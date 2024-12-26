@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 fast_mode = False
+input_test = True
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -30,6 +31,8 @@ from PIL import Image
 import os
 from scipy.stats import poisson
 import shutil
+import builtins
+import random
 
 
 # -----------------------------------------------------------------------------
@@ -161,6 +164,7 @@ number_of_time_cal_figures = 3
 save_calibrations = True
 # save_full_data = True
 presentation = False
+presentation_plots = True
 save_figures = False
 force_replacement = True # Creates a new datafile even if there is already one that looks complete
 article_format = False
@@ -373,7 +377,7 @@ y_pos_T2_and_T4 = y_pos(y_width_T2_and_T4)
 c_mm_ns = c/1000000
 muon_speed = beta * c_mm_ns
 strip_speed = 2/3 * c_mm_ns # 200 mm/ns
-
+tdiff_to_x = strip_speed # Factor to transform t_diff to X
 
 # Timtrack parameters
 vc    = beta * c_mm_ns #mm/ns
@@ -774,6 +778,16 @@ else:
         sys.exit("No files to process in UNPROCESSED or PROCESSING.")
 
 file_path = processing_file_path
+
+if input_test:
+    completed_files = os.listdir(base_directories["completed_directory"])
+    if completed_files:
+        random_file = random.choice(completed_files)
+        file_path = os.path.join(base_directories["completed_directory"], random_file)
+        print(f"Randomly selected file from COMPLETED directory: {file_path}")
+    else:
+        sys.exit("No files found in COMPLETED directory.")
+    print(f"Running test with file: {file_path}")
 
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
 right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
@@ -2591,7 +2605,7 @@ if create_plots:
         if show_plots: 
             plt.show()
         plt.close()
-    
+
     
     # Second plot: not substracting the t_sum from the other planes ----------------
     fig, axes = plt.subplots(4, 4, figsize=(20, 20))
@@ -2687,57 +2701,40 @@ if create_plots:
     plt.close()
 
 
-if create_plots:
-    fig, axes = plt.subplots(4, 6, figsize=(24, 20))  # Adjusting for 6 combinations
-    axes = axes.flatten()  # Flatten the axes array to easily iterate
+# Plotting for articles and presentations
+if create_plots and presentation_plots:
+    plane = 2  # Variable to specify the plane
     
-    # Iterate over i_plane from 1 to 4
-    for i_plane in range(1, 5):
-        # Define the column names for this plane
-        t_sum_col = f'T{i_plane}_T_sum_final'
-        t_diff_col = f'T{i_plane}_T_diff_final'
-        q_sum_col = f'T{i_plane}_Q_sum_final'
-        y_col = f'Y_{i_plane}'
-        
-        # Filter out rows where any of the variables are NaN or 0 for all comparisons
-        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, y_col]].replace(0, np.nan).dropna()
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))  # Small figsize for article column
 
-        t_sum = valid_rows[t_sum_col]
-        t_diff = valid_rows[t_diff_col]
-        q_sum = valid_rows[q_sum_col]
-        y = valid_rows[y_col]
+    # Define the column names for the specified plane
+    t_diff_col = f'T{plane}_T_diff_final'
+    y_col = f'Y_{plane}'
 
-        # Hexbin plot for all combinations (6 combinations for each i_plane)
-        axes[(i_plane-1)*6].hexbin(t_sum, t_diff, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6].set_title(f'{t_sum_col} vs {t_diff_col}')
-        
-        axes[(i_plane-1)*6 + 1].hexbin(t_sum, q_sum, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 1].set_title(f'{t_sum_col} vs {q_sum_col}')
-        
-        axes[(i_plane-1)*6 + 2].hexbin(t_sum, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 2].set_title(f'{t_sum_col} vs {y_col}')
-        
-        axes[(i_plane-1)*6 + 3].hexbin(t_diff, q_sum, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 3].set_title(f'{t_diff_col} vs {q_sum_col}')
-        
-        axes[(i_plane-1)*6 + 4].hexbin(t_diff, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 4].set_title(f'{t_diff_col} vs {y_col}')
-        
-        axes[(i_plane-1)*6 + 5].hexbin(q_sum, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 5].set_title(f'{q_sum_col} vs {y_col}')
-    
+    # Filter out rows where any of the variables are NaN or 0 for all comparisons
+    valid_rows = new_data[[t_diff_col, y_col]].replace(0, np.nan).dropna()
+
+    # Transform t_diff_col to X by multiplying with tdiff_to_x
+    valid_rows['X_transformed'] = valid_rows[t_diff_col] * tdiff_to_x
+
+    # Hexbin plot for X_transformed vs Y
+    ax.hexbin(valid_rows['X_transformed'], valid_rows[y_col], gridsize=50, cmap='turbo')
+    ax.set_title('X_transformed vs Y')
+
     plt.tight_layout()
-    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane')
-    
+
     if save_plots:
-        name_of_file = 'rpc_variables_hexbin_combinations'
+        name_of_file = 'rpc_plane2_x_y_hexbin'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
         plot_list.append(final_filename)
         plt.savefig(final_filename, format='png')
-    
-    if show_plots: plt.show()
+
+    if show_plots:
+        plt.show()
+
     plt.close()
+
 
 
 print("----------------------------------------------------------------------")
@@ -3436,7 +3433,6 @@ print("-------------------------- Save and finish ---------------------------")
 print("----------------------------------------------------------------------")
 
 # Round to 4 significant digits -----------------------------------------------
-import builtins
 print("Rounding the dataframe values.")
 
 def round_to_4_significant_digits(x):
