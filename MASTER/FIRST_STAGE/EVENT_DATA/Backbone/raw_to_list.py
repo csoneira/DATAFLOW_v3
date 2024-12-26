@@ -845,10 +845,10 @@ final_df = pd.DataFrame(columns_data)
 
 # New channel-wise plot -------------------------------------------------------
 log_scale = True
-T_clip_min = -200
-T_clip_max = -90
-Q_clip_min = 60
-Q_clip_max = 150
+T_clip_min = -300
+T_clip_max = 0
+Q_clip_min = 0
+Q_clip_max = 300
 num_bins = 100  # Parameter for the number of bins
 
 if create_plots:
