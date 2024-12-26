@@ -286,7 +286,7 @@ resampled_df.reset_index(inplace=True)
 
 # save_filename = f"accumulated_events_{filename_save_suffix}.csv"
 
-resampled_df = resampled_df.map(round_to_4_significant_digits)
+resampled_df = resampled_df.applymap(round_to_4_significant_digits)
 
 # resampled_df.to_csv(save_filename, sep=',', index=False)
 # print(f"Saved data to file: {save_filename}")
@@ -346,7 +346,7 @@ combined_df = combined_df.sort_values(by='Time').reset_index(drop=True)
 # -----------------------------------------------------------------------------
 # Save the updated big_event_data.csv -----------------------------------------
 # -----------------------------------------------------------------------------
-combined_df = combined_df.map(round_to_4_significant_digits)
+combined_df = combined_df.applymap(round_to_4_significant_digits)
 combined_df.to_csv(big_event_file, sep=',', index=False)
 print(f"Updated big_event_data.csv with {len(combined_df)} rows.")
 

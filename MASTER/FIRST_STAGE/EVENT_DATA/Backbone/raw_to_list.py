@@ -159,7 +159,7 @@ limit = False
 limit_number = 10000
 number_of_time_cal_figures = 3
 save_calibrations = True
-save_full_data = True
+# save_full_data = True
 presentation = False
 save_figures = False
 force_replacement = True # Creates a new datafile even if there is already one that looks complete
@@ -193,7 +193,7 @@ if fast_mode:
     time_calibration = False
     charge_front_back = False
     create_plots = False
-    save_full_data = False
+    # save_full_data = False
     limit = True
     limit_number = 10000
 
@@ -210,7 +210,7 @@ Q_right_pre_cal = 400
 # Qdif
 Q_diff_pre_cal_threshold = 15
 # Tsum
-T_sum_left_pre_cal = -130
+T_sum_left_pre_cal = -170 # it was -130 for mingo01 etc but for mingo03 it had to be changed
 T_sum_right_pre_cal = -105
 # Tdif
 T_diff_pre_cal_threshold = 10
@@ -230,7 +230,7 @@ T_diff_cal_threshold = 5
 
 # Once calculated the RPC variables
 # Tsum
-T_sum_RPC_left = -130
+T_sum_RPC_left = -170
 T_sum_RPC_right = -100
 # Tdiff
 T_diff_RPC_left = -1
@@ -445,7 +445,7 @@ import builtins
 enumerate = builtins.enumerate
 
 def polynomial(x, *coeffs):
-    return np.sum(c * x**i for i, c in enumerate(coeffs))
+    return sum(c * x**i for i, c in enumerate(coeffs))
 
 def scatter_2d_and_fit(xdat, ydat, title, x_label, y_label, name_of_file):
     global fig_idx
@@ -845,8 +845,8 @@ final_df = pd.DataFrame(columns_data)
 
 # New channel-wise plot -------------------------------------------------------
 log_scale = True
-T_clip_min = -150
-T_clip_max = -75
+T_clip_min = -200
+T_clip_max = -90
 Q_clip_min = 60
 Q_clip_max = 150
 num_bins = 100  # Parameter for the number of bins
@@ -3214,8 +3214,8 @@ cond = (calibrated_data['x'] != 0) & (calibrated_data['xp'] != 0) &\
        (calibrated_data['y'] != 0) & (calibrated_data['yp'] != 0) &\
        (calibrated_data['s'] != 0) & (calibrated_data['t0'] != 0)
 
+print(calibrated_data.columns)
 final_data = calibrated_data.loc[cond].copy()
-
 
 print("----------------------------------------------------------------------")
 print("----------------------- Calculating some stuff -----------------------")
@@ -3382,12 +3382,14 @@ print(f"Data purity is {len(final_data) / raw_data_len*100:.1f}%")
 
 # Statistical comprobation ----------------------------------------------------
 if create_plots:
-    final_data['datetime'] = pd.to_datetime(final_data['datetime'], errors='coerce')
-    final_data = final_data.set_index('datetime')
+    test_data = final_data.copy()
     
-    df_plot_1 = final_data
-    df_plot_2 = final_data[final_data['type'].astype(int) >= 100]
-    df_plot_3 = final_data[final_data['type'].astype(int) >= 1000]
+    test_data['datetime'] = pd.to_datetime(test_data['datetime'], errors='coerce')
+    test_data = test_data.set_index('datetime')
+    
+    df_plot_1 = test_data
+    df_plot_2 = test_data[test_data['type'].astype(int) >= 100]
+    df_plot_3 = test_data[test_data['type'].astype(int) >= 1000]
     df_plot_4 = og_data  # Original dataset
     
     datasets = {'All Data': df_plot_1, 
@@ -3401,7 +3403,7 @@ if create_plots:
     for ax, (name, df) in zip(axes, datasets.items()):
         df.index = pd.to_datetime(df.index, errors='coerce')  # Converts index to datetime
         events_per_second = df.index.floor('s').value_counts()
-        print(events_per_second)
+        # print(events_per_second)
         
         hist_data = events_per_second.value_counts().sort_index()
         lambda_estimate = events_per_second.mean()
@@ -3447,9 +3449,17 @@ def round_to_4_significant_digits(x):
 for col in final_data.select_dtypes(include=[np.number]).columns:
     final_data.loc[:, col] = final_data[col].apply(round_to_4_significant_digits)
 
+
+# ---------------------------------------------------------------------------------------------
 # Change 'datetime' column to 'Time'
-# final_data.rename(columns={'datetime': 'Time'})
-final_data.rename(columns={'datetime': 'Time'}, inplace=True)
+# print(final_data.columns)
+
+if 'datetime' in final_data.columns:
+    final_data.rename(columns={'datetime': 'Time'}, inplace=True)
+else:
+    print("Column 'datetime' not found in DataFrame!")
+# ---------------------------------------------------------------------------------------------
+
 
 # Save the data ---------------------------------------------------------------
 # if save_full_data: # Save a full version of the data, for different studies and debugging
@@ -3464,6 +3474,7 @@ columns_to_keep = [
     'Q_M3s1', 'Q_M3s2', 'Q_M3s3', 'Q_M3s4',
     'Q_M4s1', 'Q_M4s2', 'Q_M4s3', 'Q_M4s4'
 ]
+
 reduced_df = final_data[columns_to_keep]
 
 reduced_df.to_csv(save_list_path, index=False, sep=',', float_format='%.5g')
