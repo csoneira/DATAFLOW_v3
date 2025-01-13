@@ -61,6 +61,7 @@ raw_to_list_working_directory = os.path.join(base_directory, "RAW_TO_LIST")
 # Define directory paths relative to base_directory
 base_directories = {
     "pdf_directory": os.path.join(raw_to_list_working_directory, "PDF_DIRECTORY"),
+    "figure_directory": os.path.join(raw_to_list_working_directory, "FIGURE_DIRECTORY"),
     
     "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
     
@@ -543,8 +544,10 @@ def scatter_2d_and_fit(xdat, ydat, title, x_label, y_label, name_of_file):
             name_of_file = 'charge_diff_vs_charge_sum_cal'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-            plot_list.append(final_filename)
-            plt.savefig(final_filename, format='png')
+            
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
             
         if show_plots: plt.show()
         plt.close()
@@ -639,8 +642,10 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
         name_of_file = 'timing'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+        
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
         
     if show_plots: plt.show()
     plt.close()
@@ -705,8 +710,10 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
     if save_plots:
         final_filename = f'{fig_idx}_{title.replace(" ", "_")}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -932,10 +939,12 @@ if create_plots:
     plt.suptitle("Grand Figure for T values")
     
     if save_plots:
-        final_filename_T = f'{fig_idx}_grand_figure_T.png'
+        final_filename = f'{fig_idx}_grand_figure_T.png'
         fig_idx += 1
-        plot_list.append(final_filename_T)
-        plt.savefig(final_filename_T, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
 
     if show_plots: plt.show()
     plt.close(fig_T)
@@ -966,10 +975,12 @@ if create_plots:
     plt.suptitle("Grand Figure for Q values")
     
     if save_plots:
-        final_filename_Q = f'{fig_idx}_grand_figure_Q.png'
+        final_filename = f'{fig_idx}_grand_figure_Q.png'
         fig_idx += 1
-        plot_list.append(final_filename_Q)
-        plt.savefig(final_filename_Q, format='png')
+        
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
 
     if show_plots: plt.show()
     plt.close(fig_Q)
@@ -1043,8 +1054,10 @@ if create_plots:
         name_of_file = 'uncalibrated'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: 
         plt.show()
@@ -1241,8 +1254,10 @@ if create_plots:
         name_of_file = 'calibrated_one_side_removed'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+        
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -1296,8 +1311,10 @@ if presentation_plots:
             name_of_file = data[i].replace(' ', '_').replace('/', '_')  # Sanitize file name
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-            plot_list.append(final_filename)
-            plt.savefig(final_filename, format='png')
+
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
             # plt.savefig(final_filename, format='png', dpi=300)
         
         if show_plots: 
@@ -1355,8 +1372,10 @@ if charge_front_back:
             name_of_file = 'calibrated_including_ch_diff'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-            plot_list.append(final_filename)
-            plt.savefig(final_filename, format='png')
+            
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
         
         if show_plots: plt.show()
         plt.close()
@@ -1859,8 +1878,10 @@ if time_calibration:
             name_of_file = 'positions_travel_time_tzeros'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-            plot_list.append(final_filename)
-            plt.savefig(final_filename, format='png')
+            
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
         
         if show_plots: plt.show()
         plt.close()
@@ -2172,8 +2193,10 @@ if time_calibration:
             name_of_file = 'Tsum_times_calibrated'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-            plot_list.append(final_filename)
-            plt.savefig(final_filename, format='png')
+
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
     
         if show_plots: 
             plt.show()
@@ -2458,8 +2481,10 @@ if create_plots and y_position_complex_method:
         name_of_file = 'y_positions_complex'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -2508,8 +2533,10 @@ if create_plots and uniform_y_method:
         name_of_file = 'y_positions_uniform'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -2539,8 +2566,10 @@ if create_plots and y_position_complex_method == False and uniform_y_method == F
         name_of_file = 'y_positions_standard'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -2671,8 +2700,10 @@ if create_plots:
             name_of_file = 'rpc_variables_tcal_debug'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-            plot_list.append(final_filename)
-            plt.savefig(final_filename, format='png')
+
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
         
         if show_plots: 
             plt.show()
@@ -2713,8 +2744,10 @@ if create_plots:
         name_of_file = 'rpc_variables_unfiltered'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+        
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -2766,8 +2799,10 @@ if create_plots:
         name_of_file = 'rpc_variables_filtered'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -2820,8 +2855,10 @@ if create_plots:
         name_of_file = 'rpc_variables_hexbin_combinations'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -2869,8 +2906,10 @@ if presentation_plots:
             name_of_file = f'rpc_plane{plane}_x_y_hexbin'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-            plot_list.append(final_filename)
-            plt.savefig(final_filename, format='png', dpi=300)
+            
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png', dpi=300)
 
         if show_plots:
             plt.show()
@@ -3406,8 +3445,10 @@ if create_plots:
         name_of_file = 'timtrack_results_hexbin_combination'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -3457,8 +3498,10 @@ if create_plots:
         name_of_file = 'timtrack_results_hexbin_combination'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -3509,8 +3552,10 @@ if create_plots:
         name_of_file = 'timtrack_results_hexbin_combination'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
     
     if show_plots: plt.show()
     plt.close()
@@ -3565,8 +3610,11 @@ if create_plots:
         name_of_file = 'events_per_second_'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+        
     if show_plots:
         plt.show()
 
