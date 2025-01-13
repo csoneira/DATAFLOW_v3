@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 
 fast_mode = False
-input_test = True
+input_test = False
+debug = True
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -147,8 +148,6 @@ z_positions = np.array([z_1, z_2, z_3, z_4])  # In mm
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-test_filename = '/home/cayesoneira/DATAFLOW_v3/FIRST_STAGE/EVENT_DATA/EVENTS_FROM_MINGO/mi0124347232307.dat'
-
 # -----------------------------------------------------------------------------
 # Execution options -----------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -162,7 +161,7 @@ limit = False
 limit_number = 10000
 number_of_time_cal_figures = 3
 save_calibrations = True
-# save_full_data = True
+save_full_data = True
 presentation = False
 presentation_plots = True
 save_figures = False
@@ -191,13 +190,24 @@ plot_three_planes = False
 residual_plots = True
 
 if fast_mode:
-    print('Working in fast/debug mode.')
+    print('Working in fast mode.')
     residual_plots = False
     timtrack_iteration = False
     time_calibration = False
     charge_front_back = False
     create_plots = False
-    # save_full_data = False
+    save_full_data = False
+    limit = True
+    limit_number = 10000
+    
+if debug:
+    print('Working in debug mode.')
+    residual_plots = False
+    timtrack_iteration = False
+    time_calibration = False
+    charge_front_back = False
+    create_plots = True
+    save_full_data = False
     limit = True
     limit_number = 10000
 
@@ -209,15 +219,26 @@ if fast_mode:
 
 # Pre-calibration ---------
 # Qsum
-Q_left_pre_cal = 80
-Q_right_pre_cal = 400
-# Qdif
-Q_diff_pre_cal_threshold = 15
-# Tsum
-T_sum_left_pre_cal = -170 # it was -130 for mingo01 etc but for mingo03 it had to be changed
-T_sum_right_pre_cal = -105
-# Tdif
-T_diff_pre_cal_threshold = 10
+if debug:
+    Q_left_pre_cal = -1000
+    Q_right_pre_cal = 1000
+    # Qdif
+    Q_diff_pre_cal_threshold = 1000
+    # Tsum
+    T_sum_left_pre_cal = -1000 # it was -130 for mingo01 etc but for mingo03 it had to be changed
+    T_sum_right_pre_cal = 1000
+    # Tdif
+    T_diff_pre_cal_threshold = 1000
+else:
+    Q_left_pre_cal = -500
+    Q_right_pre_cal = 500
+    # Qdif
+    Q_diff_pre_cal_threshold = 500
+    # Tsum
+    T_sum_left_pre_cal = -500 # it was -130 for mingo01 etc but for mingo03 it had to be changed
+    T_sum_right_pre_cal = 500
+    # Tdif
+    T_diff_pre_cal_threshold = 500
 
 # Post-calibration ---------
 # Qsum
@@ -271,8 +292,8 @@ ext_res_tdif_filter = 0.5
 # -----------------------------------------------------------------------------
 
 # General
-calibrate_strip_T_percentile = 15
-calibrate_strip_Q_percentile = 20
+calibrate_strip_T_percentile = 5
+calibrate_strip_Q_percentile = 5
 calibrate_strip_Q_FB_percentile = 5
 
 # Time sum
@@ -734,51 +755,6 @@ print("----------------------------------------------------------------------")
 #     print(f"--> Reading test filename: '{file_path}'")
 
 
-
-unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
-if unprocessed_files:
-    for file_name in unprocessed_files:
-        unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
-        # Skip if file is already in COMPLETED
-        if os.path.exists(completed_file_path):
-            print(f"File '{file_name}' is already in COMPLETED. Removing from UNPROCESSED...")
-            os.remove(unprocessed_file_path)
-            continue
-
-        # Skip if file is already in PROCESSING
-        if os.path.exists(processing_file_path):
-            print(f"File '{file_name}' is already in PROCESSING. Removing from UNPROCESSED...")
-            os.remove(unprocessed_file_path)
-            continue
-
-        # Move file to PROCESSING and process it
-        print(f"Moving '{file_name}' to PROCESSING...")
-        shutil.move(unprocessed_file_path, processing_file_path)
-        print(f"File moved to PROCESSING: {processing_file_path}")
-else:
-    # Check for files in PROCESSING
-    processing_files = os.listdir(base_directories["processing_directory"])
-    if processing_files:
-        for file_name in processing_files:
-            processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
-            # If already in COMPLETED, remove it from PROCESSING
-            if os.path.exists(completed_file_path):
-                print(f"File '{file_name}' is already in COMPLETED. Removing from PROCESSING...")
-                os.remove(processing_file_path)
-                continue
-
-            # Otherwise, process the file
-            print(f"Processing file in PROCESSING: {file_name}")
-    else:
-        sys.exit("No files to process in UNPROCESSED or PROCESSING.")
-
-file_path = processing_file_path
-
 if input_test:
     completed_files = os.listdir(base_directories["completed_directory"])
     if completed_files:
@@ -788,6 +764,57 @@ if input_test:
     else:
         sys.exit("No files found in COMPLETED directory.")
     print(f"Running test with file: {file_path}")
+else:
+    unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
+    if unprocessed_files:
+        for file_name in unprocessed_files:
+            unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+            processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+            # Skip if file is already in COMPLETED
+            if os.path.exists(completed_file_path):
+                print(f"File '{file_name}' is already in COMPLETED. Removing from UNPROCESSED...")
+                os.remove(unprocessed_file_path)
+                continue
+
+            # Skip if file is already in PROCESSING
+            if os.path.exists(processing_file_path):
+                print(f"File '{file_name}' is already in PROCESSING. Removing from UNPROCESSED...")
+                os.remove(unprocessed_file_path)
+                continue
+
+            # Move file to PROCESSING and process it
+            print(f"Moving '{file_name}' to PROCESSING...")
+            shutil.move(unprocessed_file_path, processing_file_path)
+            print(f"File moved to PROCESSING: {processing_file_path}")
+            
+            file_path = processing_file_path
+            break
+    else:
+        # Check for files in PROCESSING
+        processing_files = os.listdir(base_directories["processing_directory"])
+        if processing_files:
+            for file_name in processing_files:
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+                # If already in COMPLETED, remove it from PROCESSING
+                if os.path.exists(completed_file_path):
+                    print(f"File '{file_name}' is already in COMPLETED. Removing from PROCESSING...")
+                    os.remove(processing_file_path)
+                    continue
+
+                # Otherwise, process the file
+                print(f"Processing file in PROCESSING: {file_name}")
+                print(f"Complete path of the file to process: {processing_file_path}")
+
+                # Break after processing one file to avoid overwriting file_path
+                file_path = processing_file_path
+                break
+        else:
+            sys.exit("No files to process in UNPROCESSED or PROCESSING.")
+    
 
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
 right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
@@ -799,6 +826,8 @@ data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if lim
 data.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, len(data.columns))]
 data['datetime'] = pd.to_datetime(data[['year', 'month', 'day', 'hour', 'minute', 'second']])
 
+if debug:
+    print(len(data))
 
 print("----------------------- Filter 1: by date -----------------------")
 filtered_data = data[(data['datetime'] >= left_limit_time) & (data['datetime'] <= right_limit_time)]
@@ -808,6 +837,9 @@ if not isinstance(og_data.index, pd.DatetimeIndex):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
 raw_data_len = len(filtered_data)
+
+if debug:
+    print(raw_data_len)
 
 datetime_value = filtered_data['datetime'][0]
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
@@ -823,8 +855,8 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
-# save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
 save_list_path = os.path.join(base_directories["list_events_directory"], save_filename)
+save_full_path = os.path.join(base_directories["list_events_directory"], save_full_filename)
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 # Check if the file exists and its size
@@ -855,15 +887,23 @@ for key, idx_range in column_indices.items():
 # Create a DataFrame from the columns data
 final_df = pd.DataFrame(columns_data)
 
-
+if debug:
+    print(len(final_df))
 
 # New channel-wise plot -------------------------------------------------------
 log_scale = True
-T_clip_min = -300
-T_clip_max = 0
-Q_clip_min = 0
-Q_clip_max = 300
-num_bins = 100  # Parameter for the number of bins
+if debug:
+    T_clip_min = -500
+    T_clip_max = 500
+    Q_clip_min = -500
+    Q_clip_max = 500
+    num_bins = 100  # Parameter for the number of bins
+else:
+    T_clip_min = -300
+    T_clip_max = 0
+    Q_clip_min = 0
+    Q_clip_max = 300
+    num_bins = 100  # Parameter for the number of bins
 
 if create_plots:
     # Create the grand figure for T values
@@ -964,6 +1004,9 @@ print("----------------------- Filter 1.1: extreme outliers --------------------
 data_columns = data_columns.applymap(lambda x: 0 if builtins.isinstance(x, (builtins.int, builtins.float)) and (x < -1e6 or x > 1e6) else x)
 new_df = pd.concat([timestamp_column, data_columns], axis=1)
 
+if debug:
+    print(len(new_df))
+
 if create_plots:
 
     num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
@@ -1030,14 +1073,25 @@ for col in new_df.columns:
 
 calibrated_data = new_df.copy()
 
+if debug:
+    print(len(calibrated_data))
+
 print("----------------------------------------------------------------------")
 print("---------------- Charge sum calibration and filtering ----------------")
 print("----------------------------------------------------------------------")
+
+if debug:
+    print(calibrated_data)
 
 calibration_Q = []
 for key in ['Q1', 'Q2', 'Q3', 'Q4']:
     Q_sum_cols = [f'{key}_Q_sum_{i+1}' for i in range(4)]
     Q_sum = new_df[Q_sum_cols].values
+    
+    v = Q_sum[:,0]
+    v = v[v != 0]
+    print(v)
+    
     calibration_q_component = [calibrate_strip_Q(Q_sum[:,i]) for i in range(4)]
     calibration_Q.append(calibration_q_component)
 calibration_Q = np.array(calibration_Q)
@@ -1192,46 +1246,64 @@ if create_plots:
     
     if show_plots: plt.show()
     plt.close()
-    
 
-if show_plots and presentation:
-    num_columns = 2  # Exclude 'datetime'
-    num_rows = 2  # Adjust as necessary for better layout
-    fig, axes = plt.subplots(num_rows, num_columns, figsize=(12, 10))
-    axes = axes.flatten()
-    
+
+# For articles and presentations
+if presentation_plots:
     plane = 2
-    strip = 3
+    strip = 2
     data = [f'T{plane}_T_sum_{strip}', f'T{plane}_T_diff_{strip}', f'Q{plane}_Q_sum_{strip}', f'Q{plane}_Q_diff_{strip}']
-    
-    for i, col in enumerate([col for col in calibrated_data.columns if col != 'datetime'][:len(axes)]):
+    fig_idx = 0  # Assuming fig_idx is defined earlier
+    plot_list = []  # Assuming plot_list is defined earlier
+
+    for i, col in enumerate([col for col in calibrated_data.columns if col != 'datetime'][:len(data)]):
         y = calibrated_data[col]
         
         if 'Q_sum' in col:
-            color = Q_sum_color
-        if 'Q_diff' in col:
-            color = Q_diff_color
-        if 'T_sum' in col:
+            color = 'green'
+        elif 'Q_diff' in col:
+            color = 'blue'
+        elif 'T_sum' in col:
             color = T_sum_color
-        if 'T_diff' in col:
-            color = T_diff_color
-        axes[i].hist(y[y != 0], bins=300, alpha=0.5, label=col, color=color)
+        elif 'T_diff' in col:
+            color = 'red'
         
-        axes[i].set_title(data[i])
-        axes[i].legend()
-    for j in range(i + 1, len(axes)):
-        fig.delaxes(axes[j])
-    plt.tight_layout()
-    
-    if save_plots:
-        name_of_file = 'presentation'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-        plot_list.append(final_filename)
-        plt.savefig(final_filename, format='png')
-    
-    if show_plots: plt.show()
-    plt.close()
+        y_p = y[y != 0]
+        
+        # Create a new figure for each histogram
+        fig, ax = plt.subplots(figsize=(5, 3.5))
+        ax.hist(y_p, bins=500, label=f"{len(y_p)} entries", alpha=0.5, color=color)
+        
+        if 'T_diff' in col:
+            ax.set_xlim([-1, 1])
+        if 'Q_diff' in col:
+            ax.set_xlim([-2, 2])
+        if 'Q_sum' in col:
+            ax.set_yscale('log')
+            ax.set_xlim([-5, 50])
+            
+        if 'Q' in col:
+            ax.set_xlabel('QtW / ns')
+        elif 'T' in col:
+            ax.set_xlabel('T / ns')
+        ax.set_ylabel('Counts')
+        
+        # ax.set_title(data[i])
+        ax.legend(frameon=False, handletextpad=0, handlelength=0)
+        plt.tight_layout()
+        
+        if save_plots:
+            name_of_file = data[i].replace(' ', '_').replace('/', '_')  # Sanitize file name
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            plot_list.append(final_filename)
+            plt.savefig(final_filename, format='png')
+            # plt.savefig(final_filename, format='png', dpi=300)
+        
+        if show_plots: 
+            plt.show()
+        plt.close()
+
 
 
 print("----------------------------------------------------------------------")
@@ -2701,39 +2773,110 @@ if create_plots:
     plt.close()
 
 
-# Plotting for articles and presentations
-if create_plots and presentation_plots:
-    plane = 2  # Variable to specify the plane
+# Same for hexbin
+if create_plots:
+    fig, axes = plt.subplots(4, 6, figsize=(24, 20))  # Adjusting for 6 combinations
+    axes = axes.flatten()  # Flatten the axes array to easily iterate
     
-    fig, ax = plt.subplots(1, 1, figsize=(6, 4))  # Small figsize for article column
+    # Iterate over i_plane from 1 to 4
+    for i_plane in range(1, 5):
+        # Define the column names for this plane
+        t_sum_col = f'T{i_plane}_T_sum_final'
+        t_diff_col = f'T{i_plane}_T_diff_final'
+        q_sum_col = f'T{i_plane}_Q_sum_final'
+        y_col = f'Y_{i_plane}'
+        
+        # Filter out rows where any of the variables are NaN or 0 for all comparisons
+        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, y_col]].replace(0, np.nan).dropna()
 
-    # Define the column names for the specified plane
-    t_diff_col = f'T{plane}_T_diff_final'
-    y_col = f'Y_{plane}'
+        t_sum = valid_rows[t_sum_col]
+        t_diff = valid_rows[t_diff_col]
+        q_sum = valid_rows[q_sum_col]
+        y = valid_rows[y_col]
 
-    # Filter out rows where any of the variables are NaN or 0 for all comparisons
-    valid_rows = new_data[[t_diff_col, y_col]].replace(0, np.nan).dropna()
-
-    # Transform t_diff_col to X by multiplying with tdiff_to_x
-    valid_rows['X_transformed'] = valid_rows[t_diff_col] * tdiff_to_x
-
-    # Hexbin plot for X_transformed vs Y
-    ax.hexbin(valid_rows['X_transformed'], valid_rows[y_col], gridsize=50, cmap='turbo')
-    ax.set_title('X_transformed vs Y')
-
+        # Hexbin plot for all combinations (6 combinations for each i_plane)
+        axes[(i_plane-1)*6].hexbin(t_sum, t_diff, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6].set_title(f'{t_sum_col} vs {t_diff_col}')
+        
+        axes[(i_plane-1)*6 + 1].hexbin(t_sum, q_sum, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 1].set_title(f'{t_sum_col} vs {q_sum_col}')
+        
+        axes[(i_plane-1)*6 + 2].hexbin(t_sum, y, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 2].set_title(f'{t_sum_col} vs {y_col}')
+        
+        axes[(i_plane-1)*6 + 3].hexbin(t_diff, q_sum, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 3].set_title(f'{t_diff_col} vs {q_sum_col}')
+        
+        axes[(i_plane-1)*6 + 4].hexbin(t_diff, y, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 4].set_title(f'{t_diff_col} vs {y_col}')
+        
+        axes[(i_plane-1)*6 + 5].hexbin(q_sum, y, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 5].set_title(f'{q_sum_col} vs {y_col}')
+    
     plt.tight_layout()
-
+    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane')
+    
     if save_plots:
-        name_of_file = 'rpc_plane2_x_y_hexbin'
+        name_of_file = 'rpc_variables_hexbin_combinations'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
         plot_list.append(final_filename)
         plt.savefig(final_filename, format='png')
-
-    if show_plots:
-        plt.show()
-
+    
+    if show_plots: plt.show()
     plt.close()
+
+
+
+# Plotting for articles and presentations
+if presentation_plots:
+    new_data = calibrated_data.copy()
+    mask_all_non_zero = (new_data['T1_Q_sum_final'] != 0) & \
+                        (new_data['T2_Q_sum_final'] != 0) & \
+                        (new_data['T3_Q_sum_final'] != 0) & \
+                        (new_data['T4_Q_sum_final'] != 0)
+
+    # Filter new_data to keep only rows where all Q_sum_final values are non-zero
+    new_data = new_data[mask_all_non_zero].copy()
+
+    for plane in range(1, 5):  # Loop through all four planes
+        fig, ax = plt.subplots(1, 1, figsize=(5, 5))  # Small figsize for article column
+
+        # Define the column names for the specified plane
+        t_diff_col = f'T{plane}_T_diff_final'
+        y_col = f'Y_{plane}'
+
+        # Filter out rows where any of the variables are NaN or 0 for all comparisons
+        valid_rows = new_data[[t_diff_col, y_col]].replace(0, np.nan).dropna()
+
+        # Transform t_diff_col to X by multiplying with tdiff_to_x
+        valid_rows['X_transformed'] = valid_rows[t_diff_col] * tdiff_to_x
+
+        # Further filter data with abs value less than 150 for X_transformed
+        valid_rows = valid_rows[(abs(valid_rows['X_transformed']) < 150) & (abs(valid_rows[y_col]) < 150)]
+
+        # Hexbin plot for X_transformed vs Y
+        ax.hexbin(valid_rows['X_transformed'], valid_rows[y_col], gridsize=35, cmap='turbo')
+        cbar = plt.colorbar(ax.collections[0], ax=ax, orientation='vertical', shrink=0.75)
+        cbar.set_label('Counts')
+        
+        ax.set_xlabel('X / mm')
+        ax.set_ylabel('Y / mm')
+        plt.tight_layout()
+        ax.set_aspect('equal', adjustable='box')
+
+        if save_plots:
+            name_of_file = f'rpc_plane{plane}_x_y_hexbin'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            plot_list.append(final_filename)
+            plt.savefig(final_filename, format='png', dpi=300)
+
+        if show_plots:
+            plt.show()
+
+        plt.close()
+
 
 
 
@@ -3458,9 +3601,9 @@ else:
 
 
 # Save the data ---------------------------------------------------------------
-# if save_full_data: # Save a full version of the data, for different studies and debugging
-#     final_data.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
-#     print(f"Datafile saved in {save_full_filename}'.")
+if save_full_data: # Save a full version of the data, for different studies and debugging
+    final_data.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
+    print(f"Datafile saved in {save_full_filename}'.")
 
 # Save a reduced version of the data always, to proceed with the analysis
 columns_to_keep = [
@@ -3514,10 +3657,10 @@ else:
 
 calibrations_df.sort_values(by='Time', inplace=True)
 calibrations_df.to_csv(csv_path, index=False, float_format='%.5g')
-print(f'{csv_path} updated with the calibrations for this folder.')
+print(f'{csv_path} updated with the calibrations for this folder.')     
 
 # Create and save the PDF -----------------------------------------------------
-if create_pdf:
+if create_pdf and not input_test:
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             for png in plot_list:
