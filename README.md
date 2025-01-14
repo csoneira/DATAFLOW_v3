@@ -55,8 +55,8 @@ Let me know if there’s anything else you’d like to adjust!
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/csoneira/minitrasgo-dataflow.git
-   cd minitrasgo-dataflow
+   git clone https://github.com/csoneira/DATAFLOW_v3.git
+   cd DATAFLOW_v3
    ```
 2. Install dependencies:
    ```bash
