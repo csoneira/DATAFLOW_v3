@@ -39,31 +39,34 @@ The dataflow system is designed with modularity and real-time processing in mind
 
 ### Prerequisites
 - Python 3.8 or later
+Here is the list of required libraries in the requested format:
 - Required libraries:
   - `pandas`
   - `numpy`
-  - `requests`
-  - `grafana_api`
-- Access credentials for the COPERNICUS database (if using reanalysis data).
+  - `matplotlib`
+  - `scipy`
+  - `tqdm`
+  - `Pillow`
+  - `cdsapi`
+  - `xarray`
+Let me know if there’s anything else you’d like to adjust!
+- Access credentials for the COPERNICUS database (if using reanalysis data). Check the tutorial in its website.
 
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/minitrasgo-dataflow.git
+   git clone https://github.com/csoneira/minitrasgo-dataflow.git
    cd minitrasgo-dataflow
    ```
 2. Install dependencies:
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements.list
    ```
 
 ### Running the System
-1. Configure the system by editing `config.yaml` to include station-specific details and API keys.
-2. Start the dataflow system:
-   ```bash
-   python main.py
-   ```
-3. Monitor the logs for real-time updates and error handling.
+1. Configure the system by creating ssh links to every station using the `~/.ssh/config` so the stations are called `mingo0X`, being X from 1 to 4.
+2. Start the dataflow system: add to crontab the lines in `add_to_crontab.info`.
+3. Monitor the logs for real-time updates and error handling in the tmux that can be set with the text in `add_to_tmux.info`.
 
 ### Data Outputs
 - **Grafana Integration**:

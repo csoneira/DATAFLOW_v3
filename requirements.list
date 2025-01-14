@@ -1,0 +1,9 @@
+pandas
+numpy
+matplotlib
+scipy
+tqdm
+Pillow
+cdsapi
+xarray
+tkinter
