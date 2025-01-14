@@ -3,7 +3,7 @@
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 input_test = False # Randomly select a file to perform the analysis
-debug_mode = True # Only 10000 rows with all detail
+debug_mode = False # Only 10000 rows with all detail
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
