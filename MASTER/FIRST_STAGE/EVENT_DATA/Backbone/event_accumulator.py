@@ -214,13 +214,36 @@ file_path = processing_file_path
 df = pd.read_csv(file_path, sep=',')
 
 # Data preparation
-df['Time'] = pd.to_datetime(df['Time'])
+df['Time'] = pd.to_datetime(df['Time'], errors='coerce') # Added errors='coerce' to handle NaT values
 df['region'] = df.apply(classify_region, axis=1)
 
-# Get the first datetime in the file
-first_datetime = df['Time'].min()
-# Define filename save suffix in the format 'yy-mm-dd_HH.MM.SS'
-filename_save_suffix = first_datetime.strftime('%y-%m-%d_%H.%M.%S')
+# Get the minimum value directly from the column (may include NaT)
+min_time_original = df['Time'].min()
+
+# Filter out invalid or null datetime values
+valid_times = df['Time'].dropna()
+
+# Get the smallest valid datetime
+if not valid_times.empty:
+    min_time_valid = valid_times.min()
+    
+    # Check if the min value with NaT differs from the valid min value
+    if min_time_original != min_time_valid:
+        print("Notice: The minimum value from 'Time' column differs from the smallest valid datetime.")
+        print("Original min value (including NaT):", min_time_original)
+        print("Valid min value (ignoring NaT):", min_time_valid)
+    
+    # Use the valid min datetime
+    first_datetime = min_time_valid
+    
+    # Define filename save suffix in the format 'yy-mm-dd_HH.MM.SS'
+    filename_save_suffix = first_datetime.strftime('%y-%m-%d_%H.%M.%S')
+else:
+    print("Error: No valid datetime values found in the 'Time' column.")
+    first_datetime = None
+    exit(1)  # Exit the program
+
+print("Filename save suffix:", filename_save_suffix)
 
 # Clean type column
 df['type'] = df['type'].apply(clean_type_column)
