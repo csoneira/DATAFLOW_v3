@@ -75,8 +75,8 @@ figure_path = f"{base_folder}/pressure_correction_fit.png"
 # skip_in_limits = 1
 
 # Plotting configuration
-show_plots = True
-save_plots = False
+show_plots = False
+save_plots = True
 create_plots = True
 
 recalculate_pressure_coeff = True
@@ -113,7 +113,7 @@ charge_types = ['count_in_1_sum', 'avalanche_1_sum', 'streamer_1_sum',
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-
+# ...
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -148,6 +148,8 @@ invalid_rows = data_df['Time'].isna().sum()
 if invalid_rows > 0:
     print(f"Removing {invalid_rows} rows with invalid datetime format.")
     data_df = data_df.dropna(subset=['Time'])
+else:
+    print("No rows with invalid datetime format removed.")
 
 print('Datetime validation completed successfully.')
 
@@ -166,12 +168,11 @@ else:
     # If results_df does not exist, do not set date limits
     start_date = None
 
-
 # Define the end date as today
 end_date = datetime.now()
 
 # Convert 'Time' column to datetime
-data_df['Time'] = pd.to_datetime(data_df['Time'].str.strip('"'), format='%Y-%m-%d %H:%M:%S')
+# data_df['Time'] = pd.to_datetime(data_df['Time'].str.strip('"'), format='%Y-%m-%d %H:%M:%S')
 
 # Filter data based on dates if start_date is set
 if date_selection and start_date is not None:
