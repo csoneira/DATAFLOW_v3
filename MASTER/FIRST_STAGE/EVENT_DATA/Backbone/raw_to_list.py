@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-fast_mode = False
-input_test = False
-debug = True
+fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
+input_test = False # Randomly select a file to perform the analysis
+debug_mode = True # Only 10000 rows with all detail
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -194,16 +194,16 @@ if fast_mode:
     print('Working in fast mode.')
     residual_plots = False
     timtrack_iteration = False
-    time_calibration = False
+    time_calibration = True
     charge_front_back = False
     create_plots = False
     save_full_data = False
-    limit = True
+    limit = False
     limit_number = 10000
     
-if debug:
+if debug_mode:
     print('Working in debug mode.')
-    residual_plots = False
+    residual_plots = True
     timtrack_iteration = False
     time_calibration = False
     charge_front_back = False
@@ -219,8 +219,9 @@ if debug:
 # General -------------------------
 
 # Pre-calibration ---------
-# Qsum
-if debug:
+
+if debug_mode:
+    # Qsum
     Q_left_pre_cal = -1000
     Q_right_pre_cal = 1000
     # Qdif
@@ -231,6 +232,7 @@ if debug:
     # Tdif
     T_diff_pre_cal_threshold = 1000
 else:
+    # Qsum
     Q_left_pre_cal = -500
     Q_right_pre_cal = 500
     # Qdif
@@ -833,7 +835,7 @@ data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if lim
 data.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, len(data.columns))]
 data['datetime'] = pd.to_datetime(data[['year', 'month', 'day', 'hour', 'minute', 'second']])
 
-if debug:
+if debug_mode:
     print(len(data))
 
 print("----------------------- Filter 1: by date -----------------------")
@@ -845,7 +847,7 @@ if not isinstance(og_data.index, pd.DatetimeIndex):
 
 raw_data_len = len(filtered_data)
 
-if debug:
+if debug_mode:
     print(raw_data_len)
 
 datetime_value = filtered_data['datetime'][0]
@@ -894,12 +896,12 @@ for key, idx_range in column_indices.items():
 # Create a DataFrame from the columns data
 final_df = pd.DataFrame(columns_data)
 
-if debug:
+if debug_mode:
     print(len(final_df))
 
 # New channel-wise plot -------------------------------------------------------
 log_scale = True
-if debug:
+if debug_mode:
     T_clip_min = -500
     T_clip_max = 500
     Q_clip_min = -500
@@ -1015,7 +1017,7 @@ print("----------------------- Filter 1.1: extreme outliers --------------------
 data_columns = data_columns.applymap(lambda x: 0 if builtins.isinstance(x, (builtins.int, builtins.float)) and (x < -1e6 or x > 1e6) else x)
 new_df = pd.concat([timestamp_column, data_columns], axis=1)
 
-if debug:
+if debug_mode:
     print(len(new_df))
 
 if create_plots:
@@ -1086,14 +1088,14 @@ for col in new_df.columns:
 
 calibrated_data = new_df.copy()
 
-if debug:
+if debug_mode:
     print(len(calibrated_data))
 
 print("----------------------------------------------------------------------")
 print("---------------- Charge sum calibration and filtering ----------------")
 print("----------------------------------------------------------------------")
 
-if debug:
+if debug_mode:
     print(calibrated_data)
 
 calibration_Q = []
