@@ -245,6 +245,7 @@ else:
 
 print("Filename save suffix:", filename_save_suffix)
 
+
 # Clean type column
 df['type'] = df['type'].apply(clean_type_column)
 

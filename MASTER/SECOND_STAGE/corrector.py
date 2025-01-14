@@ -133,15 +133,39 @@ print('Reading the CSV file...')
 data_df = pd.read_csv(filepath)
 print('File loaded successfully.')
 
+
+# Preprocess the data to remove rows with invalid datetime format
+print('Validating datetime format in "Time" column...')
+try:
+    # Try parsing 'Time' column with the specified format
+    data_df['Time'] = pd.to_datetime(data_df['Time'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+except Exception as e:
+    print(f"Error while parsing datetime: {e}")
+    exit(1)
+
+# Drop rows where 'Time' could not be parsed
+invalid_rows = data_df['Time'].isna().sum()
+if invalid_rows > 0:
+    print(f"Removing {invalid_rows} rows with invalid datetime format.")
+    data_df = data_df.dropna(subset=['Time'])
+
+print('Datetime validation completed successfully.')
+
 # Check if the results file exists
 if os.path.exists(save_filename):
     results_df = pd.read_csv(save_filename)
+    
+    # Validate and clean datetime format in results_df as well
+    results_df['Time'] = pd.to_datetime(results_df['Time'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+    results_df = results_df.dropna(subset=['Time'])
+    
     # Define start and end dates based on the last date in results_df
-    last_date = pd.to_datetime(results_df['Time']).max()  # Convert to datetime
+    last_date = results_df['Time'].max()  # Convert to datetime
     start_date = last_date - timedelta(weeks=5)
 else:
     # If results_df does not exist, do not set date limits
     start_date = None
+
 
 # Define the end date as today
 end_date = datetime.now()
