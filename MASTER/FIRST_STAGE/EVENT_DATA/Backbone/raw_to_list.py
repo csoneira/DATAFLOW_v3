@@ -242,7 +242,7 @@ if debug_mode:
     T_diff_pre_cal_threshold = 1000
 else:
     # Qsum
-    Q_left_pre_cal = -500
+    Q_left_pre_cal = -175
     Q_right_pre_cal = 500
     # Qdif
     Q_diff_pre_cal_threshold = 500
@@ -946,8 +946,8 @@ if create_plots:
             if log_scale:
                 axes_T[i*4 + j].set_yscale('log')  # For T values
 
-    plt.tight_layout()
-    plt.suptitle("Grand Figure for T values")
+    # plt.tight_layout()
+    plt.suptitle(f"Grand Figure for T values\n{start_time}")
     
     if save_plots:
         final_filename = f'{fig_idx}_grand_figure_T.png'
