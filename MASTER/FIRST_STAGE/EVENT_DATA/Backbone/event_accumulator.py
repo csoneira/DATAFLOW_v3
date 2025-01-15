@@ -239,9 +239,8 @@ if not valid_times.empty:
     # Define filename save suffix in the format 'yy-mm-dd_HH.MM.SS'
     filename_save_suffix = first_datetime.strftime('%y-%m-%d_%H.%M.%S')
 else:
-    print("Error: No valid datetime values found in the 'Time' column.")
-    first_datetime = None
-    exit(1)  # Exit the program
+    # first_datetime = None
+    sys.exit("No valid datetime values found in the 'Time' column. Exiting...")
 
 print("Filename save suffix:", filename_save_suffix)
 

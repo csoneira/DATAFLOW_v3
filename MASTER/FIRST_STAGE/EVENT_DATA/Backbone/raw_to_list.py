@@ -132,8 +132,8 @@ else:
     print("Input file does not exist.")
     z_1 = 0
     z_2 = 150
-    z_3 = 310
-    z_4 = 345.5
+    z_3 = 300
+    z_4 = 450
 
 z_positions = np.array([z_1, z_2, z_3, z_4])  # In mm
 
