@@ -227,30 +227,46 @@ if debug_mode:
 
 # General -------------------------
 
-# Pre-calibration ---------
-
+# Pre-calibration Front & Back ---------
 if debug_mode:
-    # Qsum
-    Q_left_pre_cal = -1000
-    Q_right_pre_cal = 1000
-    # Qdif
-    Q_diff_pre_cal_threshold = 1000
-    # Tsum
-    T_sum_left_pre_cal = -1000 # it was -130 for mingo01 etc but for mingo03 it had to be changed
-    T_sum_right_pre_cal = 1000
-    # Tdif
-    T_diff_pre_cal_threshold = 1000
+    print('Working in debug mode.')
+    T_F_left_pre_cal = -500
+    T_F_right_pre_cal = 500
+
+    T_B_left_pre_cal = -500
+    T_B_right_pre_cal = 500
+
+    Q_F_left_pre_cal = -500
+    Q_F_right_pre_cal = 500
+
+    Q_B_left_pre_cal = -500
+    Q_B_right_pre_cal = 500
 else:
-    # Qsum
-    Q_left_pre_cal = -500
-    Q_right_pre_cal = 500
-    # Qdif
-    Q_diff_pre_cal_threshold = 500
-    # Tsum
-    T_sum_left_pre_cal = -500 # it was -130 for mingo01 etc but for mingo03 it had to be changed
-    T_sum_right_pre_cal = 500
-    # Tdif
-    T_diff_pre_cal_threshold = 500
+    T_F_left_pre_cal = -500
+    T_F_right_pre_cal = 500
+
+    T_B_left_pre_cal = -500
+    T_B_right_pre_cal = 500
+
+    Q_F_left_pre_cal = -500
+    Q_F_right_pre_cal = 500
+
+    Q_B_left_pre_cal = -500
+    Q_B_right_pre_cal = 500
+
+
+
+# Pre-calibration Sum & Diff ---------
+# Qsum
+Q_left_pre_cal = -500
+Q_right_pre_cal = 500
+# Qdif
+Q_diff_pre_cal_threshold = 500
+# Tsum
+T_sum_left_pre_cal = -500 # it was -130 for mingo01 etc but for mingo03 it had to be changed
+T_sum_right_pre_cal = 500
+# Tdif
+T_diff_pre_cal_threshold = 500
 
 # Post-calibration ---------
 # Qsum
@@ -833,7 +849,6 @@ if debug_mode:
 datetime_value = filtered_data['datetime'][0]
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
 start_time = datetime_value
-
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
 print(f"Starting date is {save_filename_suffix}.")
@@ -878,6 +893,31 @@ final_df = pd.DataFrame(columns_data)
 
 if debug_mode:
     print(len(final_df))
+
+
+# # Create a event number column and a status column
+# final_df['event_number'] = np.arange(len(final_df))
+# final_df['status'] = 'date_filtered'
+# final_df.to_csv('hey.csv', sep=' ', index=False)
+# # Put event number and status as the first columns
+# cols = final_df.columns.tolist()
+# cols = cols[-2:] + cols[:-2]
+# final_df = final_df[cols]
+# 1/0
+
+    
+print("-------------------- Filter 1.1.1: uncalibrated data ---------------------")
+# FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out ------------------------------
+for col in final_df.columns:
+    if col.startswith('T') and col.endswith('_F'):
+        final_df[col] = np.where((final_df[col] > T_F_right_pre_cal) | (final_df[col] < T_F_left_pre_cal), 0, final_df[col])
+    if col.startswith('T') and col.endswith('_B'):
+        final_df[col] = np.where((final_df[col] > T_B_right_pre_cal) | (final_df[col] < T_B_left_pre_cal), 0, final_df[col])
+    if col.startswith('Q') and col.endswith('_F'):
+        final_df[col] = np.where((final_df[col] > Q_F_right_pre_cal) | (final_df[col] < Q_F_left_pre_cal), 0, final_df[col])
+    if col.startswith('Q') and col.endswith('_B'):
+        final_df[col] = np.where((final_df[col] > Q_B_right_pre_cal) | (final_df[col] < Q_B_left_pre_cal), 0, final_df[col])
+
 
 # New channel-wise plot -------------------------------------------------------
 log_scale = True
@@ -969,7 +1009,7 @@ if create_plots:
 # -----------------------------------------------------------------------------
 
 
-# Compute T_sum, T_diff, Q_sum, Q_diff
+# Compute T_sum, T_diff, Q_sum, Q_diff ----------------------------------------
 new_columns_data = {'datetime': final_df['datetime'].values}
 for key in ['T1', 'T2', 'T3', 'T4']:
     T_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
