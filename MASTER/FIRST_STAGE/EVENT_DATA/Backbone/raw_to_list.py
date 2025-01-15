@@ -227,7 +227,7 @@ if debug_mode:
 
 # General -------------------------
 
-# Pre-calibration Front & Back ---------
+# Pre-cal Front & Back ---------
 if debug_mode:
     print('Working in debug mode.')
     T_F_left_pre_cal = -500
@@ -242,21 +242,21 @@ if debug_mode:
     Q_B_left_pre_cal = -500
     Q_B_right_pre_cal = 500
 else:
-    T_F_left_pre_cal = -500
-    T_F_right_pre_cal = 500
+    T_F_left_pre_cal = -175
+    T_F_right_pre_cal = 0
 
-    T_B_left_pre_cal = -500
-    T_B_right_pre_cal = 500
+    T_B_left_pre_cal = -175
+    T_B_right_pre_cal = 0
 
-    Q_F_left_pre_cal = -500
-    Q_F_right_pre_cal = 500
+    Q_F_left_pre_cal = 50
+    Q_F_right_pre_cal = 300
 
-    Q_B_left_pre_cal = -500
-    Q_B_right_pre_cal = 500
+    Q_B_left_pre_cal = 50
+    Q_B_right_pre_cal = 300
 
 
 
-# Pre-calibration Sum & Diff ---------
+# Pre-cal Sum & Diff ---------
 # Qsum
 Q_left_pre_cal = -500
 Q_right_pre_cal = 500
