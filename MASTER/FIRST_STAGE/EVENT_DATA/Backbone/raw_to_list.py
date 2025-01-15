@@ -895,14 +895,17 @@ if debug_mode:
     print(len(final_df))
 
 
-# # Create a event number column and a status column
-# final_df['event_number'] = np.arange(len(final_df))
-# final_df['status'] = 'date_filtered'
-# final_df.to_csv('hey.csv', sep=' ', index=False)
-# # Put event number and status as the first columns
-# cols = final_df.columns.tolist()
-# cols = cols[-2:] + cols[:-2]
-# final_df = final_df[cols]
+# Add 'event_number' and 'status' columns ----------------------------------------------
+# filtered_data['event_number'] = np.arange(len(filtered_data))
+# filtered_data['status'] = 'date_filtered'
+
+# # Reorder columns to place 'event_number' and 'status' as the first columns
+# columns_to_move = ['event_number', 'status']
+# remaining_columns = [col for col in filtered_data.columns if col not in columns_to_move]
+# filtered_data = filtered_data[columns_to_move + remaining_columns]
+
+# # # Save the DataFrame to a CSV file
+# # filtered_data.to_csv('hey.csv', sep=' ', index=False)
 # 1/0
 
     
