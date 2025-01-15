@@ -106,6 +106,15 @@ for file_name in files_to_move:
         print(f"Failed to copy {file_name}: {e}")
 
 
+# Erase all files in the figure_directory
+figure_directory = base_directories["figure_directory"]
+files = os.listdir(figure_directory)
+
+if files:  # Check if the directory contains any files
+    print("Removing all files in the figure_directory...")
+    for file in files:
+        os.remove(os.path.join(figure_directory, file))
+
 
 # Define input file path -----------------------------------------------------
 
