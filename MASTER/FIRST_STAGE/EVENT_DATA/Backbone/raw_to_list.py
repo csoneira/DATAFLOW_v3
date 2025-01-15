@@ -895,18 +895,18 @@ if debug_mode:
     print(len(final_df))
 
 
-# Add 'event_number' and 'status' columns ----------------------------------------------
-# filtered_data['event_number'] = np.arange(len(filtered_data))
-# filtered_data['status'] = 'date_filtered'
+# # Add 'event_id' and 'event_label' columns ----------------------------------------------
+# filtered_data['event_id'] = np.arange(len(filtered_data))  # Sequential event identifiers
+# filtered_data['event_label'] = 'date_filtered'  # Label for the events
 
-# # Reorder columns to place 'event_number' and 'status' as the first columns
-# columns_to_move = ['event_number', 'status']
+# # Reorder columns to place 'event_id' and 'event_label' as the first columns
+# columns_to_move = ['event_id', 'event_label']
 # remaining_columns = [col for col in filtered_data.columns if col not in columns_to_move]
 # filtered_data = filtered_data[columns_to_move + remaining_columns]
 
-# # # Save the DataFrame to a CSV file
-# # filtered_data.to_csv('hey.csv', sep=' ', index=False)
-# 1/0
+# # Save the DataFrame to a CSV file
+# if debug_mode:
+#     filtered_data.to_csv('hey.csv', sep=' ', index=False)
 
     
 print("-------------------- Filter 1.1.1: uncalibrated data ---------------------")
