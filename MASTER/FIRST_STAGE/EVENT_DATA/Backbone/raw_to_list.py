@@ -744,35 +744,6 @@ print("----------------------------------------------------------------------")
 
 # Determine the file path input
 
-
-# try:
-#     file_path_input = sys.argv[1]
-#     print("Running with given input.")
-    
-#     file_name = os.path.basename(file_path_input)  # Extract just the file name
-    
-#     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-#     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
-#     # Check if the file is already in PROCESSING
-#     if os.path.exists(processing_file_path):
-#         print(f"File '{file_name}' is already in PROCESSING. Continuing with processing...")
-#     else:
-#         # Check if the file exists at the input location before moving
-#         if os.path.exists(file_path_input):
-#             print(f"Moving input file '{file_name}' to PROCESSING directory...")
-#             shutil.move(file_path_input, processing_file_path)
-#             print(f"File moved to PROCESSING directory: {processing_file_path}")
-#         else:
-#             raise FileNotFoundError(f"Input file '{file_path_input}' not found and not in PROCESSING.")
-    
-#     file_path = processing_file_path
-    
-# except IndexError:
-#     file_path = test_filename
-#     print(f"--> Reading test filename: '{file_path}'")
-
-
 if input_test:
     completed_files = os.listdir(base_directories["completed_directory"])
     if completed_files:
