@@ -282,7 +282,7 @@ Q_diff_cal_threshold_FB = 5
 # Tsum
 # ...
 # Tdif
-T_diff_cal_threshold = 5
+T_diff_cal_threshold = 1
 
 
 # Once calculated the RPC variables
@@ -553,7 +553,7 @@ def calibrate_strip_T_diff(T_F, T_B):
     T_F = T_F[cond]
     T_B = T_B[cond]
     
-    T_diff = T_F - T_B
+    T_diff = ( T_F - T_B ) / 2
     
     print("Zeroes:")
     print(len(T_diff[T_diff == 0]))
@@ -1545,7 +1545,7 @@ pos_test = final_df.copy()
 
 for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
     for j in range(4):
-        pos_test[f'{key}_diff_{j+1}'] = pos_test[f'{key}_F_{j+1}'] - pos_test[f'{key}_B_{j+1}']
+        pos_test[f'{key}_diff_{j+1}'] = ( pos_test[f'{key}_F_{j+1}'] - pos_test[f'{key}_B_{j+1}'] ) / 2
 
 print('Check this out:')
 print(pos_test[f'T1_diff_1'])
@@ -1758,7 +1758,8 @@ if values_replaced_q_sum:
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
         mask = new_df[f'{key}_Q_sum_{j+1}'] != 0
-        calibrated_data.loc[mask, f'{key}_Q_sum_{j+1}'] -= calibration_Q[i][j]
+        # calibrated_data.loc[mask, f'{key}_Q_sum_{j+1}'] -= calibration_Q[i][j]
+        calibrated_data.loc[mask, f'{key}_Q_sum_{j+1}'] -= ( QF_pedestal[i][j] + QF_pedestal[i][j] ) / 2
 
 
 print("--------------------- Filter 3: calibrated data ----------------------")
@@ -1799,7 +1800,8 @@ if values_replaced_t_dif:
 for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
     for j in range(4):
         mask = new_df[f'{key}_T_diff_{j+1}'] != 0
-        calibrated_data.loc[mask, f'{key}_T_diff_{j+1}'] -= calibration_T[i][j]
+        # calibrated_data.loc[mask, f'{key}_T_diff_{j+1}'] -= calibration_T[i][j]
+        calibrated_data.loc[mask, f'{key}_T_diff_{j+1}'] -= Tdiff_cal[i][j]
 
 print("--------------------- Filter 3.2: time diff filtering ----------------------")
 for col in calibrated_data.columns:
