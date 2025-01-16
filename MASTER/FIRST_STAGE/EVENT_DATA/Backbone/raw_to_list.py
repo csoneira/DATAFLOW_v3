@@ -64,6 +64,7 @@ base_directories = {
     "figure_directory": os.path.join(raw_to_list_working_directory, "FIGURE_DIRECTORY"),
     
     "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
+    "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/PROCESSING_DIRECTORY"),
@@ -171,7 +172,7 @@ limit = False
 limit_number = 10000
 number_of_time_cal_figures = 3
 save_calibrations = True
-save_full_data = True
+save_full_data = False
 presentation = False
 presentation_plots = True
 save_figures = False
@@ -1045,7 +1046,8 @@ if last_file_test:
         unprocessed_files = sorted(unprocessed_files)
         file_name = unprocessed_files[-1]
         unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-        file_path = unprocessed_file_path
+        processing_file_path = unprocessed_file_path
+        file_path = processing_file_path
         print(f"Only processing the last file in UNPROCESSED: {unprocessed_file_path}")
     elif processing_files:
         # Sort the list of processing files
@@ -1059,7 +1061,8 @@ if last_file_test:
         processing_files = sorted(completed_files)
         file_name = completed_files[-1]
         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        file_path = completed_file_path
+        processing_file_path = completed_file_path
+        file_path = processing_file_path
         print(f"Only processing the last file in COMPLETED: {completed_file_path}")
     else:
         sys.exit("No files to process in UNPROCESSED nor PROCESSING nor COMPLETED.")
@@ -1155,7 +1158,7 @@ save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
 save_list_path = os.path.join(base_directories["list_events_directory"], save_filename)
-save_full_path = os.path.join(base_directories["list_events_directory"], save_full_filename)
+save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 # Check if the file exists and its size
@@ -4052,9 +4055,14 @@ print("----------------------------------------------------------------------")
 print("----------------------- Calculating some stuff -----------------------")
 print("----------------------------------------------------------------------")
 
+df_plot_ancillary = final_data.copy()
+
+# Keep the rows where charge_event is between 0 and 50
+df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['charge_event'] > 0) & (df_plot_ancillary['charge_event'] < 50)]
+
 # Plotting the TT results all together
 if create_plots:
-    df_plot = final_data.copy()
+    df_plot = df_plot_ancillary.copy()
     
     columns_of_interest = ['x', 'y', 'theta', 'phi', 't0', 's', 'charge_event']
     num_bins = 30
@@ -4107,7 +4115,7 @@ if create_plots:
     
     
 if create_plots:
-    df_plot = final_data[final_data['type'].astype(int) >= 100].copy()
+    df_plot = df_plot_ancillary[df_plot_ancillary['type'].astype(int) >= 100].copy()
     
     columns_of_interest = ['x', 'y', 'theta', 'phi', 't0', 's', 'charge_event']
     num_bins = 30
@@ -4161,7 +4169,7 @@ if create_plots:
 
 
 if create_plots:
-    df_plot = final_data[final_data['type'].astype(int) >= 1000].copy()
+    df_plot = df_plot_ancillary[df_plot_ancillary['type'].astype(int) >= 1000].copy()
     
     columns_of_interest = ['x', 'y', 'theta', 'phi', 't0', 's', 'charge_event']
     num_bins = 30
