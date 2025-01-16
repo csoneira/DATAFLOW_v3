@@ -1370,11 +1370,11 @@ def interpolate_fast_charge(width):
     width_clipped = np.clip(width, width_table.min(), width_table.max())
     
     # Check if width values are within the interpolation range
-    if np.any((width < width_table.min()) | (width > width_table.max())):
-        print(
-            f"Some width values are outside the interpolation range "
-            f"({width_table.min()} to {width_table.max()}), but will be clipped."
-        )
+    # if np.any((width < width_table.min()) | (width > width_table.max())):
+    #     print(
+    #         f"Some width values are outside the interpolation range "
+    #         f"({width_table.min()} to {width_table.max()}), but will be clipped."
+    #     )
     
     width_clipped = np.clip(width, width_table.min(), width_table.max())
     
