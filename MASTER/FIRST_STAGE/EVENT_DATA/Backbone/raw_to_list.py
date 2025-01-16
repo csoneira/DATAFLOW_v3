@@ -300,24 +300,24 @@ Y_RPC_left = -150
 Y_RPC_right = 150
 
 # TimTrack filter -------------------------
-pos_filter = 200
-proj_filter = 1.6
-t0_left_filter = -130
-t0_right_filter = -105
-slowness_filter_left = -0.01
+pos_filter = 600
+proj_filter = 2
+t0_left_filter = T_sum_RPC_left
+t0_right_filter = T_sum_RPC_right
+slowness_filter_left = -0.01 # -0.01
 slowness_filter_right = 0.02 # 0.025
-charge_strip_left_filter = 0
-charge_strip_right_filter = 100
-charge_event_left_filter = 0
-charge_event_right_filter = 120
+charge_strip_left_filter = -1e6
+charge_strip_right_filter = 1e6
+charge_event_left_filter = -1e6
+charge_event_right_filter = 1e6
 
 res_ystr_filter = 120
 res_tsum_filter = 2
-res_tdif_filter = 0.5
+res_tdif_filter = 0.4
 
 ext_res_ystr_filter = 120
 ext_res_tsum_filter = 2
-ext_res_tdif_filter = 0.5
+ext_res_tdif_filter = 1
 
 # -----------------------------------------------------------------------------
 # Calibrations ----------------------------------------------------------------
@@ -1819,29 +1819,30 @@ print("----------------------------------------------------------------------")
 print("---------------- Charge diff calibration and filtering ---------------")
 print("----------------------------------------------------------------------")
 
-calibration_Q_FB = []
-for key in ['Q1', 'Q2', 'Q3', 'Q4']:
-    Q_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
-    Q_F = final_df[Q_F_cols].values
-    Q_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
-    Q_B = final_df[Q_B_cols].values
-    calibration_q_FB_component = [calibrate_strip_Q_FB(Q_F[:,i], Q_B[:,i]) for i in range(4)]
-    calibration_Q_FB.append(calibration_q_FB_component)
-calibration_Q_FB = np.array(calibration_Q_FB)
+# calibration_Q_FB = []
+# for key in ['Q1', 'Q2', 'Q3', 'Q4']:
+#     Q_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
+#     Q_F = final_df[Q_F_cols].values
+#     Q_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
+#     Q_B = final_df[Q_B_cols].values
+#     calibration_q_FB_component = [calibrate_strip_Q_FB(Q_F[:,i], Q_B[:,i]) for i in range(4)]
+#     calibration_Q_FB.append(calibration_q_FB_component)
+# calibration_Q_FB = np.array(calibration_Q_FB)
 
-print(f"Charge dif calibration:\n{calibration_Q_FB}")
+# print(f"Charge dif calibration:\n{calibration_Q_FB}")
 
-diff = np.abs(calibration_Q_FB - charge_dif_reference) > charge_dif_distance
-nan_mask = np.isnan(calibration_Q_FB)
-values_replaced_q_dif = np.any(diff | nan_mask)
-calibration_Q_FB[diff | nan_mask] = charge_dif_reference[diff | nan_mask]
-if values_replaced_q_dif:
-    print("Some values were replaced in the calibration Q front-back.")
+# diff = np.abs(calibration_Q_FB - charge_dif_reference) > charge_dif_distance
+# nan_mask = np.isnan(calibration_Q_FB)
+# values_replaced_q_dif = np.any(diff | nan_mask)
+# calibration_Q_FB[diff | nan_mask] = charge_dif_reference[diff | nan_mask]
+# if values_replaced_q_dif:
+#     print("Some values were replaced in the calibration Q front-back.")
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
         mask = new_df[f'{key}_Q_diff_{j+1}'] != 0
-        calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= calibration_Q_FB[i][j]
+        # calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= calibration_Q_FB[i][j]
+        calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= ( QF_pedestal[i][j] - QF_pedestal[i][j] ) / 2
 
 # Add datetime column to calibrated_data -----------------------------
 calibrated_data['datetime'] = final_df['datetime']
@@ -3505,55 +3506,55 @@ if create_plots:
 
 
 # Plotting for articles and presentations
-if presentation_plots:
-    new_data = calibrated_data.copy()
-    mask_all_non_zero = (new_data['T1_Q_sum_final'] != 0) & \
-                        (new_data['T2_Q_sum_final'] != 0) & \
-                        (new_data['T3_Q_sum_final'] != 0) & \
-                        (new_data['T4_Q_sum_final'] != 0)
+# if presentation_plots:
+#     new_data = calibrated_data.copy()
+#     mask_all_non_zero = (new_data['T1_Q_sum_final'] != 0) & \
+#                         (new_data['T2_Q_sum_final'] != 0) & \
+#                         (new_data['T3_Q_sum_final'] != 0) & \
+#                         (new_data['T4_Q_sum_final'] != 0)
 
-    # Filter new_data to keep only rows where all Q_sum_final values are non-zero
-    new_data = new_data[mask_all_non_zero].copy()
+#     # Filter new_data to keep only rows where all Q_sum_final values are non-zero
+#     new_data = new_data[mask_all_non_zero].copy()
 
-    for plane in range(1, 5):  # Loop through all four planes
-        fig, ax = plt.subplots(1, 1, figsize=(5, 5))  # Small figsize for article column
+#     for plane in range(1, 5):  # Loop through all four planes
+#         fig, ax = plt.subplots(1, 1, figsize=(5, 5))  # Small figsize for article column
 
-        # Define the column names for the specified plane
-        t_diff_col = f'T{plane}_T_diff_final'
-        y_col = f'Y_{plane}'
+#         # Define the column names for the specified plane
+#         t_diff_col = f'T{plane}_T_diff_final'
+#         y_col = f'Y_{plane}'
 
-        # Filter out rows where any of the variables are NaN or 0 for all comparisons
-        valid_rows = new_data[[t_diff_col, y_col]].replace(0, np.nan).dropna()
+#         # Filter out rows where any of the variables are NaN or 0 for all comparisons
+#         valid_rows = new_data[[t_diff_col, y_col]].replace(0, np.nan).dropna()
 
-        # Transform t_diff_col to X by multiplying with tdiff_to_x
-        valid_rows['X_transformed'] = valid_rows[t_diff_col] * tdiff_to_x
+#         # Transform t_diff_col to X by multiplying with tdiff_to_x
+#         valid_rows['X_transformed'] = valid_rows[t_diff_col] * tdiff_to_x
 
-        # Further filter data with abs value less than 150 for X_transformed
-        valid_rows = valid_rows[(abs(valid_rows['X_transformed']) < 150) & (abs(valid_rows[y_col]) < 150)]
+#         # Further filter data with abs value less than 150 for X_transformed
+#         valid_rows = valid_rows[(abs(valid_rows['X_transformed']) < 150) & (abs(valid_rows[y_col]) < 150)]
 
-        # Hexbin plot for X_transformed vs Y
-        ax.hexbin(valid_rows['X_transformed'], valid_rows[y_col], gridsize=35, cmap='turbo')
-        cbar = plt.colorbar(ax.collections[0], ax=ax, orientation='vertical', shrink=0.75)
-        cbar.set_label('Counts')
+#         # Hexbin plot for X_transformed vs Y
+#         ax.hexbin(valid_rows['X_transformed'], valid_rows[y_col], gridsize=35, cmap='turbo')
+#         cbar = plt.colorbar(ax.collections[0], ax=ax, orientation='vertical', shrink=0.75)
+#         cbar.set_label('Counts')
         
-        ax.set_xlabel('X / mm')
-        ax.set_ylabel('Y / mm')
-        plt.tight_layout()
-        ax.set_aspect('equal', adjustable='box')
+#         ax.set_xlabel('X / mm')
+#         ax.set_ylabel('Y / mm')
+#         plt.tight_layout()
+#         ax.set_aspect('equal', adjustable='box')
 
-        if save_plots:
-            name_of_file = f'rpc_plane{plane}_x_y_hexbin'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
+#         if save_plots:
+#             name_of_file = f'rpc_plane{plane}_x_y_hexbin'
+#             final_filename = f'{fig_idx}_{name_of_file}.png'
+#             fig_idx += 1
             
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png', dpi=300)
+#             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#             plot_list.append(save_fig_path)
+#             plt.savefig(save_fig_path, format='png', dpi=300)
 
-        if show_plots:
-            plt.show()
+#         if show_plots:
+#             plt.show()
 
-        plt.close()
+#         plt.close()
 
 
 
@@ -3992,9 +3993,21 @@ for iteration in range(repeat + 1):
                     calibrated_data.at[index, f'T{i}_Q_sum_final'] = 0
                     
     print("-----------------------------------------")
-    print(f"Events that are 1234: {len(calibrated_data[calibrated_data.type == 1234])}")
+    four_planes = len(calibrated_data[calibrated_data.type == 1234])
+    print(f"Events that are 1234: {four_planes}")
     print(f"Events that are 123: {len(calibrated_data[calibrated_data.type == 123])}")
     print(f"Events that are 234: {len(calibrated_data[calibrated_data.type == 234])}")
+    
+    planes134 = len(calibrated_data[calibrated_data.type == 134])
+    print(f"Events that are 134: {planes134}")
+    planes124 = len(calibrated_data[calibrated_data.type == 124])
+    print(f"Events that are 124: {planes124}")
+    
+    eff_2 = 1 - (planes134) / (four_planes + planes134 + planes124)
+    print(f"First estimate of eff_2 ={eff_2}")
+    
+    eff_3 = 1 - (planes124) / (four_planes + planes134 + planes124)
+    print(f"First estimate of eff_3 ={eff_3}")
     
     iteration += 1
     # End of TimTrack loop ---------------------------------------------------------------
@@ -4313,10 +4326,12 @@ new_row = {'Time': start_time}
 for i, module in enumerate(['M1', 'M2', 'M3', 'M4']):
     for j in range(4):
         strip = j + 1
-        new_row[f'{module}_s{strip}_Q_sum'] = calibration_Q[i, j]
+        new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QF_pedestal[i][j] ) / 2
         new_row[f'{module}_s{strip}_T_sum'] = calibration_times[i, j]
-        new_row[f'{module}_s{strip}_Q_dif'] = calibration_Q_FB[i, j]
-        new_row[f'{module}_s{strip}_T_dif'] = calibration_T[i, j]
+        # new_row[f'{module}_s{strip}_Q_dif'] = calibration_Q_FB[i, j]
+        new_row[f'{module}_s{strip}_Q_dif'] = ( QF_pedestal[i][j] - QF_pedestal[i][j] ) / 2
+        # new_row[f'{module}_s{strip}_T_dif'] = calibration_T[i, j]
+        new_row[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j]
 
 if os.path.exists(csv_path):
     # Load the existing DataFrame
