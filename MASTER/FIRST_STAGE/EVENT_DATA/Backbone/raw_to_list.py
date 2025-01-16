@@ -1247,8 +1247,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 # Plot histograms of all the pedestal substractions
 
-# if create_plots:
-if True:
+if create_plots:
 
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -1363,6 +1362,7 @@ def interpolate_fast_charge(width):
     Returns:
     - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
     """
+    
     # Ensure calibration data is sorted and numpy arrays
     width_table = FEE_calibration['Width'].to_numpy()
     fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
@@ -1396,7 +1396,7 @@ for key in ['Q1', 'Q2', 'Q3', 'Q4']:
 
 
 
-if True:
+if create_plots:
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_Q = axes_Q.flatten()
