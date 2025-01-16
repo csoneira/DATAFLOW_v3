@@ -4378,7 +4378,7 @@ if create_pdf:
         for png in plot_list:
             try:
                 os.remove(png)
-                print(f"Deleted {png}")
+                # print(f"Deleted {png}")
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
 
