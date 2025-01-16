@@ -163,7 +163,7 @@ z_positions = np.array([z_1, z_2, z_3, z_4])  # In mm
 # -----------------------------------------------------------------------------
 
 # Plots and savings -------------------------
-create_plots = True
+create_plots = False
 save_plots = True
 show_plots = False
 create_pdf = True
@@ -576,19 +576,20 @@ def calibrate_strip_T_diff(T_F, T_B, num_bins=100):
     valid_bins = (counts > T_rel_th * max_counts)
     
     # Filter the original column values based on the valid bins
-    column_filt = []
+    T_diff_filt = []
     for i, valid in enumerate(valid_bins):
         if valid:
             # Include values within the range of this bin
             bin_min = bin_edges[i]
             bin_max = bin_edges[i + 1]
-            column_filt.extend(T_diff[(T_diff >= bin_min) & (T_diff < bin_max)])
+            T_diff_filt.extend(T_diff[(T_diff >= bin_min) & (T_diff < bin_max)])
     T_diff_filt = np.array(T_diff_filt)
     
     # Calculate the offset using the mean of the filtered values
     offset = np.mean([np.min(T_diff_filt), np.max(T_diff_filt)])
     
     return offset
+
 
 def calibrate_strip_Q_pedestal(Q_ch, T_ch):
     """
@@ -1331,7 +1332,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 # Plot histograms of all the pedestal substractions
 
-if create_plots:
+if True:
 
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -1382,8 +1383,8 @@ if create_plots:
             y_F = charge_test[col_F]
             y_B = charge_test[col_B]
             
-            Q_clip_min = -1e10
-            Q_clip_max = 1e10
+            Q_clip_min = -5
+            Q_clip_max = 5
             
             # Plot histograms with Q-specific clipping and bins
             axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
