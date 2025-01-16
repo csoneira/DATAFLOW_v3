@@ -254,6 +254,9 @@ else:
     Q_B_left_pre_cal = 50
     Q_B_right_pre_cal = 300
 
+T_left_side = T_F_left_pre_cal
+T_right_side = T_F_right_pre_cal
+
 Q_left_side = Q_F_left_pre_cal
 Q_right_side = Q_F_right_pre_cal
 
@@ -503,7 +506,7 @@ def calibrate_strip_T(column, num_bins=100):
     return offset
 
 
-def calibrate_strip_Q_pedestal(Q_ch):
+def calibrate_strip_Q_pedestal(Q_ch, T_ch):
     """
     Calibrate the pedestal offset for the charge distribution (Q_ch) by finding
     the first bin of the longest subset of bins with at least one count.
@@ -516,15 +519,40 @@ def calibrate_strip_Q_pedestal(Q_ch):
         float: Offset value to bring the distribution to zero.
     """
     
+    # First let's tale good values of Time, we want to avoid outliers that might confuse the charge calibration
+    cond = (T_ch != 0) & (T_ch > T_left_side) & (T_ch < T_right_side)
+    T_ch = T_ch[cond]
+    Q_ch = Q_ch[cond]
+    
+    counts, bin_edges = np.histogram(T_ch, bins='auto')
+    max_counts = np.max(counts)
+    threshold = max_counts / 10**1.5
+    indices_above_threshold = np.where(counts > threshold)[0]
+
+    if indices_above_threshold.size > 0:
+        min_bin_edge = bin_edges[indices_above_threshold[0]]
+        max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
+        print(f"Minimum bin edge: {min_bin_edge}")
+        print(f"Maximum bin edge: {max_bin_edge}")
+    else:
+        print("No bins have counts above the threshold.")
+    
+    Q_ch = Q_ch[(T_ch > min_bin_edge) & (T_ch < max_bin_edge)]
+    
     # 5% of the maximum count
-    rel_th = 0.01
+    rel_th = 0.015
     rel_th_cal = 0.3
+    abs_th = 3
+    q_quantile = 0.4 # percentile
     
     # First take the values that are not zero
     Q_ch = Q_ch[Q_ch != 0]
     
     # Remove the values that are not in (50,500)
     Q_ch = Q_ch[(Q_ch > Q_left_side) & (Q_ch < Q_right_side)]
+    
+    # Quantile filtering
+    Q_ch = Q_ch[Q_ch > np.percentile(Q_ch, q_quantile)]
     
     # num_bins = int(len(Q_ch) / 100)
     
@@ -538,8 +566,8 @@ def calibrate_strip_Q_pedestal(Q_ch):
     
     # Find bins with at least one count
     th = rel_th * max_counts
-    if th < 1:
-        th = 1
+    if th < abs_th:
+        th = abs_th
     non_empty_bins = counts >= th
 
     # Find the longest contiguous subset of non-empty bins
@@ -567,6 +595,8 @@ def calibrate_strip_Q_pedestal(Q_ch):
     
     # Remove values outside the range (-2, 2)
     Q_ch_cal = Q_ch_cal[(Q_ch_cal > -1) & (Q_ch_cal < 2)]
+    
+    # Q_ch_cal = Q_ch_cal[Q_ch_cal > np.percentile(Q_ch_cal, q_quantile)]
     
     # Calculate histogram
     counts, bin_edges = np.histogram(Q_ch_cal, bins='auto')
@@ -1178,18 +1208,26 @@ charge_test_copy = charge_test.copy()
 
 # New calibration for charges ------------------------------------------------
 QF_pedestal = []
-for key in ['Q1', 'Q2', 'Q3', 'Q4']:
-    Q_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
+for key in ['1', '2', '3', '4']:
+    Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
     Q_F = final_df[Q_F_cols].values
-    QF_pedestal_component = [calibrate_strip_Q_pedestal(Q_F[:,i]) for i in range(4)]
+    
+    T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
+    T_F = final_df[T_F_cols].values
+    
+    QF_pedestal_component = [calibrate_strip_Q_pedestal(Q_F[:,i], T_F[:,i]) for i in range(4)]
     QF_pedestal.append(QF_pedestal_component)
 QF_pedestal = np.array(QF_pedestal)
 
 QB_pedestal = []
-for key in ['Q1', 'Q2', 'Q3', 'Q4']:
-    Q_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
+for key in ['1', '2', '3', '4']:
+    Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
     Q_B = final_df[Q_B_cols].values
-    QB_pedestal_component = [calibrate_strip_Q_pedestal(Q_B[:,i]) for i in range(4)]
+    
+    T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
+    T_B = final_df[T_B_cols].values
+    
+    QB_pedestal_component = [calibrate_strip_Q_pedestal(Q_B[:,i], T_B[:,i]) for i in range(4)]
     QB_pedestal.append(QB_pedestal_component)
 QB_pedestal = np.array(QB_pedestal)
 
@@ -1261,8 +1299,8 @@ if True:
             y_F = charge_test[col_F]
             y_B = charge_test[col_B]
             
-            Q_clip_min = -5
-            Q_clip_max = 5
+            Q_clip_min = -1e10
+            Q_clip_max = 1e10
             
             # Plot histograms with Q-specific clipping and bins
             axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
@@ -1317,21 +1355,85 @@ FEE_calibration = pd.DataFrame(FEE_calibration)
 
 def interpolate_fast_charge(width):
     """
-    Interpolates the Fast Charge for a given Width using the data table.
+    Interpolates the Fast Charge for given Width values using the data table.
 
     Parameters:
-    - width (float): The Width value to interpolate in ns.
+    - width (float or np.ndarray): The Width value(s) to interpolate in ns.
 
     Returns:
-    - float: The interpolated Fast Charge value in fC.
+    - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
     """
-    if width < FEE_calibration['Width'].min() or width > FEE_calibration['Width'].max():
-        raise ValueError(f"Width {width} is outside the interpolation range({FEE_calibration['Width'].min()} to {FEE_calibration['Width'].max()}).")
-
+    # Ensure calibration data is sorted and numpy arrays
+    width_table = FEE_calibration['Width'].to_numpy()
+    fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
+    
+    width_clipped = np.clip(width, width_table.min(), width_table.max())
+    
+    # Check if width values are within the interpolation range
+    if np.any((width < width_table.min()) | (width > width_table.max())):
+        print(
+            f"Some width values are outside the interpolation range "
+            f"({width_table.min()} to {width_table.max()}), but will be clipped."
+        )
+    
+    width_clipped = np.clip(width, width_table.min(), width_table.max())
+    
     # Perform linear interpolation
-    fast_charge = np.interp(width, FEE_calibration['Width'], FEE_calibration['Fast Charge'])
-    return fast_charge
+    return np.interp(width, width_table, fast_charge_table)
 
+
+for key in ['Q1', 'Q2', 'Q3', 'Q4']:
+    for j in range(1, 5):
+        for suffix in ['F', 'B']:
+            col = f"{key}_{suffix}_{j}"
+            if col in charge_test.columns:
+                # Mask non-zero values
+                mask = charge_test_copy[col] != 0
+                # Perform interpolation only for masked values
+                charge_test.loc[mask, col] = interpolate_fast_charge(
+                    charge_test_copy.loc[mask, col].to_numpy()
+                )
+
+
+
+if True:
+    # Create the grand figure for Q values
+    fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+    axes_Q = axes_Q.flatten()
+    
+    for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+        for j in range(4):
+            col_F = f'{key}_F_{j+1}'
+            col_B = f'{key}_B_{j+1}'
+            y_F = charge_test[col_F]
+            y_B = charge_test[col_B]
+            
+            # Plot histograms with Q-specific clipping and bins
+            axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                                 bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
+            axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                                 bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
+            axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
+            axes_Q[i*4 + j].legend()
+            axes_Q[i*4 + j].set_xlabel('Q / fC')
+            
+            if log_scale:
+                axes_Q[i*4 + j].set_yscale('log')  # For Q values
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Grand Figure for calibrated charge (fC), mingo0{station}\n{start_time}", fontsize=16)
+    
+    if save_plots:
+        final_filename = f'{fig_idx}_grand_figure_Q_fC_cal.png'
+        fig_idx += 1
+        
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: plt.show()
+    plt.close(fig_Q)
 
 # -----------------------------------------------------------------------
 
