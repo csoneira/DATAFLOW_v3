@@ -163,7 +163,7 @@ z_positions = np.array([z_1, z_2, z_3, z_4])  # In mm
 # -----------------------------------------------------------------------------
 
 # Plots and savings -------------------------
-create_plots = False
+create_plots = True
 save_plots = True
 show_plots = False
 create_pdf = True
@@ -506,7 +506,7 @@ def calibrate_strip_T(column, num_bins=100):
     return offset
 
 
-def calibrate_strip_T_diff(T_F, T_B, num_bins=100):
+def calibrate_strip_T_diff(T_F, T_B):
     """
     Calibrates a given column of T values by filtering and determining an offset.
 
@@ -524,13 +524,13 @@ def calibrate_strip_T_diff(T_F, T_B, num_bins=100):
     T_F = T_F[cond]
     counts, bin_edges = np.histogram(T_F, bins='auto')
     max_counts = np.max(counts)
-    threshold = max_counts * 0.9
+    threshold = max_counts / 10**1.5
     indices_above_threshold = np.where(counts > threshold)[0]
     if indices_above_threshold.size > 0:
         min_bin_edge_F = bin_edges[indices_above_threshold[0]]
         max_bin_edge_F = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
-        print(f"Minimum bin edge: {min_bin_edge_F}")
-        print(f"Maximum bin edge: {max_bin_edge_F}")
+        # print(f"Minimum bin edge: {min_bin_edge_F}")
+        # print(f"Maximum bin edge: {max_bin_edge_F}")
     else:
         print("No bins have counts above the threshold.")
     
@@ -538,13 +538,13 @@ def calibrate_strip_T_diff(T_F, T_B, num_bins=100):
     T_B = T_B[cond]
     counts, bin_edges = np.histogram(T_B, bins='auto')
     max_counts = np.max(counts)
-    threshold = max_counts * 0.9
+    threshold = max_counts / 10**1.5
     indices_above_threshold = np.where(counts > threshold)[0]
     if indices_above_threshold.size > 0:
         min_bin_edge_B = bin_edges[indices_above_threshold[0]]
         max_bin_edge_B = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
-        print(f"Minimum bin edge: {min_bin_edge_B}")
-        print(f"Maximum bin edge: {max_bin_edge_B}")
+        # print(f"Minimum bin edge: {min_bin_edge_B}")
+        # print(f"Maximum bin edge: {max_bin_edge_B}")
     else:
         print("No bins have counts above the threshold.")
     
@@ -555,9 +555,13 @@ def calibrate_strip_T_diff(T_F, T_B, num_bins=100):
     
     T_diff = T_F - T_B
     
+    print("Zeroes:")
+    print(len(T_diff[T_diff == 0]))
+    
     # ------------------------------------------------------------------------------
     
-    T_rel_th = 0.5
+    T_rel_th = 0.1
+    abs_th = 1
     
     # Apply mask to filter values within the threshold
     mask = (np.abs(T_diff) < T_diff_pre_cal_threshold)
@@ -567,26 +571,43 @@ def calibrate_strip_T_diff(T_F, T_B, num_bins=100):
     T_diff = T_diff[T_diff != 0]
     
     # Calculate histogram
-    counts, bin_edges = np.histogram(T_diff, bins=num_bins)
+    counts, bin_edges = np.histogram(T_diff, bins='auto')
     
-    # Find the maximum number of counts in any bin
+    # Calculate the nunber of counts of the bin that has the most counts
     max_counts = np.max(counts)
     
-    # Identify bins with counts above the relative threshold
-    valid_bins = (counts > T_rel_th * max_counts)
+    # Find bins with at least one count
+    th = T_rel_th * max_counts
+    if th < abs_th:
+        th = abs_th
+    non_empty_bins = counts >= th
+
+    # Find the longest contiguous subset of non-empty bins
+    max_length = 0
+    current_length = 0
+    start_index = 0
+    temp_start = 0
+
+    for i, is_non_empty in enumerate(non_empty_bins):
+        if is_non_empty:
+            if current_length == 0:
+                temp_start = i
+            current_length += 1
+            if current_length > max_length:
+                max_length = current_length
+                start_index = temp_start
+                end_index = i
+        else:
+            current_length = 0
     
-    # Filter the original column values based on the valid bins
-    T_diff_filt = []
-    for i, valid in enumerate(valid_bins):
-        if valid:
-            # Include values within the range of this bin
-            bin_min = bin_edges[i]
-            bin_max = bin_edges[i + 1]
-            T_diff_filt.extend(T_diff[(T_diff >= bin_min) & (T_diff < bin_max)])
-    T_diff_filt = np.array(T_diff_filt)
+    plateau_left = bin_edges[start_index]
+    plateau_right = bin_edges[end_index + 1]
+    
+    print(plateau_left)
+    print(plateau_right)
     
     # Calculate the offset using the mean of the filtered values
-    offset = np.mean([np.min(T_diff_filt), np.max(T_diff_filt)])
+    offset = ( plateau_left + plateau_right ) / 2
     
     return offset
 
@@ -1332,7 +1353,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 # Plot histograms of all the pedestal substractions
 
-if True:
+if create_plots:
 
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -1526,6 +1547,10 @@ for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
     for j in range(4):
         pos_test[f'{key}_diff_{j+1}'] = pos_test[f'{key}_F_{j+1}'] - pos_test[f'{key}_B_{j+1}']
 
+print('Check this out:')
+print(pos_test[f'T1_diff_1'])
+print('---------')
+
 pos_test_copy = pos_test.copy()
 
 # New calibration for charges ------------------------------------------------
@@ -1543,18 +1568,13 @@ Tdiff_cal = np.array(Tdiff_cal)
 
 print(Tdiff_cal)
 
-
-
-
 for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
     for j in range(4):
         mask = pos_test_copy[f'{key}_diff_{j+1}'] != 0
         pos_test.loc[mask, f'{key}_diff_{j+1}'] -= Tdiff_cal[i][j]
 
 
-
-
-if True:
+if create_plots:
 
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -1563,20 +1583,25 @@ if True:
     for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         for j in range(4):
             col_F = f'{key}_diff_{j+1}'
-            y_F = charge_test[col_F]
+            y_F = pos_test[col_F]
             
-            Q_clip_min = -500
-            Q_clip_max = 500
+            Q_clip_min = -5
+            Q_clip_max = 5
             
             # Plot histograms with Q-specific clipping and bins
             axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                  bins=num_bins, alpha=0.5, label=f'{col_F}')
-            axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
+            axes_Q[i*4 + j].set_title(f'{col_F}')
             axes_Q[i*4 + j].legend()
+            axes_Q[i*4 + j].set_xlabel('T_diff / ns')
+            axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
             
             # if log_scale:
             #     axes_Q[i*4 + j].set_yscale('log')  # For Q values
-
+            
+        for ax in axes_Q:
+            ax.axvline(0, color='green', linestyle='--', alpha=0.5)
+        
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
     plt.suptitle(f"Grand Figure for position calibration, new method, mingo0{station}\n{start_time}", fontsize=16)
