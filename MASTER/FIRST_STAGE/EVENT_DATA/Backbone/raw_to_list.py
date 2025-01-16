@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
-input_test = False # Randomly select a file to perform the analysis
 debug_mode = False # Only 10000 rows with all detail
+last_file_test = True
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -267,7 +267,7 @@ Q_diff_pre_cal_threshold = 500
 T_sum_left_pre_cal = -500 # it was -130 for mingo01 etc but for mingo03 it had to be changed
 T_sum_right_pre_cal = 500
 # Tdif
-T_diff_pre_cal_threshold = 500
+T_diff_pre_cal_threshold = 20
 
 # Post-calibration ---------
 # Qsum
@@ -417,7 +417,6 @@ y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 # Z ----------------------------
 # z_positions was defined here
 
-
 yz_big = np.array([[[y, z] for y in y_pos_T[i % 2]] for i, z in enumerate(z_positions)])
 y_width_T1_and_T3 = y_widths[0]
 y_width_T2_and_T4 = y_widths[1]
@@ -446,40 +445,154 @@ lenx  = strip_length
 # -----------------------------------------------------------------------------
 
 # Calibration functions
-def calibrate_strip_T(column):
-    q = calibrate_strip_T_percentile
-    mask = (column < T_diff_pre_cal_threshold) & (column > -T_diff_pre_cal_threshold)
+# def calibrate_strip_T(column):
+#     q = calibrate_strip_T_percentile
+#     mask = (abs(column) < T_diff_pre_cal_threshold)
+#     column = column[mask]
+#     column = column[column != 0]
+#     column = column[(np.percentile(column, q) < column) & (column < np.percentile(column, 100 - q))]
+#     column = column[(np.percentile(column, q) < column) & (column < np.percentile(column, 100 - q))]
+#     column = column[(np.percentile(column, q) < column) & (column < np.percentile(column, 100 - q))]
+#     offset = np.median([np.min(column), np.max(column)])
+#     return offset
+
+
+def calibrate_strip_T(column, num_bins=100):
+    """
+    Calibrates a given column of T values by filtering and determining an offset.
+
+    Parameters:
+        column (numpy.ndarray): Input array of T values.
+        num_bins (int): Number of bins to use in the histogram.
+
+    Returns:
+        float: Calculated offset.
+    """
+    
+    T_rel_th = 0.6
+    
+    # Apply mask to filter values within the threshold
+    mask = (np.abs(column) < T_diff_pre_cal_threshold)
     column = column[mask]
+    
+    # Remove zero values
     column = column[column != 0]
-    column = column[(np.percentile(column, q) < column) & (column < np.percentile(column, 100 - q))]
-    column = column[(np.percentile(column, q) < column) & (column < np.percentile(column, 100 - q))]
-    column = column[(np.percentile(column, q) < column) & (column < np.percentile(column, 100 - q))]
-    offset = np.median([np.min(column), np.max(column)])
+    
+    # Calculate histogram
+    counts, bin_edges = np.histogram(column, bins=num_bins)
+    
+    # Find the maximum number of counts in any bin
+    max_counts = np.max(counts)
+    
+    # Identify bins with counts above the relative threshold
+    valid_bins = (counts > T_rel_th * max_counts)
+    
+    # Filter the original column values based on the valid bins
+    column_filt = []
+    for i, valid in enumerate(valid_bins):
+        if valid:
+            # Include values within the range of this bin
+            bin_min = bin_edges[i]
+            bin_max = bin_edges[i + 1]
+            column_filt.extend(column[(column >= bin_min) & (column < bin_max)])
+    column_filt = np.array(column_filt)
+    
+    # Calculate the offset using the mean of the filtered values
+    offset = np.median([np.min(column_filt), np.max(column_filt)])
+    
     return offset
 
+
 def calibrate_strip_Q_pedestal(Q_ch):
-    # Q_ch = charge of the channel
-    q = calibrate_strip_Q_percentile
+    """
+    Calibrate the pedestal offset for the charge distribution (Q_ch) by finding
+    the first bin of the longest subset of bins with at least one count.
+
+    Parameters:
+        Q_ch (numpy.ndarray): Array of charge values for the channel.
+        num_bins (int): Number of bins to use for the histogram.
+
+    Returns:
+        float: Offset value to bring the distribution to zero.
+    """
     
-    mask_Q = (Q_ch != 0)
+    # 5% of the maximum count
+    rel_th = 0.01
+    rel_th_cal = 0.3
     
-    Q_ch = Q_ch[mask_Q]
+    # First take the values that are not zero
+    Q_ch = Q_ch[Q_ch != 0]
     
-    mask_Q = (Q_ch > Q_left_side) & (Q_ch < Q_right_side)
+    # Remove the values that are not in (50,500)
+    Q_ch = Q_ch[(Q_ch > Q_left_side) & (Q_ch < Q_right_side)]
     
-    Q_ch = Q_ch[mask_Q]
+    # num_bins = int(len(Q_ch) / 100)
     
-    Q_ch = Q_ch[Q_ch > np.percentile(Q_ch, q)]
+    # Calculate histogram
+    counts, bin_edges = np.histogram(Q_ch, bins='auto')
     
-    mean = np.mean(Q_ch)
+    # Calculate the nunber of counts of the bin that has the most counts
+    max_counts = np.max(counts)
+    counts = counts[counts < max_counts]
+    max_counts = np.max(counts)
     
-    std = np.std(Q_ch)
+    # Find bins with at least one count
+    th = rel_th * max_counts
+    if th < 1:
+        th = 1
+    non_empty_bins = counts >= th
+
+    # Find the longest contiguous subset of non-empty bins
+    max_length = 0
+    current_length = 0
+    start_index = 0
+    temp_start = 0
+
+    for i, is_non_empty in enumerate(non_empty_bins):
+        if is_non_empty:
+            if current_length == 0:
+                temp_start = i
+            current_length += 1
+            if current_length > max_length:
+                max_length = current_length
+                start_index = temp_start
+        else:
+            current_length = 0
+
+    # Get the first bin edge of the longest subset
+    offset = bin_edges[start_index]
     
-    Q_ch = Q_ch[ abs(Q_ch - mean) < std ]
+    # Second part --------------------------------------------------------------
+    Q_ch_cal = Q_ch - offset
     
-    offset = np.min(Q_ch)
+    # Remove values outside the range (-2, 2)
+    Q_ch_cal = Q_ch_cal[(Q_ch_cal > -1) & (Q_ch_cal < 2)]
     
-    return offset
+    # Calculate histogram
+    counts, bin_edges = np.histogram(Q_ch_cal, bins='auto')
+    
+    # Find the bin with the most counts
+    max_counts = np.max(counts)
+    max_bin_index = np.argmax(counts)
+    
+    # Calculate the threshold
+    threshold = rel_th_cal * max_counts
+    
+    # Start from the bin with the most counts and move left
+    offset_bin_index = max_bin_index
+    while offset_bin_index > 0 and counts[offset_bin_index] >= threshold:
+        offset_bin_index -= 1
+    
+    # Determine the X value (left edge) of the bin where the threshold is crossed
+    offset_cal = bin_edges[offset_bin_index]
+    
+    print(offset_cal)
+    
+    pedestal = offset + offset_cal
+    
+    pedestal = offset
+    return pedestal
+
 
 def calibrate_strip_Q(Q_sum):
     q = calibrate_strip_Q_percentile
@@ -785,17 +898,36 @@ print("----------------------------------------------------------------------")
 
 # Determine the file path input
 
-if input_test:
-    completed_files = os.listdir(base_directories["completed_directory"])
-    if completed_files:
-        random_file = random.choice(completed_files)
-        file_path = os.path.join(base_directories["completed_directory"], random_file)
-        print(f"Randomly selected file from COMPLETED directory: {file_path}")
+
+unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
+processing_files = os.listdir(base_directories["processing_directory"])
+completed_files = os.listdir(base_directories["completed_directory"])
+
+if last_file_test:
+    if unprocessed_files:
+        # Sort the list of unprocessed files
+        unprocessed_files = sorted(unprocessed_files)
+        file_name = unprocessed_files[-1]
+        unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+        file_path = unprocessed_file_path
+        print(f"Only processing the last file in UNPROCESSED: {unprocessed_file_path}")
+    elif processing_files:
+        # Sort the list of processing files
+        processing_files = sorted(processing_files)
+        file_name = processing_files[-1]
+        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+        file_path = processing_file_path
+        print(f"Only processing the last file in PROCESSING: {processing_file_path}")
+    elif completed_files:
+        # Sort the list of processing files
+        processing_files = sorted(completed_files)
+        file_name = completed_files[-1]
+        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+        file_path = completed_file_path
+        print(f"Only processing the last file in COMPLETED: {completed_file_path}")
     else:
-        sys.exit("No files found in COMPLETED directory.")
-    print(f"Running test with file: {file_path}")
+        sys.exit("No files to process in UNPROCESSED nor PROCESSING nor COMPLETED.")
 else:
-    unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
     if unprocessed_files:
         for file_name in unprocessed_files:
             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
@@ -823,8 +955,10 @@ else:
             break
     else:
         # Check for files in PROCESSING
-        processing_files = os.listdir(base_directories["processing_directory"])
         if processing_files:
+            # Shuffle the elements in processing_files
+            print('Shuffling the files in PROCESSING...')
+            random.shuffle(processing_files)
             for file_name in processing_files:
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
@@ -844,7 +978,7 @@ else:
                 break
         else:
             sys.exit("No files to process in UNPROCESSED or PROCESSING.")
-    
+
 
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
 right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
@@ -986,7 +1120,8 @@ if create_plots:
                 axes_T[i*4 + j].set_yscale('log')  # For T values
 
     plt.tight_layout()
-    plt.suptitle(f"Grand Figure for T values, mingo0{station}\n{start_time}", fontsize=16, y=1.05)
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Grand Figure for T values, mingo0{station}\n{start_time}", fontsize=16)
     
     if save_plots:
         final_filename = f'{fig_idx}_grand_figure_T.png'
@@ -1022,7 +1157,8 @@ if create_plots:
                 axes_Q[i*4 + j].set_yscale('log')  # For Q values
 
     plt.tight_layout()
-    plt.suptitle(f"Grand Figure for Q values, mingo0{station}\n{start_time}", fontsize=16, y=1.05)
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Grand Figure for Q values, mingo0{station}\n{start_time}", fontsize=16)
     
     if save_plots:
         final_filename = f'{fig_idx}_grand_figure_Q.png'
@@ -1099,7 +1235,8 @@ if True:
                 axes_Q[i*4 + j].set_yscale('log')  # For Q values
 
     plt.tight_layout()
-    plt.suptitle(f"Grand Figure for pedestal substracted Q values, mingo0{station}\n{start_time}", fontsize=16, y=1.05)
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Grand Figure for pedestal substracted values, mingo0{station}\n{start_time}", fontsize=16)
     
     if save_plots:
         final_filename = f'{fig_idx}_grand_figure_Q_pedestal.png'
@@ -1134,11 +1271,15 @@ if True:
                                  bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
             axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
             axes_Q[i*4 + j].legend()
-
-    plt.tight_layout()
-    plt.suptitle(f"Grand Figure for pedestal substracted Q values, mingo0{station}\n{start_time}", fontsize=16, y=1.05)
+            # Show between -5 and 5
+            axes_Q[i*4 + j].set_xlim([-5, 5])
+    # Display a vertical green dashed, alpha = 0.5 line at 0
+    for ax in axes_Q:
+        ax.axvline(0, color='green', linestyle='--', alpha=0.5)
     
-    plt.xlim([-5, 5])
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Grand Figure for pedestal substracted values (zoom), mingo0{station}\n{start_time}", fontsize=16)
     
     if save_plots:
         final_filename = f'{fig_idx}_grand_figure_Q_pedestal_zoom.png'
@@ -3916,7 +4057,7 @@ calibrations_df.to_csv(csv_path, index=False, float_format='%.5g')
 print(f'{csv_path} updated with the calibrations for this folder.')     
 
 # Create and save the PDF -----------------------------------------------------
-if create_pdf and not input_test:
+if create_pdf:
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             for png in plot_list:
