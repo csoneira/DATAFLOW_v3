@@ -165,5 +165,7 @@ process_directory "$DONE_DIR"
 # Call the python joiner execution
 python3 $python_script_path "$station"
 
-echo '--------------------------- bash script done ---------------------------'
+echo '------------------------------------------------------'
+echo "log_bring_and_clean.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
+echo '------------------------------------------------------'
 

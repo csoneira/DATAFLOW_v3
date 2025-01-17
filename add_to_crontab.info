@@ -5,28 +5,28 @@
 # Station 1 Tasks
 */15 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 1 >> ~/cron_logs/log_bring_and_clean_1.log 2>&1
 0 2 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/REANALYSIS/reanalysis.py 1 >> ~/cron_logs/reanalysis_1.log 2>&1
-*/30 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 1 >> ~/cron_logs/bring_and_analyze_events_1.log 2>&1
+*/10 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 1 >> ~/cron_logs/bring_and_analyze_events_1.log 2>&1
 */10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 1 >> ~/cron_logs/merge_large_table_1.log 2>&1
 */11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 1 >> ~/cron_logs/corrector_1.log 2>&1
 
 # Station 2 Tasks
 */15 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 2 >> ~/cron_logs/log_bring_and_clean_2.log 2>&1
 0 2 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/REANALYSIS/reanalysis.py 2 >> ~/cron_logs/reanalysis_2.log 2>&1
-*/30 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 2 >> ~/cron_logs/bring_and_analyze_events_2.log 2>&1
+*/10 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 2 >> ~/cron_logs/bring_and_analyze_events_2.log 2>&1
 */10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 2 >> ~/cron_logs/merge_large_table_2.log 2>&1
 */11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 2 >> ~/cron_logs/corrector_2.log 2>&1
 
 # Station 3 Tasks
 */15 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 3 >> ~/cron_logs/log_bring_and_clean_3.log 2>&1
 0 2 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/REANALYSIS/reanalysis.py 3 >> ~/cron_logs/reanalysis_3.log 2>&1
-*/30 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 3 >> ~/cron_logs/bring_and_analyze_events_3.log 2>&1
+*/10 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 3 >> ~/cron_logs/bring_and_analyze_events_3.log 2>&1
 */10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 3 >> ~/cron_logs/merge_large_table_3.log 2>&1
 */11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 3 >> ~/cron_logs/corrector_3.log 2>&1
 
 # Station 4 Tasks
 */15 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 4 >> ~/cron_logs/log_bring_and_clean_4.log 2>&1
 0 2 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/REANALYSIS/reanalysis.py 4 >> ~/cron_logs/reanalysis_4.log 2>&1
-*/30 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 4 >> ~/cron_logs/bring_and_analyze_events_4.log 2>&1
+*/10 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 4 >> ~/cron_logs/bring_and_analyze_events_4.log 2>&1
 */10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 4 >> ~/cron_logs/merge_large_table_4.log 2>&1
 */11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 4 >> ~/cron_logs/corrector_4.log 2>&1
 

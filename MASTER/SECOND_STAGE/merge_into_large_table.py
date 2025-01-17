@@ -10,6 +10,7 @@ import os
 import pandas as pd
 from glob import glob
 import sys
+import datetime
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
@@ -90,3 +91,7 @@ else:
 combined_df.to_csv(output_file, index=False)
 
 print(f"Data has been merged and saved to {output_file}")
+
+print('------------------------------------------------------')
+print(f"merge_into_large_table.py completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print('------------------------------------------------------')

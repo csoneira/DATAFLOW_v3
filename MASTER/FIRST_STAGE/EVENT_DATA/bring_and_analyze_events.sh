@@ -69,3 +69,6 @@ python3 "$raw_to_list_directory" "$station"
 echo "Processing list files with Python script..."
 python3 "$event_accumulator_directory" "$station"
 
+echo '------------------------------------------------------'
+echo "bring_and_analyze_events.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
+echo '------------------------------------------------------'

@@ -650,4 +650,6 @@ grafana_df.to_csv(grafana_save_filename, index=False)
 print(f'Data for Grafana saved to {grafana_save_filename}.')
 
 
-# %%
+print('------------------------------------------------------')
+print(f"corrector.py completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print('------------------------------------------------------')

@@ -262,3 +262,6 @@ print(f"Data saved to {csv_file}.")
 
 print('--------------------------- python reanalysis ends ---------------------------')
 
+print('------------------------------------------------------')
+print(f"reanalysis.py (Copernicus) completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print('------------------------------------------------------')
