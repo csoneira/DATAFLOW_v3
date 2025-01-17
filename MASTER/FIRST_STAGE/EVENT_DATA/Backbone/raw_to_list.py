@@ -165,7 +165,7 @@ z_positions = np.array([z_1, z_2, z_3, z_4])  # In mm
 
 # Plots and savings -------------------------
 crontab_execution = True
-create_plots = False
+create_plots = True
 save_plots = True
 show_plots = False
 create_pdf = True
@@ -896,7 +896,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     if r_squared < 0.5:
         print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
     
-    if True:
+    if create_plots:
         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
         y_fit = polynomial(x_fit, *coeffs)
         
@@ -922,7 +922,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
             plt.title(f"Fig. {output_order}, {title}")
         plt.xlabel(x_label)
         plt.ylabel(y_label)
-        plt.xlim([-5, 400])
+        plt.xlim([-5, 200])
         plt.ylim([-11, 11])
         
         plt.grid()
@@ -1452,7 +1452,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 # Plot histograms of all the pedestal substractions
 
-if True:
+if create_plots:
 
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
