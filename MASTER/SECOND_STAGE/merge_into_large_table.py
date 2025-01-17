@@ -10,7 +10,7 @@ import os
 import pandas as pd
 from glob import glob
 import sys
-import datetime
+from datetime import datetime
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
