@@ -165,7 +165,7 @@ z_positions = np.array([z_1, z_2, z_3, z_4])  # In mm
 
 # Plots and savings -------------------------
 crontab_execution = True
-create_plots = True
+create_plots = False
 save_plots = True
 show_plots = False
 create_pdf = True
@@ -336,8 +336,8 @@ strip_time_diff_bound = 10
 # Front-back charge
 distance_sum_charges_left_fit = -5
 distance_sum_charges_right_fit = 200
-distance_diff_charges_up_fit = 5
-distance_diff_charges_low_fit = -5
+distance_diff_charges_up_fit = 10
+distance_diff_charges_low_fit = -10
 distance_sum_charges_plot = 800
 front_back_fit_threshold = 4 # It was 1.4
 
@@ -808,6 +808,87 @@ def scatter_2d_and_fit(xdat, ydat, title, x_label, y_label, name_of_file):
         print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
     
     if create_plots:
+        x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
+        y_fit = polynomial(x_fit, *coeffs)
+        
+        x_final = xdat_plot
+        y_final = ydat_plot - polynomial(xdat_plot, *coeffs)
+        
+        plt.close()
+        
+        # (16,6) was very nice
+        if article_format:
+            ww = (10.84, 4)
+        else:
+            ww = (13.33, 5)
+            
+        plt.figure(figsize=ww)  # Use plt.subplots() to create figure and axis    
+        plt.scatter(xdat_plot, ydat_plot, s=1, label="Original data points")
+        # plt.scatter(xdat_pre_fit, ydat_pre_fit, s=1, color="magenta", label="Points for prefitting")
+        plt.scatter(xdat_fit, ydat_fit, s=1, color="orange", label="Points for fitting")
+        plt.scatter(x_final, y_final, s=1, color="green", label="Calibrated points")
+        plt.plot(x_fit, y_fit, 'r-', label='Polynomial Fit: ' + ' '.join([f'a{i}={coeff:.2g}' for i, coeff in enumerate(coeffs[::-1])]))
+        
+        if not article_format:
+            plt.title(f"Fig. {output_order}, {title}")
+        plt.xlabel(x_label)
+        plt.ylabel(y_label)
+        plt.xlim([-5, 400])
+        plt.ylim([-11, 11])
+        
+        plt.grid()
+        plt.legend(markerscale=5)  # Increase marker scale by 5 times
+        
+        plt.tight_layout()
+        # plt.savefig(f"{output_order}_{name_of_file}.png", format="png")
+        
+        if save_plots:
+            name_of_file = 'charge_diff_vs_charge_sum_cal'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+            
+        if show_plots: plt.show()
+        plt.close()
+    return coeffs
+
+
+def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
+    global fig_idx
+    
+    ydat_translated = ydat
+
+    xdat_plot = xdat[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
+    ydat_plot = ydat_translated[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
+    xdat_pre_fit = xdat[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
+    ydat_pre_fit = ydat_translated[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
+    
+    # Fit a polynomial of specified degree using curve_fit
+    initial_guess = [1] * (degree_of_polynomial + 1)
+    coeffs, _ = curve_fit(polynomial, xdat_pre_fit, ydat_pre_fit, p0=initial_guess)
+    y_pre_fit = polynomial(xdat_pre_fit, *coeffs)
+    
+    # Filter data for fitting based on residues
+    threshold = front_back_fit_threshold  # Set your desired threshold here
+    residues = np.abs(ydat_pre_fit - y_pre_fit)  # Calculate residues
+    xdat_fit = xdat_pre_fit[residues < threshold]
+    ydat_fit = ydat_pre_fit[residues < threshold]
+    
+    # Perform fit on filtered data
+    coeffs, _ = curve_fit(polynomial, xdat_fit, ydat_fit, p0=initial_guess)
+    
+    y_mean = np.mean(ydat_fit)
+    y_check = polynomial(xdat_fit, *coeffs)
+    ss_res = np.sum((ydat_fit - y_check)**2)
+    ss_tot = np.sum((ydat_fit - y_mean)**2)
+    r_squared = 1 - (ss_res / ss_tot)
+    if r_squared < 0.5:
+        print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
+    
+    if True:
         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
         y_fit = polynomial(x_fit, *coeffs)
         
@@ -1744,7 +1825,7 @@ for key in ['Q1', 'Q2', 'Q3', 'Q4']:
     
     v = Q_sum[:,0]
     v = v[v != 0]
-    print(v)
+    # print(v)
     
     calibration_q_component = [calibrate_strip_Q(Q_sum[:,i]) for i in range(4)]
     calibration_Q.append(calibration_q_component)
@@ -2008,18 +2089,14 @@ if charge_front_back:
             Q_sum = calibrated_data[f'Q{key}_Q_sum_{i+1}'].values
             Q_diff = calibrated_data[f'Q{key}_Q_diff_{i+1}'].values
 
-            # Create a copy of Q_diff to preserve original values
-            Q_diff_cal = Q_diff.copy()
-
             # Apply condition to filter non-zero Q_sum and Q_diff
             cond = (Q_sum != 0) & (Q_diff != 0)
-            Q_sum_filtered = Q_sum[cond]
-            Q_diff_filtered = Q_diff[cond]
-
-            # Adjust values using the pedestal
-            Q_sum_adjusted = Q_sum_filtered - (QF_pedestal[i][j] + QF_pedestal[i][j]) / 2
-            Q_diff_adjusted = Q_diff_filtered - (QF_pedestal[i][j] - QF_pedestal[i][j]) / 2
-
+            Q_sum_adjusted = Q_sum[cond].copy()
+            Q_diff_adjusted = Q_diff[cond].copy()
+            
+            print(len(Q_sum_adjusted))
+            print(len(Q_diff_adjusted))
+            
             # Skip correction if no data is left after filtering
             if np.sum(Q_sum_adjusted) == 0:
                 continue
@@ -2029,17 +2106,16 @@ if charge_front_back:
             x_label = "Charge sum"
             y_label = "Charge diff"
             name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
-            coeffs = scatter_2d_and_fit(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
+            coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
+            
+            # Calculate the correction based on filtered data
+            correction = polynomial(Q_diff[Q_diff != 0], *coeffs)
 
-            # Calculate the correction
-            correction = polynomial(Q_sum_filtered, *coeffs)
-
-            # Apply correction to the original Q_diff (only where non-zero)
-            non_zero_indices = Q_diff_cal != 0  # Mask for non-zero values
-            Q_diff_cal[non_zero_indices] -= correction  # Apply correction
+            # Apply correction directly to non-zero values
+            Q_diff[Q_diff != 0] -= correction
 
             # Update the DataFrame with corrected values
-            calibrated_data[f'Q{key}_Q_diff_{i+1}'] = Q_diff_cal
+            calibrated_data[f'Q{key}_Q_diff_{i+1}'] = Q_diff
         
     # ADD THE SUBFIGURES HERE OF THE 16 CALIBRATIONS
     print('Charge front-back correction performed.')
