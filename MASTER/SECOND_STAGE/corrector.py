@@ -131,6 +131,7 @@ charge_types = ['count_in_1_sum', 'avalanche_1_sum', 'streamer_1_sum',
 # Load the data
 print('Reading the CSV file...')
 data_df = pd.read_csv(filepath)
+print(filepath)
 print('File loaded successfully.')
 
 
@@ -360,11 +361,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-show_plots = True
-
 # Define the exponential model
-def fit_model(x, a, b, c):
-    return b / 100 * x
+def fit_model(x, beta):
+    # [beta] = %/mbar
+    return beta / 100 * x
 
 def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=True):
     
@@ -388,13 +388,13 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=T
             df['log_I_over_I0'],
             sigma=df['unc_log_I_over_I0'],  # Only the Y uncertainty
             absolute_sigma=True,
-            p0=(1, 0.1, 0)
+            p0=1
         )
-        a, b, c = popt  # Extract parameters
+        b = popt  # Extract parameters
         
         # Define eta_P as the parameter b (rate of change in the exponent)
         eta_P = b
-        eta_P_uncertainty = np.sqrt(np.diag(pcov))[1]
+        eta_P_uncertainty = np.sqrt(np.diag(pcov))[0]
         
         # Plot the fitting
         if create_plots:
@@ -410,8 +410,8 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=T
             plt.plot(df['delta_P'], fit_model(df['delta_P'], *popt), color='red', label='Fit')
 
             # Extract b (beta) and its uncertainty
-            b = popt[1]  # Parameter b from the fit
-            unc_b = np.sqrt(np.diag(pcov))[1]  # Uncertainty of parameter b
+            b = popt[0]  # Parameter b from the fit
+            unc_b = np.sqrt(np.diag(pcov))[0]  # Uncertainty of parameter b
 
             # Add labels and title
             plt.xlabel('Delta P')
