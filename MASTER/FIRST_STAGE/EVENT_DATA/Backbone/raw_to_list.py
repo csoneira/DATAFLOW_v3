@@ -3,7 +3,7 @@
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-last_file_test = False
+last_file_test = True
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -175,8 +175,7 @@ number_of_time_cal_figures = 3
 save_calibrations = True
 save_full_data = False
 presentation = False
-presentation_plots = True
-save_figures = False
+presentation_plots = False
 force_replacement = True # Creates a new datafile even if there is already one that looks complete
 article_format = False
 
@@ -900,7 +899,6 @@ from scipy.stats import norm
 
 def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     global fig_idx
-    # global save_figures
 
     fig = plt.figure(figsize=(8, 5))
     ax = fig.add_subplot(1, 1, 1)
@@ -1050,7 +1048,7 @@ if last_file_test:
         processing_file_path = unprocessed_file_path
         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
         file_path = processing_file_path
-        print(f"Only processing the last file in UNPROCESSED: {unprocessed_file_path}")
+        print(f"ATTENTION: processing the last file in UNPROCESSED: {unprocessed_file_path}")
     elif processing_files:
         # Sort the list of processing files
         processing_files = sorted(processing_files)
@@ -1058,7 +1056,7 @@ if last_file_test:
         processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
         file_path = processing_file_path
-        print(f"Only processing the last file in PROCESSING: {processing_file_path}")
+        print(f"ATTENTION: processing the last file in PROCESSING: {processing_file_path}")
     elif completed_files:
         # Sort the list of processing files
         processing_files = sorted(completed_files)
@@ -1066,7 +1064,7 @@ if last_file_test:
         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
         processing_file_path = completed_file_path
         file_path = processing_file_path
-        print(f"Only processing the last file in COMPLETED: {completed_file_path}")
+        print(f"ATTENTION: processing the last file in COMPLETED: {completed_file_path}")
     else:
         sys.exit("No files to process in UNPROCESSED nor PROCESSING nor COMPLETED.")
 else:
@@ -1974,36 +1972,75 @@ print("------------------- Charge front-back correction ---------------------")
 print("----------------------------------------------------------------------")
 
 if charge_front_back:
+    # for key in [1, 2, 3, 4]:
+    #     for i in range(4):
+    #         Q_sum = calibrated_data[f'Q{key}_Q_sum_{i+1}'].values
+    #         Q_diff = calibrated_data[f'Q{key}_Q_diff_{i+1}'].values
+            
+    #         # Apply correction only where Q_diff is not zero
+    #         Q_diff_cal = Q_diff.copy()  # Copy original Q_diff to preserve values
+            
+    #         cond = (Q_sum != 0) & (Q_diff != 0)
+    #         Q_sum = Q_sum[cond]
+    #         Q_diff = Q_diff[cond]
+            
+    #         Q_sum = Q_sum - ( QF_pedestal[i][j] + QF_pedestal[i][j] ) / 2
+    #         Q_diff = Q_diff - ( QF_pedestal[i][j] - QF_pedestal[i][j] ) / 2
+            
+    #         if np.sum(Q_sum) == 0: continue # Do not correct if there is no data
+    #         title = f"Q{key}_{i+1}. Charge diff. vs. charge sum."
+    #         x_label = "Charge sum"
+    #         y_label = "Charge diff"
+    #         name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
+    #         coeffs = scatter_2d_and_fit(Q_sum, Q_diff, title, x_label, y_label, name_of_file)
+    #         correction = polynomial(Q_sum, *coeffs)
+
+    #         # Apply correction to non-zero Q_diff values
+    #         non_zero_indices = Q_diff_cal != 0  # Mask for non-zero values
+    #         Q_diff_cal[non_zero_indices] = Q_diff_cal[non_zero_indices] - correction[non_zero_indices]
+            
+    #         # Update the DataFrame with corrected values
+    #         calibrated_data[f'Q{key}_Q_diff_{i+1}'] = Q_diff_cal
+    
     for key in [1, 2, 3, 4]:
         for i in range(4):
+            # Extract data from the DataFrame
             Q_sum = calibrated_data[f'Q{key}_Q_sum_{i+1}'].values
             Q_diff = calibrated_data[f'Q{key}_Q_diff_{i+1}'].values
-            
+
+            # Create a copy of Q_diff to preserve original values
+            Q_diff_cal = Q_diff.copy()
+
+            # Apply condition to filter non-zero Q_sum and Q_diff
             cond = (Q_sum != 0) & (Q_diff != 0)
-            Q_sum = Q_sum[cond]
-            Q_diff = Q_diff[cond]
-            
-            Q_sum = Q_sum - ( QF_pedestal[i][j] + QF_pedestal[i][j] ) / 2
-            Q_diff = Q_diff - ( QF_pedestal[i][j] - QF_pedestal[i][j] ) / 2
-            
-            if np.sum(Q_sum) == 0: continue # Do not correct if there is no data
+            Q_sum_filtered = Q_sum[cond]
+            Q_diff_filtered = Q_diff[cond]
+
+            # Adjust values using the pedestal
+            Q_sum_adjusted = Q_sum_filtered - (QF_pedestal[i][j] + QF_pedestal[i][j]) / 2
+            Q_diff_adjusted = Q_diff_filtered - (QF_pedestal[i][j] - QF_pedestal[i][j]) / 2
+
+            # Skip correction if no data is left after filtering
+            if np.sum(Q_sum_adjusted) == 0:
+                continue
+
+            # Perform scatter plot and fit
             title = f"Q{key}_{i+1}. Charge diff. vs. charge sum."
             x_label = "Charge sum"
             y_label = "Charge diff"
             name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
-            coeffs = scatter_2d_and_fit(Q_sum, Q_diff, title, x_label, y_label, name_of_file)
-            correction = polynomial(Q_sum, *coeffs)
+            coeffs = scatter_2d_and_fit(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
 
-            # Apply correction only where Q_diff is not zero
-            Q_diff_cal = Q_diff.copy()  # Copy original Q_diff to preserve values
+            # Calculate the correction
+            correction = polynomial(Q_sum_filtered, *coeffs)
 
-            # Apply correction to non-zero Q_diff values
-            non_zero_indices = Q_diff != 0  # Mask for non-zero values
-            Q_diff_cal[non_zero_indices] = Q_diff[non_zero_indices] - correction[non_zero_indices]
-            
+            # Apply correction to the original Q_diff (only where non-zero)
+            non_zero_indices = Q_diff_cal != 0  # Mask for non-zero values
+            Q_diff_cal[non_zero_indices] -= correction  # Apply correction
+
             # Update the DataFrame with corrected values
             calibrated_data[f'Q{key}_Q_diff_{i+1}'] = Q_diff_cal
-    
+        
     # ADD THE SUBFIGURES HERE OF THE 16 CALIBRATIONS
     print('Charge front-back correction performed.')
     
