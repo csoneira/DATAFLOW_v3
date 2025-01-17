@@ -305,8 +305,8 @@ pos_filter = 600
 proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = -0.01 # -0.01
-slowness_filter_right = 0.02 # 0.025
+slowness_filter_left = -0.02 # -0.01
+slowness_filter_right = 0.025 # 0.025
 charge_strip_left_filter = -1e6
 charge_strip_right_filter = 1e6
 charge_event_left_filter = -1e6
@@ -2108,8 +2108,8 @@ if charge_front_back:
             Q_sum_adjusted = Q_sum[cond].copy()
             Q_diff_adjusted = Q_diff[cond].copy()
             
-            print(len(Q_sum_adjusted))
-            print(len(Q_diff_adjusted))
+            # print(len(Q_sum_adjusted))
+            # print(len(Q_diff_adjusted))
             
             # Skip correction if no data is left after filtering
             if np.sum(Q_sum_adjusted) == 0:
@@ -3609,6 +3609,12 @@ if create_plots:
         t_diff = valid_rows[t_diff_col]
         q_sum = valid_rows[q_sum_col]
         y = valid_rows[y_col]
+        
+        cond = q_sum < 50
+        t_sum = t_sum[cond]
+        t_diff = t_diff[cond]
+        q_sum = q_sum[cond]
+        y = y[cond]
 
         # Hexbin plot for all combinations (6 combinations for each i_plane)
         axes[(i_plane-1)*6].hexbin(t_sum, t_diff, gridsize=50, cmap='turbo')
@@ -3630,7 +3636,8 @@ if create_plots:
         axes[(i_plane-1)*6 + 5].set_title(f'{q_sum_col} vs {y_col}')
     
     plt.tight_layout()
-    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane')
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane', fontsize=16)
     
     if save_plots:
         name_of_file = 'rpc_variables_hexbin_combinations'
@@ -4407,6 +4414,7 @@ if create_plots:
         ax.legend()
     
     plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
     plt.suptitle('Event Rate Histograms with Poisson Fits', fontsize=16, y=1.03)
     
     if save_plots:
@@ -4516,14 +4524,19 @@ print(f'{csv_path} updated with the calibrations for this folder.')
 if create_pdf:
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
-            for png in plot_list:
-                # Open the PNG file directly using PIL to get its dimensions
-                img = Image.open(png)
-                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)  # Set figsize and dpi
-                ax.imshow(img)
-                ax.axis('off')  # Hide the axes
-                pdf.savefig(fig, bbox_inches='tight')  # Save figure tightly fitting the image
-                plt.close(fig)  # Close the figure after adding it to the PDF
+            if plot_list:
+                for png in plot_list:
+                    if os.exists(png):
+                        print(f"Error: {png} does not exist.")
+                        continue
+                    
+                    # Open the PNG file directly using PIL to get its dimensions
+                    img = Image.open(png)
+                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)  # Set figsize and dpi
+                    ax.imshow(img)
+                    ax.axis('off')  # Hide the axes
+                    pdf.savefig(fig, bbox_inches='tight')  # Save figure tightly fitting the image
+                    plt.close(fig)  # Close the figure after adding it to the PDF
 
         # Remove PNG files after creating the PDF
         for png in plot_list:
