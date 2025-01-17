@@ -3,7 +3,7 @@
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-last_file_test = True
+last_file_test = False
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -1047,6 +1047,7 @@ if last_file_test:
         file_name = unprocessed_files[-1]
         unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
         processing_file_path = unprocessed_file_path
+        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
         file_path = processing_file_path
         print(f"Only processing the last file in UNPROCESSED: {unprocessed_file_path}")
     elif processing_files:
@@ -1054,6 +1055,7 @@ if last_file_test:
         processing_files = sorted(processing_files)
         file_name = processing_files[-1]
         processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
         file_path = processing_file_path
         print(f"Only processing the last file in PROCESSING: {processing_file_path}")
     elif completed_files:

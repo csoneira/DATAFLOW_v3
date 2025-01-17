@@ -67,5 +67,5 @@ python3 "$raw_to_list_directory" "$station"
 
 # Process the data: event_accumulator.py
 echo "Processing list files with Python script..."
-#python3 "$event_accumulator_directory" "$station"
+python3 "$event_accumulator_directory" "$station"
 
