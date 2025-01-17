@@ -301,6 +301,3 @@ updated_df.reset_index(inplace=True)
 updated_df.to_csv(final_output_path, index=False, float_format="%.5g")
 
 print(f"Updated merged data saved to {final_output_path}")
-
-print('--------------------------- python script done ---------------------------')
-

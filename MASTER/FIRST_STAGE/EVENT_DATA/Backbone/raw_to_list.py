@@ -3,7 +3,7 @@
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-last_file_test = True
+last_file_test = False
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
