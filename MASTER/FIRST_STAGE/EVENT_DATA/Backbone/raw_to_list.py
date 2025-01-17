@@ -613,7 +613,7 @@ def calibrate_strip_T_diff(T_F, T_B):
     return offset
 
 
-def calibrate_strip_Q_pedestal(Q_ch, T_ch):
+def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
     """
     Calibrate the pedestal offset for the charge distribution (Q_ch) by finding
     the first bin of the longest subset of bins with at least one count.
@@ -628,6 +628,14 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch):
     
     # First let's tale good values of Time, we want to avoid outliers that might confuse the charge calibration
     cond = (T_ch != 0) & (T_ch > T_left_side) & (T_ch < T_right_side)
+    T_ch = T_ch[cond]
+    Q_ch = Q_ch[cond]
+    Q_other = Q_other[cond]
+    
+    # Condition based on the charge difference: it cannot be too high
+    Q_dif = Q_ch - Q_other
+    percentile = 5
+    cond = ( Q_dif > np.percentile(Q_dif, percentile) ) & ( Q_dif < np.percentile(Q_dif, 100 - percentile ) )
     T_ch = T_ch[cond]
     Q_ch = Q_ch[cond]
     
@@ -1403,22 +1411,28 @@ for key in ['1', '2', '3', '4']:
     Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
     Q_F = final_df[Q_F_cols].values
     
+    Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
+    Q_B = final_df[Q_B_cols].values
+    
     T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
     T_F = final_df[T_F_cols].values
     
-    QF_pedestal_component = [calibrate_strip_Q_pedestal(Q_F[:,i], T_F[:,i]) for i in range(4)]
+    QF_pedestal_component = [calibrate_strip_Q_pedestal(Q_F[:,i], T_F[:,i], Q_B[:,i]) for i in range(4)]
     QF_pedestal.append(QF_pedestal_component)
 QF_pedestal = np.array(QF_pedestal)
 
 QB_pedestal = []
 for key in ['1', '2', '3', '4']:
+    Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
+    Q_F = final_df[Q_F_cols].values
+    
     Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
     Q_B = final_df[Q_B_cols].values
     
     T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
     T_B = final_df[T_B_cols].values
     
-    QB_pedestal_component = [calibrate_strip_Q_pedestal(Q_B[:,i], T_B[:,i]) for i in range(4)]
+    QB_pedestal_component = [calibrate_strip_Q_pedestal(Q_B[:,i], T_B[:,i], Q_F[:,i]) for i in range(4)]
     QB_pedestal.append(QB_pedestal_component)
 QB_pedestal = np.array(QB_pedestal)
 
@@ -1438,7 +1452,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 # Plot histograms of all the pedestal substractions
 
-if create_plots:
+if True:
 
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -1844,7 +1858,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
         mask = new_df[f'{key}_Q_sum_{j+1}'] != 0
         # calibrated_data.loc[mask, f'{key}_Q_sum_{j+1}'] -= calibration_Q[i][j]
-        calibrated_data.loc[mask, f'{key}_Q_sum_{j+1}'] -= ( QF_pedestal[i][j] + QF_pedestal[i][j] ) / 2
+        calibrated_data.loc[mask, f'{key}_Q_sum_{j+1}'] -= ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
 
 
 print("--------------------- Filter 3: calibrated data ----------------------")
@@ -1927,7 +1941,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
         mask = new_df[f'{key}_Q_diff_{j+1}'] != 0
         # calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= calibration_Q_FB[i][j]
-        calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= ( QF_pedestal[i][j] - QF_pedestal[i][j] ) / 2
+        calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
 
 # Add datetime column to calibrated_data -----------------------------
 calibrated_data['datetime'] = final_df['datetime']
@@ -2065,8 +2079,8 @@ if charge_front_back:
     #         Q_sum = Q_sum[cond]
     #         Q_diff = Q_diff[cond]
             
-    #         Q_sum = Q_sum - ( QF_pedestal[i][j] + QF_pedestal[i][j] ) / 2
-    #         Q_diff = Q_diff - ( QF_pedestal[i][j] - QF_pedestal[i][j] ) / 2
+    #         Q_sum = Q_sum - ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
+    #         Q_diff = Q_diff - ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
             
     #         if np.sum(Q_sum) == 0: continue # Do not correct if there is no data
     #         title = f"Q{key}_{i+1}. Charge diff. vs. charge sum."
@@ -4463,10 +4477,10 @@ new_row = {'Time': start_time}
 for i, module in enumerate(['M1', 'M2', 'M3', 'M4']):
     for j in range(4):
         strip = j + 1
-        new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QF_pedestal[i][j] ) / 2
+        new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
         new_row[f'{module}_s{strip}_T_sum'] = calibration_times[i, j]
         # new_row[f'{module}_s{strip}_Q_dif'] = calibration_Q_FB[i, j]
-        new_row[f'{module}_s{strip}_Q_dif'] = ( QF_pedestal[i][j] - QF_pedestal[i][j] ) / 2
+        new_row[f'{module}_s{strip}_Q_dif'] = ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
         # new_row[f'{module}_s{strip}_T_dif'] = calibration_T[i, j]
         new_row[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j]
 
