@@ -164,6 +164,7 @@ z_positions = np.array([z_1, z_2, z_3, z_4])  # In mm
 # -----------------------------------------------------------------------------
 
 # Plots and savings -------------------------
+crontab_execution = True
 create_plots = True
 save_plots = True
 show_plots = False
@@ -556,8 +557,8 @@ def calibrate_strip_T_diff(T_F, T_B):
     
     T_diff = ( T_F - T_B ) / 2
     
-    print("Zeroes:")
-    print(len(T_diff[T_diff == 0]))
+    # print("Zeroes:")
+    # print(len(T_diff[T_diff == 0]))
     
     # ------------------------------------------------------------------------------
     
@@ -604,8 +605,8 @@ def calibrate_strip_T_diff(T_F, T_B):
     plateau_left = bin_edges[start_index]
     plateau_right = bin_edges[end_index + 1]
     
-    print(plateau_left)
-    print(plateau_right)
+    # print(plateau_left)
+    # print(plateau_right)
     
     # Calculate the offset using the mean of the filtered values
     offset = ( plateau_left + plateau_right ) / 2
@@ -639,8 +640,8 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch):
     if indices_above_threshold.size > 0:
         min_bin_edge = bin_edges[indices_above_threshold[0]]
         max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
-        print(f"Minimum bin edge: {min_bin_edge}")
-        print(f"Maximum bin edge: {max_bin_edge}")
+        # print(f"Minimum bin edge: {min_bin_edge}")
+        # print(f"Maximum bin edge: {max_bin_edge}")
     else:
         print("No bins have counts above the threshold.")
     
@@ -723,7 +724,7 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch):
     # Determine the X value (left edge) of the bin where the threshold is crossed
     offset_cal = bin_edges[offset_bin_index]
     
-    print(offset_cal)
+    # print(offset_cal)
     
     pedestal = offset + offset_cal
     
@@ -1552,9 +1553,9 @@ for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
     for j in range(4):
         pos_test[f'{key}_diff_{j+1}'] = ( pos_test[f'{key}_F_{j+1}'] - pos_test[f'{key}_B_{j+1}'] ) / 2
 
-print('Check this out:')
-print(pos_test[f'T1_diff_1'])
-print('---------')
+# print('Check this out:')
+# print(pos_test[f'T1_diff_1'])
+# print('---------')
 
 pos_test_copy = pos_test.copy()
 
@@ -1973,15 +1974,23 @@ print("------------------- Charge front-back correction ---------------------")
 print("----------------------------------------------------------------------")
 
 if charge_front_back:
-    for key in ['Q1', 'Q2', 'Q3', 'Q4']:
+    for key in [1, 2, 3, 4]:
         for i in range(4):
-            Q_sum = calibrated_data[f'{key}_Q_sum_{i+1}'].values
-            Q_diff = calibrated_data[f'{key}_Q_diff_{i+1}'].values
+            Q_sum = calibrated_data[f'Q{key}_Q_sum_{i+1}'].values
+            Q_diff = calibrated_data[f'Q{key}_Q_diff_{i+1}'].values
+            
+            cond = (Q_sum != 0) & (Q_diff != 0)
+            Q_sum = Q_sum[cond]
+            Q_diff = Q_diff[cond]
+            
+            Q_sum = Q_sum - ( QF_pedestal[i][j] + QF_pedestal[i][j] ) / 2
+            Q_diff = Q_diff - ( QF_pedestal[i][j] - QF_pedestal[i][j] ) / 2
+            
             if np.sum(Q_sum) == 0: continue # Do not correct if there is no data
-            title = f"{key}_{i+1}. Charge diff. vs. charge sum."
+            title = f"Q{key}_{i+1}. Charge diff. vs. charge sum."
             x_label = "Charge sum"
             y_label = "Charge diff"
-            name_of_file = f"{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
+            name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
             coeffs = scatter_2d_and_fit(Q_sum, Q_diff, title, x_label, y_label, name_of_file)
             correction = polynomial(Q_sum, *coeffs)
 
@@ -1993,7 +2002,7 @@ if charge_front_back:
             Q_diff_cal[non_zero_indices] = Q_diff[non_zero_indices] - correction[non_zero_indices]
             
             # Update the DataFrame with corrected values
-            calibrated_data[f'{key}_Q_diff_{i+1}'] = Q_diff_cal
+            calibrated_data[f'Q{key}_Q_diff_{i+1}'] = Q_diff_cal
     
     # ADD THE SUBFIGURES HERE OF THE 16 CALIBRATIONS
     print('Charge front-back correction performed.')
@@ -3729,7 +3738,12 @@ for iteration in range(repeat + 1):
     print(f"TimTrack iteration {iteration}")
     print("-----------------------------")
     
-    for idx, track in tqdm(calibrated_data.iterrows(), total=calibrated_data.shape[0], desc="Processing events"):
+    if crontab_execution:
+        iterator = calibrated_data.iterrows()
+    else:
+        iterator = tqdm(calibrated_data.iterrows(), total=calibrated_data.shape[0], desc="Processing events")
+    
+    for idx, track in iterator:
         
         # INTRODUCTION --------------------------------------------------------
         track_numeric = pd.to_numeric(track.drop('datetime'), errors='coerce')
