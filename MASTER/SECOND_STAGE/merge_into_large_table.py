@@ -57,9 +57,6 @@ output_file = os.path.join(output_directory, "total_data_table.csv")
 os.makedirs(output_directory, exist_ok=True)
 
 
-
-
-
 # Collect all matching CSV files from the specified folders
 file_paths = []
 for folder_path in folder_paths:
@@ -83,7 +80,7 @@ for df in dataframes[1:]:
 if os.path.exists(output_file):
     # If the output file already exists, load it and append new rows
     existing_df = pd.read_csv(output_file, parse_dates=['Time'])
-    combined_df = pd.concat([existing_df, merged_df]).drop_duplicates(subset=['Time'], keep='first')
+    combined_df = pd.concat([existing_df, merged_df]).drop_duplicates(subset=['Time'], keep='last')
 else:
     combined_df = merged_df
 

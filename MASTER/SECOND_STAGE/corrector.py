@@ -381,6 +381,12 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=T
     
     if not df.empty:
         # Fit the exponential model using uncertainties in Y as weights
+        print("Fitting exponential model...")
+        
+        # Filter outliers before fitting
+        z_scores = np.abs((df['log_I_over_I0'] - df['log_I_over_I0'].mean()) / df['log_I_over_I0'].std())
+        df = df[z_scores < 3]  # Keep only rows where z-score is less than 3
+        
         # WIP TO USE UNCERTAINTY OF PRESSURE ----------------------------------------------
         popt, pcov = curve_fit(
             fit_model,
@@ -421,9 +427,11 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=T
             if show_plots: 
                 plt.show()
             if save_plots:
+                print(f"Saving figure to {figure_path}")
                 plt.savefig(figure_path)
             plt.close()
     else:
+        print("Fit not done.")
         eta_P = np.nan
         eta_P_uncertainty = np.nan  # Handle case where there are no valid data points
     return eta_P, eta_P_uncertainty

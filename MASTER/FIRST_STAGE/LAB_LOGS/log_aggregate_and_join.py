@@ -23,14 +23,17 @@ print(f"Station: {station}")
 
 # -----------------------------------------------------------------------------
 
-log_base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/LAB_LOGS/")
+replace_data = True
 
+log_base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/LAB_LOGS/")
 
 # Define directory paths relative to base_directory
 base_directories = {
+    "clean_logs_directory": os.path.join(log_base_directory, "CLEAN_LOGS"),
     
-    "raw_logs_directory": os.path.join(log_base_directory, "LOG_PROCESSED_DIRECTORY"),
-    "completed_logs_directory": os.path.join(log_base_directory, "LOG_COMPLETED_DIRECTORY"),
+    "unprocessed_logs_directory": os.path.join(log_base_directory, "LOG_UNPROCESSED_DIRECTORY"),
+    # "processing_logs_directory": os.path.join(log_base_directory, "LOG_PROCESSING_DIRECTORY"),
+    # "completed_logs_directory": os.path.join(log_base_directory, "LOG_COMPLETED_DIRECTORY"),
     "accumulated_directory": os.path.join(log_base_directory, "LOG_ACC_DIRECTORY")
 }
 
@@ -38,65 +41,49 @@ base_directories = {
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-raw_logs_directory = base_directories["raw_logs_directory"]
-completed_logs_directory = base_directories["completed_logs_directory"]
+
+clean_logs_directory = base_directories["clean_logs_directory"]
+
+unprocessed_logs_directory = base_directories["unprocessed_logs_directory"]
+# processing_logs_directory = base_directories["processing_logs_directory"]
+# completed_logs_directory = base_directories["completed_logs_directory"]
+
 accumulated_directory = base_directories["accumulated_directory"]
 
 final_output_path = os.path.join(log_base_directory, "big_log_lab_data.csv")
 
 
-
 # Ensure directories exist
-os.makedirs(raw_logs_directory, exist_ok=True)
-os.makedirs(completed_logs_directory, exist_ok=True)
+os.makedirs(clean_logs_directory, exist_ok=True)
+
+os.makedirs(unprocessed_logs_directory, exist_ok=True)
+# os.makedirs(processing_logs_directory, exist_ok=True)
+# os.makedirs(completed_logs_directory, exist_ok=True)
+
 os.makedirs(accumulated_directory, exist_ok=True)
 
-raw_files = set(os.listdir(raw_logs_directory))
-completed_files = set(os.listdir(completed_logs_directory))
+clean_files = set(os.listdir(clean_logs_directory))
 
-# Files to move: in RAW but not in COMPLETED
-files_to_move = raw_files - completed_files
+unprocessed_files = set(os.listdir(unprocessed_logs_directory))
+# processing_files = set(os.listdir(processing_logs_directory))
+# completed_files = set(os.listdir(completed_logs_directory))
+
+# Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
+# files_to_move = clean_files - (unprocessed_files | processing_files | completed_files)
+files_to_move = clean_files - unprocessed_files
 
 # Copy files to UNPROCESSED
+
+print('Files to move:', len(files_to_move))
+
 for file_name in files_to_move:
-    src_path = os.path.join(raw_logs_directory, file_name)
-    dest_path = os.path.join(completed_logs_directory, file_name)
+    src_path = os.path.join(clean_logs_directory, file_name)
+    dest_path = os.path.join(unprocessed_logs_directory, file_name)
     try:
         shutil.move(src_path, dest_path)
-        print(f"Move {file_name} to UNPROCESSED directory.")
+        #print(f"Move {file_name} to UNPROCESSED directory.")
     except Exception as e:
         print(f"Failed to copy {file_name}: {e}")
-
-
-
-# def usage():
-#     """Display the usage message and exit."""
-#     print("""
-#     This script processes and merges log files from a local directory, aggregates data, 
-#     and stores the merged output as a CSV file. 
-
-#     Description:
-#       - Processes files with predefined prefixes and expected column counts.
-#       - Aggregates data into resampled CSV files.
-#       - Filters outliers and interpolates missing data.
-#       - Produces a final merged log file.
-
-#     Output:
-#       - Processed files are saved in ~/DATAFLOW_v3/LAB_LOGS/aggregated_csvs.
-#       - Merged output is saved in ~/DATAFLOW_v3/LAB_LOGS/big_log_lab_data.csv.
-
-#     No arguments are required to run this script.
-
-#     Example:
-#       python3 <script_name>.py
-#     """)
-#     sys.exit(1)
-
-
-# # Check for arguments
-# if len(sys.argv) > 1:
-#     print("Error: This script does not accept arguments.")
-#     usage()
 
 
 print('--------------------------- python script starts ---------------------------')
@@ -104,7 +91,10 @@ print('--------------------------- python script starts ------------------------
 # Function to process each file type
 def process_files(file_type_prefix, expected_columns, output_filename):
 
-    all_files = [os.path.join(completed_logs_directory, f) for f in os.listdir(completed_logs_directory) if f.startswith(file_type_prefix)]
+    all_files = [os.path.join(unprocessed_logs_directory, f) for f in os.listdir(unprocessed_logs_directory) if f.startswith(file_type_prefix)]
+    # all_files = all_files + [os.path.join(processing_logs_directory, f) for f in os.listdir(processing_logs_directory) if f.startswith(file_type_prefix)]
+    # all_files = all_files + [os.path.join(completed_logs_directory, f) for f in os.listdir(completed_logs_directory) if f.startswith(file_type_prefix)]
+    
     dataframes = []
 
     for file in all_files:
@@ -178,6 +168,7 @@ process_files('Flow0_', ["Date", "Time", "FlowRate1", "FlowRate2", "Pressure1", 
 
 print('All files processed...')
 
+
 # Second part -------------------------------------------------------------------------------------
 file_mappings = {
     "rates": os.path.join(accumulated_directory, "rates_aggregated.csv"),
@@ -228,7 +219,7 @@ def merge_dataframes(file_mappings, start_time=None):
 
     # Merge all dataframes on the Time index
     merged_df = pd.concat(dataframes, axis=1)
-
+    
     return merged_df
 
 # Check if merged csv exists
@@ -239,19 +230,23 @@ if os.path.exists(final_output_path):
     existing_df = pd.read_csv(final_output_path, parse_dates=['Time'])
     existing_df.set_index('Time', inplace=True)
 
-    # Determine the last timestamp in the existing data
+    # Determine the first and last timestamps in the existing data
+    first_timestamp = existing_df.index.min()
     last_timestamp = existing_df.index.max()
     print(f"Last timestamp in existing data: {last_timestamp}")
     
-    start_timestamp = last_timestamp - pd.Timedelta(hours=3)
-    
-    print(f'Starting from {start_timestamp}, 3h before.')
+    if replace_data:
+        print("Replacing existing data...")
+        start_timestamp = first_timestamp
+    else:
+        start_timestamp = last_timestamp - pd.Timedelta(hours=3)
+        print(f'Starting from {start_timestamp}, 3h before.')
     
     # Merge only new data
     new_data = merge_dataframes(file_mappings, start_time=start_timestamp)
 
     # Append new data to the existing data
-    updated_df = pd.concat([existing_df, new_data]).drop_duplicates().sort_index()
+    updated_df = pd.concat([existing_df, new_data]).drop_duplicates(keep='last').sort_index()
 else:
     print(f"No existing {final_output_path} found. Processing all data...")
 
