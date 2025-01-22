@@ -78,6 +78,7 @@ figure_path = f"{base_folder}/pressure_correction_fit.png"
 show_plots = False
 save_plots = True
 create_plots = True
+show_errorbar = False
 
 recalculate_pressure_coeff = True
 
@@ -362,11 +363,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Define the exponential model
-def fit_model(x, beta):
+def fit_model(x, beta, a):
     # [beta] = %/mbar
-    return beta / 100 * x
+    return beta / 100 * x + a
 
-def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=True):
+def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
     
     log_I_over_I0 = np.log(I_over_I0)
     unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0  # Propagate relative errors
@@ -385,7 +386,7 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=T
         
         # Filter outliers before fitting
         z_scores = np.abs((df['log_I_over_I0'] - df['log_I_over_I0'].mean()) / df['log_I_over_I0'].std())
-        df = df[z_scores < 3]  # Keep only rows where z-score is less than 3
+        df = df[z_scores < 20]  # Keep only rows where z-score is less than 3
         
         # WIP TO USE UNCERTAINTY OF PRESSURE ----------------------------------------------
         popt, pcov = curve_fit(
@@ -394,9 +395,9 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=T
             df['log_I_over_I0'],
             sigma=df['unc_log_I_over_I0'],  # Only the Y uncertainty
             absolute_sigma=True,
-            p0=1
+            p0=(1,0)
         )
-        b = popt  # Extract parameters
+        b, a = popt  # Extract parameters
         
         # Define eta_P as the parameter b (rate of change in the exponent)
         eta_P = b
@@ -405,14 +406,18 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=T
         # Plot the fitting
         if create_plots:
             plt.figure()
-            plt.errorbar(
-                df['delta_P'],
-                df['log_I_over_I0'],
-                xerr=abs(df['unc_delta_P']),
-                yerr=abs(df['unc_log_I_over_I0']),
-                fmt='o',
-                label='Data with Uncertainty'
-            )
+            if show_errorbar:
+                plt.errorbar(
+                    df['delta_P'],
+                    df['log_I_over_I0'],
+                    xerr=abs(df['unc_delta_P']),
+                    yerr=abs(df['unc_log_I_over_I0']),
+                    fmt='o',
+                    label='Data with Uncertainty'
+                )
+            else:
+                plt.scatter(df['delta_P'], df['log_I_over_I0'], label='Data', s=1, alpha=0.5, marker='.')
+            
             plt.plot(df['delta_P'], fit_model(df['delta_P'], *popt), color='red', label='Fit')
 
             # Extract b (beta) and its uncertainty
@@ -428,7 +433,7 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, show_plots=T
                 plt.show()
             if save_plots:
                 print(f"Saving figure to {figure_path}")
-                plt.savefig(figure_path)
+                plt.savefig(figure_path, format = 'png', dpi = 300)
             plt.close()
     else:
         print("Fit not done.")
