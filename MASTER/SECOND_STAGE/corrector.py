@@ -13,6 +13,8 @@ Created on Mon Jun 24 19:02:22 2024
 
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 # from scipy.signal import medfilt
 import os
@@ -41,14 +43,16 @@ print(f"Station: {station}")
 # ALSO THE SIMULATED VALUES FOR ACCEPTANCE, EFFICIENCY FACTORS AND UNCERTAINTIES
 
 # This should come from an input file
-pressure_coeff_input = 0
-unc_pressure_coeff_input = 0
+pressure_coeff_input = 0.692
+unc_pressure_coeff_input = 0.017
 mean_pressure_used_for_the_fit = 940
 
 systematic_unc = [0, 0, 0, 0] # From simulation
 acceptance_factor = [0.7, 1, 1, 0.8] # From simulation
 
 systematic_unc_corr_to_real_rate = 0
+
+z_score_th_pres_corr = 3
 
 # -----------------------------------------------------------------------------
 
@@ -82,7 +86,7 @@ show_errorbar = False
 
 recalculate_pressure_coeff = True
 
-res_win_min = 3 # 180 Resampling window minutes
+res_win_min = 30 # 180 Resampling window minutes
 HMF_ker = 1 # It must be odd. Horizontal Median Filter
 MAF_ker = 1 # Moving Average Filter
 
@@ -358,9 +362,6 @@ print('Efficiency correction performed.')
 print('Pressure correction started...')
 
 from scipy.optimize import curve_fit
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 
 # Define the exponential model
 def fit_model(x, beta, a):
@@ -386,7 +387,7 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
         
         # Filter outliers before fitting
         z_scores = np.abs((df['log_I_over_I0'] - df['log_I_over_I0'].mean()) / df['log_I_over_I0'].std())
-        df = df[z_scores < 20]  # Keep only rows where z-score is less than 3
+        df = df[z_scores < z_score_th_pres_corr]  # Keep only rows where z-score is less than 3
         
         # WIP TO USE UNCERTAINTY OF PRESSURE ----------------------------------------------
         popt, pcov = curve_fit(
@@ -431,7 +432,7 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
             plt.legend()
             if show_plots: 
                 plt.show()
-            if save_plots:
+            elif save_plots:
                 print(f"Saving figure to {figure_path}")
                 plt.savefig(figure_path, format = 'png', dpi = 300)
             plt.close()

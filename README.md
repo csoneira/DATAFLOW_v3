@@ -1,5 +1,7 @@
 # Unified Dataflow for miniTRASGO Charged Secondary Cosmic Ray Network
 
+ZERO_STAGE IS THE REANALYSIS DATA
+
 ## Overview
 This repository contains the unified dataflow system for analyzing data from the **miniTRASGO** charged secondary cosmic ray network. The dataflow integrates various sources, processes them in real time, and outputs a unified dataset that can be used for visualization, monitoring, or further analysis.
 
