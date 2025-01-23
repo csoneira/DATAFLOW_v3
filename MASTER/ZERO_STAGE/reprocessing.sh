@@ -42,8 +42,8 @@ if [ "$skip_steps" -eq 0 ]; then
     start=$2
     end=$3
 
-    start_DOY=$(date -d "20${start:0:2}-${start:2:2}-${start:4:2}" +%y%j%H%M%S)
-    end_DOY=$(date -d "20${end:0:2}-${end:2:2}-${end:4:2}" +%y%j%H%M%S)
+    start_DOY=$(date -d "20${start:0:2}-${start:2:2}-${start:4:2}" +%y%j)
+    end_DOY=$(date -d "20${end:0:2}-${end:2:2}-${end:4:2}" +%y%j)
 
     echo "Date range converted to DOY format: $start_DOY to $end_DOY"
 fi
@@ -61,12 +61,12 @@ if [ "$skip_steps" -eq 0 ]; then
     echo "Listing files to be transferred:"
     ssh backuplip "ls /local/experiments/MINGOS/MINGO0$station/mi0${station}*{$start_DOY..$end_DOY}*.hld*" || {
         echo "Error: No files found on the server. Check the date range and station."
-        exit 1
+        # exit 1
     }
 
     ssh backuplip "ls /local/experiments/MINGOS/MINGO0$station/minI${station}*{$start_DOY..$end_DOY}*.hld*" || {
         echo "Error: No files found on the server. Check the date range and station."
-        exit 1
+        # exit 1
     }
     
     # Transfer files one by one with progress feedback
@@ -75,7 +75,7 @@ if [ "$skip_steps" -eq 0 ]; then
         echo "Transferring $file ..."
         scp backuplip:"$file" "$compressed_directory/" || {
             echo "Error: Failed to transfer $file"
-            exit 1
+            # exit 1
         }
     done
 
@@ -83,7 +83,7 @@ if [ "$skip_steps" -eq 0 ]; then
         echo "Transferring $file ..."
         scp backuplip:"$file" "$compressed_directory/" || {
             echo "Error: Failed to transfer $file"
-            exit 1
+            # exit 1
         }
     done
     echo "All files transferred successfully."
@@ -94,7 +94,7 @@ fi
 if [ "$skip_steps" -eq 0 ]; then
     echo "Uncompressing HLD files..."
     for file in $compressed_directory/*.tar.gz; do
-        tar -xvzf "$file" -C $uncompressed_directory
+        tar -xvzf "$file" --strip-components=3 -C $uncompressed_directory
     done
 
     # Remove the compressed files
