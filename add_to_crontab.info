@@ -1,6 +1,18 @@
-# Paste into crontab to run the daily analysis ----------------------------------------
+#*/5 * * * * export RPCSYSTEM=mingo01;export RPCRUNMODE=oneRun;/home/cayetano/gate/bin/unpack.sh
 
+# --------------------------------------------------------
+# Search and unpack if there are hld files from reanalysis
+# --------------------------------------------------------
+
+*/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 1
+*/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 2
+*/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 3
+*/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 4
+
+
+# ------------------------------------
 # Execute analysis for Stations 1 to 4
+# ------------------------------------
 
 # Station 1 Tasks
 */15 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 1 >> ~/cron_logs/log_bring_and_clean_1.log 2>&1
@@ -29,6 +41,3 @@
 6-59/10 * * * * bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 4 >> ~/cron_logs/bring_and_analyze_events_4.log 2>&1
 7-59/10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 4 >> ~/cron_logs/merge_large_table_4.log 2>&1
 8-59/11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 4 >> ~/cron_logs/corrector_4.log 2>&1
-
-
-

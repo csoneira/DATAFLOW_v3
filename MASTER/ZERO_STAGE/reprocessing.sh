@@ -118,7 +118,7 @@ echo "Moving ASCII files to processed directory..."
 mv $asci_output_directory/* $processed_directory/
 
 # Step 7. Copy ASCII files to the first-stage raw directory
-echo "Copying ASCII files to the first-stage raw directory..."
+echo "Copying ASCII files to the first-stage unprocessed directory..."
 cp $processed_directory/* $first_stage_raw_directory/
 
 echo "Reprocessing completed successfully!"
