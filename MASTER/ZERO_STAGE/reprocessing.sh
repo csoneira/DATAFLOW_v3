@@ -26,7 +26,7 @@ base_directory=/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0$station/ZERO_STAGE
 hld_input_directory=/media/externalDisk/gate/system/devices/TRB3/data/daqData/rawData/dat
 asci_output_directory=/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci
 
-first_stage_raw_directory=/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0$station/FIRST_STAGE/EVENT_DATA/RAW
+first_stage_raw_directory=/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0$station/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY
 
 compressed_directory=$base_directory/COMPRESSED_HLDS
 uncompressed_directory=$base_directory/UNCOMPRESSED_HLDS
