@@ -1230,7 +1230,15 @@ if not isinstance(og_data.index, pd.DatetimeIndex):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
 raw_data_len = len(filtered_data)
+if debug_mode:
+    print(raw_data_len)
 
+# Print the count frequency of the values in column_6
+print(filtered_data['column_6'].value_counts())
+# Take only the rows in which column_6 is equal to 1
+filtered_data = filtered_data[filtered_data['column_6'] == 1]
+
+raw_data_len = len(filtered_data)
 if debug_mode:
     print(raw_data_len)
 
@@ -1240,7 +1248,6 @@ start_time = datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
 print(f"Starting date is {save_filename_suffix}.")
-
 
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"

@@ -5,9 +5,9 @@
 # --------------------------------------------------------
 
 */5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 1
-*/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 2
-*/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 3
-*/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 4
+1-59/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 2
+2-59/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 3
+3-59/5 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 4
 
 
 # ------------------------------------
