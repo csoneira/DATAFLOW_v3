@@ -371,10 +371,13 @@ else:
 combined_df = pd.concat([big_event_df, resampled_df], ignore_index=True)
 
 # Function to handle duplicates in 'Time'
-def combine_duplicates(group):
+def combine_duplicates(group, take_newest=False):
     if len(group) == 1:
         return group.iloc[0]  # No duplicates to combine
     
+    if take_newest:
+        return group.iloc[-1]  # Take the newest (last) value based on the group order
+
     # Check if all rows are identical (excluding 'Time')
     rows_identical = group.drop(columns='Time').nunique().sum() == 0
     
@@ -400,8 +403,9 @@ def combine_duplicates(group):
 
     return pd.Series(result)
 
-# Group by 'Time' to combine duplicates
-combined_df = combined_df.groupby('Time', as_index=False).apply(combine_duplicates)
+# Group by 'Time' to combine duplicates with the option to take the newest value
+combined_df = combined_df.groupby('Time', as_index=False).apply(combine_duplicates, take_newest=True)
+
 
 # Sort the combined DataFrame by 'Time'
 combined_df = combined_df.sort_values(by='Time').reset_index(drop=True)
