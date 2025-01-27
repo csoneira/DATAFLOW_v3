@@ -7,6 +7,8 @@ import numpy as np
 import sys
 import shutil
 
+create_new_csv = True
+
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
@@ -222,7 +224,7 @@ def merge_dataframes(file_mappings, start_time=None):
     
     return merged_df
 
-# Check if merged csv exists
+# Check if merged CSV exists
 if os.path.exists(final_output_path):
     print(f"Existing {final_output_path} found. Checking for new data...")
 
@@ -235,45 +237,51 @@ if os.path.exists(final_output_path):
     last_timestamp = existing_df.index.max()
     print(f"Last timestamp in existing data: {last_timestamp}")
     
-    if replace_data:
-        print("Replacing existing data...")
-        start_timestamp = first_timestamp
+    if create_new_csv:
+        print("Creating a new CSV with all available data...")
+        # Merge all data from the beginning
+        updated_df = merge_dataframes(file_mappings)
     else:
-        start_timestamp = last_timestamp - pd.Timedelta(hours=3)
-        print(f'Starting from {start_timestamp}, 3h before.')
-    
-    # Merge only new data
-    new_data = merge_dataframes(file_mappings, start_time=start_timestamp)
+        if replace_data:
+            print("Replacing existing data...")
+            start_timestamp = first_timestamp
+        else:
+            start_timestamp = last_timestamp - pd.Timedelta(hours=3)
+            print(f'Starting from {start_timestamp}, 3h before.')
+        
+        # Merge only new data
+        new_data = merge_dataframes(file_mappings, start_time=start_timestamp)
 
-    # Append new data to the existing data
-    updated_df = pd.concat([existing_df, new_data]).drop_duplicates(keep='last').sort_index()
+        # Append new data to the existing data
+        updated_df = pd.concat([existing_df, new_data]).drop_duplicates(keep='last').sort_index()
 else:
     print(f"No existing {final_output_path} found. Processing all data...")
-
+    
     # Merge all data from the beginning
     updated_df = merge_dataframes(file_mappings)
+
 
 # Resample to ensure no gaps and fill missing timestamps
 updated_df = updated_df.resample('1min').mean()
 
 # Define the limits for outliers as a dictionary
 outlier_limits = {
-    "rates_Edge": (10, 25),
-    "rates_Accepted": (10, 20),
-    "rates_Multiplexer1": (0, 200),
-    "rates_M2": (0, 200),
-    "rates_M3": (0, 200),
-    "rates_M4": (0, 200),
-    "rates_CM1": (1, 20),
-    "rates_CM2": (5, 20),
-    "rates_CM3": (5, 20),
-    "rates_CM4": (5, 20),
+    "rates_Edge": (0, 45),
+    "rates_Accepted": (0, 30),
+    "rates_Multiplexer1": (0, 400),
+    "rates_M2": (0, 400),
+    "rates_M3": (0, 400),
+    "rates_M4": (0, 400),
+    "rates_CM1": (0, 30),
+    "rates_CM2": (0, 30),
+    "rates_CM3": (0, 30),
+    "rates_CM4": (0, 30),
     "sensors_ext_Temperature_ext": (0, 50),
     "sensors_ext_RH_ext": (0, 100),
-    "sensors_ext_Pressure_ext": (900, 1100),
-    "sensors_int_Temperature_int": (0, 70),
+    "sensors_ext_Pressure_ext": (500, 1100),
+    "sensors_int_Temperature_int": (0, 100),
     "sensors_int_RH_int": (0, 100),
-    "sensors_int_Pressure_int": (900, 1100),
+    "sensors_int_Pressure_int": (500, 1100),
     "odroid_DiskFill1": (0, 100),
     "odroid_DiskFill2": (0, 100),
     "odroid_DiskFillX": (0, 100000),

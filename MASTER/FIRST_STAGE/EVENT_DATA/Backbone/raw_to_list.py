@@ -4533,7 +4533,7 @@ if create_pdf:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:
                 for png in plot_list:
-                    if os.exists(png):
+                    if os.path.exists(png):
                         print(f"Error: {png} does not exist.")
                         continue
                     

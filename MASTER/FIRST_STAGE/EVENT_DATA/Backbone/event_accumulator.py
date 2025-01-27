@@ -343,16 +343,14 @@ if 'type_<lambda>' in resampled_df.columns:
 resampled_df.reset_index(inplace=True)
 resampled_df = resampled_df.applymap(round_to_significant_digits)
 
+# Save the newly created file to ACC_EVENTS_DIRECTORY --------------------------
+resampled_df.to_csv(save_path, sep=',', index=False)
+print(f"Saved data to file: {save_path}")
 
 # Move the original file in file_path to completed_directory
 print("Moving file to COMPLETED directory...")
 shutil.move(file_path, completed_file_path)
 print(f"File moved to: {completed_file_path}")
-
-
-# Save the newly created file to ACC_EVENTS_DIRECTORY --------------------------
-resampled_df.to_csv(save_path, sep=',', index=False)
-print(f"Saved data to file: {save_path}")
 
 
 # -----------------------------------------------------------------------------
@@ -406,7 +404,6 @@ def combine_duplicates(group, take_newest=False):
 # Group by 'Time' to combine duplicates with the option to take the newest value
 combined_df = combined_df.groupby('Time', as_index=False).apply(combine_duplicates, take_newest=True)
 
-
 # Sort the combined DataFrame by 'Time'
 combined_df = combined_df.sort_values(by='Time').reset_index(drop=True)
 
@@ -417,8 +414,3 @@ combined_df = combined_df.sort_values(by='Time').reset_index(drop=True)
 combined_df = combined_df.applymap(round_to_significant_digits)
 combined_df.to_csv(big_event_file, sep=',', index=False)
 print(f"Updated big_event_data.csv with {len(combined_df)} rows.")
-
-# Move the original datafile to PROCESSED -------------------------------------
-print("Moving file to COMPLETED directory...")
-shutil.move(processing_file_path, completed_file_path)
-print(f"File moved to: {completed_file_path}")
