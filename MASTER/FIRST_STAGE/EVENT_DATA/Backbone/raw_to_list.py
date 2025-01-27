@@ -64,7 +64,7 @@ base_directories = {
     "figure_directory": os.path.join(raw_to_list_working_directory, "FIGURE_DIRECTORY"),
     
     "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
-    "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
+    # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/PROCESSING_DIRECTORY"),
@@ -173,7 +173,7 @@ limit = False
 limit_number = 10000
 number_of_time_cal_figures = 3
 save_calibrations = True
-save_full_data = False
+# save_full_data = False
 presentation = False
 presentation_plots = False
 force_replacement = True # Creates a new datafile even if there is already one that looks complete
@@ -207,7 +207,7 @@ if fast_mode:
     time_calibration = True
     charge_front_back = False
     create_plots = False
-    save_full_data = False
+    # save_full_data = False
     limit = False
     limit_number = 10000
     
@@ -218,7 +218,7 @@ if debug_mode:
     time_calibration = False
     charge_front_back = False
     create_plots = False
-    save_full_data = False
+    # save_full_data = False
     limit = True
     limit_number = 10000
 
@@ -1255,7 +1255,7 @@ save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
 save_list_path = os.path.join(base_directories["list_events_directory"], save_filename)
-save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
+# save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 # Check if the file exists and its size
@@ -4467,9 +4467,9 @@ else:
 
 
 # Save the data ---------------------------------------------------------------
-if save_full_data: # Save a full version of the data, for different studies and debugging
-    final_data.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
-    print(f"Datafile saved in {save_full_filename}'.")
+# if save_full_data: # Save a full version of the data, for different studies and debugging
+#     final_data.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
+#     print(f"Datafile saved in {save_full_filename}'.")
 
 # Save a reduced version of the data always, to proceed with the analysis
 columns_to_keep = [
