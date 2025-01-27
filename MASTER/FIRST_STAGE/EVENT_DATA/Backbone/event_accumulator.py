@@ -44,7 +44,7 @@ base_directories = {
     "processing_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_PROCESSING"),
     "completed_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_COMPLETED"),
     
-    "list_events_directory": os.path.join(working_directory, "LIST_EVENTS_DIRECTORY"),
+    "acc_events_directory": os.path.join(working_directory, "ACC_EVENTS_DIRECTORY"),
 }
 
 # Create ALL directories if they don't already exist
@@ -126,9 +126,9 @@ def custom_mean(x):
 def custom_std(x):
     return x[x != 0].std() if len(x[x != 0]) > 0 else 0
 
-def round_to_4_significant_digits(x):
+def round_to_significant_digits(x):
     if isinstance(x, float):
-        return float(f"{x:.4g}")
+        return float(f"{x:.6g}")
     return x
 
 def clean_type_column(x):
@@ -142,33 +142,6 @@ def clean_type_column(x):
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-# # Determine the file path input
-# try:
-#     file_path_input = sys.argv[1]
-#     print("Running with given input.")
-    
-#     file_name = os.path.basename(file_path_input)  # Extract just the file name
-    
-#     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-#     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
-#     # Check if the file is already in PROCESSING
-#     if os.path.exists(processing_file_path):
-#         print(f"File '{file_name}' is already in PROCESSING. Continuing with processing...")
-#     else:
-#         # Check if the file exists at the input location before moving
-#         if os.path.exists(file_path_input):
-#             print(f"Moving input file '{file_name}' to PROCESSING directory...")
-#             shutil.move(file_path_input, processing_file_path)
-#             print(f"File moved to PROCESSING directory: {processing_file_path}")
-#         else:
-#             raise FileNotFoundError(f"Input file '{file_path_input}' not found and not in PROCESSING.")
-    
-#     file_path = processing_file_path
-    
-# except IndexError:
-#     file_path = test_filename
-#     print(f"--> Reading test filename: '{file_path}'")
 
 unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
@@ -304,6 +277,8 @@ else:
 
 print("Filename save suffix:", filename_save_suffix)
 
+save_filename = f"accumulated_events_{filename_save_suffix}.csv"
+save_path = os.path.join(base_directories["acc_events_directory"], save_filename)
 
 # Clean type column
 df['type'] = df['type'].apply(clean_type_column)
@@ -311,8 +286,8 @@ df['type'] = df['type'].apply(clean_type_column)
 # Derived metrics
 for i in range(1, 5):
     df[f'Q_{i}'] = df[[f'Q_M{i}s{j}' for j in range(1, 5)]].sum(axis=1)
-    df[f'count_in_{i}'] = (df[f'Q_{i}'] > 0).astype(int)
-    df[f'avalanche_{i}'] = ((df[f'Q_{i}'] > 0) & (df[f'Q_{i}'] < 100)).astype(int)
+    df[f'count_in_{i}'] = (df[f'Q_{i}'] != 0).astype(int)
+    df[f'avalanche_{i}'] = ((df[f'Q_{i}'] != 0) & (df[f'Q_{i}'] < 100)).astype(int)
     df[f'streamer_{i}'] = (df[f'Q_{i}'] > 100).astype(int)
 
 # ADD THE TOTAL CHARGE OF THE EVENT
@@ -366,13 +341,18 @@ if 'type_<lambda>' in resampled_df.columns:
 # -----------------------------------------------------------------------------
 
 resampled_df.reset_index(inplace=True)
+resampled_df = resampled_df.applymap(round_to_significant_digits)
 
-# save_filename = f"accumulated_events_{filename_save_suffix}.csv"
 
-resampled_df = resampled_df.applymap(round_to_4_significant_digits)
+# Move the original file in file_path to completed_directory
+print("Moving file to COMPLETED directory...")
+shutil.move(file_path, completed_file_path)
+print(f"File moved to: {completed_file_path}")
 
-# resampled_df.to_csv(save_filename, sep=',', index=False)
-# print(f"Saved data to file: {save_filename}")
+
+# Save the newly created file to ACC_EVENTS_DIRECTORY --------------------------
+resampled_df.to_csv(save_path, sep=',', index=False)
+print(f"Saved data to file: {save_path}")
 
 
 # -----------------------------------------------------------------------------
@@ -426,10 +406,11 @@ combined_df = combined_df.groupby('Time', as_index=False).apply(combine_duplicat
 # Sort the combined DataFrame by 'Time'
 combined_df = combined_df.sort_values(by='Time').reset_index(drop=True)
 
+
 # -----------------------------------------------------------------------------
 # Save the updated big_event_data.csv -----------------------------------------
 # -----------------------------------------------------------------------------
-combined_df = combined_df.applymap(round_to_4_significant_digits)
+combined_df = combined_df.applymap(round_to_significant_digits)
 combined_df.to_csv(big_event_file, sep=',', index=False)
 print(f"Updated big_event_data.csv with {len(combined_df)} rows.")
 
