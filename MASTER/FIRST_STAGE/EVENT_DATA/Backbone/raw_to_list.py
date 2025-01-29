@@ -1230,6 +1230,7 @@ if not isinstance(og_data.index, pd.DatetimeIndex):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
 raw_data_len = len(filtered_data)
+print(raw_data_len)
 if debug_mode:
     print(raw_data_len)
 
@@ -1239,8 +1240,13 @@ print(filtered_data['column_6'].value_counts())
 filtered_data = filtered_data[filtered_data['column_6'] == 1]
 
 raw_data_len = len(filtered_data)
+print(raw_data_len)
 if debug_mode:
     print(raw_data_len)
+
+if raw_data_len == 0:  # Use '==' for comparison
+    print("No coincidence events.")
+    sys.exit()
 
 datetime_value = filtered_data['datetime'][0]
 # Note that the middle between start and end time could also be taken. This is for calibration storage.

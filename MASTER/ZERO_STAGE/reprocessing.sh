@@ -31,6 +31,7 @@ first_stage_raw_directory=/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0$station/FIR
 compressed_directory=$base_directory/COMPRESSED_HLDS
 uncompressed_directory=$base_directory/UNCOMPRESSED_HLDS
 processed_directory=$base_directory/ASCII
+moved_directory=$base_directory/MOVED_ASCII
 
 # Create necessary directories
 mkdir -p $compressed_directory
@@ -120,5 +121,10 @@ mv $asci_output_directory/* $processed_directory/
 # Step 7. Copy ASCII files to the first-stage raw directory
 echo "Copying ASCII files to the first-stage unprocessed directory..."
 cp $processed_directory/* $first_stage_raw_directory/
+
+
+# Step 8. Move ASCII files to an already used directory
+echo "Moving ASCII files to a directory for copied files..."
+mv $processed_directory/* $moved_directory/
 
 echo "Reprocessing completed successfully!"
