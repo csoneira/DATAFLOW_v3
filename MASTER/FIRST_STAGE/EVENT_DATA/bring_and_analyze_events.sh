@@ -62,7 +62,7 @@ else
 fi
 
 # Process the data: raw_to_list.py
-echo "Processing .dat files with Python script..."
+echo "Processing .dat files with Python script (raw_to_list.py)..."
 python3 "$raw_to_list_directory" "$station"
 
 # Process the data: event_accumulator.py

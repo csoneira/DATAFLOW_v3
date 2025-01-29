@@ -84,7 +84,7 @@ show_errorbar = False
 
 recalculate_pressure_coeff = True
 
-res_win_min = 30 # 180 Resampling window minutes
+res_win_min = 1 # 180 Resampling window minutes
 HMF_ker = 1 # It must be odd. Horizontal Median Filter
 MAF_ker = 1 # Moving Average Filter
 

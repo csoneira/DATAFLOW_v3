@@ -37,6 +37,7 @@ moved_directory=$base_directory/MOVED_ASCII
 mkdir -p $compressed_directory
 mkdir -p $uncompressed_directory
 mkdir -p $processed_directory
+mkdir -p $moved_directory
 
 # Step 1. Convert date range to YYDDDHHMMSS format if dates are provided
 if [ "$skip_steps" -eq 0 ]; then
@@ -120,11 +121,11 @@ mv $asci_output_directory/* $processed_directory/
 
 # Step 7. Copy ASCII files to the first-stage raw directory
 echo "Copying ASCII files to the first-stage unprocessed directory..."
-cp $processed_directory/* $first_stage_raw_directory/
+cp -n $processed_directory/* $first_stage_raw_directory/
 
 
 # Step 8. Move ASCII files to an already used directory
 echo "Moving ASCII files to a directory for copied files..."
-mv $processed_directory/* $moved_directory/
+mv "$processed_directory"/* "$moved_directory"/
 
 echo "Reprocessing completed successfully!"

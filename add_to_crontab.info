@@ -4,10 +4,10 @@
 # Search and unpack if there are hld files from reanalysis
 # --------------------------------------------------------
 
-*/1 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 1
-1-59/1 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 2
-2-59/1 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 3
-3-59/1 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 4
+*/3 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 1
+1-59/3 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 2
+2-59/3 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 3
+3-59/3 * * * * bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 4
 
 # ------------------------------------
 # Execute analysis for Stations 1 to 4

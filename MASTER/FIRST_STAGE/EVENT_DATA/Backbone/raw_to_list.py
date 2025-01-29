@@ -3,7 +3,8 @@
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-last_file_test = False
+newest_file = False
+oldest_file = True
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -35,6 +36,8 @@ import shutil
 import builtins
 import random
 
+# Store the current time at the start. To time the execution
+start_execution_time_counting = datetime.now()
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
@@ -52,6 +55,9 @@ print(f"Station: {station}")
 
 # -----------------------------------------------------------------------------
 
+print("Creating the necessary directories...")
+
+date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
 # Define base working directory
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/EVENT_DATA")
@@ -61,7 +67,8 @@ raw_to_list_working_directory = os.path.join(base_directory, "RAW_TO_LIST")
 # Define directory paths relative to base_directory
 base_directories = {
     "pdf_directory": os.path.join(raw_to_list_working_directory, "PDF_DIRECTORY"),
-    "figure_directory": os.path.join(raw_to_list_working_directory, "FIGURE_DIRECTORY"),
+    "base_figure_directory": os.path.join(raw_to_list_working_directory, "FIGURE_DIRECTORY"),
+    "figure_directory": os.path.join(raw_to_list_working_directory, f"FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
     
     "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
     # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
@@ -139,7 +146,7 @@ if os.path.exists(input_file_path):
     z_4 = input_data.get('z_4', 345.5)
     
 else:
-    print("Input file does not exist.")
+    print("Input configuration file does not exist.")
     z_1 = 0
     z_2 = 150
     z_3 = 300
@@ -165,7 +172,8 @@ z_positions = np.array([z_1, z_2, z_3, z_4])  # In mm
 
 # Plots and savings -------------------------
 crontab_execution = True
-create_plots = True
+create_plots = False
+create_essential_plots = True
 save_plots = True
 show_plots = False
 create_pdf = True
@@ -243,17 +251,17 @@ if debug_mode:
     Q_B_left_pre_cal = -500
     Q_B_right_pre_cal = 500
 else:
-    T_F_left_pre_cal = -175
-    T_F_right_pre_cal = 0
+    T_F_left_pre_cal = -200
+    T_F_right_pre_cal = 100
 
-    T_B_left_pre_cal = -175
-    T_B_right_pre_cal = 0
+    T_B_left_pre_cal = -200
+    T_B_right_pre_cal = 100
 
     Q_F_left_pre_cal = 50
-    Q_F_right_pre_cal = 300
+    Q_F_right_pre_cal = 1000
 
     Q_B_left_pre_cal = 50
-    Q_B_right_pre_cal = 300
+    Q_B_right_pre_cal = 1000
 
 T_left_side = T_F_left_pre_cal
 T_right_side = T_F_right_pre_cal
@@ -275,8 +283,8 @@ T_diff_pre_cal_threshold = 20
 
 # Post-calibration ---------
 # Qsum
-Q_sum_left_cal = -5
-Q_sum_right_cal = 300
+Q_sum_left_cal = -30
+Q_sum_right_cal = 1000
 # Qdif
 Q_diff_cal_threshold = 10
 Q_diff_cal_threshold_FB = 5
@@ -288,14 +296,14 @@ T_diff_cal_threshold = 1
 
 # Once calculated the RPC variables
 # Tsum
-T_sum_RPC_left = -170
-T_sum_RPC_right = -100
+T_sum_RPC_left = -300
+T_sum_RPC_right = 300
 # Tdiff
-T_diff_RPC_left = -1
-T_diff_RPC_right = 1
+T_diff_RPC_left = -0.8
+T_diff_RPC_right = 0.8
 # Qsum
 Q_RPC_left = 0
-Q_RPC_right = 250
+Q_RPC_right = 1000
 # Y pos
 Y_RPC_left = -150
 Y_RPC_right = 150
@@ -342,7 +350,7 @@ distance_sum_charges_plot = 800
 front_back_fit_threshold = 4 # It was 1.4
 
 # Time dif calibration (time_dif_reference)
-time_dif_distance = 10
+time_dif_distance = 30
 time_dif_reference = np.array([
     [-0.0573, 0.031275, 1.033875, 0.761475],
     [-0.914, -0.873975, -0.19815, 0.452025],
@@ -351,7 +359,7 @@ time_dif_reference = np.array([
 ])
 
 # Charge sum calibration (charge_sum_reference)
-charge_sum_distance = 10
+charge_sum_distance = 30
 charge_sum_reference = np.array([
     [89.4319, 98.19605, 95.99055, 91.83875],
     [96.55775, 94.50385, 94.9254, 91.0775],
@@ -360,7 +368,7 @@ charge_sum_reference = np.array([
 ])
 
 # Charge dif calibration (charge_dif_reference)
-charge_dif_distance = 15
+charge_dif_distance = 30
 charge_dif_reference = np.array([
     [4.512, 0.58715, 1.3204, -1.3918],
     [-4.50885, 0.918, -3.39445, -0.12325],
@@ -369,7 +377,7 @@ charge_dif_reference = np.array([
 ])
 
 # Time sum calibration (time_sum_reference)
-time_sum_distance = 10
+time_sum_distance = 30
 time_sum_reference = np.array([
     [0.0, -0.3886208, -0.53020947, 0.33711737],
     [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
@@ -417,6 +425,7 @@ def y_pos(y_width):
 
 y_widths = [np.array([63, 63, 63, 98]), np.array([98, 63, 63, 63])]  # T1-T3 and T2-T4 widths
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
+
 
 # Z ----------------------------
 # z_positions was defined here
@@ -1042,6 +1051,73 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     
     
 # Define the combined function to plot histograms and optionally fit Gaussian
+# def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
+#     global fig_idx
+#     nrows, ncols = (2, 3) if figure_number == 1 else (3, 4)
+    
+#     fig, axs = plt.subplots(nrows, ncols, figsize=(20, 5 * nrows), constrained_layout=True)
+#     axs = axs.flatten()
+
+#     # Define Gaussian function
+#     def gaussian(x, mu, sigma, amplitude):
+#         return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
+
+#     # Plot histograms and fit Gaussian if needed
+#     for i, col in enumerate(columns):
+#         data = df[col].values
+#         data = data[data != 0]  # Filter out zero values
+
+#         # Check if data is empty or has fewer points than needed
+#         if len(data) == 0:
+#             # Leave plot empty if no data
+#             axs[i].text(0.5, 0.5, "No data", transform=axs[i].transAxes, ha='center', va='center', color='gray')
+#             continue
+
+#         # Plot histogram
+#         hist_data, bin_edges, _ = axs[i].hist(data, bins='auto', alpha=0.75, label='Data')
+#         axs[i].set_title(col)
+#         axs[i].set_xlabel('Value')
+#         axs[i].set_ylabel('Frequency')
+
+#         # Fit Gaussian if needed and if there's enough data
+#         if fit_gaussian and len(data) >= 10:
+#             try:
+#                 # Quantile filtering
+#                 lower_bound, upper_bound = np.quantile(data, [(1 - quantile), quantile])
+#                 filtered_data = data[(data >= lower_bound) & (data <= upper_bound)]
+
+#                 if len(filtered_data) < 2:  # Ensure there are enough points to fit a Gaussian
+#                     axs[i].text(0.5, 0.5, "Not enough data to fit", transform=axs[i].transAxes, ha='center', va='center', color='gray')
+#                     continue
+
+#                 # Fit Gaussian to the filtered data
+#                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+#                 popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filtered_data), np.std(filtered_data), max(hist_data)])
+#                 mu, sigma, amplitude = popt
+#                 x = np.linspace(min(filtered_data), max(filtered_data), 1000)
+#                 axs[i].plot(x, gaussian(x, mu, sigma, amplitude), 'r-', label=f'Gaussian Fit\nμ={mu:.2g}, σ={sigma:.2g}')
+#                 axs[i].legend()
+#             except (RuntimeError, ValueError):
+#                 axs[i].text(0.5, 0.5, "Fit failed", transform=axs[i].transAxes, ha='center', va='center', color='red')
+
+#     # Remove unused subplots
+#     for j in range(i + 1, len(axs)):
+#         fig.delaxes(axs[j])
+
+#     plt.suptitle(title, fontsize=16)
+    
+#     if save_plots:
+#         final_filename = f'{fig_idx}_{title.replace(" ", "_")}.png'
+#         fig_idx += 1
+
+#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#         plot_list.append(save_fig_path)
+#         plt.savefig(save_fig_path, format='png')
+    
+#     if show_plots: plt.show()
+#     plt.close()
+
+
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
     global fig_idx
     nrows, ncols = (2, 3) if figure_number == 1 else (3, 4)
@@ -1053,14 +1129,21 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
     def gaussian(x, mu, sigma, amplitude):
         return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
 
+    # Precompute quantiles for faster filtering
+    if fit_gaussian:
+        quantile_bounds = {}
+        for col in columns:
+            data = df[col].values
+            data = data[data != 0]
+            if len(data) > 0:
+                quantile_bounds[col] = np.quantile(data, [(1 - quantile), quantile])
+
     # Plot histograms and fit Gaussian if needed
     for i, col in enumerate(columns):
         data = df[col].values
         data = data[data != 0]  # Filter out zero values
 
-        # Check if data is empty or has fewer points than needed
-        if len(data) == 0:
-            # Leave plot empty if no data
+        if len(data) == 0:  # Skip if no data
             axs[i].text(0.5, 0.5, "No data", transform=axs[i].transAxes, ha='center', va='center', color='gray')
             continue
 
@@ -1070,22 +1153,25 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         axs[i].set_xlabel('Value')
         axs[i].set_ylabel('Frequency')
 
-        # Fit Gaussian if needed and if there's enough data
+        # Fit Gaussian if enabled and data is sufficient
         if fit_gaussian and len(data) >= 10:
             try:
-                # Quantile filtering
-                lower_bound, upper_bound = np.quantile(data, [(1 - quantile), quantile])
-                filtered_data = data[(data >= lower_bound) & (data <= upper_bound)]
+                # Use precomputed quantile bounds
+                if col in quantile_bounds:
+                    lower_bound, upper_bound = quantile_bounds[col]
+                    filtered_data = data[(data >= lower_bound) & (data <= upper_bound)]
 
-                if len(filtered_data) < 2:  # Ensure there are enough points to fit a Gaussian
+                if len(filtered_data) < 2:
                     axs[i].text(0.5, 0.5, "Not enough data to fit", transform=axs[i].transAxes, ha='center', va='center', color='gray')
                     continue
 
-                # Fit Gaussian to the filtered data
+                # Fit Gaussian to the histogram data
                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
                 popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filtered_data), np.std(filtered_data), max(hist_data)])
                 mu, sigma, amplitude = popt
-                x = np.linspace(min(filtered_data), max(filtered_data), 1000)
+
+                # Plot Gaussian fit
+                x = np.linspace(lower_bound, upper_bound, 1000)
                 axs[i].plot(x, gaussian(x, mu, sigma, amplitude), 'r-', label=f'Gaussian Fit\nμ={mu:.2g}, σ={sigma:.2g}')
                 axs[i].legend()
             except (RuntimeError, ValueError):
@@ -1096,7 +1182,7 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         fig.delaxes(axs[j])
 
     plt.suptitle(title, fontsize=16)
-    
+
     if save_plots:
         final_filename = f'{fig_idx}_{title.replace(" ", "_")}.png'
         fig_idx += 1
@@ -1105,7 +1191,8 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
     
-    if show_plots: plt.show()
+    if show_plots:
+        plt.show()
     plt.close()
 
 
@@ -1124,90 +1211,79 @@ print("----------------------------------------------------------------------")
 # Determine the file path input
 
 
-unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
-processing_files = os.listdir(base_directories["processing_directory"])
-completed_files = os.listdir(base_directories["completed_directory"])
+# Get lists of files in the directories
+unprocessed_files = sorted(os.listdir(base_directories["unprocessed_directory"]))
+processing_files = sorted(os.listdir(base_directories["processing_directory"]))
+completed_files = sorted(os.listdir(base_directories["completed_directory"]))
 
-if last_file_test:
-    if unprocessed_files:
-        # Sort the list of unprocessed files
-        unprocessed_files = sorted(unprocessed_files)
-        file_name = unprocessed_files[-1]
-        unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-        processing_file_path = unprocessed_file_path
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        file_path = processing_file_path
-        print(f"ATTENTION: processing the last file in UNPROCESSED: {unprocessed_file_path}")
-    elif processing_files:
-        # Sort the list of processing files
-        processing_files = sorted(processing_files)
-        file_name = processing_files[-1]
-        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        file_path = processing_file_path
-        print(f"ATTENTION: processing the last file in PROCESSING: {processing_file_path}")
-    elif completed_files:
-        # Sort the list of processing files
-        processing_files = sorted(completed_files)
-        file_name = completed_files[-1]
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        processing_file_path = completed_file_path
-        file_path = processing_file_path
-        print(f"ATTENTION: processing the last file in COMPLETED: {completed_file_path}")
-    else:
-        sys.exit("No files to process in UNPROCESSED nor PROCESSING nor COMPLETED.")
+def process_file(source_path, dest_path):
+    if os.path.exists(dest_path):
+        print(f"File already exists at destination: {dest_path}")
+        os.remove(source_path)
+        return False
+    print(f"Moving '{os.path.basename(source_path)}' to '{dest_path}'...")
+    shutil.move(source_path, dest_path)
+    return True
+
+def get_file_path(directory, file_name):
+    return os.path.join(directory, file_name)
+
+if newest_file or oldest_file:
+    file_list = unprocessed_files if unprocessed_files else processing_files if processing_files else completed_files
+    if not file_list:
+        sys.exit("No files to process.")
+
+    # Pick the newest or oldest file
+    file_name = file_list[-1] if newest_file else file_list[0]
+    source_dir = (
+        "unprocessed_directory" if file_name in unprocessed_files else
+        "processing_directory" if file_name in processing_files else
+        "completed_directory"
+    )
+    source_path = get_file_path(base_directories[source_dir], file_name)
+    processing_path = get_file_path(base_directories["processing_directory"], file_name)
+    completed_path = get_file_path(base_directories["completed_directory"], file_name)
+
+    # Process the file based on its current state
+    if process_file(source_path, processing_path):
+        print(f"Processing: {processing_path}")
+    elif os.path.exists(completed_path):
+        print(f"File '{file_name}' is already completed.")
 else:
-    if unprocessed_files:
-        for file_name in unprocessed_files:
-            unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-            processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+    # Process all files in UNPROCESSED
+    for file_name in unprocessed_files:
+        source_path = get_file_path(base_directories["unprocessed_directory"], file_name)
+        processing_path = get_file_path(base_directories["processing_directory"], file_name)
+        completed_path = get_file_path(base_directories["completed_directory"], file_name)
 
-            # Skip if file is already in COMPLETED
-            if os.path.exists(completed_file_path):
-                print(f"File '{file_name}' is already in COMPLETED. Removing from UNPROCESSED...")
-                os.remove(unprocessed_file_path)
-                continue
+        if process_file(source_path, processing_path):
+            print(f"Processing: {processing_path}")
+            break  # Only process one file at a time
 
-            # Skip if file is already in PROCESSING
-            if os.path.exists(processing_file_path):
-                print(f"File '{file_name}' is already in PROCESSING. Removing from UNPROCESSED...")
-                os.remove(unprocessed_file_path)
-                continue
+    # If no files in UNPROCESSED, process one from PROCESSING
+    if not unprocessed_files and processing_files:
+        random.shuffle(processing_files)
+        for file_name in processing_files:
+            processing_path = get_file_path(base_directories["processing_directory"], file_name)
+            completed_path = get_file_path(base_directories["completed_directory"], file_name)
 
-            # Move file to PROCESSING and process it
-            print(f"Moving '{file_name}' to PROCESSING...")
-            shutil.move(unprocessed_file_path, processing_file_path)
-            print(f"File moved to PROCESSING: {processing_file_path}")
-            
-            file_path = processing_file_path
-            break
-    else:
-        # Check for files in PROCESSING
-        if processing_files:
-            # Shuffle the elements in processing_files
-            print('Shuffling the files in PROCESSING...')
-            random.shuffle(processing_files)
-            for file_name in processing_files:
-                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
-                # If already in COMPLETED, remove it from PROCESSING
-                if os.path.exists(completed_file_path):
-                    print(f"File '{file_name}' is already in COMPLETED. Removing from PROCESSING...")
-                    os.remove(processing_file_path)
-                    continue
-
-                # Otherwise, process the file
-                print(f"Processing file in PROCESSING: {file_name}")
-                print(f"Complete path of the file to process: {processing_file_path}")
-
-                # Break after processing one file to avoid overwriting file_path
-                file_path = processing_file_path
+            if not os.path.exists(completed_path):
+                print(f"Processing file in PROCESSING: {processing_path}")
                 break
-        else:
-            sys.exit("No files to process in UNPROCESSED or PROCESSING.")
+            
+    # If no files in UNPROCESSED, nor in PROCESSING, process one from COMPLETED
+    if not unprocessed_files and not processing_files:
+        random.shuffle(processing_files)
+        for file_name in processing_files:
+            completed_path = get_file_path(base_directories["completed_directory"], file_name)
+            processing_path = completed_path
+            if not os.path.exists(completed_path):
+                print(f"Processing file in PROCESSING: {processing_path}")
+                break
+    else:
+        sys.exit("No files to process.")
 
+file_path = processing_path
 
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
 right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
@@ -1338,7 +1414,7 @@ else:
     Q_clip_max = 300
     num_bins = 100  # Parameter for the number of bins
 
-if create_plots:
+if create_plots or create_essential_plots:
     # Create the grand figure for T values
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_T = axes_T.flatten()
@@ -1465,7 +1541,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 # Plot histograms of all the pedestal substractions
 
-if create_plots:
+if create_plots or create_essential_plots:
 
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2134,20 +2210,24 @@ if charge_front_back:
             y_label = "Charge diff"
             name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
             coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
-            
+            print(coeffs)
             # Calculate the correction based on filtered data
-            correction = polynomial(Q_diff[Q_diff != 0], *coeffs)
+            # correction = polynomial(Q_diff[Q_diff != 0], *coeffs)
 
-            # Apply correction directly to non-zero values
-            Q_diff[Q_diff != 0] -= correction
+            # # Apply correction directly to non-zero values
+            # Q_diff[Q_diff != 0] -= correction
 
-            # Update the DataFrame with corrected values
-            calibrated_data[f'Q{key}_Q_diff_{i+1}'] = Q_diff
+            # # Update the DataFrame with corrected values
+            # calibrated_data[f'Q{key}_Q_diff_{i+1}'] = Q_diff
+            
+            # Update only filtered rows in the DataFrame
+            calibrated_data.loc[cond, f'Q{key}_Q_diff_{i+1}'] = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
+
         
     # ADD THE SUBFIGURES HERE OF THE 16 CALIBRATIONS
     print('Charge front-back correction performed.')
     
-    if create_plots:
+    if create_plots or create_essential_plots:
         num_columns = len(calibrated_data.columns) - 1  # Exclude 'datetime'
         num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
         fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
@@ -3115,20 +3195,72 @@ if y_position_complex_method:
             original_y_values_M4 = original_y_values
 
 
+# if uniform_y_method:
+#     print('Y position uniform distribution method.')
+
+#     # Initialize empty lists for y values
+#     y_values_M1 = []
+#     y_values_M2 = []
+#     y_values_M3 = []
+#     y_values_M4 = []
+
+#     # Initialize original y-values for uniform method
+#     original_y_values_M1 = []
+#     original_y_values_M2 = []
+#     original_y_values_M3 = []
+#     original_y_values_M4 = []
+
+#     # Loop through each module to compute y values
+#     for module in ['T1', 'T2', 'T3', 'T4']:
+#         if module in ['T1', 'T3']:
+#             y_pos = y_pos_T1_and_T3
+#             y_width = y_width_T1_and_T3
+#         elif module in ['T2', 'T4']:
+#             y_pos = y_pos_T2_and_T4
+#             y_width = y_width_T2_and_T4
+
+#         # Compute strip boundaries
+#         strip_boundaries = [(center - width / 2, center + width / 2) for center, width in zip(y_pos, y_width)]
+        
+#         # Get the relevant Q_sum columns for the current module
+#         Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(len(y_pos))]
+#         Q_sum_values = calibrated_data[Q_sum_cols].abs()
+
+#         # Compute the sum of Q_sum values row-wise
+#         Q_sum_total = Q_sum_values.sum(axis=1)
+
+#         # Initialize the y values for this module
+#         y = np.zeros(len(calibrated_data))
+
+#         # Loop through strips to generate uniform values
+#         for j, (lower_limit, upper_limit) in enumerate(strip_boundaries):
+#             # Generate uniform random values for the current strip
+#             random_values = np.random.uniform(lower_limit, upper_limit, size=len(calibrated_data))
+
+#             # Add random values only for rows where Q_sum for this strip is non-zero
+#             y += random_values * (Q_sum_values.iloc[:, j] != 0)
+
+#         # Store the computed y values in the corresponding list
+#         if module == "T1":
+#             y_values_M1 = y
+#             original_y_values_M1 = y.copy()  # Store original values
+#         elif module == "T2":
+#             y_values_M2 = y
+#             original_y_values_M2 = y.copy()  # Store original values
+#         elif module == "T3":
+#             y_values_M3 = y
+#             original_y_values_M3 = y.copy()  # Store original values
+#         elif module == "T4":
+#             y_values_M4 = y
+#             original_y_values_M4 = y.copy()  # Store original values
+
+
 if uniform_y_method:
     print('Y position uniform distribution method.')
 
     # Initialize empty lists for y values
-    y_values_M1 = []
-    y_values_M2 = []
-    y_values_M3 = []
-    y_values_M4 = []
-
-    # Initialize original y-values for uniform method
-    original_y_values_M1 = []
-    original_y_values_M2 = []
-    original_y_values_M3 = []
-    original_y_values_M4 = []
+    y_values_M1, y_values_M2, y_values_M3, y_values_M4 = [], [], [], []
+    original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4 = [], [], [], []
 
     # Loop through each module to compute y values
     for module in ['T1', 'T2', 'T3', 'T4']:
@@ -3141,24 +3273,16 @@ if uniform_y_method:
 
         # Compute strip boundaries
         strip_boundaries = [(center - width / 2, center + width / 2) for center, width in zip(y_pos, y_width)]
-        
+
         # Get the relevant Q_sum columns for the current module
         Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(len(y_pos))]
         Q_sum_values = calibrated_data[Q_sum_cols].abs()
 
-        # Compute the sum of Q_sum values row-wise
-        Q_sum_total = Q_sum_values.sum(axis=1)
+        # Find the index of the maximum Q_sum for each row
+        max_indices = Q_sum_values.idxmax(axis=1).apply(lambda col: int(col.split('_')[-1]) - 1)
 
-        # Initialize the y values for this module
-        y = np.zeros(len(calibrated_data))
-
-        # Loop through strips to generate uniform values
-        for j, (lower_limit, upper_limit) in enumerate(strip_boundaries):
-            # Generate uniform random values for the current strip
-            random_values = np.random.uniform(lower_limit, upper_limit, size=len(calibrated_data))
-
-            # Add random values only for rows where Q_sum for this strip is non-zero
-            y += random_values * (Q_sum_values.iloc[:, j] > 0)
+        # Compute y values based on the maximum Q_sum index
+        y = np.array([np.random.uniform(strip_boundaries[j][0], strip_boundaries[j][1]) for j in max_indices])
 
         # Store the computed y values in the corresponding list
         if module == "T1":
@@ -3173,6 +3297,7 @@ if uniform_y_method:
         elif module == "T4":
             y_values_M4 = y
             original_y_values_M4 = y.copy()  # Store original values
+
 
 
 if not uniform_y_method and not y_position_complex_method:
@@ -3286,6 +3411,8 @@ if create_plots and y_position_complex_method:
 
 # Plot the old and new Y's ------------------------------------------------------
 if create_plots and uniform_y_method:
+    print("Plotting the uniform Y position method results")
+    
     bin_number = 'auto'
 
     # Create a 3x4 grid for the plots
@@ -3457,7 +3584,7 @@ if create_plots:
     new_data[cols_to_adjust] = new_data[cols_to_adjust].subtract(new_data['T1_T_sum_final'], axis=0)
 
     # Plotting
-    if create_plots:
+    if create_plots or create_essential_plots:
         fig, axes = plt.subplots(4, 4, figsize=(20, 20))
         axes = axes.flatten()  # Flatten the axes array to easily iterate
         num_bins = 150
@@ -3476,14 +3603,14 @@ if create_plots:
             # Filter out values that are NaN or 0 before plotting from the new_data DataFrame
             axes[(i_plane-1)*4].hist(new_data[t_sum_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
             axes[(i_plane-1)*4].set_title(t_sum_col)
-    
+
             axes[(i_plane-1)*4 + 1].hist(new_data[t_diff_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
             axes[(i_plane-1)*4 + 1].set_title(t_diff_col)
-    
+
             axes[(i_plane-1)*4 + 2].hist(new_data[q_sum_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
             axes[(i_plane-1)*4 + 2].set_title(q_sum_col)
             axes[(i_plane-1)*4 + 2].set_yscale('log')  # Log scale for better visualization
-    
+
             axes[(i_plane-1)*4 + 3].hist(new_data[y_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
             axes[(i_plane-1)*4 + 3].set_title(y_col)
         
@@ -3502,7 +3629,6 @@ if create_plots:
         if show_plots: 
             plt.show()
         plt.close()
-
     
     # Second plot: not substracting the t_sum from the other planes ----------------
     fig, axes = plt.subplots(4, 4, figsize=(20, 20))
@@ -3603,7 +3729,7 @@ if create_plots:
 
 
 # Same for hexbin
-if create_plots:
+if create_plots or create_essential_plots:
     fig, axes = plt.subplots(4, 6, figsize=(24, 20))  # Adjusting for 6 combinations
     axes = axes.flatten()  # Flatten the axes array to easily iterate
     
@@ -3793,21 +3919,21 @@ def fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi): # va vector
     va = mg.transpose() @ mw @ vdmg
     return va
 
-# def fs2(nvar, npar, vs, vdat, vsig, lenx, ss, zi):
-#     va = np.zeros(npar)
-#     mk = fmkx(nvar, npar, vs, vsig, ss, zi)
-#     va = fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
-#     vm = fvmx(nvar, vs, lenx, ss, zi)
-#     mg = fmgx(nvar, npar, vs, ss, zi)
-#     mw = fmwx(nvar, vsig)
-#     vg = vm - mg @ vs
-#     vdmg = vdat - vg
-#     mg = fmgx(nvar, npar, vs, ss, zi)
-#     sk = vs.transpose() @ mk @ vs
-#     sa = vs.transpose() @ va
-#     s0 = vdmg.transpose() @ mw @ vdmg
-#     s2 = sk - 2*sa + s0
-#     return s2
+def fs2(nvar, npar, vs, vdat, vsig, lenx, ss, zi):
+    va = np.zeros(npar)
+    mk = fmkx(nvar, npar, vs, vsig, ss, zi)
+    va = fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
+    vm = fvmx(nvar, vs, lenx, ss, zi)
+    mg = fmgx(nvar, npar, vs, ss, zi)
+    mw = fmwx(nvar, vsig)
+    vg = vm - mg @ vs
+    vdmg = vdat - vg
+    mg = fmgx(nvar, npar, vs, ss, zi)
+    sk = vs.transpose() @ mk @ vs
+    sa = vs.transpose() @ va
+    s0 = vdmg.transpose() @ mw @ vdmg
+    s2 = sk - 2*sa + s0
+    return s2
 
 def fmahd(npar, vin1, vin2, merr): # Mahalanobis distance
     vdif  = np.subtract(vin1,vin2)
@@ -3961,7 +4087,7 @@ for iteration in range(repeat + 1):
         
         # Standard residual analysis
         # chi2 = fs2(nvar, npar, vsf, vdat, vsig, lenx, ss, zi) # Theoretical chisq
-        chi2 = 0 # Theoretical chisq
+        # chi2 = 0 # Theoretical chisq
         
         # Fit residuals
         res_ystr = 0
@@ -3993,13 +4119,19 @@ for iteration in range(repeat + 1):
                 calibrated_data.at[idx, f'res_tsum_{iplane}'] = vres[1]
                 calibrated_data.at[idx, f'res_tdif_{iplane}'] = vres[2]
                 
-                res_ystr   = res_ystr  + vres[0]
+                res_ystr  = res_ystr  + vres[0]
                 res_tsum  = res_tsum + vres[1]
                 res_tdif  = res_tdif + vres[2]
                 
             ndf  = ndat - npar    # number of degrees of freedom; was ndat - npar
             
+            # calibrated_data.at[idx, f'res_ystr_{iplane}'] = res_ystr
+            # calibrated_data.at[idx, f'res_tsum_{iplane}'] = res_tsum
+            # calibrated_data.at[idx, f'res_tdif_{iplane}'] = res_tdif
+            
             calibrated_data.at[idx, 'type'] = builtins.int(name_type)
+            
+            chi2 = res_ystr**2 + res_tsum**2 + res_tdif**2
             calibrated_data.at[idx, 'th_chi'] = chi2
             
             calibrated_data.at[idx, 'x'] = vsf[0]
@@ -4382,14 +4514,313 @@ if create_plots:
     
     if show_plots: plt.show()
     plt.close()
+
+
+# ------------------------------------------------------------------------------------------------
+# Including th_chi -------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+
+df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['th_chi'] > 0) & (df_plot_ancillary['th_chi'] < 0.02)]
+
+# Plotting the TT results all together
+if create_plots or create_essential_plots:
+    df_plot = df_plot_ancillary.copy()
     
+    columns_of_interest = ['x', 'y', 'theta', 'phi', 't0', 's', 'th_chi', 'charge_event']
+    num_bins = 30
+    fig, axes = plt.subplots(8, 8, figsize=(15, 15))
+    for i in range(8):
+        for j in range(8):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis('off')  # Leave the lower triangle blank
+            elif i == j:
+                # Diagonal: 1D histogram with independent axes
+                hist_data = df_plot[columns_of_interest[i]]
+                hist, bins = np.histogram(hist_data, bins=num_bins)
+                bin_centers = 0.5 * (bins[1:] + bins[:-1])
+                norm = plt.Normalize(hist.min(), hist.max())
+                cmap = plt.get_cmap('turbo')
+                for k in range(len(hist)):
+                    ax.bar(bin_centers[k], hist[k], width=bins[1] - bins[0], color=cmap(norm(hist[k])))
+                ax.set_xticks([])
+                ax.set_yticks([])
+            else:
+                # Upper triangle: hexbin plots
+                x_data = df_plot[columns_of_interest[j]]
+                y_data = df_plot[columns_of_interest[i]]
+                hb = ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
+            if i != 6:
+                ax.set_xticklabels([])  # Remove x-axis labels except for the last row
+            if j != 0:
+                ax.set_yticklabels([])  # Remove y-axis labels except for the first column
+            if i == 7:  # Last row, set x-labels
+                ax.set_xlabel(columns_of_interest[j])
+            if j == 0:  # First column, set y-labels
+                ax.set_ylabel(columns_of_interest[i])
+    plt.subplots_adjust(wspace=0.05, hspace=0.05)
+    plt.suptitle("All cases")
+    
+    if save_plots:
+        name_of_file = 'timtrack_results_hexbin_combination_th_chi'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: plt.show()
+    plt.close()
+    
+    
+if create_plots or create_essential_plots:
+    df_plot = df_plot_ancillary[df_plot_ancillary['type'].astype(int) >= 100].copy()
+    
+    columns_of_interest = ['x', 'y', 'theta', 'phi', 't0', 's', 'th_chi', 'charge_event']
+    num_bins = 30
+    fig, axes = plt.subplots(8, 8, figsize=(15, 15))
+    for i in range(8):
+        for j in range(8):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis('off')  # Leave the lower triangle blank
+            elif i == j:
+                # Diagonal: 1D histogram with independent axes
+                hist_data = df_plot[columns_of_interest[i]]
+                hist, bins = np.histogram(hist_data, bins=num_bins)
+                bin_centers = 0.5 * (bins[1:] + bins[:-1])
+                norm = plt.Normalize(hist.min(), hist.max())
+                cmap = plt.get_cmap('turbo')
+                for k in range(len(hist)):
+                    ax.bar(bin_centers[k], hist[k], width=bins[1] - bins[0], color=cmap(norm(hist[k])))
+                ax.set_xticks([])
+                ax.set_yticks([])
+            else:
+                # Upper triangle: hexbin plots
+                x_data = df_plot[columns_of_interest[j]]
+                y_data = df_plot[columns_of_interest[i]]
+                hb = ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
+            if i != 6:
+                ax.set_xticklabels([])  # Remove x-axis labels except for the last row
+            if j != 0:
+                ax.set_yticklabels([])  # Remove y-axis labels except for the first column
+            if i == 7:  # Last row, set x-labels
+                ax.set_xlabel(columns_of_interest[j])
+            if j == 0:  # First column, set y-labels
+                ax.set_ylabel(columns_of_interest[i])
+    plt.subplots_adjust(wspace=0.05, hspace=0.05)
+    plt.suptitle("At least three planes")
+    
+    if save_plots:
+        name_of_file = 'timtrack_results_hexbin_combination_th_chi'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: plt.show()
+    plt.close()
+    
+
+if create_plots or create_essential_plots:
+    df_plot = df_plot_ancillary[df_plot_ancillary['type'].astype(int) >= 1000].copy()
+    
+    columns_of_interest = ['x', 'y', 'theta', 'phi', 't0', 's', 'th_chi', 'charge_event']
+    num_bins = 30
+    fig, axes = plt.subplots(8, 8, figsize=(15, 15))
+    for i in range(8):
+        for j in range(8):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis('off')  # Leave the lower triangle blank
+            elif i == j:
+                # Diagonal: 1D histogram with independent axes
+                hist_data = df_plot[columns_of_interest[i]]
+                hist, bins = np.histogram(hist_data, bins=num_bins)
+                bin_centers = 0.5 * (bins[1:] + bins[:-1])
+                norm = plt.Normalize(hist.min(), hist.max())
+                cmap = plt.get_cmap('turbo')
+                for k in range(len(hist)):
+                    ax.bar(bin_centers[k], hist[k], width=bins[1] - bins[0], color=cmap(norm(hist[k])))
+                ax.set_xticks([])
+                ax.set_yticks([])
+            else:
+                # Upper triangle: hexbin plots
+                x_data = df_plot[columns_of_interest[j]]
+                y_data = df_plot[columns_of_interest[i]]
+                hb = ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
+            if i != 6:
+                ax.set_xticklabels([])  # Remove x-axis labels except for the last row
+            if j != 0:
+                ax.set_yticklabels([])  # Remove y-axis labels except for the first column
+            if i == 7:  # Last row, set x-labels
+                ax.set_xlabel(columns_of_interest[j])
+            if j == 0:  # First column, set y-labels
+                ax.set_ylabel(columns_of_interest[i])
+    plt.subplots_adjust(wspace=0.05, hspace=0.05)
+    plt.suptitle("Only four planes")
+    
+    if save_plots:
+        name_of_file = 'timtrack_results_hexbin_combination_th_chi'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: plt.show()
+    plt.close()
+
+
+# ------------------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------------------------
+# Including th_chi filtered -------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+
+chi_histo = True
+if chi_histo and create_plots:
+    data = df_plot_ancillary['th_chi'].dropna()  # Remove NaN values if any
+    data = data[data != 0]
+    plt.figure(figsize=(10, 6))
+    plt.hist(data, bins=300, alpha=0.5, color='blue', log=True)
+    plt.title('Histogram of th_chi', fontsize=16)
+    plt.xlabel('th_chi', fontsize=14)
+    plt.ylabel('Frequency', fontsize=14)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    
+    
+    if save_plots:
+        name_of_file = 'th_chi_histo'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: plt.show()
+    plt.close()
+
+df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['th_chi'] > 0.0001) & (df_plot_ancillary['th_chi'] < 0.02)]
+
+if chi_histo and create_plots:
+    data = df_plot_ancillary['th_chi'].dropna()  # Remove NaN values if any
+    data = data[data != 0]
+    plt.figure(figsize=(10, 6))
+    plt.hist(data, bins=300, alpha=0.5, color='blue', log=True)
+    plt.title('Histogram of th_chi', fontsize=16)
+    plt.xlabel('th_chi', fontsize=14)
+    plt.ylabel('Frequency', fontsize=14)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    
+    if save_plots:
+        name_of_file = 'th_chi_histo_filt'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: plt.show()
+    plt.close()
+
+
+df_plot_ancillary = df_plot_ancillary[df_plot_ancillary['type'].astype(int) >= 1000].copy()
+df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['th_chi'] > 0.00125) & (df_plot_ancillary['th_chi'] < 0.02)]
+
+if chi_histo and create_plots:
+    data = df_plot_ancillary['th_chi'].dropna()  # Remove NaN values if any
+    data = data[data != 0]
+    plt.figure(figsize=(10, 6))
+    plt.hist(data, bins=300, alpha=0.5, color='blue', log=True)
+    plt.title('Histogram of th_chi, only four planes', fontsize=16)
+    plt.xlabel('th_chi', fontsize=14)
+    plt.ylabel('Frequency', fontsize=14)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    
+    if save_plots:
+        name_of_file = 'th_chi_histo_filt_four_planes'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: plt.show()
+    plt.close()
+
+
+if create_plots or create_essential_plots:
+    df_plot = df_plot_ancillary[df_plot_ancillary['type'].astype(int) >= 1000].copy()
+    
+    columns_of_interest = ['x', 'y', 'theta', 'phi', 't0', 's', 'th_chi', 'charge_event']
+    num_bins = 30
+    fig, axes = plt.subplots(8, 8, figsize=(15, 15))
+    for i in range(8):
+        for j in range(8):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis('off')  # Leave the lower triangle blank
+            elif i == j:
+                # Diagonal: 1D histogram with independent axes
+                hist_data = df_plot[columns_of_interest[i]]
+                hist, bins = np.histogram(hist_data, bins=num_bins)
+                bin_centers = 0.5 * (bins[1:] + bins[:-1])
+                norm = plt.Normalize(hist.min(), hist.max())
+                cmap = plt.get_cmap('turbo')
+                for k in range(len(hist)):
+                    ax.bar(bin_centers[k], hist[k], width=bins[1] - bins[0], color=cmap(norm(hist[k])))
+                ax.set_xticks([])
+                ax.set_yticks([])
+            else:
+                # Upper triangle: hexbin plots
+                x_data = df_plot[columns_of_interest[j]]
+                y_data = df_plot[columns_of_interest[i]]
+                hb = ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
+            if i != 6:
+                ax.set_xticklabels([])  # Remove x-axis labels except for the last row
+            if j != 0:
+                ax.set_yticklabels([])  # Remove y-axis labels except for the first column
+            if i == 7:  # Last row, set x-labels
+                ax.set_xlabel(columns_of_interest[j])
+            if j == 0:  # First column, set y-labels
+                ax.set_ylabel(columns_of_interest[i])
+    plt.subplots_adjust(wspace=0.05, hspace=0.05)
+    plt.suptitle("Only four planes, chisq filtered")
+    
+    if save_plots:
+        name_of_file = 'timtrack_results_hexbin_combination_th_chi'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: plt.show()
+    plt.close()
+
+
+# ------------------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+
 
 print("-----------------------------")
 print(f"Data purity is {len(final_data) / raw_data_len*100:.1f}%")
 
 
 # Statistical comprobation ----------------------------------------------------
-if create_plots:
+if create_plots or create_essential_plots:
     test_data = final_data.copy()
     
     test_data['datetime'] = pd.to_datetime(test_data['datetime'], errors='coerce')
@@ -4539,7 +4970,7 @@ if create_pdf:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:
                 for png in plot_list:
-                    if os.path.exists(png):
+                    if os.path.exists(png) == False:
                         print(f"Error: {png} does not exist.")
                         continue
                     
@@ -4562,12 +4993,15 @@ if create_pdf:
 
 # Move the original datafile to PROCESSED -------------------------------------
 print("Moving file to COMPLETED directory...")
-shutil.move(processing_file_path, completed_file_path)
-print(f"File moved to: {completed_file_path}")
+shutil.move(processing_path, completed_path)
+print(f"File moved to: {completed_path}")
 
+
+# Store the current time at the end
+end_execution_time_counting = datetime.now()
+time_taken = (end_execution_time_counting - start_execution_time_counting).total_seconds() / 60
+print(f"Time taken for the whole execution: {time_taken:.2f} minutes")
 
 print("----------------------------------------------------------------------")
 print("------------------- Finished list_events creation --------------------")
 print("----------------------------------------------------------------------")
-
-# %%
