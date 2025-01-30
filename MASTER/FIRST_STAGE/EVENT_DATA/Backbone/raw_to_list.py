@@ -2238,36 +2238,6 @@ print("------------------- Charge front-back correction ---------------------")
 print("----------------------------------------------------------------------")
 
 if charge_front_back:
-    # for key in [1, 2, 3, 4]:
-    #     for i in range(4):
-    #         Q_sum = calibrated_data[f'Q{key}_Q_sum_{i+1}'].values
-    #         Q_diff = calibrated_data[f'Q{key}_Q_diff_{i+1}'].values
-            
-    #         # Apply correction only where Q_diff is not zero
-    #         Q_diff_cal = Q_diff.copy()  # Copy original Q_diff to preserve values
-            
-    #         cond = (Q_sum != 0) & (Q_diff != 0)
-    #         Q_sum = Q_sum[cond]
-    #         Q_diff = Q_diff[cond]
-            
-    #         Q_sum = Q_sum - ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
-    #         Q_diff = Q_diff - ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
-            
-    #         if np.sum(Q_sum) == 0: continue # Do not correct if there is no data
-    #         title = f"Q{key}_{i+1}. Charge diff. vs. charge sum."
-    #         x_label = "Charge sum"
-    #         y_label = "Charge diff"
-    #         name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
-    #         coeffs = scatter_2d_and_fit(Q_sum, Q_diff, title, x_label, y_label, name_of_file)
-    #         correction = polynomial(Q_sum, *coeffs)
-
-    #         # Apply correction to non-zero Q_diff values
-    #         non_zero_indices = Q_diff_cal != 0  # Mask for non-zero values
-    #         Q_diff_cal[non_zero_indices] = Q_diff_cal[non_zero_indices] - correction[non_zero_indices]
-            
-    #         # Update the DataFrame with corrected values
-    #         calibrated_data[f'Q{key}_Q_diff_{i+1}'] = Q_diff_cal
-    
     for key in [1, 2, 3, 4]:
         for i in range(4):
             # Extract data from the DataFrame
