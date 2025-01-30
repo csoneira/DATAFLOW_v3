@@ -3,8 +3,8 @@
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-newest_file = False
-oldest_file = True
+newest_file = True
+oldest_file = False
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -1313,45 +1313,45 @@ if limit:
 
 
 # ------------------------------------------------------------------------------------------------------
-# import re
+import re
 
-# input_file = file_path  # Change this to your actual file path
-# temp_file = os.path.join(os.path.dirname(input_file), f"temp_file_{date_execution}.csv")
+input_file = file_path  # Change this to your actual file path
+temp_file = os.path.join(os.path.dirname(input_file), f"temp_file_{date_execution}.csv")
 
-# # Track the number of replacements
-# replacement_count = 0
-# found_cases = []
+# Track the number of replacements
+replacement_count = 0
+found_cases = []
 
-# lines = 0
-# # Step 1: Read the file line by line and fix number-issue
-# with open(input_file, "r") as infile, open(temp_file, "w") as outfile:
-#     for line in infile:
-#         lines += 1
-#         # Find occurrences before replacement
-#         matches = re.findall(r'\d-\d', line)
-#         if matches:
-#             found_cases.extend(matches)  # Store first few occurrences for feedback
-#             replacement_count += len(matches)
+lines = 0
+# Step 1: Read the file line by line and fix number-issue
+with open(input_file, "r") as infile, open(temp_file, "w") as outfile:
+    for line in infile:
+        lines += 1
+        # Find occurrences before replacement
+        matches = re.findall(r'\d-\d', line)
+        if matches:
+            found_cases.extend(matches)  # Store first few occurrences for feedback
+            replacement_count += len(matches)
 
-#         # Apply replacement
-#         fixed_line = re.sub(r'(\d)-(\d)', r'\1 -\2', line)
-#         outfile.write(fixed_line)
+        # Apply replacement
+        fixed_line = re.sub(r'(\d)-(\d)', r'\1 -\2', line)
+        outfile.write(fixed_line)
 
-# print(f"Lines in the original document: {lines}")
+print(f"Lines in the original document: {lines}")
 
-# # Step 2: Provide feedback to user
-# print(f"Total replacements made: {replacement_count}")
-# if found_cases:
-#     print("First few detected cases before replacement:", found_cases[:10])  # Show first 10 cases
+# Step 2: Provide feedback to user
+print(f"Total replacements made: {replacement_count}")
+if found_cases:
+    print("First few detected cases before replacement:", found_cases[:10])  # Show first 10 cases
 
-# # Step 3: Read the cleaned file into pandas
-# data = pd.read_csv(temp_file, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip', low_memory=False)
+# Step 3: Read the cleaned file into pandas
+# data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip', low_memory=False)
 # ------------------------------------------------------------------------------------------------------
 
 
 data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip', low_memory=False)
-# data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None)
-data.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, len(data.columns))]
+data.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, 71)]
+
 # Drop rows with invalid year values
 data = data[data['year'].astype(str).str.isdigit()]
 data['datetime'] = pd.to_datetime(data[['year', 'month', 'day', 'hour', 'minute', 'second']])
