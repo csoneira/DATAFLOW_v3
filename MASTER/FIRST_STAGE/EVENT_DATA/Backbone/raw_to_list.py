@@ -271,16 +271,16 @@ else:
     T_B_right_pre_cal = 100
 
     Q_F_left_pre_cal = 50
-    Q_F_right_pre_cal = 1000
+    Q_F_right_pre_cal = 500
 
     Q_B_left_pre_cal = 50
-    Q_B_right_pre_cal = 1000
+    Q_B_right_pre_cal = 500
 
 T_left_side = T_F_left_pre_cal
 T_right_side = T_F_right_pre_cal
 
 Q_left_side = Q_F_left_pre_cal
-Q_right_side = Q_F_right_pre_cal
+Q_right_side = 150
 
 # Pre-cal Sum & Diff ---------
 # Qsum
@@ -556,6 +556,10 @@ def calibrate_strip_T_diff(T_F, T_B):
         # print(f"Maximum bin edge: {max_bin_edge_F}")
     else:
         print("No bins have counts above the threshold.")
+        threshold = max_counts / 2
+        indices_above_threshold = np.where(counts > threshold)[0]
+        min_bin_edge_F = bin_edges[indices_above_threshold[0]]
+        max_bin_edge_F = bin_edges[indices_above_threshold[-1] + 1]
     
     # Back
     T_B = T_B[cond]
@@ -570,6 +574,10 @@ def calibrate_strip_T_diff(T_F, T_B):
         # print(f"Maximum bin edge: {max_bin_edge_B}")
     else:
         print("No bins have counts above the threshold.")
+        threshold = max_counts / 2
+        indices_above_threshold = np.where(counts > threshold)[0]
+        min_bin_edge_B = bin_edges[indices_above_threshold[0]]
+        max_bin_edge_B = bin_edges[indices_above_threshold[-1] + 1]
     
     cond = (T_F > min_bin_edge_F) & (T_F < max_bin_edge_F) & (T_B > min_bin_edge_B) & (T_B < max_bin_edge_B)
             
@@ -1343,8 +1351,12 @@ def is_valid_date(values):
         return False
 
 # Process the file
+read_lines = 0
+written_lines = 0
 with open(file_path, 'r') as infile, open(temp_file, 'w') as outfile, open(rejected_file, 'w') as rejectfile:
     for i, line in enumerate(infile, start=1):
+        read_lines += 1
+        
         cleaned_line = process_line(line)
         cleaned_values = cleaned_line.split(',')  # Split into columns
 
@@ -1359,12 +1371,19 @@ with open(file_path, 'r') as infile, open(temp_file, 'w') as outfile, open(rejec
 
         # Ensure correct column count
         if len(cleaned_values) == EXPECTED_COLUMNS:
+            written_lines += 1
             outfile.write(cleaned_line + '\n')  # Save valid row
         else:
             rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")  # Save rejected row
 
 data = pd.read_csv(temp_file, header=None, low_memory=False)
 data = data.apply(pd.to_numeric, errors='coerce')
+
+# Print the number of rows in input
+print("*******************************************************")
+print("Original file has {read_lines} lines.")
+print("Processed file has {written_lines} lines.")
+print("*******************************************************")
 
 # ------------------------------------------------------------------------------------------------------
 
@@ -1386,7 +1405,6 @@ if not isinstance(og_data.index, pd.DatetimeIndex):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
 raw_data_len = len(filtered_data)
-print(raw_data_len)
 if debug_mode:
     print(raw_data_len)
 
@@ -1396,7 +1414,6 @@ print(filtered_data['column_6'].value_counts())
 filtered_data = filtered_data[filtered_data['column_6'] == 1]
 
 raw_data_len = len(filtered_data)
-print(raw_data_len)
 if debug_mode:
     print(raw_data_len)
 
@@ -1490,9 +1507,9 @@ if debug_mode:
     num_bins = 100  # Parameter for the number of bins
 else:
     T_clip_min = -300
-    T_clip_max = 0
+    T_clip_max = 100
     Q_clip_min = 0
-    Q_clip_max = 300
+    Q_clip_max = 500
     num_bins = 100  # Parameter for the number of bins
 
 
@@ -4072,8 +4089,26 @@ for iteration in range(repeat + 1):
         
         # INTRODUCTION --------------------------------------------------------
         track_numeric = pd.to_numeric(track.drop('datetime'), errors='coerce')
-        if track_numeric.isna().any() or np.isinf(track_numeric.values).any():
-            print(track_numeric)
+        has_nan = track_numeric.isna()
+        has_inf = np.isinf(track_numeric.values)
+
+        if has_nan.any().any() or has_inf.any():
+            # print(track_numeric)
+            print("Problematic values detected:")
+    
+            # Print rows and columns with NaN values
+            if has_nan.any().any():
+                nan_mask = has_nan.any(axis=1)
+                print("NaN values in the following rows/columns:")
+                print(track_numeric[nan_mask])
+            
+            # Print rows and columns with infinite values
+            if has_inf.any():
+                inf_mask = has_inf.any(axis=1)
+                print("Infinite values in the following rows/columns:")
+                print(track_numeric[inf_mask])
+            
+            print("Skipping this track due to invalid values.")
             continue
         
         name_type = ""
