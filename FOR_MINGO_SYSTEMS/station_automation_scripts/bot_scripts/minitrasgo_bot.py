@@ -39,7 +39,6 @@ else:
 # Initialize the bot with the API key
 import telebot
 bot = telebot.TeleBot(api_key)
-#bot = telebot.TeleBot("8012230734:AAFN1MH_9zbQ3RRoXnKBqalhkJSiEB3V3DE")
 
 passwords = {
     '6445882713': 'mingo@1234',
