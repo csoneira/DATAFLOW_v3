@@ -3,8 +3,8 @@
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-newest_file = True
-oldest_file = False
+newest_file = False
+oldest_file = True
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -1304,61 +1304,80 @@ right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 if limit:
     print(f'Taking the first {limit_number} rows.')
 
-# malformed_lines = []
-# with open(file_path, 'r') as infile:
-#     for i, line in enumerate(infile):
-#         if len(line.split()) != 71:  # Adjust 71 to your expected number of fields
-#             malformed_lines.append((i + 1, line))  # Save line number and content
-# print(f"Found {len(malformed_lines)} malformed lines.")
-
-
 # ------------------------------------------------------------------------------------------------------
 import re
+import csv
 
 input_file = file_path  # Change this to your actual file path
 temp_file = os.path.join(os.path.dirname(input_file), f"temp_file_{date_execution}.csv")
+rejected_file = os.path.join(os.path.dirname(input_file), f"rejected_file_{date_execution}.txt")
 
-# Track the number of replacements
-replacement_count = 0
-found_cases = []
+print(f"Temporal file is {temp_file}")
+EXPECTED_COLUMNS = 71  # Expected number of columns
 
-lines = 0
-# Step 1: Read the file line by line and fix number-issue
-with open(input_file, "r") as infile, open(temp_file, "w") as outfile:
-    for line in infile:
-        lines += 1
-        # Find occurrences before replacement
-        matches = re.findall(r'\d-\d', line)
-        if matches:
-            found_cases.extend(matches)  # Store first few occurrences for feedback
-            replacement_count += len(matches)
+# Function to process each line
+def process_line(line):
+    line = re.sub(r'0000\.0000', '0', line)  # Replace '0000.0000' with '0'
+    line = re.sub(r'\b0+([0-9]+)', r'\1', line)  # Remove leading zeros
+    line = re.sub(r' +', ',', line.strip())  # Replace multiple spaces with a comma
+    line = re.sub(r'X(202\d)', r'X\n\1', line)  # Replace X2024, X2025 with X\n202Y
+    line = re.sub(r'(\w)-(\d)', r'\1 -\2', line)  # Ensure X-Y is properly spaced
+    return line
 
-        # Apply replacement
-        fixed_line = re.sub(r'(\d)-(\d)', r'\1 -\2', line)
-        outfile.write(fixed_line)
+# Function to check for malformed numbers (e.g., '-120.144.0')
+def contains_malformed_numbers(line):
+    return bool(re.search(r'-?\d+\.\d+\.\d+', line))  # Detects multiple decimal points
 
-print(f"Lines in the original document: {lines}")
+# Function to validate year, month, and day
+def is_valid_date(values):
+    try:
+        year, month, day = int(values[0]), int(values[1]), int(values[2])
+        if year not in {2023, 2024, 2025, 2026, 2027}:  # Check valid years
+            return False
+        if not (1 <= month <= 12):  # Check valid month
+            return False
+        if not (1 <= day <= 31):  # Check valid day
+            return False
+        return True
+    except ValueError:  # In case of non-numeric values
+        return False
 
-# Step 2: Provide feedback to user
-print(f"Total replacements made: {replacement_count}")
-if found_cases:
-    print("First few detected cases before replacement:", found_cases[:10])  # Show first 10 cases
+# Process the file
+with open(file_path, 'r') as infile, open(temp_file, 'w') as outfile, open(rejected_file, 'w') as rejectfile:
+    for i, line in enumerate(infile, start=1):
+        cleaned_line = process_line(line)
+        cleaned_values = cleaned_line.split(',')  # Split into columns
 
-# Step 3: Read the cleaned file into pandas
-# data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip', low_memory=False)
+        # Validate line structure before further processing
+        if len(cleaned_values) < 3 or not is_valid_date(cleaned_values[:3]):
+            rejectfile.write(f"Line {i} (Invalid date): {line.strip()}\n")
+            continue  # Skip this row
+
+        if contains_malformed_numbers(line):
+            rejectfile.write(f"Line {i} (Malformed number): {line.strip()}\n")  # Save rejected row
+            continue  # Skip this row
+
+        # Ensure correct column count
+        if len(cleaned_values) == EXPECTED_COLUMNS:
+            outfile.write(cleaned_line + '\n')  # Save valid row
+        else:
+            rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")  # Save rejected row
+
+data = pd.read_csv(temp_file, header=None, low_memory=False)
+data = data.apply(pd.to_numeric, errors='coerce')
+
 # ------------------------------------------------------------------------------------------------------
 
+# data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip', low_memory=False)
 
-data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip', low_memory=False)
+# Assign name to the columns
 data.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, 71)]
-
-# Drop rows with invalid year values
-data = data[data['year'].astype(str).str.isdigit()]
 data['datetime'] = pd.to_datetime(data[['year', 'month', 'day', 'hour', 'minute', 'second']])
 
-if debug_mode:
-    print(len(data))
 
+# ------------------------------------------------------------------------------------------------------
+# Filter 1: by date ------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------------
 print("----------------------- Filter 1: by date -----------------------")
 filtered_data = data[(data['datetime'] >= left_limit_time) & (data['datetime'] <= right_limit_time)]
 og_data = filtered_data.copy()
@@ -1382,11 +1401,12 @@ if debug_mode:
     print(raw_data_len)
 
 if raw_data_len == 0:  # Use '==' for comparison
+    print(filtered_data['column_6'].head())
     print("No coincidence events.")
     sys.exit()
 
-datetime_value = filtered_data['datetime'][0]
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
+datetime_value = filtered_data['datetime'][0]
 start_time = datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
@@ -1474,6 +1494,7 @@ else:
     Q_clip_min = 0
     Q_clip_max = 300
     num_bins = 100  # Parameter for the number of bins
+
 
 if create_plots or create_essential_plots:
     # Create the grand figure for T values
@@ -2271,7 +2292,7 @@ if charge_front_back:
             y_label = "Charge diff"
             name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
             coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
-            print(coeffs)
+            
             # Calculate the correction based on filtered data
             # correction = polynomial(Q_diff[Q_diff != 0], *coeffs)
 
