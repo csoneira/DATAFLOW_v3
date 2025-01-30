@@ -1381,8 +1381,8 @@ data = data.apply(pd.to_numeric, errors='coerce')
 
 # Print the number of rows in input
 print("*******************************************************")
-print("Original file has {read_lines} lines.")
-print("Processed file has {written_lines} lines.")
+print(f"Original file has {read_lines} lines.")
+print(f"Processed file has {written_lines} lines.")
 print("*******************************************************")
 
 # ------------------------------------------------------------------------------------------------------
