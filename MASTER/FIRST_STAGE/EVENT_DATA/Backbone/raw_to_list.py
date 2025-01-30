@@ -73,6 +73,8 @@ base_directories = {
     "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
     # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
     
+    "empty_files_directory": os.path.join(raw_to_list_working_directory, "EMPTY_FILES"),
+    
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/COMPLETED_DIRECTORY"),
@@ -95,10 +97,21 @@ unprocessed_directory = base_directories["unprocessed_directory"]
 processing_directory = base_directories["processing_directory"]
 completed_directory = base_directories["completed_directory"]
 
+empty_files_directory = base_directories["empty_files_directory"]
+
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
+
+# Search in all this directories for empty files and move them to the empty_files_directory
+for directory in [raw_directory, unprocessed_directory, processing_directory, completed_directory]:
+    files = os.listdir(directory)
+    for file in files:
+        file_path = os.path.join(directory, file)
+        if os.path.getsize(file_path) == 0:
+            print("Moving empty file:", file)
+            shutil.move(file_path, empty_files_directory)
 
 # Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
 files_to_move = raw_files - unprocessed_files - processing_files - completed_files
@@ -1291,14 +1304,15 @@ right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 if limit:
     print(f'Taking the first {limit_number} rows.')
 
-malformed_lines = []
-with open(file_path, 'r') as infile:
-    for i, line in enumerate(infile):
-        if len(line.split()) != 71:  # Adjust 71 to your expected number of fields
-            malformed_lines.append((i + 1, line))  # Save line number and content
-print(f"Found {len(malformed_lines)} malformed lines.")
+# malformed_lines = []
+# with open(file_path, 'r') as infile:
+#     for i, line in enumerate(infile):
+#         if len(line.split()) != 71:  # Adjust 71 to your expected number of fields
+#             malformed_lines.append((i + 1, line))  # Save line number and content
+# print(f"Found {len(malformed_lines)} malformed lines.")
 
-data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip')
+# data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip')
+data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None)
 data.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, len(data.columns))]
 # Drop rows with invalid year values
 data = data[data['year'].astype(str).str.isdigit()]
