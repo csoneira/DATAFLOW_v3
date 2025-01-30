@@ -1291,8 +1291,17 @@ right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 if limit:
     print(f'Taking the first {limit_number} rows.')
 
-data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None)
+malformed_lines = []
+with open(file_path, 'r') as infile:
+    for i, line in enumerate(infile):
+        if len(line.split()) != 71:  # Adjust 71 to your expected number of fields
+            malformed_lines.append((i + 1, line))  # Save line number and content
+print(f"Found {len(malformed_lines)} malformed lines.")
+
+data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip')
 data.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, len(data.columns))]
+# Drop rows with invalid year values
+data = data[data['year'].astype(str).str.isdigit()]
 data['datetime'] = pd.to_datetime(data[['year', 'month', 'day', 'hour', 'minute', 'second']])
 
 if debug_mode:
