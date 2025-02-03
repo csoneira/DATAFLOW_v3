@@ -353,8 +353,9 @@ shutil.move(file_path, completed_file_path)
 print(f"File moved to: {completed_file_path}")
 
 
+
 # -----------------------------------------------------------------------------
-# Merge with big_event_data.csv and handle duplicates -------------------------
+# Merge all CSVs in ACC_EVENTS_DIRECTORY with big_event_data.csv ---------------
 # -----------------------------------------------------------------------------
 
 # Load or create big_event_data.csv
@@ -365,8 +366,19 @@ else:
     big_event_df = pd.DataFrame(columns=resampled_df.columns)
     print("Created new empty big_event_data.csv dataframe.")
 
-# Concatenate the new resampled data with the existing big_event_data
-combined_df = pd.concat([big_event_df, resampled_df], ignore_index=True)
+# Process all CSV files in ACC_EVENTS_DIRECTORY
+acc_directory = os.path.dirname(save_path)  # Get the directory where new CSVs are saved
+csv_files = [f for f in os.listdir(acc_directory) if f.endswith('.csv')]
+
+for csv_file in csv_files:
+    csv_path = os.path.join(acc_directory, csv_file)
+    
+    if csv_path == big_event_file:
+        continue  # Skip big_event_data.csv itself
+
+    print(f"Merging file: {csv_path}")
+    new_data = pd.read_csv(csv_path, sep=',', parse_dates=['Time'])
+    big_event_df = pd.concat([big_event_df, new_data], ignore_index=True)
 
 # Function to handle duplicates in 'Time'
 def combine_duplicates(group, take_newest=False):
@@ -402,15 +414,14 @@ def combine_duplicates(group, take_newest=False):
     return pd.Series(result)
 
 # Group by 'Time' to combine duplicates with the option to take the newest value
-combined_df = combined_df.groupby('Time', as_index=False).apply(combine_duplicates, take_newest=True)
+big_event_df = big_event_df.groupby('Time', as_index=False).apply(combine_duplicates, take_newest=True)
 
 # Sort the combined DataFrame by 'Time'
-combined_df = combined_df.sort_values(by='Time').reset_index(drop=True)
-
+big_event_df = big_event_df.sort_values(by='Time').reset_index(drop=True)
 
 # -----------------------------------------------------------------------------
 # Save the updated big_event_data.csv -----------------------------------------
 # -----------------------------------------------------------------------------
-combined_df = combined_df.applymap(round_to_significant_digits)
-combined_df.to_csv(big_event_file, sep=',', index=False)
-print(f"Updated big_event_data.csv with {len(combined_df)} rows.")
+big_event_df = big_event_df.applymap(round_to_significant_digits)
+big_event_df.to_csv(big_event_file, sep=',', index=False)
+print(f"Updated big_event_data.csv with {len(big_event_df)} rows.")

@@ -563,7 +563,7 @@ def calibrate_strip_T_diff(T_F, T_B):
         # print(f"Minimum bin edge: {min_bin_edge_F}")
         # print(f"Maximum bin edge: {max_bin_edge_F}")
     else:
-        print("No bins have counts above the threshold.")
+        print("No bins have counts above the threshold, Front.")
         threshold = max_counts / 2
         indices_above_threshold = np.where(counts > threshold)[0]
         min_bin_edge_F = bin_edges[indices_above_threshold[0]]
@@ -581,7 +581,7 @@ def calibrate_strip_T_diff(T_F, T_B):
         # print(f"Minimum bin edge: {min_bin_edge_B}")
         # print(f"Maximum bin edge: {max_bin_edge_B}")
     else:
-        print("No bins have counts above the threshold.")
+        print("No bins have counts above the threshold, Back.")
         threshold = max_counts / 2
         indices_above_threshold = np.where(counts > threshold)[0]
         min_bin_edge_B = bin_edges[indices_above_threshold[0]]
@@ -688,11 +688,11 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
         # print(f"Minimum bin edge: {min_bin_edge}")
         # print(f"Maximum bin edge: {max_bin_edge}")
     else:
-        print("No bins have counts above the threshold.")
+        print("No bins have counts above the threshold; Q pedestal calibration.")
         threshold = max_counts / 2
         indices_above_threshold = np.where(counts > threshold)[0]
-        min_bin_edge_B = bin_edges[indices_above_threshold[0]]
-        max_bin_edge_B = bin_edges[indices_above_threshold[-1] + 1]
+        min_bin_edge = bin_edges[indices_above_threshold[0]]
+        max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]
     
     Q_ch = Q_ch[(T_ch > min_bin_edge) & (T_ch < max_bin_edge)]
     
