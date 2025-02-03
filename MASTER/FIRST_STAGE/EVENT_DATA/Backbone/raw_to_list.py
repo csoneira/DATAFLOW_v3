@@ -74,6 +74,7 @@ base_directories = {
     # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
     
     "empty_files_directory": os.path.join(raw_to_list_working_directory, "EMPTY_FILES"),
+    "rejected_files_directory": os.path.join(raw_to_list_working_directory, "REJECTED_FILES"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/PROCESSING_DIRECTORY"),
@@ -98,6 +99,7 @@ processing_directory = base_directories["processing_directory"]
 completed_directory = base_directories["completed_directory"]
 
 empty_files_directory = base_directories["empty_files_directory"]
+rejected_files_directory = base_directories["rejected_files_directory"]
 
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
@@ -108,10 +110,10 @@ completed_files = set(os.listdir(completed_directory))
 for directory in [raw_directory, unprocessed_directory, processing_directory, completed_directory]:
     files = os.listdir(directory)
     for file in files:
-        file_path = os.path.join(directory, file)
-        if os.path.getsize(file_path) == 0:
+        file_empty = os.path.join(directory, file)
+        if os.path.getsize(file_empty) == 0:
             print("Moving empty file:", file)
-            shutil.move(file_path, empty_files_directory)
+            shutil.move(file_empty, empty_files_directory)
 
 # Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
 files_to_move = raw_files - unprocessed_files - processing_files - completed_files
@@ -142,10 +144,10 @@ if files:  # Check if the directory contains any files
 # The input file can be in the master directory!! And have a dictionary or
 # table where the station number allows to know the information needed
 
-input_file_path = os.path.join(base_directory, "input.inp")
+input_file_config_path = os.path.join(base_directory, "input.inp")
 
-if os.path.exists(input_file_path):
-    with open(input_file_path, 'r') as file:
+if os.path.exists(input_file_config_path):
+    with open(input_file_config_path, 'r') as file:
         input_data = {}
         for line in file:
             if line.strip():  # Skip empty lines
@@ -681,6 +683,10 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
         # print(f"Maximum bin edge: {max_bin_edge}")
     else:
         print("No bins have counts above the threshold.")
+        threshold = max_counts / 2
+        indices_above_threshold = np.where(counts > threshold)[0]
+        min_bin_edge_B = bin_edges[indices_above_threshold[0]]
+        max_bin_edge_B = bin_edges[indices_above_threshold[-1] + 1]
     
     Q_ch = Q_ch[(T_ch > min_bin_edge) & (T_ch < max_bin_edge)]
     
@@ -1231,7 +1237,6 @@ print("----------------------------------------------------------------------")
 
 # Determine the file path input
 
-
 # Get lists of files in the directories
 unprocessed_files = sorted(os.listdir(base_directories["unprocessed_directory"]))
 processing_files = sorted(os.listdir(base_directories["processing_directory"]))
@@ -1242,7 +1247,11 @@ def process_file(source_path, dest_path):
         print(f"File already exists at destination: {dest_path}")
         os.remove(source_path)
         return False
-    print(f"Moving '{os.path.basename(source_path)}' to '{dest_path}'...")
+    
+    print("**********************************************************************")
+    print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
+    print("**********************************************************************")
+    
     shutil.move(source_path, dest_path)
     return True
 
@@ -1306,6 +1315,17 @@ else:
 
 file_path = processing_path
 
+
+# Check the station number in the datafile
+try:
+    file_station_number = int(file_name[3])  # 4th character (index 3)
+    if file_station_number != int(station):
+        print(f'File station number is: {file_station_number}, it does not match.')
+        sys.exit(f"File '{file_name}' does not belong to station {station}. Exiting.")
+except ValueError:
+    sys.exit(f"Invalid station number in file '{file_name}'. Exiting.")
+
+
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
 right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 
@@ -1319,6 +1339,9 @@ import csv
 input_file = file_path  # Change this to your actual file path
 temp_file = os.path.join(os.path.dirname(input_file), f"temp_file_{date_execution}.csv")
 rejected_file = os.path.join(os.path.dirname(input_file), f"rejected_file_{date_execution}.txt")
+
+# Move rejected_file to the rejected file folder
+
 
 print(f"Temporal file is {temp_file}")
 EXPECTED_COLUMNS = 71  # Expected number of columns
@@ -5080,9 +5103,12 @@ if create_pdf:
 
 # Move the original datafile to PROCESSED -------------------------------------
 print("Moving file to COMPLETED directory...")
-shutil.move(processing_path, completed_path)
+shutil.move(file_path, completed_path)
 print(f"File moved to: {completed_path}")
 
+if os.path.exists(temp_file):
+    print("Removing temporary file...")
+    os.remove(temp_file)
 
 # Store the current time at the end
 end_execution_time_counting = datetime.now()
