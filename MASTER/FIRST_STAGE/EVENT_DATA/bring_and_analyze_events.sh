@@ -7,6 +7,10 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
+echo '------------------------------------------------------'
+echo '------------------------------------------------------'
+echo "bring_and_analyze_events.sh started on: $(date '+%Y-%m-%d %H:%M:%S')"
+
 station=$1
 echo "Station: $station"
 # ----------------------------------------------
@@ -36,9 +40,10 @@ mkdir -p "$storage_directory"
 # Ensure exclude_list_file exists
 if [ ! -f "$exclude_list_file" ]; then
     touch "$exclude_list_file"
-    echo "Created exclude list file at: $exclude_list_file"
+    # echo "Created exclude list file at: $exclude_list_file"
 else
-    echo "Exclude list file already exists: $exclude_list_file"
+    # echo "Exclude list file already exists: $exclude_list_file"
+    echo 
 fi
 
 
@@ -47,11 +52,14 @@ echo "Generating exclude list from processed files..."
 echo "Searching in: $storage_directory"
 
 find "$storage_directory" -type f -name '*.dat' -exec basename {} \; > "$exclude_list_file"
-echo "Exclude list saved to: $exclude_list_file"
+# echo "Exclude list saved to: $exclude_list_file"
 
 
 # Fetch all data
 echo "Fetching data from $mingo_direction to $local_destination, excluding already processed files..."
+
+echo '------------------------------------------------------'
+
 if [[ -s "$exclude_list_file" ]]; then
   rsync -avz --exclude-from="$exclude_list_file" "$mingo_direction:$dat_files_directory"/*.dat "$local_destination"
   rm "$exclude_list_file"
@@ -60,6 +68,8 @@ else
   echo "No exclude list found. Fetching all files..."
   rsync -avz "$mingo_direction:$dat_files_directory"/*.dat "$local_destination"
 fi
+
+echo '------------------------------------------------------'
 
 # Process the data: raw_to_list.py
 echo "Processing .dat files with Python script (raw_to_list.py)..."

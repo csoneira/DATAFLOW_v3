@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
-debug_mode = False # Only 10000 rows with all detail
+debug_mode = True # Only 10000 rows with all detail
 newest_file = False
 oldest_file = True
 
@@ -51,7 +51,7 @@ if len(sys.argv) < 2:
 
 # Get the station argument
 station = sys.argv[1]
-print(f"Station: {station}")
+# print(f"Station: {station}")
 
 # -----------------------------------------------------------------------------
 
@@ -781,18 +781,18 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
     return pedestal
 
 
-def calibrate_strip_Q(Q_sum):
-    q = calibrate_strip_Q_percentile
-    mask_Q = (Q_sum != 0)
-    Q_sum = Q_sum[mask_Q]
-    mask_Q = (Q_sum > Q_left_pre_cal) & (Q_sum < Q_right_pre_cal)
-    Q_sum = Q_sum[mask_Q]
-    Q_sum = Q_sum[Q_sum > np.percentile(Q_sum, q)]
-    mean = np.mean(Q_sum)
-    std = np.std(Q_sum)
-    Q_sum = Q_sum[ abs(Q_sum - mean) < std ]
-    offset = np.min(Q_sum)
-    return offset
+# def calibrate_strip_Q(Q_sum):
+#     q = calibrate_strip_Q_percentile
+#     mask_Q = (Q_sum != 0)
+#     Q_sum = Q_sum[mask_Q]
+#     mask_Q = (Q_sum > Q_left_pre_cal) & (Q_sum < Q_right_pre_cal)
+#     Q_sum = Q_sum[mask_Q]
+#     Q_sum = Q_sum[Q_sum > np.percentile(Q_sum, q)]
+#     mean = np.mean(Q_sum)
+#     std = np.std(Q_sum)
+#     Q_sum = Q_sum[ abs(Q_sum - mean) < std ]
+#     offset = np.min(Q_sum)
+#     return offset
 
 def calibrate_strip_Q_FB(Q_F, Q_B):
     q = calibrate_strip_Q_FB_percentile
@@ -2050,27 +2050,27 @@ print("----------------------------------------------------------------------")
 if debug_mode:
     print(calibrated_data)
 
-calibration_Q = []
-for key in ['Q1', 'Q2', 'Q3', 'Q4']:
-    Q_sum_cols = [f'{key}_Q_sum_{i+1}' for i in range(4)]
-    Q_sum = new_df[Q_sum_cols].values
+# calibration_Q = []
+# for key in ['Q1', 'Q2', 'Q3', 'Q4']:
+#     Q_sum_cols = [f'{key}_Q_sum_{i+1}' for i in range(4)]
+#     Q_sum = new_df[Q_sum_cols].values
     
-    v = Q_sum[:,0]
-    v = v[v != 0]
-    # print(v)
+#     v = Q_sum[:,0]
+#     v = v[v != 0]
+#     # print(v)
     
-    calibration_q_component = [calibrate_strip_Q(Q_sum[:,i]) for i in range(4)]
-    calibration_Q.append(calibration_q_component)
-calibration_Q = np.array(calibration_Q)
+#     calibration_q_component = [calibrate_strip_Q(Q_sum[:,i]) for i in range(4)]
+#     calibration_Q.append(calibration_q_component)
+# calibration_Q = np.array(calibration_Q)
 
-print(f"Charge sum calibration:\n{calibration_Q}")
+# print(f"Charge sum calibration:\n{calibration_Q}")
 
-diff = np.abs(calibration_Q - charge_sum_reference) > charge_sum_distance
-nan_mask = np.isnan(calibration_Q)
-values_replaced_q_sum = np.any(diff | nan_mask)
-calibration_Q[diff | nan_mask] = charge_sum_reference[diff | nan_mask]
-if values_replaced_q_sum:
-    print("Some values were replaced in the calibration Q sum.")
+# diff = np.abs(calibration_Q - charge_sum_reference) > charge_sum_distance
+# nan_mask = np.isnan(calibration_Q)
+# values_replaced_q_sum = np.any(diff | nan_mask)
+# calibration_Q[diff | nan_mask] = charge_sum_reference[diff | nan_mask]
+# if values_replaced_q_sum:
+#     print("Some values were replaced in the calibration Q sum.")
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
@@ -4117,8 +4117,11 @@ for iteration in range(repeat + 1):
     
     for idx, track in iterator:
         
-        # INTRODUCTION --------------------------------------------------------
-        track_numeric = pd.to_numeric(track.drop('datetime'), errors='coerce')
+        # INTRODUCTION -------------------------------------------------------- ---------
+
+        # Drop 'datetime' column safely, ensuring the result is always a DataFrame
+        # track_numeric = pd.to_numeric(track.drop('datetime'), errors='coerce')
+        track_numeric = pd.DataFrame(pd.to_numeric(track.drop('datetime', axis=1).squeeze(), errors='coerce'))
         has_nan = track_numeric.isna()
         has_inf = np.isinf(track_numeric.values)
 
@@ -4140,7 +4143,10 @@ for iteration in range(repeat + 1):
             
             print("Skipping this track due to invalid values.")
             continue
+
         
+        
+        # -----------------------------------------------------------------------------------
         name_type = ""
         planes_to_iterate = []
         
@@ -5071,11 +5077,11 @@ existing_row_index = calibrations_df[calibrations_df['Time'] == start_time].inde
 if not existing_row_index.empty:
     # Update the existing row
     calibrations_df.loc[existing_row_index[0]] = new_row
-    print(f"Updated existing calibration for Time: {start_time}")
+    print(f"Updated existing calibration for date: {start_time}")
 else:
     # Append the new row
     calibrations_df = pd.concat([calibrations_df, pd.DataFrame([new_row])], ignore_index=True)
-    print(f"Added new calibration for Time: {start_time}")
+    print(f"Added new calibration for date: {start_time}")
 
 calibrations_df.sort_values(by='Time', inplace=True)
 calibrations_df.to_csv(csv_path, index=False, float_format='%.5g')
