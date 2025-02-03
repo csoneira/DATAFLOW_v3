@@ -66,15 +66,20 @@ raw_to_list_working_directory = os.path.join(base_directory, "RAW_TO_LIST")
 
 # Define directory paths relative to base_directory
 base_directories = {
-    "pdf_directory": os.path.join(raw_to_list_working_directory, "PDF_DIRECTORY"),
-    "base_figure_directory": os.path.join(raw_to_list_working_directory, "FIGURE_DIRECTORY"),
-    "figure_directory": os.path.join(raw_to_list_working_directory, f"FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
+    "base_plots_directory": os.path.join(raw_to_list_working_directory, "PLOTS"),
+    
+    "pdf_directory": os.path.join(raw_to_list_working_directory, "PLOTS/PDF_DIRECTORY"),
+    "base_figure_directory": os.path.join(raw_to_list_working_directory, "PLOTS/FIGURE_DIRECTORY"),
+    "figure_directory": os.path.join(raw_to_list_working_directory, f"PLOTS/FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
     
     "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
     # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
     
-    "empty_files_directory": os.path.join(raw_to_list_working_directory, "EMPTY_FILES"),
-    "rejected_files_directory": os.path.join(raw_to_list_working_directory, "REJECTED_FILES"),
+    "ancillary_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY"),
+    
+    "empty_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/EMPTY_FILES"),
+    "rejected_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/REJECTED_FILES"),
+    "temp_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TEMP_FILES"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/PROCESSING_DIRECTORY"),
@@ -100,6 +105,7 @@ completed_directory = base_directories["completed_directory"]
 
 empty_files_directory = base_directories["empty_files_directory"]
 rejected_files_directory = base_directories["rejected_files_directory"]
+temp_files_directory = base_directories["temp_files_directory"]
 
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
@@ -1337,11 +1343,12 @@ import re
 import csv
 
 input_file = file_path  # Change this to your actual file path
-temp_file = os.path.join(os.path.dirname(input_file), f"temp_file_{date_execution}.csv")
-rejected_file = os.path.join(os.path.dirname(input_file), f"rejected_file_{date_execution}.txt")
+# temp_file = os.path.join(os.path.dirname(input_file), f"temp_file_{date_execution}.csv")
+# rejected_file = os.path.join(os.path.dirname(input_file), f"rejected_file_{date_execution}.txt")
 
 # Move rejected_file to the rejected file folder
-
+temp_file = os.path.join(base_directories["temp_files_directory"], f"temp_file_{date_execution}.csv")
+rejected_file = os.path.join(base_directories["rejected_files_directory"], f"temp_file_{date_execution}.csv")
 
 print(f"Temporal file is {temp_file}")
 EXPECTED_COLUMNS = 71  # Expected number of columns
@@ -4453,7 +4460,7 @@ cond = (calibrated_data['x'] != 0) & (calibrated_data['xp'] != 0) &\
        (calibrated_data['y'] != 0) & (calibrated_data['yp'] != 0) &\
        (calibrated_data['s'] != 0) & (calibrated_data['t0'] != 0)
 
-print(calibrated_data.columns)
+# print(calibrated_data.columns)
 final_data = calibrated_data.loc[cond].copy()
 
 print("----------------------------------------------------------------------")
@@ -5104,7 +5111,9 @@ if create_pdf:
 # Move the original datafile to PROCESSED -------------------------------------
 print("Moving file to COMPLETED directory...")
 shutil.move(file_path, completed_path)
-print(f"File moved to: {completed_path}")
+print("************************************************************")
+print(f"File moved from\n{file_path}\nto:\n{completed_path}")
+print("************************************************************")
 
 if os.path.exists(temp_file):
     print("Removing temporary file...")
