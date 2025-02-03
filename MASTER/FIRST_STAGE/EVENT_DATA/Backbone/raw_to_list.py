@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
-debug_mode = True # Only 10000 rows with all detail
-newest_file = False
-oldest_file = True
+debug_mode = False # Only 10000 rows with all detail
+newest_file = True
+oldest_file = False
 
 """
 A row is never removed, only turned to 0. That is how we can always take count
@@ -246,7 +246,7 @@ if debug_mode:
     timtrack_iteration = False
     time_calibration = False
     charge_front_back = False
-    create_plots = False
+    create_plots = True
     # save_full_data = False
     limit = True
     limit_number = 10000
@@ -259,7 +259,6 @@ if debug_mode:
 
 # Pre-cal Front & Back ---------
 if debug_mode:
-    print('Working in debug mode.')
     T_F_left_pre_cal = -500
     T_F_right_pre_cal = 500
 
@@ -555,6 +554,7 @@ def calibrate_strip_T_diff(T_F, T_B):
     T_F = T_F[cond]
     counts, bin_edges = np.histogram(T_F, bins='auto')
     max_counts = np.max(counts)
+    min_counts = np.min(counts[counts > 0])
     threshold = max_counts / 10**1.5
     indices_above_threshold = np.where(counts > threshold)[0]
     if indices_above_threshold.size > 0:
@@ -564,7 +564,7 @@ def calibrate_strip_T_diff(T_F, T_B):
         # print(f"Maximum bin edge: {max_bin_edge_F}")
     else:
         print("No bins have counts above the threshold, Front.")
-        threshold = max_counts / 2
+        threshold = (min_counts + max_counts) / 2
         indices_above_threshold = np.where(counts > threshold)[0]
         min_bin_edge_F = bin_edges[indices_above_threshold[0]]
         max_bin_edge_F = bin_edges[indices_above_threshold[-1] + 1]
@@ -573,6 +573,7 @@ def calibrate_strip_T_diff(T_F, T_B):
     T_B = T_B[cond]
     counts, bin_edges = np.histogram(T_B, bins='auto')
     max_counts = np.max(counts)
+    min_counts = np.min(counts[counts > 0])
     threshold = max_counts / 10**1.5
     indices_above_threshold = np.where(counts > threshold)[0]
     if indices_above_threshold.size > 0:
@@ -582,7 +583,7 @@ def calibrate_strip_T_diff(T_F, T_B):
         # print(f"Maximum bin edge: {max_bin_edge_B}")
     else:
         print("No bins have counts above the threshold, Back.")
-        threshold = max_counts / 2
+        threshold = (min_counts + max_counts) / 2
         indices_above_threshold = np.where(counts > threshold)[0]
         min_bin_edge_B = bin_edges[indices_above_threshold[0]]
         max_bin_edge_B = bin_edges[indices_above_threshold[-1] + 1]
@@ -679,6 +680,7 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
     
     counts, bin_edges = np.histogram(T_ch, bins='auto')
     max_counts = np.max(counts)
+    min_counts = np.min(counts[counts > 0])
     threshold = max_counts / 10**1.5
     indices_above_threshold = np.where(counts > threshold)[0]
 
@@ -689,7 +691,7 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
         # print(f"Maximum bin edge: {max_bin_edge}")
     else:
         print("No bins have counts above the threshold; Q pedestal calibration.")
-        threshold = max_counts / 2
+        threshold = (min_counts + max_counts) / 2
         indices_above_threshold = np.where(counts > threshold)[0]
         min_bin_edge = bin_edges[indices_above_threshold[0]]
         max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]
@@ -1406,7 +1408,7 @@ with open(file_path, 'r') as infile, open(temp_file, 'w') as outfile, open(rejec
         else:
             rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")  # Save rejected row
 
-data = pd.read_csv(temp_file, header=None, low_memory=False)
+data = pd.read_csv(temp_file, header=None, low_memory=False, nrows=limit_number if limit else None)
 data = data.apply(pd.to_numeric, errors='coerce')
 
 # Print the number of rows in input
@@ -1435,8 +1437,8 @@ if not isinstance(og_data.index, pd.DatetimeIndex):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
 raw_data_len = len(filtered_data)
-if debug_mode:
-    print(raw_data_len)
+# if debug_mode:
+#     print(raw_data_len)
 
 # Print the count frequency of the values in column_6
 print(filtered_data['column_6'].value_counts())
@@ -1444,8 +1446,8 @@ print(filtered_data['column_6'].value_counts())
 filtered_data = filtered_data[filtered_data['column_6'] == 1]
 
 raw_data_len = len(filtered_data)
-if debug_mode:
-    print(raw_data_len)
+# if debug_mode:
+#     print(raw_data_len)
 
 if raw_data_len == 0:  # Use '==' for comparison
     print(filtered_data['column_6'].head())
@@ -1457,7 +1459,12 @@ datetime_value = filtered_data['datetime'][0]
 start_time = datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
-print(f"Starting date is {save_filename_suffix}.")
+
+print("----------------------------------------------------------")
+print("----------------------------------------------------------")
+print(f"----------- Starting date is {save_filename_suffix}.")
+print("----------------------------------------------------------")
+print("----------------------------------------------------------")
 
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
@@ -3944,7 +3951,6 @@ if create_plots or create_essential_plots:
 
 
 
-
 print("----------------------------------------------------------------------")
 print("------------------------- TimTrack fitting ---------------------------")
 print("----------------------------------------------------------------------")
@@ -4117,36 +4123,15 @@ for iteration in range(repeat + 1):
     
     for idx, track in iterator:
         
-        # INTRODUCTION -------------------------------------------------------- ---------
-
-        # Drop 'datetime' column safely, ensuring the result is always a DataFrame
-        # track_numeric = pd.to_numeric(track.drop('datetime'), errors='coerce')
-        track_numeric = pd.DataFrame(pd.to_numeric(track.drop('datetime', axis=1).squeeze(), errors='coerce'))
-        has_nan = track_numeric.isna()
-        has_inf = np.isinf(track_numeric.values)
-
-        if has_nan.any().any() or has_inf.any():
-            # print(track_numeric)
-            print("Problematic values detected:")
-    
-            # Print rows and columns with NaN values
-            if has_nan.any().any():
-                nan_mask = has_nan.any(axis=1)
-                print("NaN values in the following rows/columns:")
-                print(track_numeric[nan_mask])
-            
-            # Print rows and columns with infinite values
-            if has_inf.any():
-                inf_mask = has_inf.any(axis=1)
-                print("Infinite values in the following rows/columns:")
-                print(track_numeric[inf_mask])
-            
-            print("Skipping this track due to invalid values.")
-            continue
-
+        if idx == 1:
+            print("First event saved to file.")
+            # Save to csv
+            track.to_csv('track.csv')
         
+        # INTRODUCTION ------------------------------------------------------------------
+        track_numeric = pd.to_numeric(track.drop('datetime'), errors='coerce')
         
-        # -----------------------------------------------------------------------------------
+        # -------------------------------------------------------------------------------
         name_type = ""
         planes_to_iterate = []
         
@@ -4154,17 +4139,17 @@ for iteration in range(repeat + 1):
         for i_plane in range(nplan):
             # Check if the sum of the charges in the current plane is non-zero
             charge_plane = getattr(track, f'T{i_plane + 1}_Q_sum_final')
-            if charge_plane > 0:
+            if charge_plane != 0:
                 # Append the plane number to name_type and planes_to_iterate
                 name_type += f'{i_plane + 1}'
                 planes_to_iterate.append(i_plane + 1)
                 calibrated_data.at[idx, f'charge_{i_plane + 1}'] = charge_plane
-                charge_event =+ charge_plane
+                charge_event += charge_plane
                 
         calibrated_data.at[idx, 'charge_event'] = charge_event
         planes_to_iterate = np.array(planes_to_iterate)
         
-        # FITTING ----------------------------------------------------------------------------
+        # FITTING -----------------------------------------------------------------------
         if len(planes_to_iterate) > 1:
             if fixed_speed:
                 vs  = np.asarray([0,0,0,0,0])
@@ -4476,7 +4461,7 @@ print("----------------------------------------------------------------------")
 df_plot_ancillary = final_data.copy()
 
 # Keep the rows where charge_event is between 0 and 50
-df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['charge_event'] > 0) & (df_plot_ancillary['charge_event'] < 50)]
+df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['charge_event'] > 0) & (df_plot_ancillary['charge_event'] < 80)]
 
 # Plotting the TT results all together
 if create_plots:

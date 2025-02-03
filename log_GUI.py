@@ -56,7 +56,8 @@ class TimeSeriesApp:
                 try:
                     filtered_data = self.data.loc[start_date:end_date, selected_column]
                     self.ax.clear()
-                    self.ax.plot(filtered_data.index, filtered_data.values, label=selected_column)
+                    self.ax.scatter(filtered_data.index, filtered_data.values, label=selected_column, s = 1)
+                    self.ax.plot(filtered_data.index, filtered_data.values, label=selected_column, alpha = 0.2)
                     self.ax.set_title(f"Time Series: {selected_column}")
                     self.ax.set_xlabel("Time")
                     self.ax.set_ylabel(selected_column)
