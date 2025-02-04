@@ -118,8 +118,18 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
     for file in files:
         file_empty = os.path.join(directory, file)
         if os.path.getsize(file_empty) == 0:
+            # Ensure the empty files directory exists
+            os.makedirs(empty_files_directory, exist_ok=True)
+            
+            # Define the destination path for the file
+            empty_destination_path = os.path.join(empty_files_directory, file)
+            
+            # Remove the destination file if it already exists
+            if os.path.exists(empty_destination_path):
+                os.remove(empty_destination_path)
+            
             print("Moving empty file:", file)
-            shutil.move(file_empty, empty_files_directory)
+            shutil.move(file_empty, empty_destination_path)
 
 # Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
 files_to_move = raw_files - unprocessed_files - processing_files - completed_files
