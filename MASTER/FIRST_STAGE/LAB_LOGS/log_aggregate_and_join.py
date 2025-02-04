@@ -164,7 +164,7 @@ process_files('Odroid_', ["Date", "Time", "DiskFill1", "DiskFill2", "DiskFillX"]
               "odroid_aggregated.csv")
 
 # Process flow files
-process_files('Flow0_', ["Date", "Time", "FlowRate1", "FlowRate2", "Pressure1", "Pressure2"],
+process_files('Flow0_', ["Date", "Time", "FlowRate1", "FlowRate2", "FlowRate3", "FlowRate4"],
               "flow_aggregated.csv")
 
 
@@ -197,11 +197,15 @@ def process_csv(file_path):
     # Ensure numeric columns only
     numeric_columns = df.select_dtypes(include=['number']).columns
     df = df[numeric_columns]
-
+    
+    # Sort by datetime index
+    df = df.sort_index()
+    
     # Resample to 1-minute intervals and calculate the mean
     df_resampled = df.resample('min').mean()
 
     return df_resampled
+
 
 def merge_dataframes(file_mappings, start_time=None):
     """Process and merge all dataframes from a given start time."""
@@ -216,13 +220,48 @@ def merge_dataframes(file_mappings, start_time=None):
 
         # Rename columns to include source name
         df_resampled.columns = [f"{name}_{col}" for col in df_resampled.columns]
-
+        
+        # Filter outliers before merging
+        for column, (lower, upper) in outlier_limits.items():
+            if column in df_resampled.columns:
+                df_resampled[column] = df_resampled[column].where((df_resampled[column] >= lower) & (df_resampled[column] <= upper), np.nan)
+        
         dataframes.append(df_resampled)
 
     # Merge all dataframes on the Time index
     merged_df = pd.concat(dataframes, axis=1)
     
     return merged_df
+
+
+# Define the limits for outliers as a dictionary
+outlier_limits = {
+    "rates_Asserted": (0, 60),
+    "rates_Edge": (0, 45),
+    "rates_Accepted": (0, 30),
+    "rates_Multiplexer1": (0, 400),
+    "rates_M2": (0, 400),
+    "rates_M3": (0, 400),
+    "rates_M4": (0, 400),
+    "rates_CM1": (0, 30),
+    "rates_CM2": (0, 30),
+    "rates_CM3": (0, 30),
+    "rates_CM4": (0, 30),
+    "sensors_ext_Temperature_ext": (0, 50),
+    "sensors_ext_RH_ext": (0, 100),
+    "sensors_ext_Pressure_ext": (500, 1300),
+    "sensors_int_Temperature_int": (0, 100),
+    "sensors_int_RH_int": (0, 100),
+    "sensors_int_Pressure_int": (500, 1300),
+    "odroid_DiskFill1": (0, 100),
+    "odroid_DiskFill2": (0, 100),
+    "odroid_DiskFillX": (0, 100000),
+    "flow_FlowRate1": (0, 1500),
+    "flow_FlowRate2": (0, 1500),
+    "flow_FlowRate3": (0, 1500),
+    "flow_FlowRate3": (0, 1500),
+}
+
 
 # Check if merged CSV exists
 if os.path.exists(final_output_path):
@@ -263,38 +302,6 @@ else:
 
 # Resample to ensure no gaps and fill missing timestamps
 updated_df = updated_df.resample('1min').mean()
-
-# Define the limits for outliers as a dictionary
-outlier_limits = {
-    "rates_Edge": (0, 45),
-    "rates_Accepted": (0, 30),
-    "rates_Multiplexer1": (0, 400),
-    "rates_M2": (0, 400),
-    "rates_M3": (0, 400),
-    "rates_M4": (0, 400),
-    "rates_CM1": (0, 30),
-    "rates_CM2": (0, 30),
-    "rates_CM3": (0, 30),
-    "rates_CM4": (0, 30),
-    "sensors_ext_Temperature_ext": (0, 50),
-    "sensors_ext_RH_ext": (0, 100),
-    "sensors_ext_Pressure_ext": (500, 1100),
-    "sensors_int_Temperature_int": (0, 100),
-    "sensors_int_RH_int": (0, 100),
-    "sensors_int_Pressure_int": (500, 1100),
-    "odroid_DiskFill1": (0, 100),
-    "odroid_DiskFill2": (0, 100),
-    "odroid_DiskFillX": (0, 100000),
-    "flow_FlowRate1": (0, 1500),
-    "flow_FlowRate2": (0, 1500),
-    "flow_Pressure1": (0, 1500),
-    "flow_Pressure2": (0, 1500),
-}
-
-# Filter the data, replacing outliers with NaN
-for column, (lower, upper) in outlier_limits.items():
-    if column in updated_df.columns:
-        updated_df[column] = updated_df[column].where((updated_df[column] >= lower) & (updated_df[column] <= upper), np.nan)
 
 print('Interpolating missing points...')
 updated_df = updated_df.interpolate(method='linear', axis=0, limit_direction='both')

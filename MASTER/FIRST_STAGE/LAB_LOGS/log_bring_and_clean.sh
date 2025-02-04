@@ -134,7 +134,7 @@ process_file() {
 			  }
 		    }
 		    END {
-			  if (valid_count > 0) {   # Only print the message if valid rows were found
+			  if (invalid_count > 0) {   # Only print the message if invalid rows were found
 				print "Processed: " valid_count " valid rows, " invalid_count " discarded rows." > "/dev/stderr"
 				print "Processed " file " into " output_file > "/dev/stderr"
 			  }

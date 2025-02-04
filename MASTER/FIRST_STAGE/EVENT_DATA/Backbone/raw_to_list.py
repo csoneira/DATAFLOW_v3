@@ -4123,10 +4123,10 @@ for iteration in range(repeat + 1):
     
     for idx, track in iterator:
         
-        if idx == 1:
-            print("First event saved to file.")
-            # Save to csv
-            track.to_csv('track.csv')
+        # if idx == 1:
+        #     print("First event saved to file.")
+        #     # Save to csv
+        #     track.to_csv('track.csv')
         
         # INTRODUCTION ------------------------------------------------------------------
         track_numeric = pd.to_numeric(track.drop('datetime'), errors='coerce')
