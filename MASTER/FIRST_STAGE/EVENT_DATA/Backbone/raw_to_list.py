@@ -5109,6 +5109,11 @@ if create_pdf:
                 print(f"Error: {e.filename} - {e.strerror}.")
 
 
+# Erase the figure_directory
+if os.path.exists(figure_directory):
+    print("Removing figure directory...")
+    os.rmdir(figure_directory)
+
 # Move the original datafile to PROCESSED -------------------------------------
 print("Moving file to COMPLETED directory...")
 shutil.move(file_path, completed_path)
