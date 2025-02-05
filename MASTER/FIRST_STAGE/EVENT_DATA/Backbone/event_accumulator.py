@@ -376,7 +376,7 @@ for csv_file in csv_files:
     if csv_path == big_event_file:
         continue  # Skip big_event_data.csv itself
 
-    print(f"Merging file: {csv_path}")
+    # print(f"Merging file: {csv_path}")
     new_data = pd.read_csv(csv_path, sep=',', parse_dates=['Time'])
     big_event_df = pd.concat([big_event_df, new_data], ignore_index=True)
 
