@@ -8,12 +8,46 @@ if [ -z "$1" ]; then
 fi
 
 echo '------------------------------------------------------'
-echo '------------------------------------------------------'
 echo "bring_and_analyze_events.sh started on: $(date '+%Y-%m-%d %H:%M:%S')"
 
 station=$1
 echo "Station: $station"
 # ----------------------------------------------
+
+
+# --------------------------------------------------------------------------------------------
+# Prevent the script from running multiple instances -----------------------------------------
+# --------------------------------------------------------------------------------------------
+
+# Variables
+script_name=$(basename "$0")
+script_args="$*"
+current_pid=$$
+
+# Check for duplicate process
+for pid in $(pgrep -f "$script_name"); do
+    if [ "$pid" != "$current_pid" ]; then
+        # Compare arguments of the found process with the current one
+        cmdline=$(cat /proc/$pid/cmdline | tr '\0' ' ')
+        if [[ "$cmdline" == *"$script_name"* && "$cmdline" == *"$script_args"* ]]; then
+            echo "------------------------------------------------------"
+            echo "bring_and_analyze_events.sh started on: $(date)"
+            echo "Station: $script_args"
+            echo "The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
+            echo "------------------------------------------------------"
+            exit 1
+        fi
+    fi
+done
+
+# If no duplicate process is found, continue
+echo "------------------------------------------------------"
+echo "bring_and_analyze_events.sh started on: $(date)"
+echo "Station: $script_args"
+echo "Running the script..."
+echo "------------------------------------------------------"
+# --------------------------------------------------------------------------------------------
+
 
 dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
 

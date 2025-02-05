@@ -12,6 +12,41 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
+
+# --------------------------------------------------------------------------------------------
+# Prevent the script from running multiple instances -----------------------------------------
+# --------------------------------------------------------------------------------------------
+
+# Variables
+script_name=$(basename "$0")
+script_args="$*"
+current_pid=$$
+
+# Check for duplicate process
+for pid in $(pgrep -f "$script_name"); do
+    if [ "$pid" != "$current_pid" ]; then
+        # Compare arguments of the found process with the current one
+        cmdline=$(cat /proc/$pid/cmdline | tr '\0' ' ')
+        if [[ "$cmdline" == *"$script_name"* && "$cmdline" == *"$script_args"* ]]; then
+            echo "------------------------------------------------------"
+            echo "bring_and_analyze_events.sh started on: $(date)"
+            echo "Station: $script_args"
+            echo "The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
+            echo "------------------------------------------------------"
+            exit 1
+        fi
+    fi
+done
+
+# If no duplicate process is found, continue
+echo "------------------------------------------------------"
+echo "bring_and_analyze_events.sh started on: $(date)"
+echo "Station: $script_args"
+echo "Running the script..."
+echo "------------------------------------------------------"
+# --------------------------------------------------------------------------------------------
+
+
 # Check if dates are provided, set flag for skipping steps
 skip_steps=0
 if [ -z "$2" ] || [ -z "$3" ]; then
@@ -112,7 +147,8 @@ fi
 # Step 5. Execute unpacking
 echo "Executing unpacking process..."
 export RPCSYSTEM=mingo0$station
-export RPCRUNMODE=oneRun
+# export RPCRUNMODE=oneRun
+export RPCRUNMODE=False
 /home/cayetano/gate/bin/unpack.sh
 
 # Step 6. Move ASCII files to the processed directory
