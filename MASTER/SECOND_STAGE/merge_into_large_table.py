@@ -66,24 +66,50 @@ for folder_path in folder_paths:
 if not file_paths:
     raise FileNotFoundError("No CSV files found in the specified directories.")
 
+print("Bringin' the data together: ", file_paths)
+
 # Load all CSV files into dataframes and store them in a list
 dataframes = [pd.read_csv(file_path, parse_dates=['Time']) for file_path in file_paths]
 
+for df in dataframes:
+    df['Time'] = df['Time'].dt.floor('min')  # Round to second precision
+
+for df in dataframes:
+    df.sort_values('Time', inplace=True)
+
+for df in dataframes:
+    df['Time'] = pd.to_datetime(df['Time'], errors='coerce')
+
 print(f"Loaded {len(dataframes)} CSV files.")
 
-# Merge the dataframes on the 'Time' column, allowing for missing data
 merged_df = dataframes[0]
 for df in dataframes[1:]:
     merged_df = pd.merge(merged_df, df, on='Time', how='outer')
 
+# Sort by Time after merging
+merged_df.sort_values('Time', inplace=True)
+
+print("Merged DataFrame Info:")
+print(merged_df.info())
+
+print("First few rows of merged data:")
+print(merged_df.head())
+
 # Save the merged dataframe
+# if os.path.exists(output_file):
+#     # If the output file already exists, load it and append new rows
+#     existing_df = pd.read_csv(output_file, parse_dates=['Time'])
+#     combined_df = pd.concat([existing_df, merged_df]).drop_duplicates(subset=['Time'], keep='last')
+# else:
+    # combined_df = merged_df
+
 if os.path.exists(output_file):
     # If the output file already exists, load it and append new rows
-    existing_df = pd.read_csv(output_file, parse_dates=['Time'])
-    combined_df = pd.concat([existing_df, merged_df]).drop_duplicates(subset=['Time'], keep='last')
-else:
-    combined_df = merged_df
+    print("Removing existing file: ", output_file)
+    os.remove(output_file)
+combined_df = merged_df
 
+print("Saving the data...")
 # Save the final dataframe to a CSV file
 combined_df.to_csv(output_file, index=False)
 

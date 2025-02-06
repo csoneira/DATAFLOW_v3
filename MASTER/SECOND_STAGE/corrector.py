@@ -91,7 +91,7 @@ MAF_ker = 1 # Moving Average Filter
 outlier_filter = 0.1
 
 high_order_correction = False
-date_selection = False  # Set to True if you want to filter by date
+date_selection = True  # Set to True if you want to filter by date
 
 skip_in_limits = 1
 
@@ -179,7 +179,10 @@ end_date = datetime.now()
 # data_df['Time'] = pd.to_datetime(data_df['Time'].str.strip('"'), format='%Y-%m-%d %H:%M:%S')
 
 # Filter data based on dates if start_date is set
+start_date = pd.to_datetime("2024-03-23")  # Use a string in 'YYYY-MM-DD' format
+end_date = pd.to_datetime("2024-03-27")
 if date_selection and start_date is not None:
+    print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
 
 print(f"Filtered data contains {len(data_df)} rows.")
@@ -321,8 +324,16 @@ data_df['final_eff_2'] = data_df['eff_2'] / acceptance_factor[1]
 data_df['final_eff_3'] = data_df['eff_3'] / acceptance_factor[2]
 data_df['final_eff_4'] = data_df['eff_4'] / acceptance_factor[3]
 
+# CORRECT THIS UNCERTAINTY CALCULATION
+data_df['unc_final_eff_1'] = data_df['unc_eff_1'] / acceptance_factor[0]
+data_df['unc_final_eff_2'] = data_df['unc_eff_2'] / acceptance_factor[0]
+data_df['unc_final_eff_3'] = data_df['unc_eff_3'] / acceptance_factor[0]
+data_df['unc_final_eff_4'] = data_df['unc_eff_4'] / acceptance_factor[0]
+
 # Calculate the average efficiency
-data_df['eff_global'] = data_df[['eff_1', 'eff_2', 'eff_3', 'eff_4']].mean(axis=1)
+# data_df['eff_global'] = data_df[['eff_1', 'eff_2', 'eff_3', 'eff_4']].mean(axis=1)
+data_df['eff_global'] = data_df[['final_eff_1', 'final_eff_2', 'final_eff_3', 'final_eff_4']].mean(axis=1)
+
 
 # Calculate the uncertainty for the average efficiency
 data_df['unc_eff_global'] = np.sqrt(
@@ -336,8 +347,20 @@ data_df['unc_eff_global'] = np.sqrt(
 # Correct by the efficiency, calculate uncertainty of the corrected rate
 # -----------------------------------------------------------------------------
 
+print("Rate below ---------------------------------------")
+print(data_df['rate'])
+print("Rate above ---------------------------------------")
+
 # Correct the rate
-data_df['eff_corr_rate'] = data_df['rate'] * (1 / data_df['eff_global'])
+# data_df['eff_corr_rate'] = data_df['rate'] * (1 / data_df['eff_global'])
+
+# Replace zero values in 'rate' or 'eff_global' with NaN to avoid division by zero
+data_df['eff_corr_rate'] = np.where(
+    (data_df['rate'] == 0) | (data_df['eff_global'] == 0),  # Condition: rate or eff_global is zero
+    np.nan,  # Assign NaN if condition is met
+    data_df['rate'] / data_df['eff_global']  # Otherwise, compute normally
+)
+
 
 # Calculate the uncertainty in the corrected rate
 data_df['unc_eff_corr_rate'] = data_df['eff_corr_rate'] * np.sqrt(
@@ -370,9 +393,7 @@ def fit_model(x, beta, a):
 
 def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
     
-    print("log below ------------------------------------------------")
     log_I_over_I0 = np.log(I_over_I0)
-    print("log above ------------------------------------------------")
     unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0  # Propagate relative errors
     
     # Prepare the data for fitting
@@ -382,6 +403,8 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
         'delta_P': delta_P,
         'unc_delta_P': unc_delta_P
     }).dropna()
+    
+    print(len(df))
     
     if not df.empty:
         # Fit the exponential model using uncertainties in Y as weights
@@ -439,7 +462,7 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
                 plt.savefig(figure_path, format = 'png', dpi = 300)
             plt.close()
     else:
-        print("Fit not done.")
+        print("Fit not done, data empty. Returning NaN.")
         eta_P = np.nan
         eta_P_uncertainty = np.nan  # Handle case where there are no valid data points
     return eta_P, eta_P_uncertainty
@@ -449,19 +472,20 @@ data_df['pressure_lab'] = data_df['sensors_ext_Pressure_ext']
 
 # Calculate pressure differences and their uncertainties
 P = data_df['pressure_lab']
-unc_P = 0.1  # Assume a small uncertainty for P if not recalculating
+unc_P = np.full_like(P, 1)  # Assume a small uncertainty for P if not recalculating
 
 if recalculate_pressure_coeff:
     P0 = data_df['pressure_lab'].mean()
     unc_P0 = unc_P / np.sqrt( len(P) )  # Uncertainty of the mean
 else:
     P0 = mean_pressure_used_for_the_fit
-    unc_P0 = 1  # Assume an arbitrary uncertainty if not recalculating
+    unc_P0 = np.full_like(P, 1)  # Assume an arbitrary uncertainty if not recalculating
 
 
 delta_P = P - P0
 unc_delta_P = np.sqrt(unc_P**2 + unc_P0**2)  # Combined uncertainty (propagation of errors)
-
+# Make the unc_delta_P a vector as long as delta_P
+# unc_delta_P = np.full_like(delta_P, unc_delta_P)
 
 I = data_df[region]
 unc_I = data_df[f'unc_{region}']
@@ -471,6 +495,10 @@ I_over_I0 = I / I0
 unc_I_over_I0 = I_over_I0 * np.sqrt( (unc_I / I)**2 + (unc_I0 / I0)**2 )
 pressure_results = pd.DataFrame(columns=['Region', 'Eta_P'])
 
+print("Length of I_over_I0: ", len(I_over_I0))
+
+print(I_over_I0)
+
 # Filter the negative or 0 I_over_I0 values
 valid_mask = I_over_I0 > 0
 I_over_I0 = I_over_I0[valid_mask]
@@ -478,8 +506,11 @@ unc_I_over_I0 = unc_I_over_I0[valid_mask]
 delta_P = delta_P[valid_mask]
 unc_delta_P = unc_delta_P[valid_mask]
 
+print("Length of I_over_I0: ", len(I_over_I0))
+
 if recalculate_pressure_coeff:
     eta_P, unc_eta_P = calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P)
+    print(eta_P)
     pressure_results = pd.concat([pressure_results, pd.DataFrame({'Region': [region], 'Eta_P': [eta_P]})], ignore_index=True)
     
 if (recalculate_pressure_coeff == False) or (eta_P == np.nan):

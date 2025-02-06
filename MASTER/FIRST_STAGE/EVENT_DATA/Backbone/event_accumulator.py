@@ -517,8 +517,12 @@ if update_big_event_file:
         if len(group) == 1:
             return group.iloc[0]  # No duplicates to combine
         
-        if take_newest:
-            return group.iloc[-1]  # Take the newest (last) value based on the group order
+        nonzero_values = group[group != 0]
+        if not nonzero_values.empty:
+            return nonzero_values.iloc[-1] if take_newest else nonzero_values.iloc[0]
+        
+        # if take_newest:
+        #     return group.iloc[-1]  # Take the newest (last) value based on the group order
 
         # Check if all rows are identical (excluding 'Time')
         rows_identical = group.drop(columns='Time').nunique().sum() == 0
