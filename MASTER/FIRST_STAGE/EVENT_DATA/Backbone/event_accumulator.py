@@ -142,7 +142,6 @@ def clean_type_column(x):
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-
 unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
 completed_files = os.listdir(base_directories["completed_directory"])
@@ -294,6 +293,17 @@ for i in range(1, 5):
 for i in range(1, 5):
     df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
 
+# Make a column which is the a string with the number of planes that have a charge that is not streamer
+# column = []
+# for row in df.iterrows():
+#     new_type = []
+#     for i in range(1, 5):
+#         if row[1][f'Q_{i}'] > 0 and row[1][f'Q_{i}'] < 100:
+#             new_type.append(i)
+#     column.append(new_type)
+# df['new_type'] = column
+df['new_type'] = df.apply(lambda row: [i for i in range(1, 5) if 0 < row[f'Q_{i}'] < 100], axis=1)
+
 
 # Work for the future ------------------------------------------------------------------------------
 # df['topology_0'] = df.apply(lambda row: sum(row[f'Q_{i}'] > 0 for i in range(1, 5)), axis=1)
@@ -309,6 +319,7 @@ agg_dict = {
     't0': [custom_mean, custom_std],
     's': [custom_mean, custom_std],
     'type': lambda x: pd.Series(x).value_counts().to_dict(),
+    'new_type': lambda x: pd.Series(x).value_counts().to_dict(),
     'Q_event': [custom_mean, custom_std],
 }
 
@@ -334,6 +345,15 @@ if 'type_<lambda>' in resampled_df.columns:
         resampled_df[f'type_{type_key}'] = type_dict_col.apply(lambda x: x.get(type_key, 0) if isinstance(x, dict) else 0)
     resampled_df.drop(columns=['type_<lambda>'], inplace=True)
 
+if 'new_type_<lambda>' in resampled_df.columns:
+    type_dict_col = resampled_df['new_type_<lambda>']
+    for type_key in df['new_type'].unique():
+        resampled_df[f'new_type_{type_key}'] = type_dict_col.apply(lambda x: x.get(type_key, 0) if isinstance(x, dict) else 0)
+    resampled_df.drop(columns=['new_type_<lambda>'], inplace=True)
+
+# Streamer percentage
+for i in range(1, 5):
+    resampled_df["streamer_percent_{i}"] = resampled_df[f"streamer_{i}_sum"] / resampled_df[f"count_in_{i}_sum"] * 100
 
 
 # -----------------------------------------------------------------------------
