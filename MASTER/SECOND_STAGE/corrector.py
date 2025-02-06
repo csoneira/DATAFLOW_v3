@@ -41,8 +41,9 @@ print(f"Station: {station}")
 # ALSO THE SIMULATED VALUES FOR ACCEPTANCE, EFFICIENCY FACTORS AND UNCERTAINTIES
 
 # This should come from an input file
-pressure_coeff_input = 0.692
-unc_pressure_coeff_input = 0.017
+eta_P = -0.250 # pressure_coeff_input
+unc_eta_P = 0.017 # unc_pressure_coeff_input
+set_a = -0.11357 # pressure_intercept_input
 mean_pressure_used_for_the_fit = 940
 
 systematic_unc = [0, 0, 0, 0] # From simulation
@@ -50,7 +51,7 @@ acceptance_factor = [0.7, 1, 1, 0.8] # From simulation
 
 systematic_unc_corr_to_real_rate = 0
 
-z_score_th_pres_corr = 3
+z_score_th_pres_corr = 1
 
 # -----------------------------------------------------------------------------
 
@@ -88,7 +89,7 @@ res_win_min = 1 # 180 Resampling window minutes
 HMF_ker = 1 # It must be odd. Horizontal Median Filter
 MAF_ker = 1 # Moving Average Filter
 
-outlier_filter = 0.1
+outlier_filter = 0.5
 
 high_order_correction = False
 date_selection = True  # Set to True if you want to filter by date
@@ -189,34 +190,47 @@ print(f"Filtered data contains {len(data_df)} rows.")
 
 
 # -----------------------------------------------------------------------------
-# Outlier removal ---------------------------------------------------------------------
+# Outlier removal -------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
-#     """
-#     Create a mask of rows that are outliers or have zero values.
-#     """
-#     # median = series.median()
-#     median = series.mean()
-#     z_scores = abs((series - median) / median)
-#     # print(z_scores)
-#     # Create a mask for rows where z_scores > z_thresh or values are zero
-#     mask = (z_scores > z_thresh) | (series == 0)
-#     return mask
+def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
+    """
+    Create a mask of rows that are outliers or have zero values.
+    """
+    # median = series.median()
+    median = series.mean()
+    z_scores = abs((series - median) / median)
+    
+    plt.hist(z_scores, bins=300)
+    plt.title('Z-Scores Distribution')
+    plt.xlabel('Z-Score')
+    plt.ylabel('Frequency')
+    if show_plots: 
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + "_original_z"
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format = 'png', dpi = 300)
+    plt.close()
+    
+    # print(z_scores)
+    # Create a mask for rows where z_scores > z_thresh or values are zero
+    mask = (z_scores > z_thresh) | (series == 0)
+    return mask
 
-# # Initialize a mask of all False, meaning no rows are removed initially
-# rows_to_remove = pd.Series(False, index=data_df.index)
-# rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df['x_custom_mean'])
+# Initialize a mask of all False, meaning no rows are removed initially
+rows_to_remove = pd.Series(False, index=data_df.index)
+rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df['High'])
 # for region in angular_regions:
 #     rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[region])
 
-# data_df_cleaned = data_df[~rows_to_remove].copy()
+data_df_cleaned = data_df[~rows_to_remove].copy()
 
-# # Now, `data_df_cleaned` contains only rows that pass the conditions.
-# print(f"Original DataFrame shape: {data_df.shape}")
-# print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
+# Now, `data_df_cleaned` contains only rows that pass the conditions.
+print(f"Original DataFrame shape: {data_df.shape}")
+print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
 
-# data_df = data_df_cleaned.copy()
+data_df = data_df_cleaned.copy()
 
 
 # -----------------------------------------------------------------------------
@@ -361,7 +375,6 @@ data_df['eff_corr_rate'] = np.where(
     data_df['rate'] / data_df['eff_global']  # Otherwise, compute normally
 )
 
-
 # Calculate the uncertainty in the corrected rate
 data_df['unc_eff_corr_rate'] = data_df['eff_corr_rate'] * np.sqrt(
     (data_df['rate_uncertainty'] / data_df['rate'])**2 +
@@ -412,6 +425,20 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
         
         # Filter outliers before fitting
         z_scores = np.abs((df['log_I_over_I0'] - df['log_I_over_I0'].mean()) / df['log_I_over_I0'].std())
+        
+        # Make a small histogram of the z_scores to see the distribution
+        plt.hist(z_scores, bins=400)
+        plt.title('Z-Scores Distribution')
+        plt.xlabel('Z-Score')
+        plt.ylabel('Frequency')
+        if show_plots: 
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + "_z"
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format = 'png', dpi = 300)
+        plt.close()
+        
         df = df[z_scores < z_score_th_pres_corr]  # Keep only rows where z-score is less than 3
         
         # WIP TO USE UNCERTAINTY OF PRESSURE ----------------------------------------------
@@ -449,7 +476,9 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
             # Extract b (beta) and its uncertainty
             b = popt[0]  # Parameter b from the fit
             unc_b = np.sqrt(np.diag(pcov))[0]  # Uncertainty of parameter b
-
+            
+            print("a of the pressure fit:", popt[1])
+            
             # Add labels and title
             plt.xlabel('Delta P')
             plt.ylabel('log (I / I0)')
@@ -472,15 +501,16 @@ data_df['pressure_lab'] = data_df['sensors_ext_Pressure_ext']
 
 # Calculate pressure differences and their uncertainties
 P = data_df['pressure_lab']
-unc_P = np.full_like(P, 1)  # Assume a small uncertainty for P if not recalculating
+# unc_P = np.full_like(P, 1)  # Assume a small uncertainty for P if not recalculating
+unc_P = 1  # Assume a small uncertainty for P if not recalculating
 
 if recalculate_pressure_coeff:
     P0 = data_df['pressure_lab'].mean()
     unc_P0 = unc_P / np.sqrt( len(P) )  # Uncertainty of the mean
 else:
     P0 = mean_pressure_used_for_the_fit
-    unc_P0 = np.full_like(P, 1)  # Assume an arbitrary uncertainty if not recalculating
-
+    # unc_P0 = np.full_like(P, 1)  # Assume an arbitrary uncertainty if not recalculating
+    unc_P0 = 1
 
 delta_P = P - P0
 unc_delta_P = np.sqrt(unc_P**2 + unc_P0**2)  # Combined uncertainty (propagation of errors)
@@ -495,18 +525,17 @@ I_over_I0 = I / I0
 unc_I_over_I0 = I_over_I0 * np.sqrt( (unc_I / I)**2 + (unc_I0 / I0)**2 )
 pressure_results = pd.DataFrame(columns=['Region', 'Eta_P'])
 
-print("Length of I_over_I0: ", len(I_over_I0))
-
-print(I_over_I0)
+# print("Length of I_over_I0: ", len(I_over_I0))
+# print(I_over_I0)
 
 # Filter the negative or 0 I_over_I0 values
 valid_mask = I_over_I0 > 0
 I_over_I0 = I_over_I0[valid_mask]
 unc_I_over_I0 = unc_I_over_I0[valid_mask]
 delta_P = delta_P[valid_mask]
-unc_delta_P = unc_delta_P[valid_mask]
+# unc_delta_P = unc_delta_P[valid_mask]
 
-print("Length of I_over_I0: ", len(I_over_I0))
+# print("Length of I_over_I0: ", len(I_over_I0))
 
 if recalculate_pressure_coeff:
     eta_P, unc_eta_P = calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P)
@@ -519,9 +548,6 @@ if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
     
     if eta_P == np.nan:
         print("Recalculating because the fit failed.")
-    
-    eta_P = pressure_coeff_input
-    unc_eta_P = unc_pressure_coeff_input
     
     log_I_over_I0 = np.log(I_over_I0)
     unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0
@@ -550,7 +576,6 @@ if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
             plt.scatter(df['delta_P'], df['log_I_over_I0'], label='Data', s=1, alpha=0.5, marker='.')
         
         # Plot the line using provided eta_P instead of fitted values
-        set_a = 0
         plt.plot(df['delta_P'], fit_model(df['delta_P'], eta_P, set_a), color='blue', label=f'Set Eta: {eta_P:.3f} ± {unc_eta_P:.3f} %/mbar')
         
         # Add labels and title
@@ -571,8 +596,19 @@ if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
 # Create corrected rate column for the region
 data_df[f'pres_{region}'] = I * np.exp(-1 * eta_P / 100 * delta_P)
 
+# Final uncertainty calculation
+unc_rate = data_df['unc_eff_corr_rate']
+unc_beta = unc_eta_P
+unc_DP = unc_delta_P
+
+term_1_rate = np.exp(-1 * eta_P / 100 * delta_P) * unc_rate
+term_2_beta = I * delta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_beta
+term_3_DP = I * eta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_DP
+
+final_unc_combined = np.sqrt(term_1_rate**2 + term_2_beta**2 + term_3_DP**2)
+
 # Calculate uncertainty in the corrected rate
-data_df[f'unc_pres_{region}'] = 1 # Placeholder
+data_df[f'unc_pres_{region}'] = final_unc_combined # Placeholder
 
 
 #%%
