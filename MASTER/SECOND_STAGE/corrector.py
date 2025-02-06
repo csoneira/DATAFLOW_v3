@@ -89,7 +89,7 @@ res_win_min = 1 # 180 Resampling window minutes
 HMF_ker = 1 # It must be odd. Horizontal Median Filter
 MAF_ker = 1 # Moving Average Filter
 
-outlier_filter = 0.5
+outlier_filter = 0.21
 
 high_order_correction = False
 date_selection = True  # Set to True if you want to filter by date
@@ -197,8 +197,8 @@ def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
     """
     Create a mask of rows that are outliers or have zero values.
     """
-    # median = series.median()
-    median = series.mean()
+    # median = series.mean()
+    median = series.median()
     z_scores = abs((series - median) / median)
     
     plt.hist(z_scores, bins=300)
