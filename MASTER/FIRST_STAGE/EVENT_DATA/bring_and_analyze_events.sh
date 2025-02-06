@@ -1,3 +1,6 @@
+env > /tmp/cron_env.log
+echo "$(date): Running bring_and_analyze_events.sh $script_args" > /tmp/script_debug.log
+
 #!/bin/bash
 
 # Station specific -----------------------------
@@ -7,11 +10,11 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
-echo '------------------------------------------------------'
-echo "bring_and_analyze_events.sh started on: $(date '+%Y-%m-%d %H:%M:%S')"
+# echo '------------------------------------------------------'
+# echo "bring_and_analyze_events.sh started on: $(date '+%Y-%m-%d %H:%M:%S')"
 
 station=$1
-echo "Station: $station"
+# echo "Station: $station"
 # ----------------------------------------------
 
 
@@ -24,21 +27,46 @@ script_name=$(basename "$0")
 script_args="$*"
 current_pid=$$
 
-# Check for duplicate process
-for pid in $(pgrep -f "$script_name"); do
-    if [ "$pid" != "$current_pid" ]; then
-        # Compare arguments of the found process with the current one
-        cmdline=$(cat /proc/$pid/cmdline | tr '\0' ' ')
-        if [[ "$cmdline" == *"$script_name"* && "$cmdline" == *"$script_args"* ]]; then
+# Debug: Check for running processes
+# echo "$(date) - Checking for existing processes of $script_name with args $script_args"
+# ps -eo pid,cmd | grep "[b]ash .*/$script_name"
+
+# Get all running instances of the script *with the same argument*, but exclude the current process
+# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | awk '{print $1}'); do
+for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
+    if [[ "$pid" != "$current_pid" ]]; then
+        cmdline=$(ps -p "$pid" -o args=)
+        # echo "$(date) - Found running process: PID $pid - $cmdline"
+        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
             echo "------------------------------------------------------"
-            echo "bring_and_analyze_events.sh started on: $(date)"
-            echo "Station: $script_args"
-            echo "The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
+            echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
             echo "------------------------------------------------------"
             exit 1
         fi
     fi
 done
+
+# If no duplicate process is found, continue
+echo "$(date) - No running instance found. Proceeding..."
+
+# Variables
+# script_name=$(basename "$0")
+# script_args="$*"
+# current_pid=$$
+
+# # Get all running instances of the script (excluding itself)
+# # for pid in $(pgrep -f "bash .*/$script_name $script_args"); do
+# for pid in $(pgrep -f "bash .*/$script_name $script_args" | grep -v $$); do
+#     if [ "$pid" != "$current_pid" ]; then
+#         cmdline=$(ps -p "$pid" -o args=)
+#         if [[ "$cmdline" == *"$script_name"* && "$cmdline" == *"$script_args"* ]]; then
+#             echo "------------------------------------------------------"
+#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
+#             echo "------------------------------------------------------"
+#             exit 1
+#         fi
+#     fi
+# done
 
 # If no duplicate process is found, continue
 echo "------------------------------------------------------"

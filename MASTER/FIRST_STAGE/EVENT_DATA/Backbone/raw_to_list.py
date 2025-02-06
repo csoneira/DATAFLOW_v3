@@ -1261,10 +1261,16 @@ processing_files = sorted(os.listdir(base_directories["processing_directory"]))
 completed_files = sorted(os.listdir(base_directories["completed_directory"]))
 
 def process_file(source_path, dest_path):
+    print("Source path:", source_path)
+    print("Destination path:", dest_path)
+    
+    if source_path == dest_path:
+        return True
+    
     if os.path.exists(dest_path):
-        print(f"File already exists at destination: {dest_path}")
-        os.remove(source_path)
-        return False
+        print(f"File already exists at destination (removing...)")
+        os.remove(dest_path)
+        # return False
     
     print("**********************************************************************")
     print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
