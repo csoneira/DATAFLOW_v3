@@ -69,6 +69,9 @@ class TimeSeriesApp:
 
             if selected_columns and start_date and end_date:
                 try:
+                    start_date = pd.to_datetime(start_date)
+                    end_date = pd.to_datetime(end_date)
+                
                     filtered_data = self.data.loc[start_date:end_date, selected_columns]
 
                     # Clear previous plot
@@ -78,7 +81,10 @@ class TimeSeriesApp:
                     for column in selected_columns:
                         self.ax.scatter(filtered_data.index, filtered_data[column], label=column, s=1)
                         self.ax.plot(filtered_data.index, filtered_data[column], alpha=0.5)
-
+                    
+                    # Ensure the x-axis starts and ends exactly at the specified date range
+                    self.ax.set_xlim(start_date, end_date)
+                
                     # Add labels, legend, and redraw
                     self.ax.set_title(f"Time Series: {', '.join(selected_columns)}")
                     self.ax.set_xlabel("Time")
