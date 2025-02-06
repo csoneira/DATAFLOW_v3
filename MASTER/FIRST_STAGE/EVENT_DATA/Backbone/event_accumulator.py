@@ -95,7 +95,7 @@ force_replacement = True  # Creates a new datafile even if there is already one 
 show_plots = False
 high_mid_limit_angle = 15
 
-crosstalk_threshold = 1.2
+# crosstalk_threshold = 1.2
 
 regions = ['High', 'N', 'E', 'S', 'W']
 # test_filename = 'list_events_2024.12.16_23.27.54.txt'
@@ -148,7 +148,6 @@ completed_files = os.listdir(base_directories["completed_directory"])
 
 if last_file_test:
     if unprocessed_files:
-        # Sort the list of unprocessed files
         unprocessed_files = sorted(unprocessed_files)
         file_name = unprocessed_files[-1]
         unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
@@ -156,42 +155,32 @@ if last_file_test:
         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
         file_path = processing_file_path
         print(f"Only processing the last file in UNPROCESSED: {unprocessed_file_path}")
+
     elif processing_files:
-        # Sort the list of processing files
         processing_files = sorted(processing_files)
         file_name = processing_files[-1]
         processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
         file_path = processing_file_path
         print(f"Only processing the last file in PROCESSING: {processing_file_path}")
+
     elif completed_files:
-        # Sort the list of processing files
-        processing_files = sorted(completed_files)
+        completed_files = sorted(completed_files)
         file_name = completed_files[-1]
         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
         processing_file_path = completed_file_path
         file_path = processing_file_path
-        print(f"Only processing the last file in COMPLETED: {completed_file_path}")
+        print(f"Reprocessing the last file in COMPLETED: {completed_file_path}")
+
     else:
-        sys.exit("No files to process in UNPROCESSED nor PROCESSING nor COMPLETED.")
+        sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+
 else:
     if unprocessed_files:
-        for file_name in unprocessed_files:
+        for file_name in sorted(unprocessed_files):
             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
-            # Skip if file is already in COMPLETED
-            if os.path.exists(completed_file_path):
-                print(f"File '{file_name}' is already in COMPLETED. Removing from UNPROCESSED...")
-                os.remove(unprocessed_file_path)
-                continue
-
-            # Skip if file is already in PROCESSING
-            if os.path.exists(processing_file_path):
-                print(f"File '{file_name}' is already in PROCESSING. Removing from UNPROCESSED...")
-                os.remove(unprocessed_file_path)
-                continue
 
             # Move file to PROCESSING and process it
             print(f"Moving '{file_name}' to PROCESSING...")
@@ -200,47 +189,139 @@ else:
             
             file_path = processing_file_path
             break
+
     elif processing_files:
-        # Check for files in PROCESSING
-        # Shuffle the elements in processing_files
-        print('Shuffling the files in PROCESSING...')
+        print("Shuffling the files in PROCESSING...")
         random.shuffle(processing_files)
         for file_name in processing_files:
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
-            # If already in COMPLETED, remove it from PROCESSING
-            if os.path.exists(completed_file_path):
-                print(f"File '{file_name}' is already in COMPLETED. Removing from PROCESSING...")
-                os.remove(processing_file_path)
-                continue
-
-            # Otherwise, process the file
             print(f"Processing file in PROCESSING: {file_name}")
             print(f"Complete path of the file to process: {processing_file_path}")
 
-            # Break after processing one file to avoid overwriting file_path
             file_path = processing_file_path
             break
-        
-    elif completed_files and reanalyze_completed:
-        # Check for files in COMPLETED
-        # Shuffle the elements in processing_files
-        print('Shuffling the files in COMPLETED...')
+
+    elif completed_files:
+        print("Shuffling the files in COMPLETED...")
         random.shuffle(completed_files)
         for file_name in completed_files:
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-            processing_file_path = completed_file_path
+            processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
 
-            # Otherwise, process the file
-            print(f"Processing file in COMPLETED: {file_name}")
-            print(f"Complete path of the file to process: {processing_file_path}")
+            print(f"Reprocessing file in COMPLETED: {file_name}")
+            # Move file to PROCESSING and process it
+            print(f"Moving '{file_name}' to PROCESSING...")
+            shutil.move(completed_file_path, processing_file_path)
+            print(f"File moved to PROCESSING: {processing_file_path}")
 
-            # Break after processing one file to avoid overwriting file_path
             file_path = processing_file_path
             break
+
     else:
-        sys.exit("No files to process in UNPROCESSED, PROCESSING nor COMPLETED.")
+        sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+
+
+# unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
+# processing_files = os.listdir(base_directories["processing_directory"])
+# completed_files = os.listdir(base_directories["completed_directory"])
+
+# if last_file_test:
+#     if unprocessed_files:
+#         # Sort the list of unprocessed files
+#         unprocessed_files = sorted(unprocessed_files)
+#         file_name = unprocessed_files[-1]
+#         unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+#         processing_file_path = unprocessed_file_path
+#         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+#         file_path = processing_file_path
+#         print(f"Only processing the last file in UNPROCESSED: {unprocessed_file_path}")
+#     elif processing_files:
+#         # Sort the list of processing files
+#         processing_files = sorted(processing_files)
+#         file_name = processing_files[-1]
+#         processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+#         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+#         file_path = processing_file_path
+#         print(f"Only processing the last file in PROCESSING: {processing_file_path}")
+#     elif completed_files:
+#         # Sort the list of processing files
+#         processing_files = sorted(completed_files)
+#         file_name = completed_files[-1]
+#         completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+#         processing_file_path = completed_file_path
+#         file_path = processing_file_path
+#         print(f"Only processing the last file in COMPLETED: {completed_file_path}")
+#     else:
+#         sys.exit("No files to process in UNPROCESSED nor PROCESSING nor COMPLETED.")
+# else:
+#     if unprocessed_files:
+#         for file_name in unprocessed_files:
+#             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+#             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+#             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+#             # Skip if file is already in COMPLETED
+#             if os.path.exists(completed_file_path):
+#                 print(f"File '{file_name}' is already in COMPLETED. Removing from UNPROCESSED...")
+#                 os.remove(unprocessed_file_path)
+#                 continue
+
+#             # Skip if file is already in PROCESSING
+#             if os.path.exists(processing_file_path):
+#                 print(f"File '{file_name}' is already in PROCESSING. Removing from UNPROCESSED...")
+#                 os.remove(unprocessed_file_path)
+#                 continue
+
+#             # Move file to PROCESSING and process it
+#             print(f"Moving '{file_name}' to PROCESSING...")
+#             shutil.move(unprocessed_file_path, processing_file_path)
+#             print(f"File moved to PROCESSING: {processing_file_path}")
+            
+#             file_path = processing_file_path
+#             break
+#     elif processing_files:
+#         # Check for files in PROCESSING
+#         # Shuffle the elements in processing_files
+#         print('Shuffling the files in PROCESSING...')
+#         random.shuffle(processing_files)
+#         for file_name in processing_files:
+#             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+#             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+#             # If already in COMPLETED, remove it from PROCESSING
+#             if os.path.exists(completed_file_path):
+#                 print(f"File '{file_name}' is already in COMPLETED. Removing from PROCESSING...")
+#                 os.remove(processing_file_path)
+#                 continue
+
+#             # Otherwise, process the file
+#             print(f"Processing file in PROCESSING: {file_name}")
+#             print(f"Complete path of the file to process: {processing_file_path}")
+
+#             # Break after processing one file to avoid overwriting file_path
+#             file_path = processing_file_path
+#             break
+        
+#     elif completed_files and reanalyze_completed:
+#         # Check for files in COMPLETED
+#         # Shuffle the elements in processing_files
+#         print('Shuffling the files in COMPLETED...')
+#         random.shuffle(completed_files)
+#         for file_name in completed_files:
+#             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+#             processing_file_path = completed_file_path
+
+#             # Otherwise, process the file
+#             print(f"Processing file in COMPLETED: {file_name}")
+#             print(f"Complete path of the file to process: {processing_file_path}")
+
+#             # Break after processing one file to avoid overwriting file_path
+#             file_path = processing_file_path
+#             break
+#     else:
+#         sys.exit("No files to process in UNPROCESSED, PROCESSING nor COMPLETED.")
 
 # Input file
 df = pd.read_csv(file_path, sep=',')
@@ -302,6 +383,7 @@ for i in range(1, 5):
 #             new_type.append(i)
 #     column.append(new_type)
 # df['new_type'] = column
+
 df['new_type'] = df.apply(lambda row: [i for i in range(1, 5) if 0 < row[f'Q_{i}'] < 100], axis=1)
 
 
@@ -319,7 +401,7 @@ agg_dict = {
     't0': [custom_mean, custom_std],
     's': [custom_mean, custom_std],
     'type': lambda x: pd.Series(x).value_counts().to_dict(),
-    'new_type': lambda x: pd.Series(x).value_counts().to_dict(),
+    'new_type': lambda x: pd.Series([tuple(i) for i in x]).value_counts().to_dict(),
     'Q_event': [custom_mean, custom_std],
 }
 
