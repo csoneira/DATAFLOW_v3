@@ -11,6 +11,7 @@ import random
 
 last_file_test = False
 reanalyze_completed = True
+update_big_event_file = True
 
 print("----------------------------------------------------------------------")
 print("--------- Running event_accumulator.py -------------------------------")
@@ -45,6 +46,7 @@ base_directories = {
     "completed_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_COMPLETED"),
     
     "acc_events_directory": os.path.join(working_directory, "ACC_EVENTS_DIRECTORY"),
+    "acc_rejected_directory": os.path.join(working_directory, "ACC_REJECTED"),
 }
 
 # Create ALL directories if they don't already exist
@@ -53,6 +55,28 @@ for directory in base_directories.values():
 
 # Path to big_event_data.csv
 big_event_file = os.path.join(working_directory, "big_event_data.csv")
+
+
+# --------------------------------------------------------------------------------------------
+# Move small or too big files in the destination folder to a directory of rejected -----------
+# --------------------------------------------------------------------------------------------
+
+source_dir = base_directories["acc_events_directory"]
+rejected_dir = base_directories["acc_rejected_directory"]
+
+for filename in os.listdir(source_dir):
+    file_path = os.path.join(source_dir, filename)
+    
+    # Check if it's a file
+    if os.path.isfile(file_path):
+        # Count the number of lines in the file
+        with open(file_path, "r") as f:
+            line_count = sum(1 for _ in f)
+
+        # Move the file if it has < 15 or > 100 rows
+        if line_count < 15 or line_count > 300:
+            shutil.move(file_path, os.path.join(rejected_dir, filename))
+            print(f"Moved: {filename}")
 
 
 # Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
@@ -375,17 +399,18 @@ for i in range(1, 5):
     df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
 
 # Make a column which is the a string with the number of planes that have a charge that is not streamer
-# column = []
-# for row in df.iterrows():
-#     new_type = []
-#     for i in range(1, 5):
-#         if row[1][f'Q_{i}'] > 0 and row[1][f'Q_{i}'] < 100:
-#             new_type.append(i)
-#     column.append(new_type)
-# df['new_type'] = column
+column = []
+for row in df.iterrows():
+    new_type = ""
+    for i in range(1, 5):
+        if row[1][f'Q_{i}'] > 0 and row[1][f'Q_{i}'] < 100:
+            new_type += str(i)
+    column.append(new_type)
+df['new_type'] = column
 
-df['new_type'] = df.apply(lambda row: [i for i in range(1, 5) if 0 < row[f'Q_{i}'] < 100], axis=1)
+# df['new_type'] = df.apply(lambda row: [i for i in range(1, 5) if 0 < row[f'Q_{i}'] < 100], axis=1)
 
+# print(df['new_type'])
 
 # Work for the future ------------------------------------------------------------------------------
 # df['topology_0'] = df.apply(lambda row: sum(row[f'Q_{i}'] > 0 for i in range(1, 5)), axis=1)
@@ -401,7 +426,7 @@ agg_dict = {
     't0': [custom_mean, custom_std],
     's': [custom_mean, custom_std],
     'type': lambda x: pd.Series(x).value_counts().to_dict(),
-    'new_type': lambda x: pd.Series([tuple(i) for i in x]).value_counts().to_dict(),
+    'new_type': lambda x: pd.Series(x).value_counts().to_dict(),
     'Q_event': [custom_mean, custom_std],
 }
 
@@ -427,16 +452,21 @@ if 'type_<lambda>' in resampled_df.columns:
         resampled_df[f'type_{type_key}'] = type_dict_col.apply(lambda x: x.get(type_key, 0) if isinstance(x, dict) else 0)
     resampled_df.drop(columns=['type_<lambda>'], inplace=True)
 
+# print("Test--------------------------------------------")
 if 'new_type_<lambda>' in resampled_df.columns:
     type_dict_col = resampled_df['new_type_<lambda>']
     for type_key in df['new_type'].unique():
+        # print(type_key)
         resampled_df[f'new_type_{type_key}'] = type_dict_col.apply(lambda x: x.get(type_key, 0) if isinstance(x, dict) else 0)
     resampled_df.drop(columns=['new_type_<lambda>'], inplace=True)
 
 # Streamer percentage
 for i in range(1, 5):
-    resampled_df["streamer_percent_{i}"] = resampled_df[f"streamer_{i}_sum"] / resampled_df[f"count_in_{i}_sum"] * 100
-
+    resampled_df[f"streamer_percent_{i}"] = (
+        (resampled_df[f"streamer_{i}_sum"] / resampled_df[f"count_in_{i}_sum"])
+        .fillna(0) * 100
+    )
+    # print(resampled_df[f"streamer_percent_{i}"])
 
 # -----------------------------------------------------------------------------
 # Saving the file -------------------------------------------------------------
@@ -455,75 +485,77 @@ shutil.move(file_path, completed_file_path)
 print(f"File moved to: {completed_file_path}")
 
 
+if update_big_event_file:
+    # -----------------------------------------------------------------------------
+    # Merge all CSVs in ACC_EVENTS_DIRECTORY with big_event_data.csv ---------------
+    # -----------------------------------------------------------------------------
 
-# -----------------------------------------------------------------------------
-# Merge all CSVs in ACC_EVENTS_DIRECTORY with big_event_data.csv ---------------
-# -----------------------------------------------------------------------------
+    # Load or create big_event_data.csv
+    if os.path.exists(big_event_file):
+        big_event_df = pd.read_csv(big_event_file, sep=',', parse_dates=['Time'])
+        print(f"Loaded existing big_event_data.csv with {len(big_event_df)} rows.")
+    else:
+        big_event_df = pd.DataFrame(columns=resampled_df.columns)
+        print("Created new empty big_event_data.csv dataframe.")
 
-# Load or create big_event_data.csv
-if os.path.exists(big_event_file):
-    big_event_df = pd.read_csv(big_event_file, sep=',', parse_dates=['Time'])
-    print(f"Loaded existing big_event_data.csv with {len(big_event_df)} rows.")
-else:
-    big_event_df = pd.DataFrame(columns=resampled_df.columns)
-    print("Created new empty big_event_data.csv dataframe.")
+    # Process all CSV files in ACC_EVENTS_DIRECTORY
+    acc_directory = os.path.dirname(save_path)  # Get the directory where new CSVs are saved
+    csv_files = [f for f in os.listdir(acc_directory) if f.endswith('.csv')]
 
-# Process all CSV files in ACC_EVENTS_DIRECTORY
-acc_directory = os.path.dirname(save_path)  # Get the directory where new CSVs are saved
-csv_files = [f for f in os.listdir(acc_directory) if f.endswith('.csv')]
+    for csv_file in csv_files:
+        csv_path = os.path.join(acc_directory, csv_file)
+        
+        if csv_path == big_event_file:
+            continue  # Skip big_event_data.csv itself
 
-for csv_file in csv_files:
-    csv_path = os.path.join(acc_directory, csv_file)
-    
-    if csv_path == big_event_file:
-        continue  # Skip big_event_data.csv itself
+        # print(f"Merging file: {csv_path}")
+        new_data = pd.read_csv(csv_path, sep=',', parse_dates=['Time'])
+        big_event_df = pd.concat([big_event_df, new_data], ignore_index=True)
 
-    # print(f"Merging file: {csv_path}")
-    new_data = pd.read_csv(csv_path, sep=',', parse_dates=['Time'])
-    big_event_df = pd.concat([big_event_df, new_data], ignore_index=True)
+    # Function to handle duplicates in 'Time'
+    def combine_duplicates(group, take_newest=True):
+        if len(group) == 1:
+            return group.iloc[0]  # No duplicates to combine
+        
+        if take_newest:
+            return group.iloc[-1]  # Take the newest (last) value based on the group order
 
-# Function to handle duplicates in 'Time'
-def combine_duplicates(group, take_newest=False):
-    if len(group) == 1:
-        return group.iloc[0]  # No duplicates to combine
-    
-    if take_newest:
-        return group.iloc[-1]  # Take the newest (last) value based on the group order
+        # Check if all rows are identical (excluding 'Time')
+        rows_identical = group.drop(columns='Time').nunique().sum() == 0
+        
+        if rows_identical:
+            return group.iloc[0]  # Keep any one row if all values are identical
+        
+        # Columns to sum and average
+        sum_columns = [col for col in group.columns if any(prefix in col for prefix in 
+                        ['count_in_', 'avalanche_', 'streamer_', 'High', 'N', 'E', 'S', 'W', 'type_'])]
+        avg_columns = ['x_custom_mean', 'y_custom_mean', 'theta_custom_mean', 'phi_custom_mean', 
+                    't0_custom_mean', 's_custom_mean', 'Q_event_custom_mean']
 
-    # Check if all rows are identical (excluding 'Time')
-    rows_identical = group.drop(columns='Time').nunique().sum() == 0
-    
-    if rows_identical:
-        return group.iloc[0]  # Keep any one row if all values are identical
-    
-    # Columns to sum and average
-    sum_columns = [col for col in group.columns if any(prefix in col for prefix in 
-                    ['count_in_', 'avalanche_', 'streamer_', 'High', 'N', 'E', 'S', 'W', 'type_'])]
-    avg_columns = ['x_custom_mean', 'y_custom_mean', 'theta_custom_mean', 'phi_custom_mean', 
-                   't0_custom_mean', 's_custom_mean', 'Q_event_custom_mean']
+        result = {}
+        for col in group.columns:
+            if col in sum_columns:
+                result[col] = group[col].sum()  # Sum values
+            elif col in avg_columns:
+                result[col] = group[col].mean()  # Average values
+            elif col.endswith('_custom_std'):
+                result[col] = group[col].mean()  # Average standard deviations
+            else:
+                result[col] = group[col].iloc[0]  # Take any non-aggregated value
 
-    result = {}
-    for col in group.columns:
-        if col in sum_columns:
-            result[col] = group[col].sum()  # Sum values
-        elif col in avg_columns:
-            result[col] = group[col].mean()  # Average values
-        elif col.endswith('_custom_std'):
-            result[col] = group[col].mean()  # Average standard deviations
-        else:
-            result[col] = group[col].iloc[0]  # Take any non-aggregated value
+        return pd.Series(result)
 
-    return pd.Series(result)
+    print("Grouping the CSVs by 'Time' and combining duplicates...")
 
-# Group by 'Time' to combine duplicates with the option to take the newest value
-big_event_df = big_event_df.groupby('Time', as_index=False).apply(combine_duplicates, take_newest=True)
+    # Group by 'Time' to combine duplicates with the option to take the newest value
+    big_event_df = big_event_df.groupby('Time', as_index=False).apply(combine_duplicates, take_newest=True)
 
-# Sort the combined DataFrame by 'Time'
-big_event_df = big_event_df.sort_values(by='Time').reset_index(drop=True)
+    # Sort the combined DataFrame by 'Time'
+    big_event_df = big_event_df.sort_values(by='Time').reset_index(drop=True)
 
-# -----------------------------------------------------------------------------
-# Save the updated big_event_data.csv -----------------------------------------
-# -----------------------------------------------------------------------------
-big_event_df = big_event_df.applymap(round_to_significant_digits)
-big_event_df.to_csv(big_event_file, sep=',', index=False)
-print(f"Updated big_event_data.csv with {len(big_event_df)} rows.")
+    # -----------------------------------------------------------------------------
+    # Save the updated big_event_data.csv -----------------------------------------
+    # -----------------------------------------------------------------------------
+    big_event_df = big_event_df.applymap(round_to_significant_digits)
+    big_event_df.to_csv(big_event_file, sep=',', index=False)
+    print(f"Updated big_event_data.csv with {len(big_event_df)} rows.")

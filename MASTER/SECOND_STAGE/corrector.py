@@ -297,6 +297,8 @@ def handle_uncertainty(row, detected_col, passed_col):
     return calculate_efficiency_uncertainty(row[detected_col], row[passed_col])
 
 
+print("Calculating efficiencies...")
+
 # Calculate efficiencies and uncertainties explicitly
 data_df['eff_1'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_1', 'passed_1'), axis=1)
 data_df['eff_2'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_2', 'passed_2'), axis=1)
@@ -368,7 +370,9 @@ def fit_model(x, beta, a):
 
 def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
     
+    print("log below ------------------------------------------------")
     log_I_over_I0 = np.log(I_over_I0)
+    print("log above ------------------------------------------------")
     unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0  # Propagate relative errors
     
     # Prepare the data for fitting
@@ -454,25 +458,84 @@ else:
     P0 = mean_pressure_used_for_the_fit
     unc_P0 = 1  # Assume an arbitrary uncertainty if not recalculating
 
+
 delta_P = P - P0
 unc_delta_P = np.sqrt(unc_P**2 + unc_P0**2)  # Combined uncertainty (propagation of errors)
 
+
+I = data_df[region]
+unc_I = data_df[f'unc_{region}']
+I0 = data_df[region].mean()
+unc_I0 = unc_I / np.sqrt( len(I) )  # Uncertainty of the mean
+I_over_I0 = I / I0
+unc_I_over_I0 = I_over_I0 * np.sqrt( (unc_I / I)**2 + (unc_I0 / I0)**2 )
+pressure_results = pd.DataFrame(columns=['Region', 'Eta_P'])
+
+# Filter the negative or 0 I_over_I0 values
+valid_mask = I_over_I0 > 0
+I_over_I0 = I_over_I0[valid_mask]
+unc_I_over_I0 = unc_I_over_I0[valid_mask]
+delta_P = delta_P[valid_mask]
+unc_delta_P = unc_delta_P[valid_mask]
+
 if recalculate_pressure_coeff:
-    I = data_df[region]
-    unc_I = data_df[f'unc_{region}']
-    
-    I0 = data_df[region].mean()
-    unc_I0 = unc_I / np.sqrt( len(I) )  # Uncertainty of the mean
-    
-    I_over_I0 = I / I0
-    unc_I_over_I0 = I_over_I0 * np.sqrt( (unc_I / I)**2 + (unc_I0 / I0)**2 )
-    
-    pressure_results = pd.DataFrame(columns=['Region', 'Eta_P'])
     eta_P, unc_eta_P = calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P)
     pressure_results = pd.concat([pressure_results, pd.DataFrame({'Region': [region], 'Eta_P': [eta_P]})], ignore_index=True)
-else:
+    
+if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
+    if recalculate_pressure_coeff == False:
+        print("Recalculating because of the options.")
+    
+    if eta_P == np.nan:
+        print("Recalculating because the fit failed.")
+    
     eta_P = pressure_coeff_input
     unc_eta_P = unc_pressure_coeff_input
+    
+    log_I_over_I0 = np.log(I_over_I0)
+    unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0
+    
+    if create_plots:
+        log_I_over_I0 = np.log(I_over_I0)
+        
+        df = pd.DataFrame({
+            'delta_P': delta_P,
+            'log_I_over_I0': log_I_over_I0,
+            'unc_delta_P': unc_delta_P,
+            'unc_log_I_over_I0': unc_I_over_I0 / I_over_I0
+        })
+        
+        plt.figure()
+        if show_errorbar:
+            plt.errorbar(
+                df['delta_P'],
+                df['log_I_over_I0'],
+                xerr=abs(df['unc_delta_P']),
+                yerr=abs(df['unc_log_I_over_I0']),
+                fmt='o',
+                label='Data with Uncertainty'
+            )
+        else:
+            plt.scatter(df['delta_P'], df['log_I_over_I0'], label='Data', s=1, alpha=0.5, marker='.')
+        
+        # Plot the line using provided eta_P instead of fitted values
+        set_a = 0
+        plt.plot(df['delta_P'], fit_model(df['delta_P'], eta_P, set_a), color='blue', label=f'Set Eta: {eta_P:.3f} ± {unc_eta_P:.3f} %/mbar')
+        
+        # Add labels and title
+        plt.xlabel('Delta P')
+        plt.ylabel('log (I / I0)')
+        plt.title(f'Plot using Set Eta_P\nEta_P = {eta_P:.3f} ± {unc_eta_P:.3f} %/mbar')
+        plt.legend()
+        
+        if show_plots: 
+            plt.show()
+        elif save_plots:
+            print(f"Saving figure to {figure_path}")
+            plt.savefig(figure_path, format='png', dpi=300)
+        
+        plt.close()
+
 
 # Create corrected rate column for the region
 data_df[f'pres_{region}'] = I * np.exp(-1 * eta_P / 100 * delta_P)
