@@ -14,7 +14,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
-# from scipy.signal import medfilt
+from scipy.signal import medfilt
 import os
 # from sklearn.linear_model import LinearRegression
 from datetime import datetime, timedelta
@@ -85,11 +85,11 @@ show_errorbar = False
 
 recalculate_pressure_coeff = True
 
-res_win_min = 1 # 180 Resampling window minutes
-HMF_ker = 1 # It must be odd. Horizontal Median Filter
+res_win_min = 20 # 180 Resampling window minutes
+HMF_ker = 0 # It must be odd. Horizontal Median Filter
 MAF_ker = 1 # Moving Average Filter
 
-outlier_filter = 0.21
+outlier_filter = 0.2
 
 high_order_correction = False
 date_selection = True  # Set to True if you want to filter by date
@@ -100,7 +100,7 @@ skip_in_limits = 1
 # To not touch unless necesary ------------------------------------------------
 # -----------------------------------------------------------------------------
 
-resampling_window = f'{res_win_min}min'  # '10T' # '5T' stands for 5 minutes.
+resampling_window = f'{res_win_min}min'  # '10min' # '5min' stands for 5 minutes.
 
 # Columns to sum
 angular_regions = ['High', 'N', 'S', 'E', 'W']
@@ -135,6 +135,10 @@ charge_types = ['count_in_1_sum', 'avalanche_1_sum', 'streamer_1_sum',
 # Load the data
 print('Reading the CSV file...')
 data_df = pd.read_csv(filepath)
+
+print("Putting zeroes to NaNs...")
+data_df = data_df.replace(0, np.nan)
+
 print(filepath)
 print('File loaded successfully.')
 
@@ -182,6 +186,8 @@ end_date = datetime.now()
 # Filter data based on dates if start_date is set
 start_date = pd.to_datetime("2024-03-23")  # Use a string in 'YYYY-MM-DD' format
 end_date = pd.to_datetime("2024-03-27")
+# start_date = pd.to_datetime("2024-03-24")  # Use a string in 'YYYY-MM-DD' format
+# end_date = pd.to_datetime("2024-03-25 18")
 if date_selection and start_date is not None:
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
@@ -239,7 +245,9 @@ data_df = data_df_cleaned.copy()
 
 data_df.set_index('Time', inplace=True)
 
-columns_to_sum = angular_regions + detection_types + charge_types
+data_df["number_of_rows"] = 1
+
+columns_to_sum = angular_regions + detection_types + charge_types + ["number_of_rows"]
 columns_to_mean = [col for col in data_df.columns if col not in columns_to_sum]
 
 # Custom aggregation function
@@ -266,8 +274,10 @@ data_df['count'] = data_df['count_regions'] # Until I have a better definition o
 data_df['count_uncertainty'] = np.sqrt(data_df['count'])
 # ------------------------------------------------------------------------------------------
 
-data_df['rate'] = data_df['count'] / ( res_win_min * 60 )  # Counts per second (Hz)
-data_df['rate_uncertainty'] = np.sqrt(data_df['count']) / ( res_win_min * 60 )
+# data_df['rate'] = data_df['count'] / ( res_win_min * 60 )  # Counts per second (Hz)
+data_df['rate'] = data_df['count'] / ( data_df['number_of_rows'] * 60 )  # Counts per second (Hz)
+# data_df['rate_uncertainty'] = np.sqrt(data_df['count']) / ( res_win_min * 60 )
+data_df['rate_uncertainty'] = np.sqrt(data_df['count']) / ( data_df['number_of_rows'] * 60 )
 
 
 # -----------------------------------------------------------------------------
@@ -710,22 +720,24 @@ data_df[f'unc_pres_{region}'] = final_unc_combined # Placeholder
 # -----------------------------------------------------------------------------
 
 # # Horizontal Median Filter ----------------------------------------------------
-# ker = HMF_ker # 61
+ker = HMF_ker # 61
 
-# # Apply median filter to columns of interest
-# if ker > 0:
-#     data_df['count'] = medfilt(data_df['count'], kernel_size=ker)
-#     data_df['x_mean'] = medfilt(data_df['x_mean'], kernel_size=ker)
-#     data_df['y_mean'] = medfilt(data_df['y_mean'], kernel_size=ker)
-#     data_df['t0_mean'] = medfilt(data_df['t0_mean'], kernel_size=ker)
-#     data_df['s_mean'] = medfilt(data_df['s_mean'], kernel_size=ker)
-#     data_df['theta_mean'] = medfilt(data_df['theta_mean'], kernel_size=ker)
-#     data_df['phi_mean'] = medfilt(data_df['phi_mean'], kernel_size=ker)
+# Apply median filter to columns of interest
+if ker > 0:
+    # data_df['count'] = medfilt(data_df['count'], kernel_size=ker)
+    # data_df['x_mean'] = medfilt(data_df['x_mean'], kernel_size=ker)
+    # data_df['y_mean'] = medfilt(data_df['y_mean'], kernel_size=ker)
+    # data_df['t0_mean'] = medfilt(data_df['t0_mean'], kernel_size=ker)
+    # data_df['s_mean'] = medfilt(data_df['s_mean'], kernel_size=ker)
+    # data_df['theta_mean'] = medfilt(data_df['theta_mean'], kernel_size=ker)
+    # data_df['phi_mean'] = medfilt(data_df['phi_mean'], kernel_size=ker)
 
-#     # Apply median filter to each region
-#     for region in angular_regions:
-#         data_df[region] = medfilt(data_df[region], kernel_size=ker)
-
+    # # Apply median filter to each region
+    # for region in angular_regions:
+    #     data_df[region] = medfilt(data_df[region], kernel_size=ker)
+    data_df[f'pres_{region}'] = medfilt(data_df[f'pres_{region}'], kernel_size=ker)
+else:
+    print('Horizontal Median Filter not applied.')
 
 
 # # Moving Average Filter -------------------------------------------------------
@@ -766,12 +778,21 @@ data_df[f'unc_sys_pres_{region}'] = np.sqrt( data_df[f'unc_pres_{region}']**2 +
 data_df[f'totally_corrected_rate'] = data_df[f'pres_{region}']
 data_df[f'unc_totally_corrected_rate'] = data_df[f'unc_sys_pres_{region}']
 
-
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Saving ----------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
+
+# If ANY value is 0, put it to NaN
+data_df = data_df.replace(0, np.nan)
+
+# Put to NaN the values in the totally_corrected_rate that are outside of [16, 20]
+print("------------------------------------------------------------------------------------------")
+print("WATCH OUT THIS LAST FILTER BECAUSE IT MAY GIVE PROBLEMS IN THE FUTURE!!!!!!!!!!!!!!!!!!!!!")
+print("------------------------------------------------------------------------------------------")
+# data_df.loc[(data_df['totally_corrected_rate'] < 16) | (data_df['totally_corrected_rate'] > 18.4), 'totally_corrected_rate'] = np.nan
+data_df.loc[(data_df['totally_corrected_rate'] < 4.85) | (data_df['totally_corrected_rate'] > 5.3), 'totally_corrected_rate'] = np.nan
 
 data_df.to_csv(save_filename, index=False)
 print('Efficiency and atmospheric corrections completed and saved to corrected_table.csv.')
@@ -787,10 +808,15 @@ grafana_df = data_df[['Time', 'pressure_lab', 'totally_corrected_rate', 'unc_tot
 # Rename the columns
 grafana_df.columns = ['Time', 'P', 'rate', 'u_rate', 'eff', 'u_eff']
 
+grafana_df["norm_rate"] = grafana_df["rate"] / grafana_df["rate"].mean() - 1
+grafana_df["u_norm_rate"] = grafana_df["u_rate"] / grafana_df["rate"].mean()
+
+# Drop amy row that has Nans
+grafana_df = grafana_df.dropna()
+
 # Save the DataFrame to a CSV file
 grafana_df.to_csv(grafana_save_filename, index=False)
 print(f'Data for Grafana saved to {grafana_save_filename}.')
-
 
 print('------------------------------------------------------')
 print(f"corrector.py completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
