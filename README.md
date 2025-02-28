@@ -40,7 +40,7 @@ The dataflow system is designed with modularity and real-time processing in mind
 ### Master Tree
 ```
 DATAFLOW_v3/MASTER
-ZERO_STAGE
+├── ZERO_STAGE
 │   ├── reprocessing.sh
 │   └── scheme_reprocessing_scheme.sh
 ├── FIRST_STAGE
