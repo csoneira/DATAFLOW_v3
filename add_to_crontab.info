@@ -1,0 +1,74 @@
+# Edit this file to introduce tasks to be run by cron.
+# m h  dom mon dow   command
+
+SHELL=/bin/bash
+PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
+
+#*/5 * * * * export RPCSYSTEM=mingo01;export RPCRUNMODE=oneRun;/home/cayetano/gate/bin/unpack.sh
+
+# Save copy the core files
+0 5 * * * rsync -av --exclude="STATIONS" --exclude=".git" --exclude=".gitignore" ~/DATAFLOW_v3/ ~/SAFE_DATAFLOW_v3/
+
+# ----------------------------------------
+# Update the Drive with the processed data
+# ----------------------------------------
+
+15 * * * * rclone sync /home/cayetano/DATAFLOW_v3/STATIONS/MINGO01/SECOND_STAGE/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO01 --progress
+20 * * * * rclone sync /home/cayetano/DATAFLOW_v3/STATIONS/MINGO02/SECOND_STAGE/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO02 --progress
+25 * * * * rclone sync /home/cayetano/DATAFLOW_v3/STATIONS/MINGO03/SECOND_STAGE/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO03 --progress
+30 * * * * rclone sync /home/cayetano/DATAFLOW_v3/STATIONS/MINGO04/SECOND_STAGE/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO04 --progress
+
+
+# ------------------------------------------------------------------------------------------
+# Update station_automation_scripts, the directory with the software I made for the stations
+# ------------------------------------------------------------------------------------------
+
+0 1 * * * rsync -avz --delete /home/cayetano/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo01:~/station_automation_scripts/
+0 2 * * * rsync -avz --delete /home/cayetano/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo02:~/station_automation_scripts/
+0 3 * * * rsync -avz --delete /home/cayetano/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo03:~/station_automation_scripts/
+0 4 * * * rsync -avz --delete /home/cayetano/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo04:~/station_automation_scripts/
+
+# --------------------------------------------------------
+# Search and unpack if there are hld files from reanalysis
+# --------------------------------------------------------
+
+* * * * * /bin/bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 1
+* * * * * /bin/bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 2
+* * * * * /bin/bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 3
+* * * * * /bin/bash ~/DATAFLOW_v3/MASTER/ZERO_STAGE/reprocessing.sh 4
+
+# ------------------------------------
+# Execute analysis for Stations 1 to 4
+# ------------------------------------
+
+# Station 1 Tasks
+*/5 * * * * /bin/bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 1 >> ~/cron_logs/log_bring_and_clean_1.log 2>&1
+0 2 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/REANALYSIS/reanalysis.py 1 >> ~/cron_logs/reanalysis_1.log 2>&1
+*/1 * * * * /bin/bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 1 >> ~/cron_logs/bring_and_analyze_events_1.log 2>&1
+* */1 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/Backbone/big_event_file_joiner.py 1 >> ~/cron_logs/big_event_file_joiner_1.log 2>&1
+*/10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 1 >> ~/cron_logs/merge_large_table_1.log 2>&1
+*/11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 1 >> ~/cron_logs/corrector_1.log 2>&1
+
+# Station 2 Tasks (Staggered)
+1-59/15 * * * * /bin/bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 2 >> ~/cron_logs/log_bring_and_clean_2.log 2>&1
+5 2 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/REANALYSIS/reanalysis.py 2 >> ~/cron_logs/reanalysis_2.log 2>&1
+*/1 * * * * /bin/bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 2 >> ~/cron_logs/bring_and_analyze_events_2.log 2>&1
+* */1 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/Backbone/big_event_file_joiner.py 2 >> ~/cron_logs/big_event_file_joiner_2.log 2>&1
+3-59/10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 2 >> ~/cron_logs/merge_large_table_2.log 2>&1
+4-59/11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 2 >> ~/cron_logs/corrector_2.log 2>&1
+
+# Station 3 Tasks (Further Staggered)
+2-59/15 * * * * /bin/bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 3 >> ~/cron_logs/log_bring_and_clean_3.log 2>&1
+10 2 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/REANALYSIS/reanalysis.py 3 >> ~/cron_logs/reanalysis_3.log 2>&1
+*/1 * * * * /bin/bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 3 >> ~/cron_logs/bring_and_analyze_events_3.log 2>&1
+* */1 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/Backbone/big_event_file_joiner.py 3 >> ~/cron_logs/big_event_file_joiner_3.log 2>&1
+5-59/10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 3 >> ~/cron_logs/merge_large_table_3.log 2>&1
+6-59/11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 3 >> ~/cron_logs/corrector_3.log 2>&1
+
+# Station 4 Tasks (Fully Staggered)
+3-59/15 * * * * /bin/bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 4 >> ~/cron_logs/log_bring_and_clean_4.log 2>&1
+15 2 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/REANALYSIS/reanalysis.py 4 >> ~/cron_logs/reanalysis_4.log 2>&1
+*/1 * * * * /bin/bash ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_and_analyze_events.sh 4 >> ~/cron_logs/bring_and_analyze_events_4.log 2>&1
+* */1 * * * python3 ~/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/Backbone/big_event_file_joiner.py 4 >> ~/cron_logs/big_event_file_joiner_4.log 2>&1
+7-59/10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 4 >> ~/cron_logs/merge_large_table_4.log 2>&1
+8-59/11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 4 >> ~/cron_logs/corrector_4.log 2>&1

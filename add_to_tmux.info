@@ -1,0 +1,49 @@
+set -g status-bg blue
+set -g mouse on
+
+# Kill the existing session if it exists
+run-shell "tmux has-session -t cron_monitor 2>/dev/null && tmux kill-session -t cron_monitor"
+
+# Create a new session named 'cron_monitor'
+new-session -d -s cron_monitor -n 'Station 1'
+
+# Station 1
+send-keys -t cron_monitor:0 "watch -n 10 tail ~/cron_logs/log_bring_and_clean_1.log" C-m
+split-window -h -t cron_monitor:0 "watch -n 10 tail ~/cron_logs/reanalysis_1.log"
+split-window -v -t cron_monitor:0 "watch -n 10 tail ~/cron_logs/bring_and_analyze_events_1.log"
+split-window -v -t cron_monitor:0 "watch -n 10 tail ~/cron_logs/merge_large_table_1.log"
+split-window -v -t cron_monitor:0 "watch -n 10 tail ~/cron_logs/corrector_1.log"
+select-layout -t cron_monitor:0 tiled
+
+# Station 2
+new-window -t cron_monitor -n 'Station 2'
+send-keys -t cron_monitor:1 "watch -n 10 tail ~/cron_logs/log_bring_and_clean_2.log" C-m
+split-window -h -t cron_monitor:1 "watch -n 10 tail ~/cron_logs/reanalysis_2.log"
+split-window -v -t cron_monitor:1 "watch -n 10 tail ~/cron_logs/bring_and_analyze_events_2.log"
+split-window -v -t cron_monitor:1 "watch -n 10 tail ~/cron_logs/merge_large_table_2.log"
+split-window -v -t cron_monitor:1 "watch -n 10 tail ~/cron_logs/corrector_2.log"
+select-layout -t cron_monitor:1 tiled
+
+# Station 3
+new-window -t cron_monitor -n 'Station 3'
+send-keys -t cron_monitor:2 "watch -n 10 tail ~/cron_logs/log_bring_and_clean_3.log" C-m
+split-window -h -t cron_monitor:2 "watch -n 10 tail ~/cron_logs/reanalysis_3.log"
+split-window -v -t cron_monitor:2 "watch -n 10 tail ~/cron_logs/bring_and_analyze_events_3.log"
+split-window -v -t cron_monitor:2 "watch -n 10 tail ~/cron_logs/merge_large_table_3.log"
+split-window -v -t cron_monitor:2 "watch -n 10 tail ~/cron_logs/corrector_3.log"
+select-layout -t cron_monitor:2 tiled
+
+# Station 4
+new-window -t cron_monitor -n 'Station 4'
+send-keys -t cron_monitor:3 "watch -n 10 tail ~/cron_logs/log_bring_and_clean_4.log" C-m
+split-window -h -t cron_monitor:3 "watch -n 10 tail ~/cron_logs/reanalysis_4.log"
+split-window -v -t cron_monitor:3 "watch -n 10 tail ~/cron_logs/bring_and_analyze_events_4.log"
+split-window -v -t cron_monitor:3 "watch -n 10 tail ~/cron_logs/merge_large_table_4.log"
+split-window -v -t cron_monitor:3 "watch -n 10 tail ~/cron_logs/corrector_4.log"
+select-layout -t cron_monitor:3 tiled
+
+# Ensure no empty windows
+#kill-window -t cron_monitor:4
+
+# Start with Station 1 window
+select-window -t cron_monitor:0

@@ -1,0 +1,68 @@
+# Ignore compressed and archive files
+*.tar
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# Ignore raw data files
+*.dat
+*.csv
+*.tsv
+*.json
+*.txt
+
+# Ignore images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.tif
+*.tiff
+*.bmp
+
+# Ignore documents and PDFs
+*.pdf
+*.doc
+*.docx
+*.odt
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.~*
+
+# Ignore Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore system-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Ignore virtual environments
+venv/
+.env/
+.venv/
+
+# Ignore build and output folders
+build/
+dist/
+*.egg-info/
+node_modules/
+
+# Ignore Git merge conflict files
+*.orig
