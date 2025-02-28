@@ -3917,7 +3917,7 @@ for col in calibrated_data.columns:
 
 
 # ----------------------------------------------------------------------------------------------------------------
-if stratos_save:
+if stratos_save and station == 1:
     print("Saving X and Y for stratos.")
     
     stratos_df = calibrated_data.copy()
