@@ -13,7 +13,7 @@ The network currently consists of miniTRASGO stations in the following locations
 - **Madrid, Spain**
 - **Warsaw, Poland**
 - **Puebla, Mexico**
-- **Monterrey, Mexico** (coming soon)
+- **Monterrey, Mexico**
 
 ### Key Features
 - **Real-Time Data Integration**: Combines CR data, atmospheric logs, and COPERNICUS data in real-time.
