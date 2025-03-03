@@ -70,7 +70,6 @@ figure_path = f"{base_folder}/pressure_correction_fit.png"
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-
 # This works fine for total counts:
 # resampling_window = '10T'  # '10T' # '5T' stands for 5 minutes. Adjust based on your needs.
 # HMF_ker = 5 # It must be odd.
@@ -85,16 +84,16 @@ save_plots = True
 create_plots = True
 show_errorbar = False
 
-recalculate_pressure_coeff = True
+recalculate_pressure_coeff = False
 
 res_win_min = 10 # 180 Resampling window minutes
 HMF_ker = 1 # It must be odd. Horizontal Median Filter
 MAF_ker = 1 # Moving Average Filter
 
-outlier_filter = 1
+outlier_filter = 0.2
 
 high_order_correction = False
-date_selection = False  # Set to True if you want to filter by date
+date_selection = True  # Set to True if you want to filter by date
 
 skip_in_limits = 1
 
@@ -129,7 +128,6 @@ charge_types = ['count_in_1_sum', 'avalanche_1_sum', 'streamer_1_sum',
 
 # Add a part that sets limits on the date to complete only the lacking part in 
 # the large corrected table.
-
 
 # -----------------------------------------------------------------------------
 # Reading ---------------------------------------------------------------------
@@ -213,10 +211,15 @@ end_date = datetime.now()
 # end_date = pd.to_datetime("2024-03-25 18")
 if date_selection:
 # if date_selection and start_date is not None:
-    start_date = pd.to_datetime("2025-02-24")  # Use a string in 'YYYY-MM-DD' format
-    end_date = pd.to_datetime("2025-02-27")
-    # start_date = pd.to_datetime("2024-05-03")  # Use a string in 'YYYY-MM-DD' format
-    # end_date = pd.to_datetime("2024-05-29")
+    start_date = pd.to_datetime("2025-02-02")  # Use a string in 'YYYY-MM-DD' format
+    end_date = pd.to_datetime("2025-03-03")
+    
+    # start_date = pd.to_datetime("2025-02-25 17:30:00")  # Use a string in 'YYYY-MM-DD' format
+    # end_date = pd.to_datetime("2025-02-26 00:10:00")
+    
+    # start_date = pd.to_datetime("2025-02-25 10:30:00")  # Use a string in 'YYYY-MM-DD' format
+    # end_date = pd.to_datetime("2025-02-26 07:10:00")
+    
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
 
@@ -437,6 +440,25 @@ def handle_uncertainty(row, detected_col, passed_col):
 print("Calculating efficiencies...")
 
 # Calculate efficiencies and uncertainties explicitly
+from scipy.ndimage import gaussian_filter1d
+
+rolling_effs = True
+if rolling_effs:
+    cols_to_interpolate = ['detected_1', 'detected_2', 'detected_3', 'detected_4', 'passed_1', 'passed_2', 'passed_3', 'passed_4']
+    data_df[cols_to_interpolate] = data_df[cols_to_interpolate].replace(0, np.nan).interpolate(method='linear')
+    
+    sum_window, med_window = 30, 1
+    rolling_sum, rolling_median = True, True
+    
+    if rolling_median:
+        for col in cols_to_interpolate:
+            data_df[col] = medfilt(data_df[col], kernel_size=med_window)
+    
+    if rolling_sum:
+        for col in cols_to_interpolate:
+            data_df[col] = data_df[col].rolling(window=sum_window, center=True, min_periods=1).sum()
+    
+
 data_df['eff_1'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_1', 'passed_1'), axis=1)
 data_df['eff_2'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_2', 'passed_2'), axis=1)
 data_df['eff_3'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_3', 'passed_3'), axis=1)
@@ -453,7 +475,6 @@ data_df['unc_eff_2'] = np.sqrt( data_df['anc_unc_eff_2']**2 + systematic_unc[1]*
 data_df['unc_eff_3'] = np.sqrt( data_df['anc_unc_eff_3']**2 + systematic_unc[2]**2 )
 data_df['unc_eff_4'] = np.sqrt( data_df['anc_unc_eff_4']**2 + systematic_unc[3]**2 )
 
-
 data_df['final_eff_1'] = data_df['eff_1'] / data_df['acc_1']
 data_df['final_eff_2'] = data_df['eff_2'] / data_df['acc_2']
 data_df['final_eff_3'] = data_df['eff_3'] / data_df['acc_3']
@@ -466,7 +487,7 @@ data_df['unc_final_eff_4'] = data_df['unc_eff_4'] / data_df['acc_4']
 
 # Calculate the average efficiency
 # data_df['eff_global'] = data_df[['eff_1', 'eff_2', 'eff_3', 'eff_4']].mean(axis=1)
-data_df['eff_global'] = data_df[['final_eff_1', 'final_eff_2', 'final_eff_3', 'final_eff_4']].mean(axis=1)
+data_df['eff_global'] = data_df[['final_eff_2', 'final_eff_3']].mean(axis=1)
 
 # Calculate the uncertainty for the average efficiency
 data_df['unc_eff_global'] = np.sqrt(
@@ -487,6 +508,8 @@ print("Rate above ---------------------------------------")
 # Replace zero values in 'rate' or 'eff_global' with NaN to avoid division by zero
 # and correct the rate by the global efficiency
 
+# data_df['rate'] = data_df['rate'].mask(data_df['rate'] < 12, np.nan).interpolate(method='linear')
+
 data_df['eff_corr_rate'] = np.where(
     (data_df['rate'] == 0) | (data_df['eff_global'] == 0),  # Condition: rate or eff_global is zero
     np.nan,  # Assign NaN if condition is met
@@ -500,6 +523,283 @@ data_df['unc_eff_corr_rate'] = data_df['eff_corr_rate'] * np.sqrt(
 )
 
 print('Efficiency correction performed.')
+
+if create_plots:
+    print("Creating efficiency plot...")
+    
+    fig, ax1 = plt.subplots(figsize=(10, 6))  # Define figure and primary axis
+
+    # Plot efficiencies on primary y-axis
+    # ax1.plot(data_df['Time'], data_df['final_eff_1'], label='Efficiency 1', color='C0')
+    # ax1.plot(data_df['Time'], data_df['final_eff_2'], label='Efficiency 2', color='C1')
+    # ax1.plot(data_df['Time'], data_df['final_eff_3'], label='Efficiency 3', color='C2')
+    # ax1.plot(data_df['Time'], data_df['final_eff_4'], label='Efficiency 4', color='C3')
+    ax1.plot(data_df['Time'], data_df['eff_global'], label='Efficiency global', color='C4')
+    
+    ax1.set_xlabel('Time')
+    ax1.set_ylabel('Efficiency')
+    ax1.set_title('Efficiencies over Time')
+    ax1.legend(loc='upper left')
+
+    # Create a second y-axis for pressure
+    ax2 = ax1.twinx()
+    ax2.plot(data_df['Time'], data_df['sensors_ext_Pressure_ext'], label='Pressure', color='C5')
+    ax2.set_ylabel('Pressure')
+    
+    # Create a third y-axis for temperature (offset to avoid overlap)
+    ax3 = ax1.twinx()
+    ax3.spines['right'].set_position(('outward', 60))  # Offset temperature axis
+    ax3.plot(data_df['Time'], data_df['sensors_ext_Temperature_ext'], label='Temperature', color='C5')
+    # ax3.plot(data_df['Time'], data_df['temp_ground'], label='Temperature', color='C5')
+    ax3.set_ylabel('Temperature')
+    # ax3.spines['right'].set_position(('outward', 60))  # Offset temperature axis
+    # ax3.plot(data_df['Time'], data_df['rate'], label='OG rate', color='C6')
+    # ax3.plot(data_df['Time'], data_df['eff_corr_rate'], label='Eff. corr. rate', color='C7')
+    # ax3.set_ylabel('Rate')
+    
+    ax4 = ax1.twinx()
+    ax4.spines['right'].set_position(('outward', 120))  # Offset temperature axis
+    ax4.plot(data_df['Time'], data_df['hv_mean'], label='HV', color='C8')
+    ax4.set_ylabel('HV')
+    ax4.set_ylim(5, 6)
+
+    # Combine all legends
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    lines3, labels3 = ax3.get_legend_handles_labels()
+    lines4, labels4 = ax4.get_legend_handles_labels()
+    ax1.legend(lines + lines2 + lines3 + lines4, labels + labels2 + labels3 + labels4, loc='upper right')
+    
+    plt.tight_layout()
+    
+    # Save or show the plot
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + "_effs.png"
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+
+    plt.close()
+
+
+
+# Take all the data_df['hv_mean'] that are between 5.415 and 5.425, scatter plot in 3D,
+# data_df['eff_global'], data_df['sensors_ext_Pressure_ext'] and data_df['sensors_ext_Temperature_ext']
+if create_plots:
+    from mpl_toolkits.mplot3d import Axes3D
+
+    # Filter data based on hv_mean range
+    filtered_df = data_df[(data_df['hv_mean'] >= 5.415) & (data_df['hv_mean'] <= 5.425)]
+
+    # Extract relevant columns
+    z = filtered_df['eff_global']
+    x = filtered_df['sensors_ext_Pressure_ext']
+    y = filtered_df['sensors_ext_Temperature_ext']
+    c = z  # Color mapped to efficiency values
+
+    # Create a figure with four subplots (2x2 layout)
+    fig = plt.figure(figsize=(14, 12))
+
+    # 3D scatter plot with isometric view
+    ax1 = fig.add_subplot(221, projection='3d')
+    sc1 = ax1.scatter(x, y, z, c=c, cmap='turbo', marker='o', s=10, alpha=0.7)
+    ax1.set_xlabel('Pressure')
+    ax1.set_ylabel('Temperature')
+    ax1.set_zlabel('Efficiency')
+    # ax1.set_title('Isometric View')
+    ax1.view_init(elev=30, azim=-60)
+
+    # 3D scatter plot with view aligned to the Pressure axis
+    ax2 = fig.add_subplot(222, projection='3d')
+    sc2 = ax2.scatter(x, y, z, c=c, cmap='turbo', marker='o', s=10, alpha=0.7)
+    # ax2.set_xlabel('Pressure')
+    ax2.set_ylabel('Temperature')
+    ax2.set_zlabel('Efficiency')
+    ax2.set_xticks([])
+    # ax2.set_title('View Along Temperature Axis')
+    ax2.view_init(elev=0, azim=0)  # Aligned to the Pressure axis
+
+    # 3D scatter plot with view aligned to the Temperature axis
+    ax3 = fig.add_subplot(223, projection='3d')
+    sc3 = ax3.scatter(x, y, z, c=c, cmap='turbo', marker='o', s=10, alpha=0.7)
+    ax3.set_xlabel('Pressure')
+    # ax3.set_ylabel('Temperature')
+    ax3.set_zlabel('Efficiency')
+    ax3.set_yticks([])
+    # ax3.set_title('View Along Pressure Axis')
+    ax3.view_init(elev=0, azim=-90)  # Aligned to the Temperature axis
+
+    # 2D scatter plot (top-down view of Pressure vs Temperature)
+    ax4 = fig.add_subplot(224, projection='3d')
+    sc4 = ax4.scatter(x, y, z, c=c, cmap='turbo', marker='o', s=10, alpha=0.7)
+    ax4.set_xlabel('Pressure')
+    ax4.set_ylabel('Temperature')
+    # ax4.set_zlabel('Efficiency')
+    # Do not put the zticks
+    ax4.set_zticks([])
+    ax4.view_init(elev=90, azim=-90)
+    # ax4.set_title('Top-Down View (Pressure vs Temperature)')
+    # fig.colorbar(sc4, ax=ax4, label='Efficiency')
+
+    # Colorbar for efficiency values across 3D plots
+    # fig.colorbar(sc1, ax=[ax1, ax2, ax3, ax4], shrink=0.6, label='Efficiency')
+    
+    # plt.suptitle('Efficiency vs Pressure and Temperature')
+    
+    ax1.set_xlabel('Pressure', labelpad=10)
+    ax1.set_ylabel('Temperature', labelpad=10)
+    ax1.set_zlabel('Efficiency', labelpad=10)
+
+    ax2.set_ylabel('Temperature', labelpad=10)
+    ax2.set_zlabel('Efficiency', labelpad=10)
+
+    ax3.set_xlabel('Pressure', labelpad=10)
+    ax3.set_zlabel('Efficiency', labelpad=10)
+
+    ax4.set_xlabel('Pressure', labelpad=10)
+    ax4.set_ylabel('Temperature', labelpad=10)
+
+    plt.tight_layout()
+    
+    # Save or show the plot
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + "_3d.png"
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+
+    plt.close()
+
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.linear_model import LinearRegression
+
+if create_plots:
+    # Filter data based on hv_mean range
+    filtered_df = data_df[(data_df['hv_mean'] >= 5.415) & (data_df['hv_mean'] <= 5.425)]
+    
+    filtered_df = filtered_df.dropna(subset=['eff_global', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext'])
+    
+    # Extract relevant columns
+    x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
+    y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
+    z = filtered_df['eff_global'].values
+    
+    # Fit a plane using linear regression
+    X = np.hstack((x, y))
+    model = LinearRegression()
+    model.fit(X, z)
+    
+    # Parameters of the fitted plane
+    a, b = model.coef_
+    c = model.intercept_
+    formula = f"Eff = {a:.2g} * P + {b:.2g} * T + {c:.2g}"
+    print(f"Fitted plane: {formula}")
+    
+    # Predicted plane
+    z_pred = model.predict(X)
+    residuals = z - z_pred
+    
+    # Create meshgrid for visualization
+    x_range = np.linspace(x.min(), x.max(), 30)
+    y_range = np.linspace(y.min(), y.max(), 30)
+    X_mesh, Y_mesh = np.meshgrid(x_range, y_range)
+    Z_mesh = model.predict(np.c_[X_mesh.ravel(), Y_mesh.ravel()]).reshape(X_mesh.shape)
+    
+    # Create a figure with four subplots (2x2 layout)
+    fig = plt.figure(figsize=(14, 12))
+    
+    # 3D scatter plot with fitted plane (Isometric view)
+    ax1 = fig.add_subplot(221, projection='3d')
+    ax1.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
+    ax1.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
+    ax1.set_xlabel('Pressure', labelpad=10)
+    ax1.set_ylabel('Temperature', labelpad=10)
+    ax1.set_zlabel('Efficiency', labelpad=10)
+    ax1.view_init(elev=30, azim=-60)
+
+    # 3D scatter plot (View along Pressure axis)
+    ax2 = fig.add_subplot(222, projection='3d')
+    ax2.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
+    ax2.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
+    ax2.set_ylabel('Temperature', labelpad=10)
+    ax2.set_zlabel('Efficiency', labelpad=10)
+    ax2.set_xticks([])
+    ax2.view_init(elev=0, azim=0)
+
+    # 3D scatter plot (View along Temperature axis)
+    ax3 = fig.add_subplot(223, projection='3d')
+    ax3.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
+    ax3.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
+    ax3.set_xlabel('Pressure', labelpad=10)
+    ax3.set_zlabel('Efficiency', labelpad=10)
+    ax3.set_yticks([])
+    ax3.view_init(elev=0, azim=-90)
+
+    # 3D scatter plot (Top-down view)
+    ax4 = fig.add_subplot(224, projection='3d')
+    ax4.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
+    ax4.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
+    ax4.set_xlabel('Pressure', labelpad=10)
+    ax4.set_ylabel('Temperature', labelpad=10)
+    ax4.set_zticks([])
+    ax4.view_init(elev=90, azim=-90)
+    
+    plt.suptitle(f'Efficiency vs Pressure and Temperature with Fitted Plane\n{formula}')
+    
+    plt.tight_layout()
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        plt.savefig(figure_path + "_3d_fit.png", format='png', dpi=300)
+    plt.close()
+    
+    # Create another figure to show residuals
+    fig_res = plt.figure(figsize=(14, 12))
+    
+    # Residuals plots
+    ax1_res = fig_res.add_subplot(221, projection='3d')
+    sc1_res = ax1_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
+    ax1_res.set_xlabel('Pressure', labelpad=10)
+    ax1_res.set_ylabel('Temperature', labelpad=10)
+    ax1_res.set_zlabel('Residuals', labelpad=10)
+    ax1_res.view_init(elev=30, azim=-60)
+    # fig_res.colorbar(sc1_res, ax=ax1_res, label='Residuals')
+    
+    ax2_res = fig_res.add_subplot(222, projection='3d')
+    ax2_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
+    ax2_res.set_ylabel('Temperature', labelpad=10)
+    ax2_res.set_zlabel('Residuals', labelpad=10)
+    ax2_res.set_xticks([])
+    ax2_res.view_init(elev=0, azim=0)
+    
+    ax3_res = fig_res.add_subplot(223, projection='3d')
+    ax3_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
+    ax3_res.set_xlabel('Pressure', labelpad=10)
+    ax3_res.set_zlabel('Residuals', labelpad=10)
+    ax3_res.set_yticks([])
+    ax3_res.view_init(elev=0, azim=-90)
+    
+    ax4_res = fig_res.add_subplot(224, projection='3d')
+    ax4_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
+    ax4_res.set_xlabel('Pressure', labelpad=10)
+    ax4_res.set_ylabel('Temperature', labelpad=10)
+    ax4_res.set_zticks([])
+    ax4_res.view_init(elev=90, azim=-90)
+    
+    plt.tight_layout()
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        plt.savefig(figure_path + "_residuals.png", format='png', dpi=300)
+    plt.close()
+
+
 
 #%%
 
