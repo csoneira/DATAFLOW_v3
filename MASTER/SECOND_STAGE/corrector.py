@@ -639,7 +639,7 @@ if create_plots:
     ax2.plot(data_df['Time'], data_df['eff_fit_corr_rate'], label='Eff. (from fit) corr. rate', color='C6')
     ax2.set_xlabel('Time')
     ax2.set_ylabel('Rate')
-    ax2.set_ylim(13, 20)
+    # ax2.set_ylim(13, 20)
     ax2.set_title('Rates over Time')
     ax2.legend(loc='upper left')
 
