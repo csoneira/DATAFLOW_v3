@@ -7,12 +7,9 @@ fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
 # newest_file = False
 # oldest_file = False
-last_file_test = True
+last_file_test = False
 
 """
-A row is never removed, only turned to 0. That is how we can always take count
-on false positives, raw rate, etc.
-
 Created on Thu Jun 20 09:15:33 2024
 
 @author: csoneira@ucm.es
