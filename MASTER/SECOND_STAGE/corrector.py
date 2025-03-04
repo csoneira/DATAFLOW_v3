@@ -50,7 +50,7 @@ systematic_unc = [0, 0, 0, 0] # From simulation
 # acceptance_factor = [0.7, 1, 1, 0.8] # From simulation
 
 systematic_unc_corr_to_real_rate = 0
-z_score_th_pres_corr = 1
+z_score_th_pres_corr = 3.5
 
 # -----------------------------------------------------------------------------
 
@@ -84,7 +84,7 @@ save_plots = True
 create_plots = True
 show_errorbar = False
 
-recalculate_pressure_coeff = False
+recalculate_pressure_coeff = True
 
 res_win_min = 10 # 180 Resampling window minutes
 HMF_ker = 1 # It must be odd. Horizontal Median Filter
@@ -301,16 +301,22 @@ data_df['count_regions_uncertainty'] = np.sqrt(data_df['count_regions'])
 data_df['count_types'] = data_df[detection_types].sum(axis=1)
 data_df['count_types_uncertainty'] = np.sqrt(data_df['count_types'])
 
+# print(data_df.columns.to_list())
+# a = 1/0
+
 # ------------------------------------------------------------------------------------------
-data_df['count'] = data_df['events'] # Until I have a better definition of the count
+# data_df['count'] = data_df['events'] # Until I have a better definition of the count
+
+data_df['count'] = data_df['type_1234'] # Until I have a better definition of the count
+
 data_df['count_uncertainty'] = np.sqrt(data_df['count'])
 # ------------------------------------------------------------------------------------------
 
 data_df['rate'] = data_df['count'] / ( res_win_min * 60 )  # Counts per second (Hz)
-data_df['rate_uncertainty'] = np.sqrt(data_df['count']) / ( res_win_min * 60 )
+data_df['unc_rate'] = np.sqrt(data_df['count']) / ( res_win_min * 60 )
 
 # data_df['rate'] = data_df['count'] / ( data_df['number_of_rows'] * 60 )  # Counts per second (Hz)
-# data_df['rate_uncertainty'] = np.sqrt(data_df['rate'])
+# data_df['unc_rate'] = np.sqrt(data_df['rate'])
 
 # Other calculations
 data_df['hv_mean'] = ( data_df['hv_HVneg'] + data_df['hv_HVpos'] ) / 2
@@ -489,6 +495,9 @@ data_df['unc_final_eff_4'] = data_df['unc_eff_4'] / data_df['acc_4']
 # data_df['eff_global'] = data_df[['eff_1', 'eff_2', 'eff_3', 'eff_4']].mean(axis=1)
 data_df['eff_global'] = data_df[['final_eff_2', 'final_eff_3']].mean(axis=1)
 
+# Eff = -0.00077 * P + 0.00053 * T + 1.7.
+data_df['eff_fit'] = -0.0007670 * data_df['sensors_ext_Pressure_ext'] + 0.0005329 * data_df['sensors_ext_Temperature_ext'] + 1.671
+
 # Calculate the uncertainty for the average efficiency
 data_df['unc_eff_global'] = np.sqrt(
     (data_df['unc_eff_1'] ** 2 +
@@ -496,6 +505,9 @@ data_df['unc_eff_global'] = np.sqrt(
      data_df['unc_eff_3'] ** 2 +
      data_df['unc_eff_4'] ** 2) / 4
 )
+
+data_df['unc_eff_fit'] = data_df['unc_eff_global']
+
 
 # -----------------------------------------------------------------------------
 # Correct by the efficiency, calculate uncertainty of the corrected rate
@@ -513,13 +525,25 @@ print("Rate above ---------------------------------------")
 data_df['eff_corr_rate'] = np.where(
     (data_df['rate'] == 0) | (data_df['eff_global'] == 0),  # Condition: rate or eff_global is zero
     np.nan,  # Assign NaN if condition is met
-    data_df['rate'] / data_df['eff_global']  # Otherwise, compute normally
+    data_df['rate'] / (data_df['eff_global'])**4  # Otherwise, compute normally
 )
 
 # Calculate the uncertainty in the corrected rate
 data_df['unc_eff_corr_rate'] = data_df['eff_corr_rate'] * np.sqrt(
-    (data_df['rate_uncertainty'] / data_df['rate'])**2 +
+    (data_df['unc_rate'] / data_df['rate'])**2 +
     (data_df['unc_eff_global'] / data_df['eff_global'])**2
+)
+
+data_df['eff_fit_corr_rate'] = np.where(
+    (data_df['rate'] == 0) | (data_df['eff_fit'] == 0),  # Condition: rate or eff_global is zero
+    np.nan,  # Assign NaN if condition is met
+    data_df['rate'] / (data_df['eff_fit'])**4  # Otherwise, compute normally
+)
+
+# Calculate the uncertainty in the corrected rate
+data_df['unc_eff_fit_corr_rate'] = data_df['eff_fit_corr_rate'] * np.sqrt(
+    (data_df['unc_rate'] / data_df['rate'])**2 +
+    (data_df['unc_eff_fit'] / data_df['eff_fit'])**2
 )
 
 print('Efficiency correction performed.')
@@ -535,6 +559,7 @@ if create_plots:
     # ax1.plot(data_df['Time'], data_df['final_eff_3'], label='Efficiency 3', color='C2')
     # ax1.plot(data_df['Time'], data_df['final_eff_4'], label='Efficiency 4', color='C3')
     ax1.plot(data_df['Time'], data_df['eff_global'], label='Efficiency global', color='C4')
+    ax1.plot(data_df['Time'], data_df['eff_fit'], label='Efficiency from the fit', color='C5')
     
     ax1.set_xlabel('Time')
     ax1.set_ylabel('Efficiency')
@@ -543,23 +568,23 @@ if create_plots:
 
     # Create a second y-axis for pressure
     ax2 = ax1.twinx()
-    ax2.plot(data_df['Time'], data_df['sensors_ext_Pressure_ext'], label='Pressure', color='C5')
-    ax2.set_ylabel('Pressure')
+    # ax2.plot(data_df['Time'], data_df['sensors_ext_Pressure_ext'], label='Pressure', color='C6')
+    # ax2.set_ylabel('Pressure')
     
     # Create a third y-axis for temperature (offset to avoid overlap)
     ax3 = ax1.twinx()
-    ax3.spines['right'].set_position(('outward', 60))  # Offset temperature axis
-    ax3.plot(data_df['Time'], data_df['sensors_ext_Temperature_ext'], label='Temperature', color='C5')
-    # ax3.plot(data_df['Time'], data_df['temp_ground'], label='Temperature', color='C5')
-    ax3.set_ylabel('Temperature')
     # ax3.spines['right'].set_position(('outward', 60))  # Offset temperature axis
-    # ax3.plot(data_df['Time'], data_df['rate'], label='OG rate', color='C6')
-    # ax3.plot(data_df['Time'], data_df['eff_corr_rate'], label='Eff. corr. rate', color='C7')
+    # ax3.plot(data_df['Time'], data_df['sensors_ext_Temperature_ext'], label='Temperature', color='C7')
+    # ax3.plot(data_df['Time'], data_df['temp_ground'], label='Temperature', color='C5')
+    # ax3.set_ylabel('Temperature')
+    # ax3.spines['right'].set_position(('outward', 60))  # Offset temperature axis
+    ax3.plot(data_df['Time'], data_df['rate'], label='OG rate', color='C6')
+    ax3.plot(data_df['Time'], data_df['eff_corr_rate'], label='Eff. corr. rate', color='C7')
     # ax3.set_ylabel('Rate')
     
     ax4 = ax1.twinx()
     ax4.spines['right'].set_position(('outward', 120))  # Offset temperature axis
-    ax4.plot(data_df['Time'], data_df['hv_mean'], label='HV', color='C8')
+    # ax4.plot(data_df['Time'], data_df['hv_mean'], label='HV', color='C8')
     ax4.set_ylabel('HV')
     ax4.set_ylim(5, 6)
 
@@ -577,6 +602,54 @@ if create_plots:
         plt.show()
     elif save_plots:
         new_figure_path = figure_path + "_effs.png"
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+
+    plt.close()
+
+
+# Assuming data_df is already loaded and contains the necessary columns
+
+if create_plots:
+    print("Creating efficiency and rate plots...")
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
+
+    # Plot efficiencies
+    ax1.plot(data_df['Time'], data_df['eff_global'], label='Efficiency global', color='C1')
+    ax1.plot(data_df['Time'], data_df['eff_fit'], label='Efficiency from the fit', color='C2')
+    ax1.set_ylabel('Efficiency')
+    ax1.set_title('Efficiencies over Time')
+    ax1.legend(loc='upper left')
+
+    # Plot rates
+    # HMF_ker = 1
+    # # Apply an horizontal median filter to the rate
+    # data_df['rate'] = medfilt(data_df['rate'], kernel_size=HMF_ker)
+    # data_df['eff_corr_rate'] = medfilt(data_df['eff_corr_rate'], kernel_size=HMF_ker)
+    # data_df['eff_fit_corr_rate'] = medfilt(data_df['eff_fit_corr_rate'], kernel_size=HMF_ker)
+    
+    # Accumulate rates in a 10-minute window
+    # data_df['rate'] = data_df['rate'].rolling(window=10, center=True, min_periods=1).mean()
+    # data_df['eff_corr_rate'] = data_df['eff_corr_rate'].rolling(window=10, center=True, min_periods=1).mean()
+    # data_df['eff_fit_corr_rate'] = data_df['eff_fit_corr_rate'].rolling(window=10, center=True, min_periods=1).mean()
+    
+    ax2.plot(data_df['Time'], data_df['rate'], label='OG rate', color='C3')
+    ax2.plot(data_df['Time'], data_df['eff_corr_rate'], label='Eff. (from calculation) corr. rate', color='C4')
+    ax2.plot(data_df['Time'], data_df['eff_fit_corr_rate'], label='Eff. (from fit) corr. rate', color='C6')
+    ax2.set_xlabel('Time')
+    ax2.set_ylabel('Rate')
+    ax2.set_ylim(13, 20)
+    ax2.set_title('Rates over Time')
+    ax2.legend(loc='upper left')
+
+    plt.tight_layout()
+
+    # Save or show the plot
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + "_effs_rates.png"
         print(f"Saving figure to {new_figure_path}")
         plt.savefig(new_figure_path, format='png', dpi=300)
 
@@ -698,7 +771,7 @@ if create_plots:
     # Parameters of the fitted plane
     a, b = model.coef_
     c = model.intercept_
-    formula = f"Eff = {a:.2g} * P + {b:.2g} * T + {c:.2g}"
+    formula = f"Eff = {a:.4g} * P + {b:.4g} * T + {c:.4g}"
     print(f"Fitted plane: {formula}")
     
     # Predicted plane
@@ -914,7 +987,9 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
         eta_P_uncertainty = np.nan  # Handle case where there are no valid data points
     return eta_P, eta_P_uncertainty
 
-region = 'eff_corr_rate'
+# region = 'eff_corr_rate'
+region = 'eff_fit_corr_rate'
+# region = 'rate'
 data_df['pressure_lab'] = data_df['sensors_ext_Pressure_ext']
 
 # Calculate pressure differences and their uncertainties
@@ -932,9 +1007,26 @@ else:
 delta_P = P - P0
 unc_delta_P = np.sqrt(unc_P**2 + unc_P0**2)  # Combined uncertainty (propagation of errors)
 
+def quantile_mean(data_df, region, lower_quantile=0.1, upper_quantile=0.9):
+    """
+    Compute the mean of the data within the specified quantile range.
+    
+    :param data_df: DataFrame containing the data.
+    :param region: Column name to compute the small quantile mean for.
+    :param lower_quantile: Lower quantile threshold (default: 10%).
+    :param upper_quantile: Upper quantile threshold (default: 90%).
+    :return: Mean of the values within the quantile range.
+    """
+    values = data_df[region].dropna()  # Remove NaNs
+    q_low, q_high = np.quantile(values, [lower_quantile, upper_quantile])
+    filtered_values = values[(values >= q_low) & (values <= q_high)]
+    
+    return filtered_values.mean()
+
 I = data_df[region]
 unc_I = data_df[f'unc_{region}']
-I0 = data_df[region].mean()
+# I0 = data_df[region].mean()
+I0 = quantile_mean(data_df, region)
 unc_I0 = unc_I / np.sqrt( len(I) )  # Uncertainty of the mean
 I_over_I0 = I / I0
 unc_I_over_I0 = I_over_I0 * np.sqrt( (unc_I / I)**2 + (unc_I0 / I0)**2 )
@@ -953,10 +1045,10 @@ if recalculate_pressure_coeff:
     
 if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
     if recalculate_pressure_coeff == False:
-        print("Recalculating because of the options.")
+        print("Not recalculating because of the options.")
     
     if eta_P == np.nan:
-        print("Recalculating because the fit failed.")
+        print("Not recalculating because the fit failed.")
     
     log_I_over_I0 = np.log(I_over_I0)
     unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0
@@ -1184,7 +1276,7 @@ data_df = data_df.replace(0, np.nan)
 print("------------------------------------------------------------------------------------------")
 print("WATCH OUT THIS LAST FILTER BECAUSE IT MAY GIVE PROBLEMS IN THE FUTURE!!!!!!!!!!!!!!!!!!!!!")
 print("------------------------------------------------------------------------------------------")
-data_df.loc[(data_df['totally_corrected_rate'] < 16) | (data_df['totally_corrected_rate'] > 18.4), 'totally_corrected_rate'] = np.nan
+data_df.loc[(data_df['totally_corrected_rate'] < 10) | (data_df['totally_corrected_rate'] > 20), 'totally_corrected_rate'] = np.nan
 # data_df.loc[(data_df['totally_corrected_rate'] < 4.85) | (data_df['totally_corrected_rate'] > 5.3), 'totally_corrected_rate'] = np.nan
 
 data_df.to_csv(save_filename, index=False)
