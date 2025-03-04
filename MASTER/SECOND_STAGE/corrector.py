@@ -16,7 +16,7 @@ matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 from scipy.signal import medfilt
 import os
-# from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression
 from datetime import datetime, timedelta
 import sys
 
@@ -37,8 +37,38 @@ if len(sys.argv) < 2:
 station = sys.argv[1]
 print(f"Station: {station}")
 
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Header ----------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
-# ALSO THE SIMULATED VALUES FOR ACCEPTANCE, EFFICIENCY FACTORS AND UNCERTAINTIES
+# This works fine for total counts:
+# resampling_window = '10T'  # '10T' # '5T' stands for 5 minutes. Adjust based on your needs.
+# HMF_ker = 5 # It must be odd.
+# MAF_ker = 1
+# skip_in_limits = 1
+
+remove_outliers = True
+
+# Plotting configuration
+show_plots = False
+save_plots = True
+create_plots = True
+show_errorbar = False
+
+recalculate_pressure_coeff = True
+
+res_win_min = 30 # 180 Resampling window minutes
+# HMF_ker = 1 # It must be odd. Horizontal Median Filter
+# MAF_ker = 1 # Moving Average Filter
+
+outlier_filter = 3
+
+high_order_correction = True
+date_selection = True  # Set to True if you want to filter by date
+
+skip_in_limits = 1
 
 # This should come from an input file
 eta_P = -0.162 # pressure_coeff_input
@@ -64,38 +94,7 @@ grafana_save_filename = f"{base_folder}/data_for_grafana_{station}.csv"
 
 figure_path = f"{base_folder}/correction.png"
 
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Header ----------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
 
-# This works fine for total counts:
-# resampling_window = '10T'  # '10T' # '5T' stands for 5 minutes. Adjust based on your needs.
-# HMF_ker = 5 # It must be odd.
-# MAF_ker = 1
-# skip_in_limits = 1
-
-remove_outliers = True
-
-# Plotting configuration
-show_plots = False
-save_plots = True
-create_plots = True
-show_errorbar = False
-
-recalculate_pressure_coeff = True
-
-res_win_min = 5 # 180 Resampling window minutes
-HMF_ker = 1 # It must be odd. Horizontal Median Filter
-MAF_ker = 1 # Moving Average Filter
-
-outlier_filter = 1
-
-high_order_correction = False
-date_selection = True  # Set to True if you want to filter by date
-
-skip_in_limits = 1
 
 # -----------------------------------------------------------------------------
 # To not touch unless necesary ------------------------------------------------
@@ -117,147 +116,6 @@ charge_types = ['count_in_1_sum', 'avalanche_1_sum', 'streamer_1_sum',
 # Function definition ---------------------------------------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
-
-def detection_prob(pattern, e1, e2, e3, e4, subset):
-    """
-    Return the probability that a muon from the 'subset' (one of the 6 physical subsets)
-    ends up being detected in the given 'pattern' of fired planes.
-
-    subset should be one of: '12', '23', '34', '123', '234', '1234'
-    pattern can be any measured combo: '12','13','14','23','24','34',
-                                      '123','124','134','234','1234'
-
-    e1, e2, e3, e4 are the detection efficiencies of planes 1..4 respectively.
-
-    We assume strictly layered geometry:
-      - Any track from plane i to plane j with i<j must physically cross all planes in between.
-      - So "13" detection means physically it's either subset '123' or '1234' (with plane2 failing).
-      - "14" detection means physically only '1234' is possible (with planes2,3 failing).
-      - etc.
-    """
-
-    # ---------- 4-plane pattern ----------
-    if pattern == '1234':
-        if subset == '1234':
-            return e1 * e2 * e3 * e4
-        else:
-            return 0.0
-
-    # ---------- 3-plane patterns ----------
-    if pattern == '123':
-        # can come from subset '123' or '1234' (plane4 fails if physically crossing it)
-        if subset == '123':
-            return e1 * e2 * e3
-        elif subset == '1234':
-            return e1 * e2 * e3 * (1 - e4)
-        else:
-            return 0.0
-
-    if pattern == '234':
-        # can come from '234' or '1234' (plane1 fails)
-        if subset == '234':
-            return e2 * e3 * e4
-        elif subset == '1234':
-            return (1 - e1) * e2 * e3 * e4
-        else:
-            return 0.0
-
-    if pattern == '124':
-        # physically includes planes 1,2,4 -> only subset '1234' can do that,
-        # plane3 must fail detection
-        if subset == '1234':
-            return e1 * e2 * e4 * (1 - e3)
-        else:
-            return 0.0
-
-    if pattern == '134':
-        # physically includes 1,2,3,4 -> so subset '1234' only,
-        # plane2 fails
-        if subset == '1234':
-            return e1 * e3 * e4 * (1 - e2)
-        else:
-            return 0.0
-
-    # ---------- 2-plane patterns ----------
-
-    # 12
-    if pattern == '12':
-        # subsets that physically include planes 1 & 2: '12','123','1234'
-        if subset == '12':
-            return e1 * e2
-        elif subset == '123':
-            return e1 * e2 * (1 - e3)
-        elif subset == '1234':
-            return e1 * e2 * (1 - e3) * (1 - e4)
-        else:
-            return 0.0
-
-    # 23
-    if pattern == '23':
-        # can come from '23','123','234','1234'
-        #   '23': e2*e3
-        #   '123': (1-e1)*e2*e3
-        #   '234': e2*e3*(1-e4)
-        #   '1234': (1-e1)*e2*e3*(1-e4)
-        if subset == '23':
-            return e2 * e3
-        elif subset == '123':
-            return (1 - e1) * e2 * e3
-        elif subset == '234':
-            return e2 * e3 * (1 - e4)
-        elif subset == '1234':
-            return (1 - e1) * e2 * e3 * (1 - e4)
-        else:
-            return 0.0
-
-    # 34
-    if pattern == '34':
-        # from '34','234','1234'
-        #   '34': e3*e4
-        #   '234': (1-e2)*e3*e4
-        #   '1234': (1-e1)*(1-e2)*e3*e4
-        if subset == '34':
-            return e3 * e4
-        elif subset == '234':
-            return (1 - e2) * e3 * e4
-        elif subset == '1234':
-            return (1 - e1) * (1 - e2) * e3 * e4
-        else:
-            return 0.0
-
-    # 13
-    if pattern == '13':
-        # physically, crossing planes 1 & 3 means also crossing plane2
-        # so subsets '123' or '1234' with plane2 failing. plane4 fails if in '1234'
-        if subset == '123':
-            return e1 * (1 - e2) * e3
-        elif subset == '1234':
-            return e1 * (1 - e2) * e3 * (1 - e4)
-        else:
-            return 0.0
-
-    # 14
-    if pattern == '14':
-        # physically must cross 2,3 => only '1234', with plane2 & 3 failing
-        if subset == '1234':
-            return e1 * e4 * (1 - e2) * (1 - e3)
-        else:
-            return 0.0
-
-    # 24
-    if pattern == '24':
-        # physically must cross plane3 if it crosses 2->4 => subsets '234' or '1234'
-        # '234': e2,e4 detect, plane3 fails => e2*(1-e3)*e4
-        # '1234': plane1 fails, plane2 &4 ok, plane3 fails => (1-e1)*e2*(1-e3)*e4
-        if subset == '234':
-            return e2 * e4 * (1 - e3)
-        elif subset == '1234':
-            return (1 - e1) * e2 * (1 - e3) * e4
-        else:
-            return 0.0
-
-    # If user measured something else, default 0:
-    return 0.0
 
 
 
@@ -284,19 +142,14 @@ data_df = data_df.replace(0, np.nan)
 print(filepath)
 print('File loaded successfully.')
 
-
 # Define input file path -----------------------------------------------------
 input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
-    # It is a csv
     input_file = pd.read_csv(input_file_config_path, skiprows=1, decimal = ",")
     
     print("Input configuration file found.")
     exists_input_file = True
-    
-    # Print the head
-    # print(input_file.head())
     
 else:
     exists_input_file = False
@@ -343,25 +196,11 @@ else:
 # Define the end date as today
 end_date = datetime.now()
 
-# Convert 'Time' column to datetime
-# data_df['Time'] = pd.to_datetime(data_df['Time'].str.strip('"'), format='%Y-%m-%d %H:%M:%S')
-
-# Filter data based on dates if start_date is set
-
-# start_date = pd.to_datetime("2024-03-24")  # Use a string in 'YYYY-MM-DD' format
-# end_date = pd.to_datetime("2024-03-25 18")
 if date_selection:
 # if date_selection and start_date is not None:
-    start_date = pd.to_datetime("2025-02-02")  # Use a string in 'YYYY-MM-DD' format
-    
-    # start_date = pd.to_datetime("2025-02-17 12:00:00")  # Use a string in 'YYYY-MM-DD' format
+    # start_date = pd.to_datetime("2025-02-02")  # Use a string in 'YYYY-MM-DD' format
+    start_date = pd.to_datetime("2025-02-17 12:00:00")  # Use a string in 'YYYY-MM-DD' format
     end_date = pd.to_datetime("2025-03-04 11:00")
-    
-    # start_date = pd.to_datetime("2025-02-25 17:30:00")  # Use a string in 'YYYY-MM-DD' format
-    # end_date = pd.to_datetime("2025-02-26 00:10:00")
-    
-    # start_date = pd.to_datetime("2024-03-23 00:00:00")  # Use a string in 'YYYY-MM-DD' format
-    # end_date = pd.to_datetime("2024-04-01 00:00:00")
     
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
@@ -421,8 +260,6 @@ if remove_outliers:
 # -----------------------------------------------------------------------------
 
 data_df.set_index('Time', inplace=True)
-# Put the times all with seconds in 00, so they are truncated to the minute
-# data_df.index = data_df.index.floor('1min')
 data_df["number_of_rows"] = 1
 columns_to_sum = angular_regions + detection_types + charge_types + ["number_of_rows"] + ["events"]
 columns_to_mean = [col for col in data_df.columns if col not in columns_to_sum]
@@ -445,22 +282,13 @@ data_df['count_regions_uncertainty'] = np.sqrt(data_df['count_regions'])
 data_df['count_types'] = data_df[detection_types].sum(axis=1)
 data_df['count_types_uncertainty'] = np.sqrt(data_df['count_types'])
 
-# print(data_df.columns.to_list())
-# a = 1/0
-
-# data_df['type_14'] = data_df['type_13']  # purely an assumption!
-# data_df['type_24'] = data_df['type_23']  # purely an assumption!
-
 # ------------------------------------------------------------------------------------------
 data_df['count'] = data_df['events'] # Until I have a better definition of the count
 data_df['count_uncertainty'] = np.sqrt(data_df['count'])
 # ------------------------------------------------------------------------------------------
 
-data_df['rate'] = data_df['count'] / ( res_win_min * 60 )  # Counts per second (Hz)
-data_df['unc_rate'] = np.sqrt(data_df['count']) / ( res_win_min * 60 )
-
-# data_df['rate'] = data_df['count'] / ( data_df['number_of_rows'] * 60 )  # Counts per second (Hz)
-# data_df['unc_rate'] = np.sqrt(data_df['rate'])
+data_df['rate'] = data_df['count'] / ( data_df["number_of_rows"] * 60 )  # Counts per second (Hz)
+data_df['unc_rate'] = np.sqrt(data_df['count']) / ( data_df["number_of_rows"] * 60 )
 
 # Other calculations
 data_df['hv_mean'] = ( data_df['hv_HVneg'] + data_df['hv_HVpos'] ) / 2
@@ -471,10 +299,6 @@ data_df['hv_mean'] = ( data_df['hv_HVneg'] + data_df['hv_HVpos'] ) / 2
 if exists_input_file:
     start_time = min_time_original
     end_time = max_time_original
-
-    # Print types of start and end dates
-    # print(f"Start date type: {type(start_time)}") # Start date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
-    # print(f"End date type: {type(end_time)}") # End date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
 
     input_file["start"] = pd.to_datetime(input_file["start"])
     input_file["end"] = pd.to_datetime(input_file["end"])
@@ -489,9 +313,6 @@ if exists_input_file:
         "acc_3": [],
         "acc_4": []
     }
-
-    # Print df columns
-    # print(data_df.columns)
 
     # Assign values based on corresponding time range
     for timestamp in data_df["Time"]:
@@ -524,10 +345,6 @@ if exists_input_file:
 
     # Print the new columns
     data_df = df_extended
-
-    # print(data_df.columns)
-    # print(data_df.head())
-    # print(data_df.tail())
     
 else:
     print("No input file found. Default values set.")
@@ -535,6 +352,7 @@ else:
     data_df["acc_2"] = 1
     data_df["acc_3"] = 1
     data_df["acc_4"] = 1
+    
 # ---------------------------------------------------------------------------------------------------------------------
 
 # Turn all the acc_* into numeric columns
@@ -560,7 +378,7 @@ def calculate_efficiency_uncertainty(N_measured, N_passed):
     if N_passed > 0:
         return np.sqrt((N_measured / N_passed**2) + (N_measured**2 / N_passed**3))
     else:
-        return 0
+        return np.nan
 
 # Create explicit columns for detected and passed
 data_df['detected_1'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134']].sum(axis=1, skipna=True)
@@ -573,31 +391,36 @@ data_df['passed_2'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 
 data_df['passed_3'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234']].sum(axis=1, skipna=True)
 data_df['passed_4'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234']].sum(axis=1, skipna=True)
 
+# Interpolate all the NaNs
+# data_df = data_df.interpolate(method='linear', limit_direction='both')
+
 print('Detected and passed calculated.')
 
 # Set columns to 0 if detected or passed values are NaN or 0
 def handle_zero_or_nan(row, detected_col, passed_col):
     if row[detected_col] == 0 or row[passed_col] == 0:
-        return 0
+        return np.nan
     return row[detected_col] / row[passed_col]
 
 def handle_uncertainty(row, detected_col, passed_col):
     if row[detected_col] == 0 or row[passed_col] == 0:
-        return 0
+        return np.nan
     return calculate_efficiency_uncertainty(row[detected_col], row[passed_col])
-
 
 print("Calculating efficiencies...")
 
 # Calculate efficiencies and uncertainties explicitly
 from scipy.ndimage import gaussian_filter1d
 
+# Replace all zeroes by NaNs and do not interpolate
+data_df = data_df.replace(0, np.nan)
+
 rolling_effs = False
 if rolling_effs:
     cols_to_interpolate = ['detected_1', 'detected_2', 'detected_3', 'detected_4', 'passed_1', 'passed_2', 'passed_3', 'passed_4']
     data_df[cols_to_interpolate] = data_df[cols_to_interpolate].replace(0, np.nan).interpolate(method='linear')
     
-    sum_window, med_window = 30, 1
+    sum_window, med_window = 5, 1
     rolling_sum, rolling_median = True, True
     
     if rolling_median:
@@ -639,20 +462,6 @@ data_df['unc_final_eff_4'] = data_df['unc_eff_4'] / data_df['acc_4']
 # data_df['eff_global'] = data_df[['eff_1', 'eff_2', 'eff_3', 'eff_4']].mean(axis=1)
 data_df['eff_global'] = data_df[['final_eff_2', 'final_eff_3']].mean(axis=1)
 
-# Ancillary -----------------------------------------------------------------------------
-# data_df['final_eff_1'] = data_df['eff_1']
-# data_df['final_eff_2'] = data_df['eff_2']
-# data_df['final_eff_3'] = data_df['eff_3']
-# data_df['final_eff_4'] = data_df['eff_4']
-# ---------------------------------------------------------------------------------------
-
-# Eff = -0.00077 * P + 0.00053 * T + 1.7.
-data_df['eff_fit'] = -0.0007670 * data_df['sensors_ext_Pressure_ext'] + 0.0005329 * data_df['sensors_ext_Temperature_ext'] + 1.671
-
-# Eff = -0.004376 * P + 0.007981 * T + 4.618
-data_df['eff_new_fit'] = -0.004376 * data_df['sensors_ext_Pressure_ext'] + 0.007981 * data_df['sensors_ext_Temperature_ext'] + 4.618
-
-
 # Calculate the uncertainty for the average efficiency
 data_df['unc_eff_global'] = np.sqrt(
     (data_df['unc_eff_1'] ** 2 +
@@ -661,392 +470,328 @@ data_df['unc_eff_global'] = np.sqrt(
      data_df['unc_eff_4'] ** 2) / 4
 )
 
-data_df['unc_eff_fit'] = 1
-data_df['unc_new_eff_fit'] = 1
 
+# -------------------------------------------------------------------------------------------------------------------------
+# Calculate the systematic for the efficiencies ---------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------------------
+
+# 1
+if create_plots:
+    filtered_df = data_df.dropna(subset=['final_eff_1', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+    x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
+    y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
+    z = filtered_df['final_eff_1'].values
+    X = np.hstack((x, y))
+    model = LinearRegression()
+    model.fit(X, z)
+    a, b = model.coef_
+    c = model.intercept_
+    formula = f"Eff = {a:.4g} * P + {b:.4g} * T + {c:.4g}"
+    data_df['eff_fit_1'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
+    data_df['unc_eff_fit_1'] = 1
+
+# 2
+if create_plots:
+    filtered_df = data_df.dropna(subset=['final_eff_2', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+    x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
+    y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
+    z = filtered_df['final_eff_2'].values
+    X = np.hstack((x, y))
+    model = LinearRegression()
+    model.fit(X, z)
+    a, b = model.coef_
+    c = model.intercept_
+    formula = f"Eff = {a:.4g} * P + {b:.4g} * T + {c:.4g}"
+    data_df['eff_fit_2'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
+    data_df['unc_eff_fit_2'] = 1
+
+# 3
+if create_plots:
+    filtered_df = data_df.dropna(subset=['final_eff_3', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+    x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
+    y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
+    z = filtered_df['final_eff_3'].values
+    X = np.hstack((x, y))
+    model = LinearRegression()
+    model.fit(X, z)
+    a, b = model.coef_
+    c = model.intercept_
+    formula = f"Eff = {a:.4g} * P + {b:.4g} * T + {c:.4g}"
+    data_df['eff_fit_3'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
+    data_df['unc_eff_fit_3'] = 1
+
+# 4
+if create_plots:
+    filtered_df = data_df.dropna(subset=['final_eff_4', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+    x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
+    y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
+    z = filtered_df['final_eff_4'].values
+    X = np.hstack((x, y))
+    model = LinearRegression()
+    model.fit(X, z)
+    a, b = model.coef_
+    c = model.intercept_
+    formula = f"Eff = {a:.4g} * P + {b:.4g} * T + {c:.4g}"
+    data_df['eff_fit_4'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
+    data_df['unc_eff_fit_4'] = 1
 
 # -----------------------------------------------------------------------------
 # Correct by eff using the equation system ------------------------------------
 # -----------------------------------------------------------------------------
 
+if create_plots:
+    print("Creating efficiency and rate plots...")
+    
+    # Create four subplots in a single column, sharing the same x-axis
+    fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(17, 14), sharex=True)
+    
+    for i in range(1, 5):  # Loop from 1 to 4
+        ax = axes[i-1]  # pick the appropriate subplot
+        
+        # Plot final_eff_i
+        ax.plot(data_df['Time'], data_df[f'final_eff_{i}'], 
+                label=f'Eff. {i}', color=f'C{i}', alpha=0.5)
+        
+        # Plot eff_fit_i
+        ax.plot(data_df['Time'], data_df[f'eff_fit_{i}'], 
+                label=f'Eff. {i} Fit', color=f'C{i}', alpha=1)
+        
+        # Fill between uncertainty bands
+        ax.fill_between(data_df['Time'],
+                        data_df[f'final_eff_{i}'] - data_df[f'unc_final_eff_{i}'],
+                        data_df[f'final_eff_{i}'] + data_df[f'unc_final_eff_{i}'],
+                        color=f'C{i}', alpha=0.2)
+        
+        # Labeling and titles
+        ax.set_ylabel('Efficiency')
+        ax.set_ylim(0.9, 1.0)
+        ax.set_title(f'Efficiency {i} over Time')
+        ax.legend(loc='upper left')
+    
+    # Label the common x-axis at the bottom
+    axes[-1].set_xlabel('Time')
 
-# def build_matrix_and_vector(e1, e2, e3, e4, measured):
-#     """
-#     measured : list of (pattern, R_value) like ('12', R12), ('13', R13), ...
-#     returns: (A, b, subset_list)
-#     """
-#     subset_list = ['12','23','34','123','234','1234']
-#     A_rows = []
-#     b_vals = []
-#     for (pattern, Rval) in measured:
-#         row = []
-#         for sub in subset_list:
-#             p = detection_prob(pattern, e1, e2, e3, e4, sub)
-#             row.append(p)
-#         A_rows.append(row)
-#         b_vals.append(Rval)
-#     A = np.array(A_rows, dtype=float)
-#     b = np.array(b_vals, dtype=float)
-#     return A, b, subset_list
+    plt.tight_layout()
 
+    # Save or show the plot
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + "_start.png"
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
 
-# def solve_for_subsets(row):
-#     # example: gather measured data for this row
-#     measured_patterns = [
-#         ('12',   row['type_12']),
-#         ('13',   row['type_13']),
-#         ('14',   row['type_14']),
-#         ('23',   row['type_23']),
-#         ('24',   row['type_24']),
-#         ('34',   row['type_34']),
-#         ('123',  row['type_123']),
-#         ('124',  row['type_124']),
-#         ('134',  row['type_134']),
-#         ('234',  row['type_234']),
-#         ('1234', row['type_1234']),
-#     ]
-
-#     # plane efficiencies in each row
-#     e1_val, e2_val, e3_val, e4_val = (
-#         row['final_eff_1'], 
-#         row['final_eff_2'], 
-#         row['final_eff_3'], 
-#         row['final_eff_4'],
-#     )
-
-#     # build system
-#     A, b, subs = build_matrix_and_vector(e1_val, e2_val, e3_val, e4_val, measured_patterns)
-
-#     # solve in least-squares sense
-#     x_best, residuals, rank, sv = np.linalg.lstsq(A, b, rcond=None)
-
-#     # pack results
-#     out = {}
-#     for label, val in zip(subs, x_best):
-#         out[f"x_{label}"] = val
-#     out['residual_sum_sq'] = float(residuals[0]) if len(residuals) else 0.0
-#     out['rank'] = rank
-#     return pd.Series(out)
-
-
-# # Then apply over your DataFrame:
-# df_unfolded = data_df.apply(solve_for_subsets, axis=1)
-
-# # "df_unfolded" now has columns x_12, x_23, x_34, x_123, x_234, x_1234, plus residual info
-
-# # Only the non-zero rows
-# print(df_unfolded[df_unfolded['residual_sum_sq'] > 0])
-
-# # Total counts calculation
-# df_unfolded["total_count"] = df_unfolded["x_12"] + df_unfolded["x_23"] + df_unfolded["x_34"]\
-#                     + df_unfolded["x_123"] + df_unfolded["x_234"] + df_unfolded["x_1234"]
-
-# data_df["eff_system_corr_rate"] = df_unfolded["total_count"] / ( res_win_min * 60 )  # Counts per second (Hz)
-# data_df["unc_eff_system_corr_rate"] = 1
-
-data_df["eff_system_corr_rate"] = 1
-data_df["unc_eff_system_corr_rate"] = 1
-
-# ----------------------------------------------------------------------------------------------
-
-def model_function(params, patterns):
-    """
-    Build the array of residuals r_alpha = sum_over_subsets( x_subset * P(pattern|subset, e_i ) ) - R_alpha_meas
-    'patterns' is a list of (pattern_string, R_meas).
-    'params': [e1, e2, e3, e4, x_12, x_23, x_34, x_123, x_234, x_1234] (or a subset if you like)
-    """
-    e1, e2, e3, e4 = params[0:4]
-    x12, x23, x34, x123, x234, x1234 = params[4:10]
-
-    # The 6 subsets we consider:
-    subset_list = ['12','23','34','123','234','1234']
-    x_values = dict(zip(subset_list, [x12, x23, x34, x123, x234, x1234]))
-
-    residuals = []
-    for (pattern_str, R_meas) in patterns:
-        # compute model = sum_{subset} x_subset * detection_prob(...)
-        model_val = 0.0
-        for s in subset_list:
-            p = detection_prob(pattern_str, e1, e2, e3, e4, s)
-            model_val += x_values[s] * p
-        # residual = (model - measured)
-        residuals.append(model_val - R_meas)
-
-    return np.array(residuals, dtype=float)
+    plt.close()
 
 
 from scipy.optimize import least_squares
 
-def fit_efficiencies_and_rates(measured_patterns):
+##############################
+# 1) Detection Probability
+##############################
+
+def detection_prob(pattern, e1, e2, e3, e4, subset):
+    """Compute the probability of detecting a muon in 'pattern' given 'subset'."""
+    if pattern == '1234':
+        return e1*e2*e3*e4 if subset == '1234' else 0.0
+    if pattern == '123':
+        return e1*e2*e3 if subset == '123' else (e1*e2*e3*(1-e4) if subset == '1234' else 0.0)
+    if pattern == '234':
+        return e2*e3*e4 if subset == '234' else ((1-e1)*e2*e3*e4 if subset == '1234' else 0.0)
+    if pattern == '124':
+        return e1*e2*e4*(1-e3) if subset == '1234' else 0.0
+    if pattern == '134':
+        return e1*e3*e4*(1-e2) if subset == '1234' else 0.0
+    if pattern == '12':
+        if subset == '12':
+            return e1*e2
+        elif subset == '123':
+            return e1*e2*(1-e3)
+        elif subset == '1234':
+            return e1*e2*(1-e3)*(1-e4)
+        return 0.0
+    if pattern == '23':
+        if subset == '23':
+            return e2*e3
+        elif subset == '123':
+            return (1-e1)*e2*e3
+        elif subset == '234':
+            return e2*e3*(1-e4)
+        elif subset == '1234':
+            return (1-e1)*e2*e3*(1-e4)
+        return 0.0
+    if pattern == '34':
+        if subset == '34':
+            return e3*e4
+        elif subset == '234':
+            return (1-e2)*e3*e4
+        elif subset == '1234':
+            return (1-e1)*(1-e2)*e3*e4
+        return 0.0
+    if pattern == '13':
+        if subset == '123':
+            return e1*(1-e2)*e3
+        elif subset == '1234':
+            return e1*(1-e2)*e3*(1-e4)
+        return 0.0
+    return 0.0
+
+
+##############################
+# 2) Solve for subset rates
+##############################
+
+def solve_for_subsets(row):
     """
-    measured_patterns: list of (pattern, R_meas) e.g. [('12',1000),('13',800),...]
-    
-    Returns: best-fit parameters for e1,e2,e3,e4,x_12,x_23,x_34,x_123,x_234,x_1234
+    Solve for x_12, x_23, x_34, x_123, x_234, x_1234
+    while taking e1, e2, e3, e4 from 'eff_global', 'final_eff_2', 'final_eff_3', and 'eff_global'.
     """
-
-    # Provide an initial guess for the 10 parameters.
-    # e_i in (0,1), so let's guess something like 0.8 for each plane.
-    # x_... might be guessed from the scale of the data, or just use a small positive guess.
-    p0 = [
-        0.8, 0.8, 0.8, 0.8,   # e1,e2,e3,e4
-        1000, 1000, 1000, 1000, 1000, 1000   # x12, x23, x34, x123, x234, x1234
-    ]
-
-    # Optionally set bounds: e_i in [0,1], x_... in [0, +inf) or some large upper bound
-    # For example:
-    lower_bounds = [0.0, 0.0, 0.0, 0.0,   0, 0, 0, 0, 0, 0]
-    upper_bounds = [1.0, 1.0, 1.0, 1.0,  np.inf, np.inf, np.inf, np.inf, np.inf, np.inf]
-
-    result = least_squares(
-        fun=model_function,
-        x0=p0,
-        bounds=(lower_bounds, upper_bounds),
-        args=(measured_patterns,),
-        # You can tweak max_nfev, xtol, etc. if needed
-    )
-
-    if not result.success:
-        print("Fit did not converge:", result.message)
-
-    # Extract the best-fit parameters:
-    fitted_params = result.x
-    e1,e2,e3,e4 = fitted_params[0:4]
-    x12, x23, x34, x123, x234, x1234 = fitted_params[4:10]
-
-    # Compute final residual norm, etc.
-    residual_norm = np.sum(result.fun**2)
-    
-    return {
-        'e1': e1, 'e2': e2, 'e3': e3, 'e4': e4,
-        'x_12': x12, 'x_23': x23, 'x_34': x34,
-        'x_123': x123, 'x_234': x234, 'x_1234': x1234,
-        'residual_sum_sq': residual_norm,
-        'nfev': result.nfev,
-        'status': result.status
-    }
-
-
-
-def build_pattern_list(row):
-    """
-    Given a pandas row that contains columns like:
-      'type_12', 'type_13', 'type_14', ...
-    return a list of (pattern_string, measured_value) tuples, for example:
-      [
-        ('12',   row['type_12']),
-        ('13',   row['type_13']),
-        ...
-        ('1234', row['type_1234']),
-      ]
-    """
+    # Gather measured patterns (fill NaNs with 0)
     measured_patterns = [
-        ('12',   row['type_12']),
-        ('13',   row['type_13']),
-        ('14',   row['type_14']),
-        ('23',   row['type_23']),
-        ('24',   row['type_24']),
-        ('34',   row['type_34']),
-        ('123',  row['type_123']),
-        ('124',  row['type_124']),
-        ('134',  row['type_134']),
-        ('234',  row['type_234']),
-        ('1234', row['type_1234']),
+        ('12',   row.get('type_12', 0)),
+        ('13',   row.get('type_13', 0)),
+        ('23',   row.get('type_23', 0)),
+        ('34',   row.get('type_34', 0)),
+        ('123',  row.get('type_123', 0)),
+        ('124',  row.get('type_124', 0)),
+        ('134',  row.get('type_134', 0)),
+        ('234',  row.get('type_234', 0)),
+        ('1234', row.get('type_1234', 0)),
     ]
-    return measured_patterns
+    # Convert any NaNs to 0
+    measured_patterns = [(pat, 0 if pd.isna(v) else v) for (pat, v) in measured_patterns]
+
+    # Fix plane efficiencies from columns (not fitting them!)
+    e1_val = row.get('eff_fit_1', 0.8)
+    e2_val = row.get('eff_fit_2', 0.8)
+    e3_val = row.get('eff_fit_3', 0.8)
+    # e4_val = row.get('eff_fit_4', 0.8)
+    e4_val = (e1_val + e2_val + e3_val) / 3 # ev_val is the mean of the other three
+    
+    # Define the 6 unknown subsets
+    subset_names = ['12', '23', '34', '123', '234', '1234']
+
+    # Initial guess for x_... (counts). We'll assume ~100 or any positive.
+    p0 = [100]*len(subset_names)
+
+    # Bounds for [0, 1e10]
+    lb = [0]*len(subset_names)
+    ub = [1e10]*len(subset_names)
+
+    # Residual function
+    def residuals(p):
+        x_vals = dict(zip(subset_names, p))
+        res_arr = []
+        for (pattern, R_meas) in measured_patterns:
+            # Sum up x_subset * detection_prob( ... ) for each possible subset
+            model_val = sum(x_vals[sub]*detection_prob(pattern, e1_val, e2_val, e3_val, e4_val, sub)
+                            for sub in subset_names)
+            res_arr.append(model_val - R_meas)
+        return np.array(res_arr, dtype=float)
+
+    # Solve with least_squares
+    res = least_squares(residuals, p0, bounds=(lb, ub), max_nfev=50000)
+
+    if not res.success:
+        return pd.Series({'status': 'failed', 'residual_sum_sq': np.nan})
+
+    best = res.x
+    out = {'status': 'success', 'residual_sum_sq': np.sum(res.fun**2)}
+    for i, label in enumerate(subset_names):
+        out[f'x_{label}'] = best[i]
+    return pd.Series(out)
 
 
+##############################
+# 3) Run row-by-row & store
+##############################
 
-df_fits = data_df.apply(
-    lambda row: fit_efficiencies_and_rates(build_pattern_list(row)), 
-    axis=1
+# Drop all the NaN in type_ and in  eff_ columns
+df_unfolded = data_df.dropna(subset=['type_12', 'type_23', 'type_34', 'type_123', 'type_234', 'type_1234',
+                                     'eff_fit_1', 'eff_fit_2', 'eff_fit_3', 'eff_fit_4']).apply(solve_for_subsets, axis=1)
+# df_unfolded = data_df.apply(solve_for_subsets, axis=1)
+
+# Sum of all x_... for each row
+df_unfolded["total_count"] = (
+    df_unfolded["x_12"] + df_unfolded["x_23"] + df_unfolded["x_34"]
+    + df_unfolded["x_123"] + df_unfolded["x_234"] + df_unfolded["x_1234"]
 )
 
-df_fits = pd.DataFrame(df_fits.tolist())
+# Convert from counts to rates (assuming 'data_df["number_of_rows"] * 60' is your measuring time in seconds)
+for subset in ["12", "23", "34", "123", "234", "1234"]:
+    data_df[f'new_sys_{subset}'] = df_unfolded[f'x_{subset}'] / (data_df["number_of_rows"] * 60)
 
-print(df_fits.columns.to_list())
-print(df_fits)
+# Overall corrected rate
+data_df["eff_corr"] = df_unfolded["total_count"] / (data_df["number_of_rows"] * 60)
+data_df["unc_eff_corr"] = 1
 
-# Sum x_12, x_23, x_34, x_123, x_234, x_1234
-df_fits['total_count'] = df_fits['x_12'] + df_fits['x_23'] + df_fits['x_34'] + df_fits['x_123'] + df_fits['x_234'] + df_fits['x_1234']
+# Example of how you might derive a new efficiency measure
+# (assuming data_df['rate'] is some measured rate)
+data_df["eff_new"] = data_df['rate'] / data_df["eff_corr"]
 
-data_df['new_sys_12'] = df_fits['x_12'] / ( res_win_min * 60 )
-data_df['new_sys_23'] = df_fits['x_23'] / ( res_win_min * 60 )
-data_df['new_sys_34'] = df_fits['x_34'] / ( res_win_min * 60 )
-data_df['new_sys_123'] = df_fits['x_123'] / ( res_win_min * 60 )
-data_df['new_sys_234'] = df_fits['x_234'] / ( res_win_min * 60 )
-data_df['new_sys_1234'] = df_fits['x_1234'] / ( res_win_min * 60 )
+# Copy plane efficiencies to new columns if desired
+data_df["new_sys_e1"] = data_df["final_eff_1"]
+data_df["new_sys_e2"] = data_df["final_eff_2"]
+data_df["new_sys_e3"] = data_df["final_eff_3"]
+data_df["new_sys_e4"] = data_df["final_eff_4"]
+
+print("Done! 'df_unfolded' has the fitted x_... columns, and 'data_df' now has new_sys_* rates.")
 
 
-data_df["eff_new_system_corr_rate"] = df_fits["total_count"] / ( res_win_min * 60 )  # Counts per second (Hz)
-data_df["unc_eff_new_system_corr_rate"] = 1
-
-data_df['new_system_e1'] = df_fits['e1']
-data_df['new_system_e2'] = df_fits['e2']
-data_df['new_system_e3'] = df_fits['e3']
-data_df['new_system_e4'] = df_fits['e4']
-
+# ------------------------------------------------------------------------------------------------
 
 
 # -----------------------------------------------------------------------------
 # Correct by the efficiency, calculate uncertainty of the corrected rate
 # -----------------------------------------------------------------------------
 
-print("Rate below ---------------------------------------")
-print(data_df['rate'])
-print("Rate above ---------------------------------------")
-
-# Replace zero values in 'rate' or 'eff_global' with NaN to avoid division by zero
-# and correct the rate by the global efficiency
-
-# data_df['rate'] = data_df['rate'].mask(data_df['rate'] < 12, np.nan).interpolate(method='linear')
-
-data_df['eff_corr_rate'] = np.where(
-    (data_df['rate'] == 0) | (data_df['eff_global'] == 0),  # Condition: rate or eff_global is zero
-    np.nan,  # Assign NaN if condition is met
-    data_df['rate'] / data_df['eff_global']  # Otherwise, compute normally
-)
-
-# Calculate the uncertainty in the corrected rate
-data_df['unc_eff_corr_rate'] = data_df['eff_corr_rate'] * np.sqrt(
-    (data_df['unc_rate'] / data_df['rate'])**2 +
-    (data_df['unc_eff_global'] / data_df['eff_global'])**2
-)
-
-data_df['eff_fit_corr_rate'] = np.where(
-    (data_df['rate'] == 0) | (data_df['eff_fit'] == 0),  # Condition: rate or eff_global is zero
-    np.nan,  # Assign NaN if condition is met
-    data_df['rate'] / data_df['eff_fit']  # Otherwise, compute normally
-)
-
-# Calculate the uncertainty in the corrected rate
-data_df['unc_eff_fit_corr_rate'] = data_df['eff_fit_corr_rate'] * np.sqrt(
-    (data_df['unc_rate'] / data_df['rate'])**2 +
-    (data_df['unc_eff_fit'] / data_df['eff_fit'])**2
-)
-
 print('Efficiency correction performed.')
-
-# if create_plots:
-#     print("Creating efficiency plot...")
-    
-#     fig, ax1 = plt.subplots(figsize=(10, 6))  # Define figure and primary axis
-
-#     # Plot efficiencies on primary y-axis
-#     # ax1.plot(data_df['Time'], data_df['final_eff_1'], label='Efficiency 1', color='C0')
-#     # ax1.plot(data_df['Time'], data_df['final_eff_2'], label='Efficiency 2', color='C1')
-#     # ax1.plot(data_df['Time'], data_df['final_eff_3'], label='Efficiency 3', color='C2')
-#     # ax1.plot(data_df['Time'], data_df['final_eff_4'], label='Efficiency 4', color='C3')
-#     ax1.plot(data_df['Time'], data_df['eff_global'], label='Efficiency global', color='C4')
-#     ax1.plot(data_df['Time'], data_df['eff_fit'], label='Efficiency from the fit', color='C5')
-    
-#     ax1.set_xlabel('Time')
-#     ax1.set_ylabel('Efficiency')
-#     ax1.set_title('Efficiencies over Time')
-#     ax1.legend(loc='upper left')
-
-#     # Create a second y-axis for pressure
-#     ax2 = ax1.twinx()
-#     # ax2.plot(data_df['Time'], data_df['sensors_ext_Pressure_ext'], label='Pressure', color='C6')
-#     # ax2.set_ylabel('Pressure')
-    
-#     # Create a third y-axis for temperature (offset to avoid overlap)
-#     ax3 = ax1.twinx()
-#     # ax3.spines['right'].set_position(('outward', 60))  # Offset temperature axis
-#     # ax3.plot(data_df['Time'], data_df['sensors_ext_Temperature_ext'], label='Temperature', color='C7')
-#     # ax3.plot(data_df['Time'], data_df['temp_ground'], label='Temperature', color='C5')
-#     # ax3.set_ylabel('Temperature')
-#     # ax3.spines['right'].set_position(('outward', 60))  # Offset temperature axis
-#     ax3.plot(data_df['Time'], data_df['rate'], label='OG rate', color='C6')
-#     ax3.plot(data_df['Time'], data_df['eff_corr_rate'], label='Eff. corr. rate', color='C7')
-#     # ax3.set_ylabel('Rate')
-    
-#     ax4 = ax1.twinx()
-#     ax4.spines['right'].set_position(('outward', 120))  # Offset temperature axis
-#     # ax4.plot(data_df['Time'], data_df['hv_mean'], label='HV', color='C8')
-#     ax4.set_ylabel('HV')
-#     ax4.set_ylim(5, 6)
-
-#     # Combine all legends
-#     lines, labels = ax1.get_legend_handles_labels()
-#     lines2, labels2 = ax2.get_legend_handles_labels()
-#     lines3, labels3 = ax3.get_legend_handles_labels()
-#     lines4, labels4 = ax4.get_legend_handles_labels()
-#     ax1.legend(lines + lines2 + lines3 + lines4, labels + labels2 + labels3 + labels4, loc='upper right')
-    
-#     plt.tight_layout()
-    
-#     # Save or show the plot
-#     if show_plots:
-#         plt.show()
-#     elif save_plots:
-#         new_figure_path = figure_path + "_effs.png"
-#         print(f"Saving figure to {new_figure_path}")
-#         plt.savefig(new_figure_path, format='png', dpi=300)
-
-#     plt.close()
 
 
 # Assuming data_df is already loaded and contains the necessary columns
 
-data_df["new_system_eff"] = data_df['rate'] / data_df['eff_new_system_corr_rate']
-data_df["unc_new_system_eff"] = 1
-
-# Remove outliers in new_system_eff if data_df["new_system_eff"] < 0.4data_df["new_system_eff"] < 0.4 but do not interpolate
-data_df["new_system_eff"] = data_df["new_system_eff"].mask(data_df["new_system_eff"] < 0.4, np.nan)
-
 if create_plots:
     print("Creating efficiency and rate plots...")
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(17, 10), sharex=True)
 
     # Plot efficiencies
-    # ax1.plot(data_df['Time'], data_df['eff_global'], label='Efficiency global', color='C1')
-    # ax1.plot(data_df['Time'], data_df['eff_fit'], label='Efficiency from the fit', color='C2')
-    # ax1.plot(data_df['Time'], data_df['eff_new_fit'], label='Efficiency from the new fit', color='C5')
-    # ax1.plot(data_df['Time'], data_df['rate'] / data_df['eff_system_corr_rate'], label='Original / Corrected with system', color='C3')
-    # ax1.plot(data_df['Time'], data_df['rate'] / data_df['eff_new_system_corr_rate'], label='Original / Corrected with new system', color='C4')
     # Plot new_system_e1, new_system_e2, new_system_e3, new_system_e4
-    ax1.plot(data_df['Time'], data_df['new_system_e1'], label='New system e1', color='C4')
-    ax1.plot(data_df['Time'], data_df['new_system_e2'], label='New system e2', color='C5')
-    ax1.plot(data_df['Time'], data_df['new_system_e3'], label='New system e3', color='C6')
-    ax1.plot(data_df['Time'], data_df['new_system_e4'], label='New system e4', color='C7')
+    ax1.plot(data_df['Time'], data_df['eff_fit_1'], label='Eff. fitted 1', color='C4')
+    ax1.plot(data_df['Time'], data_df['eff_fit_2'], label='Eff. fitted 2', color='C5')
+    ax1.plot(data_df['Time'], data_df['eff_fit_3'], label='Eff. fitted 3', color='C6')
+    ax1.plot(data_df['Time'], data_df['eff_fit_4'], label='Eff. fitted 4', color='C7')
     ax1.set_ylabel('Efficiency')
-    ax1.set_ylim(0.5, 1.0)
+    ax1.set_ylim(0.9, 1.0)
     ax1.set_title('Efficiencies over Time')
     ax1.legend(loc='upper left')
-
-    # Plot rates
-    # HMF_ker = 1
-    # # Apply an horizontal median filter to the rate
-    # data_df['rate'] = medfilt(data_df['rate'], kernel_size=HMF_ker)
-    # data_df['eff_corr_rate'] = medfilt(data_df['eff_corr_rate'], kernel_size=HMF_ker)
-    # data_df['eff_fit_corr_rate'] = medfilt(data_df['eff_fit_corr_rate'], kernel_size=HMF_ker)
     
-    # Accumulate rates in a 10-minute window
-    # data_df['rate'] = data_df['rate'].rolling(window=10, center=True, min_periods=1).mean()
-    # data_df['eff_corr_rate'] = data_df['eff_corr_rate'].rolling(window=10, center=True, min_periods=1).mean()
-    # data_df['eff_fit_corr_rate'] = data_df['eff_fit_corr_rate'].rolling(window=10, center=True, min_periods=1).mean()
     
-    # ax2.plot(data_df['Time'], data_df['rate'], label='OG rate', color='C3')
-    # ax2.plot(data_df['Time'], data_df['eff_corr_rate'], label='Eff. (from calculation) corr. rate', color='C4')
-    # ax2.plot(data_df['Time'], data_df['eff_fit_corr_rate'], label='Eff. (from fit) corr. rate', color='C6')
-    # ax2.plot(data_df['Time'], data_df['eff_system_corr_rate'], label='Eff. (from system) corr. rate', color='C7')
-    # ax2.plot(data_df['Time'], data_df['eff_new_system_corr_rate'], label='Eff. (from new system) corr. rate', color='C8')
-    
-    # Plot data_df['new_sys_12'], data_df['new_sys_23'], data_df['new_sys_34'], data_df['new_sys_123'], data_df['new_sys_234'], data_df['new_sys_1234']
-    ax2.plot(data_df['Time'], data_df['new_sys_12'], label='New system 12', color='C8')
-    ax2.plot(data_df['Time'], data_df['new_sys_23'], label='New system 23', color='C9')
-    ax2.plot(data_df['Time'], data_df['new_sys_34'], label='New system 34', color='C10')
-    ax2.plot(data_df['Time'], data_df['new_sys_123'], label='New system 123', color='C11')
-    ax2.plot(data_df['Time'], data_df['new_sys_234'], label='New system 234', color='C12')
-    ax2.plot(data_df['Time'], data_df['new_sys_1234'], label='New system 1234', color='C13')
+    # Plot the measured: 12, 23, 34, 123, 234, 1234, 13, 24, 14
+    ax2.plot(data_df['Time'], data_df['type_12'] / (data_df["number_of_rows"] * 60), label='Measured 12', color='C1')
+    ax2.plot(data_df['Time'], data_df['type_23'] / (data_df["number_of_rows"] * 60), label='Measured 23', color='C2')
+    ax2.plot(data_df['Time'], data_df['type_34'] / (data_df["number_of_rows"] * 60), label='Measured 34', color='C3')
+    ax2.plot(data_df['Time'], data_df['type_123'] / (data_df["number_of_rows"] * 60), label='Measured 123', color='C4')
+    ax2.plot(data_df['Time'], data_df['type_234'] / (data_df["number_of_rows"] * 60), label='Measured 234', color='C5')
+    ax2.plot(data_df['Time'], data_df['type_1234'] / (data_df["number_of_rows"] * 60), label='Measured 1234', color='C6')
     
     ax2.set_xlabel('Time')
     ax2.set_ylabel('Rate')
-    # ax2.set_ylim(13, 20)
-    ax2.set_title('Rates over Time')
+    ax2.set_title('Original Rates over Time')
     ax2.legend(loc='upper left')
+    
+    ax3.plot(data_df['Time'], data_df['new_sys_12'], label='Crossing 12 (fitted)', color='C1')
+    ax3.plot(data_df['Time'], data_df['new_sys_23'], label='Crossing 23', color='C2')
+    ax3.plot(data_df['Time'], data_df['new_sys_34'], label='Crossing 34', color='C3')
+    ax3.plot(data_df['Time'], data_df['new_sys_123'], label='Crossing 123', color='C4')
+    ax3.plot(data_df['Time'], data_df['new_sys_234'], label='Crossing 234', color='C5')
+    ax3.plot(data_df['Time'], data_df['new_sys_1234'], label='Crossing 1234', color='C6')
 
+    ax3.set_xlabel('Time')
+    ax3.set_ylabel('Rate')
+    ax3.set_title('Corrected by efficiency Rates over Time')
+    ax3.legend(loc='upper left')
+    
     plt.tight_layout()
 
     # Save or show the plot
@@ -1060,157 +805,19 @@ if create_plots:
     plt.close()
 
 
-
-
-if create_plots:
-    print("Creating NEW efficiency and rate plots...")
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
-
-    # Plot efficiencies
-    # ax1.plot(data_df['Time'], data_df['new_system_e1'], label='New system e1', color='red')
-    ax1.plot(data_df['Time'], data_df['new_system_e2'], label='New system e2', color='orange')
-    ax1.plot(data_df['Time'], data_df['new_system_e3'], label='New system e3', color='green')
-    # ax1.plot(data_df['Time'], data_df['new_system_e4'], label='New system e4', color='blue')
-    ax1.set_ylabel('Efficiency')
-    ax1.set_ylim(0.8, 1.0)
-    ax1.set_title('Efficiencies over Time')
-    ax1.legend(loc='upper left')
-
-
-    # Plot data_df['new_sys_12'], data_df['new_sys_23'], data_df['new_sys_34'], data_df['new_sys_123'], data_df['new_sys_234'], data_df['new_sys_1234']
-    # ax2.plot(data_df['Time'], data_df['final_eff_1'], label='OG method eff 1', color='red')
-    ax2.plot(data_df['Time'], data_df['final_eff_2'], label='OG method eff 2', color='orange')
-    ax2.plot(data_df['Time'], data_df['final_eff_3'], label='OG method eff 3', color='green')
-    # ax2.plot(data_df['Time'], data_df['final_eff_4'], label='OG method eff 4', color='blue')
-    
-    ax2.set_xlabel('Time')
-    ax2.set_ylabel('Rate')
-    ax2.set_ylim(0.8, 1.0)
-    ax2.set_title('Rates over Time')
-    ax2.legend(loc='upper left')
-
-    plt.tight_layout()
-
-    # Save or show the plot
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + "_effs_rates_new_sys_comparison.png"
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-
-    plt.close()
-
-
-
-
-# Take all the data_df['hv_mean'] that are between 5.415 and 5.425, scatter plot in 3D,
-# data_df['eff_global'], data_df['sensors_ext_Pressure_ext'] and data_df['sensors_ext_Temperature_ext']
-if create_plots:
-    from mpl_toolkits.mplot3d import Axes3D
-
-    # Filter data based on hv_mean range
-    filtered_df = data_df[(data_df['hv_mean'] >= 5.415) & (data_df['hv_mean'] <= 5.425)]
-
-    # Extract relevant columns
-    z = filtered_df['eff_global']
-    x = filtered_df['sensors_ext_Pressure_ext']
-    y = filtered_df['sensors_ext_Temperature_ext']
-    c = z  # Color mapped to efficiency values
-
-    # Create a figure with four subplots (2x2 layout)
-    fig = plt.figure(figsize=(14, 12))
-
-    # 3D scatter plot with isometric view
-    ax1 = fig.add_subplot(221, projection='3d')
-    sc1 = ax1.scatter(x, y, z, c=c, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax1.set_xlabel('Pressure')
-    ax1.set_ylabel('Temperature')
-    ax1.set_zlabel('Efficiency')
-    # ax1.set_title('Isometric View')
-    ax1.view_init(elev=30, azim=-60)
-
-    # 3D scatter plot with view aligned to the Pressure axis
-    ax2 = fig.add_subplot(222, projection='3d')
-    sc2 = ax2.scatter(x, y, z, c=c, cmap='turbo', marker='o', s=10, alpha=0.7)
-    # ax2.set_xlabel('Pressure')
-    ax2.set_ylabel('Temperature')
-    ax2.set_zlabel('Efficiency')
-    ax2.set_xticks([])
-    # ax2.set_title('View Along Temperature Axis')
-    ax2.view_init(elev=0, azim=0)  # Aligned to the Pressure axis
-
-    # 3D scatter plot with view aligned to the Temperature axis
-    ax3 = fig.add_subplot(223, projection='3d')
-    sc3 = ax3.scatter(x, y, z, c=c, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax3.set_xlabel('Pressure')
-    # ax3.set_ylabel('Temperature')
-    ax3.set_zlabel('Efficiency')
-    ax3.set_yticks([])
-    # ax3.set_title('View Along Pressure Axis')
-    ax3.view_init(elev=0, azim=-90)  # Aligned to the Temperature axis
-
-    # 2D scatter plot (top-down view of Pressure vs Temperature)
-    ax4 = fig.add_subplot(224, projection='3d')
-    sc4 = ax4.scatter(x, y, z, c=c, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax4.set_xlabel('Pressure')
-    ax4.set_ylabel('Temperature')
-    # ax4.set_zlabel('Efficiency')
-    # Do not put the zticks
-    ax4.set_zticks([])
-    ax4.view_init(elev=90, azim=-90)
-    # ax4.set_title('Top-Down View (Pressure vs Temperature)')
-    # fig.colorbar(sc4, ax=ax4, label='Efficiency')
-
-    # Colorbar for efficiency values across 3D plots
-    # fig.colorbar(sc1, ax=[ax1, ax2, ax3, ax4], shrink=0.6, label='Efficiency')
-    
-    # plt.suptitle('Efficiency vs Pressure and Temperature')
-    
-    ax1.set_xlabel('Pressure', labelpad=10)
-    ax1.set_ylabel('Temperature', labelpad=10)
-    ax1.set_zlabel('Efficiency', labelpad=10)
-
-    ax2.set_ylabel('Temperature', labelpad=10)
-    ax2.set_zlabel('Efficiency', labelpad=10)
-
-    ax3.set_xlabel('Pressure', labelpad=10)
-    ax3.set_zlabel('Efficiency', labelpad=10)
-
-    ax4.set_xlabel('Pressure', labelpad=10)
-    ax4.set_ylabel('Temperature', labelpad=10)
-
-    plt.tight_layout()
-    
-    # Save or show the plot
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + "_3d.png"
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-
-    plt.close()
-
-
-
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from sklearn.linear_model import LinearRegression
 
+
 if create_plots:
-    # Filter data based on hv_mean range
-    # filtered_df = data_df[(data_df['hv_mean'] >= 5.415) & (data_df['hv_mean'] <= 5.425)]
-    filtered_df = data_df[(data_df['hv_mean'] >= 5.61) & (data_df['hv_mean'] <= 5.68)]
-    
-    filtered_df = filtered_df.dropna(subset=['eff_global', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext'])
+    filtered_df = data_df.dropna(subset=['eff_new', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
     
     # Extract relevant columns
     x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
     y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
-    z = filtered_df['eff_global'].values
+    z = filtered_df['eff_new'].values
     
     # Fit a plane using linear regression
     X = np.hstack((x, y))
@@ -1222,6 +829,9 @@ if create_plots:
     c = model.intercept_
     formula = f"Eff = {a:.4g} * P + {b:.4g} * T + {c:.4g}"
     print(f"Fitted plane: {formula}")
+    
+    data_df['eff_fit'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
+    data_df['unc_eff_fit'] = 1
     
     # Predicted plane
     z_pred = model.predict(X)
@@ -1272,7 +882,7 @@ if create_plots:
     ax4.set_zticks([])
     ax4.view_init(elev=90, azim=-90)
     
-    plt.suptitle(f'Efficiency vs Pressure and Temperature with Fitted Plane\n{formula}')
+    plt.suptitle(f'"Eff" New. Efficiency vs Pressure and Temperature with Fitted Plane\n{formula}')
     
     plt.tight_layout()
     if show_plots:
@@ -1321,129 +931,6 @@ if create_plots:
         plt.savefig(figure_path + "_residuals.png", format='png', dpi=300)
     plt.close()
 
-
-
-
-if create_plots:
-    # Filter data based on hv_mean range
-    # filtered_df = data_df[(data_df['hv_mean'] >= 5.415) & (data_df['hv_mean'] <= 5.425)]
-    filtered_df = data_df[(data_df['hv_mean'] >= 5.61) & (data_df['hv_mean'] <= 5.68)]
-    
-    filtered_df = filtered_df.dropna(subset=['new_system_eff', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext'])
-    
-    # Extract relevant columns
-    x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
-    y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
-    z = filtered_df['new_system_eff'].values
-    
-    # Fit a plane using linear regression
-    X = np.hstack((x, y))
-    model = LinearRegression()
-    model.fit(X, z)
-    
-    # Parameters of the fitted plane
-    a, b = model.coef_
-    c = model.intercept_
-    formula = f"Eff = {a:.4g} * P + {b:.4g} * T + {c:.4g}"
-    print(f"Fitted plane: {formula}")
-    
-    # Predicted plane
-    z_pred = model.predict(X)
-    residuals = z - z_pred
-    
-    # Create meshgrid for visualization
-    x_range = np.linspace(x.min(), x.max(), 30)
-    y_range = np.linspace(y.min(), y.max(), 30)
-    X_mesh, Y_mesh = np.meshgrid(x_range, y_range)
-    Z_mesh = model.predict(np.c_[X_mesh.ravel(), Y_mesh.ravel()]).reshape(X_mesh.shape)
-    
-    # Create a figure with four subplots (2x2 layout)
-    fig = plt.figure(figsize=(14, 12))
-    
-    # 3D scatter plot with fitted plane (Isometric view)
-    ax1 = fig.add_subplot(221, projection='3d')
-    ax1.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax1.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
-    ax1.set_xlabel('Pressure', labelpad=10)
-    ax1.set_ylabel('Temperature', labelpad=10)
-    ax1.set_zlabel('Efficiency', labelpad=10)
-    ax1.view_init(elev=30, azim=-60)
-
-    # 3D scatter plot (View along Pressure axis)
-    ax2 = fig.add_subplot(222, projection='3d')
-    ax2.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax2.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
-    ax2.set_ylabel('Temperature', labelpad=10)
-    ax2.set_zlabel('Efficiency', labelpad=10)
-    ax2.set_xticks([])
-    ax2.view_init(elev=0, azim=0)
-
-    # 3D scatter plot (View along Temperature axis)
-    ax3 = fig.add_subplot(223, projection='3d')
-    ax3.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax3.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
-    ax3.set_xlabel('Pressure', labelpad=10)
-    ax3.set_zlabel('Efficiency', labelpad=10)
-    ax3.set_yticks([])
-    ax3.view_init(elev=0, azim=-90)
-
-    # 3D scatter plot (Top-down view)
-    ax4 = fig.add_subplot(224, projection='3d')
-    ax4.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax4.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
-    ax4.set_xlabel('Pressure', labelpad=10)
-    ax4.set_ylabel('Temperature', labelpad=10)
-    ax4.set_zticks([])
-    ax4.view_init(elev=90, azim=-90)
-    
-    plt.suptitle(f'New system Efficiency vs Pressure and Temperature with Fitted Plane\n{formula}')
-    
-    plt.tight_layout()
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        plt.savefig(figure_path + "_3d_fit.png", format='png', dpi=300)
-    plt.close()
-    
-    # Create another figure to show residuals
-    fig_res = plt.figure(figsize=(14, 12))
-    
-    # Residuals plots
-    ax1_res = fig_res.add_subplot(221, projection='3d')
-    sc1_res = ax1_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
-    ax1_res.set_xlabel('Pressure', labelpad=10)
-    ax1_res.set_ylabel('Temperature', labelpad=10)
-    ax1_res.set_zlabel('Residuals', labelpad=10)
-    ax1_res.view_init(elev=30, azim=-60)
-    # fig_res.colorbar(sc1_res, ax=ax1_res, label='Residuals')
-    
-    ax2_res = fig_res.add_subplot(222, projection='3d')
-    ax2_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
-    ax2_res.set_ylabel('Temperature', labelpad=10)
-    ax2_res.set_zlabel('Residuals', labelpad=10)
-    ax2_res.set_xticks([])
-    ax2_res.view_init(elev=0, azim=0)
-    
-    ax3_res = fig_res.add_subplot(223, projection='3d')
-    ax3_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
-    ax3_res.set_xlabel('Pressure', labelpad=10)
-    ax3_res.set_zlabel('Residuals', labelpad=10)
-    ax3_res.set_yticks([])
-    ax3_res.view_init(elev=0, azim=-90)
-    
-    ax4_res = fig_res.add_subplot(224, projection='3d')
-    ax4_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
-    ax4_res.set_xlabel('Pressure', labelpad=10)
-    ax4_res.set_ylabel('Temperature', labelpad=10)
-    ax4_res.set_zticks([])
-    ax4_res.view_init(elev=90, azim=-90)
-    
-    plt.tight_layout()
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        plt.savefig(figure_path + "_residuals.png", format='png', dpi=300)
-    plt.close()
 
 
 #%%
@@ -1559,12 +1046,9 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
         eta_P_uncertainty = np.nan  # Handle case where there are no valid data points
     return eta_P, eta_P_uncertainty
 
-# region = 'eff_corr_rate'
-# region = 'eff_fit_corr_rate'
-region = 'eff_new_system_corr_rate'
-# region = 'rate'
-data_df['pressure_lab'] = data_df['sensors_ext_Pressure_ext']
+region = 'eff_corr'
 
+data_df['pressure_lab'] = data_df['sensors_ext_Pressure_ext']
 # Calculate pressure differences and their uncertainties
 P = data_df['pressure_lab']
 unc_P = 1  # Assume a small uncertainty for P if not recalculating
@@ -1670,65 +1154,8 @@ if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
 # Create corrected rate column for the region
 data_df[f'pres_{region}'] = I * np.exp(-1 * eta_P / 100 * delta_P)
 
-
-if create_plots:
-    print("Creating efficiency and rate plots...")
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
-
-    # Plot efficiencies
-    # ax1.plot(data_df['Time'], data_df['eff_global'], label='Efficiency global', color='C1')
-    # ax1.plot(data_df['Time'], data_df['eff_fit'], label='Efficiency from the fit', color='C2')
-    ax1.plot(data_df['Time'], data_df['eff_new_fit'], label='Efficiency from the new fit', color='C5')
-    ax1.plot(data_df['Time'], data_df['rate'] / data_df['eff_system_corr_rate'], label='Original / Corrected with system', color='C3')
-    ax1.plot(data_df['Time'], data_df['rate'] / data_df['eff_new_system_corr_rate'], label='Original / Corrected with new system', color='C4')
-    ax1.set_ylabel('Efficiency')
-    ax1.set_ylim(0.5, 1)
-    ax1.set_title('Efficiencies over Time')
-    ax1.legend(loc='upper left')
-
-    # Plot rates
-    # HMF_ker = 1
-    # # Apply an horizontal median filter to the rate
-    # data_df['rate'] = medfilt(data_df['rate'], kernel_size=HMF_ker)
-    # data_df['eff_corr_rate'] = medfilt(data_df['eff_corr_rate'], kernel_size=HMF_ker)
-    # data_df['eff_fit_corr_rate'] = medfilt(data_df['eff_fit_corr_rate'], kernel_size=HMF_ker)
-    
-    # Accumulate rates in a 10-minute window
-    # data_df['rate'] = data_df['rate'].rolling(window=10, center=True, min_periods=1).mean()
-    # data_df['eff_corr_rate'] = data_df['eff_corr_rate'].rolling(window=10, center=True, min_periods=1).mean()
-    # data_df['eff_fit_corr_rate'] = data_df['eff_fit_corr_rate'].rolling(window=10, center=True, min_periods=1).mean()
-    
-    ax2.plot(data_df['Time'], data_df['rate'], label='OG rate', color='C3')
-    # ax2.plot(data_df['Time'], data_df['eff_corr_rate'], label='Eff. (from calculation) corr. rate', color='C4')
-    # ax2.plot(data_df['Time'], data_df['eff_fit_corr_rate'], label='Eff. (from fit) corr. rate', color='C6')
-    # ax2.plot(data_df['Time'], data_df['eff_system_corr_rate'], label='Eff. (from system) corr. rate', color='C7')
-    ax2.plot(data_df['Time'], data_df['eff_new_system_corr_rate'], label='Eff. (from new system) corr. rate', color='C8')
-    ax2.plot(data_df['Time'], data_df[f'pres_{region}'], label='Pressure corrected rate', color='C9')
-    
-    ax2.set_xlabel('Time')
-    ax2.set_ylabel('Rate')
-    ax2.set_ylim(15, 25)
-    ax2.set_title('Rates over Time')
-    ax2.legend(loc='upper left')
-
-    plt.tight_layout()
-
-    # Save or show the plot
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + "_effs_rates_new_sys_pressure.png"
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-
-    plt.close()
-
-
-
-
 # Final uncertainty calculation in the corrected rate
-unc_rate = data_df['unc_eff_corr_rate']
+unc_rate = 1
 unc_beta = unc_eta_P
 unc_DP = unc_delta_P
 term_1_rate = np.exp(-1 * eta_P / 100 * delta_P) * unc_rate
@@ -1736,6 +1163,48 @@ term_2_beta = I * delta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_beta
 term_3_DP = I * eta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_DP
 final_unc_combined = np.sqrt(term_1_rate**2 + term_2_beta**2 + term_3_DP**2)
 data_df[f'unc_pres_{region}'] = final_unc_combined
+
+
+
+# Add a new outlier filter to the pressure correction
+
+if remove_outliers:
+    print('Removing outliers and zero values...')
+    def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
+        """
+        Create a mask of rows that are outliers or have zero values.
+        """
+        # median = series.mean()
+        median = series.median()
+        std = series.std()
+        z_scores = abs((series - median) / std)
+        
+        plt.hist(z_scores, bins=300)
+        plt.title('Z-Scores Distribution')
+        plt.xlabel('Z-Score')
+        plt.ylabel('Frequency')
+        if show_plots: 
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + "_pressure_corr_z"
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format = 'png', dpi = 300)
+        plt.close()
+        
+        # print(z_scores)
+        # Create a mask for rows where z_scores > z_thresh or values are zero
+        mask = (z_scores > z_thresh) | (series == 0)
+        return mask
+
+    # Initialize a mask of all False, meaning no rows are removed initially
+    rows_to_remove = pd.Series(False, index=data_df.index)
+    rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[f'pres_{region}'], z_thresh = 0.5)
+    # for region in angular_regions:
+    #     rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[region])
+
+    data_df_cleaned = data_df[~rows_to_remove].copy()
+    data_df = data_df_cleaned.copy()
+
 
 
 #%%
@@ -1746,90 +1215,167 @@ data_df[f'unc_pres_{region}'] = final_unc_combined
 
 # WIP!!!!!!
 
-# if high_order_correction:
-#     # Use the pressure-corrected values directly
-#     # Calculate means for pressure and counts
-#     P0 = data_df['pressure_lab'].mean()
-#     I0_count_corrected = data_df['count_pressure_corrected'].mean()
+if high_order_correction:
+    
+    data_df[f'{region}_pressure_corrected'] = data_df[f'pres_{region}']
+    
+    # Use the pressure-corrected values directly
+    # Calculate means for pressure and counts
+    I0_count_corrected = data_df[f'{region}_pressure_corrected'].mean()
 
-#     # Calculate delta values using pressure-corrected values
-#     data_df['delta_I_count_corrected'] = data_df['count_pressure_corrected'] - I0_count_corrected
+    # Calculate delta values using pressure-corrected values
+    data_df['delta_I_count_corrected'] = data_df[f'{region}_pressure_corrected'] - I0_count_corrected
 
-#     # Calculate means for the required columns
-#     Tg0 = data_df['temp_ground'].mean()
-#     Th0 = data_df['temp_100mbar'].mean()
-#     H0 = data_df['height_100mbar'].mean()
+    # Calculate means for the required columns
+    Tg0 = data_df['temp_ground'].mean()
+    Th0 = data_df['temp_100mbar'].mean()
+    H0 = data_df['height_100mbar'].mean()
 
-#     # Calculate delta values
-#     data_df['delta_Tg'] = data_df['temp_ground'] - Tg0
-#     data_df['delta_Th'] = data_df['temp_100mbar'] - Th0
-#     data_df['delta_H'] = data_df['height_100mbar'] - H0
+    # Calculate delta values
+    data_df['delta_Tg'] = data_df['temp_ground'] - Tg0
+    data_df['delta_Th'] = data_df['temp_100mbar'] - Th0
+    data_df['delta_H'] = data_df['height_100mbar'] - H0
 
-#     # Normalize delta values
-#     data_df['delta_Tg_over_Tg0'] = data_df['delta_Tg'] / Tg0
-#     data_df['delta_Th_over_Th0'] = data_df['delta_Th'] / Th0
-#     data_df['delta_H_over_H0'] = data_df['delta_H'] / H0
+    # Normalize delta values
+    data_df['delta_Tg_over_Tg0'] = data_df['delta_Tg'] / Tg0
+    data_df['delta_Th_over_Th0'] = data_df['delta_Th'] / Th0
+    data_df['delta_H_over_H0'] = data_df['delta_H'] / H0
 
-#     # Initialize a DataFrame to store the results
-#     high_order_results = pd.DataFrame(columns=['Region', 'A', 'B', 'C'])
+    # Initialize a DataFrame to store the results
+    high_order_results = pd.DataFrame(columns=['Region', 'A', 'B', 'C'])
 
-#     # Function to fit the data and calculate coefficients A, B, C
-#     def calculate_coefficients(region, I0, delta_I):
-#         delta_I_over_I0 = delta_I / I0
+    # Function to fit the data and calculate coefficients A, B, C
+    def calculate_coefficients(region, I0, delta_I):
+        delta_I_over_I0 = delta_I / I0
 
-#         # Fit linear regression model without intercept
-#         model = LinearRegression(fit_intercept=False)
-#         df = pd.DataFrame({
-#             'delta_I_over_I0': delta_I_over_I0,
-#             'delta_Tg_over_Tg0': data_df['delta_Tg_over_Tg0'],
-#             'delta_Th_over_Th0': data_df['delta_Th_over_Th0'],
-#             'delta_H_over_H0': data_df['delta_H_over_H0']
-#         }).dropna()
+        # Fit linear regression model without intercept
+        model = LinearRegression(fit_intercept=False)
+        df = pd.DataFrame({
+            'delta_I_over_I0': delta_I_over_I0,
+            'delta_Tg_over_Tg0': data_df['delta_Tg_over_Tg0'],
+            'delta_Th_over_Th0': data_df['delta_Th_over_Th0'],
+            'delta_H_over_H0': data_df['delta_H_over_H0']
+        }).dropna()
 
-#         if not df.empty:
-#             X = df[['delta_Tg_over_Tg0', 'delta_Th_over_Th0', 'delta_H_over_H0']]
-#             y = df['delta_I_over_I0']
-#             model.fit(X, y)
-#             A, B, C = model.coef_
+        if not df.empty:
+            X = df[['delta_Tg_over_Tg0', 'delta_Th_over_Th0', 'delta_H_over_H0']]
+            y = df['delta_I_over_I0']
+            model.fit(X, y)
+            A, B, C = model.coef_
 
-#             # Plot the fitting in subplots
-#             fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-#             axes[0].scatter(df['delta_Tg_over_Tg0'], y, label='Data')
-#             axes[0].plot(df['delta_Tg_over_Tg0'], model.predict(X), color='red', label='Fit')
-#             axes[0].set_xlabel('Delta Tg / Tg0')
-#             axes[0].set_ylabel('Delta I / I0')
-#             axes[0].set_title(f'Fitting for {region} - Delta Tg')
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
 
-#             axes[1].scatter(df['delta_Th_over_Th0'], y, label='Data')
-#             axes[1].plot(df['delta_Th_over_Th0'], model.predict(X), color='red', label='Fit')
-#             axes[1].set_xlabel('Delta Th / Th0')
-#             axes[1].set_title(f'Fitting for {region} - Delta Th')
+            # 1) Plot Delta Tg
+            ax = axes[0]
+            x = df['delta_Tg_over_Tg0']
+            y_data = df['delta_I_over_I0']  # your actual y-values
 
-#             axes[2].scatter(df['delta_H_over_H0'], y, label='Data')
-#             axes[2].plot(df['delta_H_over_H0'], model.predict(X), color='red', label='Fit')
-#             axes[2].set_xlabel('Delta H / H0')
-#             axes[2].set_title(f'Fitting for {region} - Delta H')
+            ax.scatter(x, y_data, s=15, alpha=0.7, label='Data')  # smaller points
 
-#             plt.legend()
-#             if show_plots: plt.show();
-#             plt.close()
-#         else:
-#             A, B, C = np.nan, np.nan, np.nan  # Handle case where there are no valid data points
-#         return A, B, C
+            # Build a line from min(x) to max(x), ignoring the other variables
+            x_line = np.linspace(x.min(), x.max(), 100)
+            y_line = A * x_line  # slope = A, intercept = 0 (since fit_intercept=False)
+            ax.plot(x_line, y_line, color='red', label='Partial Fit')
 
-#     # Calculate coefficients and create corrected rate columns for each region
-#     regions = ['count'] + angular_regions
-#     for region in regions:
-#         I0_region_corrected = data_df[f'{region}_pressure_corrected'].mean()
-#         data_df[f'delta_I_{region}_corrected'] = data_df[f'{region}_pressure_corrected'] - I0_region_corrected
-#         A, B, C = calculate_coefficients(region, I0_region_corrected, data_df[f'delta_I_{region}_corrected'])
-#         high_order_results = pd.concat([high_order_results, pd.DataFrame({'Region': [region], 'A': [A], 'B': [B], 'C': [C]})], ignore_index=True)
+            ax.set_xlabel('Delta Tg / Tg0')
+            ax.set_ylabel('Delta I / I0')
+            ax.set_title('Effect of Tg')
+            ax.legend()
+
+            # 2) Plot Delta Th
+            ax = axes[1]
+            x = df['delta_Th_over_Th0']
+            ax.scatter(x, y_data, s=15, alpha=0.7, label='Data')
+
+            x_line = np.linspace(x.min(), x.max(), 100)
+            y_line = B * x_line  # slope = B
+            ax.plot(x_line, y_line, color='red', label='Partial Fit')
+
+            ax.set_xlabel('Delta Th / Th0')
+            ax.set_title('Effect of Th')
+            ax.legend()
+
+            # 3) Plot Delta H
+            ax = axes[2]
+            x = df['delta_H_over_H0']
+            ax.scatter(x, y_data, s=15, alpha=0.7, label='Data')
+
+            x_line = np.linspace(x.min(), x.max(), 100)
+            y_line = C * x_line  # slope = C
+            ax.plot(x_line, y_line, color='red', label='Partial Fit')
+
+            ax.set_xlabel('Delta H / H0')
+            ax.set_title('Effect of H')
+            ax.legend()
+
+            plt.tight_layout()
+
+            plt.legend()
+            if show_plots:
+                plt.show()
+            elif save_plots:
+                new_figure_path = figure_path + "_high_order.png"
+                print(f"Saving figure to {new_figure_path}")
+                plt.savefig(new_figure_path, format='png', dpi=300)
+
+            plt.close()
+        else:
+            A, B, C = np.nan, np.nan, np.nan  # Handle case where there are no valid data points
+        return A, B, C
+
+    # Calculate coefficients and create corrected rate columns for each region
+    regions = [region]
+    # regions = ['count'] + angular_regions
+    for region in regions:
+        I0_region_corrected = data_df[f'{region}_pressure_corrected'].mean()
+        data_df[f'delta_I_{region}_corrected'] = data_df[f'{region}_pressure_corrected'] - I0_region_corrected
+        A, B, C = calculate_coefficients(region, I0_region_corrected, data_df[f'delta_I_{region}_corrected'])
+        high_order_results = pd.concat([high_order_results, pd.DataFrame({'Region': [region], 'A': [A], 'B': [B], 'C': [C]})], ignore_index=True)
         
-#         # Create corrected rate column for the region
-#         data_df[f'{region}_corrected'] = data_df[f'{region}_pressure_corrected'] * (1 - (A * data_df['delta_Tg'] / Tg0 + B * data_df['delta_Th'] / Th0 + C * data_df['delta_H'] / H0))
+        # Create corrected rate column for the region
+        data_df[f'{region}_high_order_corrected'] = data_df[f'{region}_pressure_corrected'] * (1 - (A * data_df['delta_Tg'] / Tg0 + B * data_df['delta_Th'] / Th0 + C * data_df['delta_H'] / H0))
 
-# else:
-#     data_df[f'{region}_corrected'] = data_df[f'{region}_pressure_corrected']
+else:
+    print("High order correction not applied.")
+    data_df[f'{region}_high_order_corrected'] = data_df[f'pres_{region}']
+
+
+
+
+if create_plots:
+    print("Creating efficiency and rate plots...")
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
+
+    # Plot efficiencies
+    ax1.plot(data_df['Time'], data_df['eff_fit'], label='Efficiency from the new fit', color='C5')
+    ax1.plot(data_df['Time'], data_df['eff_new'], label='Original / Corrected with new system', color='C4')
+    ax1.set_ylabel('Efficiency')
+    ax1.set_ylim(0.9, 1)
+    ax1.set_title('Efficiencies over Time')
+    ax1.legend(loc='upper left')
+
+    ax2.plot(data_df['Time'], data_df['rate'], label='OG rate', color='C3')
+    ax2.plot(data_df['Time'], data_df['eff_corr'], label='Eff. (from new system) corr. rate', color='C8')
+    ax2.plot(data_df['Time'], data_df[f'pres_{region}'], label='Pressure corrected rate', color='C9')
+    ax2.plot(data_df['Time'], data_df[f'{region}_high_order_corrected'], label='High order corrected rate', color='C10')
+    ax2.set_xlabel('Time')
+    ax2.set_ylabel('Rate')
+    ax2.set_ylim(12, 16)
+    ax2.set_title('Rates over Time')
+    ax2.legend(loc='upper left')
+
+    plt.tight_layout()
+
+    # Save or show the plot
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + "_effs_rates_naasd_pressure.png"
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+
+    plt.close()
 
 
 # -----------------------------------------------------------------------------
@@ -1837,24 +1383,13 @@ data_df[f'unc_pres_{region}'] = final_unc_combined
 # -----------------------------------------------------------------------------
 
 # # Horizontal Median Filter ----------------------------------------------------
-ker = HMF_ker # 61
+# ker = HMF_ker # 61
 
-# Apply median filter to columns of interest
-if ker > 0:
-    # data_df['count'] = medfilt(data_df['count'], kernel_size=ker)
-    # data_df['x_mean'] = medfilt(data_df['x_mean'], kernel_size=ker)
-    # data_df['y_mean'] = medfilt(data_df['y_mean'], kernel_size=ker)
-    # data_df['t0_mean'] = medfilt(data_df['t0_mean'], kernel_size=ker)
-    # data_df['s_mean'] = medfilt(data_df['s_mean'], kernel_size=ker)
-    # data_df['theta_mean'] = medfilt(data_df['theta_mean'], kernel_size=ker)
-    # data_df['phi_mean'] = medfilt(data_df['phi_mean'], kernel_size=ker)
-
-    # # Apply median filter to each region
-    # for region in angular_regions:
-    #     data_df[region] = medfilt(data_df[region], kernel_size=ker)
-    data_df[f'pres_{region}'] = medfilt(data_df[f'pres_{region}'], kernel_size=ker)
-else:
-    print('Horizontal Median Filter not applied.')
+# # Apply median filter to columns of interest
+# if ker > 0:
+#     data_df[f'pres_{region}'] = medfilt(data_df[f'pres_{region}'], kernel_size=ker)
+# else:
+#     print('Horizontal Median Filter not applied.')
 
 
 # # Moving Average Filter -------------------------------------------------------
@@ -1862,15 +1397,6 @@ else:
 
 # # Apply moving average filter to columns of interest
 # if window_size > 0:
-#     data_df['count'] = data_df['count'].rolling(window=window_size, center=True).mean()
-#     data_df['x_mean'] = data_df['x_mean'].rolling(window=window_size, center=True).mean()
-#     data_df['y_mean'] = data_df['y_mean'].rolling(window=window_size, center=True).mean()
-#     data_df['t0_mean'] = data_df['t0_mean'].rolling(window=window_size, center=True).mean()
-#     data_df['s_mean'] = data_df['s_mean'].rolling(window=window_size, center=True).mean()
-#     data_df['theta_mean'] = data_df['theta_mean'].rolling(window=window_size, center=True).mean()
-#     data_df['phi_mean'] = data_df['phi_mean'].rolling(window=window_size, center=True).mean()
-
-#     # Apply moving average filter to each region
 #     for region in angular_regions:
 #         data_df[region] = data_df[region].rolling(window=window_size, center=True).mean()
     
