@@ -425,6 +425,8 @@ for i in range(1, 5):  # Loop over modules
 plt.tight_layout()
 plt.show()
 
+#%%
+
 # Define the Gaussian function
 def gaussian(x, a, mu, sigma):
     return a * np.exp(-(x - mu)**2 / (2 * sigma**2))
@@ -508,7 +510,15 @@ for sign in ["neg", "pos"]:
 plt.xlim(-1, 1)
 plt.ylim(-0.07, 1.3)
 # plt.legend()
+
 plt.legend(ncol=2)  # Adjust the number of columns
+
+# Create a second x axes for values that are x*200 in mm, but only modify the xticks in that
+ax2 = plt.gca().twiny()
+ax2.set_xlim(-20, 20)
+ax2.set_xlabel("Distance (cm)")
+ax2.set_xticks(np.arange(-20, 20, 5))
+
 plt.tight_layout()
 plt.savefig(figure_save_path + f"{col_name}_gaussian_fit.png", dpi=300)
 plt.show()

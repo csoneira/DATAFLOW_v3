@@ -2,7 +2,7 @@
 
 # Quick plotter for the article
 
-remove_crosstalk = True
+remove_crosstalk = False
 crosstalk_limit = 3.5 #2.6
 
 import pandas as pd
@@ -57,24 +57,43 @@ merged_df.drop_duplicates(inplace=True)
 # Print the column names
 print(merged_df.columns.to_list())
 
-
 # If any value in any column that has Q* in it is smaller than 2.5, put it to 0
 if remove_crosstalk:
-      figure_save_path = "/home/cayetano/DATAFLOW_v3/FIGURES_ARTICLE_NO_CROSSTALK/"
+      figure_save_path = "/home/cayetano/DATAFLOW_v3/CAL_FIGURES_ARTICLE_NO_CROSSTALK/"
       for col in merged_df.columns:
             if "Q_" in col and "s" in col:
                   merged_df[col] = merged_df[col].apply(lambda x: 0 if x < crosstalk_limit else x)
 else:
-      figure_save_path = "/home/cayetano/DATAFLOW_v3/FIGURES_ARTICLE/"
+      figure_save_path = "/home/cayetano/DATAFLOW_v3/CAL_FIGURES_ARTICLE/"
 
 # Check if figures_save_path exists, create one in other case
 import os
 if not os.path.exists(figure_save_path):
       os.makedirs(figure_save_path)
 
-# ---------------------------------------------------------------------------------------------------------------------------------
-# Part 1. Uncertainty in X --------------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------------------------
+
+# Create a 4x4 subfigure
+fig, axs = plt.subplots(4, 4, figsize=(12, 12))
+for i in range(1, 5):
+      for j in range(1, 5):
+            # Get the column name
+            col_name = f"Q_M{i}s{j}"
+            
+            # Plot the histogram
+            v = merged_df[col_name]
+            v = v[v != 0]
+            axs[i-1, j-1].hist(v, bins=200, range=(0, 100))
+            axs[i-1, j-1].set_title(col_name)
+            axs[i-1, j-1].set_xlabel("Charge")
+            axs[i-1, j-1].set_ylabel("Frequency")
+            axs[i-1, j-1].grid(True)
+
+plt.tight_layout()
+figure_name = "pre_cal_all_channels.png"
+plt.savefig(figure_save_path + figure_name, dpi=600)
+# plt.show()
+plt.close()
+
 
 # Take the columns that have all these characters: T, diff and cal
 # Columns to consider
@@ -83,7 +102,7 @@ if not os.path.exists(figure_save_path):
 
 FEE_calibration = {
     "Width": [
-        0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+        0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
         160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
         300, 310, 320, 330, 340, 350, 360, 370, 380, 390
     ],
@@ -102,33 +121,39 @@ FEE_calibration = {
 FEE_calibration = pd.DataFrame(FEE_calibration)
 
 def interpolate_fast_charge(width):
-    """
-    Interpolates the Fast Charge for given Width values using the data table.
+      """
+      Interpolates the Fast Charge for given Width values using the data table.
 
-    Parameters:
-    - width (float or np.ndarray): The Width value(s) to interpolate in ns.
+      Parameters:
+      - width (float or np.ndarray): The Width value(s) to interpolate in ns.
 
-    Returns:
-    - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-    """
-    
-    # Ensure calibration data is sorted and numpy arrays
-    width_table = FEE_calibration['Width'].to_numpy()
-    fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-    
-    width_clipped = np.clip(width, width_table.min(), width_table.max())
-    
-    # Check if width values are within the interpolation range
-    # if np.any((width < width_table.min()) | (width > width_table.max())):
-    #     print(
-    #         f"Some width values are outside the interpolation range "
-    #         f"({width_table.min()} to {width_table.max()}), but will be clipped."
-    #     )
-    
-    width_clipped = np.clip(width, width_table.min(), width_table.max())
-    
-    # Perform linear interpolation
-    return np.interp(width, width_table, fast_charge_table)
+      Returns:
+      - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
+      """
+      
+      # Ensure calibration data is sorted
+      width_table = FEE_calibration['Width'].to_numpy()
+      fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
+      
+      if np.isscalar(width):  # If input is a single value
+            return 0 if width == 0 else np.interp(width, width_table, fast_charge_table)
+      
+      width = np.asarray(width)  # Ensure input is a NumPy array
+      result = np.interp(width, width_table, fast_charge_table)
+      result[width == 0] = 0  # Keep zeros unchanged
+      
+      return result
+
+
+columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event']
+merged_df = merged_df.drop(columns=columns_to_drop)
+
+print(merged_df.columns.to_list())
+
+# For all the columns apply the calibration and not change the name of the columns
+for col in merged_df.columns:
+    merged_df[col] = interpolate_fast_charge(merged_df[col])
+
 
 # ---------------------------------------------------------------------------------------------------------------------------------
 # Part 2. Charge ------------------------------------------------------------------------------------------------------------------
@@ -147,7 +172,7 @@ for i in range(1, 5):
             # Plot the histogram
             v = merged_df[col_name]
             v = v[v != 0]
-            axs[i-1, j-1].hist(v, bins=200, range=(0, 80))
+            axs[i-1, j-1].hist(v, bins=200, range=(0, 1500))
             axs[i-1, j-1].set_title(col_name)
             axs[i-1, j-1].set_xlabel("Charge")
             axs[i-1, j-1].set_ylabel("Frequency")
@@ -159,53 +184,6 @@ plt.savefig(figure_save_path + figure_name, dpi=600)
 # plt.show()
 plt.close()
 
-
-# fig, axs = plt.subplots(4, 4, figsize=(12, 12))
-# for i in range(1, 5):
-#       for j in range(1, 5):
-#             # Get the column name
-#             col_name = f"Q_M{i}s{j}"
-            
-#             # Plot the histogram
-#             v = merged_df[col_name]
-#             v = v[v != 0]
-#             axs[i-1, j-1].hist(v, bins=200, range=(0, 10))
-#             axs[i-1, j-1].set_title(col_name)
-#             axs[i-1, j-1].set_xlabel("Charge")
-#             axs[i-1, j-1].set_ylabel("Frequency")
-#             axs[i-1, j-1].grid(True)
-
-# plt.tight_layout()
-# plt.show()
-
-
-# fig, axs = plt.subplots(4, 1, figsize=(12, 12))
-# for i in range(1, 5):
-#       w = np.zeros(len(merged_df))
-#       for j in range(1, 5):
-#             # Get the column name
-#             col_name = f"Q_M{i}s{j}"
-            
-#             # Plot the histogram
-#             v = merged_df[col_name]
-#             # v = v[v != 0]
-#             w += v
-#       w = w[w != 0]
-#       axs[i-1].hist(w, bins=200, range=(0, 80))
-#       axs[i-1].set_title(col_name)
-#       axs[i-1].set_xlabel("Charge")
-#       axs[i-1].set_ylabel("Frequency")
-#       axs[i-1].grid(True)
-
-# plt.tight_layout()
-# plt.show()
-
-# We call an detection in a module single if only one strip has a charge greater than 0
-# We call it double if two strips have a charge greater than 0
-# We call it double adjacent if two adjacent strips have a charge greater than 0
-# We call it triple if three strips have a charge greater than 0
-# We call it triple adjacent if three adjacent strips have a charge greater than 0
-# We call it quadruple if all four strips have a charge greater than 0
 
 # Create a vector of minimum and other of maximum charge for double adjacent detections, for each module
 # Dictionaries to store min and max charge values for double-adjacent detections
@@ -282,35 +260,6 @@ df_double_non_adj_M2 = pd.DataFrame({"Min": double_non_adjacent_M2_min, "Max": d
 df_double_non_adj_M3 = pd.DataFrame({"Min": double_non_adjacent_M3_min, "Max": double_non_adjacent_M3_max, "Sum": np.array(double_non_adjacent_M3_min) + np.array(double_non_adjacent_M3_max)})
 df_double_non_adj_M4 = pd.DataFrame({"Min": double_non_adjacent_M4_min, "Max": double_non_adjacent_M4_max, "Sum": np.array(double_non_adjacent_M4_min) + np.array(double_non_adjacent_M4_max)})
 
-# Histogram in the same axes the Min, Max and Sum in a 2x2 plot
-# Creating the 2x2 subplot layout
-# fig, axs = plt.subplots(2, 2, figsize=(12, 12))
-
-# # Define module labels and corresponding DataFrames
-# modules = [
-#     ("Module 1", df_double_adj_M1, axs[0, 0]),
-#     ("Module 2", df_double_adj_M2, axs[0, 1]),
-#     ("Module 3", df_double_adj_M3, axs[1, 0]),
-#     ("Module 4", df_double_adj_M4, axs[1, 1])
-# ]
-
-# # Plot histograms for each module
-# for title, df, ax in modules:
-#     ax.hist(df["Min"], bins=200, range=(0, 80), color="r", alpha=0.5, label="Min")
-#     ax.hist(df["Max"], bins=200, range=(0, 80), color="b", alpha=0.5, label="Max")
-#     ax.hist(df["Sum"], bins=200, range=(0, 80), color="g", alpha=0.5, label="Sum")
-    
-#     ax.set_title(title)
-#     ax.set_xlabel("Charge")
-#     ax.set_ylabel("Frequency")
-#     ax.grid(True)
-#     ax.legend()
-
-# # Adjust layout and show the plot
-# plt.tight_layout()
-# plt.show()
-
-
 
 # PLOT 1. HISTOGRAM OF MIN AND MAX CHARGE IN ADJACENT DOUBLE DETECTIONS --------------------------------------------------------
 
@@ -320,26 +269,20 @@ df_double_adj_all = pd.concat([df_double_adj_M1, df_double_adj_M2, df_double_adj
 # Create a single plot
 fig, ax = plt.subplots(figsize=(6, 4))
 
+right_lim = 1200
+
 # Plot histograms for Min, Max, and Sum
-ax.hist(df_double_adj_all["Min"], bins=250, range=(0, 50), color="r", alpha=0.5, label="Minimum charge", density=True)
-ax.hist(df_double_adj_all["Max"], bins=250, range=(0, 50), color="b", alpha=0.5, label="Maximum charge", density=True)
-ax.hist(df_double_adj_all["Sum"], bins=250, range=(0, 50), color="g", alpha=0.5, label="Sum of charges", density=True)
+ax.hist(df_double_adj_all["Min"], bins=250, range=(0, right_lim), color="r", alpha=0.5, label="Minimum charge", density=True)
+ax.hist(df_double_adj_all["Max"], bins=250, range=(0, right_lim), color="b", alpha=0.5, label="Maximum charge", density=True)
+ax.hist(df_double_adj_all["Sum"], bins=250, range=(0, right_lim), color="g", alpha=0.5, label="Sum of charges", density=True)
 
 # Set plot labels and formatting
 # ax.set_title("Histogram of Min, Max, and Sum for Combined Modules")
-ax.set_xlabel("Charge (ns)")
+ax.set_xlabel("Charge (fC)")
 ax.set_ylabel("Frequency")
-ax.set_xlim(-2, 50)
+ax.set_xlim(-2, right_lim)
 ax.grid(True, alpha=0.5, zorder=0)
 ax.legend()
-
-# Create a second x axes for values that are the charges calibrated for the corresponding xticks
-ax2 = ax.twiny()
-ax2.set_xlim(ax.get_xlim())
-ax2.set_xticks(np.linspace(0, 50, 6))
-# Round to 0 decimals
-ax2.set_xticklabels(interpolate_fast_charge(ax2.get_xticks()).round(0).astype(int))
-ax2.set_xlabel("Charge (fC)")
 
 # Show the plot
 plt.tight_layout()
@@ -349,112 +292,6 @@ plt.savefig(figure_save_path + figure_name, dpi=600)
 # plt.show()
 plt.close()
 
-
-
-# Same but non adjacent
-# Histogram in the same axes the Min, Max and Sum in a 2x2 plot
-# Creating the 2x2 subplot layout
-# fig, axs = plt.subplots(2, 2, figsize=(12, 12))
-
-# # Define module labels and corresponding DataFrames
-# modules = [
-#     ("Module 1", df_double_non_adj_M1, axs[0, 0]),
-#     ("Module 2", df_double_non_adj_M2, axs[0, 1]),
-#     ("Module 3", df_double_non_adj_M3, axs[1, 0]),
-#     ("Module 4", df_double_non_adj_M4, axs[1, 1])
-# ]
-
-# # Plot histograms for each module
-# for title, df, ax in modules:
-#     ax.hist(df["Min"], bins=200, range=(0, 40), color="r", alpha=0.5, label="Min")
-#     ax.hist(df["Max"], bins=200, range=(0, 40), color="b", alpha=0.5, label="Max")
-#     ax.hist(df["Sum"], bins=200, range=(0, 40), color="g", alpha=0.5, label="Sum")
-    
-#     ax.set_title(title)
-#     ax.set_xlabel("Charge")
-#     ax.set_ylabel("Frequency")
-#     ax.grid(True)
-#     ax.set_xlim(0, 40)
-#     ax.legend()
-
-# # Adjust layout and show the plot
-# plt.suptitle("Non adjacent")
-# plt.tight_layout()
-# plt.show()
-
-
-
-# Now the distribution in XY
-# fig, axs = plt.subplots(2, 2, figsize=(12, 12))
-# modules = [
-#       ("Module 1", df_double_adj_M1, axs[0, 0]),
-#       ("Module 2", df_double_adj_M2, axs[0, 1]),
-#       ("Module 3", df_double_adj_M3, axs[1, 0]),
-#       ("Module 4", df_double_adj_M4, axs[1, 1])
-# ]
-# for title, df, ax in modules:
-#       ax.scatter(df["Max"] - df["Min"], df["Sum"], color="b", alpha=0.7, s=1, marker=".", label="Dif vs Sum", edgecolors="none")
-#       ax.set_xlim(0, 80)
-#       ax.set_ylim(0, 80)
-#       ax.set_title(title)
-#       ax.set_xlabel("Difference between Max and Min")
-#       ax.set_ylabel("Sum of Max and Min")
-#       ax.grid(True)
-#       ax.legend()
-# plt.tight_layout()
-# plt.show()
-
-
-# # The smile!!!
-# print("Here ----------------------------------------------------------------")
-# fig, axs = plt.subplots(2, 2, figsize=(12, 12))
-# modules = [
-#       ("Module 1", df_double_adj_M1, axs[0, 0]),
-#       ("Module 2", df_double_adj_M2, axs[0, 1]),
-#       ("Module 3", df_double_adj_M3, axs[1, 0]),
-#       ("Module 4", df_double_adj_M4, axs[1, 1])
-# ]
-# for title, df, ax in modules:
-#       ax.scatter(df["Sum"], ( df["Max"] - df["Min"] ) / df["Sum"], color="b", alpha=0.9, s=1, marker=".", label="Dif / Sum vs Sum", edgecolors="none")
-#       ax.set_xlim(0, 80)
-#       ax.set_ylim(0, 1)
-#       ax.set_title(title)
-#       ax.set_xlabel("Dif / Sum between Max and Min")
-#       ax.set_ylabel("Sum of Max and Min")
-#       ax.grid(True)
-#       ax.legend()
-# plt.tight_layout()
-# plt.show()
-
-
-# Create 2x2 subplot layout
-# fig, axs = plt.subplots(2, 2, figsize=(12, 12))
-
-# modules = [
-#     ("Module 1", df_double_adj_M1, axs[0, 0]),
-#     ("Module 2", df_double_adj_M2, axs[0, 1]),
-#     ("Module 3", df_double_adj_M3, axs[1, 0]),
-#     ("Module 4", df_double_adj_M4, axs[1, 1])
-# ]
-
-# for title, df, ax in modules:
-#     x = df["Sum"]
-#     y = (df["Max"] - df["Min"]) / df["Sum"]
-    
-#     hist = ax.hist2d(x, y, bins=(80, 80), range=[[0, 80], [0, 1]], cmap="turbo", cmin=1)
-
-#     ax.set_title(title)
-#     ax.set_xlabel("Sum of Max and Min")
-#     ax.set_ylabel("Difference / Sum between Max and Min")
-#     ax.set_facecolor(hist[3].get_cmap()(0))
-#     ax.grid(True)
-
-#     # Add colorbar
-#     cbar = plt.colorbar(hist[3], ax=ax)
-#     cbar.set_label("Counts")
-
-# # plt.tight_layout()
-# plt.show()
 
 
 # PLOT 2. THE SMILE FOR ALL THE DETECTOR -----------------------------------------------------------------------------------------
@@ -468,11 +305,11 @@ y = (df_double_adj_all["Max"] - df_double_adj_all["Min"]) / df_double_adj_all["S
 
 # Create a single 2D histogram plot
 fig, ax = plt.subplots(figsize=(5, 4))
-hist = ax.hist2d(x, y, bins=(150, 150), range=[[0, 80], [0, 1]], cmap="turbo", cmin=1)
+hist = ax.hist2d(x, y, bins=(150, 150), range=[[0, 2000], [0, 1]], cmap="turbo", cmin=1)
 
 # Set labels and title
 # ax.set_title("2D Histogram of Combined Modules")
-ax.set_xlabel("Sum of charges (ns)")
+ax.set_xlabel("Sum of charges (fC)")
 ax.set_ylabel("Difference / Sum of charges")
 ax.set_facecolor(hist[3].get_cmap()(0))
 ax.grid(True, alpha=0.5, zorder=0)
@@ -481,33 +318,12 @@ ax.grid(True, alpha=0.5, zorder=0)
 cbar = plt.colorbar(hist[3], ax=ax)
 cbar.set_label("Counts")
 
-# Create a second x axes for values that are the charges calibrated for the corresponding xticks
-ax2 = ax.twiny()
-ax2.set_xlim(ax.get_xlim())
-ax2.set_xticks(np.linspace(0, 80, 5))
-# Round to 0 decimals
-ax2.set_xticklabels(interpolate_fast_charge(ax2.get_xticks()).round(0).astype(int))
-ax2.set_xlabel("Charge (fC)")
-
 # Show the plot
 plt.tight_layout()
 figure_name = "2D_histogram_sum_diff_sum_adjacent_double_detections.png"
 plt.savefig(figure_save_path + figure_name, dpi=600)
 # plt.show()
 plt.close()
-
-
-
-# Ratio of the sum of the charges to the maximum charge for M1
-# ratio = ( df_double_adj_M1["Max"] - df_double_adj_M1["Min"]) / df_double_adj_M1["Sum"]
-# # Histogram of the ratio
-# plt.hist(ratio, bins=200, range=(0, 1))
-# plt.xlabel("Ratio")
-# plt.ylabel("Frequency")
-# plt.title("Ratio of Max to Sum")
-# plt.grid(True)
-# plt.show()
-
 
 
 # Same, but for three strip cases -----------------------------------------------------------------------------------------------
@@ -590,71 +406,6 @@ df_triple_non_adj_M1 = pd.DataFrame({"Min": triple_non_adjacent_M1_min, "Mid": t
 df_triple_non_adj_M2 = pd.DataFrame({"Min": triple_non_adjacent_M2_min, "Mid": triple_non_adjacent_M2_mid, "Max": triple_non_adjacent_M2_max, "Sum": np.array(triple_non_adjacent_M2_min) + np.array(triple_non_adjacent_M2_mid) + np.array(triple_non_adjacent_M2_max)})
 df_triple_non_adj_M3 = pd.DataFrame({"Min": triple_non_adjacent_M3_min, "Mid": triple_non_adjacent_M3_mid, "Max": triple_non_adjacent_M3_max, "Sum": np.array(triple_non_adjacent_M3_min) + np.array(triple_non_adjacent_M3_mid) + np.array(triple_non_adjacent_M3_max)})
 df_triple_non_adj_M4 = pd.DataFrame({"Min": triple_non_adjacent_M4_min, "Mid": triple_non_adjacent_M4_mid, "Max": triple_non_adjacent_M4_max, "Sum": np.array(triple_non_adjacent_M4_min) + np.array(triple_non_adjacent_M4_mid) + np.array(triple_non_adjacent_M4_max)})
-
-# PLot 
-# Histogram in the same axes the Min, Max and Sum in a 2x2 plot
-# Creating the 2x2 subplot layout
-# fig, axs = plt.subplots(2, 2, figsize=(12, 12))
-
-# # Define module labels and corresponding DataFrames
-# modules = [
-#     ("Module 1", df_triple_adj_M1, axs[0, 0]),
-#     ("Module 2", df_triple_adj_M2, axs[0, 1]),
-#     ("Module 3", df_triple_adj_M3, axs[1, 0]),
-#     ("Module 4", df_triple_adj_M4, axs[1, 1])
-# ]
-
-# # Plot histograms for each module
-# for title, df, ax in modules:
-#     ax.hist(df["Min"], bins=200, range=(0, 100), color="r", alpha=0.5, label="Min")
-#     ax.hist(df["Mid"], bins=200, range=(0, 100), color="g", alpha=0.5, label="Mid")
-#     ax.hist(df["Max"], bins=200, range=(0, 100), color="b", alpha=0.5, label="Max")
-#     ax.hist(df["Sum"], bins=200, range=(0, 100), color="m", alpha=0.5, label="Sum")
-    
-#     ax.set_title(title)
-#     ax.set_xlabel("Charge")
-#     ax.set_ylabel("Frequency")
-#     ax.set_yscale("log")
-#     ax.grid(True)
-#     ax.legend()
-
-# # Adjust layout and show the plot
-# plt.suptitle("Triple Adjacent")
-# plt.tight_layout()
-# plt.show()
-
-
-# # PLot 
-# # Histogram in the same axes the Min, Max and Sum in a 2x2 plot
-# # Creating the 2x2 subplot layout
-# fig, axs = plt.subplots(2, 2, figsize=(12, 12))
-
-# # Define module labels and corresponding DataFrames
-# modules = [
-#     ("Module 1", df_triple_non_adj_M1, axs[0, 0]),
-#     ("Module 2", df_triple_non_adj_M2, axs[0, 1]),
-#     ("Module 3", df_triple_non_adj_M3, axs[1, 0]),
-#     ("Module 4", df_triple_non_adj_M4, axs[1, 1])
-# ]
-
-# # Plot histograms for each module
-# for title, df, ax in modules:
-#     ax.hist(df["Min"], bins=200, range=(0, 100), color="r", alpha=0.5, label="Min")
-#     ax.hist(df["Mid"], bins=200, range=(0, 100), color="g", alpha=0.5, label="Mid")
-#     ax.hist(df["Max"], bins=200, range=(0, 100), color="b", alpha=0.5, label="Max")
-#     ax.hist(df["Sum"], bins=200, range=(0, 100), color="m", alpha=0.5, label="Sum")
-    
-#     ax.set_title(title)
-#     ax.set_xlabel("Charge")
-#     ax.set_ylabel("Frequency")
-#     ax.set_yscale("log")
-#     ax.grid(True)
-#     ax.legend()
-
-# # Adjust layout and show the plot
-# plt.suptitle("Triple NON Adjacent")
-# plt.tight_layout()
-# plt.show()
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------
@@ -747,35 +498,8 @@ df_triple_adj = pd.concat([df_triple_adj_M1_sum, df_triple_adj_M2_sum, df_triple
 df_quadruple = pd.concat([df_quadruple_M1_sum, df_quadruple_M2_sum, df_quadruple_M3_sum, df_quadruple_M4_sum], axis=0)
 df_total = pd.concat([df_single, df_double_adj, df_triple_adj, df_quadruple], axis=0)
 
-# Histogram in the same axes the sums of the charges for single, double adjacent, triple adjacent and quadruple detections for each module
-# Creating the 2x2 subplot layout
-# fig, axs = plt.subplots(2, 2, figsize=(12, 12))
 
-# # Define module labels and corresponding DataFrames
-# modules = [
-#     ("Module 1", [df_total_M1, df_single_M1_sum, df_double_adj_M1_sum, df_triple_adj_M1_sum, df_quadruple_M1_sum], axs[0, 0]),
-#     ("Module 2", [df_total_M2, df_single_M2_sum, df_double_adj_M2_sum, df_triple_adj_M2_sum, df_quadruple_M2_sum], axs[0, 1]),
-#     ("Module 3", [df_total_M3, df_single_M3_sum, df_double_adj_M3_sum, df_triple_adj_M3_sum, df_quadruple_M3_sum], axs[1, 0]),
-#     ("Module 4", [df_total_M4, df_single_M4_sum, df_double_adj_M4_sum, df_triple_adj_M4_sum, df_quadruple_M4_sum], axs[1, 1])
-# ]
-
-# # Plot histograms for each module
-# for title, dfs, ax in modules:
-#     for i, df in enumerate(dfs):
-#         ax.hist(df, bins=150, range=(0, 300), alpha=0.9, label=f"{['Total', 'Single', 'Double Adjacent', 'Triple Adjacent', 'Quadruple'][i]}", histtype="step")
-    
-#     ax.set_title(title)
-#     ax.set_xlabel("Charge")
-#     ax.set_ylabel("Frequency")
-# #     ax.set_xscale("log")
-#     ax.set_yscale("log")
-#     ax.grid(True)
-#     ax.legend()
-
-# # Adjust layout and show the plot
-# plt.tight_layout()
-# plt.show()
-
+#%%
 
 # PLOT 3. CHARGE DISTRIBUTIONS FOR DETECTION TYPES --------------------------------------------------------------------------------
 
@@ -785,7 +509,7 @@ fig, ax = plt.subplots(figsize=(6, 4))
 # Plot histograms for each detection type
 selected_alpha = 0.7
 bin_number = 250
-right_lim = 250 # 150
+right_lim = 4500 # 150
 ax.hist(df_total, bins=bin_number, range=(0, right_lim), alpha=selected_alpha, label="Total", histtype="step", linewidth=1.5)
 ax.hist(df_single, bins=bin_number, range=(0, right_lim), alpha=selected_alpha, label="Single", histtype="step", linewidth=1.5)
 ax.hist(df_double_adj, bins=bin_number, range=(0, right_lim), alpha=selected_alpha, label="Double Adjacent", histtype="step", linewidth=1.5,)
@@ -794,21 +518,12 @@ ax.hist(df_quadruple, bins=bin_number, range=(0, right_lim), alpha=selected_alph
 
 # Set plot labels and scaling
 # ax.set_title("Charge Distributions for Detection Types")
-ax.set_xlabel("Charge (ns)")
+ax.set_xlabel("Charge (fC)")
 ax.set_ylabel("Frequency")
 ax.set_xlim(-2, right_lim)
 ax.set_yscale("log")  # Log scale for better visualization of frequency range
 ax.grid(True, alpha=0.5, zorder=0)
 ax.legend()
-
-# Create a second x axes for values that are the charges calibrated for the corresponding xticks
-ax2 = ax.twiny()
-ax2.set_xlim(ax.get_xlim())
-# Use the same tick positions as the primary x-axis
-ax2.set_xticks(ax.get_xticks())
-# Convert tick labels using the calibration function, ensuring integer formatting
-ax2.set_xticklabels(interpolate_fast_charge(ax.get_xticks()).round(0).astype(int).astype(str))
-ax2.set_xlabel("Charge (fC)")
 
 # Show the plot
 plt.tight_layout()
