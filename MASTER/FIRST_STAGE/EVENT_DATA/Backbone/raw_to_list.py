@@ -341,8 +341,8 @@ pos_filter = 600
 proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = -0.02 # -0.01
-slowness_filter_right = 0.025 # 0.025
+slowness_filter_left = -0.04 # -0.01
+slowness_filter_right = 0.04 # 0.025
 charge_strip_left_filter = -1e6
 charge_strip_right_filter = 1e6
 charge_event_left_filter = -1e6
@@ -4812,7 +4812,9 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
         'charge_1': [0, 250],
         'charge_2': [0, 250],
         'charge_3': [0, 250],
-        'charge_4': [0, 250]
+        'charge_4': [0, 250],
+        's': [slowness_filter_left, slowness_filter_right],
+        'th_chi': [0, 0.03]
     }
     
     # Apply filters
@@ -4864,6 +4866,10 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
                 y_data = df[y_col]
                 ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
                 ax.set_facecolor(plt.cm.turbo(0))
+                
+                square_x = [-150, 150, 150, -150, -150]  # Closing the loop
+                square_y = [-150, -150, 150, 150, -150]
+                ax.plot(square_x, square_y, color='white', linewidth=1)  # Thin white line
                 
                 # Apply determined limits
                 ax.set_xlim(auto_limits[x_col])
@@ -4974,6 +4980,40 @@ for filters, title in df_cases_2:
         plot_list
     )
 
+
+for filters, title in df_cases_2:
+    fig_idx = plot_hexbin_matrix(
+        df_plot_ancillary,
+        ['x', 'y', 'theta', 'phi', 'xp', 'yp', 's', 'th_chi'],
+        filters,
+        title,
+        save_plots,
+        show_plots,
+        base_directories,
+        fig_idx,
+        plot_list
+    )
+
+
+for filters, title in df_cases_2:
+    
+    relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+    relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+    relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+    
+    columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp', 's'] + relevant_residues_tsum + relevant_residues_tdif + relevant_residues_ystr
+    
+    fig_idx = plot_hexbin_matrix(
+        df_plot_ancillary,
+        columns_of_interest,
+        filters,
+        title,
+        save_plots,
+        show_plots,
+        base_directories,
+        fig_idx,
+        plot_list
+    )
 
 # ------------------------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------

@@ -63,7 +63,7 @@ res_win_min = 30 # 180 Resampling window minutes
 # HMF_ker = 1 # It must be odd. Horizontal Median Filter
 # MAF_ker = 1 # Moving Average Filter
 
-outlier_filter = 3
+outlier_filter = 3 #3
 
 high_order_correction = True
 date_selection = True  # Set to True if you want to filter by date
@@ -105,11 +105,15 @@ resampling_window = f'{res_win_min}min'  # '10min' # '5min' stands for 5 minutes
 # Columns to sum
 angular_regions = ['High', 'N', 'S', 'E', 'W']
 detection_types = ['type_1234', 'type_123', 'type_234', 'type_124', 'type_134', 'type_12', 'type_23', 'type_34', 'type_13', 'type_14', 'type_24']
-charge_types = ['count_in_1_sum', 'avalanche_1_sum', 'streamer_1_sum',
-                'count_in_2_sum', 'avalanche_2_sum', 'streamer_2_sum',
-                'count_in_3_sum', 'avalanche_3_sum', 'streamer_3_sum',
-                'count_in_4_sum', 'avalanche_4_sum', 'streamer_4_sum']
+# charge_types = ['count_in_1_sum', 'avalanche_1_sum', 'streamer_1_sum',
+#                 'count_in_2_sum', 'avalanche_2_sum', 'streamer_2_sum',
+#                 'count_in_3_sum', 'avalanche_3_sum', 'streamer_3_sum',
+#                 'count_in_4_sum', 'avalanche_4_sum', 'streamer_4_sum']
 
+charge_types = ['count_in_1', 'avalanche_1', 'streamer_1',
+                'count_in_2', 'avalanche_2', 'streamer_2',
+                'count_in_3', 'avalanche_3', 'streamer_3',
+                'count_in_4', 'avalanche_4', 'streamer_4']
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -198,9 +202,15 @@ end_date = datetime.now()
 
 if date_selection:
 # if date_selection and start_date is not None:
-    # start_date = pd.to_datetime("2025-02-02")  # Use a string in 'YYYY-MM-DD' format
-    start_date = pd.to_datetime("2025-02-17 12:00:00")  # Use a string in 'YYYY-MM-DD' format
-    end_date = pd.to_datetime("2025-03-04 11:00")
+    start_date = pd.to_datetime("2024-03-23 00:00:00")  # Use a string in 'YYYY-MM-DD' format
+    end_date = pd.to_datetime("2024-04-01 00:00:00")
+    
+    # start_date = pd.to_datetime("2024-05-08 00:00:00")  # Use a string in 'YYYY-MM-DD' format
+    # end_date = pd.to_datetime("2024-06-30 00:00:00")
+    
+    # start_date = pd.to_datetime("2025-01-02")  # Use a string in 'YYYY-MM-DD' format
+    # start_date = pd.to_datetime("2025-02-17 12:00:00")  # Use a string in 'YYYY-MM-DD' format
+    # end_date = pd.to_datetime("2025-03-12 11:00")
     
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
@@ -460,7 +470,8 @@ data_df['unc_final_eff_4'] = data_df['unc_eff_4'] / data_df['acc_4']
 
 # Calculate the average efficiency
 # data_df['eff_global'] = data_df[['eff_1', 'eff_2', 'eff_3', 'eff_4']].mean(axis=1)
-data_df['eff_global'] = data_df[['final_eff_2', 'final_eff_3']].mean(axis=1)
+data_df['eff_global'] = data_df[['final_eff_1', 'final_eff_2', 'final_eff_3']].mean(axis=1)
+# data_df['eff_global'] = data_df[['final_eff_1', 'final_eff_2', 'final_eff_3']].median(axis=1)
 
 # Calculate the uncertainty for the average efficiency
 data_df['unc_eff_global'] = np.sqrt(
@@ -775,6 +786,7 @@ if create_plots:
     ax2.plot(data_df['Time'], data_df['type_234'] / (data_df["number_of_rows"] * 60), label='Measured 234', color='C5')
     ax2.plot(data_df['Time'], data_df['type_1234'] / (data_df["number_of_rows"] * 60), label='Measured 1234', color='C6')
     
+    ax2.set_ylim(1, 5)
     ax2.set_xlabel('Time')
     ax2.set_ylabel('Rate')
     ax2.set_title('Original Rates over Time')
@@ -787,6 +799,7 @@ if create_plots:
     ax3.plot(data_df['Time'], data_df['new_sys_234'], label='Crossing 234', color='C5')
     ax3.plot(data_df['Time'], data_df['new_sys_1234'], label='Crossing 1234', color='C6')
 
+    ax3.set_ylim(1, 5)
     ax3.set_xlabel('Time')
     ax3.set_ylabel('Rate')
     ax3.set_title('Corrected by efficiency Rates over Time')
@@ -1270,42 +1283,42 @@ if high_order_correction:
             x = df['delta_Tg_over_Tg0']
             y_data = df['delta_I_over_I0']  # your actual y-values
 
-            ax.scatter(x, y_data, s=15, alpha=0.7, label='Data')  # smaller points
+            ax.scatter(x, y_data, alpha=0.7, label='Data', s=1)  # smaller points
 
             # Build a line from min(x) to max(x), ignoring the other variables
             x_line = np.linspace(x.min(), x.max(), 100)
             y_line = A * x_line  # slope = A, intercept = 0 (since fit_intercept=False)
-            ax.plot(x_line, y_line, color='red', label='Partial Fit')
+            ax.plot(x_line, y_line, color='red', label=f'Partial Fit, {A*100:.1f}% = {A*100*Tg0:.1f}% / K')
 
-            ax.set_xlabel('Delta Tg / Tg0')
+            ax.set_xlabel('$\Delta T^{\mathrm{ground}} / T^{\mathrm{ground}}_{0}$')
             ax.set_ylabel('Delta I / I0')
-            ax.set_title('Effect of Tg')
+            ax.set_title('Effect of Temp. ground')
             ax.legend()
 
             # 2) Plot Delta Th
             ax = axes[1]
             x = df['delta_Th_over_Th0']
-            ax.scatter(x, y_data, s=15, alpha=0.7, label='Data')
+            ax.scatter(x, y_data, alpha=0.7, label='Data', s=1, color = "green")
 
             x_line = np.linspace(x.min(), x.max(), 100)
             y_line = B * x_line  # slope = B
-            ax.plot(x_line, y_line, color='red', label='Partial Fit')
+            ax.plot(x_line, y_line, color='red', label=f'Partial Fit, {B*100:.1f}% = {B*100*Th0:.1f}% / K')
 
-            ax.set_xlabel('Delta Th / Th0')
-            ax.set_title('Effect of Th')
+            ax.set_xlabel('$\Delta T^{100\ \mathrm{mbar}} / T^{100\ \mathrm{mbar}}_{0}$')
+            ax.set_title('Effect of Temp. 100 mbar layer')
             ax.legend()
 
             # 3) Plot Delta H
             ax = axes[2]
             x = df['delta_H_over_H0']
-            ax.scatter(x, y_data, s=15, alpha=0.7, label='Data')
+            ax.scatter(x, y_data, alpha=0.7, label='Data', s=1, color = "purple")
 
             x_line = np.linspace(x.min(), x.max(), 100)
             y_line = C * x_line  # slope = C
-            ax.plot(x_line, y_line, color='red', label='Partial Fit')
+            ax.plot(x_line, y_line, color='red', label=f'Partial Fit, {C*100:.1f}% = {C*100*H0:.1f}% / m')
 
-            ax.set_xlabel('Delta H / H0')
-            ax.set_title('Effect of H')
+            ax.set_xlabel('$\Delta h^{100\ \mathrm{mbar}} / h^{100\ \mathrm{mbar}}_{0}$')
+            ax.set_title('Effect of Height of 100 mbar layer')
             ax.legend()
 
             plt.tight_layout()
@@ -1361,7 +1374,9 @@ if create_plots:
     ax2.plot(data_df['Time'], data_df[f'{region}_high_order_corrected'], label='High order corrected rate', color='C10')
     ax2.set_xlabel('Time')
     ax2.set_ylabel('Rate')
-    ax2.set_ylim(12, 16)
+    # ax2.set_ylim(12, 16)
+    # ax2.set_ylim(16, 18)
+    ax2.set_ylim(10, 25)
     ax2.set_title('Rates over Time')
     ax2.legend(loc='upper left')
 
@@ -1432,7 +1447,7 @@ data_df = data_df.replace(0, np.nan)
 print("------------------------------------------------------------------------------------------")
 print("WATCH OUT THIS LAST FILTER BECAUSE IT MAY GIVE PROBLEMS IN THE FUTURE!!!!!!!!!!!!!!!!!!!!!")
 print("------------------------------------------------------------------------------------------")
-data_df.loc[(data_df['totally_corrected_rate'] < 10) | (data_df['totally_corrected_rate'] > 20), 'totally_corrected_rate'] = np.nan
+data_df.loc[(data_df['totally_corrected_rate'] < 5) | (data_df['totally_corrected_rate'] > 30), 'totally_corrected_rate'] = np.nan
 # data_df.loc[(data_df['totally_corrected_rate'] < 4.85) | (data_df['totally_corrected_rate'] > 5.3), 'totally_corrected_rate'] = np.nan
 
 data_df.to_csv(save_filename, index=False)

@@ -177,7 +177,7 @@ high_mid_limit_angle = 15
 
 # crosstalk_threshold = 1.2
 
-regions = ['High', 'N', 'E', 'S', 'W']
+# regions = ['High', 'N', 'E', 'S', 'W']
 # test_filename = 'list_events_2024.12.16_23.27.54.txt'
 
 
@@ -199,6 +199,45 @@ def classify_region(row):
             return 'W'
         else:
             return 'S'
+
+
+# Hans' angular map division
+high_regions_hans = ['V']
+mid_regions_hans = ['N.M', 'NE.M', 'E.M', 'SE.M', 'S.M', 'SW.M', 'W.M', 'NW.M']
+low_regions_hans = ['N.H', 'E.H', 'S.H', 'W.H']
+
+def classify_region_hans(row):
+    phi = row['phi'] * 180/np.pi
+    theta = row['theta'] * 180/np.pi
+
+    if 0 <= theta < 10:
+        return 'V'
+    elif 10 <= theta <= 40:
+        if -22.5 <= phi < 22.5:
+            return 'N.M'
+        elif 22.5 <= phi < 67.5:
+            return 'NE.M'
+        elif 67.5 <= phi < 112.5:
+            return 'E.M'
+        elif 112.5 <= phi < 157.5:
+            return 'SE.M'
+        elif -180 <= phi < -157.5 or 157.5 <= phi <= 180:
+            return 'S.M'
+        elif -157.5 <= phi < -112.5:
+            return 'SW.M'
+        elif -112.5 <= phi < -67.5:
+            return 'W.M'
+        else:  # -67.5 <= phi < -22.5
+            return 'NW.M'
+    elif 40 < theta <= 90:
+        if -45 <= phi < 45:
+            return 'N.H'
+        elif 45 <= phi < 135:
+            return 'E.H'
+        elif -135 <= phi < -45:
+            return 'W.H'
+        else:  # phi >= 135 or phi < -135
+            return 'S.H'
 
 def custom_mean(x):
     return x[x != 0].mean() if len(x[x != 0]) > 0 else 0
@@ -476,6 +515,9 @@ print("Starting the analysis")
 print("Region assigning...")
 df['region'] = df.apply(classify_region, axis=1)
 
+print("Hans' region assigning...")
+df['region_hans'] = df.apply(classify_region_hans, axis=1)
+
 # Clean type column
 print("Cleaning the type column...")
 df['type'] = df['type'].apply(clean_type_column)
@@ -714,6 +756,10 @@ resampled_df.rename(columns=lambda x: x.replace('_sum', ''), inplace=True)
 # Region-specific count aggregation
 region_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region'])
 resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
+
+# Hans' region-specific count aggregation
+region_hans_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region_hans'])
+resampled_df = resampled_df.join(region_hans_counts, how='left').fillna(0)
 
 # Split 'type_<lambda>' dictionary into separate columns for each type
 if 'type_<lambda>' in resampled_df.columns:

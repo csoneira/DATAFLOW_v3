@@ -438,7 +438,8 @@ v = df[col_name]
 v = v[v != 0]
 plt.hist(v, bins=bin_number, range=(-1, 1), alpha=0.8, density = True, histtype = 'step', color='red')
 
-plt.hist(v, bins=bin_number, range=(-1, 1), alpha=0.2, density = True, label="$T_{\mathrm{diff}}$", color='red')
+# plt.hist(v, bins=bin_number, range=(-1, 1), alpha=0.2, density = True, label="$T_{\mathrm{diff}}$", color='red')
+plt.hist(v, bins=bin_number, range=(-1, 1), alpha=0.2, density = True, label="Histogram", color='red')
 plt.fill_between([-1,1], 0, -1, color='red', alpha=0.2)
 
 # plt.title(col_name)
@@ -468,8 +469,11 @@ for i in range(len(x)):
 
 
 # Plot the differential data
-plt.plot(x, factor * y, label="$T_{\mathrm{diff}}$ derivative", color = "green", alpha = 0.35)
+# plt.plot(x, factor * y, label="$T_{\mathrm{diff}}$ derivative", color = "green", alpha = 0.35)
+plt.plot(x, factor * y, label="Hist. derivative", color = "green", alpha = 0.35)
 plt.scatter(x, factor * y, color = "green", alpha = 0.75, s = 13)
+
+# ord = 0
 
 # Overlay the differential and Gaussian fit
 for sign in ["neg", "pos"]:
@@ -503,8 +507,16 @@ for sign in ["neg", "pos"]:
     
     # Plot the Gaussian fit
     # print(mu, sigma)
+    if sign == "neg":
+        ord = "left"
+    else:
+        ord = "right"
     x_fit = np.linspace(min(x), max(x), 500)
-    plt.plot(x_fit, factor_gaussian * gaussian(x_fit, A, mu, sigma), linewidth = 2.5, label=f"Gaussian Fit, $\\sigma$ = {sigma:.3f} ns, $\Delta X$ = {sigma*20:.2g} cm")
+    # the_label = fr"Gaussian Fit, $\sigma(\Delta T_{{{ord}}})$ = {sigma:.3f} ns, $\sigma(X_{{{ord}}})$ = {sigma*20:.2g} cm"
+    the_label = fr"Gaussian Fit, $\sigma(X_{{\mathrm{{{ord}}}}})$ = {sigma*20:.2g} cm"
+    # ord += 1
+    # the_label = r"Gaussian Fit, $\sigma(T_{\mathrm{diff}})$ = " + f"{sigma:.3f} ns, " + r"$\sigma(X)$ = " + f"{sigma*20:.2g} cm"
+    plt.plot(x_fit, factor_gaussian * gaussian(x_fit, A, mu, sigma), linewidth = 2.5, label=the_label)
 
 # Add legend and finalize the plot
 plt.xlim(-1, 1)

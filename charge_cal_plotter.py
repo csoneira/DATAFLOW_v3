@@ -2,7 +2,7 @@
 
 # Quick plotter for the article
 
-remove_crosstalk = False
+remove_crosstalk = True
 crosstalk_limit = 3.5 #2.6
 
 import pandas as pd
@@ -117,32 +117,59 @@ FEE_calibration = {
     ]
 }
 
-# Create the DataFrame
+# # Create the DataFrame
 FEE_calibration = pd.DataFrame(FEE_calibration)
 
+# def interpolate_fast_charge(width):
+#     """
+#     Interpolates the Fast Charge for given Width values using the data table.
+
+#     Parameters:
+#     - width (float or np.ndarray): The Width value(s) to interpolate in ns.
+
+#     Returns:
+#     - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
+#     """
+
+#     # Ensure calibration data is sorted
+#     width_table = FEE_calibration['Width'].to_numpy()
+#     fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
+
+#     if np.isscalar(width):  # If input is a single value
+#             return 0 if width == 0 else np.interp(width, width_table, fast_charge_table)
+
+#     width = np.asarray(width)  # Ensure input is a NumPy array
+#     result = np.interp(width, width_table, fast_charge_table)
+#     result[width == 0] = 0  # Keep zeros unchanged
+
+#     return result
+
+
+from scipy.interpolate import CubicSpline
+
+# Convert to NumPy arrays for interpolation
+width_table = FEE_calibration['Width'].to_numpy()
+fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
+
+# Create a cubic spline interpolator
+cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
+
 def interpolate_fast_charge(width):
-      """
-      Interpolates the Fast Charge for given Width values using the data table.
+    """
+    Interpolates the Fast Charge for given Width values using cubic spline interpolation.
 
-      Parameters:
-      - width (float or np.ndarray): The Width value(s) to interpolate in ns.
+    Parameters:
+    - width (float or np.ndarray): The Width value(s) to interpolate in ns.
 
-      Returns:
-      - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-      """
-      
-      # Ensure calibration data is sorted
-      width_table = FEE_calibration['Width'].to_numpy()
-      fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-      
-      if np.isscalar(width):  # If input is a single value
-            return 0 if width == 0 else np.interp(width, width_table, fast_charge_table)
-      
-      width = np.asarray(width)  # Ensure input is a NumPy array
-      result = np.interp(width, width_table, fast_charge_table)
-      result[width == 0] = 0  # Keep zeros unchanged
-      
-      return result
+    Returns:
+    - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
+    """
+    width = np.asarray(width)  # Ensure input is a NumPy array
+
+    # Keep zero values unchanged
+    result = np.where(width == 0, 0, cs(width))
+
+    return result
 
 
 columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event']
@@ -641,3 +668,5 @@ plt.savefig(figure_save_path + figure_name, dpi=600)
 # plt.show()
 plt.close()
 
+
+# %%
