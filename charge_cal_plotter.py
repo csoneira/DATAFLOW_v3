@@ -670,3 +670,100 @@ plt.close()
 
 
 # %%
+
+
+
+# PLOTS 5. THE DETECTION TYPE ACCORDING TO THE PLANE
+
+import matplotlib.pyplot as plt
+
+# Define parameters
+selected_alpha = 0.7
+bin_number = 250
+right_lim = 4500  # 150
+
+# Create a figure with 4 subplots (one per plane), sharing the x-axis
+fig, axes = plt.subplots(4, 1, figsize=(6, 12), sharex=True)
+
+# Define plane names and their corresponding data
+planes = ['M1', 'M2', 'M3', 'M4']
+df_totals = [df_total_M1, df_total_M2, df_total_M3, df_total_M4]
+df_singles = [df_single_M1_sum, df_single_M2_sum, df_single_M3_sum, df_single_M4_sum]
+df_double_adjs = [df_double_adj_M1_sum, df_double_adj_M2_sum, df_double_adj_M3_sum, df_double_adj_M4_sum]
+df_triple_adjs = [df_triple_adj_M1_sum, df_triple_adj_M2_sum, df_triple_adj_M3_sum, df_triple_adj_M4_sum]
+df_quadruples = [df_quadruple_M1_sum, df_quadruple_M2_sum, df_quadruple_M3_sum, df_quadruple_M4_sum]
+
+# Iterate over the planes and plot each one in its corresponding subplot
+for ax, plane, df_total, df_single, df_double_adj, df_triple_adj, df_quadruple in zip(
+    axes, planes, df_totals, df_singles, df_double_adjs, df_triple_adjs, df_quadruples):
+
+    ax.hist(df_total, bins=bin_number, range=(0, right_lim), alpha=selected_alpha, label="Total", histtype="step", linewidth=1.5)
+    ax.hist(df_single, bins=bin_number, range=(0, right_lim), alpha=selected_alpha, label="Single", histtype="step", linewidth=1.5)
+    ax.hist(df_double_adj, bins=bin_number, range=(0, right_lim), alpha=selected_alpha, label="Double Adjacent", histtype="step", linewidth=1.5)
+    ax.hist(df_triple_adj, bins=bin_number, range=(0, right_lim), alpha=selected_alpha, label="Triple Adjacent", histtype="step", linewidth=1.5)
+    ax.hist(df_quadruple, bins=bin_number, range=(0, right_lim), alpha=selected_alpha, label="Quadruple", histtype="step", linewidth=1.5)
+
+    ax.set_yscale("log")  # Log scale for better visualization
+    ax.grid(True, alpha=0.5, zorder=0)
+    ax.set_title(f"Charge Distributions - {plane}")
+
+# Set common labels
+axes[-1].set_xlabel("Charge (fC)")
+for ax in axes:
+    ax.set_ylabel("Frequency")
+    ax.legend()
+
+# Set layout and save figure
+plt.tight_layout()
+figure_name = "histogram_charge_distributions_per_plane.png"
+plt.savefig(figure_save_path + figure_name, dpi=600)
+plt.close()
+
+#%%
+
+
+# PLOT 6: SAME BUT DIFFERENT
+
+import matplotlib.pyplot as plt
+
+# Define parameters
+selected_alpha = 0.7
+bin_number = 250
+right_lim = 4500  # 4500
+module_colors = ["r", "orange", "g", "b"]  # Module 1: Red, Module 2: Orange, Module 3: Green, Module 4: Blue
+
+# Create a figure with 5 subplots (one per detection type), sharing the x-axis
+fig, axes = plt.subplots(5, 1, figsize=(7, 15), sharex=True)
+
+# Define detection types and their corresponding data
+detection_types = ['Total', 'Single', 'Double Adjacent', 'Triple Adjacent', 'Quadruple']
+df_data = [
+    [df_total_M1, df_total_M2, df_total_M3, df_total_M4],
+    [df_single_M1_sum, df_single_M2_sum, df_single_M3_sum, df_single_M4_sum],
+    [df_double_adj_M1_sum, df_double_adj_M2_sum, df_double_adj_M3_sum, df_double_adj_M4_sum],
+    [df_triple_adj_M1_sum, df_triple_adj_M2_sum, df_triple_adj_M3_sum, df_triple_adj_M4_sum],
+    [df_quadruple_M1_sum, df_quadruple_M2_sum, df_quadruple_M3_sum, df_quadruple_M4_sum],
+]
+
+# Iterate over detection types and plot in the corresponding subplot
+for ax, detection_type, df_group in zip(axes, detection_types, df_data):
+    for df, color, module in zip(df_group, module_colors, ['M1', 'M2', 'M3', 'M4']):
+        ax.hist(df, bins=bin_number, range=(0, right_lim), alpha=selected_alpha, label=f"{module}", color=color, histtype="step", linewidth=1.5, density = True)
+
+    ax.set_yscale("log")  # Log scale for better visualization
+    ax.grid(True, alpha=0.5, zorder=0)
+    ax.set_title(f"Charge Distributions - {detection_type}")
+
+# Set common labels
+axes[-1].set_xlabel("Charge (fC)")
+for ax in axes:
+    ax.set_ylabel("Frequency")
+    ax.legend(title="Module", loc='upper right', fontsize=8)
+
+# Set layout and save figure
+plt.tight_layout()
+figure_name = "histogram_charge_distributions_per_detection_type.png"
+plt.savefig(figure_save_path + figure_name, dpi=600)
+plt.close()
+
+# %%

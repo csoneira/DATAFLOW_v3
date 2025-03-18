@@ -59,7 +59,7 @@ show_errorbar = False
 
 recalculate_pressure_coeff = True
 
-res_win_min = 30 # 180 Resampling window minutes
+res_win_min = 60 # 180 Resampling window minutes
 # HMF_ker = 1 # It must be odd. Horizontal Median Filter
 # MAF_ker = 1 # Moving Average Filter
 
@@ -202,15 +202,16 @@ end_date = datetime.now()
 
 if date_selection:
 # if date_selection and start_date is not None:
-    start_date = pd.to_datetime("2024-03-23 00:00:00")  # Use a string in 'YYYY-MM-DD' format
-    end_date = pd.to_datetime("2024-04-01 00:00:00")
+    # start_date = pd.to_datetime("2024-03-23 00:00:00")  # Use a string in 'YYYY-MM-DD' format
+    # start_date = pd.to_datetime("2024-03-27 00:00:00")  # Use a string in 'YYYY-MM-DD' format
+    # end_date = pd.to_datetime("2024-03-31 07:30:00")
     
-    # start_date = pd.to_datetime("2024-05-08 00:00:00")  # Use a string in 'YYYY-MM-DD' format
-    # end_date = pd.to_datetime("2024-06-30 00:00:00")
+    start_date = pd.to_datetime("2024-05-10 00:00:00")  # Use a string in 'YYYY-MM-DD' format
+    end_date = pd.to_datetime("2024-05-11 12:00:00")
     
     # start_date = pd.to_datetime("2025-01-02")  # Use a string in 'YYYY-MM-DD' format
-    # start_date = pd.to_datetime("2025-02-17 12:00:00")  # Use a string in 'YYYY-MM-DD' format
-    # end_date = pd.to_datetime("2025-03-12 11:00")
+    start_date = pd.to_datetime("2025-02-17 12:00:00")  # Use a string in 'YYYY-MM-DD' format
+    end_date = pd.to_datetime("2025-03-18 11:00")
     
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
@@ -1167,6 +1168,187 @@ if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
 # Create corrected rate column for the region
 data_df[f'pres_{region}'] = I * np.exp(-1 * eta_P / 100 * delta_P)
 
+high_regions_hans = ['V']
+mid_regions_hans = ['N.M', 'NE.M', 'E.M', 'SE.M', 'S.M', 'SW.M', 'W.M', 'NW.M']
+low_regions_hans = ['N.H', 'E.H', 'S.H', 'W.H']
+angular_regions = high_regions_hans + mid_regions_hans + low_regions_hans
+
+for reg in angular_regions:
+    data_df[f'pres_{reg}'] = data_df[reg] * np.exp(-1 * eta_P / 100 * delta_P)
+
+# Plot all the time series in angular_regions
+if create_plots:
+    print("Creating multi-panel count plots for all angular regions...")
+
+    # Create figures with 4 subplots each, sharing x-axis
+    fig, axes_original = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
+    fig_corr, axes_corrected = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
+
+    # Define angular region groups
+    regions_v = ['V']
+    regions_main = ['N.M', 'E.M', 'W.M', 'S.M']
+    regions_diagonal = ['NE.M', 'SE.M', 'SW.M', 'NW.M']
+    regions_h = ['N.H', 'E.H', 'S.H', 'W.H']
+
+    region_groups = [regions_v, regions_main, regions_diagonal, regions_h]
+
+    # ---- ORIGINAL COUNTS ----
+    for ax, regions in zip(axes_original, region_groups):
+        for region in regions:
+            ax.plot(data_df['Time'], data_df[region] / (60 * res_win_min), label=f'{region} (Hz)')
+        ax.set_ylabel('Counts')
+        ax.legend(loc='upper left', ncol=2, fontsize=8)
+
+    axes_original[0].set_title('Original Counts - V')
+    axes_original[1].set_title('Original Counts - N.M, E.M, W.M, S.M')
+    axes_original[2].set_title('Original Counts - NE.M, SE.M, SW.M, NW.M')
+    axes_original[3].set_title('Original Counts - H Regions (N.H, E.H, S.H, W.H)')
+    axes_original[-1].set_xlabel('Time')
+
+    # ---- PRESSURE-CORRECTED COUNTS ----
+    for ax, regions in zip(axes_corrected, region_groups):
+        for region in regions:
+            ax.plot(data_df['Time'], data_df[f'pres_{region}'], label=f'Corrected {region}')
+        ax.set_ylabel('Counts')
+        ax.legend(loc='upper left', ncol=2, fontsize=8)
+
+    axes_corrected[0].set_title('Pressure-Corrected Counts - V')
+    axes_corrected[1].set_title('Pressure-Corrected Counts - N.M, E.M, W.M, S.M')
+    axes_corrected[2].set_title('Pressure-Corrected Counts - NE.M, SE.M, SW.M, NW.M')
+    axes_corrected[3].set_title('Pressure-Corrected Counts - H Regions (N.H, E.H, S.H, W.H)')
+    fig.suptitle("Rates for All Angular Regions", fontsize=14, fontweight='bold')
+    axes_corrected[-1].set_xlabel('Time')
+
+    plt.tight_layout()
+
+    # Save or show the plots
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        fig.savefig(figure_path + "_counts_original.png", format='png', dpi=300)
+        fig_corr.savefig(figure_path + "_counts_corrected.png", format='png', dpi=300)
+        print("Saved multi-panel count plots.")
+
+    plt.close(fig)
+    plt.close(fig_corr)
+
+if create_plots:
+    print("Creating multi-panel count plots for all angular regions...")
+
+    # Create figures with 4 subplots each, sharing x-axis
+    fig, axes_original = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
+    fig_corr, axes_corrected = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
+
+    # Define angular region groups
+    regions_v = ['V']
+    regions_main = ['N.M', 'E.M', 'W.M', 'S.M']
+    regions_diagonal = ['NE.M', 'SE.M', 'SW.M', 'NW.M']
+    regions_h = ['N.H', 'E.H', 'S.H', 'W.H']
+
+    region_groups = [regions_v, regions_main, regions_diagonal, regions_h]
+
+    # ---- ORIGINAL COUNTS ----
+    for ax, regions in zip(axes_original, region_groups):
+        norm_offset = 0
+        for region in regions:
+            y = data_df[region]
+            y_norm = (y - y.mean()) / y.mean() + norm_offset
+            norm_offset += 0.1
+            ax.plot(data_df['Time'], y_norm, label=f'{region}')
+            # ax.plot(data_df['Time'], data_df[region], label=f'{region}')
+        ax.set_ylabel('Counts')
+        ax.legend(loc='upper left', ncol=2, fontsize=8)
+
+    axes_original[0].set_title('Original Counts - V')
+    axes_original[1].set_title('Original Counts - N.M, E.M, W.M, S.M')
+    axes_original[2].set_title('Original Counts - NE.M, SE.M, SW.M, NW.M')
+    axes_original[3].set_title('Original Counts - H Regions (N.H, E.H, S.H, W.H)')
+    fig.suptitle("Normalized Counts for All Angular Regions", fontsize=14, fontweight='bold')
+    axes_original[-1].set_xlabel('Time')
+
+    # ---- PRESSURE-CORRECTED COUNTS ----
+    for ax, regions in zip(axes_corrected, region_groups):
+        for region in regions:
+            ax.plot(data_df['Time'], data_df[f'pres_{region}'], label=f'Corrected {region}')
+        ax.set_ylabel('Counts')
+        ax.legend(loc='upper left', ncol=2, fontsize=8)
+
+    axes_corrected[0].set_title('Pressure-Corrected Counts - V')
+    axes_corrected[1].set_title('Pressure-Corrected Counts - N.M, E.M, W.M, S.M')
+    axes_corrected[2].set_title('Pressure-Corrected Counts - NE.M, SE.M, SW.M, NW.M')
+    axes_corrected[3].set_title('Pressure-Corrected Counts - H Regions (N.H, E.H, S.H, W.H)')
+    axes_corrected[-1].set_xlabel('Time')
+
+    plt.tight_layout()
+
+    # Save or show the plots
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        fig.savefig(figure_path + "_counts_original_norm.png", format='png', dpi=300)
+        fig_corr.savefig(figure_path + "_counts_corrected.png", format='png', dpi=300)
+        print("Saved multi-panel count plots.")
+
+    plt.close(fig)
+    plt.close(fig_corr)
+
+
+
+
+
+# Define angular regions
+angular_regions = ['High', 'N', 'S', 'E', 'W']
+
+# Apply pressure correction
+for reg in angular_regions:
+    data_df[f'pres_{reg}'] = data_df[reg] * np.exp(-1 * eta_P / 100 * delta_P)
+
+# Plot all the time series in angular_regions
+if create_plots:
+    print("Creating multi-panel count plots for all angular regions...")
+
+    # Create figures with subplots, sharing x-axis
+    fig, axes_original = plt.subplots(len(angular_regions), 1, figsize=(17, 12), sharex=True)
+    fig_corr, axes_corrected = plt.subplots(len(angular_regions), 1, figsize=(17, 12), sharex=True)
+
+    # ---- ORIGINAL COUNTS ----
+    for ax, region in zip(axes_original, angular_regions):
+        ax.plot(data_df['Time'], data_df[region] / (60 * res_win_min), label=f'{region} (Hz)')
+        ax.set_ylabel('Counts')
+        ax.legend(loc='upper left', ncol=2, fontsize=8)
+        ax.set_title(f'Original Counts - {region}')
+    
+    axes_original[-1].set_xlabel('Time')
+
+    # ---- PRESSURE-CORRECTED COUNTS ----
+    for ax, region in zip(axes_corrected, angular_regions):
+        ax.plot(data_df['Time'], data_df[f'pres_{region}'], label=f'Corrected {region}')
+        ax.set_ylabel('Counts')
+        ax.legend(loc='upper left', ncol=2, fontsize=8)
+        ax.set_title(f'Pressure-Corrected Counts - {region}')
+    
+    axes_corrected[-1].set_xlabel('Time')
+
+    fig.suptitle("Rates for All Angular Regions", fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    # Save or show the plots
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        fig.savefig(figure_path + "_angular_caye_OG.png", format='png', dpi=300)
+        fig_corr.savefig(figure_path + "_counts_caye_corrected.png", format='png', dpi=300)
+        print("Saved multi-panel count plots.")
+
+    plt.close(fig)
+    plt.close(fig_corr)
+
+region = 'eff_corr'
+
+
+
+
+
 # Final uncertainty calculation in the corrected rate
 unc_rate = 1
 unc_beta = unc_eta_P
@@ -1176,8 +1358,6 @@ term_2_beta = I * delta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_beta
 term_3_DP = I * eta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_DP
 final_unc_combined = np.sqrt(term_1_rate**2 + term_2_beta**2 + term_3_DP**2)
 data_df[f'unc_pres_{region}'] = final_unc_combined
-
-
 
 # Add a new outlier filter to the pressure correction
 
@@ -1217,7 +1397,6 @@ if remove_outliers:
 
     data_df_cleaned = data_df[~rows_to_remove].copy()
     data_df = data_df_cleaned.copy()
-
 
 
 #%%
@@ -1354,7 +1533,6 @@ else:
 
 
 
-
 if create_plots:
     print("Creating efficiency and rate plots...")
 
@@ -1391,7 +1569,6 @@ if create_plots:
         plt.savefig(new_figure_path, format='png', dpi=300)
 
     plt.close()
-
 
 # -----------------------------------------------------------------------------
 # Smoothing filters -----------------------------------------------------------

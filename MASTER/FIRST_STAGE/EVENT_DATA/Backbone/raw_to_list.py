@@ -419,9 +419,9 @@ time_sum_reference = np.array([
 
 beta = 1 # Given the last fitting of slowness
 
-anc_sy = 30
-anc_sts = 0.4
-anc_std = 0.1
+anc_sy = 25 # 2.5 cm
+anc_sts = 0.4 # 400ps
+anc_std = 0.1 # 2 cm
 
 # Y position parameters
 transf_exp = 1
@@ -1287,7 +1287,8 @@ completed_files = os.listdir(base_directories["completed_directory"])
 if last_file_test:
     if unprocessed_files:
         unprocessed_files = sorted(unprocessed_files)
-        file_name = unprocessed_files[-1]
+        # file_name = unprocessed_files[-1]
+        file_name = unprocessed_files[0]
         
         unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
         processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
@@ -4677,7 +4678,7 @@ df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['charge_event'] > 0) & 
 #     plt.close()
 
 
-if create_plots or create_essential_plots:
+if create_plots:
     from sklearn.mixture import GaussianMixture
 
     # Define number of Gaussian components (can be changed)
@@ -4905,25 +4906,23 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
     return fig_idx
 
 
-# df_cases_1 = [
-#     ([("charge_event", 0, 80)], "All cases"),
-#     ([("type", 10, 100)], "two plane cases"),
-#     ([("type", 10, 1000)], "two-three plane cases"),
-#     ([("type", 100, 1000)], "three plane cases"),
-#     ([("type", 100, np.inf)], "three-four plane cases"),
-#     ([("type", 1234, 1234)], "four plane cases"),
-#     ([("th_chi", 0, 0.02)], "All cases, chisq filtered"),
-#     ([("type", 10, 100), ("th_chi", 0, 0.02)], "two plane cases, chisq filtered"),
-#     ([("type", 10, 1000), ("th_chi", 0, 0.02)], "two-three plane cases, chisq filtered"),
-#     ([("type", 100, 1000), ("th_chi", 0, 0.02)], "three plane cases, chisq filtered"),
-#     ([("type", 100, np.inf), ("th_chi", 0, 0.02)], "three-four plane cases, chisq filtered"),
-#     ([("type", 1234, 1234), ("th_chi", 0, 0.02)], "four plane cases, chisq filtered")
+
+# df_cases_2 = [
+#     ([("type", 12, 12)], "1-2 cases"),
+#     ([("type", 23, 23)], "2-3 cases"),
+#     ([("type", 34, 34)], "3-4 cases"),
+#     ([("type", 13, 13)], "1-3 cases"),
+#     ([("type", 123, 123)], "1-2-3 cases"),
+#     ([("type", 234, 234)], "2-3-4 cases"),
+#     ([("type", 124, 124)], "1-2-4 cases"),
+#     ([("type", 134, 134)], "1-3-4 cases"),
+#     ([("type", 1234, 1234)], "1-2-3-4 cases"),
 # ]
 
-# for filters, title in df_cases_1:
+# for filters, title in df_cases_2:
 #     fig_idx = plot_hexbin_matrix(
 #         df_plot_ancillary,
-#         ['x', 'y', 'theta', 'phi', 't0', 's', 'charge_event'],
+#         ['x', 'y', 'theta', 'phi', 'xp', 'yp', 'charge_event'],
 #         filters,
 #         title,
 #         save_plots,
@@ -4934,86 +4933,60 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
 #     )
 
 
-df_cases_2 = [
-    ([("type", 12, 12)], "1-2 cases"),
-    ([("type", 23, 23)], "2-3 cases"),
-    ([("type", 34, 34)], "3-4 cases"),
-    ([("type", 13, 13)], "1-3 cases"),
-    ([("type", 123, 123)], "1-2-3 cases"),
-    ([("type", 234, 234)], "2-3-4 cases"),
-    ([("type", 124, 124)], "1-2-4 cases"),
-    ([("type", 134, 134)], "1-3-4 cases"),
-    ([("type", 1234, 1234)], "1-2-3-4 cases"),
-]
+# for filters, title in df_cases_2:
+#     # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
+#     relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
 
-for filters, title in df_cases_2:
-    fig_idx = plot_hexbin_matrix(
-        df_plot_ancillary,
-        ['x', 'y', 'theta', 'phi', 'xp', 'yp', 'charge_event'],
-        filters,
-        title,
-        save_plots,
-        show_plots,
-        base_directories,
-        fig_idx,
-        plot_list
-    )
+#     # Define the columns of interest dynamically
+#     columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp'] + relevant_charges
+
+#     # Keep the original filters (if needed) and apply them
+#     fig_idx = plot_hexbin_matrix(
+#         df_plot_ancillary,
+#         columns_of_interest,  # Dynamically set the columns to include relevant charges
+#         filters,  # Keep original filters
+#         title,
+#         save_plots,
+#         show_plots,
+#         base_directories,
+#         fig_idx,
+#         plot_list
+#     )
 
 
-for filters, title in df_cases_2:
-    # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
-    relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
-
-    # Define the columns of interest dynamically
-    columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp'] + relevant_charges
-
-    # Keep the original filters (if needed) and apply them
-    fig_idx = plot_hexbin_matrix(
-        df_plot_ancillary,
-        columns_of_interest,  # Dynamically set the columns to include relevant charges
-        filters,  # Keep original filters
-        title,
-        save_plots,
-        show_plots,
-        base_directories,
-        fig_idx,
-        plot_list
-    )
+# for filters, title in df_cases_2:
+#     fig_idx = plot_hexbin_matrix(
+#         df_plot_ancillary,
+#         ['x', 'y', 'theta', 'phi', 'xp', 'yp', 's', 'th_chi'],
+#         filters,
+#         title,
+#         save_plots,
+#         show_plots,
+#         base_directories,
+#         fig_idx,
+#         plot_list
+#     )
 
 
-for filters, title in df_cases_2:
-    fig_idx = plot_hexbin_matrix(
-        df_plot_ancillary,
-        ['x', 'y', 'theta', 'phi', 'xp', 'yp', 's', 'th_chi'],
-        filters,
-        title,
-        save_plots,
-        show_plots,
-        base_directories,
-        fig_idx,
-        plot_list
-    )
-
-
-for filters, title in df_cases_2:
+# for filters, title in df_cases_2:
     
-    relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-    relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-    relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+#     relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+#     relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+#     relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
     
-    columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp', 's'] + relevant_residues_tsum + relevant_residues_tdif + relevant_residues_ystr
+#     columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp', 's'] + relevant_residues_tsum + relevant_residues_tdif + relevant_residues_ystr
     
-    fig_idx = plot_hexbin_matrix(
-        df_plot_ancillary,
-        columns_of_interest,
-        filters,
-        title,
-        save_plots,
-        show_plots,
-        base_directories,
-        fig_idx,
-        plot_list
-    )
+#     fig_idx = plot_hexbin_matrix(
+#         df_plot_ancillary,
+#         columns_of_interest,
+#         filters,
+#         title,
+#         save_plots,
+#         show_plots,
+#         base_directories,
+#         fig_idx,
+#         plot_list
+#     )
 
 # ------------------------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------

@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import poisson
 from scipy.optimize import minimize
 
-last_file_test = False
+last_file_test = True
 reanalyze_completed = True
 update_big_event_file = False
 
@@ -46,7 +46,7 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
 # -----------------------------------------------------------------------------
 
-remove_outliers = True
+remove_outliers = False
 create_plots = True
 save_plots = True
 create_pdf = True
@@ -209,7 +209,10 @@ low_regions_hans = ['N.H', 'E.H', 'S.H', 'W.H']
 def classify_region_hans(row):
     phi = row['phi'] * 180/np.pi
     theta = row['theta'] * 180/np.pi
-
+    
+    if int(row['type']) <= 100:
+        return 'None'
+    
     if 0 <= theta < 10:
         return 'V'
     elif 10 <= theta <= 40:
@@ -580,44 +583,45 @@ for i in range(1, 5):
         f'streamer_{i}': 'sum'
     })
 
-print("Resampling for outlier removal...")
 
-# Resampling
-resampled_df_test = df.resample('1min', on='Time').agg(agg_dict)
-
-# TEST 1s rates -------------------------------------------------------
-resampled_second_df = df.resample('1s', on='Time').agg(agg_dict)
-
-print("Resampled.")
-
-# Plot the 1 min and 1 s rates ----------------------------------------
-if create_plots:
-    fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    ax[0].plot(resampled_df_test.index, resampled_df_test['events'], label='Q_event')
-    ax[0].set_ylabel('Q_event (mean)')
-    ax[0].legend()
-
-    ax[1].plot(resampled_second_df.index, resampled_second_df['events'], label='Q_event')
-    ax[1].set_ylabel('Q_event (mean)')
-    ax[1].legend()
-
-    plt.tight_layout()
-    # Show the plot
-    if save_plots:
-        name_of_file = 'original_rates'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-        
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-        
-    if show_plots: plt.show()
-    plt.close()
 
 # Fit a Poisson distribution to the 1-second data and removed outliers based on the Poisson -------------------------
 if remove_outliers:
-    
+    print("Resampling for outlier removal...")
+
+    # Resampling
+    resampled_df_test = df.resample('1min', on='Time').agg(agg_dict)
+
+    # TEST 1s rates -------------------------------------------------------
+    resampled_second_df = df.resample('1s', on='Time').agg(agg_dict)
+
+    print("Resampled.")
+
+    # Plot the 1 min and 1 s rates ----------------------------------------
+    if create_plots:
+        fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        ax[0].plot(resampled_df_test.index, resampled_df_test['events'], label='Q_event')
+        ax[0].set_ylabel('Q_event (mean)')
+        ax[0].legend()
+
+        ax[1].plot(resampled_second_df.index, resampled_second_df['events'], label='Q_event')
+        ax[1].set_ylabel('Q_event (mean)')
+        ax[1].legend()
+
+        plt.tight_layout()
+        # Show the plot
+        if save_plots:
+            name_of_file = 'original_rates'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+            
+        if show_plots: plt.show()
+        plt.close()
+
     print("Removing outliers...")
           
     # Data: Replace with your actual data
@@ -733,6 +737,8 @@ if remove_outliers:
 
     # Create a resampled_df with the new one
     resampled_df = new_resampled_df
+else:
+    resampled_df = df.resample('1min', on='Time').agg(agg_dict)
 
 # ----------------------------------------------------------------------
 
@@ -745,7 +751,7 @@ rename_map = {
     "P3-P4_mean": "P3-P4",
     "phi_north_mean": "phi_north"
 }
-new_resampled_df.rename(columns=rename_map, inplace=True)
+resampled_df.rename(columns=rename_map, inplace=True)
 
 # Replace custom_mean by mean and custom_std by std
 resampled_df.rename(columns=lambda x: x.replace('custom_mean', 'mean').replace('custom_std', 'std'), inplace=True)
