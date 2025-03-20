@@ -3,7 +3,7 @@
 
 stratos_save = True
 
-fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
+fast_mode = True # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
 # newest_file = False
 # oldest_file = False
@@ -341,8 +341,8 @@ pos_filter = 600
 proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = -0.04 # -0.01
-slowness_filter_right = 0.04 # 0.025
+slowness_filter_left = -1 # -0.01
+slowness_filter_right = 1 # 0.025
 charge_strip_left_filter = -1e6
 charge_strip_right_filter = 1e6
 charge_event_left_filter = -1e6
@@ -419,10 +419,6 @@ time_sum_reference = np.array([
 
 beta = 1 # Given the last fitting of slowness
 
-anc_sy = 25 # 2.5 cm
-anc_sts = 0.4 # 400ps
-anc_std = 0.1 # 2 cm
-
 # Y position parameters
 transf_exp = 1
 induction_section = 0  # 40 In mm. Width of the induction section for all strips
@@ -472,6 +468,12 @@ cocut = 1  # convergence cut
 d0    = 10 # initial value of the convergence parameter 
 nplan = 4
 lenx  = strip_length
+
+anc_sy = 25 # 2.5 cm
+anc_sts = 0.4 # 400ps
+anc_std = 0.1 # 2 cm
+anc_sx = strip_speed * anc_std # 2 cm
+anc_sz = 10 # 5 cm
 
 
 # -----------------------------------------------------------------------------
@@ -4100,7 +4102,165 @@ if create_plots or create_essential_plots:
 
 #         plt.close()
 
+print("----------------------------------------------------------------------")
+print("----------------------- Alternative fitting --------------------------")
+print("----------------------------------------------------------------------")
 
+# Function to fit a straight line in 3D
+def fit_3d_line(X, Y, Z, sX, sY, sZ):
+    """
+    Least squares fitting of a 3D straight line.
+    Returns theta (zenith), phi (azimuth), and chi-squared.
+    """
+    # Stack coordinates into an array
+    points = np.vstack((X, Y, Z)).T
+    
+    # Compute centroid
+    centroid = np.mean(points, axis=0)
+    
+    # Center data
+    centered_points = points - centroid
+
+    # Compute SVD (Singular Value Decomposition)
+    _, _, Vt = np.linalg.svd(centered_points)
+    
+    # Direction vector (first principal component)
+    direction_vector = Vt[0]
+
+    # Extract direction components
+    d_x, d_y, d_z = direction_vector
+
+    # Compute theta (zenith) and phi (azimuth)
+    theta = np.arccos(d_z / np.linalg.norm(direction_vector))
+    phi = np.arctan2(d_y, d_x)
+    
+    if d_z != 0:  # Ensure no division by zero
+        t_0 = -centroid[2] / d_z
+        x_z0 = centroid[0] + t_0 * d_x
+        y_z0 = centroid[1] + t_0 * d_y
+    else:
+        x_z0, y_z0 = 0, 0  # Line is parallel to Z-plane
+    
+    # # To degrees
+    # theta = np.degrees(theta)
+    # phi = np.degrees(phi)
+    
+    # Compute chi-squared
+    distances = np.linalg.norm(np.cross(centered_points, direction_vector), axis=1)
+    chi2 = np.sum((distances / np.sqrt(np.array(sX)**2 + np.array(sY)**2 + np.array(sZ)**2)) ** 2)
+
+    return x_z0, y_z0, theta, phi, chi2
+
+# Initialize results
+alt_fit_results = ['alt_theta', 'alt_phi', 'alt_chi2']
+alt_new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=alt_fit_results)
+calibrated_data = pd.concat([calibrated_data, alt_new_columns_df], axis=1)
+
+# Loop over all tracks
+for idx, track in calibrated_data.iterrows():
+    planes_to_iterate = []
+    
+    # Identify valid planes with charge
+    for i_plane in range(nplan):
+        charge_plane = getattr(track, f'T{i_plane + 1}_Q_sum_final')
+        if charge_plane > 4:
+            planes_to_iterate.append(i_plane + 1)
+
+    planes_to_iterate = np.array(planes_to_iterate)
+
+    if len(planes_to_iterate) >= 2:  # Only fit if 2 or more points exist
+        X, Y, Z, sX, sY, sZ = [], [], [], [], [], []
+
+        for iplane in planes_to_iterate:
+            t_d = getattr(track, f'T{iplane}_T_diff_final')
+            x_p = strip_speed * t_d
+            X.append(x_p)
+            Y.append(getattr(track, f'Y_{iplane}'))
+            Z.append(z_positions[iplane - 1])
+            sX.append(anc_sx)
+            sY.append(anc_sy)
+            sZ.append(anc_sz)
+
+        # Fit line
+        x, y, theta, phi, chi2 = fit_3d_line(X, Y, Z, sX, sY, sZ)
+
+        # Store results
+        calibrated_data.at[idx, 'alt_x'] = x
+        calibrated_data.at[idx, 'alt_y'] = y
+        calibrated_data.at[idx, 'alt_theta'] = theta
+        calibrated_data.at[idx, 'alt_phi'] = phi
+        calibrated_data.at[idx, 'alt_chi2'] = chi2
+
+
+if create_essential_plots:
+    # Scatter plot of alt_theta vs alt_phi
+    plt.figure(figsize=(8, 6))
+    plt.scatter(calibrated_data['alt_phi'], calibrated_data['alt_theta'], alpha=0.7, s = 1)
+    plt.xlabel('Azimuth (φ) [radians]')
+    plt.ylabel('Zenith (θ) [radians]')
+    plt.title('Scatter Plot of Fitted Angles')
+    plt.grid(True)
+    plt.show()
+    
+    if save_plots:
+        name_of_file = 'alternative_fitting_results_scatter_combination_projections'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
+
+    plt.close()
+    
+    # Contour plot of alt_chi2 vs alt_theta and alt_phi
+    theta_values = calibrated_data['alt_theta'].values
+    phi_values = calibrated_data['alt_phi'].values
+    chi2_values = np.clip(calibrated_data['alt_chi2'].values, 0, 20)
+    
+    # Create a grid for contour plot
+    theta_grid = np.linspace(min(theta_values), max(theta_values), 100)
+    phi_grid = np.linspace(min(phi_values), max(phi_values), 100)
+    Theta, Phi = np.meshgrid(theta_grid, phi_grid)
+
+    # Interpolate chi2 values over the grid
+    from scipy.interpolate import griddata
+    Chi2 = griddata((theta_values, phi_values), chi2_values, (Theta, Phi), method='cubic')
+
+    # Plot contour
+    plt.figure(figsize=(8, 6))
+    contour = plt.contourf(Phi, Theta, Chi2, levels=50, cmap='plasma')
+    plt.colorbar(contour, label='Chi-Squared')
+    plt.xlabel('Azimuth (φ) [radians]')
+    plt.ylabel('Zenith (θ) [radians]')
+    plt.title('Contour Plot of Chi-Squared')
+    plt.grid(True)
+    plt.show()
+    
+    print("Alternative fitting done and saving...")
+
+    if save_plots:
+        name_of_file = 'alternative_fitting_results_hexbin_combination_projections'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
+
+    plt.close()
+
+# -----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 
 print("----------------------------------------------------------------------")
 print("------------------------- TimTrack fitting ---------------------------")
@@ -4255,7 +4415,6 @@ else:
 
 new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=timtrack_results)
 calibrated_data = pd.concat([calibrated_data, new_columns_df], axis=1)
-
 
 # TimTrack starts ------------------------------------------------------
 repeat = number_of_TT_executions - 1 if timtrack_iteration else 0
@@ -4569,7 +4728,6 @@ for iteration in range(repeat + 1):
     iteration += 1
     # End of TimTrack loop ---------------------------------------------------------------
 
-
 def calculate_angles(xproj, yproj):
     phi = np.arctan2(yproj, xproj)
     theta = np.arccos(1 / np.sqrt(xproj**2 + yproj**2 + 1))
@@ -4579,6 +4737,32 @@ theta, phi = calculate_angles(calibrated_data['xp'], calibrated_data['yp'])
 new_columns_df = pd.DataFrame({'theta': theta, 'phi': phi}, index=calibrated_data.index)
 calibrated_data = pd.concat([calibrated_data, new_columns_df], axis=1)
 calibrated_data = calibrated_data.copy()
+
+
+if create_essential_plots:
+    # Scatter plot of alt_theta vs alt_phi
+    plt.figure(figsize=(8, 6))
+    plt.scatter(calibrated_data['phi'], calibrated_data['theta'], alpha=0.7, s = 1)
+    plt.xlabel('Azimuth (φ) [radians]')
+    plt.ylabel('Zenith (θ) [radians]')
+    plt.title('Scatter Plot of Fitted Angles')
+    plt.grid(True)
+    plt.show()
+    
+    if save_plots:
+        name_of_file = 'timtrack_fitting_results_scatter_combination_projections'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
+
+    plt.close()
 
 # FILTER 8: X, Y, T FILTER: IGNORE THE EVENT IF (AFTER ALL) ANY OF THEM GOES OUR OF BOUNDS
 for col in calibrated_data.columns:
@@ -4601,6 +4785,12 @@ for col in calibrated_data.columns:
 cond = (calibrated_data['x'] != 0) & (calibrated_data['xp'] != 0) &\
        (calibrated_data['y'] != 0) & (calibrated_data['yp'] != 0) &\
        (calibrated_data['s'] != 0) & (calibrated_data['t0'] != 0)
+
+for col in calibrated_data.columns:
+    if 'alt_x' == col or 'alt_y' == col:
+        cond_bound = (calibrated_data[col] > pos_filter) | (calibrated_data[col] < -pos_filter)
+        cond_zero = (calibrated_data[col] == 0)
+        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
 
 # print(calibrated_data.columns)
 final_data = calibrated_data.loc[cond].copy()
@@ -4803,10 +4993,14 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
     # 'x', 'y', 'theta', 'phi', 'xp', 'yp', 'charge_event'
     
     axis_limits = {
-        'x': [-300, 300],
-        'y': [-300, 300],
+        'x': [-pos_filter, pos_filter],
+        'y': [-pos_filter, pos_filter],
+        'alt_x': [-pos_filter, pos_filter],
+        'alt_y': [-pos_filter, pos_filter],
         'theta': [0, 1.3],
         'phi': [-np.pi, np.pi],
+        'alt_theta': [0, 1.3],
+        'alt_phi': [-np.pi, np.pi],
         'xp': [-2, 2],
         'yp': [-2, 2],
         'charge_event': [0, 600],
@@ -4821,6 +5015,9 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
     # Apply filters
     for col, min_val, max_val in filter_conditions:
         df = df[(df[col] >= min_val) & (df[col] <= max_val)]
+    
+    # Put any nan to 0
+    df = df.fillna(0)
     
     num_var = len(columns_of_interest)
     fig, axes = plt.subplots(num_var, num_var, figsize=(15, 15))
@@ -4906,18 +5103,17 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
     return fig_idx
 
 
-
-# df_cases_2 = [
-#     ([("type", 12, 12)], "1-2 cases"),
-#     ([("type", 23, 23)], "2-3 cases"),
-#     ([("type", 34, 34)], "3-4 cases"),
-#     ([("type", 13, 13)], "1-3 cases"),
-#     ([("type", 123, 123)], "1-2-3 cases"),
-#     ([("type", 234, 234)], "2-3-4 cases"),
-#     ([("type", 124, 124)], "1-2-4 cases"),
-#     ([("type", 134, 134)], "1-3-4 cases"),
-#     ([("type", 1234, 1234)], "1-2-3-4 cases"),
-# ]
+df_cases_2 = [
+    ([("type", 12, 12)], "1-2 cases"),
+    ([("type", 23, 23)], "2-3 cases"),
+    ([("type", 34, 34)], "3-4 cases"),
+    ([("type", 13, 13)], "1-3 cases"),
+    ([("type", 123, 123)], "1-2-3 cases"),
+    ([("type", 234, 234)], "2-3-4 cases"),
+    ([("type", 124, 124)], "1-2-4 cases"),
+    ([("type", 134, 134)], "1-3-4 cases"),
+    ([("type", 1234, 1234)], "1-2-3-4 cases"),
+]
 
 # for filters, title in df_cases_2:
 #     fig_idx = plot_hexbin_matrix(
@@ -4987,6 +5183,45 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
 #         fig_idx,
 #         plot_list
 #     )
+
+for filters, title in df_cases_2:
+    fig_idx = plot_hexbin_matrix(
+        df_plot_ancillary,
+        ['theta', 'phi', 'alt_theta', 'alt_phi'],
+        filters,
+        title,
+        save_plots,
+        show_plots,
+        base_directories,
+        fig_idx,
+        plot_list
+    )
+
+for filters, title in df_cases_2:
+    fig_idx = plot_hexbin_matrix(
+        df_plot_ancillary,
+        ['x', 'y', 'alt_x', 'alt_y'],
+        filters,
+        title,
+        save_plots,
+        show_plots,
+        base_directories,
+        fig_idx,
+        plot_list
+    )
+
+for filters, title in df_cases_2:
+    fig_idx = plot_hexbin_matrix(
+        df_plot_ancillary,
+        ['alt_x', 'alt_y', 'alt_theta', 'alt_phi'],
+        filters,
+        title,
+        save_plots,
+        show_plots,
+        base_directories,
+        fig_idx,
+        plot_list
+    )
 
 # ------------------------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------

@@ -169,7 +169,7 @@ print(data_df_times['type'].unique())
 
 # %%
 
-case = 1234
+case = 34
 data_case = data_df_times[data_df_times["type"] == case].copy()
 
 # Ensure "T1_T_sum_1" exists in the dataframe
@@ -429,9 +429,6 @@ else:
 
 
 # %%
-
-
-
 
 
 # Slewing correction with position correction etc
