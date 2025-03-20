@@ -333,11 +333,11 @@ T_diff_RPC_right = 0.8
 Q_RPC_left = 0
 Q_RPC_right = 1000
 # Y pos
-Y_RPC_left = -150
-Y_RPC_right = 150
+ = -200 # -150
+Y_RPC_right = 200 # 150
 
 # TimTrack filter -------------------------
-pos_filter = 600
+pos_filter = 700
 proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
@@ -4230,10 +4230,13 @@ if create_essential_plots:
     # Interpolate chi2 values over the grid
     from scipy.interpolate import griddata
     Chi2 = griddata((theta_values, phi_values), chi2_values, (Theta, Phi), method='cubic')
-
+    
+    mask = griddata((theta_values, phi_values), np.ones_like(chi2_values), (Theta, Phi), method='nearest')
+    Chi2[mask != 1] = np.nan  # Set undefined regions to NaN instead of interpolating
+    
     # Plot contour
     plt.figure(figsize=(8, 6))
-    contour = plt.contourf(Phi, Theta, Chi2, levels=50, cmap='plasma')
+    contour = plt.contourf(Phi, Theta, Chi2, levels=50, cmap='turbo')
     plt.colorbar(contour, label='Chi-Squared')
     plt.xlabel('Azimuth (φ) [radians]')
     plt.ylabel('Zenith (θ) [radians]')
