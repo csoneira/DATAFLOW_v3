@@ -5,9 +5,9 @@ stratos_save = True
 
 fast_mode = True # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-# newest_file = False
-# oldest_file = False
-last_file_test = False
+last_file_test = True
+
+alternative_fitting = True
 
 """
 Created on Thu Jun 20 09:15:33 2024
@@ -333,7 +333,7 @@ T_diff_RPC_right = 0.8
 Q_RPC_left = 0
 Q_RPC_right = 1000
 # Y pos
- = -200 # -150
+Y_RPC_left = -200 # -150
 Y_RPC_right = 200 # 150
 
 # TimTrack filter -------------------------
@@ -1929,7 +1929,7 @@ def interpolate_fast_charge(width):
     
     width_clipped = np.clip(width, width_table.min(), width_table.max())
     
-    # Perform linear interpolation
+    # Perform interpolation
     return np.interp(width, width_table, fast_charge_table)
 
 
@@ -4050,6 +4050,67 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
+if create_plots or create_essential_plots:
+    fig, axes = plt.subplots(4, 6, figsize=(24, 20))  # Adjusting for 6 combinations
+    axes = axes.flatten()  # Flatten the axes array to easily iterate
+    
+    # Iterate over i_plane from 1 to 4
+    for i_plane in range(1, 5):
+        # Define the column names for this plane
+        t_sum_col = f'T{i_plane}_T_sum_final'
+        t_diff_col = f'T{i_plane}_T_diff_final'
+        q_sum_col = f'T{i_plane}_Q_sum_final'
+        y_col = f'Y_{i_plane}'
+        
+        # Filter out rows where any of the variables are NaN or 0 for all comparisons
+        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, y_col]].replace(0, np.nan).dropna()
+
+        t_sum = valid_rows[t_sum_col]
+        t_diff = valid_rows[t_diff_col]
+        q_sum = valid_rows[q_sum_col]
+        y = valid_rows[y_col]
+        
+        cond = q_sum > 100
+        t_sum = t_sum[cond]
+        t_diff = t_diff[cond]
+        q_sum = q_sum[cond]
+        y = y[cond]
+
+        # Hexbin plot for all combinations (6 combinations for each i_plane)
+        axes[(i_plane-1)*6].hexbin(t_sum, t_diff, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6].set_title(f'{t_sum_col} vs {t_diff_col}')
+        
+        axes[(i_plane-1)*6 + 1].hexbin(t_sum, q_sum, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 1].set_title(f'{t_sum_col} vs {q_sum_col}')
+        
+        axes[(i_plane-1)*6 + 2].hexbin(t_sum, y, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 2].set_title(f'{t_sum_col} vs {y_col}')
+        
+        axes[(i_plane-1)*6 + 3].hexbin(t_diff, q_sum, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 3].set_title(f'{t_diff_col} vs {q_sum_col}')
+        
+        axes[(i_plane-1)*6 + 4].hexbin(t_diff, y, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 4].set_title(f'{t_diff_col} vs {y_col}')
+        
+        axes[(i_plane-1)*6 + 5].hexbin(q_sum, y, gridsize=50, cmap='turbo')
+        axes[(i_plane-1)*6 + 5].set_title(f'{q_sum_col} vs {y_col}')
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle('STREAMERS. Hexbin Plots for All Variable Combinations by Plane', fontsize=16)
+    
+    if save_plots:
+        name_of_file = 'streamer_rpc_variables_hexbin_combinations'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: plt.show()
+    plt.close()
+
 
 # Plotting for articles and presentations
 # if presentation_plots:
@@ -4139,7 +4200,8 @@ def fit_3d_line(X, Y, Z, sX, sY, sZ):
         x_z0 = centroid[0] + t_0 * d_x
         y_z0 = centroid[1] + t_0 * d_y
     else:
-        x_z0, y_z0 = 0, 0  # Line is parallel to Z-plane
+        # x_z0, y_z0 = 0, 0 # Line is parallel to Z-plane
+        x_z0, y_z0 = np.nan, np.nan # Line is parallel to Z-plane
     
     # # To degrees
     # theta = np.degrees(theta)
@@ -4194,16 +4256,65 @@ for idx, track in calibrated_data.iterrows():
 
 if create_essential_plots:
     # Scatter plot of alt_theta vs alt_phi
+    # plt.figure(figsize=(8, 6))
+    # plt.scatter(calibrated_data['alt_phi'], calibrated_data['alt_theta'], alpha=0.7, s = 1)
+    # plt.xlabel('Azimuth (φ) [radians]')
+    # plt.ylabel('Zenith (θ) [radians]')
+    # plt.title('Scatter Plot of Fitted Angles')
+    # plt.grid(True)
+    # plt.show()
+    
+    # if save_plots:
+    #     name_of_file = 'alternative_fitting_results_scatter_combination_projections'
+    #     final_filename = f'{fig_idx}_{name_of_file}.png'
+    #     fig_idx += 1
+
+    #     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    #     plot_list.append(save_fig_path)
+    #     plt.savefig(save_fig_path, format='png')
+
+    # # Show plot if enabled
+    # if show_plots:
+    #     plt.show()
+
+    # plt.close()
+    
+    # Contour plot of alt_chi2 vs alt_theta and alt_phi
+    theta_values = calibrated_data['alt_theta'].values
+    phi_values = calibrated_data['alt_phi'].values
+    chi2_values = np.clip(calibrated_data['alt_chi2'].values, 0, 1)
+    
+    # Define grid resolution
+    theta_bins = np.linspace(min(theta_values), max(theta_values), 40)
+    phi_bins = np.linspace(min(phi_values), max(phi_values), 40)
+
+    # Create a 2D histogram
+    H, theta_edges, phi_edges = np.histogram2d(theta_values, phi_values, bins=[theta_bins, phi_bins], weights=chi2_values)
+    counts, _, _ = np.histogram2d(theta_values, phi_values, bins=[theta_bins, phi_bins])
+
+    # Compute the average chi2 in each bin
+    with np.errstate(divide='ignore', invalid='ignore'):
+        Chi2_binned = np.where(counts > 0, H / counts, 0)  # Average chi2 in each bin, 0 where no data
+
+    # Define grid for plotting
+    Theta_mid = (theta_edges[:-1] + theta_edges[1:]) / 2
+    Phi_mid = (phi_edges[:-1] + phi_edges[1:]) / 2
+    Theta_grid, Phi_grid = np.meshgrid(Theta_mid, Phi_mid, indexing='ij')
+
+    # Plot binned contour
     plt.figure(figsize=(8, 6))
-    plt.scatter(calibrated_data['alt_phi'], calibrated_data['alt_theta'], alpha=0.7, s = 1)
+    contour = plt.contourf(Phi_grid, Theta_grid, Chi2_binned, levels=20, cmap='viridis')
+    plt.colorbar(contour, label='Chi-Squared')
     plt.xlabel('Azimuth (φ) [radians]')
     plt.ylabel('Zenith (θ) [radians]')
-    plt.title('Scatter Plot of Fitted Angles')
+    plt.title('Binned Contour Plot of Chi-Squared')
     plt.grid(True)
     plt.show()
     
+    print("Alternative fitting done and saving...")
+
     if save_plots:
-        name_of_file = 'alternative_fitting_results_scatter_combination_projections'
+        name_of_file = 'alternative_fitting_results_hexbin_combination_projections'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
 
@@ -4218,36 +4329,43 @@ if create_essential_plots:
     plt.close()
     
     # Contour plot of alt_chi2 vs alt_theta and alt_phi
-    theta_values = calibrated_data['alt_theta'].values
-    phi_values = calibrated_data['alt_phi'].values
-    chi2_values = np.clip(calibrated_data['alt_chi2'].values, 0, 20)
+    # Filter Theta between 0 and 1.3
+    plot_data = calibrated_data[(calibrated_data['alt_theta'] > 0) & (calibrated_data['alt_theta'] < 1.3)]
+    theta_values = plot_data['alt_theta'].values
+    phi_values = plot_data['alt_phi'].values
+    chi2_values = np.clip(plot_data['alt_chi2'].values, 0, 1)
     
-    # Create a grid for contour plot
-    theta_grid = np.linspace(min(theta_values), max(theta_values), 100)
-    phi_grid = np.linspace(min(phi_values), max(phi_values), 100)
-    Theta, Phi = np.meshgrid(theta_grid, phi_grid)
+    # Define grid resolution
+    theta_bins = np.linspace(min(theta_values), max(theta_values), 20)
+    phi_bins = np.linspace(min(phi_values), max(phi_values), 20)
 
-    # Interpolate chi2 values over the grid
-    from scipy.interpolate import griddata
-    Chi2 = griddata((theta_values, phi_values), chi2_values, (Theta, Phi), method='cubic')
-    
-    mask = griddata((theta_values, phi_values), np.ones_like(chi2_values), (Theta, Phi), method='nearest')
-    Chi2[mask != 1] = np.nan  # Set undefined regions to NaN instead of interpolating
-    
-    # Plot contour
+    # Create a 2D histogram
+    H, theta_edges, phi_edges = np.histogram2d(theta_values, phi_values, bins=[theta_bins, phi_bins], weights=chi2_values)
+    counts, _, _ = np.histogram2d(theta_values, phi_values, bins=[theta_bins, phi_bins])
+
+    # Compute the average chi2 in each bin
+    with np.errstate(divide='ignore', invalid='ignore'):
+        Chi2_binned = np.where(counts > 0, H / counts, 0)  # Average chi2 in each bin, 0 where no data
+
+    # Define grid for plotting
+    Theta_mid = (theta_edges[:-1] + theta_edges[1:]) / 2
+    Phi_mid = (phi_edges[:-1] + phi_edges[1:]) / 2
+    Theta_grid, Phi_grid = np.meshgrid(Theta_mid, Phi_mid, indexing='ij')
+
+    # Plot binned contour
     plt.figure(figsize=(8, 6))
-    contour = plt.contourf(Phi, Theta, Chi2, levels=50, cmap='turbo')
+    contour = plt.contourf(Phi_grid, Theta_grid, Chi2_binned, levels=20, cmap='viridis')
     plt.colorbar(contour, label='Chi-Squared')
     plt.xlabel('Azimuth (φ) [radians]')
     plt.ylabel('Zenith (θ) [radians]')
-    plt.title('Contour Plot of Chi-Squared')
+    plt.title('Binned Contour Plot of Chi-Squared')
     plt.grid(True)
     plt.show()
     
     print("Alternative fitting done and saving...")
 
     if save_plots:
-        name_of_file = 'alternative_fitting_results_hexbin_combination_projections'
+        name_of_file = 'alternative_fitting_2_results_hexbin_combination_projections'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
 
@@ -5019,9 +5137,6 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
     for col, min_val, max_val in filter_conditions:
         df = df[(df[col] >= min_val) & (df[col] <= max_val)]
     
-    # Put any nan to 0
-    df = df.fillna(0)
-    
     num_var = len(columns_of_interest)
     fig, axes = plt.subplots(num_var, num_var, figsize=(15, 15))
     
@@ -5043,6 +5158,10 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
             elif i == j:
                 # Diagonal: 1D histogram
                 hist_data = df[x_col]
+                # Remove nans
+                hist_data = hist_data[~np.isnan(hist_data)]
+                # Remove zeroes
+                hist_data = hist_data[hist_data != 0]
                 hist, bins = np.histogram(hist_data, bins=num_bins)
                 bin_centers = 0.5 * (bins[1:] + bins[:-1])
                 norm = plt.Normalize(hist.min(), hist.max())
@@ -5065,6 +5184,10 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
                 # Upper triangle: hexbin plots
                 x_data = df[x_col]
                 y_data = df[y_col]
+                # Remove zeroes and nans
+                cond = (x_data != 0) & (y_data != 0) & (~np.isnan(x_data)) & (~np.isnan(y_data))
+                x_data = x_data[cond]
+                y_data = y_data[cond]
                 ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
                 ax.set_facecolor(plt.cm.turbo(0))
                 
@@ -5111,6 +5234,7 @@ df_cases_2 = [
     ([("type", 23, 23)], "2-3 cases"),
     ([("type", 34, 34)], "3-4 cases"),
     ([("type", 13, 13)], "1-3 cases"),
+    ([("type", 14, 14)], "1-4 cases"),
     ([("type", 123, 123)], "1-2-3 cases"),
     ([("type", 234, 234)], "2-3-4 cases"),
     ([("type", 124, 124)], "1-2-4 cases"),
@@ -5427,6 +5551,14 @@ if create_plots or create_essential_plots:
 print("----------------------------------------------------------------------")
 print("-------------------------- Save and finish ---------------------------")
 print("----------------------------------------------------------------------")
+
+# Replace the TimTrack fitting angle results with the alternative ones
+if alternative_fitting:
+    if 'alt_theta' in final_data.columns:
+        final_data['theta'] = final_data['alt_theta']
+        final_data['phi'] = final_data['alt_phi']
+        final_data['x'] = final_data['alt_x']
+        final_data['y'] = final_data['alt_y']
 
 # Round to 4 significant digits -----------------------------------------------
 print("Rounding the dataframe values.")

@@ -85,16 +85,19 @@ z_score_th_pres_corr = 1
 # -----------------------------------------------------------------------------
 
 # Define the base folder and file paths
+grafana_directory = os.path.expanduser(f"~/DATAFLOW_v3/GRAFANA_DATA")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 
 base_folder = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/SECOND_STAGE")
 filepath = f"{base_folder}/total_data_table.csv"
 save_filename = f"{base_folder}/large_corrected_table.csv"
-grafana_save_filename = f"{base_folder}/data_for_grafana_{station}.csv"
+grafana_save_filename = f"{grafana_directory}/data_for_grafana_{station}.csv"
 
 figure_path = f"{base_folder}/correction.png"
 
-
+# Create the folders if they dont exist
+os.makedirs(base_folder, exist_ok=True)
+os.makedirs(grafana_directory, exist_ok=True)
 
 # -----------------------------------------------------------------------------
 # To not touch unless necesary ------------------------------------------------
