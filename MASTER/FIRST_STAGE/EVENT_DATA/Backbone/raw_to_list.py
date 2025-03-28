@@ -4932,63 +4932,6 @@ cond = ( df_plot_ancillary['charge_1'] < 250 ) &\
 df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['charge_event'] > 0) & (df_plot_ancillary['charge_event'] < 600)]
 
-# Print the columns of df_plot_ancillary
-# print(df_plot_ancillary.columns.tolist())
-
-# Histogram the "phi" column of df_plot_ancillary and the "xp" and "yp" columns
-# if create_plots or create_essential_plots:
-#     df_plot = df_plot_ancillary.copy()
-    
-#     columns_of_interest = ['phi', 'xp', 'yp', 'theta', 'charge_event']
-#     num_bins = 100
-#     fig, axes = plt.subplots(len(columns_of_interest), len(columns_of_interest), figsize=(15, 15))
-#     for i in range(len(columns_of_interest)):
-#         for j in range(len(columns_of_interest)):
-#             ax = axes[i, j]
-#             if i < j:
-#                 ax.axis('off')  # Leave the lower triangle blank
-#             elif i == j:
-#                 # Diagonal: 1D histogram with independent axes
-#                 hist_data = df_plot[columns_of_interest[i]]
-#                 hist, bins = np.histogram(hist_data, bins=num_bins)
-#                 bin_centers = 0.5 * (bins[1:] + bins[:-1])
-#                 norm = plt.Normalize(hist.min(), hist.max())
-#                 cmap = plt.get_cmap('turbo')
-#                 for k in range(len(hist)):
-#                     ax.bar(bin_centers[k], hist[k], width=bins[1] - bins[0], color=cmap(norm(hist[k])))
-#                 ax.set_xticks([])
-#                 ax.set_yticks([])
-#             else:
-#                 # Upper triangle: hexbin plots
-#                 x_data = df_plot[columns_of_interest[j]]
-#                 y_data = df_plot[columns_of_interest[i]]
-#                 hb = ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
-#             if i != len(columns_of_interest) - 1:
-#                 ax.set_xticklabels([])  # Remove x-axis labels except for the last row
-#             if j != 0:
-#                 ax.set_yticklabels([])  # Remove y-axis labels except for the first column
-#             if i == len(columns_of_interest) - 1:  # Last row, set x-labels
-#                 ax.set_xlabel(columns_of_interest[j])
-#             # if i == 6 and j != 6:
-#             #     ax.set_ylim([0,100])
-#             if j == 0:  # First column, set y-labels
-#                 ax.set_ylabel(columns_of_interest[i])
-#     plt.subplots_adjust(wspace=0.05, hspace=0.05)
-#     plt.suptitle("All cases")
-    
-#     if save_plots:
-#         name_of_file = 'timtrack_results_hexbin_combination_projections'
-#         final_filename = f'{fig_idx}_{name_of_file}.png'
-#         fig_idx += 1
-
-#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
-    
-#     if show_plots: plt.show()
-#     plt.close()
-
-
 if create_plots:
     from sklearn.mixture import GaussianMixture
 
@@ -5324,31 +5267,31 @@ for filters, title in df_cases_2:
         plot_list
     )
 
-for filters, title in df_cases_2:
-    fig_idx = plot_hexbin_matrix(
-        df_plot_ancillary,
-        ['x', 'y', 'alt_x', 'alt_y'],
-        filters,
-        title,
-        save_plots,
-        show_plots,
-        base_directories,
-        fig_idx,
-        plot_list
-    )
+# for filters, title in df_cases_2:
+#     fig_idx = plot_hexbin_matrix(
+#         df_plot_ancillary,
+#         ['x', 'y', 'alt_x', 'alt_y'],
+#         filters,
+#         title,
+#         save_plots,
+#         show_plots,
+#         base_directories,
+#         fig_idx,
+#         plot_list
+#     )
 
-for filters, title in df_cases_2:
-    fig_idx = plot_hexbin_matrix(
-        df_plot_ancillary,
-        ['alt_x', 'alt_y', 'alt_theta', 'alt_phi'],
-        filters,
-        title,
-        save_plots,
-        show_plots,
-        base_directories,
-        fig_idx,
-        plot_list
-    )
+# for filters, title in df_cases_2:
+#     fig_idx = plot_hexbin_matrix(
+#         df_plot_ancillary,
+#         ['alt_x', 'alt_y', 'alt_theta', 'alt_phi'],
+#         filters,
+#         title,
+#         save_plots,
+#         show_plots,
+#         base_directories,
+#         fig_idx,
+#         plot_list
+#     )
 
 # ------------------------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------
@@ -5500,10 +5443,10 @@ if create_plots or create_essential_plots:
     test_data['datetime'] = pd.to_datetime(test_data['datetime'], errors='coerce')
     test_data = test_data.set_index('datetime')
     
-    df_plot_1 = test_data
-    df_plot_2 = test_data[test_data['type'].astype(int) >= 100]
-    df_plot_3 = test_data[test_data['type'].astype(int) >= 1000]
-    df_plot_4 = og_data  # Original dataset
+    df_plot_1 = test_data.copy()
+    df_plot_2 = test_data[test_data['type'].astype(int) >= 100].copy()
+    df_plot_3 = test_data[test_data['type'].astype(int) >= 1000].copy()
+    df_plot_4 = og_data.copy()  # Original dataset
     
     datasets = {'All Data': df_plot_1, 
                 'Type >= 100': df_plot_2, 

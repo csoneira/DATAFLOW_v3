@@ -9,6 +9,11 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # Save copy the core files
 0 5 * * * rsync -av --exclude="STATIONS" --exclude=".git" --exclude=".gitignore" ~/DATAFLOW_v3/ ~/SAFE_DATAFLOW_v3/
 
+# -----------------
+# Grafana splitting
+# -----------------
+0 * * * * python3 ~/DATAFLOW_v3/GRAFANA_DATA/grafana_split.py
+
 # ----------------------------------------
 # Update the Drive with the processed data
 # ----------------------------------------
