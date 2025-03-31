@@ -5,7 +5,7 @@ stratos_save = True
 
 fast_mode = True # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-last_file_test = True
+last_file_test = False
 
 alternative_fitting = True
 
@@ -4254,7 +4254,7 @@ for idx, track in calibrated_data.iterrows():
         calibrated_data.at[idx, 'alt_chi2'] = chi2
 
 
-if create_essential_plots:
+if create_plots:
     # Scatter plot of alt_theta vs alt_phi
     # plt.figure(figsize=(8, 6))
     # plt.scatter(calibrated_data['alt_phi'], calibrated_data['alt_theta'], alpha=0.7, s = 1)
@@ -4860,7 +4860,7 @@ calibrated_data = pd.concat([calibrated_data, new_columns_df], axis=1)
 calibrated_data = calibrated_data.copy()
 
 
-if create_essential_plots:
+if create_plots:
     # Scatter plot of alt_theta vs alt_phi
     plt.figure(figsize=(8, 6))
     plt.scatter(calibrated_data['phi'], calibrated_data['theta'], alpha=0.7, s = 1)
@@ -5254,18 +5254,18 @@ df_cases_2 = [
 #         plot_list
 #     )
 
-for filters, title in df_cases_2:
-    fig_idx = plot_hexbin_matrix(
-        df_plot_ancillary,
-        ['theta', 'phi', 'alt_theta', 'alt_phi'],
-        filters,
-        title,
-        save_plots,
-        show_plots,
-        base_directories,
-        fig_idx,
-        plot_list
-    )
+# for filters, title in df_cases_2:
+#     fig_idx = plot_hexbin_matrix(
+#         df_plot_ancillary,
+#         ['theta', 'phi', 'alt_theta', 'alt_phi'],
+#         filters,
+#         title,
+#         save_plots,
+#         show_plots,
+#         base_directories,
+#         fig_idx,
+#         plot_list
+#     )
 
 # for filters, title in df_cases_2:
 #     fig_idx = plot_hexbin_matrix(
