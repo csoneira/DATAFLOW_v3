@@ -647,7 +647,7 @@ number_of_particles_bound_up = 20
 for single_data in singles:
     single_data = np.array(single_data)
     module_hists = []
-    for n in range(1, number_of_particles_bound_up):
+    for n in range(1, number_of_particles_bound_up + 1):
         samples = np.random.choice(single_data, size=(n_events, n), replace=True).sum(axis=1)
         hist, _ = np.histogram(samples, bins=bin_edges, density=True)
         module_hists.append(hist)
@@ -658,9 +658,17 @@ fig, axes = plt.subplots(5, 2, figsize=(14, 18), sharex='col')
 
 import pandas as pd
 
-coeff_tables = {dt: pd.DataFrame(index=[f"S{n}" for n in range(1, number_of_particles_bound_up)],
+coeff_tables = {dt: pd.DataFrame(index=[f"S{n}" for n in range(1, number_of_particles_bound_up + 1)],
                                  columns=["M1", "M2", "M3", "M4"])
                 for dt in detection_types}
+
+# Accumulate event-weighted contributions per module
+component_counts = {
+    "M1": np.zeros(number_of_particles_bound_up),
+    "M2": np.zeros(number_of_particles_bound_up),
+    "M3": np.zeros(number_of_particles_bound_up),
+    "M4": np.zeros(number_of_particles_bound_up)
+}
 
 for i, (detection_type, df_group) in enumerate(zip(detection_types, df_data)):
     ax_hist = axes[i, 0]   # Left column: histograms and fit
@@ -677,7 +685,12 @@ for i, (detection_type, df_group) in enumerate(zip(detection_types, df_data)):
         coeffs, _ = nnls(A, counts_df)
         coeff_tables[detection_type].loc[:, module] = coeffs
         model = A @ coeffs  # predicted density
-
+        
+        # Get total number of events for that module and detection type
+        n_events = len(df)
+        # Weighted contribution = coeff * n_events
+        component_counts[module] += coeffs * n_events
+        
         # Plot histogram and model
         ax_hist.plot(bin_centers, counts_df, color=color, linestyle='-', label=f'{module} data')
         ax_hist.plot(bin_centers, model, color=color, linestyle='--', label=f'{module} fit')
@@ -770,5 +783,41 @@ plt.tight_layout()
 plt.savefig(f"{figure_save_path}coefficients_barplots_per_type.png", dpi=600)
 plt.show()
 plt.close()
+
+# %%
+
+# Now, multiply each coefficient by the total number of events in the module and the type
+# then sum them all up asnd obtain for each module a coeff. vs total number plot
+
+# Final plot: total number of events per component per module
+import matplotlib.pyplot as plt
+
+components = [f"S{i}" for i in range(1, number_of_particles_bound_up + 1)]
+x = np.arange(len(components))
+width = 0.1
+module_colors = ["r", "orange", "g", "b"]
+
+fig, ax = plt.subplots(figsize=(8, 5))
+
+for j, module in enumerate(component_counts.keys()):
+#     ax.bar(x + j * width, component_counts[module] / np.sum( component_counts[module] ), width=width,
+#            label=module, color=module_colors[j], alpha = 0.7)
+    ax.plot(x + j * width, component_counts[module] / np.sum( component_counts[module] ),
+           label=module, color=module_colors[j])
+
+ax.set_xticks(x + width * 1.5)
+ax.set_xticklabels(components)
+ax.set_ylabel("Total Events (Weighted by Coefficients)")
+ax.set_title("Total Event Contributions from Sums of 1–6 Singles per Module")
+ax.legend(title="Module")
+ax.grid(True, alpha=0.4)
+ax.set_yscale("log")
+ax.set_ylim(1e-5, 1.5)
+ax.set_xlim(-0.1, 5)
+
+plt.tight_layout()
+plt.savefig(figure_save_path + "total_event_contributions_per_component.png", dpi=600)
+plt.show()
+
 
 # %%

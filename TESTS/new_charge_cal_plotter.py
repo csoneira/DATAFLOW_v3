@@ -3,7 +3,7 @@
 remove_crosstalk = True
 crosstalk_limit = 3 #2.5
 
-remove_streamer = False
+remove_streamer = True
 streamer_limit = 90
 
 import pandas as pd
