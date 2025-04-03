@@ -1,6 +1,6 @@
 #%%
 
-remove_crosstalk = False
+remove_crosstalk = True
 crosstalk_limit = 3 #2.5
 
 remove_streamer = False
@@ -858,6 +858,8 @@ for key, df in sum_real_multiplicities.items():
 cases = ["real_single", "real_double", "real_triple", "real_quadruple"]
 modules = ["M1", "M2", "M3", "M4"]
 
+#%%
+
 for case in cases:
     fig_rows = len(modules)
     max_columns = 0
@@ -919,7 +921,7 @@ for case in cases:
     plt.tight_layout()
     figure_name = f"/{case}_sum.png"
     plt.savefig(figure_save_path + figure_name, dpi=150)
-    # plt.show()  # If you want interactive displays instead
+    plt.show()  # If you want interactive displays instead
     plt.close()
 
 # %%

@@ -368,6 +368,7 @@ calibrate_strip_Q_FB_percentile = 5
 # Time sum
 CRT_gaussian_fit_quantile = 0.03
 strip_time_diff_bound = 10
+time_coincidence_window = 7
 
 # Front-back charge
 distance_sum_charges_left_fit = -5
@@ -3314,6 +3315,38 @@ else:
 
 
 print("----------------------------------------------------------------------")
+print("----------------------- Time window filtering ------------------------")
+print("----------------------------------------------------------------------")
+
+# For each row, calculate the mean of the columns that have _T_sum_, then
+# calculate the difference between each column and the mean, and finally
+# check if the difference is within the time window of 7 ns
+
+# Calculate the mean of the T_sum values for each row, considering only non-zero values
+T_sum_columns = calibrated_data.filter(regex='_T_sum_')
+mean_T_sum = T_sum_columns.apply(lambda row: row[row != 0].median() if row[row != 0].size > 0 else 0, axis=1)
+
+# Calculate the difference between each T_sum value and the mean, but only for non-zero values
+diff_T_sum = T_sum_columns.sub(mean_T_sum, axis=0)
+
+# Check if the difference is within the time window, ignoring zero values
+time_window_mask = np.abs(diff_T_sum) <= time_coincidence_window
+time_window_mask[T_sum_columns == 0] = True  # Ignore zero values in the comparison
+
+# Apply the mask to the data using .loc to avoid the SettingWithCopyWarning
+calibrated_data.loc[:, T_sum_columns.columns] = T_sum_columns.where(time_window_mask, 0)
+
+# Calculate how many values were set to zero
+num_zeroed = (~time_window_mask).values.sum()
+num_total = time_window_mask.size  # total number of elements
+
+zeroed_percentage = num_zeroed / num_total
+
+if zeroed_percentage > 0:
+    print(f"Zeroed {zeroed_percentage:.2%} of the values outside the time window.")
+
+
+print("----------------------------------------------------------------------")
 print("---------------------- Y position calculation ------------------------")
 print("----------------------------------------------------------------------")
 
@@ -5435,8 +5468,10 @@ if chi_histo and create_plots:
 print("-----------------------------")
 print(f"Data purity is {len(final_data) / raw_data_len*100:.1f}%")
 
-
+# ------------------------------------------------------------------------------------------------
 # Statistical comprobation ----------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+
 if create_plots or create_essential_plots:
     test_data = final_data.copy()
     
@@ -5490,6 +5525,73 @@ if create_plots or create_essential_plots:
     if show_plots:
         plt.show()
 
+
+# ------------------------------------------------------------------------------------------------
+# Time window plotting
+# ------------------------------------------------------------------------------------------------
+
+if create_plots:
+    from matplotlib.cm import get_cmap
+
+    cases = [1234, 123, 234, 124, 134, 12, 23, 34, 13, 14, 24]
+    cmap = get_cmap('turbo')
+    colors = cmap(np.linspace(0, 1, len(cases)))
+
+    # Define window widths
+    widths = np.linspace(1, 20, 80)
+    plt.figure(figsize=(10, 6))
+
+    for idx, case in enumerate(cases):
+        data_case = final_data[final_data["type"] == case].copy()
+        
+        # Extract only the _T_sum_ columns
+        t_sum_columns = [col for col in data_case.columns if "_T_sum_" in col]
+        t_sum_data = data_case[t_sum_columns].values  # shape: (n_events, 16)
+
+        counts_per_width = []
+        counts_per_width_dev = []
+        
+        for w in widths:
+            count_in_window = []
+
+            for row in t_sum_data:
+                row_no_zeros = row[row != 0]
+                if len(row_no_zeros) == 0:
+                    count_in_window.append(0)
+                    continue
+
+                stat = np.mean(row_no_zeros)
+                lower = stat - w / 2
+                upper = stat + w / 2
+                n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
+                count_in_window.append(n_in_window)
+
+            counts_per_width.append(np.mean(count_in_window))
+            counts_per_width_dev.append(np.std(count_in_window))
+
+        plt.scatter(widths, counts_per_width / np.max(counts_per_width), color=colors[idx], label=f"type {case}")
+        counts_per_width = np.array(counts_per_width)
+        counts_per_width_dev = np.array(counts_per_width_dev)
+        plt.fill_between( widths, (counts_per_width - counts_per_width_dev) / np.max(counts_per_width), (counts_per_width + counts_per_width_dev) / np.max(counts_per_width), color=colors[idx], alpha=0.2)
+
+    plt.xlabel("Window width (ns)")
+    plt.ylabel("Average number of non-zero T_sum values in window")
+    plt.title("Counts inside statistic-centered window vs w")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    
+    if save_plots:
+        name_of_file = 'window_coincidence_count_'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+        
+    if show_plots:
+        plt.show()
 
 print("----------------------------------------------------------------------")
 print("-------------------------- Save and finish ---------------------------")

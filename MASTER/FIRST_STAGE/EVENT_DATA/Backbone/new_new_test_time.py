@@ -130,7 +130,6 @@ data_df = pd.read_csv(file_path)
 
 print(data_df.columns.to_list())
 
-
 # %%
 
 # Take only the columns which have T_sum in the name, I mean, inside of the column name
@@ -187,26 +186,10 @@ plt.tight_layout(rect=[0, 0, 1, 0.96])
 plt.show()
 # %%
 
-remove_crosstalk = True
-remove_streamers = True
+remove_crosstalk = False
+remove_streamers = False
 
 print(data_df_times.columns.to_list())
-# ['type',
-
-# 'Q1_Q_sum_1', 'Q1_Q_sum_2', 'Q1_Q_sum_3', 'Q1_Q_sum_4',
-# 'Q2_Q_sum_1', 'Q2_Q_sum_2', 'Q2_Q_sum_3', 'Q2_Q_sum_4', 'Q3_Q_sum_1', 
-# 'Q3_Q_sum_2', 'Q3_Q_sum_3', 'Q3_Q_sum_4', 'Q4_Q_sum_1', 'Q4_Q_sum_2',
-# 'Q4_Q_sum_3', 'Q4_Q_sum_4',
-
-# 'T1_T_sum_1', 'T1_T_sum_2', 'T1_T_sum_3', 
-# 'T1_T_sum_4', 'T2_T_sum_1', 'T2_T_sum_2', 'T2_T_sum_3', 'T2_T_sum_4', 
-# 'T3_T_sum_1', 'T3_T_sum_2', 'T3_T_sum_3', 'T3_T_sum_4', 'T4_T_sum_1', 
-# 'T4_T_sum_2', 'T4_T_sum_3', 'T4_T_sum_4',
-
-# 'T1_T_diff_1', 'T1_T_diff_2', 'T1_T_diff_3', 'T1_T_diff_4', 'T2_T_diff_1',
-# 'T2_T_diff_2', 'T2_T_diff_3', 
-# 'T2_T_diff_4', 'T3_T_diff_1', 'T3_T_diff_2', 'T3_T_diff_3', 'T3_T_diff_4', 
-# 'T4_T_diff_1', 'T4_T_diff_2', 'T4_T_diff_3', 'T4_T_diff_4']
       
 if remove_crosstalk or remove_streamers:
       for i in range(4):
@@ -228,157 +211,89 @@ if remove_crosstalk or remove_streamers:
       
 
 print(data_df_times['type'].unique())
-
 # %%
 
-case = 1234
-data_case = data_df_times[data_df_times["type"] == case].copy()
-
-import itertools
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.cm import get_cmap
 
-T_sum_cols = data_case.filter(regex='T_sum', axis=1)
+cases = [1234, 123, 234, 124, 134, 12, 23, 34, 13, 14, 24]
+cmap = get_cmap('turbo')
+colors = cmap(np.linspace(0, 1, len(cases)))
 
-# Function to calculate the desired distances, ignoring zeros
-def get_distances(row):
-    values = row.dropna().values  # Drop NaNs if any
-    values = values[values != 0]  # Exclude zeros
+# Define window widths
+widths = np.linspace(1, 20, 80)
+
+plt.figure(figsize=(10, 6))
+
+for idx, case in enumerate(cases):
+    data_case = data_df_times[data_df_times["type"] == case].copy()
     
-    if len(values) < 2:
-        return [np.nan] * 16  # Not enough values to compute distances
+    # Extract only the _T_sum_ columns
+    t_sum_columns = [col for col in data_case.columns if "_T_sum_" in col]
+    t_sum_data = data_case[t_sum_columns].values  # shape: (n_events, 16)
 
-    # Compute all pairwise absolute differences
-    pairwise_diffs = sorted([abs(a - b) for a, b in itertools.combinations(values, 2)])
+    counts_per_width = []
+    counts_per_width_dev = []
+    
+    for w in widths:
+        count_in_window = []
 
-    # Create a list of 20 max and 20 closest distances (or NaN if not enough)
-    max_distances = [pairwise_diffs[-i] if len(pairwise_diffs) >= i else np.nan for i in range(1, 9)]
-    closest_distances = [pairwise_diffs[i-1] if len(pairwise_diffs) >= i else np.nan for i in range(1, 9)]
+        for row in t_sum_data:
+            row_no_zeros = row[row != 0]
+            if len(row_no_zeros) == 0:
+                count_in_window.append(0)
+                continue
 
-    return max_distances + closest_distances
+            stat = np.mean(row_no_zeros)
+            lower = stat - w / 2
+            upper = stat + w / 2
+            n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
+            count_in_window.append(n_in_window)
 
-# Generate column names dynamically
-max_distance_cols = [f"{i+1}_max_distance" for i in range(8)]
-closest_distance_cols = [f"{i+1}_closest_distance" for i in range(8)]
+        counts_per_width.append(np.mean(count_in_window))
+        counts_per_width_dev.append(np.std(count_in_window))
 
-# Apply function to each row
-data_case[max_distance_cols + closest_distance_cols] = T_sum_cols.apply(get_distances, axis=1, result_type="expand")
+    plt.scatter(widths, counts_per_width / np.max(counts_per_width), color=colors[idx], label=f"type {case}")
+    counts_per_width = np.array(counts_per_width)
+    counts_per_width_dev = np.array(counts_per_width_dev)
+    plt.fill_between( widths, (counts_per_width - counts_per_width_dev) / np.max(counts_per_width), (counts_per_width + counts_per_width_dev) / np.max(counts_per_width), color=colors[idx], alpha=0.2)
 
-x_limit = 200
-
-# Plot histograms overlayed
-plt.figure(figsize=(12, 6))
-
-bin_number = 100
-colors = [
-    "blue", "red", "green", "cyan", "magenta", "orange", "purple", "brown", "pink", "yellow",
-    "lime", "teal", "gold", "navy", "violet", "gray", "salmon", "indigo", "turquoise", "maroon"
-]
-
-for i in range(8):
-      # Filter data before plotting
-      max_filtered = data_case[max_distance_cols[i]].dropna()
-      max_filtered = max_filtered[max_filtered <= x_limit]  # Apply x_limit filter
-
-      closest_filtered = data_case[closest_distance_cols[i]].dropna()
-      closest_filtered = closest_filtered[closest_filtered <= x_limit]  # Apply x_limit filter
-
-      # Plot furthest distances with solid lines
-      plt.hist(max_filtered, bins=bin_number, alpha=0.4, 
-                  label=f"{i+1}th Max Distance", color=colors[i], edgecolor='black')
-
-      # Plot closest distances with a dashed outline
-      plt.hist(closest_filtered, bins=bin_number, alpha=0.4, 
-                  label=f"{i+1}th Closest Distance", color=colors[i], hatch='//', edgecolor='black')
-
-
-plt.yscale("log")
-plt.title("Histogram of T_sum Distance Metrics (20 Furthest & 20 Closest, No Zeros)")
-plt.legend(ncol=2)  # Display legend in two columns to save space
-plt.xlim(0, x_limit)
+plt.xlabel("Window width (ns)")
+plt.ylabel("Average number of non-zero T_sum values in window")
+plt.title("Counts inside statistic-centered window vs w")
+plt.legend()
+plt.grid(True)
+# Set the background color of the plot to the first colour of the colormap
+# plt.gca().set_facecolor(cmap(0))
+plt.tight_layout()
 plt.show()
 
 # %%
 
-import itertools
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from collections import Counter
 
-# Assuming data_df_times is provided and contains the relevant data
-case = 34
-data_case = data_df_times[data_df_times["type"] == case].copy()
+calibrated_data = data_df_times.copy()
+time_window = 7
 
-# Extract T_sum columns
-T_sum_cols = data_case.filter(regex='T_sum', axis=1)
+# Calculate the mean of the T_sum values for each row, considering only non-zero values
+T_sum_columns = calibrated_data.filter(regex='_T_sum_')
+mean_T_sum = T_sum_columns.apply(lambda row: row[row != 0].median() if row[row != 0].size > 0 else 0, axis=1)
 
-# Function to compute all pairwise differences and count occurrences of large differences
-def compute_pairwise_differences(data, threshold=5):
-    problem_counter = Counter()
-    all_differences = []
+# Calculate the difference between each T_sum value and the mean, but only for non-zero values
+diff_T_sum = T_sum_columns.sub(mean_T_sum, axis=0)
 
-    for _, row in data.iterrows():
-        values = row.dropna().values  # Drop NaNs
-        values = values[values != 0]  # Exclude zeros
-        indices = row.dropna().index  # Keep track of column names
+# Check if the difference is within the time window, ignoring zero values
+time_window_mask = np.abs(diff_T_sum) <= time_window
+time_window_mask[T_sum_columns == 0] = True  # Ignore zero values in the comparison
 
-        if len(values) < 2:
-            continue  # No pairs to process
+# Apply the mask to the data
+T_sum_columns[~time_window_mask] = 0
 
-        for i, j in itertools.combinations(range(len(values)), 2):
-            diff = abs(values[i] - values[j])
-            all_differences.append(diff)
+# Calculate how many values were set to zero
+num_zeroed = (~time_window_mask).values.sum()
+num_total = time_window_mask.size  # total number of elements
 
-            if diff > threshold:
-                problem_counter[indices[i]] += 1
-                problem_counter[indices[j]] += 1
+zeroed_percentage = num_zeroed / num_total
 
-    return problem_counter, all_differences
-
-# Compute problematic T_sums and all pairwise differences
-problem_counts, all_differences = compute_pairwise_differences(T_sum_cols, threshold=7)
-
-# Convert to sorted lists for plotting
-problem_values = list(problem_counts.values())
-
-# Plot histogram of all pairwise differences
-plt.figure(figsize=(10, 5))
-plt.hist(all_differences, bins=50, edgecolor="black", alpha=0.7)
-plt.yscale("log")  # Log scale for better visibility
-plt.xlabel("Pairwise T_sum Differences (ns)")
-plt.ylabel("Frequency (log scale)")
-plt.title("Histogram of All Pairwise T_sum Differences")
-plt.grid(True)
-plt.show()
-
-# Plot histogram of bad pairings per T_sum
-plt.figure(figsize=(10, 5))
-plt.hist(problem_values, bins=30, edgecolor="black", alpha=0.7)
-plt.yscale("log")  # Log scale for better visibility
-plt.xlabel("Number of Bad Pairings per T_sum (>5 ns)")
-plt.ylabel("Frequency (log scale)")
-plt.title("Histogram of T_sum Values by Number of Bad Pairings")
-plt.grid(True)
-plt.show()
-
-# Identify T_sum columns to be zeroed (if they appear in 3 or more bad pairings)
-flagged_T_sums = {t_sum for t_sum, count in problem_counts.items() if count >= 3}
-
-# Debug: Print flagged T_sum columns
-print("T_sums flagged for zeroing:", flagged_T_sums)
-
-# Zero out flagged T_sum values and related columns
-for col in flagged_T_sums:
-    data_case[col] = 0  # Zero the T_sum values
-    related_cols = [col.replace("T_sum", suffix) for suffix in ["Tdiff", "Qdiff"]]  # Adjust suffixes
-    for r_col in related_cols:
-        if r_col in data_case.columns:
-            data_case[r_col] = 0  # Zero out related values
-
-# Debug: Check zeroing
-for col in flagged_T_sums:
-    print(f"Zeroed {col}: Unique values after zeroing ->", data_case[col].unique())
-
-
-# %%
+if zeroed_percentage > 0:
+    print(f"Zeroed {zeroed_percentage:.2%} of the values outside the time window.")
