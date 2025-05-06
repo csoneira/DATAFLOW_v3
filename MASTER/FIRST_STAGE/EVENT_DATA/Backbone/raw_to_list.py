@@ -19,6 +19,7 @@ Created on Thu Jun 20 09:15:33 2024
 
 import pandas as pd
 import numpy as np
+from scipy.interpolate import CubicSpline
 import sys
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
@@ -186,6 +187,7 @@ else:
     z_2 = 150
     z_3 = 300
     z_4 = 450
+    
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
@@ -217,23 +219,26 @@ presentation_plots = False
 force_replacement = True # Creates a new datafile even if there is already one that looks complete
 article_format = False
 
-# Charge front-back
+# Charge calibration to fC -------------------------
+calibrate_charge = True
+
+# Charge front-back --------------------------------
 charge_front_back = True
 
-# Y position -------------------------
+# Y position ---------------------------------------
 y_position_complex_method = False
 uniform_y_method = True
 
-# Slewing correction -----------------
+# Slewing correction -------------------------------
 slewing_correction = True
 
-# Time calibration ------------------
+# Time calibration ---------------------------------
 time_calibration = True
 
-# RPC variables ---------------------
+# RPC variables ------------------------------------
 weighted = False
 
-# TimTrack -------------------------
+# TimTrack -----------------------------------------
 fixed_speed = False
 res_ana_removing_planes = False
 timtrack_iteration = False
@@ -452,12 +457,12 @@ strip_length = 300
 def y_pos(y_width):
     return np.cumsum(y_width) - (np.sum(y_width) + y_width) / 2
 
-y_widths = [np.array([63, 63, 63, 98]), np.array([98, 63, 63, 63])]  # T1-T3 and T2-T4 widths
+y_widths = [np.array([63, 63, 63, 98]), np.array([98, 63, 63, 63])]  # P1-P3 and P2-P4 widths
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
-y_width_T1_and_T3 = y_widths[0]
-y_width_T2_and_T4 = y_widths[1]
-y_pos_T1_and_T3 = y_pos(y_width_T1_and_T3)
-y_pos_T2_and_T4 = y_pos(y_width_T2_and_T4)
+y_width_P1_and_P3 = y_widths[0]
+y_width_P2_and_P4 = y_widths[1]
+y_pos_P1_and_P3 = y_pos(y_width_P1_and_P3)
+y_pos_P2_and_P4 = y_pos(y_width_P2_and_P4)
 
 # Miscelanous ----------------------------
 c_mm_ns = c/1000000
@@ -486,7 +491,7 @@ anc_sz = 10 # 5 cm
 # 'discarded_by_time_window', 'one_side_events', 'purity_of_data'
 # -----------------------------------------------------------------------------
 global_variables = {
-    'CRT_avg': 0,
+    'CRP_avg': 0,
     'discarded_by_time_window_percentage': 0,
     'one_side_events': 0,
     'purity_of_data_percentage': 0,
@@ -1554,7 +1559,7 @@ if exists_input_file:
     # Select the first matching configuration if available
     if not matching_confs.empty:
         if len(matching_confs) > 1:
-            print(f"Warning: Multiple configurations match the date range ({start_time} to {end_time}). Taking the first one.")
+            print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
         
         selected_conf = matching_confs.iloc[0]
         print(f"Selected configuration: {selected_conf['conf']}")
@@ -1624,7 +1629,6 @@ final_df = pd.DataFrame(columns_data)
 if debug_mode:
     print(len(final_df))
 
-
 # # Add 'event_id' and 'event_label' columns ----------------------------------------------
 # filtered_data['event_id'] = np.arange(len(filtered_data))  # Sequential event identifiers
 # filtered_data['event_label'] = 'date_filtered'  # Label for the events
@@ -1637,8 +1641,6 @@ if debug_mode:
 # # Save the DataFrame to a CSV file
 # if debug_mode:
 #     filtered_data.to_csv('hey.csv', sep=' ', index=False)
-
-
 
 print("-------------------- Filter 1.1.1: uncalibrated data ---------------------")
 # FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out ------------------------------
@@ -1905,6 +1907,8 @@ if create_plots or create_essential_plots:
 # -----------------------------------------------------------------------------
 
 
+
+# --- Define FEE Calibration ---
 FEE_calibration = {
     "Width": [
         0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
@@ -1921,90 +1925,78 @@ FEE_calibration = {
         2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
     ]
 }
-
-# Create the DataFrame
 FEE_calibration = pd.DataFrame(FEE_calibration)
+cs = CubicSpline(FEE_calibration['Width'].to_numpy(),
+                 FEE_calibration['Fast Charge'].to_numpy(),
+                 bc_type='natural')
 
-def interpolate_fast_charge(width):
-    """
-    Interpolates the Fast Charge for given Width values using the data table.
+def interpolate_fast_charge(width_array):
+    """ Interpolates fast charge for array-like width values using cubic spline. """
+    width_array = np.asarray(width_array)
+    return np.where(width_array == 0, 0, cs(width_array))
 
-    Parameters:
-    - width (float or np.ndarray): The Width value(s) to interpolate in ns.
-
-    Returns:
-    - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-    """
-    
-    # Ensure calibration data is sorted and numpy arrays
-    width_table = FEE_calibration['Width'].to_numpy()
-    fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-    
-    width_clipped = np.clip(width, width_table.min(), width_table.max())
-    
-    # Check if width values are within the interpolation range
-    # if np.any((width < width_table.min()) | (width > width_table.max())):
-    #     print(
-    #         f"Some width values are outside the interpolation range "
-    #         f"({width_table.min()} to {width_table.max()}), but will be clipped."
-    #     )
-    
-    width_clipped = np.clip(width, width_table.min(), width_table.max())
-    
-    # Perform interpolation
-    return np.interp(width, width_table, fast_charge_table)
-
-
+# --- Calibrate and store new columns in final_df ---
 for key in ['Q1', 'Q2', 'Q3', 'Q4']:
     for j in range(1, 5):
         for suffix in ['F', 'B']:
             col = f"{key}_{suffix}_{j}"
             if col in charge_test.columns:
-                # Mask non-zero values
-                mask = charge_test_copy[col] != 0
-                # Perform interpolation only for masked values
-                charge_test.loc[mask, col] = interpolate_fast_charge(
-                    charge_test_copy.loc[mask, col].to_numpy()
-                )
+                col_fC = f"{col}_fC"
+                raw = charge_test[col]
+                mask = (raw != 0) & np.isfinite(raw)
+                charge_test[col_fC] = 0.0  # initialize
+                charge_test.loc[mask, col_fC] = interpolate_fast_charge(raw[mask])
 
-if create_plots:
-    # Create the grand figure for Q values
-    fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
-    axes_Q = axes_Q.flatten()
-    
-    for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-        for j in range(4):
-            col_F = f'{key}_F_{j+1}'
-            col_B = f'{key}_B_{j+1}'
+
+import matplotlib.pyplot as plt
+
+Q_clip_min = 0
+Q_clip_max = 2500
+num_bins = 100
+log_scale = True
+
+fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))
+axes_Q = axes_Q.flatten()
+
+for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+    for j in range(4):
+        col_F = f'{key}_F_{j+1}_fC'
+        col_B = f'{key}_B_{j+1}_fC'
+        ax = axes_Q[i*4 + j]
+
+        if col_F in charge_test.columns:
             y_F = charge_test[col_F]
-            y_B = charge_test[col_B]
-            
-            # Plot histograms with Q-specific clipping and bins
-            axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
-                                 bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-            axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
-                                 bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-            axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-            axes_Q[i*4 + j].legend()
-            axes_Q[i*4 + j].set_xlabel('Q / fC')
-            
-            if log_scale:
-                axes_Q[i*4 + j].set_yscale('log')  # For Q values
+            y_F = y_F[(y_F > Q_clip_min) & (y_F < Q_clip_max) & np.isfinite(y_F)]
+            ax.hist(y_F, bins=num_bins, alpha=0.5, label=f'{col_F}')
 
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    plt.suptitle(f"Grand Figure for calibrated charge (fC), mingo0{station}\n{start_time}", fontsize=16)
-    
-    if save_plots:
-        final_filename = f'{fig_idx}_grand_figure_Q_fC_cal.png'
-        fig_idx += 1
-        
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    
-    if show_plots: plt.show()
-    plt.close(fig_Q)
+        if col_B in charge_test.columns:
+            y_B = charge_test[col_B]
+            y_B = y_B[(y_B > Q_clip_min) & (y_B < Q_clip_max) & np.isfinite(y_B)]
+            ax.hist(y_B, bins=num_bins, alpha=0.5, label=f'{col_B}')
+
+        ax.set_title(f"{col_F} vs {col_B}")
+        ax.set_xlabel('Charge [fC]')
+        ax.legend()
+
+        if log_scale:
+            ax.set_yscale('log')
+
+plt.tight_layout()
+plt.subplots_adjust(top=0.9)
+plt.suptitle(f"Grand Figure for calibrated charge (fC), mingo0{station}\n{start_time}", fontsize=16)
+
+# --- Save/Show ---
+if save_plots:
+    final_filename = f'{fig_idx}_grand_figure_Q_fC.png'
+    fig_idx += 1
+    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    plot_list.append(save_fig_path)
+    plt.savefig(save_fig_path, format='png')
+
+if show_plots:
+    plt.show()
+plt.close(fig_Q)
+
 
 # -----------------------------------------------------------------------
 
@@ -2015,7 +2007,7 @@ for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         pos_test[f'{key}_diff_{j+1}'] = ( pos_test[f'{key}_F_{j+1}'] - pos_test[f'{key}_B_{j+1}'] ) / 2
 
 # print('Check this out:')
-# print(pos_test[f'T1_diff_1'])
+# print(pos_test[f'P1_diff_1'])
 # print('---------')
 
 pos_test_copy = pos_test.copy()
@@ -2375,7 +2367,7 @@ if create_plots:
 if presentation_plots:
     plane = 2
     strip = 2
-    data = [f'T{plane}_T_sum_{strip}', f'T{plane}_T_diff_{strip}', f'Q{plane}_Q_sum_{strip}', f'Q{plane}_Q_diff_{strip}']
+    data = [f'P{plane}_T_sum_{strip}', f'P{plane}_T_diff_{strip}', f'Q{plane}_Q_sum_{strip}', f'Q{plane}_Q_diff_{strip}']
     fig_idx = 0  # Assuming fig_idx is defined earlier
     plot_list = []  # Assuming plot_list is defined earlier
 
@@ -2555,38 +2547,38 @@ if slewing_correction:
         """Returns array of y-centers based on the widths of each strip."""
         return np.cumsum(y_width) - (np.sum(y_width) + y_width) / 2
 
-    # For T1/T3 vs T2/T4
+    # For P1/P3 vs P2/P4
     y_widths = [
-        np.array([63, 63, 63, 98]),  # T1 / T3
-        np.array([98, 63, 63, 63])   # T2 / T4
+        np.array([63, 63, 63, 98]),  # P1 / P3
+        np.array([98, 63, 63, 63])   # P2 / P4
     ]
 
-    y_pos_T1_T3 = y_pos(y_widths[0])  # shape (4,)
-    y_pos_T2_T4 = y_pos(y_widths[1])  # shape (4,)
+    y_pos_P1_P3 = y_pos(y_widths[0])  # shape (4,)
+    y_pos_P2_P4 = y_pos(y_widths[1])  # shape (4,)
 
     # yz_big[plane_index, strip_index, 0/1] = (y,z)
-    # plane_index in [0..3] => T1=0, T2=1, T3=2, T4=3
+    # plane_index in [0..3] => P1=0, P2=1, P3=2, P4=3
     # strip_index in [0..3], but your data columns say 1..4 => we do minus 1
     yz_big = np.zeros((4, 4, 2))
 
-    # Fill T1 -> plane_idx=0, T3 -> plane_idx=2 with y_pos_T1_T3
+    # Fill P1 -> plane_idx=0, P3 -> plane_idx=2 with y_pos_P1_P3
     for strip_idx in range(4):
-        yz_big[0, strip_idx, 0] = y_pos_T1_T3[strip_idx]  # y
-        yz_big[0, strip_idx, 1] = z_positions[0]         # z for T1
+        yz_big[0, strip_idx, 0] = y_pos_P1_P3[strip_idx]  # y
+        yz_big[0, strip_idx, 1] = z_positions[0]         # z for P1
         
-        yz_big[2, strip_idx, 0] = y_pos_T1_T3[strip_idx]  # y
-        yz_big[2, strip_idx, 1] = z_positions[2]         # z for T3
+        yz_big[2, strip_idx, 0] = y_pos_P1_P3[strip_idx]  # y
+        yz_big[2, strip_idx, 1] = z_positions[2]         # z for P3
 
-    # Fill T2 -> plane_idx=1, T4 -> plane_idx=3 with y_pos_T2_T4
+    # Fill P2 -> plane_idx=1, P4 -> plane_idx=3 with y_pos_P2_P4
     for strip_idx in range(4):
-        yz_big[1, strip_idx, 0] = y_pos_T2_T4[strip_idx]  # y
-        yz_big[1, strip_idx, 1] = z_positions[1]         # z for T2
+        yz_big[1, strip_idx, 0] = y_pos_P2_P4[strip_idx]  # y
+        yz_big[1, strip_idx, 1] = z_positions[1]         # z for P2
 
-        yz_big[3, strip_idx, 0] = y_pos_T2_T4[strip_idx]  # y
-        yz_big[3, strip_idx, 1] = z_positions[3]         # z for T4
+        yz_big[3, strip_idx, 0] = y_pos_P2_P4[strip_idx]  # y
+        yz_big[3, strip_idx, 1] = z_positions[3]         # z for P4
 
-    # Mapping T1->0, T2->1, T3->2, T4->3
-    plane_map = {"T1": 0, "T2": 1, "T3": 2, "T4": 3}
+    # Mapping P1->0, P2->1, P3->2, P4->3
+    plane_map = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
 
     def get_yz(plane_idx, strip_idx):
         """
@@ -2605,18 +2597,18 @@ if slewing_correction:
 
     ##############################################################################
     # 3) Parsing plane & strip from column names
-    #    (e.g. "T1_T_sum_3" => plane="T1", strip=3)
+    #    (e.g. "P1_T_sum_3" => plane="P1", strip=3)
     ##############################################################################
     def parse_plane_and_strip(col_name):
         """
-        This regex expects columns like "T1_T_sum_2" or "T3_T_diff_4".
+        This regex expects columns like "P1_T_sum_2" or "P3_T_diff_4".
         If the column doesn't match, raises ValueError.
         """
         pattern = r"^(T[1-4])_T_(?:sum|diff)_(\d+)$"
         match = re.match(pattern, col_name)
         if not match:
             raise ValueError(f"Cannot parse plane/strip from '{col_name}'")
-        plane_str = match.group(1)  # e.g. "T1"
+        plane_str = match.group(1)  # e.g. "P1"
         strip_str = match.group(2)  # e.g. "3"
         return plane_str, int(strip_str)
 
@@ -2659,7 +2651,7 @@ if slewing_correction:
     # 5) Example: load or define your DataFrame with T-sum, T-diff, Q-sum columns
     ##############################################################################
     # Suppose your actual data has columns like:
-    # ['type', 'Q1_Q_sum_1', 'Q1_Q_sum_2', ..., 'T1_T_sum_1', ..., 'T2_T_diff_2', ...]
+    # ['type', 'Q1_Q_sum_1', 'Q1_Q_sum_2', ..., 'P1_T_sum_1', ..., 'P2_T_diff_2', ...]
 
     # 5a) Filter out the T_sum, T_diff, Q_sum columns via regex so we don’t parse e.g. "type"
     T_sum_cols = [
@@ -2954,23 +2946,23 @@ if time_calibration:
     
     yz_big = np.array([[[y, z] for y in y_pos_T[i % 2]] for i, z in enumerate(z_positions)])
     
-    def calculate_diff(T_a, s_a, T_b, s_b, ps):
+    def calculate_diff(P_a, s_a, P_b, s_b, ps):
         
         # First position
-        x_1 = ps[T_a-1, 1]
-        yz_1 = yz_big[T_a-1, s_a-1]
+        x_1 = ps[P_a-1, 1]
+        yz_1 = yz_big[P_a-1, s_a-1]
         xyz_1 = np.append(x_1, yz_1)
         
         # Second position
-        x_2 = ps[T_b-1, 1]
-        yz_2 = yz_big[T_b-1, s_b-1]
+        x_2 = ps[P_b-1, 1]
+        yz_2 = yz_big[P_b-1, s_b-1]
         xyz_2 = np.append(x_2, yz_2)
         
         pos_x.append(x_1)
         pos_x.append(x_2)
         
-        t_0_1 = ps[T_a-1, 2]
-        t_0_2 = ps[T_b-1, 2]
+        t_0_1 = ps[P_a-1, 2]
+        t_0_2 = ps[P_b-1, 2]
         t_0.append(t_0_1)
         t_0.append(t_0_2)
         
@@ -2981,108 +2973,108 @@ if time_calibration:
         v_travel_time.append(travel_time)
         
         # diff = travel_time
-        diff = ps[T_b-1, 2] - ps[T_a-1, 2] - travel_time
-        # diff = ps[T_b-1, 2] - ps[T_a-1, 2]
+        diff = ps[P_b-1, 2] - ps[P_a-1, 2] - travel_time
+        # diff = ps[P_b-1, 2] - ps[P_a-1, 2]
         return diff
     
     # Three layers spaced
-    T1s1_T4s1 = []
-    T1s1_T4s2 = []
-    T1s2_T4s1 = []
-    T1s2_T4s2 = []
-    T1s2_T4s3 = []
-    T1s3_T4s2 = []
-    T1s3_T4s3 = []
-    T1s3_T4s4 = []
-    T1s4_T4s3 = []
-    T1s4_T4s4 = []
-    T1s1_T4s3 = []
-    T1s3_T4s1 = []
-    T1s2_T4s4 = []
-    T1s4_T4s2 = []
-    T1s1_T4s4 = []
+    P1s1_P4s1 = []
+    P1s1_P4s2 = []
+    P1s2_P4s1 = []
+    P1s2_P4s2 = []
+    P1s2_P4s3 = []
+    P1s3_P4s2 = []
+    P1s3_P4s3 = []
+    P1s3_P4s4 = []
+    P1s4_P4s3 = []
+    P1s4_P4s4 = []
+    P1s1_P4s3 = []
+    P1s3_P4s1 = []
+    P1s2_P4s4 = []
+    P1s4_P4s2 = []
+    P1s1_P4s4 = []
     
     # Two layers spaced
-    T1s1_T3s1 = []
-    T1s1_T3s2 = []
-    T1s2_T3s1 = []
-    T1s2_T3s2 = []
-    T1s2_T3s3 = []
-    T1s3_T3s2 = []
-    T1s3_T3s3 = []
-    T1s3_T3s4 = []
-    T1s4_T3s3 = []
-    T1s4_T3s4 = []
-    T1s1_T3s3 = []
-    T1s3_T3s1 = []
-    T1s2_T3s4 = []
-    T1s4_T3s2 = []
-    T1s1_T3s4 = []
+    P1s1_P3s1 = []
+    P1s1_P3s2 = []
+    P1s2_P3s1 = []
+    P1s2_P3s2 = []
+    P1s2_P3s3 = []
+    P1s3_P3s2 = []
+    P1s3_P3s3 = []
+    P1s3_P3s4 = []
+    P1s4_P3s3 = []
+    P1s4_P3s4 = []
+    P1s1_P3s3 = []
+    P1s3_P3s1 = []
+    P1s2_P3s4 = []
+    P1s4_P3s2 = []
+    P1s1_P3s4 = []
     
-    T2s1_T4s1 = []
-    T2s1_T4s2 = []
-    T2s2_T4s1 = []
-    T2s2_T4s2 = []
-    T2s2_T4s3 = []
-    T2s3_T4s2 = []
-    T2s3_T4s3 = []
-    T2s3_T4s4 = []
-    T2s4_T4s3 = []
-    T2s4_T4s4 = []
-    T2s1_T4s3 = []
-    T2s3_T4s1 = []
-    T2s2_T4s4 = []
-    T2s4_T4s2 = []
-    T2s1_T4s4 = []
+    P2s1_P4s1 = []
+    P2s1_P4s2 = []
+    P2s2_P4s1 = []
+    P2s2_P4s2 = []
+    P2s2_P4s3 = []
+    P2s3_P4s2 = []
+    P2s3_P4s3 = []
+    P2s3_P4s4 = []
+    P2s4_P4s3 = []
+    P2s4_P4s4 = []
+    P2s1_P4s3 = []
+    P2s3_P4s1 = []
+    P2s2_P4s4 = []
+    P2s4_P4s2 = []
+    P2s1_P4s4 = []
     
     # One layer spaced
-    T1s1_T2s1 = []
-    T1s1_T2s2 = []
-    T1s2_T2s1 = []
-    T1s2_T2s2 = []
-    T1s2_T2s3 = []
-    T1s3_T2s2 = []
-    T1s3_T2s3 = []
-    T1s3_T2s4 = []
-    T1s4_T2s3 = []
-    T1s4_T2s4 = []
-    T1s1_T2s3 = []
-    T1s3_T2s1 = []
-    T1s2_T2s4 = []
-    T1s4_T2s2 = []
-    T1s1_T2s4 = []
+    P1s1_P2s1 = []
+    P1s1_P2s2 = []
+    P1s2_P2s1 = []
+    P1s2_P2s2 = []
+    P1s2_P2s3 = []
+    P1s3_P2s2 = []
+    P1s3_P2s3 = []
+    P1s3_P2s4 = []
+    P1s4_P2s3 = []
+    P1s4_P2s4 = []
+    P1s1_P2s3 = []
+    P1s3_P2s1 = []
+    P1s2_P2s4 = []
+    P1s4_P2s2 = []
+    P1s1_P2s4 = []
     
-    T2s1_T3s1 = []
-    T2s1_T3s2 = []
-    T2s2_T3s1 = []
-    T2s2_T3s2 = []
-    T2s2_T3s3 = []
-    T2s3_T3s2 = []
-    T2s3_T3s3 = []
-    T2s3_T3s4 = []
-    T2s4_T3s3 = []
-    T2s4_T3s4 = []
-    T2s1_T3s3 = []
-    T2s3_T3s1 = []
-    T2s2_T3s4 = []
-    T2s4_T3s2 = []
-    T2s1_T3s4 = []
+    P2s1_P3s1 = []
+    P2s1_P3s2 = []
+    P2s2_P3s1 = []
+    P2s2_P3s2 = []
+    P2s2_P3s3 = []
+    P2s3_P3s2 = []
+    P2s3_P3s3 = []
+    P2s3_P3s4 = []
+    P2s4_P3s3 = []
+    P2s4_P3s4 = []
+    P2s1_P3s3 = []
+    P2s3_P3s1 = []
+    P2s2_P3s4 = []
+    P2s4_P3s2 = []
+    P2s1_P3s4 = []
     
-    T3s1_T4s1 = []
-    T3s1_T4s2 = []
-    T3s2_T4s1 = []
-    T3s2_T4s2 = []
-    T3s2_T4s3 = []
-    T3s3_T4s2 = []
-    T3s3_T4s3 = []
-    T3s3_T4s4 = []
-    T3s4_T4s3 = []
-    T3s4_T4s4 = []
-    T3s1_T4s3 = []
-    T3s3_T4s1 = []
-    T3s2_T4s4 = []
-    T3s4_T4s2 = []
-    T3s1_T4s4 = []
+    P3s1_P4s1 = []
+    P3s1_P4s2 = []
+    P3s2_P4s1 = []
+    P3s2_P4s2 = []
+    P3s2_P4s3 = []
+    P3s3_P4s2 = []
+    P3s3_P4s3 = []
+    P3s3_P4s4 = []
+    P3s4_P4s3 = []
+    P3s4_P4s4 = []
+    P3s1_P4s3 = []
+    P3s3_P4s1 = []
+    P3s2_P4s4 = []
+    P3s4_P4s2 = []
+    P3s1_P4s4 = []
     
     pos_x = []
     v_travel_time = []
@@ -3111,256 +3103,256 @@ if time_calibration:
         # ---------------------------------------------------------------------
         
         # Three layers spacing ------------------------------------------------
-        # T1-T4 ---------------------------------------------------------------
-        T_a = 1; T_b = 4
+        # P1-P4 ---------------------------------------------------------------
+        P_a = 1; P_b = 4
         # Same strips
         s_a = 1; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T4s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s4_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Adjacent strips
         s_a = 1; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T4s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s4_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Two separated strips
         s_a = 1; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T4s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s4_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Three separated strips
         s_a = 1; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         
         # Two layers spacing --------------------------------------------------
-        # T1-T3 ---------------------------------------------------------------
-        T_a = 1; T_b = 3
+        # P1-P3 ---------------------------------------------------------------
+        P_a = 1; P_b = 3
         # Same strips
         s_a = 1; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T3s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T3s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T3s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s4_T3s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Adjacent strips
         s_a = 1; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T3s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T3s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T3s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T3s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T3s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s4_T3s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Two separated strips
         s_a = 1; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T3s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T3s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T3s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s4_T3s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Three separated strips
         s_a = 1; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T3s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         
-        # T2-T4 ---------------------------------------------------------------
-        T_a = 2; T_b = 4
+        # P2-P4 ---------------------------------------------------------------
+        P_a = 2; P_b = 4
         # Same strips
         s_a = 1; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s1_T4s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s2_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s3_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s4_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Adjacent strips
         s_a = 1; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s1_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s2_T4s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s2_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s3_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s3_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s4_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Two separated strips
         s_a = 1; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s1_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s3_T4s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s2_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s4_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Three separated strips
         s_a = 1; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s1_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         
         # One layer spacing ---------------------------------------------------
-        # T3-T4 ---------------------------------------------------------------
-        T_a = 3; T_b = 4
+        # P3-P4 ---------------------------------------------------------------
+        P_a = 3; P_b = 4
         # Same strips
         s_a = 1; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s1_T4s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s2_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s3_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s4_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Adjacent strips
         s_a = 1; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s1_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s2_T4s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s2_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s3_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s3_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s4_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Two separated strips
         s_a = 1; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s1_T4s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s3_T4s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s2_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s4_T4s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Three separated strips
         s_a = 1; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T3s1_T4s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         
-        # T1-T2 ---------------------------------------------------------------
-        T_a = 1; T_b = 2
+        # P1-P2 ---------------------------------------------------------------
+        P_a = 1; P_b = 2
         # Same strips
         s_a = 1; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T2s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T2s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T2s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s4_T2s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Adjacent strips
         s_a = 1; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T2s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T2s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T2s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T2s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T2s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s4_T2s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Two separated strips
         s_a = 1; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T2s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s3_T2s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s2_T2s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s4_T2s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Three separated strips
         s_a = 1; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T1s1_T2s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         
-        # T2-T3 ---------------------------------------------------------------
-        T_a = 2; T_b = 3
+        # P2-P3 ---------------------------------------------------------------
+        P_a = 2; P_b = 3
         # Same strips
         s_a = 1; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s1_T3s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s2_T3s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s3_T3s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s4_T3s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Adjacent strips
         s_a = 1; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s1_T3s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s2_T3s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s2_T3s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s3_T3s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s3_T3s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s4_T3s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Two separated strips
         s_a = 1; s_b = 3
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s1_T3s3.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 3; s_b = 1
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s3_T3s1.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 2; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s2_T3s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         s_a = 4; s_b = 2
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s4_T3s2.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
         # Three separated strips
         s_a = 1; s_b = 4
-        if ps[T_a-1, 0] == s_a and ps[T_b-1, 0] == s_b: T2s1_T3s4.append(calculate_diff(T_a, s_a, T_b, s_b, ps))
+        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
             
         i += 1
     
     vectors = [
-        T1s1_T3s1, T1s1_T3s2, T1s2_T3s1, T1s2_T3s2, T1s2_T3s3,
-        T1s3_T3s2, T1s3_T3s3, T1s3_T3s4, T1s4_T3s3, T1s4_T3s4,
-        T1s1_T3s3, T1s3_T3s1, T1s2_T3s4, T1s4_T3s2, T1s1_T3s4,\
+        P1s1_P3s1, P1s1_P3s2, P1s2_P3s1, P1s2_P3s2, P1s2_P3s3,
+        P1s3_P3s2, P1s3_P3s3, P1s3_P3s4, P1s4_P3s3, P1s4_P3s4,
+        P1s1_P3s3, P1s3_P3s1, P1s2_P3s4, P1s4_P3s2, P1s1_P3s4,\
             
-        T1s1_T4s1, T1s1_T4s2, T1s2_T4s1, T1s2_T4s2, T1s2_T4s3,
-        T1s3_T4s2, T1s3_T4s3, T1s3_T4s4, T1s4_T4s3, T1s4_T4s4,
-        T1s1_T4s3, T1s3_T4s1, T1s2_T4s4, T1s4_T4s2, T1s1_T4s4,\
+        P1s1_P4s1, P1s1_P4s2, P1s2_P4s1, P1s2_P4s2, P1s2_P4s3,
+        P1s3_P4s2, P1s3_P4s3, P1s3_P4s4, P1s4_P4s3, P1s4_P4s4,
+        P1s1_P4s3, P1s3_P4s1, P1s2_P4s4, P1s4_P4s2, P1s1_P4s4,\
             
-        T2s1_T4s1, T2s1_T4s2, T2s2_T4s1, T2s2_T4s2, T2s2_T4s3,
-        T2s3_T4s2, T2s3_T4s3, T2s3_T4s4, T2s4_T4s3, T2s4_T4s4,
-        T2s1_T4s3, T2s3_T4s1, T2s2_T4s4, T2s4_T4s2, T2s1_T4s4,\
+        P2s1_P4s1, P2s1_P4s2, P2s2_P4s1, P2s2_P4s2, P2s2_P4s3,
+        P2s3_P4s2, P2s3_P4s3, P2s3_P4s4, P2s4_P4s3, P2s4_P4s4,
+        P2s1_P4s3, P2s3_P4s1, P2s2_P4s4, P2s4_P4s2, P2s1_P4s4,\
             
-        T3s1_T4s1, T3s1_T4s2, T3s2_T4s1, T3s2_T4s2, T3s2_T4s3,
-        T3s3_T4s2, T3s3_T4s3, T3s3_T4s4, T3s4_T4s3, T3s4_T4s4,
-        T3s1_T4s3, T3s3_T4s1, T3s2_T4s4, T3s4_T4s2, T3s1_T4s4,\
+        P3s1_P4s1, P3s1_P4s2, P3s2_P4s1, P3s2_P4s2, P3s2_P4s3,
+        P3s3_P4s2, P3s3_P4s3, P3s3_P4s4, P3s4_P4s3, P3s4_P4s4,
+        P3s1_P4s3, P3s3_P4s1, P3s2_P4s4, P3s4_P4s2, P3s1_P4s4,\
             
-        T1s1_T2s1, T1s1_T2s2, T1s2_T2s1, T1s2_T2s2, T1s2_T2s3,
-        T1s3_T2s2, T1s3_T2s3, T1s3_T2s4, T1s4_T2s3, T1s4_T2s4,
-        T1s1_T2s3, T1s3_T2s1, T1s2_T2s4, T1s4_T2s2, T1s1_T2s4,\
+        P1s1_P2s1, P1s1_P2s2, P1s2_P2s1, P1s2_P2s2, P1s2_P2s3,
+        P1s3_P2s2, P1s3_P2s3, P1s3_P2s4, P1s4_P2s3, P1s4_P2s4,
+        P1s1_P2s3, P1s3_P2s1, P1s2_P2s4, P1s4_P2s2, P1s1_P2s4,\
             
-        T2s1_T3s1, T2s1_T3s2, T2s2_T3s1, T2s2_T3s2, T2s2_T3s3,
-        T2s3_T3s2, T2s3_T3s3, T2s3_T3s4, T2s4_T3s3, T2s4_T3s4,
-        T2s1_T3s3, T2s3_T3s1, T2s2_T3s4, T2s4_T3s2, T2s1_T3s4
+        P2s1_P3s1, P2s1_P3s2, P2s2_P3s1, P2s2_P3s2, P2s2_P3s3,
+        P2s3_P3s2, P2s3_P3s3, P2s3_P3s4, P2s4_P3s3, P2s4_P3s4,
+        P2s1_P3s3, P2s3_P3s1, P2s2_P3s4, P2s4_P3s2, P2s1_P3s4
     ]
 
     if create_plots:
@@ -3440,16 +3432,16 @@ if time_calibration:
     crt_values = crt_values[crt_values <= 1]
     filtered_crt_values = crt_values[(crt_values >= Q1 - 1.5 * (Q3 - Q1)) & (crt_values <= Q3 + 1.5 * (Q3 - Q1))]
     
-    global_variables['CRT_avg'] = np.mean(filtered_crt_values)*1000
+    global_variables['CRP_avg'] = np.mean(filtered_crt_values)*1000
     
-    # print(f"CRT values: {crt_values}, Filtered: {filtered_crt_values}, Avg: {calibrated_data['CRT_avg'][0]:.4g}")
+    # print(f"CRT values: {crt_values}, Filtered: {filtered_crt_values}, Avg: {calibrated_data['CRP_avg'][0]:.4g}")
     print("---------------------------")
-    print(f"CRT Avg: {global_variables['CRT_avg']:.4g} ps")
+    print(f"CRT Avg: {global_variables['CRP_avg']:.4g} ps")
     print("---------------------------")
     
     # Create row and column indices
-    rows = ['T{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
-    columns = ['T{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+    rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+    columns = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
     
     df = pd.DataFrame(index=rows, columns=columns)
     for vector in vectors:
@@ -3468,13 +3460,13 @@ if time_calibration:
     brute_force_analysis = False
     if brute_force_analysis:
         # Main itinerary
-        itinerary = ["T1s1", "T3s1", "T1s2", "T3s2", "T1s3", "T3s3", "T1s4", "T3s4","T4s4", "T2s4", "T4s3", "T2s3", "T4s2", "T2s2", "T4s1", "T2s1"]
+        itinerary = ["P1s1", "P3s1", "P1s2", "P3s2", "P1s3", "P3s3", "P1s4", "P3s4","P4s4", "P2s4", "P4s3", "P2s3", "P4s2", "P2s2", "P4s1", "P2s1"]
         import random
         k = 0
         max_iter = 2000000
         brute_force_list = []
         # Create row and column indices
-        rows = ['T{}'.format(i) for i in range(1, 5)]
+        rows = ['P{}'.format(i) for i in range(1, 5)]
         columns = ['s{}'.format(i) for i in range(1,5)]
         brute_force_df = pd.DataFrame(0, index=rows, columns=columns)
         jump = False
@@ -3517,117 +3509,117 @@ if time_calibration:
     # Selected paths method
     # -----------------------------------------------------------------------------
     itineraries = [
-    ['T1s1', 'T3s1', 'T1s2', 'T3s2', 'T1s3', 'T3s3', 'T1s4', 'T3s4', 'T4s4', 'T2s4', 'T4s3', 'T2s3', 'T4s2', 'T2s2', 'T4s1', 'T2s1'],
-    ['T3s4', 'T1s4', 'T2s4', 'T4s4', 'T2s2', 'T4s3', 'T2s3', 'T1s3', 'T3s3', 'T2s1', 'T4s2', 'T1s2', 'T3s2', 'T1s1', 'T4s1', 'T3s1'],
-    ['T3s2', 'T1s2', 'T2s2', 'T4s1', 'T3s1', 'T1s1', 'T3s3', 'T4s2', 'T2s3', 'T1s3', 'T3s4', 'T2s4', 'T4s4', 'T1s4', 'T4s3', 'T2s1'],
-    ['T2s4', 'T4s2', 'T1s4', 'T4s4', 'T2s3', 'T4s1', 'T1s3', 'T3s3', 'T1s2', 'T2s2', 'T3s2', 'T2s1', 'T3s1', 'T1s1', 'T4s3', 'T3s4'],
-    ['T2s4', 'T4s4', 'T2s2', 'T1s2', 'T3s1', 'T1s1', 'T4s3', 'T2s3', 'T4s1', 'T1s3', 'T3s4', 'T1s4', 'T3s3', 'T2s1', 'T4s2', 'T3s2'],
-    ['T3s1', 'T2s1', 'T1s2', 'T4s3', 'T1s3', 'T2s2', 'T3s3', 'T4s1', 'T3s2', 'T1s1', 'T4s4', 'T2s3', 'T3s4', 'T2s4', 'T4s2', 'T1s4'],
-    ['T2s3', 'T4s4', 'T2s4', 'T4s2', 'T1s1', 'T3s2', 'T2s1', 'T3s1', 'T4s1', 'T1s3', 'T2s2', 'T1s2', 'T3s3', 'T1s4', 'T4s3', 'T3s4'],
-    ['T2s4', 'T3s4', 'T4s2', 'T1s1', 'T2s1', 'T3s1', 'T1s2', 'T4s1', 'T1s3', 'T4s4', 'T2s2', 'T3s3', 'T1s4', 'T2s3', 'T4s3', 'T3s2'],
-    ['T3s3', 'T1s2', 'T3s2', 'T2s1', 'T4s3', 'T2s3', 'T4s4', 'T3s4', 'T2s4', 'T1s4', 'T4s2', 'T2s2', 'T1s3', 'T4s1', 'T1s1', 'T3s1'],
-    ['T2s4', 'T3s4', 'T1s4', 'T3s3', 'T4s1', 'T2s3', 'T4s2', 'T2s1', 'T3s2', 'T1s3', 'T4s3', 'T2s2', 'T1s2', 'T4s4', 'T1s1', 'T3s1'],
-    ['T4s2', 'T3s2', 'T4s3', 'T1s3', 'T2s2', 'T4s1', 'T1s1', 'T2s1', 'T3s3', 'T1s4', 'T2s3', 'T3s4', 'T2s4', 'T4s4', 'T1s2', 'T3s1'],
-    ['T1s3', 'T2s3', 'T3s4', 'T1s4', 'T4s4', 'T2s4', 'T4s3', 'T1s2', 'T3s1', 'T4s1', 'T2s1', 'T4s2', 'T3s2', 'T1s1', 'T3s3', 'T2s2'],
-    ['T2s4', 'T4s3', 'T1s2', 'T2s1', 'T3s2', 'T2s2', 'T4s2', 'T3s3', 'T1s4', 'T2s3', 'T1s3', 'T3s4', 'T4s4', 'T1s1', 'T3s1', 'T4s1'],
-    ['T2s2', 'T1s2', 'T4s1', 'T1s1', 'T3s1', 'T2s1', 'T3s3', 'T4s2', 'T2s4', 'T4s4', 'T1s4', 'T2s3', 'T3s4', 'T4s3', 'T1s3', 'T3s2'],
-    ['T3s1', 'T2s1', 'T3s3', 'T2s2', 'T4s2', 'T2s4', 'T4s4', 'T1s2', 'T3s2', 'T1s3', 'T3s4', 'T1s4', 'T2s3', 'T4s1', 'T1s1', 'T4s3'],
-    ['T4s2', 'T3s2', 'T2s2', 'T4s4', 'T3s3', 'T1s4', 'T2s3', 'T1s3', 'T3s4', 'T2s4', 'T4s3', 'T2s1', 'T1s2', 'T3s1', 'T4s1', 'T1s1'],
-    ['T1s2', 'T3s3', 'T4s4', 'T1s1', 'T4s1', 'T3s1', 'T2s1', 'T3s2', 'T1s3', 'T3s4', 'T2s3', 'T4s3', 'T2s2', 'T4s2', 'T2s4', 'T1s4'],
-    ['T3s3', 'T1s2', 'T4s2', 'T3s2', 'T1s3', 'T2s2', 'T4s1', 'T1s1', 'T3s1', 'T2s1', 'T4s3', 'T1s4', 'T2s4', 'T3s4', 'T4s4', 'T2s3'],
-    ['T3s4', 'T1s3', 'T4s2', 'T2s4', 'T4s3', 'T3s2', 'T1s2', 'T3s3', 'T2s2', 'T4s1', 'T2s3', 'T1s4', 'T4s4', 'T2s1', 'T1s1', 'T3s1'],
-    ['T2s1', 'T1s1', 'T3s1', 'T1s2', 'T3s3', 'T1s4', 'T2s3', 'T4s4', 'T3s4', 'T4s2', 'T2s4', 'T4s3', 'T1s3', 'T2s2', 'T4s1', 'T3s2'],
-    ['T3s3', 'T2s2', 'T1s2', 'T4s4', 'T2s1', 'T3s2', 'T1s3', 'T3s4', 'T1s4', 'T2s3', 'T4s1', 'T3s1', 'T1s1', 'T4s3', 'T2s4', 'T4s2'],
-    ['T3s2', 'T2s2', 'T4s2', 'T2s4', 'T1s4', 'T3s4', 'T1s3', 'T4s1', 'T1s2', 'T3s1', 'T1s1', 'T3s3', 'T4s4', 'T2s3', 'T4s3', 'T2s1'],
-    ['T3s2', 'T1s2', 'T4s2', 'T1s1', 'T4s4', 'T2s3', 'T1s4', 'T3s3', 'T2s1', 'T3s1', 'T4s1', 'T2s2', 'T1s3', 'T3s4', 'T2s4', 'T4s3'],
-    ['T3s2', 'T2s2', 'T3s3', 'T1s1', 'T4s2', 'T1s3', 'T4s3', 'T3s4', 'T2s4', 'T1s4', 'T2s3', 'T4s4', 'T1s2', 'T4s1', 'T3s1', 'T2s1'],
-    ['T1s3', 'T3s4', 'T2s4', 'T1s4', 'T3s3', 'T1s2', 'T2s1', 'T4s4', 'T2s3', 'T4s1', 'T3s2', 'T4s2', 'T2s2', 'T4s3', 'T1s1', 'T3s1'],
-    ['T2s1', 'T3s3', 'T1s4', 'T2s3', 'T3s4', 'T1s3', 'T4s2', 'T1s1', 'T3s1', 'T4s1', 'T2s2', 'T3s2', 'T1s2', 'T4s3', 'T2s4', 'T4s4'],
-    ['T3s1', 'T4s1', 'T3s2', 'T1s1', 'T4s2', 'T2s4', 'T1s4', 'T2s3', 'T1s3', 'T3s3', 'T2s2', 'T1s2', 'T4s4', 'T3s4', 'T4s3', 'T2s1'],
-    ['T1s3', 'T3s4', 'T2s4', 'T4s2', 'T1s4', 'T4s4', 'T3s3', 'T2s3', 'T4s3', 'T3s2', 'T4s1', 'T2s1', 'T1s1', 'T3s1', 'T1s2', 'T2s2'],
-    ['T3s2', 'T2s2', 'T1s3', 'T4s3', 'T1s4', 'T2s3', 'T4s2', 'T1s1', 'T4s1', 'T3s1', 'T2s1', 'T1s2', 'T3s3', 'T4s4', 'T2s4', 'T3s4'],
-    ['T2s3', 'T3s3', 'T1s1', 'T3s1', 'T1s2', 'T4s2', 'T2s1', 'T3s2', 'T4s1', 'T2s2', 'T4s4', 'T1s3', 'T3s4', 'T4s3', 'T1s4', 'T2s4'],
-    ['T1s1', 'T3s1', 'T1s2', 'T4s1', 'T2s1', 'T3s2', 'T1s3', 'T2s3', 'T1s4', 'T4s4', 'T2s2', 'T4s3', 'T2s4', 'T3s4', 'T4s2', 'T3s3'],
-    ['T1s3', 'T3s3', 'T1s4', 'T2s4', 'T3s4', 'T4s2', 'T2s3', 'T4s4', 'T1s2', 'T3s2', 'T2s2', 'T4s3', 'T2s1', 'T4s1', 'T3s1', 'T1s1'],
-    ['T2s3', 'T3s4', 'T2s4', 'T4s4', 'T1s1', 'T4s1', 'T2s2', 'T4s2', 'T1s2', 'T3s1', 'T2s1', 'T3s2', 'T1s3', 'T3s3', 'T4s3', 'T1s4'],
-    ['T2s4', 'T4s4', 'T1s2', 'T4s2', 'T2s3', 'T3s4', 'T1s4', 'T3s3', 'T1s3', 'T4s1', 'T2s1', 'T4s3', 'T2s2', 'T3s2', 'T1s1', 'T3s1'],
-    ['T4s3', 'T2s1', 'T1s2', 'T2s2', 'T3s2', 'T1s1', 'T3s1', 'T4s1', 'T3s3', 'T4s2', 'T2s4', 'T1s4', 'T4s4', 'T2s3', 'T3s4', 'T1s3'],
-    ['T2s2', 'T4s4', 'T2s4', 'T4s3', 'T2s3', 'T4s1', 'T2s1', 'T1s1', 'T3s1', 'T1s2', 'T3s2', 'T4s2', 'T1s3', 'T3s3', 'T1s4', 'T3s4'],
-    ['T3s1', 'T4s1', 'T2s3', 'T4s3', 'T1s1', 'T2s1', 'T1s2', 'T2s2', 'T4s2', 'T2s4', 'T4s4', 'T3s4', 'T1s4', 'T3s3', 'T1s3', 'T3s2'],
-    ['T4s2', 'T3s3', 'T2s1', 'T1s2', 'T4s4', 'T2s2', 'T4s3', 'T1s3', 'T3s4', 'T2s4', 'T1s4', 'T2s3', 'T4s1', 'T3s1', 'T1s1', 'T3s2'],
-    ['T1s3', 'T3s4', 'T2s4', 'T4s2', 'T1s1', 'T3s1', 'T1s2', 'T2s2', 'T4s4', 'T2s3', 'T1s4', 'T3s3', 'T4s3', 'T3s2', 'T4s1', 'T2s1'],
-    ['T3s2', 'T1s3', 'T4s2', 'T3s3', 'T2s3', 'T3s4', 'T2s4', 'T1s4', 'T4s4', 'T2s2', 'T4s1', 'T2s1', 'T3s1', 'T1s2', 'T4s3', 'T1s1'],
-    ['T2s3', 'T4s4', 'T2s4', 'T1s4', 'T3s4', 'T1s3', 'T3s2', 'T2s2', 'T4s2', 'T2s1', 'T4s3', 'T3s3', 'T1s1', 'T3s1', 'T1s2', 'T4s1'],
-    ['T4s1', 'T3s1', 'T1s1', 'T2s1', 'T4s4', 'T1s3', 'T2s3', 'T4s3', 'T2s2', 'T3s2', 'T1s2', 'T4s2', 'T3s3', 'T1s4', 'T3s4', 'T2s4'],
-    ['T2s4', 'T4s3', 'T2s3', 'T4s1', 'T1s3', 'T2s2', 'T3s2', 'T4s2', 'T1s2', 'T3s1', 'T2s1', 'T3s3', 'T1s1', 'T4s4', 'T1s4', 'T3s4'],
-    ['T1s4', 'T2s4', 'T4s3', 'T2s3', 'T3s3', 'T1s1', 'T3s2', 'T4s1', 'T1s3', 'T3s4', 'T4s4', 'T2s2', 'T4s2', 'T2s1', 'T3s1', 'T1s2'],
-    ['T2s2', 'T4s1', 'T2s3', 'T1s3', 'T3s2', 'T1s1', 'T3s1', 'T1s2', 'T3s3', 'T2s1', 'T4s3', 'T2s4', 'T3s4', 'T4s2', 'T1s4', 'T4s4'],
-    ['T2s2', 'T1s2', 'T2s1', 'T3s2', 'T1s1', 'T4s3', 'T2s4', 'T4s2', 'T2s3', 'T3s4', 'T1s4', 'T3s3', 'T4s4', 'T1s3', 'T4s1', 'T3s1'],
-    ['T2s1', 'T3s1', 'T4s1', 'T2s3', 'T3s3', 'T2s2', 'T3s2', 'T1s3', 'T4s4', 'T1s2', 'T4s2', 'T1s1', 'T4s3', 'T3s4', 'T1s4', 'T2s4'],
-    ['T1s1', 'T3s3', 'T2s3', 'T1s3', 'T3s4', 'T4s4', 'T1s4', 'T2s4', 'T4s3', 'T2s1', 'T4s1', 'T3s1', 'T1s2', 'T2s2', 'T4s2', 'T3s2'],
-    ['T2s2', 'T4s3', 'T2s3', 'T3s3', 'T4s4', 'T1s2', 'T4s2', 'T2s4', 'T1s4', 'T3s4', 'T1s3', 'T4s1', 'T3s1', 'T1s1', 'T3s2', 'T2s1'],
-    ['T4s1', 'T1s1', 'T3s1', 'T1s2', 'T2s1', 'T3s2', 'T2s2', 'T4s3', 'T3s3', 'T4s4', 'T2s4', 'T1s4', 'T3s4', 'T1s3', 'T2s3', 'T4s2'],
-    ['T4s4', 'T1s3', 'T3s3', 'T2s2', 'T1s2', 'T3s1', 'T2s1', 'T3s2', 'T1s1', 'T4s1', 'T2s3', 'T4s2', 'T1s4', 'T3s4', 'T2s4', 'T4s3'],
-    ['T1s3', 'T4s4', 'T3s4', 'T2s4', 'T4s2', 'T2s2', 'T3s3', 'T1s1', 'T3s1', 'T1s2', 'T3s2', 'T4s3', 'T1s4', 'T2s3', 'T4s1', 'T2s1'],
-    ['T3s2', 'T4s3', 'T2s1', 'T1s1', 'T3s1', 'T4s1', 'T1s3', 'T2s2', 'T1s2', 'T4s4', 'T2s4', 'T1s4', 'T3s4', 'T2s3', 'T3s3', 'T4s2'],
-    ['T2s3', 'T4s2', 'T2s1', 'T4s4', 'T2s2', 'T1s2', 'T3s1', 'T1s1', 'T3s3', 'T4s3', 'T3s2', 'T4s1', 'T1s3', 'T3s4', 'T1s4', 'T2s4'],
-    ['T2s2', 'T3s2', 'T4s1', 'T3s1', 'T2s1', 'T1s2', 'T4s4', 'T1s1', 'T4s3', 'T2s3', 'T3s3', 'T1s3', 'T3s4', 'T1s4', 'T4s2', 'T2s4'],
-    ['T4s4', 'T2s2', 'T1s3', 'T3s3', 'T1s4', 'T3s4', 'T2s4', 'T4s2', 'T1s2', 'T4s1', 'T3s1', 'T1s1', 'T3s2', 'T2s1', 'T4s3', 'T2s3'],
-    ['T2s2', 'T3s2', 'T1s1', 'T3s1', 'T2s1', 'T3s3', 'T4s1', 'T2s3', 'T1s4', 'T4s4', 'T2s4', 'T3s4', 'T1s3', 'T4s3', 'T1s2', 'T4s2'],
-    ['T2s3', 'T3s3', 'T2s2', 'T1s3', 'T3s2', 'T1s2', 'T3s1', 'T4s1', 'T1s1', 'T2s1', 'T4s4', 'T1s4', 'T4s3', 'T3s4', 'T2s4', 'T4s2'],
-    ['T2s4', 'T1s4', 'T3s3', 'T1s1', 'T3s1', 'T4s1', 'T2s2', 'T3s2', 'T4s3', 'T1s3', 'T3s4', 'T2s3', 'T4s4', 'T2s1', 'T4s2', 'T1s2'],
-    ['T3s1', 'T1s1', 'T4s4', 'T2s1', 'T3s3', 'T4s1', 'T1s2', 'T4s2', 'T1s4', 'T2s3', 'T3s4', 'T1s3', 'T2s2', 'T3s2', 'T4s3', 'T2s4'],
-    ['T2s2', 'T4s4', 'T2s1', 'T4s3', 'T2s4', 'T1s4', 'T4s2', 'T3s4', 'T2s3', 'T1s3', 'T3s3', 'T1s2', 'T3s2', 'T4s1', 'T3s1', 'T1s1'],
-    ['T3s2', 'T1s3', 'T2s3', 'T4s2', 'T2s4', 'T1s4', 'T3s3', 'T1s1', 'T2s1', 'T4s4', 'T3s4', 'T4s3', 'T1s2', 'T3s1', 'T4s1', 'T2s2'],
-    ['T1s4', 'T2s3', 'T4s4', 'T3s3', 'T1s1', 'T4s1', 'T3s1', 'T2s1', 'T4s3', 'T1s3', 'T3s4', 'T2s4', 'T4s2', 'T1s2', 'T3s2', 'T2s2'],
-    ['T1s1', 'T3s1', 'T2s1', 'T3s3', 'T2s3', 'T4s2', 'T3s4', 'T1s4', 'T2s4', 'T4s4', 'T1s2', 'T2s2', 'T4s1', 'T3s2', 'T1s3', 'T4s3'],
-    ['T1s4', 'T2s4', 'T4s2', 'T3s4', 'T2s3', 'T4s1', 'T3s1', 'T1s2', 'T2s1', 'T4s4', 'T3s3', 'T1s1', 'T4s3', 'T1s3', 'T3s2', 'T2s2'],
-    ['T1s1', 'T3s1', 'T2s1', 'T3s2', 'T4s1', 'T2s3', 'T1s3', 'T3s3', 'T1s2', 'T4s2', 'T2s2', 'T4s4', 'T3s4', 'T1s4', 'T2s4', 'T4s3'],
-    ['T1s3', 'T2s2', 'T3s2', 'T2s1', 'T4s3', 'T1s1', 'T4s1', 'T3s1', 'T1s2', 'T4s2', 'T1s4', 'T3s3', 'T4s4', 'T2s3', 'T3s4', 'T2s4'],
-    ['T3s1', 'T1s2', 'T4s4', 'T1s4', 'T4s3', 'T2s2', 'T4s1', 'T2s1', 'T1s1', 'T3s3', 'T2s3', 'T1s3', 'T3s4', 'T2s4', 'T4s2', 'T3s2'],
-    ['T4s4', 'T1s1', 'T3s1', 'T2s1', 'T3s2', 'T4s1', 'T1s2', 'T4s2', 'T3s4', 'T2s4', 'T1s4', 'T3s3', 'T2s2', 'T1s3', 'T4s3', 'T2s3'],
-    ['T1s1', 'T4s1', 'T3s1', 'T2s1', 'T3s2', 'T4s2', 'T2s4', 'T4s4', 'T1s2', 'T2s2', 'T4s3', 'T2s3', 'T3s4', 'T1s3', 'T3s3', 'T1s4'],
-    ['T2s4', 'T3s4', 'T4s3', 'T1s3', 'T2s2', 'T4s1', 'T3s2', 'T1s2', 'T2s1', 'T4s2', 'T1s4', 'T2s3', 'T4s4', 'T3s3', 'T1s1', 'T3s1'],
-    ['T2s4', 'T4s3', 'T1s2', 'T3s2', 'T2s2', 'T3s3', 'T4s1', 'T3s1', 'T1s1', 'T2s1', 'T4s2', 'T2s3', 'T3s4', 'T1s3', 'T4s4', 'T1s4'],
-    ['T2s2', 'T1s3', 'T4s1', 'T3s1', 'T2s1', 'T1s1', 'T3s2', 'T1s2', 'T3s3', 'T4s3', 'T3s4', 'T1s4', 'T4s4', 'T2s4', 'T4s2', 'T2s3'],
-    ['T2s4', 'T4s4', 'T2s2', 'T4s2', 'T3s4', 'T1s3', 'T2s3', 'T1s4', 'T4s3', 'T3s3', 'T1s2', 'T3s2', 'T1s1', 'T3s1', 'T2s1', 'T4s1'],
-    ['T3s2', 'T2s1', 'T3s3', 'T1s1', 'T4s4', 'T2s2', 'T4s3', 'T1s2', 'T3s1', 'T4s1', 'T2s3', 'T4s2', 'T1s3', 'T3s4', 'T2s4', 'T1s4'],
-    ['T3s1', 'T4s1', 'T3s3', 'T2s2', 'T3s2', 'T1s1', 'T2s1', 'T1s2', 'T4s4', 'T3s4', 'T2s4', 'T4s3', 'T1s3', 'T2s3', 'T4s2', 'T1s4'],
-    ['T2s3', 'T4s2', 'T2s4', 'T1s4', 'T4s4', 'T2s2', 'T4s3', 'T1s1', 'T3s2', 'T4s1', 'T3s1', 'T1s2', 'T2s1', 'T3s3', 'T1s3', 'T3s4'],
-    ['T2s4', 'T4s2', 'T1s1', 'T3s1', 'T1s2', 'T3s2', 'T1s3', 'T3s4', 'T1s4', 'T4s4', 'T2s3', 'T3s3', 'T4s1', 'T2s2', 'T4s3', 'T2s1'],
-    ['T2s1', 'T4s4', 'T1s3', 'T4s1', 'T1s2', 'T3s1', 'T1s1', 'T3s2', 'T2s2', 'T4s2', 'T3s3', 'T4s3', 'T1s4', 'T2s4', 'T3s4', 'T2s3'],
-    ['T4s1', 'T3s3', 'T4s3', 'T2s4', 'T4s2', 'T1s3', 'T3s4', 'T2s3', 'T1s4', 'T4s4', 'T2s2', 'T1s2', 'T3s2', 'T1s1', 'T3s1', 'T2s1'],
-    ['T4s3', 'T2s1', 'T1s1', 'T3s2', 'T2s2', 'T3s3', 'T1s4', 'T2s3', 'T3s4', 'T4s2', 'T2s4', 'T4s4', 'T1s3', 'T4s1', 'T3s1', 'T1s2'],
-    ['T4s4', 'T1s2', 'T3s1', 'T2s1', 'T3s2', 'T2s2', 'T1s3', 'T3s4', 'T1s4', 'T4s3', 'T2s4', 'T4s2', 'T2s3', 'T4s1', 'T1s1', 'T3s3'],
-    ['T1s1', 'T3s2', 'T1s2', 'T4s2', 'T2s2', 'T1s3', 'T4s3', 'T2s4', 'T1s4', 'T3s4', 'T4s4', 'T2s3', 'T3s3', 'T2s1', 'T3s1', 'T4s1'],
-    ['T2s1', 'T3s1', 'T1s1', 'T3s2', 'T4s2', 'T2s4', 'T3s4', 'T4s4', 'T1s2', 'T2s2', 'T1s3', 'T4s1', 'T3s3', 'T2s3', 'T1s4', 'T4s3'],
-    ['T2s4', 'T4s4', 'T1s2', 'T4s2', 'T3s3', 'T2s1', 'T3s2', 'T1s3', 'T2s3', 'T1s4', 'T3s4', 'T4s3', 'T2s2', 'T4s1', 'T3s1', 'T1s1'],
-    ['T2s2', 'T3s3', 'T2s3', 'T1s4', 'T3s4', 'T4s2', 'T1s2', 'T2s1', 'T3s1', 'T4s1', 'T1s3', 'T3s2', 'T4s3', 'T2s4', 'T4s4', 'T1s1'],
-    ['T4s3', 'T2s2', 'T3s3', 'T4s2', 'T2s4', 'T3s4', 'T1s4', 'T2s3', 'T1s3', 'T4s1', 'T2s1', 'T3s1', 'T1s1', 'T3s2', 'T1s2', 'T4s4'],
-    ['T3s1', 'T4s1', 'T3s2', 'T1s1', 'T4s2', 'T2s4', 'T1s4', 'T2s3', 'T3s4', 'T4s4', 'T1s2', 'T2s2', 'T1s3', 'T4s3', 'T2s1', 'T3s3'],
-    ['T2s4', 'T3s4', 'T1s4', 'T2s3', 'T4s3', 'T1s2', 'T3s2', 'T1s1', 'T2s1', 'T3s1', 'T4s1', 'T1s3', 'T2s2', 'T4s2', 'T3s3', 'T4s4'],
-    ['T2s1', 'T4s2', 'T1s3', 'T3s3', 'T4s3', 'T1s2', 'T4s1', 'T2s3', 'T1s4', 'T3s4', 'T2s4', 'T4s4', 'T2s2', 'T3s2', 'T1s1', 'T3s1'],
-    ['T3s3', 'T1s1', 'T3s1', 'T2s1', 'T4s4', 'T1s2', 'T4s3', 'T3s2', 'T4s2', 'T2s4', 'T1s4', 'T3s4', 'T1s3', 'T2s3', 'T4s1', 'T2s2'],
-    ['T2s3', 'T3s4', 'T4s3', 'T2s1', 'T1s1', 'T3s1', 'T1s2', 'T3s3', 'T4s1', 'T2s2', 'T4s2', 'T3s2', 'T1s3', 'T4s4', 'T2s4', 'T1s4'],
-    ['T1s4', 'T2s4', 'T4s2', 'T1s3', 'T3s4', 'T4s3', 'T3s2', 'T2s2', 'T1s2', 'T3s3', 'T2s3', 'T4s1', 'T3s1', 'T1s1', 'T2s1', 'T4s4'],
-    ['T1s1', 'T3s3', 'T1s2', 'T2s1', 'T3s1', 'T4s1', 'T3s2', 'T4s3', 'T2s2', 'T1s3', 'T4s4', 'T3s4', 'T4s2', 'T2s4', 'T1s4', 'T2s3'],
-    ['T2s2', 'T1s2', 'T3s1', 'T2s1', 'T1s1', 'T4s3', 'T3s2', 'T4s1', 'T2s3', 'T4s2', 'T3s3', 'T1s4', 'T2s4', 'T3s4', 'T1s3', 'T4s4'],
-    ['T1s1', 'T3s2', 'T1s3', 'T4s4', 'T1s4', 'T4s3', 'T2s2', 'T4s2', 'T2s4', 'T3s4', 'T2s3', 'T3s3', 'T1s2', 'T2s1', 'T4s1', 'T3s1'],
-    ['T1s3', 'T4s4', 'T2s2', 'T1s2', 'T3s2', 'T4s3', 'T2s4', 'T3s4', 'T1s4', 'T2s3', 'T3s3', 'T2s1', 'T4s2', 'T1s1', 'T4s1', 'T3s1'],
-    ['T1s4', 'T2s4', 'T4s3', 'T3s4', 'T4s4', 'T2s2', 'T4s1', 'T1s3', 'T3s2', 'T1s1', 'T3s1', 'T1s2', 'T4s2', 'T2s1', 'T3s3', 'T2s3'],
-    ['T2s3', 'T1s3', 'T4s2', 'T3s2', 'T4s1', 'T1s2', 'T4s3', 'T2s4', 'T1s4', 'T3s4', 'T4s4', 'T2s2', 'T3s3', 'T1s1', 'T3s1', 'T2s1'],
-    ['T4s1', 'T3s1', 'T1s2', 'T4s4', 'T1s4', 'T2s4', 'T4s3', 'T1s1', 'T2s1', 'T3s3', 'T2s2', 'T4s2', 'T3s2', 'T1s3', 'T2s3', 'T3s4'],
-    ['T1s4', 'T2s4', 'T3s4', 'T4s3', 'T2s2', 'T3s2', 'T2s1', 'T4s4', 'T1s2', 'T3s1', 'T1s1', 'T4s2', 'T1s3', 'T2s3', 'T3s3', 'T4s1'],
-    ['T3s2', 'T1s1', 'T4s3', 'T1s3', 'T2s2', 'T1s2', 'T4s1', 'T3s1', 'T2s1', 'T4s4', 'T3s3', 'T4s2', 'T3s4', 'T2s3', 'T1s4', 'T2s4'],
-    ['T4s3', 'T1s2', 'T4s1', 'T2s3', 'T3s4', 'T1s4', 'T4s4', 'T2s4', 'T4s2', 'T2s2', 'T3s3', 'T1s3', 'T3s2', 'T1s1', 'T3s1', 'T2s1'],
-    ['T2s2', 'T4s1', 'T1s2', 'T3s3', 'T2s3', 'T1s3', 'T3s2', 'T4s3', 'T1s4', 'T4s2', 'T3s4', 'T2s4', 'T4s4', 'T2s1', 'T3s1', 'T1s1'],
-    ['T2s2', 'T4s1', 'T3s1', 'T1s1', 'T4s3', 'T2s4', 'T3s4', 'T1s4', 'T4s4', 'T1s3', 'T4s2', 'T2s3', 'T3s3', 'T1s2', 'T2s1', 'T3s2'],
-    ['T4s3', 'T1s4', 'T2s3', 'T3s4', 'T1s3', 'T2s2', 'T3s3', 'T4s1', 'T1s1', 'T3s2', 'T2s1', 'T3s1', 'T1s2', 'T4s2', 'T2s4', 'T4s4'],
-    ['T3s1', 'T2s1', 'T1s1', 'T4s3', 'T2s2', 'T1s3', 'T4s1', 'T3s3', 'T4s2', 'T3s2', 'T1s2', 'T4s4', 'T2s4', 'T1s4', 'T2s3', 'T3s4'],
-    ['T2s4', 'T1s4', 'T4s4', 'T1s3', 'T2s3', 'T3s4', 'T4s3', 'T1s1', 'T3s1', 'T4s1', 'T3s2', 'T1s2', 'T2s2', 'T3s3', 'T2s1', 'T4s2'],
-    ['T4s2', 'T3s2', 'T2s1', 'T3s1', 'T1s2', 'T4s1', 'T1s3', 'T2s2', 'T4s4', 'T3s4', 'T2s4', 'T4s3', 'T1s4', 'T2s3', 'T3s3', 'T1s1'],
-    ['T3s2', 'T2s2', 'T4s4', 'T3s3', 'T2s1', 'T4s1', 'T2s3', 'T4s2', 'T1s2', 'T3s1', 'T1s1', 'T4s3', 'T1s4', 'T2s4', 'T3s4', 'T1s3'],
-    ['T2s2', 'T1s3', 'T4s1', 'T3s1', 'T2s1', 'T3s3', 'T4s2', 'T1s2', 'T3s2', 'T1s1', 'T4s4', 'T2s4', 'T1s4', 'T3s4', 'T2s3', 'T4s3'],
+    ['P1s1', 'P3s1', 'P1s2', 'P3s2', 'P1s3', 'P3s3', 'P1s4', 'P3s4', 'P4s4', 'P2s4', 'P4s3', 'P2s3', 'P4s2', 'P2s2', 'P4s1', 'P2s1'],
+    ['P3s4', 'P1s4', 'P2s4', 'P4s4', 'P2s2', 'P4s3', 'P2s3', 'P1s3', 'P3s3', 'P2s1', 'P4s2', 'P1s2', 'P3s2', 'P1s1', 'P4s1', 'P3s1'],
+    ['P3s2', 'P1s2', 'P2s2', 'P4s1', 'P3s1', 'P1s1', 'P3s3', 'P4s2', 'P2s3', 'P1s3', 'P3s4', 'P2s4', 'P4s4', 'P1s4', 'P4s3', 'P2s1'],
+    ['P2s4', 'P4s2', 'P1s4', 'P4s4', 'P2s3', 'P4s1', 'P1s3', 'P3s3', 'P1s2', 'P2s2', 'P3s2', 'P2s1', 'P3s1', 'P1s1', 'P4s3', 'P3s4'],
+    ['P2s4', 'P4s4', 'P2s2', 'P1s2', 'P3s1', 'P1s1', 'P4s3', 'P2s3', 'P4s1', 'P1s3', 'P3s4', 'P1s4', 'P3s3', 'P2s1', 'P4s2', 'P3s2'],
+    ['P3s1', 'P2s1', 'P1s2', 'P4s3', 'P1s3', 'P2s2', 'P3s3', 'P4s1', 'P3s2', 'P1s1', 'P4s4', 'P2s3', 'P3s4', 'P2s4', 'P4s2', 'P1s4'],
+    ['P2s3', 'P4s4', 'P2s4', 'P4s2', 'P1s1', 'P3s2', 'P2s1', 'P3s1', 'P4s1', 'P1s3', 'P2s2', 'P1s2', 'P3s3', 'P1s4', 'P4s3', 'P3s4'],
+    ['P2s4', 'P3s4', 'P4s2', 'P1s1', 'P2s1', 'P3s1', 'P1s2', 'P4s1', 'P1s3', 'P4s4', 'P2s2', 'P3s3', 'P1s4', 'P2s3', 'P4s3', 'P3s2'],
+    ['P3s3', 'P1s2', 'P3s2', 'P2s1', 'P4s3', 'P2s3', 'P4s4', 'P3s4', 'P2s4', 'P1s4', 'P4s2', 'P2s2', 'P1s3', 'P4s1', 'P1s1', 'P3s1'],
+    ['P2s4', 'P3s4', 'P1s4', 'P3s3', 'P4s1', 'P2s3', 'P4s2', 'P2s1', 'P3s2', 'P1s3', 'P4s3', 'P2s2', 'P1s2', 'P4s4', 'P1s1', 'P3s1'],
+    ['P4s2', 'P3s2', 'P4s3', 'P1s3', 'P2s2', 'P4s1', 'P1s1', 'P2s1', 'P3s3', 'P1s4', 'P2s3', 'P3s4', 'P2s4', 'P4s4', 'P1s2', 'P3s1'],
+    ['P1s3', 'P2s3', 'P3s4', 'P1s4', 'P4s4', 'P2s4', 'P4s3', 'P1s2', 'P3s1', 'P4s1', 'P2s1', 'P4s2', 'P3s2', 'P1s1', 'P3s3', 'P2s2'],
+    ['P2s4', 'P4s3', 'P1s2', 'P2s1', 'P3s2', 'P2s2', 'P4s2', 'P3s3', 'P1s4', 'P2s3', 'P1s3', 'P3s4', 'P4s4', 'P1s1', 'P3s1', 'P4s1'],
+    ['P2s2', 'P1s2', 'P4s1', 'P1s1', 'P3s1', 'P2s1', 'P3s3', 'P4s2', 'P2s4', 'P4s4', 'P1s4', 'P2s3', 'P3s4', 'P4s3', 'P1s3', 'P3s2'],
+    ['P3s1', 'P2s1', 'P3s3', 'P2s2', 'P4s2', 'P2s4', 'P4s4', 'P1s2', 'P3s2', 'P1s3', 'P3s4', 'P1s4', 'P2s3', 'P4s1', 'P1s1', 'P4s3'],
+    ['P4s2', 'P3s2', 'P2s2', 'P4s4', 'P3s3', 'P1s4', 'P2s3', 'P1s3', 'P3s4', 'P2s4', 'P4s3', 'P2s1', 'P1s2', 'P3s1', 'P4s1', 'P1s1'],
+    ['P1s2', 'P3s3', 'P4s4', 'P1s1', 'P4s1', 'P3s1', 'P2s1', 'P3s2', 'P1s3', 'P3s4', 'P2s3', 'P4s3', 'P2s2', 'P4s2', 'P2s4', 'P1s4'],
+    ['P3s3', 'P1s2', 'P4s2', 'P3s2', 'P1s3', 'P2s2', 'P4s1', 'P1s1', 'P3s1', 'P2s1', 'P4s3', 'P1s4', 'P2s4', 'P3s4', 'P4s4', 'P2s3'],
+    ['P3s4', 'P1s3', 'P4s2', 'P2s4', 'P4s3', 'P3s2', 'P1s2', 'P3s3', 'P2s2', 'P4s1', 'P2s3', 'P1s4', 'P4s4', 'P2s1', 'P1s1', 'P3s1'],
+    ['P2s1', 'P1s1', 'P3s1', 'P1s2', 'P3s3', 'P1s4', 'P2s3', 'P4s4', 'P3s4', 'P4s2', 'P2s4', 'P4s3', 'P1s3', 'P2s2', 'P4s1', 'P3s2'],
+    ['P3s3', 'P2s2', 'P1s2', 'P4s4', 'P2s1', 'P3s2', 'P1s3', 'P3s4', 'P1s4', 'P2s3', 'P4s1', 'P3s1', 'P1s1', 'P4s3', 'P2s4', 'P4s2'],
+    ['P3s2', 'P2s2', 'P4s2', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P4s1', 'P1s2', 'P3s1', 'P1s1', 'P3s3', 'P4s4', 'P2s3', 'P4s3', 'P2s1'],
+    ['P3s2', 'P1s2', 'P4s2', 'P1s1', 'P4s4', 'P2s3', 'P1s4', 'P3s3', 'P2s1', 'P3s1', 'P4s1', 'P2s2', 'P1s3', 'P3s4', 'P2s4', 'P4s3'],
+    ['P3s2', 'P2s2', 'P3s3', 'P1s1', 'P4s2', 'P1s3', 'P4s3', 'P3s4', 'P2s4', 'P1s4', 'P2s3', 'P4s4', 'P1s2', 'P4s1', 'P3s1', 'P2s1'],
+    ['P1s3', 'P3s4', 'P2s4', 'P1s4', 'P3s3', 'P1s2', 'P2s1', 'P4s4', 'P2s3', 'P4s1', 'P3s2', 'P4s2', 'P2s2', 'P4s3', 'P1s1', 'P3s1'],
+    ['P2s1', 'P3s3', 'P1s4', 'P2s3', 'P3s4', 'P1s3', 'P4s2', 'P1s1', 'P3s1', 'P4s1', 'P2s2', 'P3s2', 'P1s2', 'P4s3', 'P2s4', 'P4s4'],
+    ['P3s1', 'P4s1', 'P3s2', 'P1s1', 'P4s2', 'P2s4', 'P1s4', 'P2s3', 'P1s3', 'P3s3', 'P2s2', 'P1s2', 'P4s4', 'P3s4', 'P4s3', 'P2s1'],
+    ['P1s3', 'P3s4', 'P2s4', 'P4s2', 'P1s4', 'P4s4', 'P3s3', 'P2s3', 'P4s3', 'P3s2', 'P4s1', 'P2s1', 'P1s1', 'P3s1', 'P1s2', 'P2s2'],
+    ['P3s2', 'P2s2', 'P1s3', 'P4s3', 'P1s4', 'P2s3', 'P4s2', 'P1s1', 'P4s1', 'P3s1', 'P2s1', 'P1s2', 'P3s3', 'P4s4', 'P2s4', 'P3s4'],
+    ['P2s3', 'P3s3', 'P1s1', 'P3s1', 'P1s2', 'P4s2', 'P2s1', 'P3s2', 'P4s1', 'P2s2', 'P4s4', 'P1s3', 'P3s4', 'P4s3', 'P1s4', 'P2s4'],
+    ['P1s1', 'P3s1', 'P1s2', 'P4s1', 'P2s1', 'P3s2', 'P1s3', 'P2s3', 'P1s4', 'P4s4', 'P2s2', 'P4s3', 'P2s4', 'P3s4', 'P4s2', 'P3s3'],
+    ['P1s3', 'P3s3', 'P1s4', 'P2s4', 'P3s4', 'P4s2', 'P2s3', 'P4s4', 'P1s2', 'P3s2', 'P2s2', 'P4s3', 'P2s1', 'P4s1', 'P3s1', 'P1s1'],
+    ['P2s3', 'P3s4', 'P2s4', 'P4s4', 'P1s1', 'P4s1', 'P2s2', 'P4s2', 'P1s2', 'P3s1', 'P2s1', 'P3s2', 'P1s3', 'P3s3', 'P4s3', 'P1s4'],
+    ['P2s4', 'P4s4', 'P1s2', 'P4s2', 'P2s3', 'P3s4', 'P1s4', 'P3s3', 'P1s3', 'P4s1', 'P2s1', 'P4s3', 'P2s2', 'P3s2', 'P1s1', 'P3s1'],
+    ['P4s3', 'P2s1', 'P1s2', 'P2s2', 'P3s2', 'P1s1', 'P3s1', 'P4s1', 'P3s3', 'P4s2', 'P2s4', 'P1s4', 'P4s4', 'P2s3', 'P3s4', 'P1s3'],
+    ['P2s2', 'P4s4', 'P2s4', 'P4s3', 'P2s3', 'P4s1', 'P2s1', 'P1s1', 'P3s1', 'P1s2', 'P3s2', 'P4s2', 'P1s3', 'P3s3', 'P1s4', 'P3s4'],
+    ['P3s1', 'P4s1', 'P2s3', 'P4s3', 'P1s1', 'P2s1', 'P1s2', 'P2s2', 'P4s2', 'P2s4', 'P4s4', 'P3s4', 'P1s4', 'P3s3', 'P1s3', 'P3s2'],
+    ['P4s2', 'P3s3', 'P2s1', 'P1s2', 'P4s4', 'P2s2', 'P4s3', 'P1s3', 'P3s4', 'P2s4', 'P1s4', 'P2s3', 'P4s1', 'P3s1', 'P1s1', 'P3s2'],
+    ['P1s3', 'P3s4', 'P2s4', 'P4s2', 'P1s1', 'P3s1', 'P1s2', 'P2s2', 'P4s4', 'P2s3', 'P1s4', 'P3s3', 'P4s3', 'P3s2', 'P4s1', 'P2s1'],
+    ['P3s2', 'P1s3', 'P4s2', 'P3s3', 'P2s3', 'P3s4', 'P2s4', 'P1s4', 'P4s4', 'P2s2', 'P4s1', 'P2s1', 'P3s1', 'P1s2', 'P4s3', 'P1s1'],
+    ['P2s3', 'P4s4', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P3s2', 'P2s2', 'P4s2', 'P2s1', 'P4s3', 'P3s3', 'P1s1', 'P3s1', 'P1s2', 'P4s1'],
+    ['P4s1', 'P3s1', 'P1s1', 'P2s1', 'P4s4', 'P1s3', 'P2s3', 'P4s3', 'P2s2', 'P3s2', 'P1s2', 'P4s2', 'P3s3', 'P1s4', 'P3s4', 'P2s4'],
+    ['P2s4', 'P4s3', 'P2s3', 'P4s1', 'P1s3', 'P2s2', 'P3s2', 'P4s2', 'P1s2', 'P3s1', 'P2s1', 'P3s3', 'P1s1', 'P4s4', 'P1s4', 'P3s4'],
+    ['P1s4', 'P2s4', 'P4s3', 'P2s3', 'P3s3', 'P1s1', 'P3s2', 'P4s1', 'P1s3', 'P3s4', 'P4s4', 'P2s2', 'P4s2', 'P2s1', 'P3s1', 'P1s2'],
+    ['P2s2', 'P4s1', 'P2s3', 'P1s3', 'P3s2', 'P1s1', 'P3s1', 'P1s2', 'P3s3', 'P2s1', 'P4s3', 'P2s4', 'P3s4', 'P4s2', 'P1s4', 'P4s4'],
+    ['P2s2', 'P1s2', 'P2s1', 'P3s2', 'P1s1', 'P4s3', 'P2s4', 'P4s2', 'P2s3', 'P3s4', 'P1s4', 'P3s3', 'P4s4', 'P1s3', 'P4s1', 'P3s1'],
+    ['P2s1', 'P3s1', 'P4s1', 'P2s3', 'P3s3', 'P2s2', 'P3s2', 'P1s3', 'P4s4', 'P1s2', 'P4s2', 'P1s1', 'P4s3', 'P3s4', 'P1s4', 'P2s4'],
+    ['P1s1', 'P3s3', 'P2s3', 'P1s3', 'P3s4', 'P4s4', 'P1s4', 'P2s4', 'P4s3', 'P2s1', 'P4s1', 'P3s1', 'P1s2', 'P2s2', 'P4s2', 'P3s2'],
+    ['P2s2', 'P4s3', 'P2s3', 'P3s3', 'P4s4', 'P1s2', 'P4s2', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P4s1', 'P3s1', 'P1s1', 'P3s2', 'P2s1'],
+    ['P4s1', 'P1s1', 'P3s1', 'P1s2', 'P2s1', 'P3s2', 'P2s2', 'P4s3', 'P3s3', 'P4s4', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P2s3', 'P4s2'],
+    ['P4s4', 'P1s3', 'P3s3', 'P2s2', 'P1s2', 'P3s1', 'P2s1', 'P3s2', 'P1s1', 'P4s1', 'P2s3', 'P4s2', 'P1s4', 'P3s4', 'P2s4', 'P4s3'],
+    ['P1s3', 'P4s4', 'P3s4', 'P2s4', 'P4s2', 'P2s2', 'P3s3', 'P1s1', 'P3s1', 'P1s2', 'P3s2', 'P4s3', 'P1s4', 'P2s3', 'P4s1', 'P2s1'],
+    ['P3s2', 'P4s3', 'P2s1', 'P1s1', 'P3s1', 'P4s1', 'P1s3', 'P2s2', 'P1s2', 'P4s4', 'P2s4', 'P1s4', 'P3s4', 'P2s3', 'P3s3', 'P4s2'],
+    ['P2s3', 'P4s2', 'P2s1', 'P4s4', 'P2s2', 'P1s2', 'P3s1', 'P1s1', 'P3s3', 'P4s3', 'P3s2', 'P4s1', 'P1s3', 'P3s4', 'P1s4', 'P2s4'],
+    ['P2s2', 'P3s2', 'P4s1', 'P3s1', 'P2s1', 'P1s2', 'P4s4', 'P1s1', 'P4s3', 'P2s3', 'P3s3', 'P1s3', 'P3s4', 'P1s4', 'P4s2', 'P2s4'],
+    ['P4s4', 'P2s2', 'P1s3', 'P3s3', 'P1s4', 'P3s4', 'P2s4', 'P4s2', 'P1s2', 'P4s1', 'P3s1', 'P1s1', 'P3s2', 'P2s1', 'P4s3', 'P2s3'],
+    ['P2s2', 'P3s2', 'P1s1', 'P3s1', 'P2s1', 'P3s3', 'P4s1', 'P2s3', 'P1s4', 'P4s4', 'P2s4', 'P3s4', 'P1s3', 'P4s3', 'P1s2', 'P4s2'],
+    ['P2s3', 'P3s3', 'P2s2', 'P1s3', 'P3s2', 'P1s2', 'P3s1', 'P4s1', 'P1s1', 'P2s1', 'P4s4', 'P1s4', 'P4s3', 'P3s4', 'P2s4', 'P4s2'],
+    ['P2s4', 'P1s4', 'P3s3', 'P1s1', 'P3s1', 'P4s1', 'P2s2', 'P3s2', 'P4s3', 'P1s3', 'P3s4', 'P2s3', 'P4s4', 'P2s1', 'P4s2', 'P1s2'],
+    ['P3s1', 'P1s1', 'P4s4', 'P2s1', 'P3s3', 'P4s1', 'P1s2', 'P4s2', 'P1s4', 'P2s3', 'P3s4', 'P1s3', 'P2s2', 'P3s2', 'P4s3', 'P2s4'],
+    ['P2s2', 'P4s4', 'P2s1', 'P4s3', 'P2s4', 'P1s4', 'P4s2', 'P3s4', 'P2s3', 'P1s3', 'P3s3', 'P1s2', 'P3s2', 'P4s1', 'P3s1', 'P1s1'],
+    ['P3s2', 'P1s3', 'P2s3', 'P4s2', 'P2s4', 'P1s4', 'P3s3', 'P1s1', 'P2s1', 'P4s4', 'P3s4', 'P4s3', 'P1s2', 'P3s1', 'P4s1', 'P2s2'],
+    ['P1s4', 'P2s3', 'P4s4', 'P3s3', 'P1s1', 'P4s1', 'P3s1', 'P2s1', 'P4s3', 'P1s3', 'P3s4', 'P2s4', 'P4s2', 'P1s2', 'P3s2', 'P2s2'],
+    ['P1s1', 'P3s1', 'P2s1', 'P3s3', 'P2s3', 'P4s2', 'P3s4', 'P1s4', 'P2s4', 'P4s4', 'P1s2', 'P2s2', 'P4s1', 'P3s2', 'P1s3', 'P4s3'],
+    ['P1s4', 'P2s4', 'P4s2', 'P3s4', 'P2s3', 'P4s1', 'P3s1', 'P1s2', 'P2s1', 'P4s4', 'P3s3', 'P1s1', 'P4s3', 'P1s3', 'P3s2', 'P2s2'],
+    ['P1s1', 'P3s1', 'P2s1', 'P3s2', 'P4s1', 'P2s3', 'P1s3', 'P3s3', 'P1s2', 'P4s2', 'P2s2', 'P4s4', 'P3s4', 'P1s4', 'P2s4', 'P4s3'],
+    ['P1s3', 'P2s2', 'P3s2', 'P2s1', 'P4s3', 'P1s1', 'P4s1', 'P3s1', 'P1s2', 'P4s2', 'P1s4', 'P3s3', 'P4s4', 'P2s3', 'P3s4', 'P2s4'],
+    ['P3s1', 'P1s2', 'P4s4', 'P1s4', 'P4s3', 'P2s2', 'P4s1', 'P2s1', 'P1s1', 'P3s3', 'P2s3', 'P1s3', 'P3s4', 'P2s4', 'P4s2', 'P3s2'],
+    ['P4s4', 'P1s1', 'P3s1', 'P2s1', 'P3s2', 'P4s1', 'P1s2', 'P4s2', 'P3s4', 'P2s4', 'P1s4', 'P3s3', 'P2s2', 'P1s3', 'P4s3', 'P2s3'],
+    ['P1s1', 'P4s1', 'P3s1', 'P2s1', 'P3s2', 'P4s2', 'P2s4', 'P4s4', 'P1s2', 'P2s2', 'P4s3', 'P2s3', 'P3s4', 'P1s3', 'P3s3', 'P1s4'],
+    ['P2s4', 'P3s4', 'P4s3', 'P1s3', 'P2s2', 'P4s1', 'P3s2', 'P1s2', 'P2s1', 'P4s2', 'P1s4', 'P2s3', 'P4s4', 'P3s3', 'P1s1', 'P3s1'],
+    ['P2s4', 'P4s3', 'P1s2', 'P3s2', 'P2s2', 'P3s3', 'P4s1', 'P3s1', 'P1s1', 'P2s1', 'P4s2', 'P2s3', 'P3s4', 'P1s3', 'P4s4', 'P1s4'],
+    ['P2s2', 'P1s3', 'P4s1', 'P3s1', 'P2s1', 'P1s1', 'P3s2', 'P1s2', 'P3s3', 'P4s3', 'P3s4', 'P1s4', 'P4s4', 'P2s4', 'P4s2', 'P2s3'],
+    ['P2s4', 'P4s4', 'P2s2', 'P4s2', 'P3s4', 'P1s3', 'P2s3', 'P1s4', 'P4s3', 'P3s3', 'P1s2', 'P3s2', 'P1s1', 'P3s1', 'P2s1', 'P4s1'],
+    ['P3s2', 'P2s1', 'P3s3', 'P1s1', 'P4s4', 'P2s2', 'P4s3', 'P1s2', 'P3s1', 'P4s1', 'P2s3', 'P4s2', 'P1s3', 'P3s4', 'P2s4', 'P1s4'],
+    ['P3s1', 'P4s1', 'P3s3', 'P2s2', 'P3s2', 'P1s1', 'P2s1', 'P1s2', 'P4s4', 'P3s4', 'P2s4', 'P4s3', 'P1s3', 'P2s3', 'P4s2', 'P1s4'],
+    ['P2s3', 'P4s2', 'P2s4', 'P1s4', 'P4s4', 'P2s2', 'P4s3', 'P1s1', 'P3s2', 'P4s1', 'P3s1', 'P1s2', 'P2s1', 'P3s3', 'P1s3', 'P3s4'],
+    ['P2s4', 'P4s2', 'P1s1', 'P3s1', 'P1s2', 'P3s2', 'P1s3', 'P3s4', 'P1s4', 'P4s4', 'P2s3', 'P3s3', 'P4s1', 'P2s2', 'P4s3', 'P2s1'],
+    ['P2s1', 'P4s4', 'P1s3', 'P4s1', 'P1s2', 'P3s1', 'P1s1', 'P3s2', 'P2s2', 'P4s2', 'P3s3', 'P4s3', 'P1s4', 'P2s4', 'P3s4', 'P2s3'],
+    ['P4s1', 'P3s3', 'P4s3', 'P2s4', 'P4s2', 'P1s3', 'P3s4', 'P2s3', 'P1s4', 'P4s4', 'P2s2', 'P1s2', 'P3s2', 'P1s1', 'P3s1', 'P2s1'],
+    ['P4s3', 'P2s1', 'P1s1', 'P3s2', 'P2s2', 'P3s3', 'P1s4', 'P2s3', 'P3s4', 'P4s2', 'P2s4', 'P4s4', 'P1s3', 'P4s1', 'P3s1', 'P1s2'],
+    ['P4s4', 'P1s2', 'P3s1', 'P2s1', 'P3s2', 'P2s2', 'P1s3', 'P3s4', 'P1s4', 'P4s3', 'P2s4', 'P4s2', 'P2s3', 'P4s1', 'P1s1', 'P3s3'],
+    ['P1s1', 'P3s2', 'P1s2', 'P4s2', 'P2s2', 'P1s3', 'P4s3', 'P2s4', 'P1s4', 'P3s4', 'P4s4', 'P2s3', 'P3s3', 'P2s1', 'P3s1', 'P4s1'],
+    ['P2s1', 'P3s1', 'P1s1', 'P3s2', 'P4s2', 'P2s4', 'P3s4', 'P4s4', 'P1s2', 'P2s2', 'P1s3', 'P4s1', 'P3s3', 'P2s3', 'P1s4', 'P4s3'],
+    ['P2s4', 'P4s4', 'P1s2', 'P4s2', 'P3s3', 'P2s1', 'P3s2', 'P1s3', 'P2s3', 'P1s4', 'P3s4', 'P4s3', 'P2s2', 'P4s1', 'P3s1', 'P1s1'],
+    ['P2s2', 'P3s3', 'P2s3', 'P1s4', 'P3s4', 'P4s2', 'P1s2', 'P2s1', 'P3s1', 'P4s1', 'P1s3', 'P3s2', 'P4s3', 'P2s4', 'P4s4', 'P1s1'],
+    ['P4s3', 'P2s2', 'P3s3', 'P4s2', 'P2s4', 'P3s4', 'P1s4', 'P2s3', 'P1s3', 'P4s1', 'P2s1', 'P3s1', 'P1s1', 'P3s2', 'P1s2', 'P4s4'],
+    ['P3s1', 'P4s1', 'P3s2', 'P1s1', 'P4s2', 'P2s4', 'P1s4', 'P2s3', 'P3s4', 'P4s4', 'P1s2', 'P2s2', 'P1s3', 'P4s3', 'P2s1', 'P3s3'],
+    ['P2s4', 'P3s4', 'P1s4', 'P2s3', 'P4s3', 'P1s2', 'P3s2', 'P1s1', 'P2s1', 'P3s1', 'P4s1', 'P1s3', 'P2s2', 'P4s2', 'P3s3', 'P4s4'],
+    ['P2s1', 'P4s2', 'P1s3', 'P3s3', 'P4s3', 'P1s2', 'P4s1', 'P2s3', 'P1s4', 'P3s4', 'P2s4', 'P4s4', 'P2s2', 'P3s2', 'P1s1', 'P3s1'],
+    ['P3s3', 'P1s1', 'P3s1', 'P2s1', 'P4s4', 'P1s2', 'P4s3', 'P3s2', 'P4s2', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P2s3', 'P4s1', 'P2s2'],
+    ['P2s3', 'P3s4', 'P4s3', 'P2s1', 'P1s1', 'P3s1', 'P1s2', 'P3s3', 'P4s1', 'P2s2', 'P4s2', 'P3s2', 'P1s3', 'P4s4', 'P2s4', 'P1s4'],
+    ['P1s4', 'P2s4', 'P4s2', 'P1s3', 'P3s4', 'P4s3', 'P3s2', 'P2s2', 'P1s2', 'P3s3', 'P2s3', 'P4s1', 'P3s1', 'P1s1', 'P2s1', 'P4s4'],
+    ['P1s1', 'P3s3', 'P1s2', 'P2s1', 'P3s1', 'P4s1', 'P3s2', 'P4s3', 'P2s2', 'P1s3', 'P4s4', 'P3s4', 'P4s2', 'P2s4', 'P1s4', 'P2s3'],
+    ['P2s2', 'P1s2', 'P3s1', 'P2s1', 'P1s1', 'P4s3', 'P3s2', 'P4s1', 'P2s3', 'P4s2', 'P3s3', 'P1s4', 'P2s4', 'P3s4', 'P1s3', 'P4s4'],
+    ['P1s1', 'P3s2', 'P1s3', 'P4s4', 'P1s4', 'P4s3', 'P2s2', 'P4s2', 'P2s4', 'P3s4', 'P2s3', 'P3s3', 'P1s2', 'P2s1', 'P4s1', 'P3s1'],
+    ['P1s3', 'P4s4', 'P2s2', 'P1s2', 'P3s2', 'P4s3', 'P2s4', 'P3s4', 'P1s4', 'P2s3', 'P3s3', 'P2s1', 'P4s2', 'P1s1', 'P4s1', 'P3s1'],
+    ['P1s4', 'P2s4', 'P4s3', 'P3s4', 'P4s4', 'P2s2', 'P4s1', 'P1s3', 'P3s2', 'P1s1', 'P3s1', 'P1s2', 'P4s2', 'P2s1', 'P3s3', 'P2s3'],
+    ['P2s3', 'P1s3', 'P4s2', 'P3s2', 'P4s1', 'P1s2', 'P4s3', 'P2s4', 'P1s4', 'P3s4', 'P4s4', 'P2s2', 'P3s3', 'P1s1', 'P3s1', 'P2s1'],
+    ['P4s1', 'P3s1', 'P1s2', 'P4s4', 'P1s4', 'P2s4', 'P4s3', 'P1s1', 'P2s1', 'P3s3', 'P2s2', 'P4s2', 'P3s2', 'P1s3', 'P2s3', 'P3s4'],
+    ['P1s4', 'P2s4', 'P3s4', 'P4s3', 'P2s2', 'P3s2', 'P2s1', 'P4s4', 'P1s2', 'P3s1', 'P1s1', 'P4s2', 'P1s3', 'P2s3', 'P3s3', 'P4s1'],
+    ['P3s2', 'P1s1', 'P4s3', 'P1s3', 'P2s2', 'P1s2', 'P4s1', 'P3s1', 'P2s1', 'P4s4', 'P3s3', 'P4s2', 'P3s4', 'P2s3', 'P1s4', 'P2s4'],
+    ['P4s3', 'P1s2', 'P4s1', 'P2s3', 'P3s4', 'P1s4', 'P4s4', 'P2s4', 'P4s2', 'P2s2', 'P3s3', 'P1s3', 'P3s2', 'P1s1', 'P3s1', 'P2s1'],
+    ['P2s2', 'P4s1', 'P1s2', 'P3s3', 'P2s3', 'P1s3', 'P3s2', 'P4s3', 'P1s4', 'P4s2', 'P3s4', 'P2s4', 'P4s4', 'P2s1', 'P3s1', 'P1s1'],
+    ['P2s2', 'P4s1', 'P3s1', 'P1s1', 'P4s3', 'P2s4', 'P3s4', 'P1s4', 'P4s4', 'P1s3', 'P4s2', 'P2s3', 'P3s3', 'P1s2', 'P2s1', 'P3s2'],
+    ['P4s3', 'P1s4', 'P2s3', 'P3s4', 'P1s3', 'P2s2', 'P3s3', 'P4s1', 'P1s1', 'P3s2', 'P2s1', 'P3s1', 'P1s2', 'P4s2', 'P2s4', 'P4s4'],
+    ['P3s1', 'P2s1', 'P1s1', 'P4s3', 'P2s2', 'P1s3', 'P4s1', 'P3s3', 'P4s2', 'P3s2', 'P1s2', 'P4s4', 'P2s4', 'P1s4', 'P2s3', 'P3s4'],
+    ['P2s4', 'P1s4', 'P4s4', 'P1s3', 'P2s3', 'P3s4', 'P4s3', 'P1s1', 'P3s1', 'P4s1', 'P3s2', 'P1s2', 'P2s2', 'P3s3', 'P2s1', 'P4s2'],
+    ['P4s2', 'P3s2', 'P2s1', 'P3s1', 'P1s2', 'P4s1', 'P1s3', 'P2s2', 'P4s4', 'P3s4', 'P2s4', 'P4s3', 'P1s4', 'P2s3', 'P3s3', 'P1s1'],
+    ['P3s2', 'P2s2', 'P4s4', 'P3s3', 'P2s1', 'P4s1', 'P2s3', 'P4s2', 'P1s2', 'P3s1', 'P1s1', 'P4s3', 'P1s4', 'P2s4', 'P3s4', 'P1s3'],
+    ['P2s2', 'P1s3', 'P4s1', 'P3s1', 'P2s1', 'P3s3', 'P4s2', 'P1s2', 'P3s2', 'P1s1', 'P4s4', 'P2s4', 'P1s4', 'P3s4', 'P2s3', 'P4s3'],
     ]
     
     def has_duplicate_sublists(lst):
@@ -3645,7 +3637,7 @@ if time_calibration:
     selected_path_list = []
     
     # Create row and column indices
-    rows = ['T{}'.format(i) for i in range(1, 5)]
+    rows = ['P{}'.format(i) for i in range(1, 5)]
     columns = ['s{}'.format(i) for i in range(1,5)]
     
     # Create DataFrame
@@ -3700,8 +3692,8 @@ if time_calibration:
         fig, axs = plt.subplots(1, 4, figsize=(20, 5), constrained_layout=True)
     
         # Plot histograms for T_sum values from calibrated_data
-        times = [calibrated_data[f'T1_T_sum_{i+1}'] for i in range(4)]
-        titles_times = ["T_sum T1", "T_sum T2", "T_sum T3", "T_sum T4"]
+        times = [calibrated_data[f'P1_T_sum_{i+1}'] for i in range(4)]
+        titles_times = ["T_sum P1", "T_sum P2", "T_sum P3", "T_sum P4"]
     
         for i, (time, title) in enumerate(zip(times, titles_times)):
             time_non_zero = time[time != 0]  # Filter out zeros
@@ -3729,7 +3721,7 @@ if time_calibration:
     
 else:
     calibration_times = time_sum_reference
-    calibrated_data['CRT_avg'] = 1000 # An extreme time to not crush the program
+    calibrated_data['CRP_avg'] = 1000 # An extreme time to not crush the program
     print("Calibration in times was set to the reference! (calibration was not performed)\n", calibration_times)
 
 
@@ -3853,22 +3845,22 @@ if y_position_complex_method:
         return value
 
     # Loop through each module to compute y values
-    for module in ['T1', 'T2', 'T3', 'T4']:
-        if module in ['T1', 'T3']:
+    for module in ['P1', 'P2', 'P3', 'P4']:
+        if module in ['P1', 'P3']:
             thick_strip = 4
-            y_pos = y_pos_T1_and_T3
-            y_width = y_width_T1_and_T3
+            y_pos = y_pos_P1_and_P3
+            y_width = y_width_P1_and_P3
             lost_band = [width - induction_section for width in y_width]  # Calculate lost band
-        elif module in ['T2', 'T4']:
+        elif module in ['P2', 'P4']:
             thick_strip = 1
-            y_pos = y_pos_T2_and_T4
-            y_width = y_width_T2_and_T4
+            y_pos = y_pos_P2_and_P4
+            y_width = y_width_P2_and_P4
             lost_band = [width - induction_section for width in y_width]  # Calculate lost band
             
         lost_band = np.array(lost_band) / 2
         
         # Get the relevant Q_sum columns for the current module
-        Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(4)]
+        Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(4)]
         Q_sum_values = calibrated_data[Q_sum_cols].abs()
 
         Q_sum_trans = transformation(Q_sum_values, transf_exp)
@@ -3928,18 +3920,18 @@ if y_position_complex_method:
                         y[i] = scaled_value
 
         # Store the computed y values in the corresponding list
-        if module == "T1":
-            y_values_M1 = y
-            original_y_values_M1 = original_y_values
-        elif module == "T2":
-            y_values_M2 = y
-            original_y_values_M2 = original_y_values
-        elif module == "T3":
-            y_values_M3 = y
-            original_y_values_M3 = original_y_values
-        elif module == "T4":
-            y_values_M4 = y
-            original_y_values_M4 = original_y_values
+        if module == "P1":
+            y_values_P1 = y
+            original_y_values_P1 = original_y_values
+        elif module == "P2":
+            y_values_P2 = y
+            original_y_values_P2 = original_y_values
+        elif module == "P3":
+            y_values_P3 = y
+            original_y_values_P3 = original_y_values
+        elif module == "P4":
+            y_values_P4 = y
+            original_y_values_P4 = original_y_values
 
 
 # if uniform_y_method:
@@ -3958,13 +3950,13 @@ if y_position_complex_method:
 #     original_y_values_M4 = []
 
 #     # Loop through each module to compute y values
-#     for module in ['T1', 'T2', 'T3', 'T4']:
-#         if module in ['T1', 'T3']:
-#             y_pos = y_pos_T1_and_T3
-#             y_width = y_width_T1_and_T3
-#         elif module in ['T2', 'T4']:
-#             y_pos = y_pos_T2_and_T4
-#             y_width = y_width_T2_and_T4
+#     for module in ['P1', 'P2', 'P3', 'P4']:
+#         if module in ['P1', 'P3']:
+#             y_pos = y_pos_P1_and_P3
+#             y_width = y_width_P1_and_P3
+#         elif module in ['P2', 'P4']:
+#             y_pos = y_pos_P2_and_P4
+#             y_width = y_width_P2_and_P4
 
 #         # Compute strip boundaries
 #         strip_boundaries = [(center - width / 2, center + width / 2) for center, width in zip(y_pos, y_width)]
@@ -3988,16 +3980,16 @@ if y_position_complex_method:
 #             y += random_values * (Q_sum_values.iloc[:, j] != 0)
 
 #         # Store the computed y values in the corresponding list
-#         if module == "T1":
+#         if module == "P1":
 #             y_values_M1 = y
 #             original_y_values_M1 = y.copy()  # Store original values
-#         elif module == "T2":
+#         elif module == "P2":
 #             y_values_M2 = y
 #             original_y_values_M2 = y.copy()  # Store original values
-#         elif module == "T3":
+#         elif module == "P3":
 #             y_values_M3 = y
 #             original_y_values_M3 = y.copy()  # Store original values
-#         elif module == "T4":
+#         elif module == "P4":
 #             y_values_M4 = y
 #             original_y_values_M4 = y.copy()  # Store original values
 
@@ -4010,13 +4002,13 @@ if uniform_y_method:
     original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4 = [], [], [], []
 
     # Loop through each module to compute y values
-    for module in ['T1', 'T2', 'T3', 'T4']:
-        if module in ['T1', 'T3']:
-            y_pos = y_pos_T1_and_T3
-            y_width = y_width_T1_and_T3
-        elif module in ['T2', 'T4']:
-            y_pos = y_pos_T2_and_T4
-            y_width = y_width_T2_and_T4
+    for module in ['P1', 'P2', 'P3', 'P4']:
+        if module in ['P1', 'P3']:
+            y_pos = y_pos_P1_and_P3
+            y_width = y_width_P1_and_P3
+        elif module in ['P2', 'P4']:
+            y_pos = y_pos_P2_and_P4
+            y_width = y_width_P2_and_P4
 
         # Compute strip boundaries
         strip_boundaries = [(center - width / 2, center + width / 2) for center, width in zip(y_pos, y_width)]
@@ -4032,16 +4024,16 @@ if uniform_y_method:
         y = np.array([np.random.uniform(strip_boundaries[j][0], strip_boundaries[j][1]) for j in max_indices])
 
         # Store the computed y values in the corresponding list
-        if module == "T1":
+        if module == "P1":
             y_values_M1 = y
             original_y_values_M1 = y.copy()  # Store original values
-        elif module == "T2":
+        elif module == "P2":
             y_values_M2 = y
             original_y_values_M2 = y.copy()  # Store original values
-        elif module == "T3":
+        elif module == "P3":
             y_values_M3 = y
             original_y_values_M3 = y.copy()  # Store original values
-        elif module == "T4":
+        elif module == "P4":
             y_values_M4 = y
             original_y_values_M4 = y.copy()  # Store original values
 
@@ -4056,13 +4048,13 @@ if not uniform_y_method and not y_position_complex_method:
     y_values_M4 = []
     
     # Loop through each module to compute y values
-    for module in ['T1', 'T2', 'T3', 'T4']:
-        if module in ['T1', 'T3']:
+    for module in ['P1', 'P2', 'P3', 'P4']:
+        if module in ['P1', 'P3']:
             thick_strip = 4
-            y_pos = y_pos_T1_and_T3
-        elif module in ['T2', 'T4']:
+            y_pos = y_pos_P1_and_P3
+        elif module in ['P2', 'P4']:
             thick_strip = 1
-            y_pos = y_pos_T2_and_T4
+            y_pos = y_pos_P2_and_P4
     
         # Get the relevant Q_sum columns for the current module
         Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(4)]
@@ -4076,13 +4068,13 @@ if not uniform_y_method and not y_position_complex_method:
         y[Q_sum_total == 0] = 0  # Set y to 0 where Q_sum_total is 0
     
         # Store the computed y values in the corresponding list
-        if module == "T1":
+        if module == "P1":
             y_values_M1 = y.values
-        elif module == "T2":
+        elif module == "P2":
             y_values_M2 = y.values
-        elif module == "T3":
+        elif module == "P3":
             y_values_M3 = y.values
-        elif module == "T4":
+        elif module == "P4":
             y_values_M4 = y.values
             
 
@@ -4107,10 +4099,10 @@ if create_plots and y_position_complex_method:
     fig, axs = plt.subplots(3, 4, figsize=(20, 15), constrained_layout=True)
     y_columns = ['Y_1', 'Y_2', 'Y_3', 'Y_4']
     titles = ['Y1', 'Y2', 'Y3', 'Y4']
-    strip_borders_T1_and_T3 = np.cumsum(np.append(0, y_width_T1_and_T3)) - np.sum(y_width_T1_and_T3) / 2
-    strip_borders_T2_and_T4 = np.cumsum(np.append(0, y_width_T2_and_T4)) - np.sum(y_width_T2_and_T4) / 2
-    centers_dict = {'Y1': y_pos_T1_and_T3, 'Y3': y_pos_T1_and_T3, 'Y2': y_pos_T2_and_T4, 'Y4': y_pos_T2_and_T4}
-    borders_dict = {'Y1': strip_borders_T1_and_T3, 'Y3': strip_borders_T1_and_T3, 'Y2': strip_borders_T2_and_T4, 'Y4': strip_borders_T2_and_T4}
+    strip_borders_P1_and_P3 = np.cumsum(np.append(0, y_width_P1_and_P3)) - np.sum(y_width_P1_and_P3) / 2
+    strip_borders_P2_and_P4 = np.cumsum(np.append(0, y_width_P2_and_P4)) - np.sum(y_width_P2_and_P4) / 2
+    centers_dict = {'Y1': y_pos_P1_and_P3, 'Y3': y_pos_P1_and_P3, 'Y2': y_pos_P2_and_P4, 'Y4': y_pos_P2_and_P4}
+    borders_dict = {'Y1': strip_borders_P1_and_P3, 'Y3': strip_borders_P1_and_P3, 'Y2': strip_borders_P2_and_P4, 'Y4': strip_borders_P2_and_P4}
 
     for i, (y_col, title) in enumerate(zip(y_columns, titles)):
         y_processed, y_original = calibrated_data[y_col].values, [original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4][i]
@@ -4166,10 +4158,10 @@ if create_plots and uniform_y_method:
     fig, axs = plt.subplots(3, 4, figsize=(20, 15), constrained_layout=True)
     y_columns = ['Y_1', 'Y_2', 'Y_3', 'Y_4']
     titles = ['Y1', 'Y2', 'Y3', 'Y4']
-    strip_borders_T1_and_T3 = np.cumsum(np.append(0, y_width_T1_and_T3)) - np.sum(y_width_T1_and_T3) / 2
-    strip_borders_T2_and_T4 = np.cumsum(np.append(0, y_width_T2_and_T4)) - np.sum(y_width_T2_and_T4) / 2
-    centers_dict = {'Y1': y_pos_T1_and_T3, 'Y3': y_pos_T1_and_T3, 'Y2': y_pos_T2_and_T4, 'Y4': y_pos_T2_and_T4}
-    borders_dict = {'Y1': strip_borders_T1_and_T3, 'Y3': strip_borders_T1_and_T3, 'Y2': strip_borders_T2_and_T4, 'Y4': strip_borders_T2_and_T4}
+    strip_borders_P1_and_P3 = np.cumsum(np.append(0, y_width_P1_and_P3)) - np.sum(y_width_P1_and_P3) / 2
+    strip_borders_P2_and_P4 = np.cumsum(np.append(0, y_width_P2_and_P4)) - np.sum(y_width_P2_and_P4) / 2
+    centers_dict = {'Y1': y_pos_P1_and_P3, 'Y3': y_pos_P1_and_P3, 'Y2': y_pos_P2_and_P4, 'Y4': y_pos_P2_and_P4}
+    borders_dict = {'Y1': strip_borders_P1_and_P3, 'Y3': strip_borders_P1_and_P3, 'Y2': strip_borders_P2_and_P4, 'Y4': strip_borders_P2_and_P4}
 
     for i, (y_col, title) in enumerate(zip(y_columns, titles)):
         y_processed, y_original = calibrated_data[y_col].values, [original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4][i]
@@ -4283,8 +4275,8 @@ def compute_transformed_values(T_sums, T_diffs, Q_sums, weighted):
 
 for i_plane in range(1, 5):
     # Generate relevant column names for current plane
-    T_sum_cols = [f'T{i_plane}_T_sum_{i+1}' for i in range(4)]
-    T_diff_cols = [f'T{i_plane}_T_diff_{i+1}' for i in range(4)]
+    T_sum_cols = [f'P{i_plane}_T_sum_{i+1}' for i in range(4)]
+    T_diff_cols = [f'P{i_plane}_T_diff_{i+1}' for i in range(4)]
     Q_sum_cols = [f'Q{i_plane}_Q_sum_{i+1}' for i in range(4)]
 
     # Extract and preprocess data for calculations
@@ -4300,9 +4292,9 @@ for i_plane in range(1, 5):
     T_sum_final, T_diff_final = compute_transformed_values(T_sums, T_diffs, Q_sums, weighted)
     
     # Store results in the new_columns dictionary
-    new_columns[f'T{i_plane}_T_sum_final'] = T_sum_final
-    new_columns[f'T{i_plane}_T_diff_final'] = T_diff_final
-    new_columns[f'T{i_plane}_Q_sum_final'] = Q_sums_og.sum(axis=1)
+    new_columns[f'P{i_plane}_T_sum_final'] = T_sum_final
+    new_columns[f'P{i_plane}_T_diff_final'] = T_diff_final
+    new_columns[f'P{i_plane}_Q_sum_final'] = Q_sums_og.sum(axis=1)
     
     # Save the charge in each strip
     for strip in range(1, 5):
@@ -4318,17 +4310,17 @@ if create_plots:
     
     # First plot: check the time calibration ------------------
     new_data = calibrated_data.copy()
-    mask_all_non_zero = (new_data['T1_Q_sum_final'] != 0) & \
-                        (new_data['T2_Q_sum_final'] != 0) & \
-                        (new_data['T3_Q_sum_final'] != 0) & \
-                        (new_data['T4_Q_sum_final'] != 0)
+    mask_all_non_zero = (new_data['P1_Q_sum_final'] != 0) & \
+                        (new_data['P2_Q_sum_final'] != 0) & \
+                        (new_data['P3_Q_sum_final'] != 0) & \
+                        (new_data['P4_Q_sum_final'] != 0)
     
     # Filter new_data to keep only rows where all Q_sum_final values are non-zero
     new_data = new_data[mask_all_non_zero].copy()
     
-    # Subtract T1_T_sum_final from T2_T_sum_final, T3_T_sum_final, and T4_T_sum_final in one step
-    cols_to_adjust = [f'T{i}_T_sum_final' for i in range(1, 5)]
-    new_data[cols_to_adjust] = new_data[cols_to_adjust].subtract(new_data['T1_T_sum_final'], axis=0)
+    # Subtract P1_T_sum_final from P2_T_sum_final, P3_T_sum_final, and P4_T_sum_final in one step
+    cols_to_adjust = [f'P{i}_T_sum_final' for i in range(1, 5)]
+    new_data[cols_to_adjust] = new_data[cols_to_adjust].subtract(new_data['P1_T_sum_final'], axis=0)
 
     # Plotting
     if create_plots or create_essential_plots:
@@ -4339,9 +4331,9 @@ if create_plots:
         # Iterate over i_plane from 1 to 4
         for i_plane in range(1, 5):
             # Define the column names for this plane
-            t_sum_col = f'T{i_plane}_T_sum_final'
-            t_diff_col = f'T{i_plane}_T_diff_final'
-            q_sum_col = f'T{i_plane}_Q_sum_final'
+            t_sum_col = f'P{i_plane}_T_sum_final'
+            t_diff_col = f'P{i_plane}_T_diff_final'
+            q_sum_col = f'P{i_plane}_Q_sum_final'
             y_col = f'Y_{i_plane}'
             
             # Filter components in all vectors in which t_sum_col is bigger in abs to 10
@@ -4385,9 +4377,9 @@ if create_plots:
     # Iterate over i_plane from 1 to 4
     for i_plane in range(1, 5):
         # Define the column names for this plane
-        t_sum_col = f'T{i_plane}_T_sum_final'
-        t_diff_col = f'T{i_plane}_T_diff_final'
-        q_sum_col = f'T{i_plane}_Q_sum_final'
+        t_sum_col = f'P{i_plane}_T_sum_final'
+        t_diff_col = f'P{i_plane}_T_diff_final'
+        q_sum_col = f'P{i_plane}_Q_sum_final'
         y_col = f'Y_{i_plane}'
         
         # Filter out values that are NaN or 0 before plotting
@@ -4468,9 +4460,9 @@ if create_plots:
     # Iterate over i_plane from 1 to 4
     for i_plane in range(1, 5):
         # Define the column names for this plane
-        t_sum_col = f'T{i_plane}_T_sum_final'
-        t_diff_col = f'T{i_plane}_T_diff_final'
-        q_sum_col = f'T{i_plane}_Q_sum_final'
+        t_sum_col = f'P{i_plane}_T_sum_final'
+        t_diff_col = f'P{i_plane}_T_diff_final'
+        q_sum_col = f'P{i_plane}_Q_sum_final'
         y_col = f'Y_{i_plane}'
         
         # Filter out values that are NaN or 0 before plotting
@@ -4511,9 +4503,9 @@ if create_plots or create_essential_plots:
     # Iterate over i_plane from 1 to 4
     for i_plane in range(1, 5):
         # Define the column names for this plane
-        t_sum_col = f'T{i_plane}_T_sum_final'
-        t_diff_col = f'T{i_plane}_T_diff_final'
-        q_sum_col = f'T{i_plane}_Q_sum_final'
+        t_sum_col = f'P{i_plane}_T_sum_final'
+        t_diff_col = f'P{i_plane}_T_diff_final'
+        q_sum_col = f'P{i_plane}_Q_sum_final'
         y_col = f'Y_{i_plane}'
         
         # Filter out rows where any of the variables are NaN or 0 for all comparisons
@@ -4573,9 +4565,9 @@ if create_plots or create_essential_plots:
     # Iterate over i_plane from 1 to 4
     for i_plane in range(1, 5):
         # Define the column names for this plane
-        t_sum_col = f'T{i_plane}_T_sum_final'
-        t_diff_col = f'T{i_plane}_T_diff_final'
-        q_sum_col = f'T{i_plane}_Q_sum_final'
+        t_sum_col = f'P{i_plane}_T_sum_final'
+        t_diff_col = f'P{i_plane}_T_diff_final'
+        q_sum_col = f'P{i_plane}_Q_sum_final'
         y_col = f'Y_{i_plane}'
         
         # Filter out rows where any of the variables are NaN or 0 for all comparisons
@@ -4631,10 +4623,10 @@ if create_plots or create_essential_plots:
 # Plotting for articles and presentations
 # if presentation_plots:
 #     new_data = calibrated_data.copy()
-#     mask_all_non_zero = (new_data['T1_Q_sum_final'] != 0) & \
-#                         (new_data['T2_Q_sum_final'] != 0) & \
-#                         (new_data['T3_Q_sum_final'] != 0) & \
-#                         (new_data['T4_Q_sum_final'] != 0)
+#     mask_all_non_zero = (new_data['P1_Q_sum_final'] != 0) & \
+#                         (new_data['P2_Q_sum_final'] != 0) & \
+#                         (new_data['P3_Q_sum_final'] != 0) & \
+#                         (new_data['P4_Q_sum_final'] != 0)
 
 #     # Filter new_data to keep only rows where all Q_sum_final values are non-zero
 #     new_data = new_data[mask_all_non_zero].copy()
@@ -4643,7 +4635,7 @@ if create_plots or create_essential_plots:
 #         fig, ax = plt.subplots(1, 1, figsize=(5, 5))  # Small figsize for article column
 
 #         # Define the column names for the specified plane
-#         t_diff_col = f'T{plane}_T_diff_final'
+#         t_diff_col = f'P{plane}_T_diff_final'
 #         y_col = f'Y_{plane}'
 
 #         # Filter out rows where any of the variables are NaN or 0 for all comparisons
@@ -4740,7 +4732,7 @@ for idx, track in calibrated_data.iterrows():
     
     # Identify valid planes with charge
     for i_plane in range(nplan):
-        charge_plane = getattr(track, f'T{i_plane + 1}_Q_sum_final')
+        charge_plane = getattr(track, f'P{i_plane + 1}_Q_sum_final')
         if charge_plane > 4:
             planes_to_iterate.append(i_plane + 1)
 
@@ -4750,7 +4742,7 @@ for idx, track in calibrated_data.iterrows():
         X, Y, Z, sX, sY, sZ = [], [], [], [], [], []
 
         for iplane in planes_to_iterate:
-            t_d = getattr(track, f'T{iplane}_T_diff_final')
+            t_d = getattr(track, f'P{iplane}_T_diff_final')
             x_p = strip_speed * t_d
             X.append(x_p)
             Y.append(getattr(track, f'Y_{iplane}'))
@@ -4912,7 +4904,7 @@ for idx, track in calibrated_data.iterrows():
     
     # Identify valid planes with charge
     for i_plane in range(nplan):
-        charge_plane = getattr(track, f'T{i_plane + 1}_Q_sum_final')
+        charge_plane = getattr(track, f'P{i_plane + 1}_Q_sum_final')
         if charge_plane > 4:
             planes_to_iterate.append(i_plane + 1)
 
@@ -4923,7 +4915,7 @@ for idx, track in calibrated_data.iterrows():
         z = []
         
         for iplane in planes_to_iterate:
-            t_s = getattr(track, f'T{iplane}_T_sum_final')
+            t_s = getattr(track, f'P{iplane}_T_sum_final')
             tsum.append(t_s)
             z.append(z_positions[iplane - 1])
 
@@ -5180,7 +5172,7 @@ for iteration in range(repeat + 1):
         charge_event = 0
         for i_plane in range(nplan):
             # Check if the sum of the charges in the current plane is non-zero
-            charge_plane = getattr(track, f'T{i_plane + 1}_Q_sum_final')
+            charge_plane = getattr(track, f'P{i_plane + 1}_Q_sum_final')
             if charge_plane != 0:
                 # Append the plane number to name_type and planes_to_iterate
                 name_type += f'{i_plane + 1}'
@@ -5209,9 +5201,9 @@ for iteration in range(repeat + 1):
                     zi  = z_positions[iplane - 1]                              # z pos
                     yst = getattr(track, f'Y_{iplane}')                        # y position
                     sy  = anc_sy                                               # uncertainty in y               
-                    ts  = getattr(track, f'T{iplane}_T_sum_final')             # t sum
+                    ts  = getattr(track, f'P{iplane}_T_sum_final')             # t sum
                     sts = anc_std                                              # uncertainty in t sum
-                    td  = getattr(track, f'T{iplane}_T_diff_final')            # t dif
+                    td  = getattr(track, f'P{iplane}_T_diff_final')            # t dif
                     std = anc_std                                              # uncertainty in tdif
                     # -------------------------------------------------------------
                     
@@ -5255,9 +5247,9 @@ for iteration in range(repeat + 1):
                 zi  = z_positions[iplane - 1]                                  # z pos
                 yst = getattr(track, f'Y_{iplane}')                            # y position
                 sy  = anc_sy                                                   # uncertainty in y               
-                ts  = getattr(track, f'T{iplane}_T_sum_final')                 # t sum
+                ts  = getattr(track, f'P{iplane}_T_sum_final')                 # t sum
                 sts = anc_std                                                  # uncertainty in t sum
-                td  = getattr(track, f'T{iplane}_T_diff_final')                # t dif
+                td  = getattr(track, f'P{iplane}_T_diff_final')                # t dif
                 std = anc_std                                                  # uncertainty in tdif
                 # -------------------------------------------------------------
                 
@@ -5305,9 +5297,9 @@ for iteration in range(repeat + 1):
                 z_ref  = z_positions[iplane_ref - 1]                               # z pos
                 y_strip_ref = getattr(track, f'Y_{iplane_ref}')                    # y position
                 sy  = anc_sy                                                       # uncertainty in y
-                t_sum_ref  = getattr(track, f'T{iplane_ref}_T_sum_final')          # t sum
+                t_sum_ref  = getattr(track, f'P{iplane_ref}_T_sum_final')          # t sum
                 sts = anc_sts                                                      # uncertainty in t sum
-                t_dif_ref  = getattr(track, f'T{iplane_ref}_T_diff_final')         # t dif
+                t_dif_ref  = getattr(track, f'P{iplane_ref}_T_diff_final')         # t dif
                 std = anc_std                                                      # uncertainty in tdif
                 # -----------------------------------------------------------------
                 
@@ -5319,7 +5311,7 @@ for iteration in range(repeat + 1):
                 vs     = vsf  # We start with the previous 4-planes fit
                 mk     = np.zeros([npar, npar])
                 va     = np.zeros(npar)
-                ist3 = 0
+                isP3 = 0
                 dist = d0
                 while dist>cocut:
                     # for iplane, istrip in zip(planes_to_iterate_short, istrip_list_short):
@@ -5329,9 +5321,9 @@ for iteration in range(repeat + 1):
                         zi  = z_positions[iplane - 1] - z_ref                           # z pos
                         yst = getattr(track, f'Y_{iplane}')                             # y position
                         sy  = anc_sy                                                    # uncertainty in y
-                        ts  = getattr(track, f'T{iplane}_T_sum_final')                  # t sum
+                        ts  = getattr(track, f'P{iplane}_T_sum_final')                  # t sum
                         sts = anc_sts                                                   # uncertainty in t sum
-                        td  = getattr(track, f'T{iplane}_T_diff_final')                 # t dif
+                        td  = getattr(track, f'P{iplane}_T_diff_final')                 # t dif
                         std = anc_std                                                   # uncertainty in tdif
                         # -------------------------------------------------------------
                         
@@ -5339,7 +5331,7 @@ for iteration in range(repeat + 1):
                         vsig = [sy, sts, std]
                         mk = mk + fmkx(nvar, npar, vs, vsig, ss, zi)
                         va = va + fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
-                    ist3 = ist3 + 1
+                    isP3 = isP3 + 1
                     merr = linalg.inv(mk)    # Error matrix
                     vs0 = vs
                     vs  = merr @ va          # sEa equation
@@ -5414,9 +5406,9 @@ for iteration in range(repeat + 1):
             # If a module is identified, set related values to 0
             if module_to_zero:
                 calibrated_data.at[index, f'Y_{module_to_zero}'] = 0
-                calibrated_data.at[index, f'T{module_to_zero}_T_sum_final'] = 0
-                calibrated_data.at[index, f'T{module_to_zero}_T_diff_final'] = 0
-                calibrated_data.at[index, f'T{module_to_zero}_Q_sum_final'] = 0
+                calibrated_data.at[index, f'P{module_to_zero}_T_sum_final'] = 0
+                calibrated_data.at[index, f'P{module_to_zero}_T_diff_final'] = 0
+                calibrated_data.at[index, f'P{module_to_zero}_Q_sum_final'] = 0
     
     # FILTER 7: TSUM, TDIF, QSUM, QDIF TIMTRACK RESIDUE FILTER --> 0 THE COMPONENT THAT HAS LARGE RESIDUE
     for index, row in calibrated_data.iterrows():
@@ -5427,18 +5419,18 @@ for iteration in range(repeat + 1):
                     abs(row[f'ext_res_ystr_{i}']) > ext_res_ystr_filter:
                     
                     calibrated_data.at[index, f'Y_{i}'] = 0
-                    calibrated_data.at[index, f'T{i}_T_sum_final'] = 0
-                    calibrated_data.at[index, f'T{i}_T_diff_final'] = 0
-                    calibrated_data.at[index, f'T{i}_Q_sum_final'] = 0
+                    calibrated_data.at[index, f'P{i}_T_sum_final'] = 0
+                    calibrated_data.at[index, f'P{i}_T_diff_final'] = 0
+                    calibrated_data.at[index, f'P{i}_Q_sum_final'] = 0
             else:
                 if abs(row[f'res_tsum_{i}']) > res_tsum_filter or \
                     abs(row[f'res_tdif_{i}']) > res_tdif_filter or \
                     abs(row[f'res_ystr_{i}']) > res_ystr_filter:
                     
                     calibrated_data.at[index, f'Y_{i}'] = 0
-                    calibrated_data.at[index, f'T{i}_T_sum_final'] = 0
-                    calibrated_data.at[index, f'T{i}_T_diff_final'] = 0
-                    calibrated_data.at[index, f'T{i}_Q_sum_final'] = 0
+                    calibrated_data.at[index, f'P{i}_T_sum_final'] = 0
+                    calibrated_data.at[index, f'P{i}_T_diff_final'] = 0
+                    calibrated_data.at[index, f'P{i}_Q_sum_final'] = 0
                     
     print("-----------------------------------------")
     four_planes = len(calibrated_data[calibrated_data.type == 1234])
@@ -6240,7 +6232,7 @@ if save_full_data: # Save a full version of the data, for different studies and 
 
 # Save a reduced version of the data always, to proceed with the analysis
 columns_to_keep = [
-    'Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event',
+    'Time', 'CRP_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event',
     'Q_M1s1', 'Q_M1s2', 'Q_M1s3', 'Q_M1s4',
     'Q_M2s1', 'Q_M2s2', 'Q_M2s3', 'Q_M2s4',
     'Q_M3s1', 'Q_M3s2', 'Q_M3s3', 'Q_M3s4',
@@ -6272,7 +6264,7 @@ if os.path.exists(csv_path):
 else:
     columns = ['Time'] + [
         f'{module}_s{strip}_{var}'
-        for module in ['M1', 'M2', 'M3', 'M4']
+        for module in ['P1', 'P2', 'P3', 'P4']
         for strip in range(1, 5)
         for var in ['Q_sum', 'T_sum', 'Q_dif', 'T_dif']
     ]
