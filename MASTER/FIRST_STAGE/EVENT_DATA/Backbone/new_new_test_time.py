@@ -271,7 +271,6 @@ plt.show()
 
 # %%
 
-
 calibrated_data = data_df_times.copy()
 time_window = 7
 
@@ -297,3 +296,5 @@ zeroed_percentage = num_zeroed / num_total
 
 if zeroed_percentage > 0:
     print(f"Zeroed {zeroed_percentage:.2%} of the values outside the time window.")
+
+# %%

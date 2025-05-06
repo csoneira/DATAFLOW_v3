@@ -190,7 +190,6 @@ else:
 # -----------------------------------------------------------------------------
 
 
-
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Header ----------------------------------------------------------------------
@@ -203,7 +202,7 @@ else:
 
 # Plots and savings -------------------------
 crontab_execution = True
-create_plots = True
+create_plots = False
 create_essential_plots = True
 save_plots = True
 show_plots = False
@@ -225,16 +224,19 @@ charge_front_back = True
 y_position_complex_method = False
 uniform_y_method = True
 
-# Time calibration
+# Slewing correction -----------------
+slewing_correction = True
+
+# Time calibration ------------------
 time_calibration = True
 
-# RPC variables
+# RPC variables ---------------------
 weighted = False
 
 # TimTrack -------------------------
 fixed_speed = False
 res_ana_removing_planes = False
-timtrack_iteration = True
+timtrack_iteration = False
 number_of_TT_executions = 2
 plot_three_planes = False
 residual_plots = True
@@ -343,8 +345,8 @@ pos_filter = 700
 proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = -1 # -0.01
-slowness_filter_right = 1 # 0.025
+slowness_filter_left = -0.01 # -0.01
+slowness_filter_right = 0.025 # 0.025
 charge_strip_left_filter = -1e6
 charge_strip_right_filter = 1e6
 charge_event_left_filter = -1e6
@@ -478,6 +480,23 @@ anc_std = 0.1 # 2 cm
 anc_sx = strip_speed * anc_std # 2 cm
 anc_sz = 10 # 5 cm
 
+
+# -----------------------------------------------------------------------------
+# Some variables that define the analysis, define a dictionary with the variables:
+# 'discarded_by_time_window', 'one_side_events', 'purity_of_data'
+# -----------------------------------------------------------------------------
+global_variables = {
+    'CRT_avg': 0,
+    'discarded_by_time_window_percentage': 0,
+    'one_side_events': 0,
+    'purity_of_data_percentage': 0,
+    'unc_y': anc_sy,
+    'unc_tsum': anc_sts,
+    'unc_tdif': anc_std
+}
+
+# Modify discarded_by_time_window entry
+global_variables['discarded_by_time_window'] = 1
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -2482,7 +2501,8 @@ if charge_front_back:
             plot_list.append(save_fig_path)
             plt.savefig(save_fig_path, format='png')
         
-        if show_plots: plt.show()
+        if show_plots:
+            plt.show()
         plt.close()
 
 else:
@@ -2494,6 +2514,403 @@ print("----------------- Filter 5: charge difference FB filter -----------------
 for col in calibrated_data.columns:
     if 'Q_diff' in col:
         calibrated_data[col] = np.where((calibrated_data[col] > Q_diff_cal_threshold_FB) | (calibrated_data[col] < Q_diff_cal_threshold_FB), 0, calibrated_data[col])
+
+print("----------------------------------------------------------------------")
+print("------------------------ Slewing correction --------------------------")
+print("----------------------------------------------------------------------")
+
+if slewing_correction:
+    print("WIP")
+    
+    data_df = calibrated_data.copy()
+    
+    # Take only the columns which have T_sum in the name, I mean, inside of the column name
+    # Also _final cannot be in the column name. Also the column called 'type' save it
+    # Extract relevant columns
+    data_df_times = data_df.filter(regex='T_sum')
+    data_df_charges = data_df.filter(regex='Q_sum')
+    data_df_tdiff = data_df.filter(regex='T_diff')
+
+    # Concatenate all relevant data with 'type' column
+    data_df_times = pd.concat([data_df_charges, data_df_times, data_df_tdiff], axis=1)
+    print(data_df_times.columns.to_list())
+    data_case = data_df_times
+
+    import re
+    import itertools
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    from scipy.constants import c
+
+    ##############################################################################
+    # 1) Define geometry and plane-strip mapping
+    ##############################################################################
+
+    # Print the resulting z_positions
+    z_positions = z_positions - z_positions[0]
+    print(f"Z positions: {z_positions}")
+
+    def y_pos(y_width):
+        """Returns array of y-centers based on the widths of each strip."""
+        return np.cumsum(y_width) - (np.sum(y_width) + y_width) / 2
+
+    # For T1/T3 vs T2/T4
+    y_widths = [
+        np.array([63, 63, 63, 98]),  # T1 / T3
+        np.array([98, 63, 63, 63])   # T2 / T4
+    ]
+
+    y_pos_T1_T3 = y_pos(y_widths[0])  # shape (4,)
+    y_pos_T2_T4 = y_pos(y_widths[1])  # shape (4,)
+
+    # yz_big[plane_index, strip_index, 0/1] = (y,z)
+    # plane_index in [0..3] => T1=0, T2=1, T3=2, T4=3
+    # strip_index in [0..3], but your data columns say 1..4 => we do minus 1
+    yz_big = np.zeros((4, 4, 2))
+
+    # Fill T1 -> plane_idx=0, T3 -> plane_idx=2 with y_pos_T1_T3
+    for strip_idx in range(4):
+        yz_big[0, strip_idx, 0] = y_pos_T1_T3[strip_idx]  # y
+        yz_big[0, strip_idx, 1] = z_positions[0]         # z for T1
+        
+        yz_big[2, strip_idx, 0] = y_pos_T1_T3[strip_idx]  # y
+        yz_big[2, strip_idx, 1] = z_positions[2]         # z for T3
+
+    # Fill T2 -> plane_idx=1, T4 -> plane_idx=3 with y_pos_T2_T4
+    for strip_idx in range(4):
+        yz_big[1, strip_idx, 0] = y_pos_T2_T4[strip_idx]  # y
+        yz_big[1, strip_idx, 1] = z_positions[1]         # z for T2
+
+        yz_big[3, strip_idx, 0] = y_pos_T2_T4[strip_idx]  # y
+        yz_big[3, strip_idx, 1] = z_positions[3]         # z for T4
+
+    # Mapping T1->0, T2->1, T3->2, T4->3
+    plane_map = {"T1": 0, "T2": 1, "T3": 2, "T4": 3}
+
+    def get_yz(plane_idx, strip_idx):
+        """
+        Return (y,z) for the given plane_idx (0..3) and strip_idx (0..3).
+        We do yz_big[plane_idx, strip_idx], which is [y,z].
+        """
+        return yz_big[plane_idx, strip_idx, :]
+
+
+    ##############################################################################
+    # 2) Define constants and speed
+    ##############################################################################
+    c_mm_ns = c / 1000000
+    beta = 1.0
+    muon_speed = beta * c_mm_ns
+
+    ##############################################################################
+    # 3) Parsing plane & strip from column names
+    #    (e.g. "T1_T_sum_3" => plane="T1", strip=3)
+    ##############################################################################
+    def parse_plane_and_strip(col_name):
+        """
+        This regex expects columns like "T1_T_sum_2" or "T3_T_diff_4".
+        If the column doesn't match, raises ValueError.
+        """
+        pattern = r"^(T[1-4])_T_(?:sum|diff)_(\d+)$"
+        match = re.match(pattern, col_name)
+        if not match:
+            raise ValueError(f"Cannot parse plane/strip from '{col_name}'")
+        plane_str = match.group(1)  # e.g. "T1"
+        strip_str = match.group(2)  # e.g. "3"
+        return plane_str, int(strip_str)
+
+
+    ##############################################################################
+    # 4) Compute travel time function
+    #    - figure out plane/strip for each T_sum column
+    #    - find T_diff columns => x positions
+    #    - get (y,z) from yz_big
+    #    - distance / speed
+    ##############################################################################
+    def compute_travel_time(row, col_sum1, col_sum2):
+        plane1, strip1 = parse_plane_and_strip(col_sum1)  
+        plane2, strip2 = parse_plane_and_strip(col_sum2)
+        
+        # T_diff columns for x
+        tdiff_col1 = f"{plane1}_T_diff_{strip1}"
+        tdiff_col2 = f"{plane2}_T_diff_{strip2}"
+        
+        # x1, x2 in mm
+        x1 = row[tdiff_col1] * 200.0
+        x2 = row[tdiff_col2] * 200.0
+        
+        # yz from yz_big
+        i1 = plane_map[plane1]
+        i2 = plane_map[plane2]
+        j1 = strip1 - 1  # because your columns say e.g. strip=1..4
+        j2 = strip2 - 1
+        y1, z1 = get_yz(i1, j1)
+        y2, z2 = get_yz(i2, j2)
+        
+        dx = x2 - x1
+        dy = y2 - y1
+        dz = z2 - z1
+        dist = np.sqrt(dx**2 + dy**2 + dz**2)
+        return dist / muon_speed  # time in ns
+
+
+    ##############################################################################
+    # 5) Example: load or define your DataFrame with T-sum, T-diff, Q-sum columns
+    ##############################################################################
+    # Suppose your actual data has columns like:
+    # ['type', 'Q1_Q_sum_1', 'Q1_Q_sum_2', ..., 'T1_T_sum_1', ..., 'T2_T_diff_2', ...]
+
+    # 5a) Filter out the T_sum, T_diff, Q_sum columns via regex so we don’t parse e.g. "type"
+    T_sum_cols = [
+        col for col in data_case.columns
+        if re.match(r"^T[1-4]_T_sum_[1-4]$", col)
+    ]
+    T_diff_cols = [
+        col for col in data_case.columns
+        if re.match(r"^T[1-4]_T_diff_[1-4]$", col)
+    ]
+    Q_sum_cols = [
+        col for col in data_case.columns
+        if re.match(r"^Q[1-4]_Q_sum_[1-4]$", col)
+    ]
+
+    ##############################################################################
+    # 6) Build T_sum differences minus travel time
+    ##############################################################################
+    import math
+
+    T_sum_diffs = {}
+    # We do pairwise combinations of the T_sum columns
+    for col1, col2 in itertools.combinations(T_sum_cols, 2):
+        diff_series = data_case.apply(
+            # lambda row: row[col1] - row[col2] - compute_travel_time(row, col1, col2)
+            lambda row: row[col1] - row[col2]
+            if (row[col1] - row[col2]) != 0 else 0,  # Perform calculation only if difference is nonzero
+            axis=1
+        )
+        T_sum_diffs[f"{col1}-{col2}"] = diff_series
+
+    T_sum_diff_df = pd.DataFrame(T_sum_diffs)
+
+    ##############################################################################
+    # 7) Q_sum differences (no travel time needed)
+    ##############################################################################
+    Q_sum_diffs = {}
+    for col1, col2 in itertools.combinations(Q_sum_cols, 2):
+        Q_sum_diffs[f"{col1}-{col2}"] = data_case[col1] - data_case[col2]
+
+    Q_sum_diff_df = pd.DataFrame(Q_sum_diffs)
+
+    ##############################################################################
+    # 8) Optionally compute total sums
+    ##############################################################################
+    data_case["Total_T_sum"] = data_case[T_sum_cols].sum(axis=1)
+    data_case["Total_Q_sum"] = data_case[Q_sum_cols].sum(axis=1) if Q_sum_cols else np.nan
+
+    ##############################################################################
+    # 9) Merge differences + totals
+    ##############################################################################
+    data_analysis = pd.concat(
+        [T_sum_diff_df, Q_sum_diff_df, data_case[["Total_T_sum", "Total_Q_sum"]]],
+        axis=1
+    )
+
+    print("data_analysis:\n", data_analysis)
+
+    import matplotlib.pyplot as plt
+
+    # Get available T_sum and Q_sum difference columns
+    num_available_T = len(T_sum_diff_df.columns)
+    num_available_Q = len(Q_sum_diff_df.columns)
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import scipy.stats as stats
+    from scipy.optimize import curve_fit
+
+    # Define Gaussian function for fitting
+    def gaussian(x, mu, sigma, A):
+        return A * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+
+    # Get available T_sum and Q_sum difference columns
+    num_available_T = len(T_sum_diff_df.columns)
+    num_available_Q = len(Q_sum_diff_df.columns)
+
+    from scipy.stats import linregress
+
+    # Get available T_sum and Q_sum difference columns
+    num_available_T = len(T_sum_diff_df.columns)
+    num_available_Q = len(Q_sum_diff_df.columns)
+
+    # Ensure we have data to process
+    if num_available_T > 0 and num_available_Q > 0:
+        corrected_T_sum_diff = {}
+
+        for i in range(num_available_T):
+            col_t = list(T_sum_diff_df.columns)[i]
+            col_q = list(Q_sum_diff_df.columns)[i]
+
+            x = data_analysis[col_t]
+            y = data_analysis[col_q]
+
+            # Apply condition to filter out extreme values
+            cond = (abs(x) <= 5) & (abs(y) <= 100) & (y != 0) & (x != 0)
+            x = x[cond]
+            y = y[cond]
+
+            # Perform linear regression using scipy.stats.linregress
+            try:
+                # Perform linear regression using scipy.stats.linregress
+                slope, intercept, _, _, _ = linregress(y, x)
+                # Correct T_sum_diff values using the regression line only if the original value is not 0
+                corrected_x = np.where(x != 0, x - (slope * y + intercept), x)
+                corrected_T_sum_diff[col_t] = corrected_x
+            except Exception as e:
+                print(f"Skipping fit for {col_t} due to error: {e}")
+                corrected_T_sum_diff[col_t] = x  # Keep original values if fit fails
+            
+            if create_essential_plots or create_plots:
+                # Plot in a scatter plot the original, the fit and the corrected values
+                plt.figure(figsize=(6, 4))
+                plt.scatter(y, x, alpha=0.6, s=1, label="Original")
+                plt.scatter(y, slope * y + intercept, alpha=0.6, s=1, label="Fit")
+                plt.scatter(y, corrected_x, alpha=0.6, s=1, label="Corrected")
+                plt.xlabel(col_q)
+                plt.ylabel(col_t)
+                plt.xlim([-100, 100])
+                plt.ylim([-4, 4])
+                plt.title(f"{col_t} vs. {col_q}")
+                plt.legend()
+                
+                if save_plots:
+                    name_of_file = 'slew_corr'
+                    final_filename = f'{fig_idx}_{name_of_file}.png'
+                    fig_idx += 1
+                    
+                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                    plot_list.append(save_fig_path)
+                    plt.savefig(save_fig_path, format='png')
+                
+                if show_plots:
+                    plt.show()
+                plt.close()
+
+    else:
+        print("No valid combination of T_sum/Q_sum differences to plot.")
+
+
+    from scipy.stats import linregress
+    import itertools
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import re
+
+    # -----------------------------
+    # Step 1: Per-strip slewing correction
+    # -----------------------------
+    corrected_T_sum = {}
+
+    for col_t in T_sum_cols:
+        match = re.match(r"^(T[1-4])_T_sum_(\d+)$", col_t)
+        if not match:
+            continue
+        plane = match.group(1)
+        strip = match.group(2)
+        col_q = f"{plane.replace('T', 'Q')}_Q_sum_{strip}"
+
+        if col_q not in data_case.columns:
+            print(f"Missing Q_sum for {col_t} → skipping.")
+            continue
+
+        x = data_case[col_q]
+        y = data_case[col_t]
+
+        cond = (x != 0) & (y != 0) & np.isfinite(x) & np.isfinite(y)
+        x_fit = x[cond]
+        y_fit = y[cond]
+
+        if len(x_fit) < 100:
+            print(f"Insufficient points for {col_t} → skipping correction.")
+            corrected_T_sum[col_t] = data_case[col_t]
+            continue
+
+        try:
+            slope, intercept, _, _, _ = linregress(x_fit, y_fit)
+            corrected_y = data_case[col_t] - (slope * data_case[col_q] + intercept)
+            corrected_T_sum[col_t] = corrected_y
+        except Exception as e:
+            print(f"Fit failed for {col_t}: {e}")
+            corrected_T_sum[col_t] = data_case[col_t]
+
+    corrected_T_sum_df = pd.DataFrame(corrected_T_sum)
+
+    # -----------------------------
+    # Step 2: Compute corrected T_sum differences
+    # -----------------------------
+    corrected_T_sum_diff_df = {
+        f"{c1}-{c2}": corrected_T_sum_df[c1] - corrected_T_sum_df[c2]
+        for c1, c2 in itertools.combinations(corrected_T_sum_df.columns, 2)
+    }
+    corrected_T_sum_diff_df = pd.DataFrame(corrected_T_sum_diff_df)
+
+    # -----------------------------
+    # Step 3: Identify valid inter-layer combinations
+    # -----------------------------
+    valid_pairs = []
+    pattern = r"^(T[1-4])_T_sum_(\d+)-(T[1-4])_T_sum_(\d+)$"
+
+    for col_t in corrected_T_sum_diff_df.columns:
+        m = re.match(pattern, col_t)
+        if not m:
+            continue
+        plane1, _, plane2, _ = m.groups()
+        if plane1 != plane2:
+            col_q = col_t.replace("T_sum", "Q_sum").replace("T", "Q")
+            if col_q in Q_sum_diff_df.columns:
+                valid_pairs.append((col_t, col_q))
+
+    # -----------------------------
+    # Step 4: Plot first 5 valid inter-layer pairs
+    # -----------------------------
+    num_plots = min(5, len(valid_pairs))
+    if num_plots > 0:
+        fig, axes = plt.subplots(num_plots, 1, figsize=(6, 4 * num_plots))
+        if num_plots == 1:
+            axes = [axes]
+
+        for i in range(num_plots):
+            col_t, col_q = valid_pairs[i]
+
+            x = corrected_T_sum_diff_df[col_t]
+            y = Q_sum_diff_df[col_q]
+
+            cond = (abs(x) <= 5) & (abs(y) <= 100) & np.isfinite(x) & np.isfinite(y)
+            x = x[cond]
+            y = y[cond]
+
+            axes[i].scatter(y, x, alpha=0.6, s=1)
+            axes[i].set_xlabel(col_q)
+            axes[i].set_ylabel(col_t)
+            axes[i].set_title(f"{col_t} vs {col_q} (after per-strip slewing correction)")
+            axes[i].set_xlim(-100, 100)
+            axes[i].set_ylim(-4, 4)  
+
+        plt.tight_layout()
+
+        if save_plots:
+            name_of_file = 'slew_corr_first5_interlayer_scatter'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+
+        if show_plots:
+            plt.show()
+        plt.close()
+    else:
+        print("No valid inter-layer T_sum/Q_sum pairs found for plotting.")
 
 
 print("----------------------------------------------------------------------")
@@ -2920,7 +3337,6 @@ if time_calibration:
             
         i += 1
     
-    
     vectors = [
         T1s1_T3s1, T1s1_T3s2, T1s2_T3s1, T1s2_T3s2, T1s2_T3s3,
         T1s3_T3s2, T1s3_T3s3, T1s3_T3s4, T1s4_T3s3, T1s4_T3s4,
@@ -2946,7 +3362,6 @@ if time_calibration:
         T2s3_T3s2, T2s3_T3s3, T2s3_T3s4, T2s4_T3s3, T2s4_T3s4,
         T2s1_T3s3, T2s3_T3s1, T2s2_T3s4, T2s4_T3s2, T2s1_T3s4
     ]
-
 
     if create_plots:
         # Convert data to numpy arrays and filter
@@ -3024,10 +3439,12 @@ if time_calibration:
     Q1, Q3 = np.percentile(crt_values, [25, 75])
     crt_values = crt_values[crt_values <= 1]
     filtered_crt_values = crt_values[(crt_values >= Q1 - 1.5 * (Q3 - Q1)) & (crt_values <= Q3 + 1.5 * (Q3 - Q1))]
-    calibrated_data['CRT_avg'] = np.mean(filtered_crt_values)
+    
+    global_variables['CRT_avg'] = np.mean(filtered_crt_values)*1000
+    
     # print(f"CRT values: {crt_values}, Filtered: {filtered_crt_values}, Avg: {calibrated_data['CRT_avg'][0]:.4g}")
     print("---------------------------")
-    print(f"CRT Avg: {calibrated_data['CRT_avg'][0]*1000:.4g} ps")
+    print(f"CRT Avg: {global_variables['CRT_avg']:.4g} ps")
     print("---------------------------")
     
     # Create row and column indices
@@ -3346,6 +3763,70 @@ zeroed_percentage = num_zeroed / num_total
 
 if zeroed_percentage > 0:
     print(f"Zeroed {zeroed_percentage:.2%} of the values outside the time window.")
+
+global_variables['discarded_by_time_window_percentage'] = zeroed_percentage
+
+if create_essential_plots or create_plots:
+
+    t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
+    widths = np.linspace(1, 10, 40)  # Scan range of window widths in ns
+
+    counts_per_width = []
+    counts_per_width_dev = []
+
+    for w in widths:
+        count_in_window = []
+
+        for row in t_sum_data:
+            row_no_zeros = row[row != 0]
+            if len(row_no_zeros) == 0:
+                count_in_window.append(0)
+                continue
+
+            stat = np.mean(row_no_zeros)  # or np.median(row_no_zeros)
+            lower = stat - w / 2
+            upper = stat + w / 2
+            n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
+            count_in_window.append(n_in_window)
+
+        counts_per_width.append(np.mean(count_in_window))
+        counts_per_width_dev.append(np.std(count_in_window))
+
+    counts_per_width = np.array(counts_per_width)
+    counts_per_width_dev = np.array(counts_per_width_dev)
+    counts_per_width_norm = counts_per_width / np.max(counts_per_width)
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
+    # ax.fill_between(
+    #     widths,
+    #     (counts_per_width - counts_per_width_dev) / np.max(counts_per_width),
+    #     (counts_per_width + counts_per_width_dev) / np.max(counts_per_width),
+    #     alpha=0.2,
+    #     label='±1σ band'
+    # )
+    ax.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
+    ax.set_xlabel("Window width (ns)")
+    ax.set_ylabel("Normalized average # of T_sum values in window")
+    ax.set_title("Fraction of hits within stat-centered window vs width")
+    ax.grid(True)
+    ax.legend()
+    plt.tight_layout()
+
+    if save_plots:
+        name_of_file = 'stat_window_accumulation'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots:
+        plt.show()
+    plt.close()
+
 
 
 print("----------------------------------------------------------------------")
@@ -4397,7 +4878,7 @@ if create_plots:
     plt.grid(True)
     plt.show()
     
-    print("Alternative fitting done and saving...")
+    print("Alternative angle fitting done and saving...")
 
     if save_plots:
         name_of_file = 'alternative_fitting_2_results_hexbin_combination_projections'
@@ -4412,6 +4893,101 @@ if create_plots:
     if show_plots:
         plt.show()
 
+    plt.close()
+
+
+print("----------------------------------------------------------------------")
+print("----------------- Alternative slowness fitting -----------------------")
+print("----------------------------------------------------------------------")
+
+
+# Initialize results
+alt_fit_slow_results = ['alt_slowness']
+alt_slow_new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=alt_fit_slow_results)
+calibrated_data = pd.concat([calibrated_data, alt_slow_new_columns_df], axis=1)
+
+# Loop over all tracks
+for idx, track in calibrated_data.iterrows():
+    planes_to_iterate = []
+    
+    # Identify valid planes with charge
+    for i_plane in range(nplan):
+        charge_plane = getattr(track, f'T{i_plane + 1}_Q_sum_final')
+        if charge_plane > 4:
+            planes_to_iterate.append(i_plane + 1)
+
+    planes_to_iterate = np.array(planes_to_iterate)
+    
+    if len(planes_to_iterate) >= 2:  # Only fit if 2 or more points exist
+        tsum = []
+        z = []
+        
+        for iplane in planes_to_iterate:
+            t_s = getattr(track, f'T{iplane}_T_sum_final')
+            tsum.append(t_s)
+            z.append(z_positions[iplane - 1])
+
+        theta = getattr(track, f'alt_theta')
+        phi = getattr(track, f'alt_phi')
+        
+        # Now calculate the slowness using the difference of the time sums and the angle subtended by the trace
+        
+        # Convert to arrays
+        tsum = np.array(tsum)
+        z = np.array(z)
+
+        # Projected track path length between planes along the track direction
+        # dz = z - z[0]
+        # dz_proj = dz / np.cos(theta)
+        # slope, intercept = np.polyfit(dz_proj, tsum - tsum[0], deg=1)
+
+        # Step 1: Build track direction vector
+        v_dir = np.array([
+            np.sin(theta) * np.cos(phi),
+            np.sin(theta) * np.sin(phi),
+            np.cos(theta)
+        ])
+
+        # Step 2: Build hit positions in 3D (only z is known, assume y=0, x=0)
+        # You can adapt this if you know x/y per plane
+        positions = np.stack([np.zeros_like(z), np.zeros_like(z), z], axis=1)
+
+        # Step 3: Project each position onto the direction vector to get path length
+        proj_dist = positions @ v_dir  # scalar projection: s = r · v̂
+
+        # Step 4: Fit T_sum vs. projected distance
+        slope, intercept = np.polyfit(proj_dist - proj_dist[0], tsum - tsum[0], deg=1)
+        calibrated_data.at[idx, 'alt_slowness'] = slope
+    
+print("Alternative slowness fitting done and saving...")
+    
+if create_essential_plots or create_plots:
+    # Histogram the slowness calculated
+    plt.figure(figsize=(8, 6))
+    v = calibrated_data['alt_slowness'].replace(0, np.nan).dropna()
+    cond = (v > slowness_filter_left) & (v < slowness_filter_right)
+    v = v[cond]
+    plt.hist(v, bins=200, alpha=0.7)
+    plt.xlabel('Slowness (ns/mm)')
+    plt.ylabel('Counts')
+    plt.title('Histogram of Slowness')
+    plt.grid(True)
+    plt.xlim(slowness_filter_left, slowness_filter_right)  # Adjust x-axis limits as needed
+    # plt.ylim(slowness_filter_left, slowness_filter_right)  # Adjust y-axis limits as needed
+    plt.tight_layout()
+    
+    if save_plots:
+        name_of_file = 'alt_slowness'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
     plt.close()
 
 # -----------------------------------------------------------------------------------
@@ -5108,6 +5684,7 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
         'charge_3': [0, 250],
         'charge_4': [0, 250],
         's': [slowness_filter_left, slowness_filter_right],
+        'alt_slowness': [slowness_filter_left, slowness_filter_right],
         'th_chi': [0, 0.03]
     }
     
@@ -5328,6 +5905,19 @@ df_cases_2 = [
 #         plot_list
 #     )
 
+for filters, title in df_cases_2:
+    fig_idx = plot_hexbin_matrix(
+        df_plot_ancillary,
+        ['alt_slowness', 's'],
+        filters,
+        title,
+        save_plots,
+        show_plots,
+        base_directories,
+        fig_idx,
+        plot_list
+    )
+
 # ------------------------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------
@@ -5468,7 +6058,10 @@ if chi_histo and create_plots:
 
 
 print("-----------------------------")
-print(f"Data purity is {len(final_data) / raw_data_len*100:.1f}%")
+data_purity = len(final_data) / raw_data_len*100
+print(f"Data purity is {data_purity:.1f}%")
+
+global_variables['purity_of_data_percentage'] = data_purity
 
 # ------------------------------------------------------------------------------------------------
 # Statistical comprobation ----------------------------------------------------
@@ -5598,6 +6191,14 @@ if create_plots:
 print("----------------------------------------------------------------------")
 print("-------------------------- Save and finish ---------------------------")
 print("----------------------------------------------------------------------")
+
+# Put the global_variables as columns in the final_data dataframe
+for key, value in global_variables.items():
+    if key not in final_data.columns:
+        print(f"Adding {key} to the dataframe.")
+        final_data[key] = value
+    else:
+        print(f"Warning: Column '{key}' already exists in the DataFrame. Skipping addition.")
 
 # Replace the TimTrack fitting angle results with the alternative ones
 if alternative_fitting:
@@ -5744,4 +6345,4 @@ print(f"Time taken for the whole execution: {time_taken:.2f} minutes")
 
 print("----------------------------------------------------------------------")
 print("------------------- Finished list_events creation --------------------")
-print("----------------------------------------------------------------------")
+print("----------------------------------------------------------------------\n")

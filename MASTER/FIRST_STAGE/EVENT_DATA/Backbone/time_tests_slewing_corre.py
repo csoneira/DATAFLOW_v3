@@ -258,7 +258,6 @@ plt.show()
 
 # %%
 
-
 plt.figure(figsize=(12, 6))
 
 x_limit = 500  # Pre-filtering applied before plotting
@@ -322,7 +321,6 @@ data_case["Total_Q_sum"] = data_case[Q_sum_cols].sum(axis=1)
 data_analysis = pd.concat([T_sum_diff_df, Q_sum_diff_df, data_case[["Total_T_sum", "Total_Q_sum"]]], axis=1)
 
 # %%
-
 
 # Determine the actual number of available T_sum and Q_sum differences
 num_available_T = len(T_sum_diff_df.columns)
