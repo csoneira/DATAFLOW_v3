@@ -3,7 +3,7 @@
 
 stratos_save = True
 
-fast_mode = True # Do not iterate TimTrack, neither save figures, etc.
+fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
 last_file_test = False
 
@@ -168,6 +168,8 @@ if files:  # Check if the directory contains any files
 input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
+    print("Searching input configuration file:", input_file_config_path)
+    
     # It is a csv
     input_file = pd.read_csv(input_file_config_path, skiprows=1)
     
@@ -201,7 +203,7 @@ else:
 
 # Plots and savings -------------------------
 crontab_execution = True
-create_plots = False
+create_plots = True
 create_essential_plots = True
 save_plots = True
 show_plots = False
