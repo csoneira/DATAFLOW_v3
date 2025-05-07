@@ -173,12 +173,23 @@ else:
 
 force_replacement = True  # Creates a new datafile even if there is already one that looks complete
 show_plots = False
-high_mid_limit_angle = 15
+caye_high_mid_limit_angle = 15
+
+hans_high_mid_limit_angle = 10
+hans_low_mid_limit_angle = 40
 
 # crosstalk_threshold = 1.2
 # regions = ['High', 'N', 'E', 'S', 'W']
 # test_filename = 'list_events_2024.12.16_23.27.54.txt'
 
+event_acc_global_variables = {
+    "poisson_rejected": 0,
+    "hans_reg_high_to_mid": hans_high_mid_limit_angle,
+    "hans_reg_mid_to_low": hans_low_mid_limit_angle,
+    "caye_reg_high_to_mid": caye_high_mid_limit_angle,
+}
+
+event_acc_global_variables["poisson_rejected"] = 0
 
 # -----------------------------------------------------------------------------
 # Functions -------------------------------------------------------------------
@@ -187,9 +198,9 @@ high_mid_limit_angle = 15
 def classify_region(row):
     phi = row['phi'] * 180 / np.pi  + row['phi_north'] # Convert phi to degrees
     theta = row['theta'] * 180 / np.pi
-    if 0 <= theta < high_mid_limit_angle:
+    if 0 <= theta < caye_high_mid_limit_angle:
         return 'High'
-    elif high_mid_limit_angle <= theta <= 90:
+    elif caye_high_mid_limit_angle <= theta <= 90:
         if -45 <= phi < 45:
             return 'N'
         elif 45 <= phi < 135:
@@ -212,9 +223,9 @@ def classify_region_hans(row):
     if int(row['type']) <= 100:
         return 'None'
     
-    if 0 <= theta < 10:
+    if 0 <= theta < hans_high_mid_limit_angle:
         return 'V'
-    elif 10 <= theta <= 40:
+    elif hans_high_mid_limit_angle <= theta <= hans_low_mid_limit_angle:
         if -22.5 <= phi < 22.5:
             return 'N.M'
         elif 22.5 <= phi < 67.5:
@@ -417,8 +428,8 @@ if exists_input_file:
     # print(f"Start date type: {type(start_time)}") # Start date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
     # print(f"End date type: {type(end_time)}") # End date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
 
-    input_file["start"] = pd.to_datetime(input_file["start"])
-    input_file["end"] = pd.to_datetime(input_file["end"])
+    input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
+    input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
 
     # Ensure no NaN in 'end' column
     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
@@ -517,7 +528,7 @@ print("----------------------------------------------------------------------")
 # Polya fit -----------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
-polya_fit = False
+polya_fit = True
 if polya_fit:
     print("Polya fit. WIP.")
 
@@ -1697,7 +1708,6 @@ if multiplicity_calculations:
     if show_plots: plt.show()
     plt.close()
 
-
     import matplotlib.pyplot as plt
     import numpy as np
     from scipy.optimize import nnls
@@ -1785,58 +1795,6 @@ if multiplicity_calculations:
         "M3": np.zeros(number_of_particles_bound_up),
         "M4": np.zeros(number_of_particles_bound_up)
     }
-
-    # ------------------------------------------------------------------------------------------------------
-
-    # for i, (detection_type, df_group) in enumerate(zip(detection_types, df_data)):
-    #     ax_hist = axes[i, 0]   # Left column: histograms and fit
-    #     ax_scatter = axes[i, 1]  # Right column: scatter plot
-
-    #     for j, (df_in, color, module) in enumerate(zip(df_group, module_colors, ['M1', 'M2', 'M3', 'M4'])):
-    #         # Real data histogram
-            
-    #         df_in = np.asarray(df_in)
-    #         df_in = df_in[np.isfinite(df_in)]  # Remove NaNs and infs
-            
-    #         counts_df, _ = np.histogram(df_in, bins=bin_edges, density=False)
-    #         n_events = len(df_in)
-            
-    #         # Plot histogram and model
-    #         ax_hist.plot(bin_centers, counts_df, color=color, linestyle='-', label=f'{module} data')
-            
-    #     # Format histogram panel
-    #     ax_hist.set_title(f"{detection_type}")
-    #     ax_hist.set_ylabel("Density")
-    #     ax_hist.grid(True, alpha=0.5)
-    #     ax_hist.legend(fontsize=8)
-
-    #     # Format scatter panel
-    #     ax_scatter.set_xscale("log")
-    #     ax_scatter.set_yscale("log")
-    #     ax_scatter.grid(True, alpha=0.5)
-    #     ax_scatter.set_aspect('equal', 'box')
-    #     ax_scatter.set_title("Model vs Data")
-    #     ax_scatter.set_ylabel("Freq. (measured)")
-
-    # # Final X labels
-    # axes[-1, 0].set_xlabel("Charge (fC)")
-    # axes[-1, 1].set_xlabel("Freq. (fitted model)")
-
-    # # Layout & save
-    # plt.suptitle(f"Charge Distributions and Scatter Model Fit (1–{number_of_particles_bound_up} Singles)", fontsize=16)
-    # plt.tight_layout(rect=[0, 0, 1, 0.96])
-    # figure_name = f"fit_and_scatter_sum_of_1_to_{number_of_particles_bound_up}_singles"
-    # if save_plots:
-    #     name_of_file = figure_name
-    #     final_filename = f'{fig_idx}_{name_of_file}.png'
-    #     fig_idx += 1
-    #     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    #     plot_list.append(save_fig_path)
-    #     plt.savefig(save_fig_path, format='png')
-    # if show_plots: plt.show()
-    # plt.close()
-
-    # ------------------------------------------------------------------------------------------------------
 
 
     for i, (detection_type, df_group) in enumerate(zip(detection_types, df_data)):
@@ -1955,7 +1913,7 @@ if multiplicity_calculations:
         ax.grid(True, alpha=0.4)
 
     # Final formatting
-    axes[-1].set_xlabel("Summed singles components (S1 to S6)")
+    axes[-1].set_xlabel("Summed singles components (S1 to Sn)")
     plt.tight_layout()
     figure_name = "coefficients_barplots_per_type"
     if save_plots:
@@ -2010,10 +1968,20 @@ if multiplicity_calculations:
     plt.close()
 
 
+# Assume coeff_tables_normalized is your dictionary (as printed above)
 
+# Filter out 'Total' and stack the rest into one DataFrame
+df_mult_fit = (
+    pd.concat(
+        {k: v for k, v in coeff_tables_normalized.items() if k != 'Total'},
+        names=["detection_type", "multiplicity"]
+    )
+    .reset_index()
+    .rename(columns={"level_1": "multiplicity"})
+)
 
-
-
+# Optional: display or save
+# print(df_mult_fit)
 
 
 # ---------------------------------------------------------------------------
@@ -2464,57 +2432,52 @@ if show_plots:
 plt.close()
 
 # --- 8. Save fit results ---
-fit_df = pd.DataFrame(fit_results)
-
-print(fit_df.columns)
+df_cross_fit = pd.DataFrame(fit_results)
+print(df_cross_fit)
 
 
 # ---------------------------------------------------------------------------
 # Spectral index and Georgy's efficiency calculations -----------------------
 # ---------------------------------------------------------------------------
 
-a = 1/0
+georgys = False
+if georgys:
 
-import matplotlib.pyplot as plt
+    # Drop NaN values from theta
+    theta_clean = df["theta"].dropna()
 
-# Drop NaN values from theta
-theta_clean = df["theta"].dropna()
+    # Define intervals
+    in_0_pi2 = ((theta_clean > 0) & (theta_clean < np.pi / 2)).sum()
+    in_pi2_pi = ((theta_clean > np.pi / 2) & (theta_clean < np.pi)).sum()
+    total = len(theta_clean)
 
-# Define intervals
-in_0_pi2 = ((theta_clean > 0) & (theta_clean < np.pi / 2)).sum()
-in_pi2_pi = ((theta_clean > np.pi / 2) & (theta_clean < np.pi)).sum()
-total = len(theta_clean)
+    # Compute percentages
+    pct_0_pi2 = 100 * in_0_pi2 / total
+    pct_pi2_pi = 100 * in_pi2_pi / total
 
-# Compute percentages
-pct_0_pi2 = 100 * in_0_pi2 / total
-pct_pi2_pi = 100 * in_pi2_pi / total
+    print(f"θ ∈ (0, π/2):  {pct_0_pi2:.2f}% of events")
+    print(f"θ ∈ (π/2, π):  {pct_pi2_pi:.2f}% of events")
 
-print(f"θ ∈ (0, π/2):  {pct_0_pi2:.2f}% of events")
-print(f"θ ∈ (π/2, π):  {pct_pi2_pi:.2f}% of events")
-
-plt.figure(figsize=(8, 5))
-plt.hist(df["theta"].dropna(), bins=200, alpha=0.7)
-plt.xlabel("Theta (rad)")
-plt.ylabel("Counts")
-plt.title("Histogram of θ")
-plt.grid(True)
-plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
-plt.tight_layout()
-if save_plots:
-    name_of_file = 'theta'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-if show_plots: plt.show()
-plt.close()
-
-a = 1/0
+    plt.figure(figsize=(8, 5))
+    plt.hist(df["theta"].dropna(), bins=200, alpha=0.7)
+    plt.xlabel("Theta (rad)")
+    plt.ylabel("Counts")
+    plt.title("Histogram of θ")
+    plt.grid(True)
+    plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
+    plt.tight_layout()
+    if save_plots:
+        name_of_file = 'theta'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots: plt.show()
+    plt.close()
 
 print("\n\n\n")
 print(df.columns)
-a = 1/0
 
 
 # ---------------------------------------------------------------------------
@@ -2911,8 +2874,6 @@ if show_plots:
     plt.show()
 plt.close()
 
-a = 1/0
-
 
 print("------------------------- Aggregation and Poisson filtering ----------------------------")
 
@@ -3067,6 +3028,10 @@ if remove_outliers:
         plt.close()
 
     # Create a resampled_df with the new one
+    
+    rejected_percentage = ((below_count + above_count) / len(df)) * 100
+    event_acc_global_variables["poisson_rejected"] = rejected_percentage
+    
     resampled_df = new_resampled_df
 else:
     resampled_df = df.resample('1min', on='Time').agg(agg_dict)
@@ -3113,14 +3078,6 @@ if 'type_<lambda>' in resampled_df.columns:
         resampled_df[f'type_{type_key}'] = type_dict_col.apply(lambda x: x.get(type_key, 0) if isinstance(x, dict) else 0)
     resampled_df.drop(columns=['type_<lambda>'], inplace=True)
 
-# print("Test--------------------------------------------")
-# if 'new_type_<lambda>' in resampled_df.columns:
-#     type_dict_col = resampled_df['new_type_<lambda>']
-#     for type_key in df['new_type'].unique():
-#         # print(type_key)
-#         resampled_df[f'new_type_{type_key}'] = type_dict_col.apply(lambda x: x.get(type_key, 0) if isinstance(x, dict) else 0)
-#     resampled_df.drop(columns=['new_type_<lambda>'], inplace=True)
-
 
 print("------------------------- More derived metrics ----------------------------")
 
@@ -3131,7 +3088,6 @@ for i in range(1, 5):
         .fillna(0) * 100
     )
 
-
 # -----------------------------------------------------------------------------
 # Saving the file -------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -3140,7 +3096,20 @@ print("----------------------------------------------------------------------")
 print("-------------------------- Saving and finishing ---------------------------")
 print("----------------------------------------------------------------------")
 
+
+# Polya fitting values
+print(df_polya_fit)
+
+# Crosstalk fitting
+print(df_cross_fit)
+
+# Multiplicity fitting
+print(df_mult_fit)
+
+
 print("-------------------------- Saving the file ---------------------------")
+
+resampled_df.reset_index(inplace=True)
 
 # Show the head and tail
 print(resampled_df.head())
@@ -3149,7 +3118,42 @@ print(resampled_df.tail())
 # Print the columns
 print(resampled_df.columns)
 
-resampled_df.reset_index(inplace=True)
+
+# -------------------------------------------------------------------
+
+import pandas as pd
+
+# --- Flatten df_polya_fit ---
+df_polya_flat = df_polya_fit.set_index('module').add_prefix('polya_')  # polya_module_1 → polya_theta, etc.
+
+# --- Flatten df_cross_fit ---
+df_cross_flat = df_cross_fit.set_index('key').add_prefix('cross_')  # cross_M1_s1_x0, cross_M1_s1_k
+
+# --- Flatten df_mult_fit ---
+df_mult_long = df_mult_fit.melt(id_vars=['detection_type', 'multiplicity'], var_name='module', value_name='value')
+df_mult_long['colname'] = (
+    df_mult_long['detection_type'] + '_' +
+    df_mult_long['multiplicity'] + '_' +
+    df_mult_long['module']
+)
+df_mult_flat = df_mult_long.set_index('colname')['value'].to_frame().T.add_prefix('mult_')  # single row
+
+# --- Combine all into one row DataFrame ---
+flat_polya = df_polya_flat.stack().to_frame().T
+flat_cross = df_cross_flat.stack().to_frame().T
+flat_mult = df_mult_flat
+
+flat_all = pd.concat([flat_polya, flat_cross, flat_mult], axis=1)
+
+# --- Repeat and merge with resampled_df ---
+flat_all_repeated = pd.concat([flat_all] * len(resampled_df), ignore_index=True)
+resampled_df = pd.concat([resampled_df.reset_index(drop=True), flat_all_repeated], axis=1)
+
+print("\n\n-------------------------------------------------------------------------")
+# Print the columns of resampled_df
+print(resampled_df.columns.to_list())
+print(resampled_df)
+
 resampled_df = resampled_df.applymap(round_to_significant_digits)
 
 # Save the newly created file to ACC_EVENTS_DIRECTORY --------------------------

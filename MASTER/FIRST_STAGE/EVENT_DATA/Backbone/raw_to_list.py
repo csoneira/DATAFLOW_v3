@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-a = 1/0
+# a = 1/0
 
 stratos_save = True
 
@@ -1552,8 +1552,8 @@ save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace(
 print("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH")
 if exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
-    input_file["start"] = pd.to_datetime(input_file["start"])
-    input_file["end"] = pd.to_datetime(input_file["end"])
+    input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
+    input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
     
     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
     
