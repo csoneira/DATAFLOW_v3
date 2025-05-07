@@ -440,7 +440,7 @@ if exists_input_file:
             }
 
             # Print df columns
-            print(df.columns)
+            # print(df.columns)
 
             # Assign values based on corresponding time range
             for timestamp in df["Time"]:
@@ -516,6 +516,10 @@ else:
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
+print("\n\n\n")
+print(df.columns)
+# a = 1/0
+
 print("----------------------------------------------------------------------")
 print("----------------------- Starting the analysis ------------------------")
 print("----------------------------------------------------------------------")
@@ -533,7 +537,7 @@ print("Cleaning the type column...")
 df['type'] = df['type'].apply(clean_type_column)
 
 
-print("------------------------- Derived metrics ----------------------------")
+print("--------------------- Derived metrics pre-aggregation ------------------------")
 
 # Derived metrics
 print("Derived metrics...")
@@ -546,6 +550,164 @@ for i in range(1, 5):
 # ADD THE TOTAL CHARGE OF THE EVENT
 for i in range(1, 5):
     df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
+
+
+for i in range(1, 5):
+    cols = [f"Q_M{i}s{j}" for j in range(1, 5)]
+    q = df[cols].copy()
+    
+    # Basic counts
+    df[f"cluster_size_{i}"] = (q > 0).sum(axis=1)
+    df[f"cluster_charge_{i}"] = q.sum(axis=1)
+    df[f"cluster_max_q_{i}"] = q.max(axis=1)
+    df[f"cluster_q_ratio_{i}"] = df[f"cluster_max_q_{i}"] / df[f"cluster_charge_{i}"].replace(0, np.nan)
+
+    # Charge-weighted barycenter
+    strip_positions = np.array([1, 2, 3, 4])
+    weighted_sum = (q * strip_positions).sum(axis=1)
+    df[f"cluster_barycenter_{i}"] = weighted_sum / df[f"cluster_charge_{i}"].replace(0, np.nan)
+
+    # Charge-weighted RMS
+    barycenter = df[f"cluster_barycenter_{i}"]
+    squared_diff = (strip_positions.reshape(1, -1) - barycenter.values[:, None]) ** 2
+    weighted_squared = q.values * squared_diff
+    rms = np.sqrt(weighted_squared.sum(axis=1) / df[f"cluster_charge_{i}"].replace(0, np.nan))
+    df[f"cluster_rms_{i}"] = rms
+
+# Aggregate over all modules (i = 1 to 4)
+cluster_size_cols = [f"cluster_size_{i}" for i in range(1, 5)]
+cluster_charge_cols = [f"cluster_charge_{i}" for i in range(1, 5)]
+cluster_rms_cols = [f"cluster_rms_{i}" for i in range(1, 5)]
+cluster_barycenter_cols = [f"cluster_barycenter_{i}" for i in range(1, 5)]
+
+# Mean cluster size
+df["mean_cluster_size"] = df[cluster_size_cols].mean(axis=1)
+
+# Mean cluster size weighted by module charge
+charge_sum = df[cluster_charge_cols].sum(axis=1).replace(0, np.nan)
+weighted_cluster_size = (df[cluster_size_cols].values * df[cluster_charge_cols].values).sum(axis=1)
+df["mean_cluster_size_weighted_q"] = weighted_cluster_size / charge_sum
+
+# Total cluster charge
+df["total_cluster_charge"] = df[cluster_charge_cols].sum(axis=1)
+
+# Maximum RMS
+df["max_cluster_rms"] = df[cluster_rms_cols].max(axis=1)
+
+# Minimum barycenter (across modules)
+df["min_cluster_barycenter"] = df[cluster_barycenter_cols].min(axis=1)
+
+# Charge-weighted global barycenter across modules
+numerator = np.zeros(len(df))
+for i in range(1, 5):
+    q = df[f"cluster_charge_{i}"]
+    bc = df[f"cluster_barycenter_{i}"]
+    numerator += q * bc
+
+df["weighted_global_barycenter"] = numerator / charge_sum
+
+print(df.columns)
+
+# --- Collect relevant column groups ---
+per_module_cols = []
+for i in range(1, 5):
+    per_module_cols += [
+        f"cluster_size_{i}",
+        f"cluster_charge_{i}",
+        # f"cluster_max_q_{i}",
+        f"cluster_q_ratio_{i}",
+        f"cluster_barycenter_{i}",
+        f"cluster_rms_{i}",
+        # f"Q_{i}",
+        # f"avalanche_{i}",
+        # f"streamer_{i}",
+    ]
+
+event_level_cols = [
+    # "Q_event",
+    "mean_cluster_size",
+    "mean_cluster_size_weighted_q",
+    "total_cluster_charge",
+    "max_cluster_rms",
+    "min_cluster_barycenter",
+    "weighted_global_barycenter",
+]
+
+all_metrics = per_module_cols
+all_metrics = sorted(all_metrics)
+
+# --- Plot histograms ---
+ncols = 4
+nrows = (len(all_metrics) + ncols - 1) // ncols
+
+fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
+axes = axes.flatten()
+
+for i, col in enumerate(all_metrics):
+    if col in df.columns:
+        ax = axes[i]
+        data = df[col]
+        data = data[np.isfinite(data)]  # drop NaNs
+        ax.hist(data, bins=50, alpha=0.7)
+        ax.set_title(col.replace('_', ' '))
+        ax.set_xlabel('Value')
+        ax.set_ylabel('Entries')
+
+# Hide unused subplots
+for j in range(i+1, len(axes)):
+    axes[j].axis('off')
+
+plt.tight_layout()
+plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
+if save_plots:
+    name_of_file = 'charge_statistics_per_module'
+    final_filename = f'{fig_idx}_{name_of_file}.png'
+    fig_idx += 1
+    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    plot_list.append(save_fig_path)
+    plt.savefig(save_fig_path, format='png')
+if show_plots: plt.show()
+plt.close()
+
+
+all_metrics = event_level_cols
+all_metrics = sorted(all_metrics)
+
+# --- Plot histograms ---
+ncols = 4
+nrows = (len(all_metrics) + ncols - 1) // ncols
+
+fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
+axes = axes.flatten()
+
+for i, col in enumerate(all_metrics):
+    if col in df.columns:
+        ax = axes[i]
+        data = df[col]
+        data = data[np.isfinite(data)]  # drop NaNs
+        ax.hist(data, bins=50, alpha=0.7)
+        ax.set_title(col.replace('_', ' '))
+        ax.set_xlabel('Value')
+        ax.set_ylabel('Entries')
+
+# Hide unused subplots
+for j in range(i+1, len(axes)):
+    axes[j].axis('off')
+
+plt.tight_layout()
+plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
+if save_plots:
+    name_of_file = 'charge_statistics_global'
+    final_filename = f'{fig_idx}_{name_of_file}.png'
+    fig_idx += 1
+    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    plot_list.append(save_fig_path)
+    plt.savefig(save_fig_path, format='png')
+if show_plots: plt.show()
+plt.close()
+
+
+a = 1/0
 
 # Make a column which is the a string with the number of planes that have a charge that is not streamer
 # column = []
@@ -563,6 +725,8 @@ for i in range(1, 5):
 # Work for the future ------------------------------------------------------------------------------
 # df['topology_0'] = df.apply(lambda row: sum(row[f'Q_{i}'] > 0 for i in range(1, 5)), axis=1)
 # df[f'topology_{crosstalk_threshold}'] = df.apply(lambda row: sum(row[f'Q_{i}'] > crosstalk_threshold for i in range(1, 5)), axis=1)
+
+print("------------------------- Aggregation and Poisson filtering ----------------------------")
 
 df['events'] = 1
 
@@ -593,21 +757,14 @@ for i in range(1, 5):
         f'streamer_{i}': 'sum'
     })
 
-
-print("------------------------- Poisson filtering ----------------------------")
-
 # Fit a Poisson distribution to the 1-second data and removed outliers based on the Poisson -------------------------
 if remove_outliers:
     print("Resampling for outlier removal...")
-
     # Resampling
     resampled_df_test = df.resample('1min', on='Time').agg(agg_dict)
-
     # TEST 1s rates -------------------------------------------------------
     resampled_second_df = df.resample('1s', on='Time').agg(agg_dict)
-
     print("Resampled.")
-
     # Plot the 1 min and 1 s rates ----------------------------------------
     if create_plots:
         fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
@@ -728,6 +885,8 @@ else:
 
 # ----------------------------------------------------------------------
 
+print("------------------------- Some renaming ----------------------------")
+
 resampled_df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in resampled_df.columns.values]
 
 rename_map = {
@@ -745,6 +904,9 @@ resampled_df.rename(columns=lambda x: x.replace('custom_mean', 'mean').replace('
 # Replace sum by nothing
 resampled_df.rename(columns=lambda x: x.replace('_sum', ''), inplace=True)
 
+
+print("------------------------- Column aggregation ----------------------------")
+
 # Region-specific count aggregation
 region_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region'])
 resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
@@ -752,6 +914,9 @@ resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
 # Hans' region-specific count aggregation
 region_hans_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region_hans'])
 resampled_df = resampled_df.join(region_hans_counts, how='left').fillna(0)
+
+
+print("------------------------- Counting types ----------------------------")
 
 # Split 'type_<lambda>' dictionary into separate columns for each type
 if 'type_<lambda>' in resampled_df.columns:
@@ -768,6 +933,9 @@ if 'type_<lambda>' in resampled_df.columns:
 #         resampled_df[f'new_type_{type_key}'] = type_dict_col.apply(lambda x: x.get(type_key, 0) if isinstance(x, dict) else 0)
 #     resampled_df.drop(columns=['new_type_<lambda>'], inplace=True)
 
+
+print("------------------------- More derived metrics ----------------------------")
+
 # Streamer percentage
 for i in range(1, 5):
     resampled_df[f"streamer_percent_{i}"] = (
@@ -779,6 +947,12 @@ for i in range(1, 5):
 # -----------------------------------------------------------------------------
 # Saving the file -------------------------------------------------------------
 # -----------------------------------------------------------------------------
+
+print("----------------------------------------------------------------------")
+print("-------------------------- Saving and finishing ---------------------------")
+print("----------------------------------------------------------------------")
+
+print("-------------------------- Saving the file ---------------------------")
 
 # Show the head and tail
 print(resampled_df.head())
@@ -799,6 +973,8 @@ print("Moving file to COMPLETED directory...")
 shutil.move(file_path, completed_file_path)
 print(f"File moved to: {completed_file_path}")
 
+
+print("-------------------------- Saving the PDF ---------------------------")
 
 # Create and save the PDF -----------------------------------------------------
 if create_pdf:
@@ -826,10 +1002,7 @@ if create_pdf:
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
 
-
 # Erase the figure_directory
 if os.path.exists(figure_directory):
     print("Removing figure directory...")
     os.rmdir(figure_directory)
-
-

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+a = 1/0
+
 stratos_save = True
 
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
@@ -3719,7 +3721,7 @@ global_variables['discarded_by_time_window_percentage'] = zeroed_percentage
 if create_essential_plots or create_plots:
 
     t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
-    widths = np.linspace(1, 40, 200)  # Scan range of window widths in ns
+    widths = np.linspace(1, 80, 200)  # Scan range of window widths in ns
 
     counts_per_width = []
     counts_per_width_dev = []
