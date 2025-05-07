@@ -176,7 +176,6 @@ show_plots = False
 high_mid_limit_angle = 15
 
 # crosstalk_threshold = 1.2
-
 # regions = ['High', 'N', 'E', 'S', 'W']
 # test_filename = 'list_events_2024.12.16_23.27.54.txt'
 
@@ -362,7 +361,6 @@ else:
 # This is for all cases
 file_path = processing_file_path
 
-
 # Input file
 df = pd.read_csv(file_path, sep=',')
 
@@ -511,9 +509,18 @@ else:
     
 # ---------------------------------------------------------------------------------------------------------------------
 
-# Start the analysis --------------------------------------------------------
 
-print("Starting the analysis")
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Start the analysis --------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+print("----------------------------------------------------------------------")
+print("----------------------- Starting the analysis ------------------------")
+print("----------------------------------------------------------------------")
+
+print("------------------------- Regions asigning ---------------------------")
 
 print("Region assigning...")
 df['region'] = df.apply(classify_region, axis=1)
@@ -524,6 +531,9 @@ df['region_hans'] = df.apply(classify_region_hans, axis=1)
 # Clean type column
 print("Cleaning the type column...")
 df['type'] = df['type'].apply(clean_type_column)
+
+
+print("------------------------- Derived metrics ----------------------------")
 
 # Derived metrics
 print("Derived metrics...")
@@ -584,6 +594,7 @@ for i in range(1, 5):
     })
 
 
+print("------------------------- Poisson filtering ----------------------------")
 
 # Fit a Poisson distribution to the 1-second data and removed outliers based on the Poisson -------------------------
 if remove_outliers:
@@ -623,7 +634,6 @@ if remove_outliers:
         plt.close()
 
     print("Removing outliers...")
-          
     # Data: Replace with your actual data
     data = resampled_second_df['events']
 
@@ -645,70 +655,51 @@ if remove_outliers:
 
     # Overlay the fitted Poisson distribution
     if create_plots:
-        
         # Generate Poisson probabilities for the range of your data
         x = np.arange(0, np.max(data) + 1)  # Range of event counts
         poisson_probs = poisson.pmf(x, lambda_fit) * len(data)  # Scale by sample size
 
-        # Plot histogram of the data
         plt.hist(data, bins=100, alpha=0.7, label='Observed data', color='blue', density=False)
-
         plt.plot(x, poisson_probs, 'r-', lw=2, label=f'Poisson Fit ($\lambda={lambda_fit:.2f}$)')
         plt.axvline(lower_bound, color='r', linestyle='--', label='Poisson 0.1%')
         plt.axvline(upper_bound, color='r', linestyle='--', label='Poisson 99.9%')
-
-        # Add labels, legend, and title
         plt.xlabel('Number of events per second')
         plt.ylabel('Frequency')
         plt.title('Histogram of events per second with Poisson Fit')
         plt.legend()
-
-        # Show the plot
         if save_plots:
             name_of_file = 'poisson_fit'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-            
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
             plt.savefig(save_fig_path, format='png')
-            
         if show_plots: plt.show()
         plt.close()
-
     # Now, if any value is outside of the tails of the poisson distribution, we can remove it
     # so obtain the extremes, obtain the seconds in which the values are outside of the distribution
     # and remove those seconds from a copy of the original df, so a new resampled_df can be created
     # with the new data
-
     # Ensure 'events' is a flat Series
     events_series = resampled_second_df['events']
-
     # Count how many values fall below or above the bounds
     below_count = (events_series < lower_bound).sum()
     above_count = (events_series > upper_bound).sum()
-    
     print("-------------------------------------------------------------")
     print(f"Below bound: {below_count.sum()}")
     print(f"Above bound: {above_count.sum()}")
     print(f"Total outliers: {(below_count + above_count).sum()}")
     print("-------------------------------------------------------------")
-
     # Identify outlier indices correctly
     outlier_mask = (events_series < lower_bound) | (events_series > upper_bound)
-
     # Flatten outlier_mask to 1D
     outlier_mask = outlier_mask.values.ravel()  # Turn into a 1D array
-
     # Extract the indices of outliers
     outlier_indices = events_series.index[outlier_mask]
-
     # Create a temporary 'Time_sec' column floored to seconds for alignment
     df['Time_sec'] = df['Time'].dt.floor('1s')
-
     # Filter out rows corresponding to the outlier indices
     filtered_df = df[~df['Time_sec'].isin(outlier_indices)].drop(columns=['Time_sec'])
-
     # Resample the filtered data to 1-minute intervals
     new_resampled_df = filtered_df.resample('1min', on='Time').agg(agg_dict)
 
@@ -719,19 +710,14 @@ if remove_outliers:
         ax.set_ylabel('Q_event (mean)')
         ax.set_title('1-Minute Resampled Data After Outlier Removal')
         ax.legend()
-
         plt.tight_layout()
-        
-        # Show the plot
         if save_plots:
             name_of_file = 'filtered_rate'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-            
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
             plt.savefig(save_fig_path, format='png')
-            
         if show_plots: plt.show()
         plt.close()
 

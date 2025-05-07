@@ -396,7 +396,7 @@ time_dif_reference = np.array([
     [1.508825, 2.086375, 1.6876, 3.023575]
 ])
 
-# Charge sum calibration (charge_sum_reference)
+# Charge sum pedestal (charge_sum_reference)
 charge_sum_distance = 30
 charge_sum_reference = np.array([
     [89.4319, 98.19605, 95.99055, 91.83875],
@@ -697,7 +697,7 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
         float: Offset value to bring the distribution to zero.
     """
     
-    # First let's tale good values of Time, we want to avoid outliers that might confuse the charge calibration
+    # First let's tale good values of Time, we want to avoid outliers that might confuse the charge pedestal calibration
     cond = (T_ch != 0) & (T_ch > T_left_side) & (T_ch < T_right_side)
     T_ch = T_ch[cond]
     Q_ch = Q_ch[cond]
@@ -1774,7 +1774,7 @@ if low_value_cols:
 charge_test = final_df.copy()
 charge_test_copy = charge_test.copy()
 
-# New calibration for charges ------------------------------------------------
+# New pedestal calibration for charges ------------------------------------------------
 QF_pedestal = []
 for key in ['1', '2', '3', '4']:
     Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
@@ -1951,7 +1951,7 @@ for key in ['Q1', 'Q2', 'Q3', 'Q4']:
 import matplotlib.pyplot as plt
 
 Q_clip_min = 0
-Q_clip_max = 2500
+Q_clip_max = 1750
 num_bins = 100
 log_scale = True
 
@@ -2012,7 +2012,7 @@ for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
 
 pos_test_copy = pos_test.copy()
 
-# New calibration for charges ------------------------------------------------
+# New calibration for positions ------------------------------------------------
 Tdiff_cal = []
 for key in ['1', '2', '3', '4']:
     T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
@@ -2035,7 +2035,6 @@ for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
 
 
 if create_plots:
-
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_Q = axes_Q.flatten()
@@ -2187,33 +2186,11 @@ if debug_mode:
     print(len(calibrated_data))
 
 print("----------------------------------------------------------------------")
-print("---------------- Charge sum calibration and filtering ----------------")
+print("----------- Charge sum pedestal, calibration and filtering -----------")
 print("----------------------------------------------------------------------")
 
 if debug_mode:
     print(calibrated_data)
-
-# calibration_Q = []
-# for key in ['Q1', 'Q2', 'Q3', 'Q4']:
-#     Q_sum_cols = [f'{key}_Q_sum_{i+1}' for i in range(4)]
-#     Q_sum = new_df[Q_sum_cols].values
-    
-#     v = Q_sum[:,0]
-#     v = v[v != 0]
-#     # print(v)
-    
-#     calibration_q_component = [calibrate_strip_Q(Q_sum[:,i]) for i in range(4)]
-#     calibration_Q.append(calibration_q_component)
-# calibration_Q = np.array(calibration_Q)
-
-# print(f"Charge sum calibration:\n{calibration_Q}")
-
-# diff = np.abs(calibration_Q - charge_sum_reference) > charge_sum_distance
-# nan_mask = np.isnan(calibration_Q)
-# values_replaced_q_sum = np.any(diff | nan_mask)
-# calibration_Q[diff | nan_mask] = charge_sum_reference[diff | nan_mask]
-# if values_replaced_q_sum:
-#     print("Some values were replaced in the calibration Q sum.")
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
@@ -2278,25 +2255,6 @@ for key in ['T1', 'T2', 'T3', 'T4']:
 print("----------------------------------------------------------------------")
 print("---------------- Charge diff calibration and filtering ---------------")
 print("----------------------------------------------------------------------")
-
-# calibration_Q_FB = []
-# for key in ['Q1', 'Q2', 'Q3', 'Q4']:
-#     Q_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
-#     Q_F = final_df[Q_F_cols].values
-#     Q_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
-#     Q_B = final_df[Q_B_cols].values
-#     calibration_q_FB_component = [calibrate_strip_Q_FB(Q_F[:,i], Q_B[:,i]) for i in range(4)]
-#     calibration_Q_FB.append(calibration_q_FB_component)
-# calibration_Q_FB = np.array(calibration_Q_FB)
-
-# print(f"Charge dif calibration:\n{calibration_Q_FB}")
-
-# diff = np.abs(calibration_Q_FB - charge_dif_reference) > charge_dif_distance
-# nan_mask = np.isnan(calibration_Q_FB)
-# values_replaced_q_dif = np.any(diff | nan_mask)
-# calibration_Q_FB[diff | nan_mask] = charge_dif_reference[diff | nan_mask]
-# if values_replaced_q_dif:
-#     print("Some values were replaced in the calibration Q front-back.")
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
@@ -3761,7 +3719,7 @@ global_variables['discarded_by_time_window_percentage'] = zeroed_percentage
 if create_essential_plots or create_plots:
 
     t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
-    widths = np.linspace(1, 10, 40)  # Scan range of window widths in ns
+    widths = np.linspace(1, 40, 200)  # Scan range of window widths in ns
 
     counts_per_width = []
     counts_per_width_dev = []
@@ -3803,9 +3761,80 @@ if create_essential_plots or create_plots:
     ax.set_ylabel("Normalized average # of T_sum values in window")
     ax.set_title("Fraction of hits within stat-centered window vs width")
     ax.grid(True)
-    ax.legend()
-    plt.tight_layout()
+    
+    from scipy.optimize import curve_fit
+    import numpy as np
 
+    # Define model function: signal (logistic) + linear background
+    def signal_plus_background(w, S, w0, tau, B):
+        return S / (1 + np.exp(-(w - w0) / tau)) + B * w
+
+    # Initial guess: [signal_height, center, width, background_slope]
+    p0 = [1.0, 2.0, 0.5, 0.001]
+
+    # Fit
+    popt, pcov = curve_fit(signal_plus_background, widths, counts_per_width_norm, p0=p0)
+
+    # Extract parameters
+    S_fit, w0_fit, tau_fit, B_fit = popt
+    print(f"Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Sigmoid center w0 = {w0_fit:.4f} ns\n  Sigmoid width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
+
+    # Evaluate fit
+    w_fit = np.linspace(min(widths), max(widths), 300)
+    f_fit = signal_plus_background(w_fit, *popt)
+
+    # Overlay fit curve
+    ax.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
+
+    # Annotate signal and background
+    ax.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
+
+    # Compute stacked signal/background probabilities over window range
+    s_vals = S_fit / (1 + np.exp(-(w_fit - w0_fit) / tau_fit))
+    b_vals = B_fit * w_fit
+    f_vals = s_vals + b_vals
+
+    P_signal = s_vals / f_vals
+    P_background = b_vals / f_vals
+
+    # Create new axis above for stacked fill
+    from matplotlib.gridspec import GridSpec
+
+    # Reconstruct the figure with GridSpec
+    fig = plt.figure(figsize=(10, 8))
+    gs = GridSpec(2, 1, height_ratios=[1, 2], hspace=0.05)
+
+    ax_fill = fig.add_subplot(gs[0])  # Top: signal vs. background fill
+    ax_main = fig.add_subplot(gs[1], sharex=ax_fill)  # Bottom: your original plot
+
+    # Fill signal/background areas
+    ax_fill.fill_between(w_fit, 0, P_signal, color='green', alpha=0.4, label='Signal')
+    ax_fill.fill_between(w_fit, P_signal, 1, color='red', alpha=0.4, label='Background')
+
+    ax_fill.set_ylabel("Fraction")
+    ax_fill.set_ylim(np.min(P_signal), 1)
+    # ax_fill.set_yticks([0.25, 0.5, 0.75, 1.0])
+    ax_fill.legend(loc="upper right")
+    ax_fill.set_title("Estimated Signal and Background Fractions per Window Width")
+
+    # Hide x-tick labels on top plot
+    plt.setp(ax_fill.get_xticklabels(), visible=False)
+
+    # Replot original data in ax_main
+    ax_main.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
+    ax_main.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
+    ax_main.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
+    ax_main.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
+    ax_main.set_xlabel("Window width (ns)")
+    ax_main.set_ylabel("Normalized average # of T_sum values in window")
+    ax_main.grid(True)
+    fit_summary = (
+        f"Fit: S = {S_fit:.3f}, w₀ = {w0_fit:.3f} ns, "
+        f"τ = {tau_fit:.3f} ns, B = {B_fit:.4f}/ns"
+    )
+    ax_main.plot([], [], ' ', label=fit_summary)  # invisible handle to add text
+    ax_main.legend()
+    
     if save_plots:
         name_of_file = 'stat_window_accumulation'
         final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -4014,7 +4043,7 @@ if uniform_y_method:
         strip_boundaries = [(center - width / 2, center + width / 2) for center, width in zip(y_pos, y_width)]
 
         # Get the relevant Q_sum columns for the current module
-        Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(len(y_pos))]
+        Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(len(y_pos))]
         Q_sum_values = calibrated_data[Q_sum_cols].abs()
 
         # Find the index of the maximum Q_sum for each row
@@ -4057,7 +4086,7 @@ if not uniform_y_method and not y_position_complex_method:
             y_pos = y_pos_P2_and_P4
     
         # Get the relevant Q_sum columns for the current module
-        Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(4)]
+        Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(4)]
         Q_sum_values = calibrated_data[Q_sum_cols].abs()
     
         # Compute the sum of Q_sum values row-wise
@@ -4275,8 +4304,8 @@ def compute_transformed_values(T_sums, T_diffs, Q_sums, weighted):
 
 for i_plane in range(1, 5):
     # Generate relevant column names for current plane
-    T_sum_cols = [f'P{i_plane}_T_sum_{i+1}' for i in range(4)]
-    T_diff_cols = [f'P{i_plane}_T_diff_{i+1}' for i in range(4)]
+    T_sum_cols = [f'T{i_plane}_T_sum_{i+1}' for i in range(4)]
+    T_diff_cols = [f'T{i_plane}_T_diff_{i+1}' for i in range(4)]
     Q_sum_cols = [f'Q{i_plane}_Q_sum_{i+1}' for i in range(4)]
 
     # Extract and preprocess data for calculations
@@ -4298,7 +4327,7 @@ for i_plane in range(1, 5):
     
     # Save the charge in each strip
     for strip in range(1, 5):
-        new_columns[f'Q_M{i_plane}s{strip}'] = Q_sums_og[:, strip-1]
+        new_columns[f'Q_P{i_plane}s{strip}'] = Q_sums_og[:, strip-1]
 
 
 # Create a new DataFrame from computed columns and concatenate with original data
@@ -5900,7 +5929,7 @@ df_cases_2 = [
 for filters, title in df_cases_2:
     fig_idx = plot_hexbin_matrix(
         df_plot_ancillary,
-        ['alt_slowness', 's'],
+        ['alt_slowness', 's', 'theta', 'phi', 'alt_theta', 'alt_phi'],
         filters,
         title,
         save_plots,
@@ -6233,10 +6262,10 @@ if save_full_data: # Save a full version of the data, for different studies and 
 # Save a reduced version of the data always, to proceed with the analysis
 columns_to_keep = [
     'Time', 'CRP_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event',
-    'Q_M1s1', 'Q_M1s2', 'Q_M1s3', 'Q_M1s4',
-    'Q_M2s1', 'Q_M2s2', 'Q_M2s3', 'Q_M2s4',
-    'Q_M3s1', 'Q_M3s2', 'Q_M3s3', 'Q_M3s4',
-    'Q_M4s1', 'Q_M4s2', 'Q_M4s3', 'Q_M4s4'
+    'Q_P1s1', 'Q_P1s2', 'Q_P1s3', 'Q_P1s4',
+    'Q_P2s1', 'Q_P2s2', 'Q_P2s3', 'Q_P2s4',
+    'Q_P3s1', 'Q_P3s2', 'Q_P3s3', 'Q_P3s4',
+    'Q_P4s1', 'Q_P4s2', 'Q_P4s3', 'Q_P4s4'
 ]
 
 reduced_df = final_data[columns_to_keep]
@@ -6248,7 +6277,7 @@ print(f"Datafile saved in {save_filename}. Path is {save_list_path}")
 # Save the calibrations -------------------------------------------------------
 new_row = {'Time': start_time}
 
-for i, module in enumerate(['M1', 'M2', 'M3', 'M4']):
+for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
     for j in range(4):
         strip = j + 1
         new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
@@ -6337,4 +6366,4 @@ print(f"Time taken for the whole execution: {time_taken:.2f} minutes")
 
 print("----------------------------------------------------------------------")
 print("------------------- Finished list_events creation --------------------")
-print("----------------------------------------------------------------------\n")
+print("----------------------------------------------------------------------\n\n\n")
