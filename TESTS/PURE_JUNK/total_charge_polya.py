@@ -490,3 +490,5 @@ for idx, module in enumerate(range(1, 5)):
 
 plt.tight_layout()
 plt.show()
+
+# %%

@@ -495,6 +495,8 @@ anc_sz = 10 # 5 cm
 global_variables = {
     'CRP_avg': 0,
     'discarded_by_time_window_percentage': 0,
+    'sigmoid_width': 0,
+    'background_slope': 0,
     'one_side_events': 0,
     'purity_of_data_percentage': 0,
     'unc_y': anc_sy,
@@ -3780,7 +3782,10 @@ if create_essential_plots or create_plots:
     # Extract parameters
     S_fit, w0_fit, tau_fit, B_fit = popt
     print(f"Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Sigmoid center w0 = {w0_fit:.4f} ns\n  Sigmoid width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
-
+    
+    global_variables['sigmoid_width'] = tau_fit
+    global_variables['background_slope'] = B_fit
+    
     # Evaluate fit
     w_fit = np.linspace(min(widths), max(widths), 300)
     f_fit = signal_plus_background(w_fit, *popt)
@@ -4925,7 +4930,7 @@ print("----------------------------------------------------------------------")
 
 
 # Initialize results
-alt_fit_slow_results = ['alt_slowness']
+alt_fit_slow_results = ['alt_s']
 alt_slow_new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=alt_fit_slow_results)
 calibrated_data = pd.concat([calibrated_data, alt_slow_new_columns_df], axis=1)
 
@@ -4980,14 +4985,14 @@ for idx, track in calibrated_data.iterrows():
 
         # Step 4: Fit T_sum vs. projected distance
         slope, intercept = np.polyfit(proj_dist - proj_dist[0], tsum - tsum[0], deg=1)
-        calibrated_data.at[idx, 'alt_slowness'] = slope
+        calibrated_data.at[idx, 'alt_s'] = slope
     
 print("Alternative slowness fitting done and saving...")
     
 if create_essential_plots or create_plots:
     # Histogram the slowness calculated
     plt.figure(figsize=(8, 6))
-    v = calibrated_data['alt_slowness'].replace(0, np.nan).dropna()
+    v = calibrated_data['alt_s'].replace(0, np.nan).dropna()
     cond = (v > slowness_filter_left) & (v < slowness_filter_right)
     v = v[cond]
     plt.hist(v, bins=200, alpha=0.7)
@@ -5000,7 +5005,7 @@ if create_essential_plots or create_plots:
     plt.tight_layout()
     
     if save_plots:
-        name_of_file = 'alt_slowness'
+        name_of_file = 'alt_s'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
 
@@ -5695,9 +5700,9 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
         'y': [-pos_filter, pos_filter],
         'alt_x': [-pos_filter, pos_filter],
         'alt_y': [-pos_filter, pos_filter],
-        'theta': [0, 1.3],
+        'theta': [0, np.pi],
         'phi': [-np.pi, np.pi],
-        'alt_theta': [0, 1.3],
+        'alt_theta': [0, np.pi],
         'alt_phi': [-np.pi, np.pi],
         'xp': [-2, 2],
         'yp': [-2, 2],
@@ -5707,7 +5712,7 @@ def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_p
         'charge_3': [0, 250],
         'charge_4': [0, 250],
         's': [slowness_filter_left, slowness_filter_right],
-        'alt_slowness': [slowness_filter_left, slowness_filter_right],
+        'alt_s': [slowness_filter_left, slowness_filter_right],
         'th_chi': [0, 0.03]
     }
     
@@ -5931,7 +5936,7 @@ df_cases_2 = [
 for filters, title in df_cases_2:
     fig_idx = plot_hexbin_matrix(
         df_plot_ancillary,
-        ['alt_slowness', 's', 'theta', 'phi', 'alt_theta', 'alt_phi'],
+        ['alt_x', 'alt_y', 'alt_phi', 'alt_theta', 'alt_s', 's', 'theta', 'phi', 'y', 'x'],
         filters,
         title,
         save_plots,
@@ -6230,6 +6235,7 @@ if alternative_fitting:
         final_data['phi'] = final_data['alt_phi']
         final_data['x'] = final_data['alt_x']
         final_data['y'] = final_data['alt_y']
+        final_data['s'] = final_data['alt_s']
 
 # Round to 4 significant digits -----------------------------------------------
 print("Rounding the dataframe values.")

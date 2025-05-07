@@ -504,7 +504,6 @@ df_total = pd.concat([df_single, df_double_adj, df_triple_adj, df_quadruple], ax
 #%%
 
 
-
 # PLOT 4. AMOUNT OF STRIPS TRIGGERED --------------------------------------------------------------------------------------------
 
 # Now count the number of single, double, triple and quadruple detections for each module and histogram it
