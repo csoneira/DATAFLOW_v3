@@ -4,7 +4,7 @@
 """
 Created on Mon Jun 24 19:02:22 2024
 
-@author: gfn
+@author: csoneira@ucm.es
 """
 
 # globals().clear()
@@ -63,7 +63,7 @@ res_win_min = 60 # 180 Resampling window minutes
 # HMF_ker = 1 # It must be odd. Horizontal Median Filter
 # MAF_ker = 1 # Moving Average Filter
 
-outlier_filter = 3 #3
+outlier_filter = 4 #3
 
 high_order_correction = True
 date_selection = True  # Set to True if you want to filter by date
@@ -80,7 +80,7 @@ systematic_unc = [0, 0, 0, 0] # From simulation
 # acceptance_factor = [0.7, 1, 1, 0.8] # From simulation
 
 systematic_unc_corr_to_real_rate = 0
-z_score_th_pres_corr = 1
+z_score_th_pres_corr = 5
 
 # -----------------------------------------------------------------------------
 
@@ -89,11 +89,13 @@ grafana_directory = os.path.expanduser(f"~/DATAFLOW_v3/GRAFANA_DATA")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 
 base_folder = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/SECOND_STAGE")
-filepath = f"{base_folder}/total_data_table.csv"
+filepath = f"{base_folder}/cp_total_data_table.csv"
+print("---------------------------------------------------- A MODIFIED DATAFILE IS BEING TAKEN, WATCH OUT!!!!!!!!! ---------------------------------")
 save_filename = f"{base_folder}/large_corrected_table.csv"
 grafana_save_filename = f"{grafana_directory}/data_for_grafana_{station}.csv"
 
-figure_path = f"{base_folder}/correction.png"
+figure_path = f"{base_folder}/"
+fig_idx = 0
 
 # Create the folders if they dont exist
 os.makedirs(base_folder, exist_ok=True)
@@ -214,7 +216,7 @@ if date_selection:
     
     # start_date = pd.to_datetime("2025-01-02")  # Use a string in 'YYYY-MM-DD' format
     start_date = pd.to_datetime("2025-02-17 12:00:00")  # Use a string in 'YYYY-MM-DD' format
-    end_date = pd.to_datetime("2025-03-18 11:00")
+    end_date = pd.to_datetime("2025-05-08 11:00")
     
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
@@ -229,22 +231,26 @@ print(f"Filtered data contains {len(data_df)} rows.")
 if remove_outliers:
     print('Removing outliers and zero values...')
     def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
+        global fig_idx
+        
         """
         Create a mask of rows that are outliers or have zero values.
         """
-        # median = series.mean()
-        median = series.median()
+        median = series.mean()
+        # median = series.median()
         std = series.std()
         z_scores = abs((series - median) / std)
+        # z_scores = (series - median) / std
         
-        plt.hist(z_scores, bins=300)
+        plt.hist(z_scores, bins=100)
         plt.title('Z-Scores Distribution')
         plt.xlabel('Z-Score')
         plt.ylabel('Frequency')
         if show_plots: 
             plt.show()
         elif save_plots:
-            new_figure_path = figure_path + "_original_z"
+            new_figure_path = figure_path + f"{fig_idx}" + "_original_z.png"
+            fig_idx += 1
             print(f"Saving figure to {new_figure_path}")
             plt.savefig(new_figure_path, format = 'png', dpi = 300)
         plt.close()
@@ -314,8 +320,8 @@ if exists_input_file:
     start_time = min_time_original
     end_time = max_time_original
 
-    input_file["start"] = pd.to_datetime(input_file["start"])
-    input_file["end"] = pd.to_datetime(input_file["end"])
+    input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
+    input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
 
     # Ensure no NaN in 'end' column
     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
@@ -385,7 +391,16 @@ data_df["acc_4"] = pd.to_numeric(data_df["acc_4"])
 # Calculate efficiency and uncertainty of the efficiency
 # -----------------------------------------------------------------------------
 
-print('Calculating efficiency...')
+
+print('----------------------------------------------------------------------')
+print('----------------------------------------------------------------------')
+print('-------------------- Calculating efficiencies ------------------------')
+print('----------------------------------------------------------------------')
+print('----------------------------------------------------------------------')
+
+print('----------------------------------------------------------------------')
+print('--------------- 1. Standard method (includes system) -----------------')
+print('----------------------------------------------------------------------')
 
 # Define the function to calculate efficiency uncertainty
 def calculate_efficiency_uncertainty(N_measured, N_passed):
@@ -485,7 +500,6 @@ data_df['unc_eff_global'] = np.sqrt(
      data_df['unc_eff_4'] ** 2) / 4
 )
 
-
 # -------------------------------------------------------------------------------------------------------------------------
 # Calculate the systematic for the efficiencies ---------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------------------
@@ -579,7 +593,7 @@ if create_plots:
         
         # Labeling and titles
         ax.set_ylabel('Efficiency')
-        ax.set_ylim(0.9, 1.0)
+        ax.set_ylim(0.5, 1.0)
         ax.set_title(f'Efficiency {i} over Time')
         ax.legend(loc='upper left')
     
@@ -592,7 +606,49 @@ if create_plots:
     if show_plots:
         plt.show()
     elif save_plots:
-        new_figure_path = figure_path + "_start.png"
+        new_figure_path = figure_path + f"{fig_idx}" + "_eff_standard_method_compared_to_fit.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+
+    plt.close()
+
+
+if create_plots:
+    print("Creating efficiency comparison scatter plot...")
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    for i in range(1, 5):  # Modules 1 to 4
+        ax.scatter(
+            data_df[f'eff_fit_{i}'],
+            data_df[f'final_eff_{i}'],
+            alpha=0.5,
+            s=1,
+            label=f'Module {i}',
+            color=f'C{i}'
+        )
+    
+    low_lim = 0.6
+    
+    # Plot y = x reference line
+    ax.plot([low_lim, 1.0], [low_lim, 1.0], 'k--', linewidth=1, label='Ideal (y = x)')
+
+    ax.set_xlabel('Fitted Efficiency')
+    ax.set_ylabel('Measured Efficiency')
+    ax.set_title('Measured vs Fitted Efficiency for All Modules')
+    ax.set_xlim(low_lim, 1.0)
+    ax.set_ylim(low_lim, 1.0)
+    ax.grid(True)
+    ax.legend()
+
+    plt.tight_layout()
+
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + f"{fig_idx}" + "_eff_vs_eff_fit_scatter.png"
+        fig_idx += 1
         print(f"Saving figure to {new_figure_path}")
         plt.savefig(new_figure_path, format='png', dpi=300)
 
@@ -753,15 +809,31 @@ data_df["new_sys_e4"] = data_df["final_eff_4"]
 print("Done! 'df_unfolded' has the fitted x_... columns, and 'data_df' now has new_sys_* rates.")
 
 
-# ------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+print('----------------------------------------------------------------------')
+print('------ 2. Geometric method (requires complete angular spectra) -------')
+print('----------------------------------------------------------------------')
+
+print("Georgy's method, WIP...")
+
+# -----------------------------------------------------------------------------
+
+
+print('----------------------------------------------------------------------')
+print('----- 3. Inefficiency method (requires complete charge spectra) ------')
+print('----------------------------------------------------------------------')
+
+print("WIP...")
+
+# -----------------------------------------------------------------------------
 
 
 # -----------------------------------------------------------------------------
 # Correct by the efficiency, calculate uncertainty of the corrected rate
 # -----------------------------------------------------------------------------
 
-print('Efficiency correction performed.')
-
+print('Efficiency calculations performed.')
 
 # Assuming data_df is already loaded and contains the necessary columns
 
@@ -777,7 +849,7 @@ if create_plots:
     ax1.plot(data_df['Time'], data_df['eff_fit_3'], label='Eff. fitted 3', color='C6')
     ax1.plot(data_df['Time'], data_df['eff_fit_4'], label='Eff. fitted 4', color='C7')
     ax1.set_ylabel('Efficiency')
-    ax1.set_ylim(0.9, 1.0)
+    ax1.set_ylim(0.5, 1.0)
     ax1.set_title('Efficiencies over Time')
     ax1.legend(loc='upper left')
     
@@ -790,7 +862,7 @@ if create_plots:
     ax2.plot(data_df['Time'], data_df['type_234'] / (data_df["number_of_rows"] * 60), label='Measured 234', color='C5')
     ax2.plot(data_df['Time'], data_df['type_1234'] / (data_df["number_of_rows"] * 60), label='Measured 1234', color='C6')
     
-    ax2.set_ylim(1, 5)
+    ax2.set_ylim(0.1, 5)
     ax2.set_xlabel('Time')
     ax2.set_ylabel('Rate')
     ax2.set_title('Original Rates over Time')
@@ -803,7 +875,7 @@ if create_plots:
     ax3.plot(data_df['Time'], data_df['new_sys_234'], label='Crossing 234', color='C5')
     ax3.plot(data_df['Time'], data_df['new_sys_1234'], label='Crossing 1234', color='C6')
 
-    ax3.set_ylim(1, 5)
+    ax3.set_ylim(0.1, 5)
     ax3.set_xlabel('Time')
     ax3.set_ylabel('Rate')
     ax3.set_title('Corrected by efficiency Rates over Time')
@@ -815,7 +887,8 @@ if create_plots:
     if show_plots:
         plt.show()
     elif save_plots:
-        new_figure_path = figure_path + "_effs_rates_new_sys.png"
+        new_figure_path = figure_path + f"{fig_idx}" + "_effs_rates_new_sys.png"
+        fig_idx += 1
         print(f"Saving figure to {new_figure_path}")
         plt.savefig(new_figure_path, format='png', dpi=300)
 
@@ -905,7 +978,10 @@ if create_plots:
     if show_plots:
         plt.show()
     elif save_plots:
-        plt.savefig(figure_path + "_3d_fit.png", format='png', dpi=300)
+        new_figure_path = figure_path + f"{fig_idx}" + "_3D_fit.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format = 'png', dpi = 300)
     plt.close()
     
     # Create another figure to show residuals
@@ -945,12 +1021,12 @@ if create_plots:
     if show_plots:
         plt.show()
     elif save_plots:
-        plt.savefig(figure_path + "_residuals.png", format='png', dpi=300)
+        new_figure_path = figure_path + f"{fig_idx}" + "_residuals.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format = 'png', dpi = 300)
     plt.close()
 
-
-
-#%%
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -958,11 +1034,19 @@ if create_plots:
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+print('----------------------------------------------------------------------')
+print('----------------------------------------------------------------------')
+print('-------------------- Atmospheric corrections started -----------------')
+print('----------------------------------------------------------------------')
+print('----------------------------------------------------------------------')
+
 # -----------------------------------------------------------------------------
 # Pressure correction ---------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-print('Pressure correction started...')
+print('----------------------------------------------------------------------')
+print('---------------------- Pressure correction started -------------------')
+print('----------------------------------------------------------------------')
 
 from scipy.optimize import curve_fit
 
@@ -971,7 +1055,8 @@ def fit_model(x, beta, a):
     # [beta] = %/mbar
     return beta / 100 * x + a
 
-def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
+def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = None):
+    global fig_idx
     
     log_I_over_I0 = np.log(I_over_I0)
     unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0  # Propagate relative errors
@@ -990,51 +1075,47 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
         # Fit the exponential model using uncertainties in Y as weights
         print("Fitting exponential model...")
         
-        # Filter outliers before fitting
+        # ------------------------------------------------------------------------------------------------
+        # Filter outliers before fitting -----------------------------------------------------------------
+        # ------------------------------------------------------------------------------------------------
+        
         z_scores = np.abs((df['log_I_over_I0'] - df['log_I_over_I0'].median()) / df['log_I_over_I0'].std())
+        # z_scores = (df['log_I_over_I0'] - df['log_I_over_I0'].median()) / df['log_I_over_I0'].std()
         
         # Make a small histogram of the z_scores to see the distribution
         plt.hist(z_scores, bins=400)
-        plt.title('Z-Scores Distribution')
+        plt.axvline(x=z_score_th_pres_corr, color='r', linestyle='--', label='Threshold')
+        plt.title(f'{region}\nZ-Scores Distribution')
         plt.xlabel('Z-Score')
         plt.ylabel('Frequency')
         if show_plots: 
             plt.show()
         elif save_plots:
-            new_figure_path = figure_path + "_z"
+            new_figure_path = figure_path + f"{fig_idx}" + "_pre_pressure_z" + f"{region}" + ".png"
+            fig_idx += 1
             print(f"Saving figure to {new_figure_path}")
             plt.savefig(new_figure_path, format = 'png', dpi = 300)
         plt.close()
         
         df = df[z_scores < z_score_th_pres_corr]
         
+        
+        # ------------------------------------------------------------------------------------------------
+        
         # WIP TO USE UNCERTAINTY OF PRESSURE ----------------------------------------------
-        popt, pcov = curve_fit(
-            fit_model,
-            df['delta_P'],
-            df['log_I_over_I0'],
-            sigma=df['unc_log_I_over_I0'],  # Only the Y uncertainty
-            absolute_sigma=True,
-            p0=(1,0)
-        )
+        popt, pcov = curve_fit(fit_model, df['delta_P'], df['log_I_over_I0'], sigma=df['unc_log_I_over_I0'], absolute_sigma=True, p0=(1,0))
         b, a = popt  # Extract parameters
         
         # Define eta_P as the parameter b (rate of change in the exponent)
         eta_P = b
+        eta_P_ordinate = a
         eta_P_uncertainty = np.sqrt(np.diag(pcov))[0]
         
         # Plot the fitting
         if create_plots:
             plt.figure()
             if show_errorbar:
-                plt.errorbar(
-                    df['delta_P'],
-                    df['log_I_over_I0'],
-                    xerr=abs(df['unc_delta_P']),
-                    yerr=abs(df['unc_log_I_over_I0']),
-                    fmt='o',
-                    label='Data with Uncertainty'
-                )
+                plt.errorbar(df['delta_P'], df['log_I_over_I0'], xerr=abs(df['unc_delta_P']), yerr=abs(df['unc_log_I_over_I0']), fmt='o', label='Data with Uncertainty')
             else:
                 plt.scatter(df['delta_P'], df['log_I_over_I0'], label='Data', s=1, alpha=0.5, marker='.')
             
@@ -1049,354 +1130,333 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P):
             # Add labels and title
             plt.xlabel('Delta P')
             plt.ylabel('log (I / I0)')
-            plt.title(f'Exponential Fit with Uncertainty\nBeta (b) = {b:.3f} ± {unc_b:.3f} %/mbar')
+            plt.title(f'{region} - Exponential Fit with Uncertainty\nBeta (b) = {b:.3f} ± {unc_b:.3f} %/mbar')
             plt.legend()
             if show_plots: 
                 plt.show()
             elif save_plots:
-                print(f"Saving figure to {figure_path}")
-                plt.savefig(figure_path, format = 'png', dpi = 300)
+                new_figure_path = figure_path + f"{fig_idx}" + "_press_corr" + f"{region}" + ".png"
+                fig_idx += 1
+                print(f"Saving figure to {new_figure_path}")
+                plt.savefig(new_figure_path, format = 'png', dpi = 300)
             plt.close()
     else:
         print("Fit not done, data empty. Returning NaN.")
         eta_P = np.nan
         eta_P_uncertainty = np.nan  # Handle case where there are no valid data points
-    return eta_P, eta_P_uncertainty
-
-region = 'eff_corr'
-
-data_df['pressure_lab'] = data_df['sensors_ext_Pressure_ext']
-# Calculate pressure differences and their uncertainties
-P = data_df['pressure_lab']
-unc_P = 1  # Assume a small uncertainty for P if not recalculating
-
-if recalculate_pressure_coeff:
-    P0 = data_df['pressure_lab'].mean()
-    unc_P0 = unc_P / np.sqrt( len(P) )  # Uncertainty of the mean
-else:
-    P0 = mean_pressure_used_for_the_fit
-    # unc_P0 = np.full_like(P, 1)  # Assume an arbitrary uncertainty if not recalculating
-    unc_P0 = 1
-
-delta_P = P - P0
-unc_delta_P = np.sqrt(unc_P**2 + unc_P0**2)  # Combined uncertainty (propagation of errors)
+    return eta_P, eta_P_uncertainty, eta_P_ordinate
 
 def quantile_mean(data_df, region, lower_quantile=0.1, upper_quantile=0.9):
-    """
-    Compute the mean of the data within the specified quantile range.
-    
-    :param data_df: DataFrame containing the data.
-    :param region: Column name to compute the small quantile mean for.
-    :param lower_quantile: Lower quantile threshold (default: 10%).
-    :param upper_quantile: Upper quantile threshold (default: 90%).
-    :return: Mean of the values within the quantile range.
-    """
-    values = data_df[region].dropna()  # Remove NaNs
-    q_low, q_high = np.quantile(values, [lower_quantile, upper_quantile])
-    filtered_values = values[(values >= q_low) & (values <= q_high)]
-    
-    return filtered_values.mean()
-
-I = data_df[region]
-unc_I = data_df[f'unc_{region}']
-# I0 = data_df[region].mean()
-I0 = quantile_mean(data_df, region)
-unc_I0 = unc_I / np.sqrt( len(I) )  # Uncertainty of the mean
-I_over_I0 = I / I0
-unc_I_over_I0 = I_over_I0 * np.sqrt( (unc_I / I)**2 + (unc_I0 / I0)**2 )
-pressure_results = pd.DataFrame(columns=['Region', 'Eta_P'])
-
-# Filter the negative or 0 I_over_I0 values
-valid_mask = I_over_I0 > 0
-I_over_I0 = I_over_I0[valid_mask]
-unc_I_over_I0 = unc_I_over_I0[valid_mask]
-delta_P = delta_P[valid_mask]
-
-if recalculate_pressure_coeff:
-    eta_P, unc_eta_P = calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P)
-    print(eta_P)
-    pressure_results = pd.concat([pressure_results, pd.DataFrame({'Region': [region], 'Eta_P': [eta_P]})], ignore_index=True)
-    
-if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
-    if recalculate_pressure_coeff == False:
-        print("Not recalculating because of the options.")
-    
-    if eta_P == np.nan:
-        print("Not recalculating because the fit failed.")
-    
-    log_I_over_I0 = np.log(I_over_I0)
-    unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0
-    
-    if create_plots:
-        log_I_over_I0 = np.log(I_over_I0)
+        """
+        Compute the mean of the data within the specified quantile range.
         
-        df = pd.DataFrame({
-            'delta_P': delta_P,
-            'log_I_over_I0': log_I_over_I0,
-            'unc_delta_P': unc_delta_P,
-            'unc_log_I_over_I0': unc_I_over_I0 / I_over_I0
-        })
+        :param data_df: DataFrame containing the data.
+        :param region: Column name to compute the small quantile mean for.
+        :param lower_quantile: Lower quantile threshold (default: 10%).
+        :param upper_quantile: Upper quantile threshold (default: 90%).
+        :return: Mean of the values within the quantile range.
+        """
+        values = data_df[region].dropna()  # Remove NaNs
+        q_low, q_high = np.quantile(values, [lower_quantile, upper_quantile])
+        filtered_values = values[(values >= q_low) & (values <= q_high)]
         
-        plt.figure()
-        if show_errorbar:
-            plt.errorbar(
-                df['delta_P'],
-                df['log_I_over_I0'],
-                xerr=abs(df['unc_delta_P']),
-                yerr=abs(df['unc_log_I_over_I0']),
-                fmt='o',
-                label='Data with Uncertainty'
-            )
-        else:
-            plt.scatter(df['delta_P'], df['log_I_over_I0'], label='Data', s=1, alpha=0.5, marker='.')
-        
-        # Plot the line using provided eta_P instead of fitted values
-        plt.plot(df['delta_P'], fit_model(df['delta_P'], eta_P, set_a), color='blue', label=f'Set Eta: {eta_P:.3f} ± {unc_eta_P:.3f} %/mbar')
-        
-        # Add labels and title
-        plt.xlabel('Delta P')
-        plt.ylabel('log (I / I0)')
-        plt.title(f'Plot using Set Eta_P\nEta_P = {eta_P:.3f} ± {unc_eta_P:.3f} %/mbar')
-        plt.legend()
-        
-        if show_plots: 
-            plt.show()
-        elif save_plots:
-            print(f"Saving figure to {figure_path}")
-            plt.savefig(figure_path, format='png', dpi=300)
-        
-        plt.close()
+        return filtered_values.mean()
 
 
-# Create corrected rate column for the region
-data_df[f'pres_{region}'] = I * np.exp(-1 * eta_P / 100 * delta_P)
+# -------------------------------------------------------------------------------
+# -------------------------- LOOPING THE DATA -----------------------------------
+# -------------------------------------------------------------------------------
 
-high_regions_hans = ['V']
-mid_regions_hans = ['N.M', 'NE.M', 'E.M', 'SE.M', 'S.M', 'SW.M', 'W.M', 'NW.M']
-low_regions_hans = ['N.H', 'E.H', 'S.H', 'W.H']
-angular_regions = high_regions_hans + mid_regions_hans + low_regions_hans
-
-for reg in angular_regions:
-    data_df[f'pres_{reg}'] = data_df[reg] * np.exp(-1 * eta_P / 100 * delta_P)
-
-# Plot all the time series in angular_regions
-if create_plots:
-    print("Creating multi-panel count plots for all angular regions...")
-
-    # Create figures with 4 subplots each, sharing x-axis
-    fig, axes_original = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
-    fig_corr, axes_corrected = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
-
-    # Define angular region groups
-    regions_v = ['V']
-    regions_main = ['N.M', 'E.M', 'W.M', 'S.M']
-    regions_diagonal = ['NE.M', 'SE.M', 'SW.M', 'NW.M']
-    regions_h = ['N.H', 'E.H', 'S.H', 'W.H']
-
-    region_groups = [regions_v, regions_main, regions_diagonal, regions_h]
-
-    # ---- ORIGINAL COUNTS ----
-    for ax, regions in zip(axes_original, region_groups):
-        for region in regions:
-            ax.plot(data_df['Time'], data_df[region] / (60 * res_win_min), label=f'{region} (Hz)')
-        ax.set_ylabel('Counts')
-        ax.legend(loc='upper left', ncol=2, fontsize=8)
-
-    axes_original[0].set_title('Original Counts - V')
-    axes_original[1].set_title('Original Counts - N.M, E.M, W.M, S.M')
-    axes_original[2].set_title('Original Counts - NE.M, SE.M, SW.M, NW.M')
-    axes_original[3].set_title('Original Counts - H Regions (N.H, E.H, S.H, W.H)')
-    axes_original[-1].set_xlabel('Time')
-
-    # ---- PRESSURE-CORRECTED COUNTS ----
-    for ax, regions in zip(axes_corrected, region_groups):
-        for region in regions:
-            ax.plot(data_df['Time'], data_df[f'pres_{region}'], label=f'Corrected {region}')
-        ax.set_ylabel('Counts')
-        ax.legend(loc='upper left', ncol=2, fontsize=8)
-
-    axes_corrected[0].set_title('Pressure-Corrected Counts - V')
-    axes_corrected[1].set_title('Pressure-Corrected Counts - N.M, E.M, W.M, S.M')
-    axes_corrected[2].set_title('Pressure-Corrected Counts - NE.M, SE.M, SW.M, NW.M')
-    axes_corrected[3].set_title('Pressure-Corrected Counts - H Regions (N.H, E.H, S.H, W.H)')
-    fig.suptitle("Rates for All Angular Regions", fontsize=14, fontweight='bold')
-    axes_corrected[-1].set_xlabel('Time')
-
-    plt.tight_layout()
-
-    # Save or show the plots
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        fig.savefig(figure_path + "_counts_original.png", format='png', dpi=300)
-        fig_corr.savefig(figure_path + "_counts_corrected.png", format='png', dpi=300)
-        print("Saved multi-panel count plots.")
-
-    plt.close(fig)
-    plt.close(fig_corr)
-
-if create_plots:
-    print("Creating multi-panel count plots for all angular regions...")
-
-    # Create figures with 4 subplots each, sharing x-axis
-    fig, axes_original = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
-    fig_corr, axes_corrected = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
-
-    # Define angular region groups
-    regions_v = ['V']
-    regions_main = ['N.M', 'E.M', 'W.M', 'S.M']
-    regions_diagonal = ['NE.M', 'SE.M', 'SW.M', 'NW.M']
-    regions_h = ['N.H', 'E.H', 'S.H', 'W.H']
-
-    region_groups = [regions_v, regions_main, regions_diagonal, regions_h]
-
-    # ---- ORIGINAL COUNTS ----
-    for ax, regions in zip(axes_original, region_groups):
-        norm_offset = 0
-        for region in regions:
-            y = data_df[region]
-            y_norm = (y - y.mean()) / y.mean() + norm_offset
-            norm_offset += 0.1
-            ax.plot(data_df['Time'], y_norm, label=f'{region}')
-            # ax.plot(data_df['Time'], data_df[region], label=f'{region}')
-        ax.set_ylabel('Counts')
-        ax.legend(loc='upper left', ncol=2, fontsize=8)
-
-    axes_original[0].set_title('Original Counts - V')
-    axes_original[1].set_title('Original Counts - N.M, E.M, W.M, S.M')
-    axes_original[2].set_title('Original Counts - NE.M, SE.M, SW.M, NW.M')
-    axes_original[3].set_title('Original Counts - H Regions (N.H, E.H, S.H, W.H)')
-    fig.suptitle("Normalized Counts for All Angular Regions", fontsize=14, fontweight='bold')
-    axes_original[-1].set_xlabel('Time')
-
-    # ---- PRESSURE-CORRECTED COUNTS ----
-    for ax, regions in zip(axes_corrected, region_groups):
-        for region in regions:
-            ax.plot(data_df['Time'], data_df[f'pres_{region}'], label=f'Corrected {region}')
-        ax.set_ylabel('Counts')
-        ax.legend(loc='upper left', ncol=2, fontsize=8)
-
-    axes_corrected[0].set_title('Pressure-Corrected Counts - V')
-    axes_corrected[1].set_title('Pressure-Corrected Counts - N.M, E.M, W.M, S.M')
-    axes_corrected[2].set_title('Pressure-Corrected Counts - NE.M, SE.M, SW.M, NW.M')
-    axes_corrected[3].set_title('Pressure-Corrected Counts - H Regions (N.H, E.H, S.H, W.H)')
-    axes_corrected[-1].set_xlabel('Time')
-
-    plt.tight_layout()
-
-    # Save or show the plots
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        fig.savefig(figure_path + "_counts_original_norm.png", format='png', dpi=300)
-        fig_corr.savefig(figure_path + "_counts_corrected.png", format='png', dpi=300)
-        print("Saved multi-panel count plots.")
-
-    plt.close(fig)
-    plt.close(fig_corr)
-
-
-
-
-
-# Define angular regions
+# region = 'eff_corr'
 angular_regions = ['High', 'N', 'S', 'E', 'W']
+trigger_types_corrected = ['new_sys_12', 'new_sys_23', 'new_sys_34', 'new_sys_123', 'new_sys_234', 'new_sys_1234']
+regions_to_correct = ['eff_corr'] + angular_regions + trigger_types_corrected
 
-# Apply pressure correction
-for reg in angular_regions:
-    data_df[f'pres_{reg}'] = data_df[reg] * np.exp(-1 * eta_P / 100 * delta_P)
+log_delta_I_df = pd.DataFrame(columns=['Region', 'Log_I_over_I0', 'Delta_P', 'Unc_Log_I_over_I0', 'Unc_Delta_P', 'Eta_P', 'Unc_Eta_P'])
 
-# Plot all the time series in angular_regions
-if create_plots:
-    print("Creating multi-panel count plots for all angular regions...")
+# List to store results
+results = []
 
-    # Create figures with subplots, sharing x-axis
-    fig, axes_original = plt.subplots(len(angular_regions), 1, figsize=(17, 12), sharex=True)
-    fig_corr, axes_corrected = plt.subplots(len(angular_regions), 1, figsize=(17, 12), sharex=True)
+for region in regions_to_correct:
 
-    # ---- ORIGINAL COUNTS ----
-    for ax, region in zip(axes_original, angular_regions):
-        ax.plot(data_df['Time'], data_df[region] / (60 * res_win_min), label=f'{region} (Hz)')
-        ax.set_ylabel('Counts')
-        ax.legend(loc='upper left', ncol=2, fontsize=8)
-        ax.set_title(f'Original Counts - {region}')
+    data_df['pressure_lab'] = data_df['sensors_ext_Pressure_ext']
+    # Calculate pressure differences and their uncertainties
+    P = data_df['pressure_lab']
+    unc_P = 1  # Assume a small uncertainty for P if not recalculating
+
+    if recalculate_pressure_coeff:
+        P0 = data_df['pressure_lab'].mean()
+        unc_P0 = unc_P / np.sqrt( len(P) )  # Uncertainty of the mean
+    else:
+        P0 = mean_pressure_used_for_the_fit
+        # unc_P0 = np.full_like(P, 1)  # Assume an arbitrary uncertainty if not recalculating
+        unc_P0 = 1
+
+    delta_P = P - P0
+    unc_delta_P = np.sqrt(unc_P**2 + unc_P0**2)  # Combined uncertainty (propagation of errors)
+
+    I = data_df[region]
+    try:
+        unc_I = data_df[f'unc_{region}']
+    except KeyError:
+        unc_I = 1
     
-    axes_original[-1].set_xlabel('Time')
+    # I0 = data_df[region].mean()
+    I0 = quantile_mean(data_df, region)
+    unc_I0 = unc_I / np.sqrt( len(I) )  # Uncertainty of the mean
+    I_over_I0 = I / I0
+    unc_I_over_I0 = I_over_I0 * np.sqrt( (unc_I / I)**2 + (unc_I0 / I0)**2 )
+    pressure_results = pd.DataFrame(columns=['Region', 'Eta_P'])
 
-    # ---- PRESSURE-CORRECTED COUNTS ----
-    for ax, region in zip(axes_corrected, angular_regions):
-        ax.plot(data_df['Time'], data_df[f'pres_{region}'], label=f'Corrected {region}')
-        ax.set_ylabel('Counts')
-        ax.legend(loc='upper left', ncol=2, fontsize=8)
-        ax.set_title(f'Pressure-Corrected Counts - {region}')
+    # Filter the negative or 0 I_over_I0 values
+    valid_mask = I_over_I0 > 0
+    I_over_I0 = I_over_I0[valid_mask]
+    unc_I_over_I0 = unc_I_over_I0[valid_mask]
+    delta_P = delta_P[valid_mask]
+
+
+    if recalculate_pressure_coeff:
+        eta_P, unc_eta_P, eta_P_ordinate = calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region)
+        
+        # Store entire vectors without flattening
+        results.append({
+            'Region': region,
+            'Log_I_over_I0': np.log(I_over_I0),  # Entire vector
+            'Delta_P': delta_P,  # Entire vector
+            'Unc_Log_I_over_I0': unc_I_over_I0,  # Entire vector
+            'Unc_Delta_P': unc_delta_P,  # Entire vector
+            'Eta_P': eta_P,  # Scalar value for eta_P
+            'Unc_Eta_P': unc_eta_P,  # Scalar uncertainty for eta_P
+            'Eta_P_ordinate': eta_P_ordinate  # Scalar uncertainty for eta_P
+        })
+
+    # Convert the list of dictionaries into a DataFrame after the loop
+    log_delta_I_df = pd.DataFrame(results)
+
+    # if recalculate_pressure_coeff:
+    #     eta_P, unc_eta_P = calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region)
+    #     print(eta_P)
+    #     pressure_results = pd.concat([pressure_results, pd.DataFrame({'Region': [region], 'Eta_P': [eta_P]})], ignore_index=True)
+        
+    if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
+        if recalculate_pressure_coeff == False:
+            print("Not recalculating because of the options.")
+        
+        if eta_P == np.nan:
+            print("Not recalculating because the fit failed.")
+        
+        log_I_over_I0 = np.log(I_over_I0)
+        unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0
+        
+        if create_plots:
+            log_I_over_I0 = np.log(I_over_I0)
+            
+            df = pd.DataFrame({
+                'delta_P': delta_P,
+                'log_I_over_I0': log_I_over_I0,
+                'unc_delta_P': unc_delta_P,
+                'unc_log_I_over_I0': unc_I_over_I0 / I_over_I0
+            })
+            
+            plt.figure()
+            if show_errorbar:
+                plt.errorbar(df['delta_P'], df['log_I_over_I0'], xerr=abs(df['unc_delta_P']), yerr=abs(df['unc_log_I_over_I0']), fmt='o', label='Data with Uncertainty')
+            else:
+                plt.scatter(df['delta_P'], df['log_I_over_I0'], label='Data', s=1, alpha=0.5, marker='.')
+            
+            # Plot the line using provided eta_P instead of fitted values
+            plt.plot(df['delta_P'], fit_model(df['delta_P'], eta_P, set_a), color='blue', label=f'Set Eta: {eta_P:.3f} ± {unc_eta_P:.3f} %/mbar')
+            
+            # Add labels and title
+            plt.xlabel('Delta P')
+            plt.ylabel('log (I / I0)')
+            plt.title(f'Plot of {region} using Set Eta_P\nEta_P = {eta_P:.3f} ± {unc_eta_P:.3f} %/mbar')
+            plt.legend()
+            
+            if show_plots: 
+                plt.show()
+            elif save_plots:
+                new_figure_path = figure_path + f"{fig_idx}" + "_press_fit" + f"{region}" + ".png"
+                fig_idx += 1
+                print(f"Saving figure to {new_figure_path}")
+                plt.savefig(new_figure_path, format = 'png', dpi = 300)
+            plt.close()
+
+
+    # Create corrected rate column for the region
+    data_df[f'pres_{region}'] = I * np.exp(-1 * eta_P / 100 * delta_P)
+
+    # ------------------- Final uncertainty calculation in the corrected rate --------------------------
+
+    unc_rate = 1
+    unc_beta = unc_eta_P
+    unc_DP = unc_delta_P
+    term_1_rate = np.exp(-1 * eta_P / 100 * delta_P) * unc_rate
+    term_2_beta = I * delta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_beta
+    term_3_DP = I * eta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_DP
+    final_unc_combined = np.sqrt(term_1_rate**2 + term_2_beta**2 + term_3_DP**2)
+    data_df[f'unc_pres_{region}'] = final_unc_combined
+
+
+
+# Convert the list of dictionaries into a DataFrame after the loop
+log_delta_I_df = pd.DataFrame(results)
+
+# --- Plotting the vectors ---
+plt.figure(figsize=(12, 8))
+
+# Loop through all regions
+for region in log_delta_I_df['Region']:
     
-    axes_corrected[-1].set_xlabel('Time')
+    # If region does not contain new_, skip it
+    if 'new_' not in region:
+        continue
+    
+    # Extract data for the current region
+    region_data = log_delta_I_df[log_delta_I_df['Region'] == region]
 
-    fig.suptitle("Rates for All Angular Regions", fontsize=14, fontweight='bold')
-    plt.tight_layout()
+    # Access the full vectors (they are stored as columns, so we directly use them)
+    delta_P = region_data['Delta_P'].values[0]  # Access the vector (1D)
+    log_I_over_I0 = region_data['Log_I_over_I0'].values[0]  # Access the vector (1D)
+    unc_delta_P = region_data['Unc_Delta_P'].values[0]  # Access the vector (1D)
+    unc_log_I_over_I0 = region_data['Unc_Log_I_over_I0'].values[0]  # Access the vector (1D)
+    
+    eta_P = region_data['Eta_P'].values[0]  # Scalar value for eta_P
+    eta_P_ordinate = region_data['Eta_P_ordinate'].values[0]  # Scalar value for eta_P_ordinate
+    
+    # Plot scatter for the current region
+    plt.scatter(delta_P, log_I_over_I0, label=f'{region} Fit', s=2, alpha=0.8, marker='.')
 
-    # Save or show the plots
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        fig.savefig(figure_path + "_angular_caye_OG.png", format='png', dpi=300)
-        fig_corr.savefig(figure_path + "_counts_caye_corrected.png", format='png', dpi=300)
-        print("Saved multi-panel count plots.")
+    # Calculate the fitted values using the fit model
+    fitted_values = fit_model(delta_P, eta_P, eta_P_ordinate)
 
-    plt.close(fig)
-    plt.close(fig_corr)
+    # Plot the line using eta_P (beta) and eta_P_ordinate (a)
+    plt.plot(delta_P, fitted_values, label=f"{region} Fit Line", color=f'C{list(log_delta_I_df["Region"]).index(region)}', alpha=0.7)
+    
+    # Optional: plot with error bars if needed
+    if show_errorbar:
+        plt.errorbar(delta_P, log_I_over_I0, xerr=abs(unc_delta_P), yerr=abs(unc_log_I_over_I0), fmt='o', label=f'{region} Fit with Errors')
 
-region = 'eff_corr'
+plt.xlabel('Delta P')
+plt.ylabel('Log (I / I0)')
+plt.ylim(-1, 0.5)
+plt.title('Efficiency Fits for Different Regions')
+plt.legend()
+plt.grid(True)
+if show_plots: 
+    plt.show()
+elif save_plots:
+    new_figure_path = figure_path + f"{fig_idx}" + "_GIANT _PRESSURE_PLOT.png"
+    fig_idx += 1
+    print(f"Saving figure to {new_figure_path}")
+    plt.savefig(new_figure_path, format = 'png', dpi = 300)
+plt.close()
+
+# ---------------------------------------------------------------------------------------------------
+
+# Filter regions that contain 'new_' to plot
+regions_to_plot = [region for region in log_delta_I_df['Region'] if 'new_' in region]
+
+# Create subplots dynamically based on the number of regions to plot
+num_regions = len(regions_to_plot)
+fig, axes = plt.subplots(nrows=num_regions, figsize=(12, 8), sharex=True, sharey=True)
+
+# Loop through all regions and plot them in separate subplots
+for idx, region in enumerate(regions_to_plot):
+    
+    # Extract data for the current region
+    region_data = log_delta_I_df[log_delta_I_df['Region'] == region]
+
+    # Access the full vectors (they are stored as columns, so we directly use them)
+    delta_P = region_data['Delta_P'].values[0]  # Access the vector (1D)
+    log_I_over_I0 = region_data['Log_I_over_I0'].values[0]  # Access the vector (1D)
+    unc_delta_P = region_data['Unc_Delta_P'].values[0]  # Access the vector (1D)
+    unc_log_I_over_I0 = region_data['Unc_Log_I_over_I0'].values[0]  # Access the vector (1D)
+    
+    eta_P = region_data['Eta_P'].values[0]  # Scalar value for eta_P
+    eta_P_ordinate = region_data['Eta_P_ordinate'].values[0]  # Scalar value for eta_P_ordinate
+    
+    # Plot scatter for the current region on the appropriate subplot
+    ax = axes[idx]  # Get the correct subplot based on idx
+    ax.scatter(delta_P, log_I_over_I0, label=f'{region} Fit', s=1, alpha=0.8, marker='.')
+
+    # Calculate the fitted values using the fit model
+    fitted_values = fit_model(delta_P, eta_P, eta_P_ordinate)
+
+    # Plot the line using eta_P (beta) and eta_P_ordinate (a)
+    ax.plot(delta_P, fitted_values, label=f"{region} Fit Line", color=f'C{idx}', alpha=0.7)
+    
+    # Optional: plot with error bars if needed
+    if show_errorbar:
+        ax.errorbar(delta_P, log_I_over_I0, xerr=abs(unc_delta_P), yerr=abs(unc_log_I_over_I0), fmt='o', label=f'{region} Fit with Errors')
+
+    # Add labels and title to the subplots
+    ax.set_xlabel('Delta P')
+    ax.set_ylabel('Log (I / I0)')
+    ax.set_title(f'Efficiency Fit for {region}')
+    ax.legend()
+    ax.grid(True)
+
+# Adjust layout to prevent overlap
+plt.tight_layout()
+
+# Show or save the plot
+if show_plots: 
+    plt.show()
+elif save_plots:
+    new_figure_path = figure_path + f"{fig_idx}" + "_GIANT_PRESSURE_PLOT.png"
+    fig_idx += 1
+    print(f"Saving figure to {new_figure_path}")
+    plt.savefig(new_figure_path, format='png', dpi=300)
+
+plt.close()
 
 
 
 
-
-# Final uncertainty calculation in the corrected rate
-unc_rate = 1
-unc_beta = unc_eta_P
-unc_DP = unc_delta_P
-term_1_rate = np.exp(-1 * eta_P / 100 * delta_P) * unc_rate
-term_2_beta = I * delta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_beta
-term_3_DP = I * eta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_DP
-final_unc_combined = np.sqrt(term_1_rate**2 + term_2_beta**2 + term_3_DP**2)
-data_df[f'unc_pres_{region}'] = final_unc_combined
+# ---------------------------------------------------------------------------------------------------
 
 # Add a new outlier filter to the pressure correction
+region = "eff_corr"
+after_press_z_score_th = 0.5
 
 if remove_outliers:
     print('Removing outliers and zero values...')
     def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
+        global fig_idx
+        
         """
         Create a mask of rows that are outliers or have zero values.
         """
         # median = series.mean()
         median = series.median()
         std = series.std()
-        z_scores = abs((series - median) / std)
+        # z_scores = abs((series - median) / std)
+        z_scores = (series - median) / std
         
         plt.hist(z_scores, bins=300)
+        plt.axvline(x=z_thresh, color='r', linestyle='--', label='Threshold')
+        plt.axvline(x=-1*z_thresh, color='r', linestyle='--', label='Threshold')
         plt.title('Z-Scores Distribution')
         plt.xlabel('Z-Score')
         plt.ylabel('Frequency')
         if show_plots: 
             plt.show()
         elif save_plots:
-            new_figure_path = figure_path + "_pressure_corr_z"
+            new_figure_path = figure_path + f"{fig_idx}" + "_after_pressure_corr_z.png"
+            fig_idx += 1
             print(f"Saving figure to {new_figure_path}")
             plt.savefig(new_figure_path, format = 'png', dpi = 300)
         plt.close()
         
         # print(z_scores)
         # Create a mask for rows where z_scores > z_thresh or values are zero
-        mask = (z_scores > z_thresh) | (series == 0)
+        mask = (abs(z_scores) > z_thresh) | (series == 0)
         return mask
 
     # Initialize a mask of all False, meaning no rows are removed initially
     rows_to_remove = pd.Series(False, index=data_df.index)
-    rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[f'pres_{region}'], z_thresh = 0.5)
-    # for region in angular_regions:
-    #     rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[region])
+    rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[f'pres_{region}'], z_thresh = after_press_z_score_th)
 
     data_df_cleaned = data_df[~rows_to_remove].copy()
     data_df = data_df_cleaned.copy()
@@ -1409,6 +1469,10 @@ if remove_outliers:
 # -----------------------------------------------------------------------------
 
 # WIP!!!!!!
+
+print('----------------------------------------------------------------------')
+print('--------------------- High order correction started ------------------')
+print('----------------------------------------------------------------------')
 
 if high_order_correction:
     
@@ -1441,6 +1505,8 @@ if high_order_correction:
 
     # Function to fit the data and calculate coefficients A, B, C
     def calculate_coefficients(region, I0, delta_I):
+        global fig_idx
+        
         delta_I_over_I0 = delta_I / I0
 
         # Fit linear regression model without intercept
@@ -1509,7 +1575,8 @@ if high_order_correction:
             if show_plots:
                 plt.show()
             elif save_plots:
-                new_figure_path = figure_path + "_high_order.png"
+                new_figure_path = figure_path + f"{fig_idx}" + "_high_order.png"
+                fig_idx += 1
                 print(f"Saving figure to {new_figure_path}")
                 plt.savefig(new_figure_path, format='png', dpi=300)
 
@@ -1545,7 +1612,7 @@ if create_plots:
     ax1.plot(data_df['Time'], data_df['eff_fit'], label='Efficiency from the new fit', color='C5')
     ax1.plot(data_df['Time'], data_df['eff_new'], label='Original / Corrected with new system', color='C4')
     ax1.set_ylabel('Efficiency')
-    ax1.set_ylim(0.9, 1)
+    ax1.set_ylim(0.5, 1)
     ax1.set_title('Efficiencies over Time')
     ax1.legend(loc='upper left')
 
@@ -1557,7 +1624,7 @@ if create_plots:
     ax2.set_ylabel('Rate')
     # ax2.set_ylim(12, 16)
     # ax2.set_ylim(16, 18)
-    ax2.set_ylim(10, 25)
+    ax2.set_ylim(5, 15)
     ax2.set_title('Rates over Time')
     ax2.legend(loc='upper left')
 
@@ -1567,7 +1634,8 @@ if create_plots:
     if show_plots:
         plt.show()
     elif save_plots:
-        new_figure_path = figure_path + "_effs_rates_naasd_pressure.png"
+        new_figure_path = figure_path + f"{fig_idx}" + "_effs_rates_naasd_pressure.png"
+        fig_idx += 1
         print(f"Saving figure to {new_figure_path}")
         plt.savefig(new_figure_path, format='png', dpi=300)
 
@@ -1657,3 +1725,188 @@ print(f'Data for Grafana saved to {grafana_save_filename}.')
 print('------------------------------------------------------')
 print(f"corrector.py completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print('------------------------------------------------------')
+
+sys.exit(0)
+
+# -------------------------------------------------------------------------------------
+# ----------------JUNK ----------------------------------------------------------------
+# -------------------------------------------------------------------------------------
+
+# high_regions_hans = ['V']
+# mid_regions_hans = ['N.M', 'NE.M', 'E.M', 'SE.M', 'S.M', 'SW.M', 'W.M', 'NW.M']
+# low_regions_hans = ['N.H', 'E.H', 'S.H', 'W.H']
+# angular_regions = high_regions_hans + mid_regions_hans + low_regions_hans
+
+# for reg in angular_regions:
+#     data_df[f'pres_{reg}'] = data_df[reg] * np.exp(-1 * eta_P / 100 * delta_P)
+
+# # Plot all the time series in angular_regions
+# if create_plots:
+#     print("Creating multi-panel count plots for all angular regions...")
+
+#     # Create figures with 4 subplots each, sharing x-axis
+#     fig, axes_original = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
+#     fig_corr, axes_corrected = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
+
+#     # Define angular region groups
+#     regions_v = ['V']
+#     regions_main = ['N.M', 'E.M', 'W.M', 'S.M']
+#     regions_diagonal = ['NE.M', 'SE.M', 'SW.M', 'NW.M']
+#     regions_h = ['N.H', 'E.H', 'S.H', 'W.H']
+
+#     region_groups = [regions_v, regions_main, regions_diagonal, regions_h]
+
+#     # ---- ORIGINAL COUNTS ----
+#     for ax, regions in zip(axes_original, region_groups):
+#         for region in regions:
+#             ax.plot(data_df['Time'], data_df[region] / (60 * res_win_min), label=f'{region} (Hz)')
+#         ax.set_ylabel('Counts')
+#         ax.legend(loc='upper left', ncol=2, fontsize=8)
+
+#     axes_original[0].set_title('Original Counts - V')
+#     axes_original[1].set_title('Original Counts - N.M, E.M, W.M, S.M')
+#     axes_original[2].set_title('Original Counts - NE.M, SE.M, SW.M, NW.M')
+#     axes_original[3].set_title('Original Counts - H Regions (N.H, E.H, S.H, W.H)')
+#     axes_original[-1].set_xlabel('Time')
+
+#     # ---- PRESSURE-CORRECTED COUNTS ----
+#     for ax, regions in zip(axes_corrected, region_groups):
+#         for region in regions:
+#             ax.plot(data_df['Time'], data_df[f'pres_{region}'], label=f'Corrected {region}')
+#         ax.set_ylabel('Counts')
+#         ax.legend(loc='upper left', ncol=2, fontsize=8)
+
+#     axes_corrected[0].set_title('Pressure-Corrected Counts - V')
+#     axes_corrected[1].set_title('Pressure-Corrected Counts - N.M, E.M, W.M, S.M')
+#     axes_corrected[2].set_title('Pressure-Corrected Counts - NE.M, SE.M, SW.M, NW.M')
+#     axes_corrected[3].set_title('Pressure-Corrected Counts - H Regions (N.H, E.H, S.H, W.H)')
+#     fig.suptitle("Rates for All Angular Regions", fontsize=14, fontweight='bold')
+#     axes_corrected[-1].set_xlabel('Time')
+
+#     plt.tight_layout()
+
+#     # Save or show the plots
+#     if show_plots:
+#         plt.show()
+#     elif save_plots:
+#         fig.savefig(figure_path + f"{fig_idx}" + "_counts_original.png", format='png', dpi=300)
+#         fig_idx += 1
+#         fig_corr.savefig(figure_path + f"{fig_idx}" + "_counts_corrected.png", format='png', dpi=300)
+#         fig_idx += 1
+#         print("Saved multi-panel count plots.")
+
+#     plt.close(fig)
+#     plt.close(fig_corr)
+
+# if create_plots:
+#     print("Creating multi-panel count plots for all angular regions...")
+
+#     # Create figures with 4 subplots each, sharing x-axis
+#     fig, axes_original = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
+#     fig_corr, axes_corrected = plt.subplots(4, 1, figsize=(17, 12), sharex=True)
+
+#     # Define angular region groups
+#     regions_v = ['V']
+#     regions_main = ['N.M', 'E.M', 'W.M', 'S.M']
+#     regions_diagonal = ['NE.M', 'SE.M', 'SW.M', 'NW.M']
+#     regions_h = ['N.H', 'E.H', 'S.H', 'W.H']
+
+#     region_groups = [regions_v, regions_main, regions_diagonal, regions_h]
+
+#     # ---- ORIGINAL COUNTS ----
+#     for ax, regions in zip(axes_original, region_groups):
+#         norm_offset = 0
+#         for region in regions:
+#             y = data_df[region]
+#             y_norm = (y - y.mean()) / y.mean() + norm_offset
+#             norm_offset += 0.1
+#             ax.plot(data_df['Time'], y_norm, label=f'{region}')
+#             # ax.plot(data_df['Time'], data_df[region], label=f'{region}')
+#         ax.set_ylabel('Counts')
+#         ax.legend(loc='upper left', ncol=2, fontsize=8)
+
+#     axes_original[0].set_title('Original Counts - V')
+#     axes_original[1].set_title('Original Counts - N.M, E.M, W.M, S.M')
+#     axes_original[2].set_title('Original Counts - NE.M, SE.M, SW.M, NW.M')
+#     axes_original[3].set_title('Original Counts - H Regions (N.H, E.H, S.H, W.H)')
+#     fig.suptitle("Normalized Counts for All Angular Regions", fontsize=14, fontweight='bold')
+#     axes_original[-1].set_xlabel('Time')
+
+#     # ---- PRESSURE-CORRECTED COUNTS ----
+#     for ax, regions in zip(axes_corrected, region_groups):
+#         for region in regions:
+#             ax.plot(data_df['Time'], data_df[f'pres_{region}'], label=f'Corrected {region}')
+#         ax.set_ylabel('Counts')
+#         ax.legend(loc='upper left', ncol=2, fontsize=8)
+
+#     axes_corrected[0].set_title('Pressure-Corrected Counts - V')
+#     axes_corrected[1].set_title('Pressure-Corrected Counts - N.M, E.M, W.M, S.M')
+#     axes_corrected[2].set_title('Pressure-Corrected Counts - NE.M, SE.M, SW.M, NW.M')
+#     axes_corrected[3].set_title('Pressure-Corrected Counts - H Regions (N.H, E.H, S.H, W.H)')
+#     axes_corrected[-1].set_xlabel('Time')
+
+#     plt.tight_layout()
+
+#     # Save or show the plots
+#     if show_plots:
+#         plt.show()
+#     elif save_plots:
+#         fig.savefig(figure_path + f"{fig_idx}" + "_counts_original_norm.png", format='png', dpi=300)
+#         fig_idx += 1
+#         fig_corr.savefig(figure_path + f"{fig_idx}" + "_counts_corrected_norm.png", format='png', dpi=300)
+#         fig_idx += 1
+#         print("Saved multi-panel count plots.")
+
+#     plt.close(fig)
+#     plt.close(fig_corr)
+
+
+
+# # Define angular regions
+# angular_regions = ['High', 'N', 'S', 'E', 'W']
+
+# # Apply pressure correction
+# for reg in angular_regions:
+#     data_df[f'pres_{reg}'] = data_df[reg] * np.exp(-1 * eta_P / 100 * delta_P)
+
+# # Plot all the time series in angular_regions
+# if create_plots:
+#     print("Creating multi-panel count plots for all angular regions...")
+
+#     # Create figures with subplots, sharing x-axis
+#     fig, axes_original = plt.subplots(len(angular_regions), 1, figsize=(17, 12), sharex=True)
+#     fig_corr, axes_corrected = plt.subplots(len(angular_regions), 1, figsize=(17, 12), sharex=True)
+
+#     # ---- ORIGINAL COUNTS ----
+#     for ax, region in zip(axes_original, angular_regions):
+#         ax.plot(data_df['Time'], data_df[region] / (60 * res_win_min), label=f'{region} (Hz)')
+#         ax.set_ylabel('Counts')
+#         ax.legend(loc='upper left', ncol=2, fontsize=8)
+#         ax.set_title(f'Original Counts - {region}')
+    
+#     axes_original[-1].set_xlabel('Time')
+
+#     # ---- PRESSURE-CORRECTED COUNTS ----
+#     for ax, region in zip(axes_corrected, angular_regions):
+#         ax.plot(data_df['Time'], data_df[f'pres_{region}'], label=f'Corrected {region}')
+#         ax.set_ylabel('Counts')
+#         ax.legend(loc='upper left', ncol=2, fontsize=8)
+#         ax.set_title(f'Pressure-Corrected Counts - {region}')
+    
+#     axes_corrected[-1].set_xlabel('Time')
+
+#     fig.suptitle("Rates for All Angular Regions", fontsize=14, fontweight='bold')
+#     plt.tight_layout()
+
+#     # Save or show the plots
+#     if show_plots:
+#         plt.show()
+#     elif save_plots:
+#         fig.savefig(figure_path + f"{fig_idx}" + "_angular_caye_OG.png", format='png', dpi=300)
+#         fig_idx += 1
+#         fig_corr.savefig(figure_path + f"{fig_idx}" + "_counts_caye_corrected.png", format='png', dpi=300)
+#         fig_idx += 1
+#         print("Saved multi-panel count plots.")
+
+#     plt.close(fig)
+#     plt.close(fig_corr)
