@@ -46,7 +46,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import re
 from itertools import combinations
-
+from scipy.optimize import curve_fit
+import numpy as np
+    
 # Store the current time at the start. To time the execution
 start_execution_time_counting = datetime.now()
 
@@ -233,15 +235,19 @@ calibrate_charge = True
 # Charge front-back --------------------------------
 charge_front_back = True
 
-# Y position ---------------------------------------
-y_position_complex_method = False
-uniform_y_method = True
-
 # Slewing correction -------------------------------
 slewing_correction = True
 
 # Time calibration ---------------------------------
 time_calibration = True
+
+# Time window determination ------------------------
+
+
+# Y position ---------------------------------------
+y_position_complex_method = False
+uniform_y_method = True
+uniform_weighted_method = False
 
 # RPC variables ------------------------------------
 weighted = False
@@ -321,7 +327,7 @@ Q_right_pre_cal = 500
 # Qdif
 Q_diff_pre_cal_threshold = 20
 # Tsum
-T_sum_left_pre_cal = -150 # it was -130 for mingo01 etc but for mingo03 it had to be changed
+T_sum_left_pre_cal = -150 # was -130 for mingo01 but for mingo03 is different
 T_sum_right_pre_cal = -90
 
 # Tdif
@@ -342,8 +348,8 @@ T_diff_cal_threshold = 1
 
 # Once calculated the RPC variables
 # Tsum
-T_sum_RPC_left = -300
-T_sum_RPC_right = 300
+T_sum_RPC_left = -140
+T_sum_RPC_right = -100
 # Tdiff
 T_diff_RPC_left = -0.8
 T_diff_RPC_right = 0.8
@@ -351,8 +357,8 @@ T_diff_RPC_right = 0.8
 Q_RPC_left = 0
 Q_RPC_right = 1000
 # Y pos
-Y_RPC_left = -200 # -150
-Y_RPC_right = 200 # 150
+Y_RPC_left = -150 # -150
+Y_RPC_right = 150 # 150
 
 # TimTrack filter -------------------------
 pos_filter = 700
@@ -386,7 +392,7 @@ calibrate_strip_Q_FB_percentile = 5
 # Time sum
 CRT_gaussian_fit_quantile = 0.03
 strip_time_diff_bound = 10
-time_coincidence_window = 7
+# time_coincidence_window = 7
 
 # Front-back charge
 distance_sum_charges_left_fit = -5
@@ -3495,7 +3501,6 @@ if slewing_correction:
 
 
 
-
 print("----------------------------------------------------------------------")
 print("----------------------- Time sum calibration -------------------------")
 print("----------------------------------------------------------------------")
@@ -4338,52 +4343,25 @@ else:
     calibrated_data['CRP_avg'] = 1000 # An extreme time to not crush the program
     print("Calibration in times was set to the reference! (calibration was not performed)\n", calibration_times)
 
-a = 1/0
+
 
 print("----------------------------------------------------------------------")
 print("----------------------- Time window filtering ------------------------")
 print("----------------------------------------------------------------------")
 
-# For each row, calculate the mean of the columns that have _T_sum_, then
-# calculate the difference between each column and the mean, and finally
-# check if the difference is within the time window of 7 ns
-
-# Calculate the mean of the T_sum values for each row, considering only non-zero values
-T_sum_columns = calibrated_data.filter(regex='_T_sum_')
-mean_T_sum = T_sum_columns.apply(lambda row: row[row != 0].median() if row[row != 0].size > 0 else 0, axis=1)
-
-# Calculate the difference between each T_sum value and the mean, but only for non-zero values
-diff_T_sum = T_sum_columns.sub(mean_T_sum, axis=0)
-
-# Check if the difference is within the time window, ignoring zero values
-time_window_mask = np.abs(diff_T_sum) <= time_coincidence_window
-time_window_mask[T_sum_columns == 0] = True  # Ignore zero values in the comparison
-
-# Apply the mask to the data using .loc to avoid the SettingWithCopyWarning
-calibrated_data.loc[:, T_sum_columns.columns] = T_sum_columns.where(time_window_mask, 0)
-
-# Calculate how many values were set to zero
-num_zeroed = (~time_window_mask).values.sum()
-num_total = time_window_mask.size  # total number of elements
-
-zeroed_percentage = num_zeroed / num_total
-
-if zeroed_percentage > 0:
-    print(f"Zeroed {zeroed_percentage:.2%} of the values outside the time window.")
-
-global_variables['discarded_by_time_window_percentage'] = zeroed_percentage
-
-if create_essential_plots or create_plots:
+time_window_filtering = True
+if time_window_filtering:
+    
+    T_sum_columns = calibrated_data.filter(regex='_T_sum_')
 
     t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
-    widths = np.linspace(1, 80, 200)  # Scan range of window widths in ns
+    widths = np.linspace(1, 10, 30)  # Scan range of window widths in ns
 
     counts_per_width = []
     counts_per_width_dev = []
 
     for w in widths:
         count_in_window = []
-
         for row in t_sum_data:
             row_no_zeros = row[row != 0]
             if len(row_no_zeros) == 0:
@@ -4403,25 +4381,6 @@ if create_essential_plots or create_plots:
     counts_per_width_dev = np.array(counts_per_width_dev)
     counts_per_width_norm = counts_per_width / np.max(counts_per_width)
 
-    # Plot
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
-    # ax.fill_between(
-    #     widths,
-    #     (counts_per_width - counts_per_width_dev) / np.max(counts_per_width),
-    #     (counts_per_width + counts_per_width_dev) / np.max(counts_per_width),
-    #     alpha=0.2,
-    #     label='±1σ band'
-    # )
-    ax.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
-    ax.set_xlabel("Window width (ns)")
-    ax.set_ylabel("Normalized average # of T_sum values in window")
-    ax.set_title("Fraction of hits within stat-centered window vs width")
-    ax.grid(True)
-    
-    from scipy.optimize import curve_fit
-    import numpy as np
-
     # Define model function: signal (logistic) + linear background
     def signal_plus_background(w, S, w0, tau, B):
         return S / (1 + np.exp(-(w - w0) / tau)) + B * w
@@ -4435,208 +4394,182 @@ if create_essential_plots or create_plots:
     # Extract parameters
     S_fit, w0_fit, tau_fit, B_fit = popt
     print(f"Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Sigmoid center w0 = {w0_fit:.4f} ns\n  Sigmoid width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
-    
+
     global_variables['sigmoid_width'] = tau_fit
     global_variables['background_slope'] = B_fit
-    
-    # Evaluate fit
-    w_fit = np.linspace(min(widths), max(widths), 300)
-    f_fit = signal_plus_background(w_fit, *popt)
 
-    # Overlay fit curve
-    ax.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
-
-    # Annotate signal and background
-    ax.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
-
-    # Compute stacked signal/background probabilities over window range
-    s_vals = S_fit / (1 + np.exp(-(w_fit - w0_fit) / tau_fit))
-    b_vals = B_fit * w_fit
-    f_vals = s_vals + b_vals
-
-    P_signal = s_vals / f_vals
-    P_background = b_vals / f_vals
-
-    # Create new axis above for stacked fill
-    from matplotlib.gridspec import GridSpec
-
-    # Reconstruct the figure with GridSpec
-    fig = plt.figure(figsize=(10, 8))
-    gs = GridSpec(2, 1, height_ratios=[1, 2], hspace=0.05)
-
-    ax_fill = fig.add_subplot(gs[0])  # Top: signal vs. background fill
-    ax_main = fig.add_subplot(gs[1], sharex=ax_fill)  # Bottom: your original plot
-
-    # Fill signal/background areas
-    ax_fill.fill_between(w_fit, 0, P_signal, color='green', alpha=0.4, label='Signal')
-    ax_fill.fill_between(w_fit, P_signal, 1, color='red', alpha=0.4, label='Background')
-
-    ax_fill.set_ylabel("Fraction")
-    ax_fill.set_ylim(np.min(P_signal), 1)
-    # ax_fill.set_yticks([0.25, 0.5, 0.75, 1.0])
-    ax_fill.legend(loc="upper right")
-    ax_fill.set_title("Estimated Signal and Background Fractions per Window Width")
-
-    # Hide x-tick labels on top plot
-    plt.setp(ax_fill.get_xticklabels(), visible=False)
-
-    # Replot original data in ax_main
-    ax_main.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
-    ax_main.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
-    ax_main.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
-    ax_main.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
-    ax_main.set_xlabel("Window width (ns)")
-    ax_main.set_ylabel("Normalized average # of T_sum values in window")
-    ax_main.grid(True)
-    fit_summary = (
-        f"Fit: S = {S_fit:.3f}, w₀ = {w0_fit:.3f} ns, "
-        f"τ = {tau_fit:.3f} ns, B = {B_fit:.4f}/ns"
-    )
-    ax_main.plot([], [], ' ', label=fit_summary)  # invisible handle to add text
-    ax_main.legend()
-    
-    if save_plots:
-        name_of_file = 'stat_window_accumulation'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-
-    if show_plots:
-        plt.show()
-    plt.close()
-
+    if create_plots:
+    # if create_essential_plots or create_plots:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
+        # ax.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
+        ax.set_xlabel("Window width (ns)")
+        ax.set_ylabel("Normalized average # of T_sum values in window")
+        ax.set_title("Fraction of hits within stat-centered window vs width")
+        ax.grid(True)
+        w_fit = np.linspace(min(widths), max(widths), 300)
+        f_fit = signal_plus_background(w_fit, *popt)
+        ax.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
+        ax.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
+        s_vals = S_fit / (1 + np.exp(-(w_fit - w0_fit) / tau_fit))
+        b_vals = B_fit * w_fit
+        f_vals = s_vals + b_vals
+        P_signal = s_vals / f_vals
+        P_background = b_vals / f_vals
+        from matplotlib.gridspec import GridSpec
+        fig = plt.figure(figsize=(10, 8))
+        gs = GridSpec(2, 1, height_ratios=[1, 2], hspace=0.05)
+        ax_fill = fig.add_subplot(gs[0])  # Top: signal vs. background fill
+        ax_main = fig.add_subplot(gs[1], sharex=ax_fill)  # Bottom: your original plot
+        ax_fill.fill_between(w_fit, 0, P_signal, color='green', alpha=0.4, label='Signal')
+        ax_fill.fill_between(w_fit, P_signal, 1, color='red', alpha=0.4, label='Background')
+        ax_fill.set_ylabel("Fraction")
+        ax_fill.set_ylim(np.min(P_signal), 1)
+        # ax_fill.set_yticks([0.25, 0.5, 0.75, 1.0])
+        ax_fill.legend(loc="upper right")
+        ax_fill.set_title("Estimated Signal and Background Fractions per Window Width")
+        plt.setp(ax_fill.get_xticklabels(), visible=False)
+        ax_main.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
+        # ax_main.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
+        ax_main.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
+        ax_main.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
+        ax_main.set_xlabel("Window width (ns)")
+        ax_main.set_ylabel("Normalized average # of T_sum values in window")
+        ax_main.grid(True)
+        fit_summary = (f"Fit: S = {S_fit:.3f}, w₀ = {w0_fit:.3f} ns, " f"τ = {tau_fit:.3f} ns, B = {B_fit:.4f}/ns")
+        ax_main.plot([], [], ' ', label=fit_summary)  # invisible handle to add text
+        ax_main.legend()
+        
+        if save_plots:
+            name_of_file = 'stat_window_accumulation'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
 
 
 print("----------------------------------------------------------------------")
 print("---------------------- Y position calculation ------------------------")
 print("----------------------------------------------------------------------")
 
-if y_position_complex_method:
-    print('Y position complex method.')
-    # Initialize empty lists for y values
-    y_values_M1 = []
-    y_values_M2 = []
-    y_values_M3 = []
-    y_values_M4 = []
-
-    # To store original y values before applying the lost bands or threshold adjustments
-    original_y_values_M1 = []
-    original_y_values_M2 = []
-    original_y_values_M3 = []
-    original_y_values_M4 = []
-
-    def transformation(Q, exp):
-        Q = np.where(Q <= 0, 0, Q)
-        value = Q ** exp
-        return value
-
-    # Loop through each module to compute y values
-    for module in ['P1', 'P2', 'P3', 'P4']:
-        if module in ['P1', 'P3']:
-            thick_strip = 4
-            y_pos = y_pos_P1_and_P3
-            y_width = y_width_P1_and_P3
-            lost_band = [width - induction_section for width in y_width]  # Calculate lost band
-        elif module in ['P2', 'P4']:
-            thick_strip = 1
-            y_pos = y_pos_P2_and_P4
-            y_width = y_width_P2_and_P4
-            lost_band = [width - induction_section for width in y_width]  # Calculate lost band
-            
-        lost_band = np.array(lost_band) / 2
-        
-        # Get the relevant Q_sum columns for the current module
-        Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(4)]
-        Q_sum_values = calibrated_data[Q_sum_cols].abs()
-
-        Q_sum_trans = transformation(Q_sum_values, transf_exp)
-
-        # Compute the sum of Q_sum values row-wise
-        Q_sum_total = Q_sum_trans.sum(axis=1)
-
-        # Calculate y using vectorized operations
-        epsilon = 1e-10  # A small value to avoid division by very small numbers or zero
-        y = (Q_sum_trans * y_pos).sum(axis=1) / (Q_sum_total + epsilon)
-
-        # Save original y values for comparison later (without lost band adjustments)
-        original_y_values = y.copy()
-
-        # Check if y is too close to any of the y_pos values
-        for i in range(len(y)):
-            if Q_sum_total[i] == 0:
-                continue  # Skip rows where Q_sum_total is 0
-        
-            # Check if the y value is too close to any y_pos value
-            for j in range(len(y_pos)):
-                # Check if within the threshold
-                if abs(y[i] - y_pos[j]) < y_pos_threshold:
-                    # Inside threshold: Generate a new value uniformly distributed in the lost band
-                    lower_limit = y_pos[j] - lost_band[j]
-                    upper_limit = y_pos[j] + lost_band[j]
-                    
-                    # Special case for strips in positions (1, 4) to extend uniformly to the strip border
-                    if j == 0:  # Strip 1: Extend to the left edge of the detector
-                        lower_limit = -np.sum(y_width) / 2
-                    elif j == len(y_pos) - 1:  # Strip 4: Extend to the right edge of the detector
-                        upper_limit = np.sum(y_width) / 2
-                    
-                    y[i] = np.random.uniform(lower_limit, upper_limit)
-                    
-                elif y_pos_threshold <= abs(y[i] - y_pos[j]) < y_width[j] / 2:
-                    # Values between threshold and strip border are scaled between the lost band and the strip border
-                    lower_limit = y_pos[j] - y_width[j] / 2
-                    upper_limit = y_pos[j] + y_width[j] / 2
-                    lost_band_value = lost_band[j]
-
-                    if y[i] > y_pos[j]:
-                        # Scale y[i] to fit between lost band and border (right side)
-                        scaled_value = np.interp(
-                            y[i],
-                            [y_pos[j] + y_pos_threshold, upper_limit],
-                            [y_pos[j] + lost_band_value, upper_limit]
-                        )
-                        y[i] = scaled_value
-                    else:
-                        # Scale y[i] to fit between lost band and border (left side)
-                        scaled_value = np.interp(
-                            y[i],
-                            [lower_limit, y_pos[j] - y_pos_threshold],
-                            [lower_limit, y_pos[j] - lost_band_value]
-                        )
-                        y[i] = scaled_value
-
-        # Store the computed y values in the corresponding list
-        if module == "P1":
-            y_values_P1 = y
-            original_y_values_P1 = original_y_values
-        elif module == "P2":
-            y_values_P2 = y
-            original_y_values_P2 = original_y_values
-        elif module == "P3":
-            y_values_P3 = y
-            original_y_values_P3 = original_y_values
-        elif module == "P4":
-            y_values_P4 = y
-            original_y_values_P4 = original_y_values
-
-
-# if uniform_y_method:
-#     print('Y position uniform distribution method.')
-
+# if y_position_complex_method:
+#     print('Y position complex method.')
 #     # Initialize empty lists for y values
 #     y_values_M1 = []
 #     y_values_M2 = []
 #     y_values_M3 = []
 #     y_values_M4 = []
 
-#     # Initialize original y-values for uniform method
+#     # To store original y values before applying the lost bands or threshold adjustments
 #     original_y_values_M1 = []
 #     original_y_values_M2 = []
 #     original_y_values_M3 = []
 #     original_y_values_M4 = []
+
+#     def transformation(Q, exp):
+#         Q = np.where(Q <= 0, 0, Q)
+#         value = Q ** exp
+#         return value
+
+#     # Loop through each module to compute y values
+#     for module in ['P1', 'P2', 'P3', 'P4']:
+#         if module in ['P1', 'P3']:
+#             thick_strip = 4
+#             y_pos = y_pos_P1_and_P3
+#             y_width = y_width_P1_and_P3
+#         elif module in ['P2', 'P4']:
+#             thick_strip = 1
+#             y_pos = y_pos_P2_and_P4
+#             y_width = y_width_P2_and_P4
+        
+#         lost_band = [width - induction_section for width in y_width]  # Calculate lost band
+#         lost_band = np.array(lost_band) / 2
+        
+#         # Get the relevant Q_sum columns for the current module
+#         Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(4)]
+#         Q_sum_values = calibrated_data[Q_sum_cols].abs()
+
+#         Q_sum_trans = transformation(Q_sum_values, transf_exp)
+
+#         # Compute the sum of Q_sum values row-wise
+#         Q_sum_total = Q_sum_trans.sum(axis=1)
+
+#         # Calculate y using vectorized operations
+#         epsilon = 1e-10  # A small value to avoid division by very small numbers or zero
+#         y = (Q_sum_trans * y_pos).sum(axis=1) / (Q_sum_total + epsilon)
+
+#         # Save original y values for comparison later (without lost band adjustments)
+#         original_y_values = y.copy()
+
+#         # Check if y is too close to any of the y_pos values
+#         for i in range(len(y)):
+#             if Q_sum_total[i] == 0:
+#                 continue  # Skip rows where Q_sum_total is 0
+        
+#             # Check if the y value is too close to any y_pos value
+#             for j in range(len(y_pos)):
+#                 # Check if within the threshold
+#                 if abs(y[i] - y_pos[j]) < y_pos_threshold:
+#                     # Inside threshold: Generate a new value uniformly distributed in the lost band
+#                     lower_limit = y_pos[j] - lost_band[j]
+#                     upper_limit = y_pos[j] + lost_band[j]
+                    
+#                     # Special case for strips in positions (1, 4) to extend uniformly to the strip border
+#                     if j == 0:  # Strip 1: Extend to the left edge of the detector
+#                         lower_limit = -np.sum(y_width) / 2
+#                     elif j == len(y_pos) - 1:  # Strip 4: Extend to the right edge of the detector
+#                         upper_limit = np.sum(y_width) / 2
+                    
+#                     y[i] = np.random.uniform(lower_limit, upper_limit)
+                    
+#                 elif y_pos_threshold <= abs(y[i] - y_pos[j]) < y_width[j] / 2:
+#                     # Values between threshold and strip border are scaled between the lost band and the strip border
+#                     lower_limit = y_pos[j] - y_width[j] / 2
+#                     upper_limit = y_pos[j] + y_width[j] / 2
+#                     lost_band_value = lost_band[j]
+
+#                     if y[i] > y_pos[j]:
+#                         # Scale y[i] to fit between lost band and border (right side)
+#                         scaled_value = np.interp(
+#                             y[i],
+#                             [y_pos[j] + y_pos_threshold, upper_limit],
+#                             [y_pos[j] + lost_band_value, upper_limit]
+#                         )
+#                         y[i] = scaled_value
+#                     else:
+#                         # Scale y[i] to fit between lost band and border (left side)
+#                         scaled_value = np.interp(
+#                             y[i],
+#                             [lower_limit, y_pos[j] - y_pos_threshold],
+#                             [lower_limit, y_pos[j] - lost_band_value]
+#                         )
+#                         y[i] = scaled_value
+
+#         # Store the computed y values in the corresponding list
+#         if module == "P1":
+#             y_values_P1 = y
+#             original_y_values_P1 = original_y_values
+#         elif module == "P2":
+#             y_values_P2 = y
+#             original_y_values_P2 = original_y_values
+#         elif module == "P3":
+#             y_values_P3 = y
+#             original_y_values_P3 = original_y_values
+#         elif module == "P4":
+#             y_values_P4 = y
+#             original_y_values_P4 = original_y_values
+
+
+# if uniform_y_method:
+#     print('Y position uniform distribution method.')
+
+#     # Initialize empty lists for y values
+#     y_values_M1, y_values_M2, y_values_M3, y_values_M4 = [], [], [], []
+#     original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4 = [], [], [], []
 
 #     # Loop through each module to compute y values
 #     for module in ['P1', 'P2', 'P3', 'P4']:
@@ -4649,24 +4582,16 @@ if y_position_complex_method:
 
 #         # Compute strip boundaries
 #         strip_boundaries = [(center - width / 2, center + width / 2) for center, width in zip(y_pos, y_width)]
-        
+
 #         # Get the relevant Q_sum columns for the current module
-#         Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(len(y_pos))]
+#         Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(len(y_pos))]
 #         Q_sum_values = calibrated_data[Q_sum_cols].abs()
 
-#         # Compute the sum of Q_sum values row-wise
-#         Q_sum_total = Q_sum_values.sum(axis=1)
+#         # Find the index of the maximum Q_sum for each row
+#         max_indices = Q_sum_values.idxmax(axis=1).apply(lambda col: int(col.split('_')[-1]) - 1)
 
-#         # Initialize the y values for this module
-#         y = np.zeros(len(calibrated_data))
-
-#         # Loop through strips to generate uniform values
-#         for j, (lower_limit, upper_limit) in enumerate(strip_boundaries):
-#             # Generate uniform random values for the current strip
-#             random_values = np.random.uniform(lower_limit, upper_limit, size=len(calibrated_data))
-
-#             # Add random values only for rows where Q_sum for this strip is non-zero
-#             y += random_values * (Q_sum_values.iloc[:, j] != 0)
+#         # Compute y values based on the maximum Q_sum index
+#         y = np.array([np.random.uniform(strip_boundaries[j][0], strip_boundaries[j][1]) for j in max_indices])
 
 #         # Store the computed y values in the corresponding list
 #         if module == "P1":
@@ -4683,245 +4608,357 @@ if y_position_complex_method:
 #             original_y_values_M4 = y.copy()  # Store original values
 
 
-if uniform_y_method:
-    print('Y position uniform distribution method.')
+# if uniform_weighted_method:
+#     print('Y position uniform distribution method (weighted average).')
 
-    # Initialize empty lists for y values
-    y_values_M1, y_values_M2, y_values_M3, y_values_M4 = [], [], [], []
-    original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4 = [], [], [], []
+#     y_values_M1, y_values_M2, y_values_M3, y_values_M4 = [], [], [], []
+#     original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4 = [], [], [], []
 
-    # Loop through each module to compute y values
-    for module in ['P1', 'P2', 'P3', 'P4']:
-        if module in ['P1', 'P3']:
-            y_pos = y_pos_P1_and_P3
-            y_width = y_width_P1_and_P3
-        elif module in ['P2', 'P4']:
-            y_pos = y_pos_P2_and_P4
-            y_width = y_width_P2_and_P4
+#     for module in ['P1', 'P2', 'P3', 'P4']:
+#         if module in ['P1', 'P3']:
+#             y_pos = y_pos_P1_and_P3
+#             y_width = y_width_P1_and_P3
+#         elif module in ['P2', 'P4']:
+#             y_pos = y_pos_P2_and_P4
+#             y_width = y_width_P2_and_P4
 
-        # Compute strip boundaries
-        strip_boundaries = [(center - width / 2, center + width / 2) for center, width in zip(y_pos, y_width)]
+#         strip_boundaries = [(center - width / 2, center + width / 2) for center, width in zip(y_pos, y_width)]
+#         Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(len(y_pos))]
+#         Q_sum_values = calibrated_data[Q_sum_cols].abs().values  # shape: (n_events, n_strips)
 
-        # Get the relevant Q_sum columns for the current module
-        Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(len(y_pos))]
-        Q_sum_values = calibrated_data[Q_sum_cols].abs()
+#         n_events, n_strips = Q_sum_values.shape
+#         y_samples = np.zeros_like(Q_sum_values)
 
-        # Find the index of the maximum Q_sum for each row
-        max_indices = Q_sum_values.idxmax(axis=1).apply(lambda col: int(col.split('_')[-1]) - 1)
+#         for i in range(n_strips):
+#             low, high = strip_boundaries[i]
+#             mask = Q_sum_values[:, i] > 3
+#             y_samples[mask, i] = np.random.uniform(low, high, size=mask.sum())
 
-        # Compute y values based on the maximum Q_sum index
-        y = np.array([np.random.uniform(strip_boundaries[j][0], strip_boundaries[j][1]) for j in max_indices])
+#         # Normalize charges to weights (avoid division by 0)
+#         binary_mask = (Q_sum_values > 3).astype(float)
+#         active_strips = binary_mask.sum(axis=1, keepdims=True)
+#         weights = np.divide(binary_mask, active_strips, out=np.zeros_like(binary_mask), where=active_strips != 0)
 
-        # Store the computed y values in the corresponding list
-        if module == "P1":
-            y_values_M1 = y
-            original_y_values_M1 = y.copy()  # Store original values
-        elif module == "P2":
-            y_values_M2 = y
-            original_y_values_M2 = y.copy()  # Store original values
-        elif module == "P3":
-            y_values_M3 = y
-            original_y_values_M3 = y.copy()  # Store original values
-        elif module == "P4":
-            y_values_M4 = y
-            original_y_values_M4 = y.copy()  # Store original values
+#         # Weighted average y per event
+#         y_weighted = (weights * y_samples).sum(axis=1)
+
+#         if module == "P1":
+#             y_values_M1 = y_weighted
+#             original_y_values_M1 = y_weighted.copy()
+#         elif module == "P2":
+#             y_values_M2 = y_weighted
+#             original_y_values_M2 = y_weighted.copy()
+#         elif module == "P3":
+#             y_values_M3 = y_weighted
+#             original_y_values_M3 = y_weighted.copy()
+#         elif module == "P4":
+#             y_values_M4 = y_weighted
+#             original_y_values_M4 = y_weighted.copy()
 
 
-
-if not uniform_y_method and not y_position_complex_method:
-    print('Y position center of the strip method.')
-    # Initialize empty lists for y values
-    y_values_M1 = []
-    y_values_M2 = []
-    y_values_M3 = []
-    y_values_M4 = []
+# if not uniform_y_method and not y_position_complex_method and not uniform_weighted_method:
+#     print('Y position center of the strip method.')
+#     # Initialize empty lists for y values
+#     y_values_M1 = []
+#     y_values_M2 = []
+#     y_values_M3 = []
+#     y_values_M4 = []
     
-    # Loop through each module to compute y values
-    for module in ['P1', 'P2', 'P3', 'P4']:
-        if module in ['P1', 'P3']:
-            thick_strip = 4
-            y_pos = y_pos_P1_and_P3
-        elif module in ['P2', 'P4']:
-            thick_strip = 1
-            y_pos = y_pos_P2_and_P4
+#     # Loop through each module to compute y values
+#     for module in ['P1', 'P2', 'P3', 'P4']:
+#         if module in ['P1', 'P3']:
+#             thick_strip = 4
+#             y_pos = y_pos_P1_and_P3
+#         elif module in ['P2', 'P4']:
+#             thick_strip = 1
+#             y_pos = y_pos_P2_and_P4
     
-        # Get the relevant Q_sum columns for the current module
-        Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(4)]
-        Q_sum_values = calibrated_data[Q_sum_cols].abs()
+#         # Get the relevant Q_sum columns for the current module
+#         Q_sum_cols = [f'{module.replace("P", "Q")}_Q_sum_{i+1}' for i in range(4)]
+#         Q_sum_values = calibrated_data[Q_sum_cols].abs()
     
-        # Compute the sum of Q_sum values row-wise
-        Q_sum_total = Q_sum_values.sum(axis=1)
+#         # Compute the sum of Q_sum values row-wise
+#         Q_sum_total = Q_sum_values.sum(axis=1)
     
-        # Calculate y using vectorized operations
-        y = (Q_sum_values * y_pos).sum(axis=1) / Q_sum_total
-        y[Q_sum_total == 0] = 0  # Set y to 0 where Q_sum_total is 0
+#         # Calculate y using vectorized operations
+#         y = (Q_sum_values * y_pos).sum(axis=1) / Q_sum_total
+#         y[Q_sum_total == 0] = 0  # Set y to 0 where Q_sum_total is 0
     
-        # Store the computed y values in the corresponding list
-        if module == "P1":
-            y_values_M1 = y.values
-        elif module == "P2":
-            y_values_M2 = y.values
-        elif module == "P3":
-            y_values_M3 = y.values
-        elif module == "P4":
-            y_values_M4 = y.values
+#         # Store the computed y values in the corresponding list
+#         if module == "P1":
+#             y_values_M1 = y.values
+#         elif module == "P2":
+#             y_values_M2 = y.values
+#         elif module == "P3":
+#             y_values_M3 = y.values
+#         elif module == "P4":
+#             y_values_M4 = y.values
             
 
+# y_values_dict = {
+#     'Y_1': y_values_M1,
+#     'Y_2': y_values_M2,
+#     'Y_3': y_values_M3,
+#     'Y_4': y_values_M4
+# }
 
-y_values_dict = {
-    'Y_1': y_values_M1,
-    'Y_2': y_values_M2,
-    'Y_3': y_values_M3,
-    'Y_4': y_values_M4
-}
+# y_values_df = pd.DataFrame(y_values_dict, index=calibrated_data.index)
+# calibrated_data = pd.concat([calibrated_data, y_values_df], axis=1)
+# calibrated_data = calibrated_data.copy()
 
-y_values_df = pd.DataFrame(y_values_dict, index=calibrated_data.index)
-calibrated_data = pd.concat([calibrated_data, y_values_df], axis=1)
-calibrated_data = calibrated_data.copy()
+# # Plot the old and new Y's ------------------------------------------------------
+# if (create_essential_plots or create_plots) and y_position_complex_method:
+#     bin_number = 'auto'
 
+#     # Create a 3x4 grid for the plots
+#     fig, axs = plt.subplots(3, 4, figsize=(20, 15), constrained_layout=True)
+#     y_columns = ['Y_1', 'Y_2', 'Y_3', 'Y_4']
+#     titles = ['Y1', 'Y2', 'Y3', 'Y4']
+#     strip_borders_P1_and_P3 = np.cumsum(np.append(0, y_width_P1_and_P3)) - np.sum(y_width_P1_and_P3) / 2
+#     strip_borders_P2_and_P4 = np.cumsum(np.append(0, y_width_P2_and_P4)) - np.sum(y_width_P2_and_P4) / 2
+#     centers_dict = {'Y1': y_pos_P1_and_P3, 'Y3': y_pos_P1_and_P3, 'Y2': y_pos_P2_and_P4, 'Y4': y_pos_P2_and_P4}
+#     borders_dict = {'Y1': strip_borders_P1_and_P3, 'Y3': strip_borders_P1_and_P3, 'Y2': strip_borders_P2_and_P4, 'Y4': strip_borders_P2_and_P4}
 
-# Plot the old and new Y's ------------------------------------------------------
-if create_plots and y_position_complex_method:
-    bin_number = 'auto'
+#     for i, (y_col, title) in enumerate(zip(y_columns, titles)):
+#         y_processed, y_original = calibrated_data[y_col].values, [original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4][i]
+#         y_non_zero_processed, y_non_zero_original = y_processed[y_processed != 0], y_original[y_original != 0]
 
-    # Create a 3x4 grid for the plots
-    fig, axs = plt.subplots(3, 4, figsize=(20, 15), constrained_layout=True)
-    y_columns = ['Y_1', 'Y_2', 'Y_3', 'Y_4']
-    titles = ['Y1', 'Y2', 'Y3', 'Y4']
-    strip_borders_P1_and_P3 = np.cumsum(np.append(0, y_width_P1_and_P3)) - np.sum(y_width_P1_and_P3) / 2
-    strip_borders_P2_and_P4 = np.cumsum(np.append(0, y_width_P2_and_P4)) - np.sum(y_width_P2_and_P4) / 2
-    centers_dict = {'Y1': y_pos_P1_and_P3, 'Y3': y_pos_P1_and_P3, 'Y2': y_pos_P2_and_P4, 'Y4': y_pos_P2_and_P4}
-    borders_dict = {'Y1': strip_borders_P1_and_P3, 'Y3': strip_borders_P1_and_P3, 'Y2': strip_borders_P2_and_P4, 'Y4': strip_borders_P2_and_P4}
+#         # Plot processed y-values
+#         axs[0, i].hist(y_non_zero_processed, bins=bin_number, alpha=0.5, color='blue', label='Processed')
+#         axs[0, i].set(title=f'{title} (Processed)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
 
-    for i, (y_col, title) in enumerate(zip(y_columns, titles)):
-        y_processed, y_original = calibrated_data[y_col].values, [original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4][i]
-        y_non_zero_processed, y_non_zero_original = y_processed[y_processed != 0], y_original[y_original != 0]
+#         # Plot original y-values
+#         axs[1, i].hist(y_non_zero_original, bins=bin_number, alpha=0.5, color='green', label='Original')
+#         axs[1, i].set(title=f'{title} (Original)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
 
-        # Plot processed y-values
-        axs[0, i].hist(y_non_zero_processed, bins=bin_number, alpha=0.5, color='blue', label='Processed')
-        axs[0, i].set(title=f'{title} (Processed)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
+#         # Plot both processed and original together in the third row
+#         axs[2, i].hist(y_non_zero_processed, bins=bin_number, alpha=0.4, color='blue', label='Processed')
+#         axs[2, i].hist(y_non_zero_original, bins=bin_number, alpha=0.4, color='green', label='Original')
+#         axs[2, i].set(title=f'{title} (Processed & Original)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
 
-        # Plot original y-values
-        axs[1, i].hist(y_non_zero_original, bins=bin_number, alpha=0.5, color='green', label='Original')
-        axs[1, i].set(title=f'{title} (Original)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
+#         # Add continuous lines for strip centers and borders in all rows
+#         for ax in [axs[0, i], axs[1, i], axs[2, i]]:
+#             for center in centers_dict[title]:
+#                 ax.axvline(center, color='blue', linestyle='-', alpha=0.7)
+#             for border in borders_dict[title]:
+#                 ax.axvline(border, color='red', linestyle='--', alpha=0.7)
+#             for band_border in [center + np.array([-lost_band[j], lost_band[j]]) for j, center in enumerate(centers_dict[title])]:
+#                 ax.axvline(band_border[0], color='purple', linestyle=':', alpha=0.7)
+#                 ax.axvline(band_border[1], color='purple', linestyle=':', alpha=0.7)
+#             for center in centers_dict[title]:
+#                 ax.axvspan(center - y_pos_threshold, center + y_pos_threshold, color='yellow', alpha=0.2)
 
-        # Plot both processed and original together in the third row
-        axs[2, i].hist(y_non_zero_processed, bins=bin_number, alpha=0.4, color='blue', label='Processed')
-        axs[2, i].hist(y_non_zero_original, bins=bin_number, alpha=0.4, color='green', label='Original')
-        axs[2, i].set(title=f'{title} (Processed & Original)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
-
-        # Add continuous lines for strip centers and borders in all rows
-        for ax in [axs[0, i], axs[1, i], axs[2, i]]:
-            for center in centers_dict[title]:
-                ax.axvline(center, color='blue', linestyle='-', alpha=0.7)
-            for border in borders_dict[title]:
-                ax.axvline(border, color='red', linestyle='--', alpha=0.7)
-            for band_border in [center + np.array([-lost_band[j], lost_band[j]]) for j, center in enumerate(centers_dict[title])]:
-                ax.axvline(band_border[0], color='purple', linestyle=':', alpha=0.7)
-                ax.axvline(band_border[1], color='purple', linestyle=':', alpha=0.7)
-            for center in centers_dict[title]:
-                ax.axvspan(center - y_pos_threshold, center + y_pos_threshold, color='yellow', alpha=0.2)
-
-    plt.suptitle('Histograms of Y positions with Logarithmic Y-Axis', fontsize=16)
+#     plt.suptitle('Histograms of Y positions with Logarithmic Y-Axis', fontsize=16)
     
-    if save_plots:
-        name_of_file = 'y_positions_complex'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
+#     if save_plots:
+#         name_of_file = 'y_positions_complex'
+#         final_filename = f'{fig_idx}_{name_of_file}.png'
+#         fig_idx += 1
 
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#         plot_list.append(save_fig_path)
+#         plt.savefig(save_fig_path, format='png')
     
-    if show_plots: plt.show()
-    plt.close()
+#     if show_plots: plt.show()
+#     plt.close()
 
 
-# Plot the old and new Y's ------------------------------------------------------
-if create_plots and uniform_y_method:
-    print("Plotting the uniform Y position method results")
+# # Plot the old and new Y's ------------------------------------------------------
+# if (create_essential_plots or create_plots) and (uniform_y_method or uniform_weighted_method):
+#     print("Plotting the uniform Y position method results")
     
-    bin_number = 'auto'
+#     bin_number = 'auto'
 
-    # Create a 3x4 grid for the plots
-    fig, axs = plt.subplots(3, 4, figsize=(20, 15), constrained_layout=True)
-    y_columns = ['Y_1', 'Y_2', 'Y_3', 'Y_4']
-    titles = ['Y1', 'Y2', 'Y3', 'Y4']
-    strip_borders_P1_and_P3 = np.cumsum(np.append(0, y_width_P1_and_P3)) - np.sum(y_width_P1_and_P3) / 2
-    strip_borders_P2_and_P4 = np.cumsum(np.append(0, y_width_P2_and_P4)) - np.sum(y_width_P2_and_P4) / 2
-    centers_dict = {'Y1': y_pos_P1_and_P3, 'Y3': y_pos_P1_and_P3, 'Y2': y_pos_P2_and_P4, 'Y4': y_pos_P2_and_P4}
-    borders_dict = {'Y1': strip_borders_P1_and_P3, 'Y3': strip_borders_P1_and_P3, 'Y2': strip_borders_P2_and_P4, 'Y4': strip_borders_P2_and_P4}
+#     # Create a 3x4 grid for the plots
+#     fig, axs = plt.subplots(3, 4, figsize=(20, 15), constrained_layout=True)
+#     y_columns = ['Y_1', 'Y_2', 'Y_3', 'Y_4']
+#     titles = ['Y1', 'Y2', 'Y3', 'Y4']
+#     strip_borders_P1_and_P3 = np.cumsum(np.append(0, y_width_P1_and_P3)) - np.sum(y_width_P1_and_P3) / 2
+#     strip_borders_P2_and_P4 = np.cumsum(np.append(0, y_width_P2_and_P4)) - np.sum(y_width_P2_and_P4) / 2
+#     centers_dict = {'Y1': y_pos_P1_and_P3, 'Y3': y_pos_P1_and_P3, 'Y2': y_pos_P2_and_P4, 'Y4': y_pos_P2_and_P4}
+#     borders_dict = {'Y1': strip_borders_P1_and_P3, 'Y3': strip_borders_P1_and_P3, 'Y2': strip_borders_P2_and_P4, 'Y4': strip_borders_P2_and_P4}
 
-    for i, (y_col, title) in enumerate(zip(y_columns, titles)):
-        y_processed, y_original = calibrated_data[y_col].values, [original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4][i]
-        y_non_zero_processed, y_non_zero_original = y_processed[y_processed != 0], y_original[y_original != 0]
+#     for i, (y_col, title) in enumerate(zip(y_columns, titles)):
+#         y_processed, y_original = calibrated_data[y_col].values, [original_y_values_M1, original_y_values_M2, original_y_values_M3, original_y_values_M4][i]
+#         y_non_zero_processed, y_non_zero_original = y_processed[y_processed != 0], y_original[y_original != 0]
 
-        # Plot processed y-values
-        axs[0, i].hist(y_non_zero_processed, bins=bin_number, alpha=0.5, color='blue', label='Processed')
-        axs[0, i].set(title=f'{title} (Processed)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
+#         # Plot processed y-values
+#         axs[0, i].hist(y_non_zero_processed, bins=bin_number, alpha=0.5, color='blue', label='Processed')
+#         axs[0, i].set(title=f'{title} (Processed)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
 
-        # Plot original y-values
-        axs[1, i].hist(y_non_zero_original, bins=bin_number, alpha=0.5, color='green', label='Original')
-        axs[1, i].set(title=f'{title} (Original)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
+#         # Plot original y-values
+#         axs[1, i].hist(y_non_zero_original, bins=bin_number, alpha=0.5, color='green', label='Original')
+#         axs[1, i].set(title=f'{title} (Original)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
 
-        # Plot both processed and original together in the third row
-        axs[2, i].hist(y_non_zero_processed, bins=bin_number, alpha=0.4, color='blue', label='Processed')
-        axs[2, i].hist(y_non_zero_original, bins=bin_number, alpha=0.4, color='green', label='Original')
-        axs[2, i].set(title=f'{title} (Processed & Original)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
+#         # Plot both processed and original together in the third row
+#         axs[2, i].hist(y_non_zero_processed, bins=bin_number, alpha=0.4, color='blue', label='Processed')
+#         axs[2, i].hist(y_non_zero_original, bins=bin_number, alpha=0.4, color='green', label='Original')
+#         axs[2, i].set(title=f'{title} (Processed & Original)', xlabel='Position (units)', ylabel='Frequency', xlim=(-150, 150), yscale='log')
 
-        # Add continuous lines for strip centers and borders in all rows
-        for ax in [axs[0, i], axs[1, i], axs[2, i]]:
-            for center in centers_dict[title]:
-                ax.axvline(center, color='blue', linestyle='-', alpha=0.7)
-            for border in borders_dict[title]:
-                ax.axvline(border, color='red', linestyle='--', alpha=0.7)
+#         # Add continuous lines for strip centers and borders in all rows
+#         for ax in [axs[0, i], axs[1, i], axs[2, i]]:
+#             for center in centers_dict[title]:
+#                 ax.axvline(center, color='blue', linestyle='-', alpha=0.7)
+#             for border in borders_dict[title]:
+#                 ax.axvline(border, color='red', linestyle='--', alpha=0.7)
 
-    plt.suptitle('Histograms of Y positions with Logarithmic Y-Axis', fontsize=16)
+#     plt.suptitle('Histograms of Y positions with Logarithmic Y-Axis', fontsize=16)
     
-    if save_plots:
-        name_of_file = 'y_positions_uniform'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
+#     if save_plots:
+#         name_of_file = 'y_positions_uniform'
+#         final_filename = f'{fig_idx}_{name_of_file}.png'
+#         fig_idx += 1
 
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#         plot_list.append(save_fig_path)
+#         plt.savefig(save_fig_path, format='png')
     
-    if show_plots: plt.show()
-    plt.close()
+#     if show_plots: plt.show()
+#     plt.close()
 
 
-if create_plots and y_position_complex_method == False and uniform_y_method == False: 
-    fig, axs = plt.subplots(1, 4, figsize=(20, 5), constrained_layout=True)
-    y_columns = ['Y_1', 'Y_2', 'Y_3', 'Y_4']
-    titles = ['Y1', 'Y2', 'Y3', 'Y4']
+# if (create_essential_plots or create_plots) and y_position_complex_method == False and uniform_y_method == False and uniform_weighted_method == False: 
+#     fig, axs = plt.subplots(1, 4, figsize=(20, 5), constrained_layout=True)
+#     y_columns = ['Y_1', 'Y_2', 'Y_3', 'Y_4']
+#     titles = ['Y1', 'Y2', 'Y3', 'Y4']
     
-    # Loop through each Y column and plot in the corresponding subplot
-    for i, (y_col, title) in enumerate(zip(y_columns, titles)):
-        y = calibrated_data[y_col].values
-        y_non_zero = y[y != 0]  # Filter out zeros
+#     # Loop through each Y column and plot in the corresponding subplot
+#     for i, (y_col, title) in enumerate(zip(y_columns, titles)):
+#         y = calibrated_data[y_col].values
+#         y_non_zero = y[y != 0]  # Filter out zeros
         
-        # Plot histogram
-        axs[i].hist(y_non_zero, bins=300, alpha=0.5, label=title)
-        axs[i].set_title(title)
-        axs[i].set_xlabel('Time (units)')
-        axs[i].set_ylabel('Frequency')
-        axs[i].set_yscale('log')  # Set y-axis to logarithmic scale
-        axs[i].legend()
+#         # Plot histogram
+#         axs[i].hist(y_non_zero, bins=300, alpha=0.5, label=title)
+#         axs[i].set_title(title)
+#         axs[i].set_xlabel('Time (units)')
+#         axs[i].set_ylabel('Frequency')
+#         axs[i].set_yscale('log')  # Set y-axis to logarithmic scale
+#         axs[i].legend()
         
-    plt.suptitle('Histograms of Y positions with Logarithmic Y-Axis', fontsize=16)
+#     plt.suptitle('Histograms of Y positions with Logarithmic Y-Axis', fontsize=16)
     
+#     if save_plots:
+#         name_of_file = 'y_positions_standard'
+#         final_filename = f'{fig_idx}_{name_of_file}.png'
+#         fig_idx += 1
+
+#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#         plot_list.append(save_fig_path)
+#         plt.savefig(save_fig_path, format='png')
+    
+#     if show_plots: plt.show()
+#     plt.close()
+
+
+# y_new_method = True
+
+# if y_new_method:
+    
+#     for plane_id in range(1, 5):
+#         # Column names for this plane
+#         cols = [f'Q{plane_id}_Q_sum_{i}' for i in range(1, 5)]
+#         Q_plane = calibrated_data[cols].values  # shape (N, 4)
+
+#         # Binary topology (1 if charge > 0, else 0)
+#         topo_binary = (Q_plane > 3).astype(int)  # shape (N, 4)
+
+#         # Select appropriate Y position vector
+#         if plane_id in [1, 3]:
+#             y_vec = y_pos_P1_and_P3
+#         else:
+#             y_vec = y_pos_P2_and_P4
+
+#         # Multiply binary topo by Y vector to get contribution
+#         weighted_y = topo_binary * y_vec  # broadcast y_vec over rows
+
+#         # Count non-zero elements per row
+#         active_strips = topo_binary.sum(axis=1)
+
+#         # Avoid division by zero; set divisor to 1 where sum is 0 (will zero out anyway)
+#         active_strips_safe = np.where(active_strips == 0, 1, active_strips)
+
+#         # Compute mean Y position per plane (0 when no active strips)
+#         y_position = weighted_y.sum(axis=1) / active_strips_safe
+#         y_position[active_strips == 0] = 0  # Enforce 0 where no strip active
+
+#         # Store in DataFrame
+#         calibrated_data[f'Y_{plane_id}'] = y_position
+
+
+# ---------------------------------------------------------------------------------------------------
+# ------------ CALCULATE, AT THIS POINT, THE ACTIVE STRIPS PER PLANE NUMBER -------------------------
+# ---------------------------------------------------------------------------------------------------
+
+# Compute and store the binary topology (active strips per plane)
+for plane_id in range(1, 5):
+    cols = [f'Q{plane_id}_Q_sum_{i}' for i in range(1, 5)]
+    Q_plane = calibrated_data[cols].values  # shape (N, 4)
+
+    # Binary activation: 1 if charge > 3
+    active_strips_binary = (Q_plane > 3).astype(int)
+
+    # Convert each row to string (e.g. [0, 0, 1, 0] -> '0010')
+    binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
+    calibrated_data[f'active_strips_P{plane_id}'] = binary_strings
+
+# Print check
+print("Active strips per plane calculated.")
+print(calibrated_data[['active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4']].head())
+
+
+y_new_method = True
+
+if y_new_method:
+    for plane_id in range(1, 5):
+        # Retrieve and convert stored binary string to numeric array
+        topo_binary = np.array([
+            list(map(int, s)) for s in calibrated_data[f'active_strips_P{plane_id}']
+        ])  # shape (N, 4)
+
+        # Select the corresponding Y position vector
+        if plane_id in [1, 3]:
+            y_vec = y_pos_P1_and_P3
+        else:
+            y_vec = y_pos_P2_and_P4
+
+        # Compute weighted average
+        weighted_y = topo_binary * y_vec
+        active_counts = topo_binary.sum(axis=1)
+        active_counts_safe = np.where(active_counts == 0, 1, active_counts)
+
+        y_position = weighted_y.sum(axis=1) / active_counts_safe
+        y_position[active_counts == 0] = 0  # Enforce 0 when no strips are active
+
+        calibrated_data[f'Y_{plane_id}'] = y_position
+
+
+
+if create_essential_plots:
+
+    plt.figure(figsize=(12, 8))
+    for i, plane_id in enumerate(range(1, 5), 1):
+        plt.subplot(2, 2, i)
+        column_name = f'Y_{plane_id}'
+        data = calibrated_data[column_name]
+        
+        plt.hist(data[data != 0], bins=50, histtype='stepfilled', alpha=0.7)
+        plt.title(f'Y Position Distribution - Plane {plane_id}')
+        plt.xlabel('Y Position (a.u.)')
+        plt.ylabel('Counts')
+        plt.grid(True)
+
+    plt.tight_layout()
     if save_plots:
-        name_of_file = 'y_positions_standard'
+        name_of_file = 'new_Y'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-    
-    if show_plots: plt.show()
+    if show_plots:
+        plt.show()
     plt.close()
+
 
 print("Y position calculated.")
 
@@ -4930,74 +4967,110 @@ print("----------------------------------------------------------------------")
 print("----------------- Setting the variables of each RPC ------------------")
 print("----------------------------------------------------------------------")
 
-exp_final_rpc = 1
-weighting_threshold = 0.2
+# exp_final_rpc = 1
+# weighting_threshold = 0.2
 
-new_columns = {}
+# new_columns = {}
 
-# Function to compute weighted or maximum charge-based values
-def compute_transformed_values(T_sums, T_diffs, Q_sums, weighted):
-    # Get maximum charge and apply threshold
-    Q_max = np.max(Q_sums, axis=1)
-    limit_value = weighting_threshold * Q_max[:, np.newaxis]
-    Q_sums[Q_sums < limit_value] = 0
+# # Function to compute weighted or maximum charge-based values
+# def compute_transformed_values(T_sums, T_diffs, Q_sums, weighted):
+#     # Get maximum charge and apply threshold
+#     Q_max = np.max(Q_sums, axis=1)
+#     limit_value = weighting_threshold * Q_max[:, np.newaxis]
+#     Q_sums[Q_sums < limit_value] = 0
 
-    # Compute the transformed charges
-    Q_transformed = Q_sums ** exp_final_rpc
-    Q_sum_axis = Q_transformed.sum(axis=1) + 1e-10
+#     # Compute the transformed charges
+#     Q_transformed = Q_sums ** exp_final_rpc
+#     Q_sum_axis = Q_transformed.sum(axis=1) + 1e-10
 
-    # Calculate weighted sums
-    weighted_T_sum = (T_sums * Q_transformed).sum(axis=1) / Q_sum_axis
-    weighted_T_diff = (T_diffs * Q_transformed).sum(axis=1) / Q_sum_axis
+#     # Calculate weighted sums
+#     weighted_T_sum = (T_sums * Q_transformed).sum(axis=1) / Q_sum_axis
+#     weighted_T_diff = (T_diffs * Q_transformed).sum(axis=1) / Q_sum_axis
 
-    # Find the index of the maximum charge for each event
-    Q_max_index = np.argmax(Q_sums, axis=1)
-    T_sum_max_charge = T_sums[np.arange(len(T_sums)), Q_max_index]
-    T_diff_max_charge = T_diffs[np.arange(len(T_diffs)), Q_max_index]
+#     # Find the index of the maximum charge for each event
+#     Q_max_index = np.argmax(Q_sums, axis=1)
+#     T_sum_max_charge = T_sums[np.arange(len(T_sums)), Q_max_index]
+#     T_diff_max_charge = T_diffs[np.arange(len(T_diffs)), Q_max_index]
 
-    # Select values based on weighting mode
-    if weighted:
-        return weighted_T_sum, weighted_T_diff
-    else:
-        return T_sum_max_charge, T_diff_max_charge
+#     # Select values based on weighting mode
+#     if weighted:
+#         return weighted_T_sum, weighted_T_diff
+#     else:
+#         return T_sum_max_charge, T_diff_max_charge
+
+
+# for i_plane in range(1, 5):
+#     # Generate relevant column names for current plane
+#     T_sum_cols = [f'T{i_plane}_T_sum_{i+1}' for i in range(4)]
+#     T_diff_cols = [f'T{i_plane}_T_diff_{i+1}' for i in range(4)]
+#     Q_sum_cols = [f'Q{i_plane}_Q_sum_{i+1}' for i in range(4)]
+
+#     # Extract and preprocess data for calculations
+#     T_sums, T_diffs, Q_sums = (
+#         calibrated_data[cols].astype(float).fillna(0).values
+#         for cols in (T_sum_cols, T_diff_cols, Q_sum_cols)
+#     )
+
+#     # Make a copy of original Q_sums for final Q_sum calculation
+#     Q_sums_og = Q_sums.copy()
+
+#     # Compute final values
+#     T_sum_final, T_diff_final = compute_transformed_values(T_sums, T_diffs, Q_sums, weighted)
+    
+#     # Store results in the new_columns dictionary
+#     new_columns[f'P{i_plane}_T_sum_final'] = T_sum_final
+#     new_columns[f'P{i_plane}_T_diff_final'] = T_diff_final
+#     new_columns[f'P{i_plane}_Q_sum_final'] = Q_sums_og.sum(axis=1)
+    
+#     # Save the charge in each strip
+#     for strip in range(1, 5):
+#         new_columns[f'Q_P{i_plane}s{strip}'] = Q_sums_og[:, strip-1]
+
+
+# # Create a new DataFrame from computed columns and concatenate with original data
+# new_columns_df = pd.DataFrame(new_columns, index=calibrated_data.index)
+# calibrated_data = pd.concat([calibrated_data, new_columns_df], axis=1).copy()
 
 
 for i_plane in range(1, 5):
-    # Generate relevant column names for current plane
+    # Column names
     T_sum_cols = [f'T{i_plane}_T_sum_{i+1}' for i in range(4)]
     T_diff_cols = [f'T{i_plane}_T_diff_{i+1}' for i in range(4)]
     Q_sum_cols = [f'Q{i_plane}_Q_sum_{i+1}' for i in range(4)]
 
-    # Extract and preprocess data for calculations
-    T_sums, T_diffs, Q_sums = (
-        calibrated_data[cols].astype(float).fillna(0).values
-        for cols in (T_sum_cols, T_diff_cols, Q_sum_cols)
-    )
+    # Extract data
+    T_sums = calibrated_data[T_sum_cols].astype(float).fillna(0).values
+    T_diffs = calibrated_data[T_diff_cols].astype(float).fillna(0).values
+    Q_sums = calibrated_data[Q_sum_cols].astype(float).fillna(0).values
 
-    # Make a copy of original Q_sums for final Q_sum calculation
-    Q_sums_og = Q_sums.copy()
+    # Decode binary topology
+    active_mask = np.array([
+        list(map(int, s)) for s in calibrated_data[f'active_strips_P{i_plane}']
+    ])  # shape (N, 4)
 
-    # Compute final values
-    T_sum_final, T_diff_final = compute_transformed_values(T_sums, T_diffs, Q_sums, weighted)
+    # Compute strip activation count
+    n_active = active_mask.sum(axis=1)
+    n_active_safe = np.where(n_active == 0, 1, n_active)
+
+    # Apply mask and compute means
+    T_sum_masked = T_sums * active_mask
+    T_diff_masked = T_diffs * active_mask
+
+    calibrated_data[f'P{i_plane}_T_sum_final'] = T_sum_masked.sum(axis=1) / n_active_safe
+    calibrated_data[f'P{i_plane}_T_diff_final'] = T_diff_masked.sum(axis=1) / n_active_safe
+
+    # Zero out where no active strips
+    calibrated_data.loc[n_active == 0, f'P{i_plane}_T_sum_final'] = 0
+    calibrated_data.loc[n_active == 0, f'P{i_plane}_T_diff_final'] = 0
+
+    # Store total charge
+    calibrated_data[f'P{i_plane}_Q_sum_final'] = (Q_sums * active_mask).sum(axis=1)
+
+
+
+if create_essential_plots or create_plots:
     
-    # Store results in the new_columns dictionary
-    new_columns[f'P{i_plane}_T_sum_final'] = T_sum_final
-    new_columns[f'P{i_plane}_T_diff_final'] = T_diff_final
-    new_columns[f'P{i_plane}_Q_sum_final'] = Q_sums_og.sum(axis=1)
-    
-    # Save the charge in each strip
-    for strip in range(1, 5):
-        new_columns[f'Q_P{i_plane}s{strip}'] = Q_sums_og[:, strip-1]
-
-
-# Create a new DataFrame from computed columns and concatenate with original data
-new_columns_df = pd.DataFrame(new_columns, index=calibrated_data.index)
-calibrated_data = pd.concat([calibrated_data, new_columns_df], axis=1).copy()
-
-
-if create_plots:
-    
-    # First plot: check the time calibration ------------------
+    # First plot: check the time calibration -----------------------------------------------------
     new_data = calibrated_data.copy()
     mask_all_non_zero = (new_data['P1_Q_sum_final'] != 0) & \
                         (new_data['P2_Q_sum_final'] != 0) & \
@@ -5046,7 +5119,7 @@ if create_plots:
         plt.suptitle('RPC variables, four planes, substracted time to debug', fontsize=16)
         
         if save_plots:
-            name_of_file = 'rpc_variables_tcal_debug'
+            name_of_file = 'rpc_variables_tcal_debug_four_plane_coin'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
 
@@ -5058,7 +5131,8 @@ if create_plots:
             plt.show()
         plt.close()
     
-    # Second plot: not substracting the t_sum from the other planes ----------------
+    
+    # Second plot: not substracting the t_sum from the other planes -------------------------------------------------
     fig, axes = plt.subplots(4, 4, figsize=(20, 20))
     axes = axes.flatten()  # Flatten the axes array to easily iterate
     num_bins = 150
@@ -5101,6 +5175,7 @@ if create_plots:
     plt.close()
     
 
+
 print("--------------------- Filter 6: calibrated data ----------------------")
 for col in calibrated_data.columns:
     if 'T_sum_final' in col:
@@ -5129,19 +5204,14 @@ if stratos_save and station == 1:
     filtered_stratos_df.rename(columns=lambda col: f'X_{col.split("_")[0][1:]}' if "_T_diff_final" in col else col, inplace=True)
     filtered_stratos_df.loc[:, filtered_stratos_df.columns.str.startswith("X_")] *= 200
 
-    # Display the first few rows of the modified DataFrame
-    # print(filtered_stratos_df.head())
-
     # Define the save path
     save_stratos = os.path.join(stratos_list_events_directory, f'stratos_data_{save_filename_suffix}.csv')
 
     # Save DataFrame to CSV (correcting the method name)
     filtered_stratos_df.to_csv(save_stratos, index=False, float_format="%.1f")
-
-    # print(f"Stratos data saved successfully to: {save_stratos}")
 # ----------------------------------------------------------------------------------------------------------------
 
-if create_plots:
+if create_plots or create_essential_plots:
     fig, axes = plt.subplots(4, 4, figsize=(20, 20))
     axes = axes.flatten()  # Flatten the axes array to easily iterate
     num_bins = 150
@@ -5309,86 +5379,27 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
-# Plotting for articles and presentations
-# if presentation_plots:
-#     new_data = calibrated_data.copy()
-#     mask_all_non_zero = (new_data['P1_Q_sum_final'] != 0) & \
-#                         (new_data['P2_Q_sum_final'] != 0) & \
-#                         (new_data['P3_Q_sum_final'] != 0) & \
-#                         (new_data['P4_Q_sum_final'] != 0)
+print("----------------------------------------------------------------------")
+print("----------------- Finishing the slewing correction -------------------")
+print("----------------------------------------------------------------------")
 
-#     # Filter new_data to keep only rows where all Q_sum_final values are non-zero
-#     new_data = new_data[mask_all_non_zero].copy()
+print('WIP')
 
-#     for plane in range(1, 5):  # Loop through all four planes
-#         fig, ax = plt.subplots(1, 1, figsize=(5, 5))  # Small figsize for article column
-
-#         # Define the column names for the specified plane
-#         t_diff_col = f'P{plane}_T_diff_final'
-#         y_col = f'Y_{plane}'
-
-#         # Filter out rows where any of the variables are NaN or 0 for all comparisons
-#         valid_rows = new_data[[t_diff_col, y_col]].replace(0, np.nan).dropna()
-
-#         # Transform t_diff_col to X by multiplying with tdiff_to_x
-#         valid_rows['X_transformed'] = valid_rows[t_diff_col] * tdiff_to_x
-
-#         # Further filter data with abs value less than 150 for X_transformed
-#         valid_rows = valid_rows[(abs(valid_rows['X_transformed']) < 150) & (abs(valid_rows[y_col]) < 150)]
-
-#         # Hexbin plot for X_transformed vs Y
-#         ax.hexbin(valid_rows['X_transformed'], valid_rows[y_col], gridsize=35, cmap='turbo')
-#         cbar = plt.colorbar(ax.collections[0], ax=ax, orientation='vertical', shrink=0.75)
-#         cbar.set_label('Counts')
-        
-#         ax.set_xlabel('X / mm')
-#         ax.set_ylabel('Y / mm')
-#         plt.tight_layout()
-#         ax.set_aspect('equal', adjustable='box')
-
-#         if save_plots:
-#             name_of_file = f'rpc_plane{plane}_x_y_hexbin'
-#             final_filename = f'{fig_idx}_{name_of_file}.png'
-#             fig_idx += 1
-            
-#             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#             plot_list.append(save_fig_path)
-#             plt.savefig(save_fig_path, format='png', dpi=300)
-
-#         if show_plots:
-#             plt.show()
-
-#         plt.close()
 
 print("----------------------------------------------------------------------")
-print("----------------------- Alternative fitting --------------------------")
+print("----------------------------------------------------------------------")
+print("-------------- Alternative angle and slowness fitting ----------------")
+print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 # Function to fit a straight line in 3D
 def fit_3d_line(X, Y, Z, sX, sY, sZ):
-    """
-    Least squares fitting of a 3D straight line.
-    Returns theta (zenith), phi (azimuth), and chi-squared.
-    """
-    # Stack coordinates into an array
     points = np.vstack((X, Y, Z)).T
-    
-    # Compute centroid
     centroid = np.mean(points, axis=0)
-    
-    # Center data
     centered_points = points - centroid
-
-    # Compute SVD (Singular Value Decomposition)
     _, _, Vt = np.linalg.svd(centered_points)
-    
-    # Direction vector (first principal component)
     direction_vector = Vt[0]
-
-    # Extract direction components
     d_x, d_y, d_z = direction_vector
-
-    # Compute theta (zenith) and phi (azimuth)
     theta = np.arccos(d_z / np.linalg.norm(direction_vector))
     phi = np.arctan2(d_y, d_x)
     
@@ -5397,17 +5408,10 @@ def fit_3d_line(X, Y, Z, sX, sY, sZ):
         x_z0 = centroid[0] + t_0 * d_x
         y_z0 = centroid[1] + t_0 * d_y
     else:
-        # x_z0, y_z0 = 0, 0 # Line is parallel to Z-plane
         x_z0, y_z0 = np.nan, np.nan # Line is parallel to Z-plane
     
-    # # To degrees
-    # theta = np.degrees(theta)
-    # phi = np.degrees(phi)
-    
-    # Compute chi-squared
     distances = np.linalg.norm(np.cross(centered_points, direction_vector), axis=1)
     chi2 = np.sum((distances / np.sqrt(np.array(sX)**2 + np.array(sY)**2 + np.array(sZ)**2)) ** 2)
-
     return x_z0, y_z0, theta, phi, chi2
 
 # Initialize results
@@ -5451,31 +5455,68 @@ for idx, track in calibrated_data.iterrows():
         calibrated_data.at[idx, 'alt_chi2'] = chi2
 
 
-if create_plots:
-    # Scatter plot of alt_theta vs alt_phi
-    # plt.figure(figsize=(8, 6))
-    # plt.scatter(calibrated_data['alt_phi'], calibrated_data['alt_theta'], alpha=0.7, s = 1)
-    # plt.xlabel('Azimuth (φ) [radians]')
-    # plt.ylabel('Zenith (θ) [radians]')
-    # plt.title('Scatter Plot of Fitted Angles')
-    # plt.grid(True)
-    # plt.show()
+# Initialize results
+alt_fit_slow_results = ['alt_s']
+alt_slow_new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=alt_fit_slow_results)
+calibrated_data = pd.concat([calibrated_data, alt_slow_new_columns_df], axis=1)
+
+# Loop over all tracks
+for idx, track in calibrated_data.iterrows():
+    planes_to_iterate = []
     
-    # if save_plots:
-    #     name_of_file = 'alternative_fitting_results_scatter_combination_projections'
-    #     final_filename = f'{fig_idx}_{name_of_file}.png'
-    #     fig_idx += 1
+    # Identify valid planes with charge
+    for i_plane in range(nplan):
+        charge_plane = getattr(track, f'P{i_plane + 1}_Q_sum_final')
+        if charge_plane > 4:
+            planes_to_iterate.append(i_plane + 1)
 
-    #     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    #     plot_list.append(save_fig_path)
-    #     plt.savefig(save_fig_path, format='png')
-
-    # # Show plot if enabled
-    # if show_plots:
-    #     plt.show()
-
-    # plt.close()
+    planes_to_iterate = np.array(planes_to_iterate)
     
+    if len(planes_to_iterate) >= 2:  # Only fit if 2 or more points exist
+        tsum = []
+        z = []
+        
+        for iplane in planes_to_iterate:
+            t_s = getattr(track, f'P{iplane}_T_sum_final')
+            tsum.append(t_s)
+            z.append(z_positions[iplane - 1])
+
+        theta = getattr(track, f'alt_theta')
+        phi = getattr(track, f'alt_phi')
+        
+        # Convert to arrays
+        tsum = np.array(tsum)
+        z = np.array(z)
+
+        # Step 1: Build track direction vector
+        v_dir = np.array([
+            np.sin(theta) * np.cos(phi),
+            np.sin(theta) * np.sin(phi),
+            np.cos(theta)
+        ])
+
+        # Step 2: Build hit positions in 3D (only z is known, assume y=0, x=0)
+        positions = np.stack([np.zeros_like(z), np.zeros_like(z), z], axis=1)
+
+        # Step 3: Project each position onto the direction vector to get path length
+        proj_dist = positions @ v_dir  # scalar projection: s = r · v̂
+
+        # Step 4: Fit T_sum vs. projected distance
+        slope, intercept = np.polyfit(proj_dist - proj_dist[0], tsum - tsum[0], deg=1)
+        calibrated_data.at[idx, 'alt_s'] = slope
+    
+print("Alternative slowness fitting done and saving...")
+
+
+
+
+if create_essential_plots or create_plots:
+    
+    # ---------------------------------------------------------------------------------------
+    # ANGLES PLOTS ------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------------------
+    
+    # PLOT 1 -------------------------------------------------------------------------------------------------------------------
     # Contour plot of alt_chi2 vs alt_theta and alt_phi
     theta_values = calibrated_data['alt_theta'].values
     phi_values = calibrated_data['alt_phi'].values
@@ -5506,7 +5547,6 @@ if create_plots:
     plt.ylabel('Zenith (θ) [radians]')
     plt.title('Binned Contour Plot of Chi-Squared')
     plt.grid(True)
-    plt.show()
     
     print("Alternative fitting done and saving...")
 
@@ -5522,8 +5562,10 @@ if create_plots:
     # Show plot if enabled
     if show_plots:
         plt.show()
-
     plt.close()
+    
+    
+    # PLOT 2 -------------------------------------------------------------------------------------------------------------------
     
     # Contour plot of alt_chi2 vs alt_theta and alt_phi
     # Filter Theta between 0 and 1.3
@@ -5557,7 +5599,6 @@ if create_plots:
     plt.ylabel('Zenith (θ) [radians]')
     plt.title('Binned Contour Plot of Chi-Squared')
     plt.grid(True)
-    plt.show()
     
     print("Alternative angle fitting done and saving...")
 
@@ -5573,76 +5614,13 @@ if create_plots:
     # Show plot if enabled
     if show_plots:
         plt.show()
-
     plt.close()
-
-
-print("----------------------------------------------------------------------")
-print("----------------- Alternative slowness fitting -----------------------")
-print("----------------------------------------------------------------------")
-
-
-# Initialize results
-alt_fit_slow_results = ['alt_s']
-alt_slow_new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=alt_fit_slow_results)
-calibrated_data = pd.concat([calibrated_data, alt_slow_new_columns_df], axis=1)
-
-# Loop over all tracks
-for idx, track in calibrated_data.iterrows():
-    planes_to_iterate = []
     
-    # Identify valid planes with charge
-    for i_plane in range(nplan):
-        charge_plane = getattr(track, f'P{i_plane + 1}_Q_sum_final')
-        if charge_plane > 4:
-            planes_to_iterate.append(i_plane + 1)
-
-    planes_to_iterate = np.array(planes_to_iterate)
     
-    if len(planes_to_iterate) >= 2:  # Only fit if 2 or more points exist
-        tsum = []
-        z = []
-        
-        for iplane in planes_to_iterate:
-            t_s = getattr(track, f'P{iplane}_T_sum_final')
-            tsum.append(t_s)
-            z.append(z_positions[iplane - 1])
-
-        theta = getattr(track, f'alt_theta')
-        phi = getattr(track, f'alt_phi')
-        
-        # Now calculate the slowness using the difference of the time sums and the angle subtended by the trace
-        
-        # Convert to arrays
-        tsum = np.array(tsum)
-        z = np.array(z)
-
-        # Projected track path length between planes along the track direction
-        # dz = z - z[0]
-        # dz_proj = dz / np.cos(theta)
-        # slope, intercept = np.polyfit(dz_proj, tsum - tsum[0], deg=1)
-
-        # Step 1: Build track direction vector
-        v_dir = np.array([
-            np.sin(theta) * np.cos(phi),
-            np.sin(theta) * np.sin(phi),
-            np.cos(theta)
-        ])
-
-        # Step 2: Build hit positions in 3D (only z is known, assume y=0, x=0)
-        # You can adapt this if you know x/y per plane
-        positions = np.stack([np.zeros_like(z), np.zeros_like(z), z], axis=1)
-
-        # Step 3: Project each position onto the direction vector to get path length
-        proj_dist = positions @ v_dir  # scalar projection: s = r · v̂
-
-        # Step 4: Fit T_sum vs. projected distance
-        slope, intercept = np.polyfit(proj_dist - proj_dist[0], tsum - tsum[0], deg=1)
-        calibrated_data.at[idx, 'alt_s'] = slope
+    # ---------------------------------------------------------------------------------------
+    # SLOWNESS PLOTS ------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------------------
     
-print("Alternative slowness fitting done and saving...")
-    
-if create_essential_plots or create_plots:
     # Histogram the slowness calculated
     plt.figure(figsize=(8, 6))
     v = calibrated_data['alt_s'].replace(0, np.nan).dropna()
@@ -5671,12 +5649,18 @@ if create_essential_plots or create_plots:
         plt.show()
     plt.close()
 
+
 # -----------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------
 
+a = 1/0
+
+
+print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("------------------------- TimTrack fitting ---------------------------")
+print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 if fixed_speed:
