@@ -7,6 +7,26 @@ Created on Mon Jun 24 19:02:22 2024
 @author: csoneira@ucm.es
 """
 
+print("\n\n")
+
+print("                                          _.oo.")
+print("                 _.u[[/;:,.         .odMMMMMM'")
+print("              .o888UU[[[/;:-.  .o@P^    MMM^")
+print("             oN88888UU[[[/;::-.        dP^")
+print("            dNMMNN888UU[[[/;:--.   .o@P^")
+print("           ,MMMMMMN888UU[[/;::-. o@^")
+print("           NNMMMNN888UU[[[/~.o@P^")
+print("           888888888UU[[[/o@^-..")
+print("          oI8888UU[[[/o@P^:--..")
+print("       .@^  YUU[[[/o@^;::---..")
+print("     oMP     ^/o@P^;:::---..")
+print("  .dMMM    .o@^ ^;::---...")
+print(" dMMMMMMM@^`       `^^^^")
+print("YMMMUP^")
+print(" ^^")
+
+print("\n\n")
+
 # globals().clear()
 
 import numpy as np
@@ -215,8 +235,8 @@ if date_selection:
     end_date = pd.to_datetime("2024-05-11 12:00:00")
     
     # start_date = pd.to_datetime("2025-01-02")  # Use a string in 'YYYY-MM-DD' format
-    start_date = pd.to_datetime("2025-02-17 12:00:00")  # Use a string in 'YYYY-MM-DD' format
-    end_date = pd.to_datetime("2025-05-08 11:00")
+    start_date = pd.to_datetime("2025-04-18 12:36:00")  # Use a string in 'YYYY-MM-DD' format
+    end_date = pd.to_datetime("2025-04-19 10:15")
     
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
@@ -403,22 +423,36 @@ print('--------------- 1. Standard method (includes system) -----------------')
 print('----------------------------------------------------------------------')
 
 # Define the function to calculate efficiency uncertainty
+# def calculate_efficiency_uncertainty(N_measured, N_passed):
+#     if N_passed > 0:
+#         return np.sqrt((N_measured / N_passed**2) + (N_measured**2 / N_passed**3))
+#     else:
+#         return np.nan
+
 def calculate_efficiency_uncertainty(N_measured, N_passed):
-    if N_passed > 0:
-        return np.sqrt((N_measured / N_passed**2) + (N_measured**2 / N_passed**3))
-    else:
-        return np.nan
+    # Ensure that the inputs are Series, handle element-wise computation
+    uncertainty = np.where(N_passed > 0,
+                           np.sqrt((N_measured / N_passed**2) + (N_measured**2 / N_passed**3)),
+                           np.nan)  # If N_passed is 0, return NaN
+    
+    return uncertainty
+
+# Print all the columns starting with type_
+print(data_df.columns[data_df.columns.str.startswith('type_')])
+
+# 'type_1234', 'type_123', 'type_234', 'type_124', 'type_134', 'type_12',
+# 'type_23', 'type_34', 'type_13', 'type_14', 'type_24'
 
 # Create explicit columns for detected and passed
-data_df['detected_1'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134']].sum(axis=1, skipna=True)
-data_df['detected_2'] = data_df[['type_1234', 'type_123', 'type_234', 'type_124']].sum(axis=1, skipna=True)
-data_df['detected_3'] = data_df[['type_1234', 'type_123', 'type_234', 'type_134']].sum(axis=1, skipna=True)
-data_df['detected_4'] = data_df[['type_1234', 'type_234', 'type_124', 'type_134']].sum(axis=1, skipna=True)
+data_df['detected_1'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_12', 'type_13', 'type_14']].sum(axis=1, skipna=True)
+data_df['detected_2'] = data_df[['type_1234', 'type_123', 'type_234', 'type_124', 'type_12', 'type_23', 'type_24']].sum(axis=1, skipna=True)
+data_df['detected_3'] = data_df[['type_1234', 'type_123', 'type_234', 'type_134', 'type_23', 'type_34', 'type_13']].sum(axis=1, skipna=True)
+data_df['detected_4'] = data_df[['type_1234', 'type_234', 'type_124', 'type_134', 'type_34', 'type_14', 'type_24']].sum(axis=1, skipna=True)
 
-data_df['passed_1'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234']].sum(axis=1, skipna=True)
-data_df['passed_2'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234']].sum(axis=1, skipna=True)
-data_df['passed_3'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234']].sum(axis=1, skipna=True)
-data_df['passed_4'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234']].sum(axis=1, skipna=True)
+data_df['passed_1'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234', 'type_12', 'type_13', 'type_14']].sum(axis=1, skipna=True)
+data_df['passed_2'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234', 'type_12', 'type_23', 'type_13', 'type_14', 'type_24']].sum(axis=1, skipna=True)
+data_df['passed_3'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234', 'type_34', 'type_23', 'type_13', 'type_14', 'type_24']].sum(axis=1, skipna=True)
+data_df['passed_4'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234', 'type_34', 'type_14', 'type_24']].sum(axis=1, skipna=True)
 
 # Interpolate all the NaNs
 # data_df = data_df.interpolate(method='linear', limit_direction='both')
@@ -426,15 +460,17 @@ data_df['passed_4'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 
 print('Detected and passed calculated.')
 
 # Set columns to 0 if detected or passed values are NaN or 0
-def handle_zero_or_nan(row, detected_col, passed_col):
-    if row[detected_col] == 0 or row[passed_col] == 0:
-        return np.nan
-    return row[detected_col] / row[passed_col]
+# def handle_zero_or_nan(row, detected_col, passed_col):
+#     if row[detected_col] == 0 or row[passed_col] == 0:
+#         return np.nan
+#     return row[detected_col] / row[passed_col]
 
-def handle_uncertainty(row, detected_col, passed_col):
-    if row[detected_col] == 0 or row[passed_col] == 0:
-        return np.nan
-    return calculate_efficiency_uncertainty(row[detected_col], row[passed_col])
+# def handle_uncertainty(row, detected_col, passed_col):
+#     if row[detected_col] == 0 or row[passed_col] == 0:
+#         return np.nan
+#     return calculate_efficiency_uncertainty(row[detected_col], row[passed_col])
+
+
 
 print("Calculating efficiencies...")
 
@@ -461,15 +497,48 @@ if rolling_effs:
             data_df[col] = data_df[col].rolling(window=sum_window, center=True, min_periods=1).sum()
     
 
-data_df['eff_1'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_1', 'passed_1'), axis=1)
-data_df['eff_2'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_2', 'passed_2'), axis=1)
-data_df['eff_3'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_3', 'passed_3'), axis=1)
-data_df['eff_4'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_4', 'passed_4'), axis=1)
+# data_df['eff_1'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_1', 'passed_1'), axis=1)
+# data_df['eff_2'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_2', 'passed_2'), axis=1)
+# data_df['eff_3'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_3', 'passed_3'), axis=1)
+# data_df['eff_4'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_4', 'passed_4'), axis=1)
 
-data_df['anc_unc_eff_1'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_1', 'passed_1'), axis=1)
-data_df['anc_unc_eff_2'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_2', 'passed_2'), axis=1)
-data_df['anc_unc_eff_3'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_3', 'passed_3'), axis=1)
-data_df['anc_unc_eff_4'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_4', 'passed_4'), axis=1)
+def handle_efficiency_and_uncertainty_all(data_df, detected_cols, passed_cols):
+    # Create empty columns for efficiencies and uncertainties
+    efficiency_cols = [f'eff_{i}' for i in range(1, 5)]
+    uncertainty_cols = [f'anc_unc_eff_{i}' for i in range(1, 5)]
+
+    # Vectorized approach to calculate efficiency and uncertainty
+    for i in range(4):  # For eff_1, eff_2, ..., eff_4
+        detected_col = detected_cols[i]
+        passed_col = passed_cols[i]
+
+        # Vectorized efficiency calculation (row-wise operation)
+        data_df[efficiency_cols[i]] = np.where(
+            (data_df[detected_col] != 0) & (data_df[passed_col] != 0),
+            data_df[detected_col] / data_df[passed_col],
+            np.nan
+        )
+
+        # Vectorized uncertainty calculation (row-wise operation)
+        data_df[uncertainty_cols[i]] = np.where(
+            (data_df[detected_col] != 0) & (data_df[passed_col] != 0),
+            calculate_efficiency_uncertainty(data_df[detected_col], data_df[passed_col]),
+            np.nan
+        )
+
+    return data_df
+
+# Define columns for detected and passed values
+detected_columns = ['detected_1', 'detected_2', 'detected_3', 'detected_4']
+passed_columns = ['passed_1', 'passed_2', 'passed_3', 'passed_4']
+
+# Apply the function for all detected and passed columns
+data_df = handle_efficiency_and_uncertainty_all(data_df, detected_columns, passed_columns)
+
+# data_df['anc_unc_eff_1'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_1', 'passed_1'), axis=1)
+# data_df['anc_unc_eff_2'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_2', 'passed_2'), axis=1)
+# data_df['anc_unc_eff_3'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_3', 'passed_3'), axis=1)
+# data_df['anc_unc_eff_4'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_4', 'passed_4'), axis=1)
 
 # Add the systematic uncertainties to the efficiency calculation
 data_df['unc_eff_1'] = np.sqrt( data_df['anc_unc_eff_1']**2 + systematic_unc[0]**2 )
@@ -1339,14 +1408,14 @@ for region in log_delta_I_df['Region']:
 
 plt.xlabel('Delta P')
 plt.ylabel('Log (I / I0)')
-plt.ylim(-1, 0.5)
+plt.ylim(-0.6, 0.5)
 plt.title('Efficiency Fits for Different Regions')
 plt.legend()
 plt.grid(True)
-if show_plots: 
+if show_plots:
     plt.show()
 elif save_plots:
-    new_figure_path = figure_path + f"{fig_idx}" + "_GIANT _PRESSURE_PLOT.png"
+    new_figure_path = figure_path + f"{fig_idx}" + "_GIANT_PRESSURE_PLOT.png"
     fig_idx += 1
     print(f"Saving figure to {new_figure_path}")
     plt.savefig(new_figure_path, format = 'png', dpi = 300)
@@ -1359,7 +1428,7 @@ regions_to_plot = [region for region in log_delta_I_df['Region'] if 'new_' in re
 
 # Create subplots dynamically based on the number of regions to plot
 num_regions = len(regions_to_plot)
-fig, axes = plt.subplots(nrows=num_regions, figsize=(12, 8), sharex=True, sharey=True)
+fig, axes = plt.subplots(nrows=num_regions, figsize=(12, 20), sharex=True, sharey=True)
 
 # Loop through all regions and plot them in separate subplots
 for idx, region in enumerate(regions_to_plot):
@@ -1393,6 +1462,7 @@ for idx, region in enumerate(regions_to_plot):
     # Add labels and title to the subplots
     ax.set_xlabel('Delta P')
     ax.set_ylabel('Log (I / I0)')
+    ax.set_ylim(-0.6, 0.5)
     ax.set_title(f'Efficiency Fit for {region}')
     ax.legend()
     ax.grid(True)

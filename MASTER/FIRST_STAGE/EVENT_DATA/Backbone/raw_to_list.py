@@ -40,6 +40,12 @@ import builtins
 import random
 import re
 import csv
+from scipy.stats import linregress
+import itertools
+import numpy as np
+import matplotlib.pyplot as plt
+import re
+from itertools import combinations
 
 # Store the current time at the start. To time the execution
 start_execution_time_counting = datetime.now()
@@ -290,17 +296,17 @@ if debug_mode:
     Q_B_left_pre_cal = -500
     Q_B_right_pre_cal = 500
 else:
-    T_F_left_pre_cal = -200
-    T_F_right_pre_cal = 100
+    T_F_left_pre_cal = -150
+    T_F_right_pre_cal = -90
 
-    T_B_left_pre_cal = -200
-    T_B_right_pre_cal = 100
+    T_B_left_pre_cal = T_F_left_pre_cal
+    T_B_right_pre_cal = T_F_right_pre_cal
 
-    Q_F_left_pre_cal = 50
-    Q_F_right_pre_cal = 500
+    Q_F_left_pre_cal = 70
+    Q_F_right_pre_cal = 300
 
-    Q_B_left_pre_cal = 50
-    Q_B_right_pre_cal = 500
+    Q_B_left_pre_cal = Q_F_left_pre_cal
+    Q_B_right_pre_cal = Q_F_right_pre_cal
 
 T_left_side = T_F_left_pre_cal
 T_right_side = T_F_right_pre_cal
@@ -310,23 +316,24 @@ Q_right_side = 150
 
 # Pre-cal Sum & Diff ---------
 # Qsum
-Q_left_pre_cal = -500
+Q_left_pre_cal = 75
 Q_right_pre_cal = 500
 # Qdif
-Q_diff_pre_cal_threshold = 500
+Q_diff_pre_cal_threshold = 20
 # Tsum
-T_sum_left_pre_cal = -500 # it was -130 for mingo01 etc but for mingo03 it had to be changed
-T_sum_right_pre_cal = 500
+T_sum_left_pre_cal = -150 # it was -130 for mingo01 etc but for mingo03 it had to be changed
+T_sum_right_pre_cal = -90
+
 # Tdif
 T_diff_pre_cal_threshold = 20
 
 # Post-calibration ---------
 # Qsum
-Q_sum_left_cal = -30
-Q_sum_right_cal = 1000
+Q_sum_left_cal = -20
+Q_sum_right_cal = 300
 # Qdif
 Q_diff_cal_threshold = 10
-Q_diff_cal_threshold_FB = 5
+Q_diff_cal_threshold_FB = 1.25
 # Tsum
 # ...
 # Tdif
@@ -816,6 +823,11 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
     pedestal = offset + offset_cal
     
     pedestal = offset
+    
+    translate_charge_cal = True
+    if translate_charge_cal:
+        pedestal = pedestal - 0.25
+    
     return pedestal
 
 
@@ -863,85 +875,85 @@ enumerate = builtins.enumerate
 def polynomial(x, *coeffs):
     return sum(c * x**i for i, c in enumerate(coeffs))
 
-def scatter_2d_and_fit(xdat, ydat, title, x_label, y_label, name_of_file):
-    global fig_idx
+# def scatter_2d_and_fit(xdat, ydat, title, x_label, y_label, name_of_file):
+#     global fig_idx
     
-    ydat_translated = ydat
+#     ydat_translated = ydat
 
-    xdat_plot = xdat[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
-    ydat_plot = ydat_translated[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
-    xdat_pre_fit = xdat[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
-    ydat_pre_fit = ydat_translated[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
+#     xdat_plot = xdat[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
+#     ydat_plot = ydat_translated[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
+#     xdat_pre_fit = xdat[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
+#     ydat_pre_fit = ydat_translated[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
     
-    # Fit a polynomial of specified degree using curve_fit
-    initial_guess = [1] * (degree_of_polynomial + 1)
-    coeffs, _ = curve_fit(polynomial, xdat_pre_fit, ydat_pre_fit, p0=initial_guess)
-    y_pre_fit = polynomial(xdat_pre_fit, *coeffs)
+#     # Fit a polynomial of specified degree using curve_fit
+#     initial_guess = [1] * (degree_of_polynomial + 1)
+#     coeffs, _ = curve_fit(polynomial, xdat_pre_fit, ydat_pre_fit, p0=initial_guess)
+#     y_pre_fit = polynomial(xdat_pre_fit, *coeffs)
     
-    # Filter data for fitting based on residues
-    threshold = front_back_fit_threshold  # Set your desired threshold here
-    residues = np.abs(ydat_pre_fit - y_pre_fit)  # Calculate residues
-    xdat_fit = xdat_pre_fit[residues < threshold]
-    ydat_fit = ydat_pre_fit[residues < threshold]
+#     # Filter data for fitting based on residues
+#     threshold = front_back_fit_threshold  # Set your desired threshold here
+#     residues = np.abs(ydat_pre_fit - y_pre_fit)  # Calculate residues
+#     xdat_fit = xdat_pre_fit[residues < threshold]
+#     ydat_fit = ydat_pre_fit[residues < threshold]
     
-    # Perform fit on filtered data
-    coeffs, _ = curve_fit(polynomial, xdat_fit, ydat_fit, p0=initial_guess)
+#     # Perform fit on filtered data
+#     coeffs, _ = curve_fit(polynomial, xdat_fit, ydat_fit, p0=initial_guess)
     
-    y_mean = np.mean(ydat_fit)
-    y_check = polynomial(xdat_fit, *coeffs)
-    ss_res = np.sum((ydat_fit - y_check)**2)
-    ss_tot = np.sum((ydat_fit - y_mean)**2)
-    r_squared = 1 - (ss_res / ss_tot)
-    if r_squared < 0.5:
-        print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
+#     y_mean = np.mean(ydat_fit)
+#     y_check = polynomial(xdat_fit, *coeffs)
+#     ss_res = np.sum((ydat_fit - y_check)**2)
+#     ss_tot = np.sum((ydat_fit - y_mean)**2)
+#     r_squared = 1 - (ss_res / ss_tot)
+#     if r_squared < 0.5:
+#         print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
     
-    if create_plots:
-        x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
-        y_fit = polynomial(x_fit, *coeffs)
+#     if create_plots:
+#         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
+#         y_fit = polynomial(x_fit, *coeffs)
         
-        x_final = xdat_plot
-        y_final = ydat_plot - polynomial(xdat_plot, *coeffs)
+#         x_final = xdat_plot
+#         y_final = ydat_plot - polynomial(xdat_plot, *coeffs)
         
-        plt.close()
+#         plt.close()
         
-        # (16,6) was very nice
-        if article_format:
-            ww = (10.84, 4)
-        else:
-            ww = (13.33, 5)
+#         # (16,6) was very nice
+#         if article_format:
+#             ww = (10.84, 4)
+#         else:
+#             ww = (13.33, 5)
             
-        plt.figure(figsize=ww)  # Use plt.subplots() to create figure and axis    
-        plt.scatter(xdat_plot, ydat_plot, s=1, label="Original data points")
-        # plt.scatter(xdat_pre_fit, ydat_pre_fit, s=1, color="magenta", label="Points for prefitting")
-        plt.scatter(xdat_fit, ydat_fit, s=1, color="orange", label="Points for fitting")
-        plt.scatter(x_final, y_final, s=1, color="green", label="Calibrated points")
-        plt.plot(x_fit, y_fit, 'r-', label='Polynomial Fit: ' + ' '.join([f'a{i}={coeff:.2g}' for i, coeff in enumerate(coeffs[::-1])]))
+#         plt.figure(figsize=ww)  # Use plt.subplots() to create figure and axis    
+#         plt.scatter(xdat_plot, ydat_plot, s=1, label="Original data points")
+#         # plt.scatter(xdat_pre_fit, ydat_pre_fit, s=1, color="magenta", label="Points for prefitting")
+#         plt.scatter(xdat_fit, ydat_fit, s=1, color="orange", label="Points for fitting")
+#         plt.scatter(x_final, y_final, s=1, color="green", label="Calibrated points")
+#         plt.plot(x_fit, y_fit, 'r-', label='Polynomial Fit: ' + ' '.join([f'a{i}={coeff:.2g}' for i, coeff in enumerate(coeffs[::-1])]))
         
-        if not article_format:
-            plt.title(f"Fig. {output_order}, {title}")
-        plt.xlabel(x_label)
-        plt.ylabel(y_label)
-        plt.xlim([-5, 400])
-        plt.ylim([-11, 11])
+#         if not article_format:
+#             plt.title(f"Fig. {output_order}, {title}")
+#         plt.xlabel(x_label)
+#         plt.ylabel(y_label)
+#         plt.xlim([-5, 400])
+#         plt.ylim([-11, 11])
         
-        plt.grid()
-        plt.legend(markerscale=5)  # Increase marker scale by 5 times
+#         plt.grid()
+#         plt.legend(markerscale=5)  # Increase marker scale by 5 times
         
-        plt.tight_layout()
-        # plt.savefig(f"{output_order}_{name_of_file}.png", format="png")
+#         plt.tight_layout()
+#         # plt.savefig(f"{output_order}_{name_of_file}.png", format="png")
         
-        if save_plots:
-            name_of_file = 'charge_diff_vs_charge_sum_cal'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
+#         if save_plots:
+#             name_of_file = 'charge_diff_vs_charge_sum_cal'
+#             final_filename = f'{fig_idx}_{name_of_file}.png'
+#             fig_idx += 1
             
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+#             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#             plot_list.append(save_fig_path)
+#             plt.savefig(save_fig_path, format='png')
             
-        if show_plots: plt.show()
-        plt.close()
-    return coeffs
+#         if show_plots: plt.show()
+#         plt.close()
+#     return coeffs
 
 
 def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
@@ -1022,6 +1034,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
             
         if show_plots: plt.show()
         plt.close()
+        
     return coeffs
 
 def summary_skew(vdat):
@@ -1630,6 +1643,57 @@ for key, idx_range in column_indices.items():
 # Create a DataFrame from the columns data
 final_df = pd.DataFrame(columns_data)
 
+
+# ----------------------------------------------------------------------------------
+# Original trigger type ------------------------------------------------------------
+# ----------------------------------------------------------------------------------
+
+# Print final_df columns, all of them
+if debug_mode:
+    print("Final DataFrame columns:")
+    for col in final_df.columns:
+        print(col)
+
+def create_original_tt(df):
+    def get_original_tt(row):
+        planes_with_charge = []
+        for plane in range(1, 5):
+            charge_columns = [f'Q{plane}_F_1', f'Q{plane}_F_2', f'Q{plane}_F_3', f'Q{plane}_F_4',
+                              f'Q{plane}_B_1', f'Q{plane}_B_2', f'Q{plane}_B_3', f'Q{plane}_B_4']
+            if any(row[col] != 0 for col in charge_columns):
+                planes_with_charge.append(str(plane))
+        return ''.join(planes_with_charge)
+    
+    df['original_tt'] = df.apply(get_original_tt, axis=1)
+    return df
+
+# Apply the function to the DataFrame
+final_df = create_original_tt(final_df)
+
+# if create_essential_plots or create_plots:
+if create_plots:
+    event_counts = final_df['original_tt'].copy().value_counts()
+
+    # Plot the histogram of event counts
+    plt.figure(figsize=(10, 6))
+    event_counts.plot(kind='bar', alpha=0.7)
+    plt.title('Number of Events per Original TT Label')
+    plt.xlabel('Original TT Label')
+    plt.ylabel('Number of Events')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    if save_plots:
+        final_filename = f'{fig_idx}_original_TT.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots: plt.show()
+    plt.close()
+
+
 if debug_mode:
     print(len(final_df))
 
@@ -1645,18 +1709,6 @@ if debug_mode:
 # # Save the DataFrame to a CSV file
 # if debug_mode:
 #     filtered_data.to_csv('hey.csv', sep=' ', index=False)
-
-print("-------------------- Filter 1.1.1: uncalibrated data ---------------------")
-# FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out ------------------------------
-for col in final_df.columns:
-    if col.startswith('T') and col.endswith('_F'):
-        final_df[col] = np.where((final_df[col] > T_F_right_pre_cal) | (final_df[col] < T_F_left_pre_cal), 0, final_df[col])
-    if col.startswith('T') and col.endswith('_B'):
-        final_df[col] = np.where((final_df[col] > T_B_right_pre_cal) | (final_df[col] < T_B_left_pre_cal), 0, final_df[col])
-    if col.startswith('Q') and col.endswith('_F'):
-        final_df[col] = np.where((final_df[col] > Q_F_right_pre_cal) | (final_df[col] < Q_F_left_pre_cal), 0, final_df[col])
-    if col.startswith('Q') and col.endswith('_B'):
-        final_df[col] = np.where((final_df[col] > Q_B_right_pre_cal) | (final_df[col] < Q_B_left_pre_cal), 0, final_df[col])
 
 
 # New channel-wise plot -------------------------------------------------------
@@ -1675,7 +1727,204 @@ else:
     num_bins = 100  # Parameter for the number of bins
 
 
-if create_plots or create_essential_plots:
+# if create_plots or create_essential_plots:
+if create_plots:
+    # Create the grand figure for T values
+    fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+    axes_T = axes_T.flatten()
+    
+    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+        for j in range(4):
+            col_F = f'{key}_F_{j+1}'
+            col_B = f'{key}_B_{j+1}'
+            y_F = final_df[col_F].copy()
+            y_B = final_df[col_B].copy()
+            
+            # Plot histograms with T-specific clipping and bins
+            axes_T[i*4 + j].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
+                                 bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
+            axes_T[i*4 + j].hist(y_B[(y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max)], 
+                                 bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
+            axes_T[i*4 + j].axvline(x=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
+            axes_T[i*4 + j].axvline(x=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
+            axes_T[i*4 + j].set_title(f'{col_F} vs {col_B}')
+            axes_T[i*4 + j].legend()
+            
+            if log_scale:
+                axes_T[i*4 + j].set_yscale('log')  # For T values
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Grand Figure for T values, mingo0{station}\n{start_time}", fontsize=16)
+    
+    if save_plots:
+        final_filename = f'{fig_idx}_grand_figure_T.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots: plt.show()
+    plt.close(fig_T)
+
+    # Create the grand figure for Q values
+    fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+    axes_Q = axes_Q.flatten()
+    
+    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+        for j in range(4):
+            col_F = f'{key.replace("T", "Q")}_F_{j+1}'
+            col_B = f'{key.replace("T", "Q")}_B_{j+1}'
+            y_F = final_df[col_F]
+            y_B = final_df[col_B]
+            
+            # Plot histograms with Q-specific clipping and bins
+            axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                                 bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
+            axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                                 bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
+            axes_Q[i*4 + j].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
+            axes_Q[i*4 + j].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
+            axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
+            axes_Q[i*4 + j].legend()
+            
+            if log_scale:
+                axes_Q[i*4 + j].set_yscale('log')  # For Q values
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Grand Figure for Q values, mingo0{station}\n{start_time}", fontsize=16)
+    
+    if save_plots:
+        final_filename = f'{fig_idx}_grand_figure_Q.png'
+        fig_idx += 1
+        
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots: plt.show()
+    plt.close(fig_Q)
+
+# -----------------------------------------------------------------------------------------------
+
+
+if create_plots:
+    # Initialize figure and axes for scatter plot of Time vs Charge
+    fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+    axes_TQ = axes_TQ.flatten()
+
+    # Iterate over each module (T1, T2, T3, T4)
+    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+        for j in range(4):
+            col_F = f'{key}_F_{j+1}'  # Time F column
+            col_B = f'{key}_B_{j+1}'  # Time B column
+            
+            y_F = final_df[col_F].copy()  # Time values for front
+            y_B = final_df[col_B].copy()  # Time values for back
+            
+            charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'  # Corresponding charge column for front
+            charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'  # Corresponding charge column for back
+            
+            charge_F = final_df[charge_col_F].copy()  # Charge values for front
+            charge_B = final_df[charge_col_B].copy()  # Charge values for back
+            
+            # Apply clipping ranges to the data
+            mask_F = (y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max) & (charge_F > Q_clip_min) & (charge_F < Q_clip_max)
+            mask_B = (y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max) & (charge_B > Q_clip_min) & (charge_B < Q_clip_max)
+            
+            # Plot scatter plots for Time F vs Charge F and Time B vs Charge B
+            axes_TQ[i*4 + j].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
+            axes_TQ[i*4 + j].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
+            
+            # Plot threshold lines for time and charge
+            axes_TQ[i*4 + j].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
+            axes_TQ[i*4 + j].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
+            axes_TQ[i*4 + j].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
+            axes_TQ[i*4 + j].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
+            
+            axes_TQ[i*4 + j].set_title(f'{col_F} vs {col_B}')
+            axes_TQ[i*4 + j].legend()
+
+    # Adjust the layout and title
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Scatter Plot for T vs Q values, mingo0{station}\n{start_time}", fontsize=16)
+
+    # Save the plot
+    if save_plots:
+        final_filename = f'{fig_idx}_scatter_plot_TQ.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show the plot if requested
+    if show_plots:
+        plt.show()
+
+    # Close the plot to avoid excessive memory usage
+    plt.close(fig_TQ)
+
+# -----------------------------------------------------------------------------------------------
+
+print("--------------------------------------------------------------------------")
+print("-------------------- Filter 1.1.1: uncalibrated data ---------------------")
+print("--------------------------------------------------------------------------")
+# FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out ------------------------------
+
+# print("Before filtering:")
+# print(f"Number of non-zero values in {col_F}: {np.sum(final_df[col_F] != 0)}")
+# print(f"Number of non-zero values in {col_B}: {np.sum(final_df[col_B] != 0)}")
+# print(f"Min and Max values for {col_F} before filtering: {final_df[col_F].min()}, {final_df[col_F].max()}")
+
+# Handle NaNs by replacing them with 0
+final_df = final_df.fillna(0)
+
+# Loop through all relevant columns and apply the filtering
+for col in final_df.columns:
+    if col.startswith('T') or col.startswith('Q'):  # Check for T and Q columns
+        if '_F_' in col:  # Check if '_F_' is in the column name
+            # Apply the T_F filter for time columns (T)
+            if col.startswith('T'):
+                final_df[col] = np.where((final_df[col] > T_F_right_pre_cal) | (final_df[col] < T_F_left_pre_cal), 0, final_df[col])
+            # Apply the Q_F filter for charge columns (Q)
+            if col.startswith('Q'):
+                final_df[col] = np.where((final_df[col] > Q_F_right_pre_cal) | (final_df[col] < Q_F_left_pre_cal), 0, final_df[col])
+        elif '_B_' in col:  # Check if '_B_' is in the column name
+            # Apply the T_B filter for time columns (T)
+            if col.startswith('T'):
+                final_df[col] = np.where((final_df[col] > T_B_right_pre_cal) | (final_df[col] < T_B_left_pre_cal), 0, final_df[col])
+            # Apply the Q_B filter for charge columns (Q)
+            if col.startswith('Q'):
+                final_df[col] = np.where((final_df[col] > Q_B_right_pre_cal) | (final_df[col] < Q_B_left_pre_cal), 0, final_df[col])
+
+
+# print("After filtering:")
+# print(f"Number of non-zero values in {col_F}: {np.sum(final_df[col_F] != 0)}")
+# print(f"Number of non-zero values in {col_B}: {np.sum(final_df[col_B] != 0)}")
+# print(f"Min and Max values for {col_F} after filtering: {final_df[col_F].min()}, {final_df[col_F].max()}")
+
+
+# New channel-wise plot -------------------------------------------------------
+log_scale = True
+if debug_mode:
+    T_clip_min = -500
+    T_clip_max = 500
+    Q_clip_min = -500
+    Q_clip_max = 500
+    num_bins = 100  # Parameter for the number of bins
+else:
+    T_clip_min = -300
+    T_clip_max = 100
+    Q_clip_min = 0
+    Q_clip_max = 500
+    num_bins = 100  # Parameter for the number of bins
+
+
+# if create_plots or create_essential_plots:
+if create_plots:
     # Create the grand figure for T values
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_T = axes_T.flatten()
@@ -1749,7 +1998,64 @@ if create_plots or create_essential_plots:
 
     if show_plots: plt.show()
     plt.close(fig_Q)
-# -----------------------------------------------------------------------------
+
+
+if create_plots:
+    # Initialize figure and axes for scatter plot of Time vs Charge
+    fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+    axes_TQ = axes_TQ.flatten()
+
+    # Iterate over each module (T1, T2, T3, T4)
+    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+        for j in range(4):
+            col_F = f'{key}_F_{j+1}'  # Time F column
+            col_B = f'{key}_B_{j+1}'  # Time B column
+            
+            y_F = final_df[col_F].copy()  # Time values for front
+            y_B = final_df[col_B].copy()  # Time values for back
+            
+            charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'  # Corresponding charge column for front
+            charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'  # Corresponding charge column for back
+            
+            charge_F = final_df[charge_col_F].copy()  # Charge values for front
+            charge_B = final_df[charge_col_B].copy()  # Charge values for back
+            
+            # Apply clipping ranges to the data
+            mask_F = (y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max) & (charge_F > Q_clip_min) & (charge_F < Q_clip_max)
+            mask_B = (y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max) & (charge_B > Q_clip_min) & (charge_B < Q_clip_max)
+            
+            # Plot scatter plots for Time F vs Charge F and Time B vs Charge B
+            axes_TQ[i*4 + j].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
+            axes_TQ[i*4 + j].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
+            
+            # Plot threshold lines for time and charge
+            axes_TQ[i*4 + j].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
+            axes_TQ[i*4 + j].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
+            axes_TQ[i*4 + j].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
+            axes_TQ[i*4 + j].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
+            
+            axes_TQ[i*4 + j].set_title(f'{col_F} vs {col_B}')
+            axes_TQ[i*4 + j].legend()
+
+    # Adjust the layout and title
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Scatter Plot for T vs Q values, mingo0{station}\n{start_time}", fontsize=16)
+
+    # Save the plot
+    if save_plots:
+        final_filename = f'{fig_idx}_scatter_plot_TQ_filtered.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show the plot if requested
+    if show_plots:
+        plt.show()
+
+    # Close the plot to avoid excessive memory usage
+    plt.close(fig_TQ)
 
 
 # -----------------------------------------------------------------------------
@@ -1771,9 +2077,12 @@ if low_value_cols:
     print(f"Moving {file_path} to the error directory {final_path}...")
     shutil.move(file_path, final_path)
     
-    sys.exit()
+    sys.exit(1)
 
-# -----------------------------------------------------------------------------
+
+print("--------------------------------------------------------------------------")
+print("-------------------- Charge pedestal calibration -------------------------")
+print("--------------------------------------------------------------------------")
 
 charge_test = final_df.copy()
 charge_test_copy = charge_test.copy()
@@ -1827,8 +2136,8 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 # Plot histograms of all the pedestal substractions
 
-if create_plots or create_essential_plots:
-
+# if create_plots or create_essential_plots:
+if create_plots:
     # Create the grand figure for Q values
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_Q = axes_Q.flatten()
@@ -1908,9 +2217,11 @@ if create_plots or create_essential_plots:
     
     if show_plots: plt.show()
     plt.close(fig_Q)
-# -----------------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------------------
+# ----------------------- Charge calibration from ns to fC -------------------------
+# ----------------------------------------------------------------------------------
 
 # --- Define FEE Calibration ---
 FEE_calibration = {
@@ -1952,71 +2263,65 @@ for key in ['Q1', 'Q2', 'Q3', 'Q4']:
                 charge_test.loc[mask, col_fC] = interpolate_fast_charge(raw[mask])
 
 
-import matplotlib.pyplot as plt
-
 Q_clip_min = 0
 Q_clip_max = 1750
 num_bins = 100
 log_scale = True
 
-fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))
-axes_Q = axes_Q.flatten()
 
-for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-    for j in range(4):
-        col_F = f'{key}_F_{j+1}_fC'
-        col_B = f'{key}_B_{j+1}_fC'
-        ax = axes_Q[i*4 + j]
+if create_plots:
+    fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))
+    axes_Q = axes_Q.flatten()
 
-        if col_F in charge_test.columns:
-            y_F = charge_test[col_F]
-            y_F = y_F[(y_F > Q_clip_min) & (y_F < Q_clip_max) & np.isfinite(y_F)]
-            ax.hist(y_F, bins=num_bins, alpha=0.5, label=f'{col_F}')
+    for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+        for j in range(4):
+            col_F = f'{key}_F_{j+1}_fC'
+            col_B = f'{key}_B_{j+1}_fC'
+            ax = axes_Q[i*4 + j]
 
-        if col_B in charge_test.columns:
-            y_B = charge_test[col_B]
-            y_B = y_B[(y_B > Q_clip_min) & (y_B < Q_clip_max) & np.isfinite(y_B)]
-            ax.hist(y_B, bins=num_bins, alpha=0.5, label=f'{col_B}')
+            if col_F in charge_test.columns:
+                y_F = charge_test[col_F]
+                y_F = y_F[(y_F > Q_clip_min) & (y_F < Q_clip_max) & np.isfinite(y_F)]
+                ax.hist(y_F, bins=num_bins, alpha=0.5, label=f'{col_F}')
 
-        ax.set_title(f"{col_F} vs {col_B}")
-        ax.set_xlabel('Charge [fC]')
-        ax.legend()
+            if col_B in charge_test.columns:
+                y_B = charge_test[col_B]
+                y_B = y_B[(y_B > Q_clip_min) & (y_B < Q_clip_max) & np.isfinite(y_B)]
+                ax.hist(y_B, bins=num_bins, alpha=0.5, label=f'{col_B}')
 
-        if log_scale:
-            ax.set_yscale('log')
+            ax.set_title(f"{col_F} vs {col_B}")
+            ax.set_xlabel('Charge [fC]')
+            ax.legend()
 
-plt.tight_layout()
-plt.subplots_adjust(top=0.9)
-plt.suptitle(f"Grand Figure for calibrated charge (fC), mingo0{station}\n{start_time}", fontsize=16)
+            if log_scale:
+                ax.set_yscale('log')
 
-# --- Save/Show ---
-if save_plots:
-    final_filename = f'{fig_idx}_grand_figure_Q_fC.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Grand Figure for calibrated charge (fC), mingo0{station}\n{start_time}", fontsize=16)
 
-if show_plots:
-    plt.show()
-plt.close(fig_Q)
+    if save_plots:
+        final_filename = f'{fig_idx}_grand_figure_Q_fC.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots:
+        plt.show()
+    plt.close(fig_Q)
 
 
-# -----------------------------------------------------------------------
+# ----------------------------------------------------------------------------------
+# -------------------------- Position offset calibration ---------------------------
+# ----------------------------------------------------------------------------------
 
 pos_test = final_df.copy()
-
 for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
     for j in range(4):
         pos_test[f'{key}_diff_{j+1}'] = ( pos_test[f'{key}_F_{j+1}'] - pos_test[f'{key}_B_{j+1}'] ) / 2
 
-# print('Check this out:')
-# print(pos_test[f'P1_diff_1'])
-# print('---------')
-
 pos_test_copy = pos_test.copy()
-
-# New calibration for positions ------------------------------------------------
 Tdiff_cal = []
 for key in ['1', '2', '3', '4']:
     T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
@@ -2029,63 +2334,65 @@ for key in ['1', '2', '3', '4']:
     Tdiff_cal.append(Tdiff_cal_component)
 Tdiff_cal = np.array(Tdiff_cal)
 
-print("\nTime diff. offset:")
-print(Tdiff_cal)
+# print("\nTime diff. offset:")
+# print(Tdiff_cal)
 
-for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-    for j in range(4):
-        mask = pos_test_copy[f'{key}_diff_{j+1}'] != 0
-        pos_test.loc[mask, f'{key}_diff_{j+1}'] -= Tdiff_cal[i][j]
+# for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+#     for j in range(4):
+#         mask = pos_test_copy[f'{key}_diff_{j+1}'] != 0
+#         pos_test.loc[mask, f'{key}_diff_{j+1}'] -= Tdiff_cal[i][j]
 
 
-if create_plots:
-    # Create the grand figure for Q values
-    fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
-    axes_Q = axes_Q.flatten()
+# if create_plots:
+#     # Create the grand figure for Q values
+#     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+#     axes_Q = axes_Q.flatten()
     
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            col_F = f'{key}_diff_{j+1}'
-            y_F = pos_test[col_F]
+#     for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+#         for j in range(4):
+#             col_F = f'{key}_diff_{j+1}'
+#             y_F = pos_test[col_F]
             
-            Q_clip_min = -5
-            Q_clip_max = 5
+#             Q_clip_min = -5
+#             Q_clip_max = 5
             
-            # Plot histograms with Q-specific clipping and bins
-            axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
-                                 bins=num_bins, alpha=0.5, label=f'{col_F}')
-            axes_Q[i*4 + j].set_title(f'{col_F}')
-            axes_Q[i*4 + j].legend()
-            axes_Q[i*4 + j].set_xlabel('T_diff / ns')
-            axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+#             # Plot histograms with Q-specific clipping and bins
+#             axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+#                                  bins=num_bins, alpha=0.5, label=f'{col_F}')
+#             axes_Q[i*4 + j].set_title(f'{col_F}')
+#             axes_Q[i*4 + j].legend()
+#             axes_Q[i*4 + j].set_xlabel('T_diff / ns')
+#             axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
             
-            # if log_scale:
-            #     axes_Q[i*4 + j].set_yscale('log')  # For Q values
+#             # if log_scale:
+#             #     axes_Q[i*4 + j].set_yscale('log')  # For Q values
             
-        for ax in axes_Q:
-            ax.axvline(0, color='green', linestyle='--', alpha=0.5)
+#         for ax in axes_Q:
+#             ax.axvline(0, color='green', linestyle='--', alpha=0.5)
         
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    plt.suptitle(f"Grand Figure for position calibration, new method, mingo0{station}\n{start_time}", fontsize=16)
+#     plt.tight_layout()
+#     plt.subplots_adjust(top=0.9)
+#     plt.suptitle(f"Grand Figure for position calibration, new method, mingo0{station}\n{start_time}", fontsize=16)
     
-    if save_plots:
-        final_filename = f'{fig_idx}_grand_figure_T_diff_cal.png'
-        fig_idx += 1
+#     if save_plots:
+#         final_filename = f'{fig_idx}_grand_figure_T_diff_cal.png'
+#         fig_idx += 1
         
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#         plot_list.append(save_fig_path)
+#         plt.savefig(save_fig_path, format='png')
     
-    if show_plots: plt.show()
-    plt.close(fig_Q)
-
-
+#     if show_plots: plt.show()
+#     plt.close(fig_Q)
 
 
 # -----------------------------------------------------------------------
 # -----------------------------------------------------------------------
 # -----------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------------
+# -------------------------- Semisums and semidifferences --------------------------
+# ----------------------------------------------------------------------------------
 
 # Compute T_sum, T_diff, Q_sum, Q_diff ----------------------------------------
 new_columns_data = {'datetime': final_df['datetime'].values}
@@ -2107,19 +2414,19 @@ for key in ['T1', 'T2', 'T3', 'T4']:
         new_columns_data[f'{key.replace("T", "Q")}_Q_diff_{i+1}'] = (Q_F[:, i] - Q_B[:, i]) / 2
 
 new_df = pd.DataFrame(new_columns_data)
-timestamp_column = new_df['datetime']  # Adjust if the column name is different
-data_columns = new_df.drop(columns=['datetime'])
+# timestamp_column = new_df['datetime']  # Adjust if the column name is different
+# data_columns = new_df.drop(columns=['datetime'])
 
 
-print("----------------------- Filter 1.1: extreme outliers -----------------------")
-data_columns = data_columns.applymap(lambda x: 0 if builtins.isinstance(x, (builtins.int, builtins.float)) and (x < -1e6 or x > 1e6) else x)
-new_df = pd.concat([timestamp_column, data_columns], axis=1)
+# print("----------------------- Filter 1.1: extreme outliers -----------------------")
+# data_columns = data_columns.applymap(lambda x: 0 if builtins.isinstance(x, (builtins.int, builtins.float)) and (x < -1e6 or x > 1e6) else x)
+# new_df = pd.concat([timestamp_column, data_columns], axis=1)
 
 if debug_mode:
     print(len(new_df))
 
+# if create_essential_plots or create_plots:
 if create_plots:
-
     num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
@@ -2184,17 +2491,63 @@ for col in new_df.columns:
     if 'Q_diff' in col:
         new_df[col] = np.where((new_df[col] > Q_diff_pre_cal_threshold) | (new_df[col] < -Q_diff_pre_cal_threshold), 0, new_df[col])
 
+
+# if create_essential_plots or create_plots:
+if create_plots:
+    num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
+    num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
+    fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
+    axes = axes.flatten()
+
+    for i, col in enumerate([col for col in new_df.columns if col != 'datetime']):
+        y = new_df[col]
+        
+        if 'Q_sum' in col:
+            color = Q_sum_color
+        if 'Q_diff' in col:
+            color = Q_diff_color
+        if 'T_sum' in col:
+            color = T_sum_color
+        if 'T_diff' in col:
+            color = T_diff_color
+        axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
+        
+        axes[i].set_title(col)
+        axes[i].legend()
+        if 'Q_sum' in col:
+            axes[i].set_yscale('log')
+    
+    # Remove any unused axes
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+    
+    plt.tight_layout()
+    plt.suptitle("Uncalibrated data")
+    
+    if save_plots:
+        name_of_file = 'uncalibrated_filtered'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: 
+        plt.show()
+    plt.close()
+
+
 calibrated_data = new_df.copy()
+calibrated_data['datetime'] = final_df['datetime'] # Add datetime column to calibrated_data
 
 if debug_mode:
     print(len(calibrated_data))
 
+
 print("----------------------------------------------------------------------")
 print("----------- Charge sum pedestal, calibration and filtering -----------")
 print("----------------------------------------------------------------------")
-
-if debug_mode:
-    print(calibrated_data)
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
@@ -2209,51 +2562,44 @@ for col in calibrated_data.columns:
         calibrated_data[col] = np.where((calibrated_data[col] > Q_sum_right_cal) | (calibrated_data[col] < Q_sum_left_cal), 0, calibrated_data[col])
 
 
-print("--------------------- Filter 3.1: if one charge is 0 put the time to 0 ----------------------")
-for key in ['T1', 'T2', 'T3', 'T4']:
-    for i in range(4):
-        mask = (calibrated_data[f'{key.replace("T", "Q")}_Q_sum_{i+1}'] == 0)
-        calibrated_data.loc[mask, [f'{key}_T_diff_{i+1}', f'{key}_T_sum_{i+1}', 
-                                   f'{key.replace("T", "Q")}_Q_diff_{i+1}', f'{key.replace("T", "Q")}_Q_sum_{i+1}']] = 0
-
-
 print("----------------------------------------------------------------------")
 print("----------------- Time diff calibration and filtering ----------------")
 print("----------------------------------------------------------------------")
 
-calibration_T = []
-for key in ['T1', 'T2', 'T3', 'T4']:
-    T_dif_cols = [f'{key}_T_diff_{i+1}' for i in range(4)]
-    T_dif = new_df[T_dif_cols].values
-    calibration_t_component = [calibrate_strip_T(T_dif[:, i]) for i in range(4)]
-    calibration_T.append(calibration_t_component)
-calibration_T = np.array(calibration_T)
+# calibration_T = []
+# for key in ['T1', 'T2', 'T3', 'T4']:
+#     T_dif_cols = [f'{key}_T_diff_{i+1}' for i in range(4)]
+#     T_dif = new_df[T_dif_cols].values
+#     calibration_t_component = [calibrate_strip_T(T_dif[:, i]) for i in range(4)]
+#     calibration_T.append(calibration_t_component)
+# calibration_T = np.array(calibration_T)
 
-print(f"Time dif calibration:\n{calibration_T}")
+# print(f"Time dif calibration:\n{calibration_T}")
 
-diff = np.abs(calibration_T - time_dif_reference) > time_dif_distance
-nan_mask = np.isnan(calibration_T)
-values_replaced_t_dif = np.any(diff | nan_mask)
-calibration_T[diff | nan_mask] = time_dif_reference[diff | nan_mask]
-if values_replaced_t_dif:
-    print("Some values were replaced in the calibration T dif.")
+# diff = np.abs(calibration_T - time_dif_reference) > time_dif_distance
+# nan_mask = np.isnan(calibration_T)
+# values_replaced_t_dif = np.any(diff | nan_mask)
+# calibration_T[diff | nan_mask] = time_dif_reference[diff | nan_mask]
+# if values_replaced_t_dif:
+#     print("Some values were replaced in the calibration T dif.")
 
+# for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+#     for j in range(4):
+#         mask = new_df[f'{key}_T_diff_{j+1}'] != 0
+#         # calibrated_data.loc[mask, f'{key}_T_diff_{j+1}'] -= calibration_T[i][j]
+#         calibrated_data.loc[mask, f'{key}_T_diff_{j+1}'] -= Tdiff_cal[i][j]
+
+
+calibrated_data_copy = calibrated_data.copy()
 for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
     for j in range(4):
-        mask = new_df[f'{key}_T_diff_{j+1}'] != 0
-        # calibrated_data.loc[mask, f'{key}_T_diff_{j+1}'] -= calibration_T[i][j]
+        mask = calibrated_data_copy[f'{key}_T_diff_{j+1}'] != 0
         calibrated_data.loc[mask, f'{key}_T_diff_{j+1}'] -= Tdiff_cal[i][j]
 
-print("--------------------- Filter 3.2: time diff filtering ----------------------")
+print("--------------------- Filter 3.2: time diff filtering ----------------")
 for col in calibrated_data.columns:
     if 'T_diff' in col:
         calibrated_data[col] = np.where((calibrated_data[col] > T_diff_cal_threshold) | (calibrated_data[col] < -T_diff_cal_threshold), 0, calibrated_data[col])
-
-for key in ['T1', 'T2', 'T3', 'T4']:
-    for i in range(4):
-        mask = (calibrated_data[f'{key}_T_diff_{i+1}'] == 0)
-        calibrated_data.loc[mask, [f'{key}_T_diff_{i+1}', f'{key}_T_sum_{i+1}', 
-                                   f'{key.replace("T", "Q")}_Q_diff_{i+1}', f'{key.replace("T", "Q")}_Q_sum_{i+1}']] = 0
 
 
 print("----------------------------------------------------------------------")
@@ -2266,63 +2612,11 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
         # calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= calibration_Q_FB[i][j]
         calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
 
-# Add datetime column to calibrated_data -----------------------------
-calibrated_data['datetime'] = final_df['datetime']
-
 
 print("------------------ Filter 4: charge diff filtering -------------------")
 for col in calibrated_data.columns:
     if 'Q_diff' in col:
         calibrated_data[col] = np.where((calibrated_data[col] > Q_diff_cal_threshold) | (calibrated_data[col] < -Q_diff_cal_threshold), 0, calibrated_data[col])
-
-
-print("------------------ Filter 4.1: one-side filter removal -------------------")
-for key in ['T1', 'T2', 'T3', 'T4']:
-    for i in range(4):
-        mask = (calibrated_data[f'{key}_T_diff_{i+1}'] == 0) | (calibrated_data[f'{key}_T_sum_{i+1}'] == 0) | \
-               (calibrated_data[f'{key.replace("T", "Q")}_Q_diff_{i+1}'] == 0) | (calibrated_data[f'{key.replace("T", "Q")}_Q_sum_{i+1}'] == 0)
-        calibrated_data.loc[mask, [f'{key}_T_diff_{i+1}', f'{key}_T_sum_{i+1}', 
-                                   f'{key.replace("T", "Q")}_Q_diff_{i+1}', f'{key.replace("T", "Q")}_Q_sum_{i+1}']] = 0
-
-
-if create_plots:
-    num_columns = len(calibrated_data.columns) - 1  # Exclude 'datetime'
-    num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
-    fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
-    axes = axes.flatten()
-    for i, col in enumerate([col for col in calibrated_data.columns if col != 'datetime']):
-        y = calibrated_data[col]
-        
-        if 'Q_sum' in col:
-            color = Q_sum_color
-        if 'Q_diff' in col:
-            color = Q_diff_color
-        if 'T_sum' in col:
-            color = T_sum_color
-        if 'T_diff' in col:
-            color = T_diff_color
-        axes[i].hist(y[y != 0], bins=300, alpha=0.5, label=col, color=color)
-        
-        axes[i].set_title(col)
-        axes[i].legend()
-        if 'Q_sum' in col:
-            axes[i].set_yscale('log') 
-    for j in range(i + 1, len(axes)):
-        fig.delaxes(axes[j])
-    plt.tight_layout()
-    plt.suptitle('Calibrated data, one-side events removed')
-    
-    if save_plots:
-        name_of_file = 'calibrated_one_side_removed'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-        
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    
-    if show_plots: plt.show()
-    plt.close()
 
 
 # For articles and presentations
@@ -2335,7 +2629,6 @@ if presentation_plots:
 
     for i, col in enumerate([col for col in calibrated_data.columns if col != 'datetime'][:len(data)]):
         y = calibrated_data[col]
-        
         if 'Q_sum' in col:
             color = 'green'
         elif 'Q_diff' in col:
@@ -2344,13 +2637,9 @@ if presentation_plots:
             color = T_sum_color
         elif 'T_diff' in col:
             color = 'red'
-        
         y_p = y[y != 0]
-        
-        # Create a new figure for each histogram
         fig, ax = plt.subplots(figsize=(5, 3.5))
         ax.hist(y_p, bins=500, label=f"{len(y_p)} entries", alpha=0.5, color=color)
-        
         if 'T_diff' in col:
             ax.set_xlim([-1, 1])
         if 'Q_diff' in col:
@@ -2358,31 +2647,68 @@ if presentation_plots:
         if 'Q_sum' in col:
             ax.set_yscale('log')
             ax.set_xlim([-5, 50])
-            
         if 'Q' in col:
             ax.set_xlabel('QtW / ns')
         elif 'T' in col:
             ax.set_xlabel('T / ns')
         ax.set_ylabel('Counts')
-        
-        # ax.set_title(data[i])
         ax.legend(frameon=False, handletextpad=0, handlelength=0)
         plt.tight_layout()
-        
         if save_plots:
             name_of_file = data[i].replace(' ', '_').replace('/', '_')  # Sanitize file name
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
             plt.savefig(save_fig_path, format='png')
-            # plt.savefig(final_filename, format='png', dpi=300)
-        
-        if show_plots: 
-            plt.show()
+        if show_plots: plt.show()
         plt.close()
 
+
+# if create_essential_plots or create_plots:
+if create_plots:
+    num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
+    num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
+    fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
+    axes = axes.flatten()
+
+    for i, col in enumerate([col for col in new_df.columns if col != 'datetime']):
+        y = calibrated_data[col]
+        
+        if 'Q_sum' in col:
+            color = Q_sum_color
+        if 'Q_diff' in col:
+            color = Q_diff_color
+        if 'T_sum' in col:
+            color = T_sum_color
+        if 'T_diff' in col:
+            color = T_diff_color
+        axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
+        
+        axes[i].set_title(col)
+        axes[i].legend()
+        if 'Q_sum' in col:
+            axes[i].set_yscale('log')
+    
+    # Remove any unused axes
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+    
+    plt.tight_layout()
+    plt.suptitle("Calibrated filtered data before FB correction")
+    
+    if save_plots:
+        name_of_file = 'calibrated_filtered_before_FB_corr'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: 
+        plt.show()
+    plt.close()
 
 
 print("----------------------------------------------------------------------")
@@ -2401,9 +2727,6 @@ if charge_front_back:
             Q_sum_adjusted = Q_sum[cond].copy()
             Q_diff_adjusted = Q_diff[cond].copy()
             
-            # print(len(Q_sum_adjusted))
-            # print(len(Q_diff_adjusted))
-            
             # Skip correction if no data is left after filtering
             if np.sum(Q_sum_adjusted) == 0:
                 continue
@@ -2414,51 +2737,10 @@ if charge_front_back:
             y_label = "Charge diff"
             name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
             coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
-            
-            # Calculate the correction based on filtered data
-            # correction = polynomial(Q_diff[Q_diff != 0], *coeffs)
-
-            # # Apply correction directly to non-zero values
-            # Q_diff[Q_diff != 0] -= correction
-
-            # # Update the DataFrame with corrected values
-            # calibrated_data[f'Q{key}_Q_diff_{i+1}'] = Q_diff
-            
-            # Update only filtered rows in the DataFrame
             calibrated_data.loc[cond, f'Q{key}_Q_diff_{i+1}'] = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
-
-        
-    # ADD THE SUBFIGURES HERE OF THE 16 CALIBRATIONS
+            
     print('Charge front-back correction performed.')
     
-    if create_plots or create_essential_plots:
-        num_columns = len(calibrated_data.columns) - 1  # Exclude 'datetime'
-        num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
-        fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
-        axes = axes.flatten()
-        for i, col in enumerate([col for col in calibrated_data.columns if col != 'datetime']):
-            y = calibrated_data[col]
-            axes[i].hist(y[y != 0], bins=300, alpha=0.5, label=col)
-            axes[i].set_title(col)
-            axes[i].legend()
-        for j in range(i + 1, len(axes)):
-            fig.delaxes(axes[j])
-        plt.tight_layout()
-        plt.suptitle('Calibrated data, included Front-back correction')
-        
-        if save_plots:
-            name_of_file = 'calibrated_including_ch_diff'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
-            
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-        
-        if show_plots:
-            plt.show()
-        plt.close()
-
 else:
     print('Charge front-back correction was selected to not be performed.')
     Q_diff_cal_threshold_FB = 10
@@ -2467,7 +2749,58 @@ else:
 print("----------------- Filter 5: charge difference FB filter -----------------")
 for col in calibrated_data.columns:
     if 'Q_diff' in col:
-        calibrated_data[col] = np.where((calibrated_data[col] > Q_diff_cal_threshold_FB) | (calibrated_data[col] < Q_diff_cal_threshold_FB), 0, calibrated_data[col])
+        calibrated_data[col] = np.where(np.abs(calibrated_data[col]) < Q_diff_cal_threshold_FB, calibrated_data[col], 0)
+
+# ------------------------------------------------------------
+
+# if create_essential_plots or create_plots:
+if create_plots:
+    num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
+    num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
+    fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
+    axes = axes.flatten()
+
+    for i, col in enumerate([col for col in new_df.columns if col != 'datetime']):
+        y = calibrated_data[col]
+        
+        if 'Q_sum' in col:
+            color = Q_sum_color
+        if 'Q_diff' in col:
+            color = Q_diff_color
+        if 'T_sum' in col:
+            color = T_sum_color
+        if 'T_diff' in col:
+            color = T_diff_color
+        axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
+        
+        axes[i].set_title(col)
+        axes[i].legend()
+        if 'Q_sum' in col:
+            axes[i].set_yscale('log')
+    
+    # Remove any unused axes
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+    
+    plt.tight_layout()
+    plt.suptitle("Calibrated filtered data including FB correction")
+    
+    if save_plots:
+        name_of_file = 'calibrated_filtered'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: 
+        plt.show()
+    plt.close()
+
+# ------------------------------------------------------------
+
+
 
 print("----------------------------------------------------------------------")
 print("------------------------ Slewing correction --------------------------")
@@ -2486,385 +2819,681 @@ if slewing_correction:
     data_df_tdiff = data_df.filter(regex='T_diff')
 
     # Concatenate all relevant data with 'type' column
-    data_df_times = pd.concat([data_df_charges, data_df_times, data_df_tdiff], axis=1)
-    print(data_df_times.columns.to_list())
-    data_case = data_df_times
-
-    import re
-    import itertools
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    from scipy.constants import c
-
-    ##############################################################################
-    # 1) Define geometry and plane-strip mapping
-    ##############################################################################
-
-    # Print the resulting z_positions
-    z_positions = z_positions - z_positions[0]
-    print(f"Z positions: {z_positions}")
-
-    def y_pos(y_width):
-        """Returns array of y-centers based on the widths of each strip."""
-        return np.cumsum(y_width) - (np.sum(y_width) + y_width) / 2
-
-    # For P1/P3 vs P2/P4
-    y_widths = [
-        np.array([63, 63, 63, 98]),  # P1 / P3
-        np.array([98, 63, 63, 63])   # P2 / P4
-    ]
-
-    y_pos_P1_P3 = y_pos(y_widths[0])  # shape (4,)
-    y_pos_P2_P4 = y_pos(y_widths[1])  # shape (4,)
-
-    # yz_big[plane_index, strip_index, 0/1] = (y,z)
-    # plane_index in [0..3] => P1=0, P2=1, P3=2, P4=3
-    # strip_index in [0..3], but your data columns say 1..4 => we do minus 1
-    yz_big = np.zeros((4, 4, 2))
-
-    # Fill P1 -> plane_idx=0, P3 -> plane_idx=2 with y_pos_P1_P3
-    for strip_idx in range(4):
-        yz_big[0, strip_idx, 0] = y_pos_P1_P3[strip_idx]  # y
-        yz_big[0, strip_idx, 1] = z_positions[0]         # z for P1
-        
-        yz_big[2, strip_idx, 0] = y_pos_P1_P3[strip_idx]  # y
-        yz_big[2, strip_idx, 1] = z_positions[2]         # z for P3
-
-    # Fill P2 -> plane_idx=1, P4 -> plane_idx=3 with y_pos_P2_P4
-    for strip_idx in range(4):
-        yz_big[1, strip_idx, 0] = y_pos_P2_P4[strip_idx]  # y
-        yz_big[1, strip_idx, 1] = z_positions[1]         # z for P2
-
-        yz_big[3, strip_idx, 0] = y_pos_P2_P4[strip_idx]  # y
-        yz_big[3, strip_idx, 1] = z_positions[3]         # z for P4
-
-    # Mapping P1->0, P2->1, P3->2, P4->3
-    plane_map = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
-
-    def get_yz(plane_idx, strip_idx):
-        """
-        Return (y,z) for the given plane_idx (0..3) and strip_idx (0..3).
-        We do yz_big[plane_idx, strip_idx], which is [y,z].
-        """
-        return yz_big[plane_idx, strip_idx, :]
-
-
-    ##############################################################################
-    # 2) Define constants and speed
-    ##############################################################################
-    c_mm_ns = c / 1000000
-    beta = 1.0
-    muon_speed = beta * c_mm_ns
-
-    ##############################################################################
-    # 3) Parsing plane & strip from column names
-    #    (e.g. "P1_T_sum_3" => plane="P1", strip=3)
-    ##############################################################################
-    def parse_plane_and_strip(col_name):
-        """
-        This regex expects columns like "P1_T_sum_2" or "P3_T_diff_4".
-        If the column doesn't match, raises ValueError.
-        """
-        pattern = r"^(T[1-4])_T_(?:sum|diff)_(\d+)$"
-        match = re.match(pattern, col_name)
-        if not match:
-            raise ValueError(f"Cannot parse plane/strip from '{col_name}'")
-        plane_str = match.group(1)  # e.g. "P1"
-        strip_str = match.group(2)  # e.g. "3"
-        return plane_str, int(strip_str)
-
-
-    ##############################################################################
-    # 4) Compute travel time function
-    #    - figure out plane/strip for each T_sum column
-    #    - find T_diff columns => x positions
-    #    - get (y,z) from yz_big
-    #    - distance / speed
-    ##############################################################################
-    def compute_travel_time(row, col_sum1, col_sum2):
-        plane1, strip1 = parse_plane_and_strip(col_sum1)  
-        plane2, strip2 = parse_plane_and_strip(col_sum2)
-        
-        # T_diff columns for x
-        tdiff_col1 = f"{plane1}_T_diff_{strip1}"
-        tdiff_col2 = f"{plane2}_T_diff_{strip2}"
-        
-        # x1, x2 in mm
-        x1 = row[tdiff_col1] * 200.0
-        x2 = row[tdiff_col2] * 200.0
-        
-        # yz from yz_big
-        i1 = plane_map[plane1]
-        i2 = plane_map[plane2]
-        j1 = strip1 - 1  # because your columns say e.g. strip=1..4
-        j2 = strip2 - 1
-        y1, z1 = get_yz(i1, j1)
-        y2, z2 = get_yz(i2, j2)
-        
-        dx = x2 - x1
-        dy = y2 - y1
-        dz = z2 - z1
-        dist = np.sqrt(dx**2 + dy**2 + dz**2)
-        return dist / muon_speed  # time in ns
-
-
-    ##############################################################################
-    # 5) Example: load or define your DataFrame with T-sum, T-diff, Q-sum columns
-    ##############################################################################
-    # Suppose your actual data has columns like:
-    # ['type', 'Q1_Q_sum_1', 'Q1_Q_sum_2', ..., 'P1_T_sum_1', ..., 'P2_T_diff_2', ...]
-
-    # 5a) Filter out the T_sum, T_diff, Q_sum columns via regex so we don’t parse e.g. "type"
-    T_sum_cols = [
-        col for col in data_case.columns
-        if re.match(r"^T[1-4]_T_sum_[1-4]$", col)
-    ]
-    T_diff_cols = [
-        col for col in data_case.columns
-        if re.match(r"^T[1-4]_T_diff_[1-4]$", col)
-    ]
-    Q_sum_cols = [
-        col for col in data_case.columns
-        if re.match(r"^Q[1-4]_Q_sum_[1-4]$", col)
-    ]
-
-    ##############################################################################
-    # 6) Build T_sum differences minus travel time
-    ##############################################################################
-    import math
-
-    T_sum_diffs = {}
-    # We do pairwise combinations of the T_sum columns
-    for col1, col2 in itertools.combinations(T_sum_cols, 2):
-        diff_series = data_case.apply(
-            # lambda row: row[col1] - row[col2] - compute_travel_time(row, col1, col2)
-            lambda row: row[col1] - row[col2]
-            if (row[col1] - row[col2]) != 0 else 0,  # Perform calculation only if difference is nonzero
-            axis=1
-        )
-        T_sum_diffs[f"{col1}-{col2}"] = diff_series
-
-    T_sum_diff_df = pd.DataFrame(T_sum_diffs)
-
-    ##############################################################################
-    # 7) Q_sum differences (no travel time needed)
-    ##############################################################################
-    Q_sum_diffs = {}
-    for col1, col2 in itertools.combinations(Q_sum_cols, 2):
-        Q_sum_diffs[f"{col1}-{col2}"] = data_case[col1] - data_case[col2]
-
-    Q_sum_diff_df = pd.DataFrame(Q_sum_diffs)
-
-    ##############################################################################
-    # 8) Optionally compute total sums
-    ##############################################################################
-    data_case["Total_T_sum"] = data_case[T_sum_cols].sum(axis=1)
-    data_case["Total_Q_sum"] = data_case[Q_sum_cols].sum(axis=1) if Q_sum_cols else np.nan
-
-    ##############################################################################
-    # 9) Merge differences + totals
-    ##############################################################################
-    data_analysis = pd.concat(
-        [T_sum_diff_df, Q_sum_diff_df, data_case[["Total_T_sum", "Total_Q_sum"]]],
-        axis=1
-    )
-
-    print("data_analysis:\n", data_analysis)
-
-    import matplotlib.pyplot as plt
-
-    # Get available T_sum and Q_sum difference columns
-    num_available_T = len(T_sum_diff_df.columns)
-    num_available_Q = len(Q_sum_diff_df.columns)
-
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import scipy.stats as stats
-    from scipy.optimize import curve_fit
-
-    # Define Gaussian function for fitting
-    def gaussian(x, mu, sigma, A):
-        return A * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
-
-    # Get available T_sum and Q_sum difference columns
-    num_available_T = len(T_sum_diff_df.columns)
-    num_available_Q = len(Q_sum_diff_df.columns)
-
-    from scipy.stats import linregress
-
-    # Get available T_sum and Q_sum difference columns
-    num_available_T = len(T_sum_diff_df.columns)
-    num_available_Q = len(Q_sum_diff_df.columns)
-
-    # Ensure we have data to process
-    if num_available_T > 0 and num_available_Q > 0:
-        corrected_T_sum_diff = {}
-
-        for i in range(num_available_T):
-            col_t = list(T_sum_diff_df.columns)[i]
-            col_q = list(Q_sum_diff_df.columns)[i]
-
-            x = data_analysis[col_t]
-            y = data_analysis[col_q]
-
-            # Apply condition to filter out extreme values
-            cond = (abs(x) <= 5) & (abs(y) <= 100) & (y != 0) & (x != 0)
-            x = x[cond]
-            y = y[cond]
-
-            # Perform linear regression using scipy.stats.linregress
-            try:
-                # Perform linear regression using scipy.stats.linregress
-                slope, intercept, _, _, _ = linregress(y, x)
-                # Correct T_sum_diff values using the regression line only if the original value is not 0
-                corrected_x = np.where(x != 0, x - (slope * y + intercept), x)
-                corrected_T_sum_diff[col_t] = corrected_x
-            except Exception as e:
-                print(f"Skipping fit for {col_t} due to error: {e}")
-                corrected_T_sum_diff[col_t] = x  # Keep original values if fit fails
-            
-            if create_essential_plots or create_plots:
-                # Plot in a scatter plot the original, the fit and the corrected values
-                plt.figure(figsize=(6, 4))
-                plt.scatter(y, x, alpha=0.6, s=1, label="Original")
-                plt.scatter(y, slope * y + intercept, alpha=0.6, s=1, label="Fit")
-                plt.scatter(y, corrected_x, alpha=0.6, s=1, label="Corrected")
-                plt.xlabel(col_q)
-                plt.ylabel(col_t)
-                plt.xlim([-100, 100])
-                plt.ylim([-4, 4])
-                plt.title(f"{col_t} vs. {col_q}")
-                plt.legend()
-                
-                if save_plots:
-                    name_of_file = 'slew_corr'
-                    final_filename = f'{fig_idx}_{name_of_file}.png'
-                    fig_idx += 1
-                    
-                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                    plot_list.append(save_fig_path)
-                    plt.savefig(save_fig_path, format='png')
-                
-                if show_plots:
-                    plt.show()
-                plt.close()
-
-    else:
-        print("No valid combination of T_sum/Q_sum differences to plot.")
-
-
-    from scipy.stats import linregress
-    import itertools
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import re
-
-    # -----------------------------
-    # Step 1: Per-strip slewing correction
-    # -----------------------------
-    corrected_T_sum = {}
-
-    for col_t in T_sum_cols:
-        match = re.match(r"^(T[1-4])_T_sum_(\d+)$", col_t)
-        if not match:
-            continue
-        plane = match.group(1)
-        strip = match.group(2)
-        col_q = f"{plane.replace('T', 'Q')}_Q_sum_{strip}"
-
-        if col_q not in data_case.columns:
-            print(f"Missing Q_sum for {col_t} → skipping.")
-            continue
-
-        x = data_case[col_q]
-        y = data_case[col_t]
-
-        cond = (x != 0) & (y != 0) & np.isfinite(x) & np.isfinite(y)
-        x_fit = x[cond]
-        y_fit = y[cond]
-
-        if len(x_fit) < 100:
-            print(f"Insufficient points for {col_t} → skipping correction.")
-            corrected_T_sum[col_t] = data_case[col_t]
-            continue
-
-        try:
-            slope, intercept, _, _, _ = linregress(x_fit, y_fit)
-            corrected_y = data_case[col_t] - (slope * data_case[col_q] + intercept)
-            corrected_T_sum[col_t] = corrected_y
-        except Exception as e:
-            print(f"Fit failed for {col_t}: {e}")
-            corrected_T_sum[col_t] = data_case[col_t]
-
-    corrected_T_sum_df = pd.DataFrame(corrected_T_sum)
-
-    # -----------------------------
-    # Step 2: Compute corrected T_sum differences
-    # -----------------------------
-    corrected_T_sum_diff_df = {
-        f"{c1}-{c2}": corrected_T_sum_df[c1] - corrected_T_sum_df[c2]
-        for c1, c2 in itertools.combinations(corrected_T_sum_df.columns, 2)
+    data_df_filt = pd.concat([data_df_charges, data_df_times, data_df_tdiff], axis=1)
+    print(data_df_filt.columns.to_list())
+    data_slew = data_df_filt
+    
+    # Select y_pos for each plane
+    y_lookup = {
+        1: y_pos_T[0],
+        2: y_pos_T[1],
+        3: y_pos_T[0],
+        4: y_pos_T[1],
     }
-    corrected_T_sum_diff_df = pd.DataFrame(corrected_T_sum_diff_df)
+    
+    results = []
+    
+    # Loop through all combinations of planes and strips
+    for (p1, s1), (p2, s2) in combinations([(p, s) for p in range(1, 5) for s in range(1, 5)], 2):
+        Q1 = data_slew[f"Q{p1}_Q_sum_{s1}"]
+        Q2 = data_slew[f"Q{p2}_Q_sum_{s2}"]
+        T1 = data_slew[f"T{p1}_T_sum_{s1}"]
+        T2 = data_slew[f"T{p2}_T_sum_{s2}"]
+        TD1 = data_slew[f"T{p1}_T_diff_{s1}"]
+        TD2 = data_slew[f"T{p2}_T_diff_{s2}"]
+        
+        valid_mask = (
+            (Q1 != 0) & (Q2 != 0) &
+            (T1 != 0) & (T2 != 0) &
+            (TD1 != 0) & (TD2 != 0)
+        )
 
-    # -----------------------------
-    # Step 3: Identify valid inter-layer combinations
-    # -----------------------------
-    valid_pairs = []
-    pattern = r"^(T[1-4])_T_sum_(\d+)-(T[1-4])_T_sum_(\d+)$"
+        # Apply mask to compute only valid values
+        Q1 = Q1[valid_mask]
+        Q2 = Q2[valid_mask]
+        T1 = T1[valid_mask]
+        T2 = T2[valid_mask]
+        TD1 = TD1[valid_mask]
+        TD2 = TD2[valid_mask]
+        
+        x1 = TD1 * tdiff_to_x  # mm
+        x2 = TD2 * tdiff_to_x
+        y1 = y_lookup[p1][s1 - 1]
+        y2 = y_lookup[p2][s2 - 1]
+        z1 = z_positions[p1 - 1]
+        z2 = z_positions[p2 - 1]
 
-    for col_t in corrected_T_sum_diff_df.columns:
-        m = re.match(pattern, col_t)
-        if not m:
-            continue
-        plane1, _, plane2, _ = m.groups()
-        if plane1 != plane2:
-            col_q = col_t.replace("T_sum", "Q_sum").replace("T", "Q")
-            if col_q in Q_sum_diff_df.columns:
-                valid_pairs.append((col_t, col_q))
+        dx = x1 - x2
+        dy = y1 - y2
+        dz = z1 - z2
 
-    # -----------------------------
-    # Step 4: Plot first 5 valid inter-layer pairs
-    # -----------------------------
-    num_plots = min(5, len(valid_pairs))
-    if num_plots > 0:
-        fig, axes = plt.subplots(num_plots, 1, figsize=(6, 4 * num_plots))
-        if num_plots == 1:
-            axes = [axes]
+        travel_time = np.sqrt(dx**2 + dy**2 + dz**2) / c_mm_ns
+        tsum_diff = (T1 - T2)
+        corrected_tsum_diff = tsum_diff + travel_time
 
-        for i in range(num_plots):
-            col_t, col_q = valid_pairs[i]
+        results.append(pd.DataFrame({
+            'plane1': p1, 'strip1': s1,
+            'plane2': p2, 'strip2': s2,
+            'Q_sum_semidiff': 0.5 * (Q1 - Q2),
+            'Q_sum_semisum':  0.5 * (Q1 + Q2),
+            'T_sum_corrected_diff': corrected_tsum_diff,
+            'T_sum_diff': tsum_diff,
+            'x_diff': dx,
+            'travel_time': travel_time
+        }))
 
-            x = corrected_T_sum_diff_df[col_t]
-            y = Q_sum_diff_df[col_q]
+    # Concatenate all results
+    slew_df = pd.concat(results, ignore_index=True)
+    
 
-            cond = (abs(x) <= 5) & (abs(y) <= 100) & np.isfinite(x) & np.isfinite(y)
-            x = x[cond]
-            y = y[cond]
+    # if create_essential_plots or create_plots:
+    if create_plots:
 
-            axes[i].scatter(y, x, alpha=0.6, s=1)
-            axes[i].set_xlabel(col_q)
-            axes[i].set_ylabel(col_t)
-            axes[i].set_title(f"{col_t} vs {col_q} (after per-strip slewing correction)")
-            axes[i].set_xlim(-100, 100)
-            axes[i].set_ylim(-4, 4)  
+        pair_labels = [
+            (p1, s1, p2, s2)
+            for p1 in range(1, 5)
+            for s1 in range(1, 5)
+            for p2 in range(p1 + 1, 5)
+            for s2 in range(1, 5)
+        ]
 
-        plt.tight_layout()
+        # Parameters
+        batch_size = 4  # number of pairs per batch
+        num_batches = int(np.ceil(len(pair_labels) / batch_size))
 
-        if save_plots:
-            name_of_file = 'slew_corr_first5_interlayer_scatter'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+        for batch in range(num_batches):
+            start_idx = batch * batch_size
+            end_idx = min((batch + 1) * batch_size, len(pair_labels))
+            current_pairs = pair_labels[start_idx:end_idx]
 
-        if show_plots:
-            plt.show()
-        plt.close()
-    else:
-        print("No valid inter-layer T_sum/Q_sum pairs found for plotting.")
+            fig, axes = plt.subplots(1, batch_size, figsize=(6 * batch_size, 5), constrained_layout=True)
+            axes = np.atleast_2d(axes)
+
+            for col_idx, (p1, s1, p2, s2) in enumerate(current_pairs):
+                mask = (
+                    (slew_df['plane1'] == p1) & (slew_df['strip1'] == s1) &
+                    (slew_df['plane2'] == p2) & (slew_df['strip2'] == s2)
+                )
+                data = slew_df[mask]
+
+                # Only use rows with valid x_diff and T values
+                valid_mask = (
+                    (data['x_diff'] != 0) &
+                    (data['T_sum_corrected_diff'] != 0) &
+                    (data['T_sum_diff'] != 0)
+                )
+                data = data[valid_mask]
+
+                x = data['x_diff']
+                t_uncorrected = data['T_sum_diff']
+                t_corrected = data['T_sum_corrected_diff']
+
+                # dx vs T_sum_diff (uncorrected)
+                ax1 = axes[0, col_idx]
+                ax1.scatter(x, t_uncorrected, s=5, alpha=0.6, color='tab:red')
+                ax1.set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Uncorrected")
+                ax1.set_xlabel("dx (mm)")
+                ax1.set_ylabel("T_sum_diff (ns)")
+
+                ax1.scatter(x, t_corrected, s=5, alpha=0.6, color='tab:blue')
+                ax1.set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Corrected")
+
+            # Hide unused subplots
+            for row in range(1):
+                for col in range(len(current_pairs), batch_size):
+                    axes[row, col].set_visible(False)
+
+            plt.suptitle(f"Batch {batch + 1}/{num_batches} — dx vs Time Differences", fontsize=18, y=1.01)
+
+            if save_plots:
+                name_of_file = 'dx_vs_tsum'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
+
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+
+            if show_plots:
+                plt.show()
+            plt.close()
+
+    
+    # if create_essential_plots or create_plots:
+    if create_plots:   
+        pair_labels = [
+            (p1, s1, p2, s2)
+            for p1 in range(1, 5)
+            for s1 in range(1, 5)
+            for p2 in range(p1 + 1, 5)
+            for s2 in range(1, 5)
+        ]
+
+        # Parameters
+        batch_size = 4  # number of pairs per batch
+        num_batches = int(np.ceil(len(pair_labels) / batch_size))
+        
+        for batch in range(num_batches):
+            start_idx = batch * batch_size
+            end_idx = min((batch + 1) * batch_size, len(pair_labels))
+            current_pairs = pair_labels[start_idx:end_idx]
+
+            fig, axes = plt.subplots(1, batch_size, figsize=(6 * batch_size, 5), constrained_layout=True)
+            axes = np.atleast_1d(axes)
+
+            for col_idx, (p1, s1, p2, s2) in enumerate(current_pairs):
+                mask = (
+                    (slew_df['plane1'] == p1) & (slew_df['strip1'] == s1) &
+                    (slew_df['plane2'] == p2) & (slew_df['strip2'] == s2)
+                )
+                data = slew_df[mask]
+
+                # Valid entries only
+                valid_mask = (
+                    (data['x_diff'] != 0) &
+                    (data['travel_time'] != 0)
+                )
+                data = data[valid_mask]
+
+                x = data['x_diff']
+                t = data['travel_time']
+
+                ax = axes[col_idx]
+                ax.scatter(x, t, s=5, alpha=0.6, color='tab:green')
+                ax.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
+                ax.set_xlabel("dx (mm)")
+                ax.set_ylabel("travel_time (ns)")
+
+            # Hide unused subplots
+            for col in range(len(current_pairs), batch_size):
+                axes[col].set_visible(False)
+
+            plt.suptitle(f"Batch {batch + 1}/{num_batches} — dx vs Travel Time", fontsize=18, y=1.01)
+
+            if save_plots:
+                name_of_file = 'dx_vs_travel_time'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
+
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+
+            if show_plots:
+                plt.show()
+            plt.close()
+
+
+    
+    # if create_essential_plots or create_plots:
+    if create_plots:
+        import seaborn as sns
+        
+        pair_labels = [
+            (p1, s1, p2, s2)
+            for p1 in range(1, 5)
+            for s1 in range(1, 5)
+            for p2 in range(p1 + 1, 5)
+            for s2 in range(1, 5)
+        ]
+
+        # Parameters
+        batch_size = 4  # number of pairs per batch
+        num_batches = int(np.ceil(len(pair_labels) / batch_size))
+
+        # ---- Loop through batches of pairs and plot all three histograms per pair ----
+        for batch in range(num_batches):
+            start_idx = batch * batch_size
+            end_idx = min((batch + 1) * batch_size, len(pair_labels))
+            current_pairs = pair_labels[start_idx:end_idx]
+
+            fig, axes = plt.subplots(3, batch_size, figsize=(6 * batch_size, 12), constrained_layout=True)
+            axes = np.atleast_2d(axes)
+
+            for col_idx, (p1, s1, p2, s2) in enumerate(current_pairs):
+                mask = (
+                    (slew_df['plane1'] == p1) & (slew_df['strip1'] == s1) &
+                    (slew_df['plane2'] == p2) & (slew_df['strip2'] == s2)
+                )
+                data = slew_df[mask]
+
+                # Plot Q_sum_semidiff
+                sns.histplot(data['Q_sum_semidiff'], bins=30, kde=True, ax=axes[0, col_idx])
+                axes[0, col_idx].set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Q_diff")
+                axes[0, col_idx].set_xlabel("Q_sum_semidiff")
+                axes[0, col_idx].set_ylabel("Counts")
+
+                # Plot Q_sum_semisum
+                sns.histplot(data['Q_sum_semisum'], bins=30, kde=True, ax=axes[1, col_idx])
+                axes[1, col_idx].set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Q_sum")
+                axes[1, col_idx].set_xlabel("Q_sum_semisum")
+                axes[1, col_idx].set_ylabel("Counts")
+
+                # Plot T_sum_corrected_diff
+                sns.histplot(data['T_sum_corrected_diff'], bins=30, kde=True, ax=axes[2, col_idx])
+                axes[2, col_idx].set_title(f"P{p1}S{s1} vs P{p2}S{s2} — ΔT corrected")
+                axes[2, col_idx].set_xlabel("T_sum_corrected_diff")
+                axes[2, col_idx].set_ylabel("Counts")
+
+            # Hide unused subplots
+            for row in range(3):
+                for col in range(len(current_pairs), batch_size):
+                    axes[row, col].set_visible(False)
+
+            plt.suptitle(f"Batch {batch + 1}/{num_batches} — Histograms per Plane/Strip Pair", fontsize=18, y=1.01)
+
+            if save_plots:
+                name_of_file = 'slewing'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
+
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+        
+            if show_plots: 
+                plt.show()
+            plt.close()
+            
+            
+    # if create_essential_plots or create_plots:
+    if create_plots:
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+        from matplotlib import gridspec
+        
+        import seaborn as sns
+        
+        pair_labels = [
+            (p1, s1, p2, s2)
+            for p1 in range(1, 5)
+            for s1 in range(1, 5)
+            for p2 in range(p1 + 1, 5)
+            for s2 in range(1, 5)
+        ]
+
+        # Parameters
+        batch_size = 4  # number of pairs per batch
+        num_batches = int(np.ceil(len(pair_labels) / batch_size))
+        
+        for batch in range(num_batches):
+            start_idx = batch * batch_size
+            end_idx = min((batch + 1) * batch_size, len(pair_labels))
+            current_pairs = pair_labels[start_idx:end_idx]
+
+            fig = plt.figure(figsize=(6 * batch_size, 16), constrained_layout=True)
+            spec = gridspec.GridSpec(nrows=4, ncols=batch_size, figure=fig)
+
+            for col_idx, (p1, s1, p2, s2) in enumerate(current_pairs):
+                mask = (
+                    (slew_df['plane1'] == p1) & (slew_df['strip1'] == s1) &
+                    (slew_df['plane2'] == p2) & (slew_df['strip2'] == s2)
+                )
+                data = slew_df[mask]
+
+                # Drop rows with any invalid values for this pair
+                valid_mask = (
+                    (data['Q_sum_semidiff'] != 0) &
+                    (data['Q_sum_semisum'] != 0) &
+                    (data['T_sum_corrected_diff'] != 0)
+                )
+                data = data[valid_mask]
+
+                x = data['T_sum_corrected_diff']
+                y = data['Q_sum_semisum']
+                z = data['Q_sum_semidiff']
+
+                # 3D plot
+                ax3d = fig.add_subplot(spec[0:2, col_idx], projection='3d')
+                ax3d.scatter(x, y, z, s=5, alpha=0.6)
+                ax3d.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
+                ax3d.set_xlabel('ΔT corrected (ns)')
+                ax3d.set_ylabel('Q_sum_semisum')
+                ax3d.set_zlabel('Q_sum_semidiff')
+
+                # XY projection
+                ax_xy = fig.add_subplot(spec[2, col_idx])
+                ax_xy.scatter(x, y, s=5, alpha=0.5)
+                ax_xy.set_xlabel('ΔT corrected')
+                ax_xy.set_ylabel('Q_sum_semisum')
+                ax_xy.set_title('XY projection')
+
+                # XZ projection
+                ax_xz = fig.add_subplot(spec[3, col_idx])
+                ax_xz.scatter(x, z, s=5, alpha=0.5, c='tab:red')
+                ax_xz.set_xlabel('ΔT corrected')
+                ax_xz.set_ylabel('Q_sum_semidiff')
+                ax_xz.set_title('XZ projection')
+
+            plt.suptitle(f"Batch {batch + 1}/{num_batches} — 3D Slewing Observables", fontsize=18, y=1.01)
+
+            if save_plots:
+                name_of_file = 'slewing_3d'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
+
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+
+            if show_plots:
+                plt.show()
+            plt.close()
+
+
+    # THE FIT ----------------------------------------------------------------
+    from sklearn.linear_model import LinearRegression
+    
+    pair_labels = [
+            (p1, s1, p2, s2)
+            for p1 in range(1, 5)
+            for s1 in range(1, 5)
+            for p2 in range(p1 + 1, 5)
+            for s2 in range(1, 5)
+        ]
+    
+    # Store fitted model parameters
+    fit_results = []
+
+    def robust_z_filter(df, cols, threshold=3.5):
+        from scipy.stats import median_abs_deviation
+
+        mask = np.ones(len(df), dtype=bool)
+        for col in cols:
+            median = np.median(df[col])
+            mad = median_abs_deviation(df[col], scale='normal')  # consistent with std if normal
+            if mad == 0:
+                continue  # skip flat distributions
+            z_mod = 0.6745 * (df[col] - median) / mad
+            mask &= np.abs(z_mod) < threshold
+        return df[mask]
+    
+    for (p1, s1, p2, s2) in pair_labels:
+        mask = (
+            (slew_df['plane1'] == p1) & (slew_df['strip1'] == s1) &
+            (slew_df['plane2'] == p2) & (slew_df['strip2'] == s2)
+        )
+        data = slew_df[mask]
+
+        valid_mask = (
+            (data['Q_sum_semidiff'] != 0) &
+            (data['Q_sum_semisum'] != 0) &
+            (data['T_sum_corrected_diff'] != 0)
+        )
+        data = data[valid_mask]
+
+        if len(data) < 10:
+            continue  # not enough data to fit
+        
+        # Apply some filtering on the values of Q_sum_semidiff and Q_sum_semisum
+        data = data[
+            (data['Q_sum_semidiff'] > -20) & (data['Q_sum_semidiff'] < 20) &
+            (data['Q_sum_semisum'] > 10) & (data['Q_sum_semisum'] < 50) &
+            (data['T_sum_corrected_diff'] > -4) & (data['T_sum_corrected_diff'] < 4)
+        ]
+        
+        
+        # Apply it to your DataFrame:
+        data = robust_z_filter(data, ['Q_sum_semidiff', 'Q_sum_semisum', 'T_sum_corrected_diff'])
+        
+        not_use_q = False
+        if not_use_q:
+            X = data[['Q_sum_semidiff']].values
+            y = data['T_sum_corrected_diff'].values
+
+            model = LinearRegression()
+            model.fit(X, y)
+            
+            b_semidiff = model.coef_[0]
+            a_semisum = 0
+        else:
+            X = data[['Q_sum_semisum', 'Q_sum_semidiff']].values
+            y = data['T_sum_corrected_diff'].values
+
+            model = LinearRegression()
+            model.fit(X, y)
+            
+            a_semisum = model.coef_[0]
+            b_semidiff = model.coef_[1]
+
+        # Store results
+        fit_results.append({
+            'plane1': p1, 'strip1': s1,
+            'plane2': p2, 'strip2': s2,
+            'a_semisum': a_semisum,
+            'b_semidiff': b_semidiff,
+            'c_offset': model.intercept_,
+            'n_points': len(data)
+        })
+
+    # Create dataframe with all model parameters
+    slewing_fit_df = pd.DataFrame(fit_results)
+    
+    print("Fitting results:")
+    print(slewing_fit_df)
+    
+    
+    # if create_essential_plots or create_plots:
+    if create_plots:
+        from mpl_toolkits.mplot3d import Axes3D
+        from matplotlib import gridspec
+        import seaborn as sns
+
+        pair_labels = [
+            (p1, s1, p2, s2)
+            for p1 in range(1, 5)
+            for s1 in range(1, 5)
+            for p2 in range(p1 + 1, 5)
+            for s2 in range(1, 5)
+        ]
+
+        batch_size = 4
+        num_batches = int(np.ceil(len(pair_labels) / batch_size))
+
+        for batch in range(num_batches):
+            start_idx = batch * batch_size
+            end_idx = min((batch + 1) * batch_size, len(pair_labels))
+            current_pairs = pair_labels[start_idx:end_idx]
+
+            fig = plt.figure(figsize=(6 * batch_size, 16), constrained_layout=True)
+            spec = gridspec.GridSpec(nrows=4, ncols=batch_size, figure=fig)
+
+            for col_idx, (p1, s1, p2, s2) in enumerate(current_pairs):
+                mask = (
+                    (slew_df['plane1'] == p1) & (slew_df['strip1'] == s1) &
+                    (slew_df['plane2'] == p2) & (slew_df['strip2'] == s2)
+                )
+                data = slew_df[mask]
+
+                valid_mask = (
+                    (data['Q_sum_semidiff'] != 0) &
+                    (data['Q_sum_semisum'] != 0) &
+                    (data['T_sum_corrected_diff'] != 0)
+                )
+                data = data[valid_mask]
+
+                if len(data) < 10:
+                    continue
+
+                # Retrieve fitted model coefficients from slewing_fit_df
+                fit_row = slewing_fit_df[
+                    (slewing_fit_df['plane1'] == p1) &
+                    (slewing_fit_df['strip1'] == s1) &
+                    (slewing_fit_df['plane2'] == p2) &
+                    (slewing_fit_df['strip2'] == s2)
+                ]
+                if fit_row.empty:
+                    continue
+
+                a = fit_row['a_semisum'].values[0]
+                b = fit_row['b_semidiff'].values[0]
+                c = fit_row['c_offset'].values[0]
+
+                x = data['T_sum_corrected_diff'].values
+                y = data['Q_sum_semisum'].values
+                z = data['Q_sum_semidiff'].values
+
+                # 3D plot
+                ax3d = fig.add_subplot(spec[0:2, col_idx], projection='3d')
+                ax3d.scatter(x, y, z, s=5, alpha=0.6)
+                ax3d.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
+                ax3d.set_xlabel('ΔT corrected (ns)')
+                ax3d.set_ylabel('Q_sum_semisum')
+                ax3d.set_zlabel('Q_sum_semidiff')
+
+                # XY projection
+                ax_xy = fig.add_subplot(spec[2, col_idx])
+                ax_xy.scatter(x, y, s=5, alpha=0.5)
+                z_fixed = np.mean(z)
+                y_line = np.linspace(np.min(y), np.max(y), 100)
+                x_line = a * y_line + b * z_fixed + c
+                ax_xy.plot(x_line, y_line, color='black', lw=1, label='Fitted projection')
+                ax_xy.set_xlabel('ΔT corrected')
+                ax_xy.set_ylabel('Q_sum_semisum')
+                ax_xy.set_title('XY projection')
+                ax_xy.legend(fontsize='x-small')
+
+                # XZ projection
+                ax_xz = fig.add_subplot(spec[3, col_idx])
+                ax_xz.scatter(x, z, s=5, alpha=0.5, c='tab:red')
+                y_fixed = np.mean(y)
+                z_line = np.linspace(np.min(z), np.max(z), 100)
+                x_line2 = a * y_fixed + b * z_line + c
+                ax_xz.plot(x_line2, z_line, color='black', lw=1, label='Fitted projection')
+                ax_xz.set_xlabel('ΔT corrected')
+                ax_xz.set_ylabel('Q_sum_semidiff')
+                ax_xz.set_title('XZ projection')
+                ax_xz.legend(fontsize='x-small')
+
+            plt.suptitle(f"Batch {batch + 1}/{num_batches} — 3D Slewing + Fitted Projections", fontsize=18, y=1.01)
+
+            if save_plots:
+                name_of_file = 'slewing_3d_fitproj'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
+
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+
+            if show_plots:
+                plt.show()
+            plt.close()
+
+
+
+    # FIT VALIDATION (reduced to essential plots)
+    # if create_essential_plots or create_plots:
+    if create_plots:
+
+        from mpl_toolkits.mplot3d import Axes3D
+        from matplotlib import gridspec
+        import seaborn as sns
+
+        pair_labels = [
+            (p1, s1, p2, s2)
+            for p1 in range(1, 5)
+            for s1 in range(1, 5)
+            for p2 in range(p1 + 1, 5)
+            for s2 in range(1, 5)
+        ]
+
+        batch_size = 4
+        num_batches = int(np.ceil(len(pair_labels) / batch_size))
+        
+        for batch in range(num_batches):
+            start_idx = batch * batch_size
+            end_idx = min((batch + 1) * batch_size, len(pair_labels))
+            current_pairs = pair_labels[start_idx:end_idx]
+
+            fig, axes = plt.subplots(2, batch_size, figsize=(6 * batch_size, 8), constrained_layout=True)
+            axes = np.atleast_2d(axes)
+
+            for col_idx, (p1, s1, p2, s2) in enumerate(current_pairs):
+                mask = (
+                    (slew_df['plane1'] == p1) & (slew_df['strip1'] == s1) &
+                    (slew_df['plane2'] == p2) & (slew_df['strip2'] == s2)
+                )
+                data = slew_df[mask]
+
+                valid_mask = (
+                    (data['Q_sum_semidiff'] != 0) &
+                    (data['Q_sum_semisum'] != 0) &
+                    (data['T_sum_corrected_diff'] != 0)
+                )
+                data = data[valid_mask]
+
+                if len(data) < 10:
+                    for row in range(2):
+                        axes[row, col_idx].set_visible(False)
+                    continue
+
+                fit_row = slewing_fit_df[
+                    (slewing_fit_df['plane1'] == p1) &
+                    (slewing_fit_df['strip1'] == s1) &
+                    (slewing_fit_df['plane2'] == p2) &
+                    (slewing_fit_df['strip2'] == s2)
+                ]
+                if fit_row.empty:
+                    for row in range(2):
+                        axes[row, col_idx].set_visible(False)
+                    continue
+
+                a = fit_row['a_semisum'].values[0]
+                b = fit_row['b_semidiff'].values[0]
+                c = fit_row['c_offset'].values[0]
+
+                qsum = data['Q_sum_semisum'].values
+                qdiff = data['Q_sum_semidiff'].values
+                t_true = data['T_sum_corrected_diff'].values
+                t_pred = a * qsum + b * qdiff + c
+                residual = t_true - t_pred
+                
+                # Filter residuals, remove if out of the range
+                residual_range = 5
+                cond = (residual > -1*residual_range) & (residual < residual_range)
+                residual = residual[cond]
+                t_true = t_true[cond]
+                t_pred = t_pred[cond]
+                
+                # Plot predicted vs true with y=x line
+                ax0 = axes[0, col_idx]
+                ax0.scatter(t_true, t_pred, s=5, alpha=0.6)
+                min_val = min(t_true.min(), t_pred.min())
+                max_val = max(t_true.max(), t_pred.max())
+                ax0.plot([min_val, max_val], [min_val, max_val], 'k--', lw=1)
+                ax0.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
+                ax0.set_xlabel("T_true")
+                ax0.set_ylabel("T_predicted")
+
+                # Residuals histogram
+                ax1 = axes[1, col_idx]
+                ax1.hist(t_true, bins=100, alpha=0.7, color='tab:gray', label = "Uncorrected")
+                ax1.hist(residual, bins=100, alpha=0.7, color='green', label = "Residuals, same as corrected")
+                ax1.set_xlabel("Residuals (ns)")
+                ax1.set_ylabel("Counts")
+                ax1.set_title("Residual Distribution")
+
+            # Hide unused subplots
+            for row in range(2):
+                for col in range(len(current_pairs), batch_size):
+                    axes[row, col].set_visible(False)
+
+            plt.suptitle(f"Batch {batch + 1}/{num_batches} — Fit Check (Predicted vs Real, Residuals)", fontsize=18, y=1.01)
+
+            if save_plots:
+                name_of_file = 'model_validation_simple'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
+
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+
+            if show_plots:
+                plt.show()
+            plt.close()
+
+
 
 
 print("----------------------------------------------------------------------")
@@ -2872,549 +3501,572 @@ print("----------------------- Time sum calibration -------------------------")
 print("----------------------------------------------------------------------")
 
 if time_calibration:
-    # Initialize an empty list to store the resulting matrices for each event
-    event_matrices = []
-    
-    # Iterate over each event (row) in the DataFrame
-    for _, row in calibrated_data.iterrows():
-        event_matrix = []
-        for module in ['T1', 'T2', 'T3', 'T4']:
-            # Find the index of the strip with the maximum Q_sum for this module
-            Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(4)]
-            Q_sum_values = row[Q_sum_cols].values
+    old_timing_method = False
+    if old_timing_method:
+        # Initialize an empty list to store the resulting matrices for each event
+        event_matrices = []
+        
+        # Iterate over each event (row) in the DataFrame
+        for _, row in calibrated_data.iterrows():
+            event_matrix = []
+            for module in ['T1', 'T2', 'T3', 'T4']:
+                # Find the index of the strip with the maximum Q_sum for this module
+                Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(4)]
+                Q_sum_values = row[Q_sum_cols].values
+                
+                if sum(Q_sum_values) == 0:
+                    event_matrix.append([0, 0, 0])
+                    continue
+                
+                max_index = np.argmax(Q_sum_values) + 1
+                    
+                # Get the corresponding T_sum and T_diff for the module and strip
+                T_sum_col = f'{module}_T_sum_{max_index}'
+                T_diff_col = f'{module}_T_diff_{max_index}'
+                T_sum_value = row[T_sum_col]
+                T_diff_value = row[T_diff_col]
+                
+                # Append the row to the event matrix
+                event_matrix.append([max_index, T_sum_value, T_diff_value])
             
-            if sum(Q_sum_values) == 0:
-                event_matrix.append([0, 0, 0])
+            # Convert the event matrix to a numpy array and append it to the list of event matrices
+            event_matrices.append(np.array(event_matrix))
+        
+        # Convert the list of event matrices to a 3D numpy array (events x modules x features)
+        event_matrices = np.array(event_matrices)
+        
+        # The old code to do this -----------------------------
+        
+        yz_big = np.array([[[y, z] for y in y_pos_T[i % 2]] for i, z in enumerate(z_positions)])
+        
+        def calculate_diff(P_a, s_a, P_b, s_b, ps):
+            
+            # First position
+            x_1 = ps[P_a-1, 1]
+            yz_1 = yz_big[P_a-1, s_a-1]
+            xyz_1 = np.append(x_1, yz_1)
+            
+            # Second position
+            x_2 = ps[P_b-1, 1]
+            yz_2 = yz_big[P_b-1, s_b-1]
+            xyz_2 = np.append(x_2, yz_2)
+            
+            pos_x.append(x_1)
+            pos_x.append(x_2)
+            
+            t_0_1 = ps[P_a-1, 2]
+            t_0_2 = ps[P_b-1, 2]
+            t_0.append(t_0_1)
+            t_0.append(t_0_2)
+            
+            # Length
+            dist = np.sqrt(np.sum((xyz_2 - xyz_1)**2))
+            travel_time = dist / muon_speed
+            
+            v_travel_time.append(travel_time)
+            
+            # diff = travel_time
+            diff = ps[P_b-1, 2] - ps[P_a-1, 2] - travel_time
+            # diff = ps[P_b-1, 2] - ps[P_a-1, 2]
+            return diff
+        
+        # Three layers spaced
+        P1s1_P4s1 = []
+        P1s1_P4s2 = []
+        P1s2_P4s1 = []
+        P1s2_P4s2 = []
+        P1s2_P4s3 = []
+        P1s3_P4s2 = []
+        P1s3_P4s3 = []
+        P1s3_P4s4 = []
+        P1s4_P4s3 = []
+        P1s4_P4s4 = []
+        P1s1_P4s3 = []
+        P1s3_P4s1 = []
+        P1s2_P4s4 = []
+        P1s4_P4s2 = []
+        P1s1_P4s4 = []
+        
+        # Two layers spaced
+        P1s1_P3s1 = []
+        P1s1_P3s2 = []
+        P1s2_P3s1 = []
+        P1s2_P3s2 = []
+        P1s2_P3s3 = []
+        P1s3_P3s2 = []
+        P1s3_P3s3 = []
+        P1s3_P3s4 = []
+        P1s4_P3s3 = []
+        P1s4_P3s4 = []
+        P1s1_P3s3 = []
+        P1s3_P3s1 = []
+        P1s2_P3s4 = []
+        P1s4_P3s2 = []
+        P1s1_P3s4 = []
+        
+        P2s1_P4s1 = []
+        P2s1_P4s2 = []
+        P2s2_P4s1 = []
+        P2s2_P4s2 = []
+        P2s2_P4s3 = []
+        P2s3_P4s2 = []
+        P2s3_P4s3 = []
+        P2s3_P4s4 = []
+        P2s4_P4s3 = []
+        P2s4_P4s4 = []
+        P2s1_P4s3 = []
+        P2s3_P4s1 = []
+        P2s2_P4s4 = []
+        P2s4_P4s2 = []
+        P2s1_P4s4 = []
+        
+        # One layer spaced
+        P1s1_P2s1 = []
+        P1s1_P2s2 = []
+        P1s2_P2s1 = []
+        P1s2_P2s2 = []
+        P1s2_P2s3 = []
+        P1s3_P2s2 = []
+        P1s3_P2s3 = []
+        P1s3_P2s4 = []
+        P1s4_P2s3 = []
+        P1s4_P2s4 = []
+        P1s1_P2s3 = []
+        P1s3_P2s1 = []
+        P1s2_P2s4 = []
+        P1s4_P2s2 = []
+        P1s1_P2s4 = []
+        
+        P2s1_P3s1 = []
+        P2s1_P3s2 = []
+        P2s2_P3s1 = []
+        P2s2_P3s2 = []
+        P2s2_P3s3 = []
+        P2s3_P3s2 = []
+        P2s3_P3s3 = []
+        P2s3_P3s4 = []
+        P2s4_P3s3 = []
+        P2s4_P3s4 = []
+        P2s1_P3s3 = []
+        P2s3_P3s1 = []
+        P2s2_P3s4 = []
+        P2s4_P3s2 = []
+        P2s1_P3s4 = []
+        
+        P3s1_P4s1 = []
+        P3s1_P4s2 = []
+        P3s2_P4s1 = []
+        P3s2_P4s2 = []
+        P3s2_P4s3 = []
+        P3s3_P4s2 = []
+        P3s3_P4s3 = []
+        P3s3_P4s4 = []
+        P3s4_P4s3 = []
+        P3s4_P4s4 = []
+        P3s1_P4s3 = []
+        P3s3_P4s1 = []
+        P3s2_P4s4 = []
+        P3s4_P4s2 = []
+        P3s1_P4s4 = []
+        
+        pos_x = []
+        v_travel_time = []
+        t_0 = []
+        
+        # -----------------------------------------------------------------------------
+        # Perform the calculation of a strip vs. the any other one --------------------
+        # -----------------------------------------------------------------------------
+        
+        i = 0
+        for event in event_matrices:
+            if limit and i >= limit_number:
+                break
+            if np.all(event[:,0] == 0):
                 continue
             
-            max_index = np.argmax(Q_sum_values) + 1
+            istrip = event[:, 0]
+            t0 = event[:,1] - strip_length / 2 / strip_speed
+            x = event[:,2] * strip_speed
+            
+            ps = np.column_stack(( istrip, x,  t0 ))
+            ps[:,2] = ps[:,2] - ps[0,2]
+            
+            # ---------------------------------------------------------------------
+            # Fill the time differences vectors -----------------------------------
+            # ---------------------------------------------------------------------
+            
+            # Three layers spacing ------------------------------------------------
+            # P1-P4 ---------------------------------------------------------------
+            P_a = 1; P_b = 4
+            # Same strips
+            s_a = 1; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Adjacent strips
+            s_a = 1; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Two separated strips
+            s_a = 1; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Three separated strips
+            s_a = 1; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            
+            # Two layers spacing --------------------------------------------------
+            # P1-P3 ---------------------------------------------------------------
+            P_a = 1; P_b = 3
+            # Same strips
+            s_a = 1; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Adjacent strips
+            s_a = 1; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Two separated strips
+            s_a = 1; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Three separated strips
+            s_a = 1; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            
+            # P2-P4 ---------------------------------------------------------------
+            P_a = 2; P_b = 4
+            # Same strips
+            s_a = 1; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Adjacent strips
+            s_a = 1; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Two separated strips
+            s_a = 1; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Three separated strips
+            s_a = 1; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            
+            # One layer spacing ---------------------------------------------------
+            # P3-P4 ---------------------------------------------------------------
+            P_a = 3; P_b = 4
+            # Same strips
+            s_a = 1; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Adjacent strips
+            s_a = 1; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Two separated strips
+            s_a = 1; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Three separated strips
+            s_a = 1; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            
+            # P1-P2 ---------------------------------------------------------------
+            P_a = 1; P_b = 2
+            # Same strips
+            s_a = 1; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Adjacent strips
+            s_a = 1; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Two separated strips
+            s_a = 1; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Three separated strips
+            s_a = 1; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            
+            # P2-P3 ---------------------------------------------------------------
+            P_a = 2; P_b = 3
+            # Same strips
+            s_a = 1; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Adjacent strips
+            s_a = 1; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Two separated strips
+            s_a = 1; s_b = 3
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 3; s_b = 1
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 2; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            s_a = 4; s_b = 2
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
+            # Three separated strips
+            s_a = 1; s_b = 4
+            if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
                 
-            # Get the corresponding T_sum and T_diff for the module and strip
-            T_sum_col = f'{module}_T_sum_{max_index}'
-            T_diff_col = f'{module}_T_diff_{max_index}'
-            T_sum_value = row[T_sum_col]
-            T_diff_value = row[T_diff_col]
-            
-            # Append the row to the event matrix
-            event_matrix.append([max_index, T_sum_value, T_diff_value])
+            i += 1
         
-        # Convert the event matrix to a numpy array and append it to the list of event matrices
-        event_matrices.append(np.array(event_matrix))
-    
-    # Convert the list of event matrices to a 3D numpy array (events x modules x features)
-    event_matrices = np.array(event_matrices)
-    
-    # The old code to do this -----------------------------
-    
-    yz_big = np.array([[[y, z] for y in y_pos_T[i % 2]] for i, z in enumerate(z_positions)])
-    
-    def calculate_diff(P_a, s_a, P_b, s_b, ps):
-        
-        # First position
-        x_1 = ps[P_a-1, 1]
-        yz_1 = yz_big[P_a-1, s_a-1]
-        xyz_1 = np.append(x_1, yz_1)
-        
-        # Second position
-        x_2 = ps[P_b-1, 1]
-        yz_2 = yz_big[P_b-1, s_b-1]
-        xyz_2 = np.append(x_2, yz_2)
-        
-        pos_x.append(x_1)
-        pos_x.append(x_2)
-        
-        t_0_1 = ps[P_a-1, 2]
-        t_0_2 = ps[P_b-1, 2]
-        t_0.append(t_0_1)
-        t_0.append(t_0_2)
-        
-        # Length
-        dist = np.sqrt(np.sum((xyz_2 - xyz_1)**2))
-        travel_time = dist / muon_speed
-        
-        v_travel_time.append(travel_time)
-        
-        # diff = travel_time
-        diff = ps[P_b-1, 2] - ps[P_a-1, 2] - travel_time
-        # diff = ps[P_b-1, 2] - ps[P_a-1, 2]
-        return diff
-    
-    # Three layers spaced
-    P1s1_P4s1 = []
-    P1s1_P4s2 = []
-    P1s2_P4s1 = []
-    P1s2_P4s2 = []
-    P1s2_P4s3 = []
-    P1s3_P4s2 = []
-    P1s3_P4s3 = []
-    P1s3_P4s4 = []
-    P1s4_P4s3 = []
-    P1s4_P4s4 = []
-    P1s1_P4s3 = []
-    P1s3_P4s1 = []
-    P1s2_P4s4 = []
-    P1s4_P4s2 = []
-    P1s1_P4s4 = []
-    
-    # Two layers spaced
-    P1s1_P3s1 = []
-    P1s1_P3s2 = []
-    P1s2_P3s1 = []
-    P1s2_P3s2 = []
-    P1s2_P3s3 = []
-    P1s3_P3s2 = []
-    P1s3_P3s3 = []
-    P1s3_P3s4 = []
-    P1s4_P3s3 = []
-    P1s4_P3s4 = []
-    P1s1_P3s3 = []
-    P1s3_P3s1 = []
-    P1s2_P3s4 = []
-    P1s4_P3s2 = []
-    P1s1_P3s4 = []
-    
-    P2s1_P4s1 = []
-    P2s1_P4s2 = []
-    P2s2_P4s1 = []
-    P2s2_P4s2 = []
-    P2s2_P4s3 = []
-    P2s3_P4s2 = []
-    P2s3_P4s3 = []
-    P2s3_P4s4 = []
-    P2s4_P4s3 = []
-    P2s4_P4s4 = []
-    P2s1_P4s3 = []
-    P2s3_P4s1 = []
-    P2s2_P4s4 = []
-    P2s4_P4s2 = []
-    P2s1_P4s4 = []
-    
-    # One layer spaced
-    P1s1_P2s1 = []
-    P1s1_P2s2 = []
-    P1s2_P2s1 = []
-    P1s2_P2s2 = []
-    P1s2_P2s3 = []
-    P1s3_P2s2 = []
-    P1s3_P2s3 = []
-    P1s3_P2s4 = []
-    P1s4_P2s3 = []
-    P1s4_P2s4 = []
-    P1s1_P2s3 = []
-    P1s3_P2s1 = []
-    P1s2_P2s4 = []
-    P1s4_P2s2 = []
-    P1s1_P2s4 = []
-    
-    P2s1_P3s1 = []
-    P2s1_P3s2 = []
-    P2s2_P3s1 = []
-    P2s2_P3s2 = []
-    P2s2_P3s3 = []
-    P2s3_P3s2 = []
-    P2s3_P3s3 = []
-    P2s3_P3s4 = []
-    P2s4_P3s3 = []
-    P2s4_P3s4 = []
-    P2s1_P3s3 = []
-    P2s3_P3s1 = []
-    P2s2_P3s4 = []
-    P2s4_P3s2 = []
-    P2s1_P3s4 = []
-    
-    P3s1_P4s1 = []
-    P3s1_P4s2 = []
-    P3s2_P4s1 = []
-    P3s2_P4s2 = []
-    P3s2_P4s3 = []
-    P3s3_P4s2 = []
-    P3s3_P4s3 = []
-    P3s3_P4s4 = []
-    P3s4_P4s3 = []
-    P3s4_P4s4 = []
-    P3s1_P4s3 = []
-    P3s3_P4s1 = []
-    P3s2_P4s4 = []
-    P3s4_P4s2 = []
-    P3s1_P4s4 = []
-    
-    pos_x = []
-    v_travel_time = []
-    t_0 = []
-    
-    # -----------------------------------------------------------------------------
-    # Perform the calculation of a strip vs. the any other one --------------------
-    # -----------------------------------------------------------------------------
-    
-    i = 0
-    for event in event_matrices:
-        if limit and i >= limit_number:
-            break
-        if np.all(event[:,0] == 0):
-            continue
-        
-        istrip = event[:, 0]
-        t0 = event[:,1] - strip_length / 2 / strip_speed
-        x = event[:,2] * strip_speed
-        
-        ps = np.column_stack(( istrip, x,  t0 ))
-        ps[:,2] = ps[:,2] - ps[0,2]
-        
-        # ---------------------------------------------------------------------
-        # Fill the time differences vectors -----------------------------------
-        # ---------------------------------------------------------------------
-        
-        # Three layers spacing ------------------------------------------------
-        # P1-P4 ---------------------------------------------------------------
-        P_a = 1; P_b = 4
-        # Same strips
-        s_a = 1; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Adjacent strips
-        s_a = 1; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Two separated strips
-        s_a = 1; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Three separated strips
-        s_a = 1; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        
-        # Two layers spacing --------------------------------------------------
-        # P1-P3 ---------------------------------------------------------------
-        P_a = 1; P_b = 3
-        # Same strips
-        s_a = 1; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Adjacent strips
-        s_a = 1; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Two separated strips
-        s_a = 1; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Three separated strips
-        s_a = 1; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        
-        # P2-P4 ---------------------------------------------------------------
-        P_a = 2; P_b = 4
-        # Same strips
-        s_a = 1; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Adjacent strips
-        s_a = 1; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Two separated strips
-        s_a = 1; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Three separated strips
-        s_a = 1; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        
-        # One layer spacing ---------------------------------------------------
-        # P3-P4 ---------------------------------------------------------------
-        P_a = 3; P_b = 4
-        # Same strips
-        s_a = 1; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Adjacent strips
-        s_a = 1; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Two separated strips
-        s_a = 1; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Three separated strips
-        s_a = 1; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        
-        # P1-P2 ---------------------------------------------------------------
-        P_a = 1; P_b = 2
-        # Same strips
-        s_a = 1; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Adjacent strips
-        s_a = 1; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Two separated strips
-        s_a = 1; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Three separated strips
-        s_a = 1; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        
-        # P2-P3 ---------------------------------------------------------------
-        P_a = 2; P_b = 3
-        # Same strips
-        s_a = 1; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Adjacent strips
-        s_a = 1; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Two separated strips
-        s_a = 1; s_b = 3
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 3; s_b = 1
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 2; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        s_a = 4; s_b = 2
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-        # Three separated strips
-        s_a = 1; s_b = 4
-        if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-            
-        i += 1
-    
-    vectors = [
-        P1s1_P3s1, P1s1_P3s2, P1s2_P3s1, P1s2_P3s2, P1s2_P3s3,
-        P1s3_P3s2, P1s3_P3s3, P1s3_P3s4, P1s4_P3s3, P1s4_P3s4,
-        P1s1_P3s3, P1s3_P3s1, P1s2_P3s4, P1s4_P3s2, P1s1_P3s4,\
-            
-        P1s1_P4s1, P1s1_P4s2, P1s2_P4s1, P1s2_P4s2, P1s2_P4s3,
-        P1s3_P4s2, P1s3_P4s3, P1s3_P4s4, P1s4_P4s3, P1s4_P4s4,
-        P1s1_P4s3, P1s3_P4s1, P1s2_P4s4, P1s4_P4s2, P1s1_P4s4,\
-            
-        P2s1_P4s1, P2s1_P4s2, P2s2_P4s1, P2s2_P4s2, P2s2_P4s3,
-        P2s3_P4s2, P2s3_P4s3, P2s3_P4s4, P2s4_P4s3, P2s4_P4s4,
-        P2s1_P4s3, P2s3_P4s1, P2s2_P4s4, P2s4_P4s2, P2s1_P4s4,\
-            
-        P3s1_P4s1, P3s1_P4s2, P3s2_P4s1, P3s2_P4s2, P3s2_P4s3,
-        P3s3_P4s2, P3s3_P4s3, P3s3_P4s4, P3s4_P4s3, P3s4_P4s4,
-        P3s1_P4s3, P3s3_P4s1, P3s2_P4s4, P3s4_P4s2, P3s1_P4s4,\
-            
-        P1s1_P2s1, P1s1_P2s2, P1s2_P2s1, P1s2_P2s2, P1s2_P2s3,
-        P1s3_P2s2, P1s3_P2s3, P1s3_P2s4, P1s4_P2s3, P1s4_P2s4,
-        P1s1_P2s3, P1s3_P2s1, P1s2_P2s4, P1s4_P2s2, P1s1_P2s4,\
-            
-        P2s1_P3s1, P2s1_P3s2, P2s2_P3s1, P2s2_P3s2, P2s2_P3s3,
-        P2s3_P3s2, P2s3_P3s3, P2s3_P3s4, P2s4_P3s3, P2s4_P3s4,
-        P2s1_P3s3, P2s3_P3s1, P2s2_P3s4, P2s4_P3s2, P2s1_P3s4
-    ]
+        vectors = [
+            P1s1_P3s1, P1s1_P3s2, P1s2_P3s1, P1s2_P3s2, P1s2_P3s3,
+            P1s3_P3s2, P1s3_P3s3, P1s3_P3s4, P1s4_P3s3, P1s4_P3s4,
+            P1s1_P3s3, P1s3_P3s1, P1s2_P3s4, P1s4_P3s2, P1s1_P3s4,\
+                
+            P1s1_P4s1, P1s1_P4s2, P1s2_P4s1, P1s2_P4s2, P1s2_P4s3,
+            P1s3_P4s2, P1s3_P4s3, P1s3_P4s4, P1s4_P4s3, P1s4_P4s4,
+            P1s1_P4s3, P1s3_P4s1, P1s2_P4s4, P1s4_P4s2, P1s1_P4s4,\
+                
+            P2s1_P4s1, P2s1_P4s2, P2s2_P4s1, P2s2_P4s2, P2s2_P4s3,
+            P2s3_P4s2, P2s3_P4s3, P2s3_P4s4, P2s4_P4s3, P2s4_P4s4,
+            P2s1_P4s3, P2s3_P4s1, P2s2_P4s4, P2s4_P4s2, P2s1_P4s4,\
+                
+            P3s1_P4s1, P3s1_P4s2, P3s2_P4s1, P3s2_P4s2, P3s2_P4s3,
+            P3s3_P4s2, P3s3_P4s3, P3s3_P4s4, P3s4_P4s3, P3s4_P4s4,
+            P3s1_P4s3, P3s3_P4s1, P3s2_P4s4, P3s4_P4s2, P3s1_P4s4,\
+                
+            P1s1_P2s1, P1s1_P2s2, P1s2_P2s1, P1s2_P2s2, P1s2_P2s3,
+            P1s3_P2s2, P1s3_P2s3, P1s3_P2s4, P1s4_P2s3, P1s4_P2s4,
+            P1s1_P2s3, P1s3_P2s1, P1s2_P2s4, P1s4_P2s2, P1s1_P2s4,\
+                
+            P2s1_P3s1, P2s1_P3s2, P2s2_P3s1, P2s2_P3s2, P2s2_P3s3,
+            P2s3_P3s2, P2s3_P3s3, P2s3_P3s4, P2s4_P3s3, P2s4_P3s4,
+            P2s1_P3s3, P2s3_P3s1, P2s2_P3s4, P2s4_P3s2, P2s1_P3s4
+        ]
 
-    if create_plots:
-        # Convert data to numpy arrays and filter
-        pos_x = np.array(pos_x)
-        pos_x = pos_x[(-200 < pos_x) & (pos_x < 200) & (pos_x != 0)]
-        v_travel_time = np.array(v_travel_time)
-        v_travel_time = v_travel_time[v_travel_time < 1.6]
-        t_0 = np.array(t_0)
-        t_0 = t_0[(-10 < t_0) & (t_0 < 10)]
-        t_0 = t_0[t_0 != 0]
-        
-        # Prepare a figure with 1x3 subplots
-        fig, axs = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
-        
-        # Plot histogram for positions (pos_x)
-        axs[0].hist(pos_x, bins='auto', alpha=0.6, color='blue')
-        axs[0].set_title('Positions')
-        axs[0].set_xlabel('Position (units)')
-        axs[0].set_ylabel('Frequency')
-        
-        # Plot histogram for travel time (v_travel_time)
-        axs[1].hist(v_travel_time, bins=300, alpha=0.6, color='green')
-        axs[1].set_title('Travel Time of a Particle at c')
-        axs[1].set_xlabel('T / ns')
-        axs[1].set_ylabel('Frequency')
-        
-        # Plot histogram for T0s (t_0)
-        axs[2].hist(t_0, bins='auto', alpha=0.6, color='red')
-        axs[2].set_title('T0s')
-        axs[2].set_xlabel('T / ns')
-        axs[2].set_ylabel('Frequency')
-        
-        # Show the combined figure
-        plt.suptitle('Combined Histograms of Positions, Travel Time, and T0s')
-        
-        if save_plots:
-            name_of_file = 'positions_travel_time_tzeros'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
+        if create_plots:
+            # Convert data to numpy arrays and filter
+            pos_x = np.array(pos_x)
+            pos_x = pos_x[(-200 < pos_x) & (pos_x < 200) & (pos_x != 0)]
+            v_travel_time = np.array(v_travel_time)
+            v_travel_time = v_travel_time[v_travel_time < 1.6]
+            t_0 = np.array(t_0)
+            t_0 = t_0[(-10 < t_0) & (t_0 < 10)]
+            t_0 = t_0[t_0 != 0]
             
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            # Prepare a figure with 1x3 subplots
+            fig, axs = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
+            
+            # Plot histogram for positions (pos_x)
+            axs[0].hist(pos_x, bins='auto', alpha=0.6, color='blue')
+            axs[0].set_title('Positions')
+            axs[0].set_xlabel('Position (units)')
+            axs[0].set_ylabel('Frequency')
+            
+            # Plot histogram for travel time (v_travel_time)
+            axs[1].hist(v_travel_time, bins=300, alpha=0.6, color='green')
+            axs[1].set_title('Travel Time of a Particle at c')
+            axs[1].set_xlabel('T / ns')
+            axs[1].set_ylabel('Frequency')
+            
+            # Plot histogram for T0s (t_0)
+            axs[2].hist(t_0, bins='auto', alpha=0.6, color='red')
+            axs[2].set_title('T0s')
+            axs[2].set_xlabel('T / ns')
+            axs[2].set_ylabel('Frequency')
+            
+            # Show the combined figure
+            plt.suptitle('Combined Histograms of Positions, Travel Time, and T0s')
+            
+            if save_plots:
+                name_of_file = 'positions_travel_time_tzeros'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
+                
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+            
+            if show_plots: plt.show()
+            plt.close()
         
-        if show_plots: plt.show()
-        plt.close()
-    
-        # No fit: loop over each vector and plot histogram
+            # No fit: loop over each vector and plot histogram
+            for i, vector in enumerate(vectors):
+                var_name = [name for name, val in globals().items() if val is vector][0]
+                if i >= number_of_time_cal_figures: break
+                hist_1d(vector, 100, var_name, "T / ns", var_name)
+
+
+        # Dictionary to store CRT values
+        crt_values = {}
         for i, vector in enumerate(vectors):
             var_name = [name for name, val in globals().items() if val is vector][0]
-            if i >= number_of_time_cal_figures: break
-            hist_1d(vector, 100, var_name, "T / ns", var_name)
-
-
-    # Dictionary to store CRT values
-    crt_values = {}
-    for i, vector in enumerate(vectors):
-        var_name = [name for name, val in globals().items() if val is vector][0]
-        vdat = np.array(vector)
-        if len(vdat) > 1:
-            try:
-                vdat = vdat[(vdat > np.quantile(vdat, CRT_gaussian_fit_quantile)) & (vdat < np.quantile(vdat, 1 - CRT_gaussian_fit_quantile))]
-            except IndexError:
-                print(f"IndexError encountered for {var_name}, setting CRT to 0")
-                vdat = np.array([0])
+            vdat = np.array(vector)
+            if len(vdat) > 1:
+                try:
+                    vdat = vdat[(vdat > np.quantile(vdat, CRT_gaussian_fit_quantile)) & (vdat < np.quantile(vdat, 1 - CRT_gaussian_fit_quantile))]
+                except IndexError:
+                    print(f"IndexError encountered for {var_name}, setting CRT to 0")
+                    vdat = np.array([0])
+            
+            CRT = norm.fit(vdat)[1] / np.sqrt(2) if len(vdat) > 0 else 0
+            # print(f"CRT for {var_name} is {CRT:.4g}")
+            crt_values[f'CRT_{var_name}'] = CRT
         
-        CRT = norm.fit(vdat)[1] / np.sqrt(2) if len(vdat) > 0 else 0
-        # print(f"CRT for {var_name} is {CRT:.4g}")
-        crt_values[f'CRT_{var_name}'] = CRT
+        crt_df = pd.DataFrame(crt_values, index=calibrated_data.index)
+        calibrated_data = pd.concat([calibrated_data, crt_df], axis=1)
+        calibrated_data = calibrated_data.copy()
+        crt_values = calibrated_data.filter(like='CRT_').iloc[0].values
+        Q1, Q3 = np.percentile(crt_values, [25, 75])
+        crt_values = crt_values[crt_values <= 1]
+        filtered_crt_values = crt_values[(crt_values >= Q1 - 1.5 * (Q3 - Q1)) & (crt_values <= Q3 + 1.5 * (Q3 - Q1))]
+        
+        global_variables['CRP_avg'] = np.mean(filtered_crt_values)*1000
+        
+        # print(f"CRT values: {crt_values}, Filtered: {filtered_crt_values}, Avg: {calibrated_data['CRP_avg'][0]:.4g}")
+        print("---------------------------")
+        print(f"CRT Avg: {global_variables['CRP_avg']:.4g} ps")
+        print("---------------------------")
+        
+        # Create row and column indices
+        rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+        columns = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+        
+        df = pd.DataFrame(index=rows, columns=columns)
+        for vector in vectors:
+            var_name = [name for name, val in globals().items() if val is vector][0]
+            if var_name == "vector":
+                continue
+            current_prefix = str(var_name.split('_')[0])
+            current_suffix = str(var_name.split('_')[1])
+            # Key part: create the antisymmetric matrix
+            df.loc[current_prefix, current_suffix] = summary(vector)
+            df.loc[current_suffix, current_prefix] = -df.loc[current_prefix, current_suffix]
+        
+        print("Antisymmetric matrix:")
+        print(df)
     
-    crt_df = pd.DataFrame(crt_values, index=calibrated_data.index)
-    calibrated_data = pd.concat([calibrated_data, crt_df], axis=1)
-    calibrated_data = calibrated_data.copy()
-    crt_values = calibrated_data.filter(like='CRT_').iloc[0].values
-    Q1, Q3 = np.percentile(crt_values, [25, 75])
-    crt_values = crt_values[crt_values <= 1]
-    filtered_crt_values = crt_values[(crt_values >= Q1 - 1.5 * (Q3 - Q1)) & (crt_values <= Q3 + 1.5 * (Q3 - Q1))]
-    
-    global_variables['CRP_avg'] = np.mean(filtered_crt_values)*1000
-    
-    # print(f"CRT values: {crt_values}, Filtered: {filtered_crt_values}, Avg: {calibrated_data['CRP_avg'][0]:.4g}")
-    print("---------------------------")
-    print(f"CRT Avg: {global_variables['CRP_avg']:.4g} ps")
-    print("---------------------------")
-    
-    # Create row and column indices
-    rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
-    columns = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
-    
-    df = pd.DataFrame(index=rows, columns=columns)
-    for vector in vectors:
-        var_name = [name for name, val in globals().items() if val is vector][0]
-        if var_name == "vector":
-            continue
-        current_prefix = str(var_name.split('_')[0])
-        current_suffix = str(var_name.split('_')[1])
-        # Key part: create the antisymmetric matrix
-        df.loc[current_prefix, current_suffix] = summary(vector)
-        df.loc[current_suffix, current_prefix] = -df.loc[current_prefix, current_suffix]
+    else:
+        # Create row and column indices
+        rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+        columns = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+        
+        df = pd.DataFrame(index=rows, columns=columns)
+        
+        # Fill df with antisymmetric c_offset values from slewing_fit_df
+        for _, row in slewing_fit_df.iterrows():
+            l1 = f'P{str(int(row["plane1"]))}s{str(int(row["strip1"]))}'
+            l2 = f'P{str(int(row["plane2"]))}s{str(int(row["strip2"]))}'
+            offset = row['c_offset']
+            df.loc[l1, l2] = -offset
+            df.loc[l2, l1] = offset
+        
+        print("Antisymmetric matrix:")
+        print(df)
     
     # -----------------------------------------------------------------------------
     # Brute force method
@@ -3686,6 +4338,7 @@ else:
     calibrated_data['CRP_avg'] = 1000 # An extreme time to not crush the program
     print("Calibration in times was set to the reference! (calibration was not performed)\n", calibration_times)
 
+a = 1/0
 
 print("----------------------------------------------------------------------")
 print("----------------------- Time window filtering ------------------------")
@@ -4372,7 +5025,7 @@ if create_plots:
             q_sum_col = f'P{i_plane}_Q_sum_final'
             y_col = f'Y_{i_plane}'
             
-            # Filter components in all vectors in which t_sum_col is bigger in abs to 10
+            # Filter components in all vecs in which t_sum_col is bigger in abs to 10
             new_data = new_data[abs(new_data[t_sum_col]) < 10]
             
             # Filter out values that are NaN or 0 before plotting from the new_data DataFrame
@@ -6161,7 +6814,7 @@ if create_plots:
     colors = cmap(np.linspace(0, 1, len(cases)))
 
     # Define window widths
-    widths = np.linspace(1, 20, 80)
+    widths = np.linspace(1, 20, 40)
     plt.figure(figsize=(10, 6))
 
     for idx, case in enumerate(cases):

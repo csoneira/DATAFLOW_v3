@@ -163,7 +163,7 @@ if os.path.exists(input_file_config_path):
 else:
     exists_input_file = False
     print("Input configuration file does not exist.")
-    
+
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
@@ -420,28 +420,165 @@ save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filenam
 # Input file reading --------------------------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------------------------------------------
 
+# if exists_input_file:
+#     start_time = min_time_original
+#     end_time = max_time_original
+
+#     # Print types of start and end dates
+#     # print(f"Start date type: {type(start_time)}") # Start date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
+#     # print(f"End date type: {type(end_time)}") # End date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
+
+#     input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
+#     input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
+
+#     # Ensure no NaN in 'end' column
+#     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
+    
+#     matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
+    
+#     if not matching_confs.empty:
+    
+#         if len(matching_confs) > 1:
+#             print(f"Warning: Multiple configurations match the date range ({start_time} to {end_time}).")
+                
+#             # Create an empty dictionary to hold new column values
+#             new_columns = {
+#                 "over_P1": [],
+#                 "P1-P2": [],
+#                 "P2-P3": [],
+#                 "P3-P4": [],
+#                 "phi_north": []
+#             }
+
+#             # Print df columns
+#             # print(df.columns)
+
+#             # Assign values based on corresponding time range
+#             for timestamp in df["Time"]:
+#                 # Find matching configuration
+#                 match = input_file[
+#                     (input_file["start"] <= timestamp) & (input_file["end"] >= timestamp)
+#                 ]
+                
+#                 if not match.empty:
+#                     # Take the first matching row
+#                     selected_conf = match.iloc[0]
+#                     new_columns["over_P1"].append(selected_conf.get("over_P1", np.nan))
+#                     new_columns["P1-P2"].append(selected_conf.get("P1-P2", np.nan))
+#                     new_columns["P2-P3"].append(selected_conf.get("P2-P3", np.nan))
+#                     new_columns["P3-P4"].append(selected_conf.get("P3-P4", np.nan))
+#                     new_columns["phi_north"].append(selected_conf.get("phi_north", np.nan))
+#                 else:
+#                     # No matching configuration, fill with NaN
+#                     new_columns["over_P1"].append(np.nan)
+#                     new_columns["P1-P2"].append(np.nan)
+#                     new_columns["P2-P3"].append(np.nan)
+#                     new_columns["P3-P4"].append(np.nan)
+#                     new_columns["phi_north"].append(0)  # Default value for phi_north
+
+#             df_new_cols = pd.DataFrame(new_columns)
+#             df_extended = pd.concat([df, df_new_cols], axis=1)
+#             df_extended.fillna(method='ffill', inplace=True)
+#             df = df_extended
+
+#             # print(df.columns)
+#             # print(df.head())
+#             # print(df.tail())
+            
+#         if len(matching_confs) == 1:
+#             selected_conf = matching_confs.iloc[0]
+#             print(f"Only one selected configuration: {selected_conf['conf']}")
+            
+#             df["over_P1"] = selected_conf.get("over_P1", np.nan)
+#             df["P1-P2"] = selected_conf.get("P1-P2", np.nan)
+#             df["P2-P3"] = selected_conf.get("P2-P3", np.nan)
+#             df["P3-P4"] = selected_conf.get("P3-P4", np.nan)
+#             df["phi_north"] = selected_conf.get("phi_north", 0)
+
+#     else:
+#         # Create new columns with default values
+#         df["over_P1"] = 0
+#         df["P1-P2"] = 0
+#         df["P2-P3"] = 0
+#         df["P3-P4"] = 0
+#         df["phi_north"] = 0
+
+# else:
+#     # Create new columns with default values
+#     df["over_P1"] = 0
+#     df["P1-P2"] = 0
+#     df["P2-P3"] = 0
+#     df["P3-P4"] = 0
+#     df["phi_north"] = 0
+
+
+
+# print("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH")
+# if exists_input_file:
+#     # Ensure `start` and `end` columns are in datetime format
+#     input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
+#     input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
+    
+#     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
+    
+#     # Filter matching configurations
+#     matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
+
+#     # Select the first matching configuration if available
+#     if not matching_confs.empty:
+#         if len(matching_confs) > 1:
+#             print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
+        
+#         selected_conf = matching_confs.iloc[0]
+#         print(f"Selected configuration: {selected_conf['conf']}")
+
+#         # Extract z_1 to z_4 values
+#         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
+
+#     else:
+#         print("Error: No matching configuration found for the given date range. Using default z_positions.")
+#         z_positions = np.array([0, 150, 300, 450])  # In mm
+        
+# else:
+#     print("Error: No input file. Using default z_positions.")
+#     z_positions = np.array([0, 150, 300, 450])  # In mm
+
+# # Print the resulting z_positions
+# z_positions = z_positions - z_positions[0]
+# print(f"Z positions: {z_positions}")
+
+# print("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH")
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Input file reading --------------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------
+
 if exists_input_file:
     start_time = min_time_original
     end_time = max_time_original
-
-    # Print types of start and end dates
-    # print(f"Start date type: {type(start_time)}") # Start date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
-    # print(f"End date type: {type(end_time)}") # End date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
-
+    
+    # Read and preprocess the input file only once
     input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
     input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
-
-    # Ensure no NaN in 'end' column
     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
-    
-    matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
-    
+
+    # Filter matching configurations based on start_time and end_time
+    matching_confs = input_file[(input_file["start"] <= start_time) & (input_file["end"] >= end_time)]
+
     if not matching_confs.empty:
-    
         if len(matching_confs) > 1:
             print(f"Warning: Multiple configurations match the date range ({start_time} to {end_time}).")
-                
-            # Create an empty dictionary to hold new column values
+
+        # Assign the first matching configuration
+        selected_conf = matching_confs.iloc[0]
+        print(f"Selected configuration: {selected_conf['conf']}")
+
+        # Extract z_1 to z_4 values from the selected configuration
+        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
+
+        # Update dataframe with configuration values
+        if len(matching_confs) > 1:
+            # Create a dictionary for new columns if multiple configurations match
             new_columns = {
                 "over_P1": [],
                 "P1-P2": [],
@@ -450,18 +587,10 @@ if exists_input_file:
                 "phi_north": []
             }
 
-            # Print df columns
-            # print(df.columns)
-
-            # Assign values based on corresponding time range
+            # Assign values to new columns based on timestamps in df
             for timestamp in df["Time"]:
-                # Find matching configuration
-                match = input_file[
-                    (input_file["start"] <= timestamp) & (input_file["end"] >= timestamp)
-                ]
-                
+                match = input_file[(input_file["start"] <= timestamp) & (input_file["end"] >= timestamp)]
                 if not match.empty:
-                    # Take the first matching row
                     selected_conf = match.iloc[0]
                     new_columns["over_P1"].append(selected_conf.get("over_P1", np.nan))
                     new_columns["P1-P2"].append(selected_conf.get("P1-P2", np.nan))
@@ -469,48 +598,48 @@ if exists_input_file:
                     new_columns["P3-P4"].append(selected_conf.get("P3-P4", np.nan))
                     new_columns["phi_north"].append(selected_conf.get("phi_north", np.nan))
                 else:
-                    # No matching configuration, fill with NaN
                     new_columns["over_P1"].append(np.nan)
                     new_columns["P1-P2"].append(np.nan)
                     new_columns["P2-P3"].append(np.nan)
                     new_columns["P3-P4"].append(np.nan)
-                    new_columns["phi_north"].append(0)  # Default value for phi_north
+                    new_columns["phi_north"].append(0)
 
             df_new_cols = pd.DataFrame(new_columns)
             df_extended = pd.concat([df, df_new_cols], axis=1)
             df_extended.fillna(method='ffill', inplace=True)
             df = df_extended
 
-            # print(df.columns)
-            # print(df.head())
-            # print(df.tail())
-            
-        if len(matching_confs) == 1:
-            selected_conf = matching_confs.iloc[0]
-            print(f"Only one selected configuration: {selected_conf['conf']}")
-            
+        else:
+            # Single match, directly apply configuration values to df
             df["over_P1"] = selected_conf.get("over_P1", np.nan)
             df["P1-P2"] = selected_conf.get("P1-P2", np.nan)
             df["P2-P3"] = selected_conf.get("P2-P3", np.nan)
             df["P3-P4"] = selected_conf.get("P3-P4", np.nan)
             df["phi_north"] = selected_conf.get("phi_north", 0)
-
     else:
-        # Create new columns with default values
+        print("Error: No matching configuration found for the given date range.")
+        # Assign default values if no match found
+        z_positions = np.array([0, 150, 300, 450])  # In mm
         df["over_P1"] = 0
         df["P1-P2"] = 0
         df["P2-P3"] = 0
         df["P3-P4"] = 0
         df["phi_north"] = 0
-
 else:
-    # Create new columns with default values
+    print("Error: No input file. Using default z_positions.")
+    z_positions = np.array([0, 150, 300, 450])  # In mm
+    # Assign default values to columns in the dataframe
     df["over_P1"] = 0
     df["P1-P2"] = 0
     df["P2-P3"] = 0
     df["P3-P4"] = 0
     df["phi_north"] = 0
-    
+
+# Adjust z_positions and print
+z_positions = z_positions - z_positions[0]
+print(f"Z positions: {z_positions}")
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 
 
@@ -2873,6 +3002,214 @@ if save_plots:
 if show_plots:
     plt.show()
 plt.close()
+
+
+# ---------------------------------------------------------------------------------------
+# ------------------------------ Passed type determination ------------------------------
+# ---------------------------------------------------------------------------------------
+
+z1 = z_positions[0]
+z2 = z_positions[1]
+z3 = z_positions[2]
+z4 = z_positions[3]
+
+# Take the x, y, theta, phi and z_positions and determine, if x, y are set in z1, if the trace
+# determined is inside the planes at the heights of z1, z2, z3 and z4
+# and if the trace is inside the planes, then we can say that the type is passed, and create a
+# column called passed and in the value of the column the planes it passed thrpugh, like 123 if passed trhough planes 1, 2 and 3,
+# 12 if passed through plane 1 and 2, and so on. z_positions is a configuration of the detector
+# and do not change, but x ,y, theta, phi are the values of the event, and they are selected with
+# df['x'], df['y'], df['theta'], df['phi']. A plane is determined, at a given z, by x being inside
+# -150, 150, and by y being inside -150, 150. Create a histogram with the number of counts per each label
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Define z_positions for the detector planes
+z_positions = [z1, z2, z3, z4]  # Replace with actual z positions
+
+xlim = 190
+ylim = 190
+
+# Function to check if the trace at given z is inside the plane bounds
+def is_inside_plane(x, y):
+    global xlim, ylim
+    return -1*xlim <= x <= xlim and -1*ylim <= y <= ylim
+
+# Function to compute the x, y positions at a given z for a trace based on theta and phi
+def trace_at_z(x0, y0, theta, phi, z_pos):
+    # Calculate the distance the trace moves in the z direction
+    z_diff = z_pos
+    # Calculate the displacement in x and y based on the trace angle
+    x = x0 + z_diff * np.tan(theta) * np.cos(phi)
+    y = y0 + z_diff * np.tan(theta) * np.sin(phi)
+    return x, y
+
+# Initialize the dataframe (df) with x, y, theta, phi, assuming the dataframe exists
+# df['x'], df['y'], df['theta'], df['phi'] should already be in the dataframe
+
+# Function to determine which planes the trace passes through
+def determine_passed_planes(row, z_positions):
+    x0, y0, theta, phi = row['x'], row['y'], row['theta'], row['phi']
+    passed = []
+    
+    # Iterate through each z position and check if the trace passes through that plane
+    for i, z in enumerate(z_positions):
+        x, y = trace_at_z(x0, y0, theta, phi, z)
+        if is_inside_plane(x, y):
+            passed.append(str(i + 1))  # Plane labels are 1, 2, 3, 4
+            
+    return ''.join(passed) if passed else '0'  # '0' if no plane is passed
+
+# Apply the function to each row in the dataframe and create the 'passed' column
+df['passed'] = df.apply(lambda row: determine_passed_planes(row, z_positions), axis=1)
+
+# Create a histogram to count occurrences of each label in the 'passed' column
+passed_counts = df['passed'].value_counts().sort_index()
+
+# Plot the histogram
+plt.figure(figsize=(10, 6))
+plt.bar(passed_counts.index.astype(str), passed_counts.values)
+plt.xlabel('Planes Passed Through')
+plt.ylabel('Count')
+plt.title(f'Number of Events Passing Through Different Planes\nabs(X) < {xlim}, abs(Y) < {ylim}')
+
+if save_plots:
+    name_of_file = 'passed_type'
+    final_filename = f'{fig_idx}_{name_of_file}.png'
+    fig_idx += 1
+    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    plot_list.append(save_fig_path)
+    plt.savefig(save_fig_path, format='png')
+
+if show_plots:
+    plt.show()
+plt.close()
+
+
+# ---------------------------------------------------------------------------------------------------
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Define z_positions for the detector planes
+z_positions = [z1, z2, z3, z4]  # Replace with actual z positions
+
+xlim = 190
+ylim = 190
+
+# Function to check if the trace at given z is inside the plane bounds
+def is_inside_plane(x, y):
+    global xlim, ylim
+    return -1*xlim <= x <= xlim and -1*ylim <= y <= ylim
+
+# Function to compute the x, y positions at a given z for a trace based on theta and phi
+def trace_at_z(x0, y0, theta, phi, z_pos):
+    # Calculate the distance the trace moves in the z direction
+    z_diff = z_pos
+    # Calculate the displacement in x and y based on the trace angle
+    x = x0 + z_diff * np.tan(theta) * np.cos(phi)
+    y = y0 + z_diff * np.tan(theta) * np.sin(phi)
+    return x, y
+
+# Function to determine which planes the trace passes through
+def determine_passed_planes(row, z_positions):
+    x0, y0, theta, phi = row['x'], row['y'], row['theta'], row['phi']
+    passed = []
+    
+    # Iterate through each z position and check if the trace passes through that plane
+    for i, z in enumerate(z_positions):
+        x, y = trace_at_z(x0, y0, theta, phi, z)
+        if is_inside_plane(x, y):
+            passed.append(str(i + 1))  # Plane labels are 1, 2, 3, 4
+            
+    return ''.join(passed) if passed else '0'  # '0' if no plane is passed
+
+# Apply the function to each row in the dataframe and create the 'passed' column
+df['passed'] = df.apply(lambda row: determine_passed_planes(row, z_positions), axis=1)
+
+# Define charge windows (i_vals and j_vals) for charge cuts
+i_vals = np.arange(0, 21, 10)  # e.g., [0, 10]
+j_vals = np.arange(100, 301, 100)  # e.g., [90]
+
+# Plot configuration
+plt.figure(figsize=(12, 6))
+color_cycle = plt.cm.viridis(np.linspace(0, 1, len(i_vals) * len(j_vals)))
+
+k = 0  # color index
+for i_min in i_vals:
+    for j_max in j_vals:
+        # Define passed_label: '1' if charge in range (i_min, j_max) and passed through planes, else '0'
+        def compute_passed_label(row):
+            passed_label = ""
+            for m in range(1, 5):  # Check for each plane (Q_1 to Q_4)
+                charge_col = f"Q_{m}"  # Charge column names: Q_1, Q_2, Q_3, Q_4
+                if i_min <= row[charge_col] <= j_max:  # Check if the charge is within the cut for this plane
+                    label = determine_passed_planes(row, z_positions)
+                    if label:
+                        passed_label = label
+            return passed_label if passed_label else '0'  # '0' if no planes are passed or charge doesn't meet criteria
+
+        col_name = f"passed_label_{i_min}_{j_max}"
+        df[col_name] = df.apply(compute_passed_label, axis=1)
+
+        # Get normalized histogram
+        passed_counts = df[col_name].value_counts(normalize=False)
+        passed_counts = passed_counts[passed_counts.index != "0"]  # Exclude '0' label (not passing any planes)
+
+        if not passed_counts.empty:
+            # Prepare integer x-axis
+            x_vals = np.arange(len(passed_counts))
+            labels = passed_counts.index  # Binary or label strings for planes passed
+
+            # Plot bars
+            plt.bar(
+                x_vals,
+                passed_counts.values,
+                alpha=0.25,
+                color=color_cycle[k % len(color_cycle)],
+                edgecolor='black',
+                label=f"{i_min}–{j_max}"
+            )
+
+            # Plot connecting lines
+            plt.plot(
+                x_vals,
+                passed_counts.values,
+                alpha=0.75,
+                color=color_cycle[k % len(color_cycle)]
+            )
+
+            # Set the x-axis ticks to the label strings
+            plt.xticks(x_vals, labels, rotation=90)
+            k += 1
+
+# Final plot details
+plt.xlabel("Passed Planes (for given charge window)")
+plt.ylabel("Relative Frequency")
+plt.title(f'Number of Events Passing Through Different Planes\nabs(X) < {xlim}, abs(Y) < {ylim}')
+plt.xticks(rotation=90)
+plt.legend(title="Charge window (i–j)", bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.subplots_adjust(top=0.92)
+
+# Save or show the plot
+if save_plots:
+    name_of_file = 'passed_label_charge_windows'
+    final_filename = f'{fig_idx}_{name_of_file}.png'
+    fig_idx += 1
+    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    plot_list.append(save_fig_path)
+    plt.savefig(save_fig_path, format='png')
+
+if show_plots:
+    plt.show()
+plt.close()
+
+
+
 
 
 print("------------------------- Aggregation and Poisson filtering ----------------------------")
