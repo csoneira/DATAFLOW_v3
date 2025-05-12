@@ -184,8 +184,12 @@ if os.path.exists(input_file_config_path):
     # It is a csv
     input_file = pd.read_csv(input_file_config_path, skiprows=1)
     
-    print("Input configuration file found.")
-    exists_input_file = True
+    if not input_file.empty:
+        print("Input configuration file found and is not empty.")
+        exists_input_file = True
+    else:
+        print("Input configuration file is empty.")
+        exists_input_file = False
     
     # Print the head
     # print(input_file.head())
@@ -253,7 +257,7 @@ uniform_weighted_method = False
 weighted = False
 
 # TimTrack -----------------------------------------
-fixed_speed = False
+fixed_speed = True
 res_ana_removing_planes = False
 timtrack_iteration = False
 number_of_TT_executions = 2
@@ -283,12 +287,19 @@ if debug_mode:
     limit_number = 10000
 
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Filters ---------------------------------------------------------------------
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
-# General -------------------------
+# General ---------------------------------------------------------------------
 
-# Pre-cal Front & Back ---------
+# Crosstalk limit
+crosstalk_threshold_ns = 3
+
+# -----------------------------------------------------------------------------
+# Pre-cal Front & Back --------------------------------------------------------
+# -----------------------------------------------------------------------------
 if debug_mode:
     T_F_left_pre_cal = -500
     T_F_right_pre_cal = 500
@@ -320,7 +331,9 @@ T_right_side = T_F_right_pre_cal
 Q_left_side = Q_F_left_pre_cal
 Q_right_side = 150
 
-# Pre-cal Sum & Diff ---------
+# -----------------------------------------------------------------------------
+# Pre-cal Sum & Diff ----------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Qsum
 Q_left_pre_cal = 75
 Q_right_pre_cal = 500
@@ -333,7 +346,9 @@ T_sum_right_pre_cal = -90
 # Tdif
 T_diff_pre_cal_threshold = 20
 
-# Post-calibration ---------
+# -----------------------------------------------------------------------------
+# Post-calibration ------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Qsum
 Q_sum_left_cal = -20
 Q_sum_right_cal = 300
@@ -345,11 +360,9 @@ Q_diff_cal_threshold_FB = 1.25
 # Tdif
 T_diff_cal_threshold = 1
 
-
-# Crosstalk limit
-crosstalk_threshold_ns = 3
-
-# Once calculated the RPC variables ---------
+# -----------------------------------------------------------------------------
+# Once calculated the RPC variables -------------------------------------------
+# -----------------------------------------------------------------------------
 # Tsum
 T_sum_RPC_left = -140
 T_sum_RPC_right = -100
@@ -358,25 +371,39 @@ T_diff_RPC_left = -0.8
 T_diff_RPC_right = 0.8
 # Qsum
 Q_RPC_left = 0
-Q_RPC_right = 1000
+Q_RPC_right = 500
+#Qdiff
+Q_dif_RPC_left = -100
+Q_dif_RPC_right = 100
 # Y pos
-Y_RPC_left = -150 # -150
-Y_RPC_right = 150 # 150
+Y_RPC_left = -160 # -150
+Y_RPC_right = 160 # 150
 
-# TimTrack filter -------------------------
-pos_filter = 700
+# -----------------------------------------------------------------------------
+# Alternative fitter filter ---------------------------------------------------
+# -----------------------------------------------------------------------------
+alt_pos_filter = 600
+alt_theta_left_filter = 0
+alt_theta_right_filter = np.pi
+alt_phi_left_filter = -1*np.pi
+alt_phi_right_filter = np.pi
+alt_slowness_filter_left = -0.02
+alt_slowness_filter_right = 0.03 # 0.025
+
+# -----------------------------------------------------------------------------
+# TimTrack filter -------------------------------------------------------------
+# -----------------------------------------------------------------------------
+pos_filter = 600
 proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = -0.01 # -0.01
-slowness_filter_right = 0.025 # 0.025
-charge_strip_left_filter = -1e6
-charge_strip_right_filter = 1e6
-charge_event_left_filter = -1e6
+slowness_filter_left = -0.02 # -0.01
+slowness_filter_right = 0.03 # 0.025
+charge_event_left_filter = 0
 charge_event_right_filter = 1e6
 
-res_ystr_filter = 120
-res_tsum_filter = 2
+res_ystr_filter = 100
+res_tsum_filter = 1.5
 res_tdif_filter = 0.4
 
 ext_res_ystr_filter = 120
@@ -384,7 +411,9 @@ ext_res_tsum_filter = 2
 ext_res_tdif_filter = 1
 
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Calibrations ----------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
 # General
@@ -445,12 +474,7 @@ time_sum_reference = np.array([
 # Variables to modify ---------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-beta = 1 # Given the last fitting of slowness
-
-# Y position parameters
-transf_exp = 1
-induction_section = 0  # 40 In mm. Width of the induction section for all strips
-y_pos_threshold = 10000  # In mm. Not a real distance. Adjust this value as needed for "closeness"
+beta = 1
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
@@ -500,7 +524,7 @@ lenx  = strip_length
 anc_sy = 25 # 2.5 cm
 anc_sts = 0.4 # 400ps
 anc_std = 0.1 # 2 cm
-anc_sx = strip_speed * anc_std # 2 cm
+anc_sx = tdiff_to_x * anc_std # 2 cm
 anc_sz = 10 # 5 cm
 
 
@@ -1570,8 +1594,6 @@ save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace(
 # Input file and data managing to select configuration
 # -------------------------------------------------------------------------------
 
-
-print("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH")
 if exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
@@ -1605,15 +1627,14 @@ else:
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
 
-print("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH")
 
 # -------------------------------------------------------------------------------
 
-print("----------------------------------------------------------")
-print("----------------------------------------------------------")
-print(f"----------- Starting date is {save_filename_suffix} --------------")
-print("----------------------------------------------------------")
-print("----------------------------------------------------------")
+print("--------------------------------------------------------------------------")
+print("--------------------------------------------------------------------------")
+print(f"--------------- Starting date is {save_filename_suffix} -----------------")
+print("--------------------------------------------------------------------------")
+print("--------------------------------------------------------------------------")
 
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
@@ -1747,8 +1768,8 @@ def create_original_tt(df):
 # Apply the function to the DataFrame
 final_df = create_original_tt(final_df)
 
-if create_essential_plots or create_plots:
-# if create_plots:
+# if create_essential_plots or create_plots:
+if create_plots:
     event_counts = final_df['original_tt'].copy().value_counts()
 
     # Plot the histogram of event counts
@@ -2619,7 +2640,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
         calibrated_data.loc[mask, f'{key}_Q_sum_{j+1}'] -= ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
 
 
-print("--------------------- Filter 3: charge sum filtering ----------------------")
+print("------------------ Filter 3: charge sum filtering --------------------")
 for col in calibrated_data.columns:
     if 'Q_sum' in col:
         calibrated_data[col] = np.where((calibrated_data[col] > Q_sum_right_cal) | (calibrated_data[col] < Q_sum_left_cal), 0, calibrated_data[col])
@@ -2856,8 +2877,8 @@ def create_filtered_tt(df):
 # Apply the function to the DataFrame
 calibrated_data = create_filtered_tt(calibrated_data)
 
+if create_plots:
 # if create_essential_plots or create_plots:
-if create_essential_plots or create_plots:
     event_counts = calibrated_data['not_so_filtered_tt'].copy().value_counts()
 
     # Plot the histogram of event counts
@@ -2882,9 +2903,86 @@ if create_essential_plots or create_plots:
 # ------------------------------------------------------------
 # ------------------------------------------------------------
 
+
+print("----------------------------------------------------------------------")
+print("------------- Filter if any variable in the strip is 0 ---------------")
+print("----------------------------------------------------------------------")
+
 # Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
 # put the four variables in that plane, strip and event to 0
 
+# Print all the column names of calibrated_data
+print(calibrated_data.columns.to_list())
+
+total_events = len(calibrated_data)
+
+for plane in range(1, 5):
+    for strip in range(1, 5):
+        q_sum  = f'Q{plane}_Q_sum_{strip}'
+        q_diff = f'Q{plane}_Q_diff_{strip}'
+        t_sum  = f'T{plane}_T_sum_{strip}'
+        t_diff = f'T{plane}_T_diff_{strip}'
+        
+        # Build mask
+        mask = (
+            (calibrated_data[q_sum]  == 0) |
+            (calibrated_data[q_diff] == 0) |
+            (calibrated_data[t_sum]  == 0) |
+            (calibrated_data[t_diff] == 0)
+        )
+        
+        # Count affected events
+        num_affected_events = mask.sum()
+        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
+
+        # Zero the affected values
+        calibrated_data.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+
+
+# if create_essential_plots or create_plots:
+if create_plots:
+    num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
+    num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
+    fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
+    axes = axes.flatten()
+
+    for i, col in enumerate([col for col in new_df.columns if col != 'datetime']):
+        y = calibrated_data[col]
+        
+        if 'Q_sum' in col:
+            color = Q_sum_color
+        if 'Q_diff' in col:
+            color = Q_diff_color
+        if 'T_sum' in col:
+            color = T_sum_color
+        if 'T_diff' in col:
+            color = T_diff_color
+        axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
+        
+        axes[i].set_title(col)
+        axes[i].legend()
+        if 'Q_sum' in col:
+            axes[i].set_yscale('log')
+    
+    # Remove any unused axes
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+    
+    plt.tight_layout()
+    plt.suptitle("Calibrated filtered data including FB correction removing zeroes in any variable")
+    
+    if save_plots:
+        name_of_file = 'calibrated_filtered_removed_zeroes'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    
+    if show_plots: 
+        plt.show()
+    plt.close()
 
 
 
@@ -4463,7 +4561,8 @@ for plane_id in range(1, 5):
 print("Active strips per plane calculated.")
 print(calibrated_data[['active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4']].head())
 
-if create_essential_plots or create_plots:
+# if create_essential_plots or create_plots:
+if create_plots:
     fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 12), sharex=True, sharey=True)
     colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red']
     y_max = 0
@@ -4525,7 +4624,7 @@ def create_filtered_tt(df):
 calibrated_data = create_filtered_tt(calibrated_data)
 
 # if create_essential_plots or create_plots:
-if create_essential_plots or create_plots:
+if create_plots:
     event_counts = calibrated_data['filtered_tt'].copy().value_counts()
 
     # Plot the histogram of event counts
@@ -4651,113 +4750,114 @@ print("----------------------------------------------------------------------")
 
 from itertools import combinations
 
-for i_plane in range(1, 5):
-    active_col = f'active_strips_P{i_plane}'
-    print(f"\n--- Plane {i_plane} ---")
+# if create_essential_plots or create_plots:
+if create_plots:
+    for i_plane in range(1, 5):
+        active_col = f'active_strips_P{i_plane}'
+        print(f"\n--- Plane {i_plane} ---")
 
-    # Column names
-    T_sum_cols = [f'T{i_plane}_T_sum_{j+1}' for j in range(4)]
-    T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
-    Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+        # Column names
+        T_sum_cols = [f'T{i_plane}_T_sum_{j+1}' for j in range(4)]
+        T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
+        Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+        Q_dif_cols = [f'Q{i_plane}_Q_diff_{j+1}' for j in range(4)]
 
-    # Get all unique multi-strip patterns
-    patterns = calibrated_data[active_col].unique()
-    multi_patterns = [p for p in patterns if p != '0000' and p.count('1') > 1]
+        # Get all unique multi-strip patterns
+        patterns = calibrated_data[active_col].unique()
+        multi_patterns = [p for p in patterns if p != '0000' and p.count('1') > 1]
 
-    for pattern in multi_patterns:
-        active_strips = [i for i, c in enumerate(pattern) if c == '1']
-        if len(active_strips) != 2:
-            continue
+        for pattern in multi_patterns:
+            active_strips = [i for i, c in enumerate(pattern) if c == '1']
+            if len(active_strips) != 2:
+                continue
 
-        mask = calibrated_data[active_col] == pattern
-        n_events = mask.sum()
-        if n_events == 0:
-            continue
+            mask = calibrated_data[active_col] == pattern
+            n_events = mask.sum()
+            if n_events == 0:
+                continue
 
-        print(f"Pattern {pattern} ({n_events} events):")
+            print(f"Pattern {pattern} ({n_events} events):")
 
-        for i, j in combinations(active_strips, 2):
-            fig, axs = plt.subplots(1, 3, figsize=(15, 5), sharex=False, sharey=False)
-            variable_sets = [
-                ('T_sum', T_sum_cols),
-                ('T_diff', T_diff_cols),
-                ('Q_sum', Q_sum_cols)
-            ]
+            for i, j in combinations(active_strips, 2):
+                fig, axs = plt.subplots(1, 4, figsize=(20, 5), sharex=False, sharey=False)
+                variable_sets = [
+                    ('T_sum', T_sum_cols),
+                    ('T_diff', T_diff_cols),
+                    ('Q_sum', Q_sum_cols),
+                    ('Q_dif', Q_dif_cols)
+                ]
 
-            for ax, (var_label, cols) in zip(axs, variable_sets):
-                xi = calibrated_data.loc[mask, cols[i]].values
-                yi = calibrated_data.loc[mask, cols[j]].values
+                for ax, (var_label, cols) in zip(axs, variable_sets):
+                    xi = calibrated_data.loc[mask, cols[i]].values
+                    yi = calibrated_data.loc[mask, cols[j]].values
 
-                ax.scatter(xi, yi, alpha=0.5, s=10)
-                ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
-                        [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
-                        'k--', linewidth=1, label='y = x')
-                ax.set_xlabel(f'{var_label} Strip {i+1}')
-                ax.set_ylabel(f'{var_label} Strip {j+1}')
-                ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
-                # Aspect ratio 1:1
-                ax.set_aspect('equal', adjustable='box')
-                ax.grid(True)
-                ax.legend()
+                    ax.scatter(xi, yi, alpha=0.5, s=10)
+                    ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+                            [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+                            'k--', linewidth=1, label='y = x')
+                    ax.set_xlabel(f'{var_label} Strip {i+1}')
+                    ax.set_ylabel(f'{var_label} Strip {j+1}')
+                    ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
+                    # Aspect ratio 1:1
+                    ax.set_aspect('equal', adjustable='box')
+                    ax.grid(True)
+                    ax.legend()
 
-            fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
-            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+                fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
+                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-            if save_plots:
-                name_of_file = f'rpc_variables_debug_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
-                final_filename = f'{fig_idx}_{name_of_file}'
-                fig_idx += 1
+                if save_plots:
+                    name_of_file = f'rpc_variables_debug_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
+                    final_filename = f'{fig_idx}_{name_of_file}'
+                    fig_idx += 1
 
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                    plot_list.append(save_fig_path)
+                    plt.savefig(save_fig_path, format='png')
 
-            if show_plots:
-                plt.show()
-            plt.close()
-            
-            fig, axs = plt.subplots(1, 3, figsize=(15, 5), sharex=False, sharey=False)
+                if show_plots:
+                    plt.show()
+                plt.close()
+                
+                fig, axs = plt.subplots(1, 4, figsize=(20, 5), sharex=False, sharey=False)
 
-            # Other variables
-            for ax, (var_label, cols) in zip(axs, variable_sets):
-                xi = calibrated_data.loc[mask, cols[i]].values
-                yi = calibrated_data.loc[mask, cols[j]].values
+                # Other variables
+                for ax, (var_label, cols) in zip(axs, variable_sets):
+                    xi = calibrated_data.loc[mask, cols[i]].values
+                    yi = calibrated_data.loc[mask, cols[j]].values
 
-                # ax.scatter(xi + yi, ( xi - yi ) / (xi + yi), alpha=0.5, s=10)
-                mask_nonzero = (xi + yi) != 0
-                ax.scatter(xi[mask_nonzero] + yi[mask_nonzero],
-                        (xi[mask_nonzero] - yi[mask_nonzero]) / (xi[mask_nonzero] + yi[mask_nonzero]),
-                        alpha=0.5, s=10)
+                    # ax.scatter(xi + yi, ( xi - yi ) / (xi + yi), alpha=0.5, s=10)
+                    mask_nonzero = (xi + yi) != 0
+                    ax.scatter(xi[mask_nonzero] + yi[mask_nonzero],
+                            (xi[mask_nonzero] - yi[mask_nonzero]) / (xi[mask_nonzero] + yi[mask_nonzero]),
+                            alpha=0.5, s=10)
 
-                # ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
-                #         [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
-                #         'k--', linewidth=1, label='y = x')
-                ax.set_xlabel(f'{var_label} Strip {i+1}')
-                ax.set_ylabel(f'{var_label} Strip {j+1}')
-                ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
-                # Aspect ratio 1:1
-                # ax.set_aspect('equal', adjustable='box')
-                ax.grid(True)
-                # ax.legend()
+                    # ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+                    #         [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+                    #         'k--', linewidth=1, label='y = x')
+                    ax.set_xlabel(f'{var_label} Strip {i+1}')
+                    ax.set_ylabel(f'{var_label} Strip {j+1}')
+                    ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
+                    # Aspect ratio 1:1
+                    # ax.set_aspect('equal', adjustable='box')
+                    ax.grid(True)
+                    # ax.legend()
 
-            fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
-            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+                fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
+                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-            if save_plots:
-                name_of_file = f'rpc_variables_calculations_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
-                final_filename = f'{fig_idx}_{name_of_file}'
-                fig_idx += 1
+                if save_plots:
+                    name_of_file = f'rpc_variables_calculations_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
+                    final_filename = f'{fig_idx}_{name_of_file}'
+                    fig_idx += 1
 
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                    plot_list.append(save_fig_path)
+                    plt.savefig(save_fig_path, format='png')
 
-            if show_plots:
-                plt.show()
-            plt.close()
-
-
-a = 1/0
+                if show_plots:
+                    plt.show()
+                plt.close()
 
 
 print("----------------------------------------------------------------------")
@@ -4773,13 +4873,15 @@ print("----------------------------------------------------------------------")
 for i_plane in range(1, 5):
     # Column names
     T_sum_cols = [f'T{i_plane}_T_sum_{i+1}' for i in range(4)]
-    T_diff_cols = [f'T{i_plane}_T_diff_{i+1}' for i in range(4)]
+    T_dif_cols = [f'T{i_plane}_T_diff_{i+1}' for i in range(4)]
     Q_sum_cols = [f'Q{i_plane}_Q_sum_{i+1}' for i in range(4)]
+    Q_dif_cols = [f'Q{i_plane}_Q_diff_{i+1}' for i in range(4)]
 
     # Extract data
     T_sums = calibrated_data[T_sum_cols].astype(float).fillna(0).values
-    T_diffs = calibrated_data[T_diff_cols].astype(float).fillna(0).values
+    T_difs = calibrated_data[T_dif_cols].astype(float).fillna(0).values
     Q_sums = calibrated_data[Q_sum_cols].astype(float).fillna(0).values
+    Q_difs = calibrated_data[Q_dif_cols].astype(float).fillna(0).values
 
     # Decode binary topology
     active_mask = np.array([
@@ -4792,10 +4894,11 @@ for i_plane in range(1, 5):
 
     # Apply mask and compute means
     T_sum_masked = T_sums * active_mask
-    T_diff_masked = T_diffs * active_mask
+    T_dif_masked = T_difs * active_mask
+    Q_dif_masked = Q_difs * active_mask
 
     calibrated_data[f'P{i_plane}_T_sum_final'] = T_sum_masked.sum(axis=1) / n_active_safe
-    calibrated_data[f'P{i_plane}_T_diff_final'] = T_diff_masked.sum(axis=1) / n_active_safe
+    calibrated_data[f'P{i_plane}_T_diff_final'] = T_dif_masked.sum(axis=1) / n_active_safe
 
     # Zero out where no active strips
     calibrated_data.loc[n_active == 0, f'P{i_plane}_T_sum_final'] = 0
@@ -4803,131 +4906,69 @@ for i_plane in range(1, 5):
 
     # Store total charge
     calibrated_data[f'P{i_plane}_Q_sum_final'] = (Q_sums * active_mask).sum(axis=1)
+    calibrated_data[f'P{i_plane}_Q_diff_final'] = (Q_difs * active_mask).sum(axis=1)
 
 
 if create_essential_plots or create_plots:
-    # First plot: check the time calibration -----------------------------------------------------
-    new_data = calibrated_data.copy()
-    mask_all_non_zero = (new_data['P1_Q_sum_final'] != 0) & \
-                        (new_data['P2_Q_sum_final'] != 0) & \
-                        (new_data['P3_Q_sum_final'] != 0) & \
-                        (new_data['P4_Q_sum_final'] != 0)
-    
-    # Filter new_data to keep only rows where all Q_sum_final values are non-zero
-    new_data = new_data[mask_all_non_zero].copy()
-    
-    # Subtract P1_T_sum_final from P2_T_sum_final, P3_T_sum_final, and P4_T_sum_final in one step
-    cols_to_adjust = [f'P{i}_T_sum_final' for i in range(1, 5)]
-    new_data[cols_to_adjust] = new_data[cols_to_adjust].subtract(new_data['P1_T_sum_final'], axis=0)
-    
-    
-    fig, axes = plt.subplots(4, 4, figsize=(20, 20))
-    axes = axes.flatten()  # Flatten the axes array to easily iterate
-    num_bins = 150
-    
-    # Iterate over i_plane from 1 to 4
+    fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
+    axes = axes.flatten()
+
     for i_plane in range(1, 5):
-        # Define the column names for this plane
+        # Column names
         t_sum_col = f'P{i_plane}_T_sum_final'
         t_diff_col = f'P{i_plane}_T_diff_final'
         q_sum_col = f'P{i_plane}_Q_sum_final'
+        q_diff_col = f'P{i_plane}_Q_diff_final'
         y_col = f'Y_{i_plane}'
+
+        # Filter valid rows (non-zero)
+        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
         
-        # Filter components in all vecs in which t_sum_col is bigger in abs to 10
-        new_data = new_data[abs(new_data[t_sum_col]) < 10]
-        
-        # Filter out values that are NaN or 0 before plotting from the new_data DataFrame
-        axes[(i_plane-1)*4].hist(new_data[t_sum_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
-        axes[(i_plane-1)*4].set_title(t_sum_col)
+        # Extract variables and filter low charge
+        cond = valid_rows[q_sum_col] < 50
+        t_sum  = valid_rows.loc[cond, t_sum_col]
+        t_diff = valid_rows.loc[cond, t_diff_col]
+        q_sum  = valid_rows.loc[cond, q_sum_col]
+        q_diff = valid_rows.loc[cond, q_diff_col]
+        y      = valid_rows.loc[cond, y_col]
 
-        axes[(i_plane-1)*4 + 1].hist(new_data[t_diff_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
-        axes[(i_plane-1)*4 + 1].set_title(t_diff_col)
+        base_idx = (i_plane - 1) * 10  # 10 plots per plane
 
-        axes[(i_plane-1)*4 + 2].hist(new_data[q_sum_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
-        axes[(i_plane-1)*4 + 2].set_title(q_sum_col)
-        axes[(i_plane-1)*4 + 2].set_yscale('log')  # Log scale for better visualization
+        combinations = [
+            (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+            (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
+            (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
+            (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
+            (t_diff, y,      f'{t_diff_col} vs {y_col}'),
+            (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
+            (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
+            (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
+            (q_diff, y,      f'{q_diff_col} vs {y_col}'),
+            (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+        ]
 
-        axes[(i_plane-1)*4 + 3].hist(new_data[y_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
-        axes[(i_plane-1)*4 + 3].set_title(y_col)
-    
+        for offset, (x, yv, title) in enumerate(combinations):
+            ax = axes[base_idx + offset]
+            ax.hexbin(x, yv, gridsize=50, cmap='turbo')
+            ax.set_title(title)
+
     plt.tight_layout()
-    plt.suptitle('RPC variables, four planes, substracted time to debug', fontsize=16)
-    
+    plt.subplots_adjust(top=0.92)
+    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane', fontsize=18)
+
     if save_plots:
-        name_of_file = 'rpc_variables_tcal_debug_four_plane_coin'
+        name_of_file = 'rpc_variables_hexbin_combinations'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-    
-    if show_plots: 
-        plt.show()
-    plt.close()
-    
-    
-    fig, axes = plt.subplots(4, 6, figsize=(24, 20))  # Adjusting for 6 combinations
-    axes = axes.flatten()  # Flatten the axes array to easily iterate
-    
-    # Iterate over i_plane from 1 to 4
-    for i_plane in range(1, 5):
-        # Define the column names for this plane
-        t_sum_col = f'P{i_plane}_T_sum_final'
-        t_diff_col = f'P{i_plane}_T_diff_final'
-        q_sum_col = f'P{i_plane}_Q_sum_final'
-        y_col = f'Y_{i_plane}'
-        
-        # Filter out rows where any of the variables are NaN or 0 for all comparisons
-        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, y_col]].replace(0, np.nan).dropna()
 
-        t_sum = valid_rows[t_sum_col]
-        t_diff = valid_rows[t_diff_col]
-        q_sum = valid_rows[q_sum_col]
-        y = valid_rows[y_col]
-        
-        cond = q_sum < 50
-        t_sum = t_sum[cond]
-        t_diff = t_diff[cond]
-        q_sum = q_sum[cond]
-        y = y[cond]
-
-        # Hexbin plot for all combinations (6 combinations for each i_plane)
-        axes[(i_plane-1)*6].hexbin(t_sum, t_diff, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6].set_title(f'{t_sum_col} vs {t_diff_col}')
-        
-        axes[(i_plane-1)*6 + 1].hexbin(t_sum, q_sum, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 1].set_title(f'{t_sum_col} vs {q_sum_col}')
-        
-        axes[(i_plane-1)*6 + 2].hexbin(t_sum, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 2].set_title(f'{t_sum_col} vs {y_col}')
-        
-        axes[(i_plane-1)*6 + 3].hexbin(t_diff, q_sum, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 3].set_title(f'{t_diff_col} vs {q_sum_col}')
-        
-        axes[(i_plane-1)*6 + 4].hexbin(t_diff, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 4].set_title(f'{t_diff_col} vs {y_col}')
-        
-        axes[(i_plane-1)*6 + 5].hexbin(q_sum, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 5].set_title(f'{q_sum_col} vs {y_col}')
-    
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, no filtering', fontsize=16)
-    
-    if save_plots:
-        name_of_file = 'rpc_variables_hexbin_combinations_pre_filter'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    
     if show_plots: plt.show()
     plt.close()
-    
 
+    
 
 print("--------------------- Filter 6: calibrated data ----------------------")
 for col in calibrated_data.columns:
@@ -4937,8 +4978,30 @@ for col in calibrated_data.columns:
         calibrated_data[col] = np.where((calibrated_data[col] < T_diff_RPC_left) | (calibrated_data[col] > T_diff_RPC_right), 0, calibrated_data[col])
     if 'Q_sum_final' in col:
         calibrated_data[col] = np.where((calibrated_data[col] < Q_RPC_left) | (calibrated_data[col] > Q_RPC_right), 0, calibrated_data[col])
+    if 'Q_diff_final' in col:
+        calibrated_data[col] = np.where((calibrated_data[col] < Q_dif_RPC_left) | (calibrated_data[col] > Q_dif_RPC_right), 0, calibrated_data[col])
     if 'Y_' in col:
         calibrated_data[col] = np.where((calibrated_data[col] < Y_RPC_left) | (calibrated_data[col] > Y_RPC_right), 0, calibrated_data[col])
+
+total_events = len(calibrated_data)
+
+for i_plane in range(1, 5):
+    y_col      = f'Y_{i_plane}'
+    t_sum_col  = f'P{i_plane}_T_sum_final'
+    t_diff_col = f'P{i_plane}_T_diff_final'
+    q_sum_col  = f'P{i_plane}_Q_sum_final'
+    q_diff_col = f'P{i_plane}_Q_diff_final'
+
+    cols = [y_col, t_sum_col, t_diff_col, q_sum_col, q_diff_col]
+
+    # Identify affected rows
+    mask = (calibrated_data[cols] == 0).any(axis=1)
+    num_affected = mask.sum()
+
+    print(f"Plane {i_plane}: {num_affected} out of {total_events} events affected ({(num_affected / total_events) * 100:.2f}%)")
+
+    # Apply zeroing
+    calibrated_data.loc[mask, cols] = 0
 
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -4964,99 +5027,54 @@ if stratos_save and station == 1:
     filtered_stratos_df.to_csv(save_stratos, index=False, float_format="%.1f")
 # ----------------------------------------------------------------------------------------------------------------
 
-# if create_plots or create_essential_plots:
-    # fig, axes = plt.subplots(4, 4, figsize=(20, 20))
-    # axes = axes.flatten()  # Flatten the axes array to easily iterate
-    # num_bins = 150
-    
-    # # Iterate over i_plane from 1 to 4
-    # for i_plane in range(1, 5):
-    #     # Define the column names for this plane
-    #     t_sum_col = f'P{i_plane}_T_sum_final'
-    #     t_diff_col = f'P{i_plane}_T_diff_final'
-    #     q_sum_col = f'P{i_plane}_Q_sum_final'
-    #     y_col = f'Y_{i_plane}'
-        
-    #     # Filter out values that are NaN or 0 before plotting
-    #     axes[(i_plane-1)*4].hist(calibrated_data[t_sum_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
-    #     axes[(i_plane-1)*4].set_title(t_sum_col)
-
-    #     axes[(i_plane-1)*4 + 1].hist(calibrated_data[t_diff_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
-    #     axes[(i_plane-1)*4 + 1].set_title(t_diff_col)
-
-    #     axes[(i_plane-1)*4 + 2].hist(calibrated_data[q_sum_col][calibrated_data[q_sum_col] > 0].dropna(), bins=num_bins, alpha=0.7)
-    #     axes[(i_plane-1)*4 + 2].set_title(q_sum_col)
-    #     axes[(i_plane-1)*4 + 2].set_yscale('log')
-
-    #     axes[(i_plane-1)*4 + 3].hist(calibrated_data[y_col].replace(0, np.nan).dropna(), bins=num_bins, alpha=0.7)
-    #     axes[(i_plane-1)*4 + 3].set_title(y_col)
-    
-    # plt.tight_layout()
-    # plt.suptitle('RPC variables, filtered')
-    
-    # if save_plots:
-    #     name_of_file = 'rpc_variables_filtered'
-    #     final_filename = f'{fig_idx}_{name_of_file}.png'
-    #     fig_idx += 1
-
-    #     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    #     plot_list.append(save_fig_path)
-    #     plt.savefig(save_fig_path, format='png')
-    
-    # if show_plots: plt.show()
-    # plt.close()
-
-
 # Same for hexbin
 if create_plots or create_essential_plots:
-    fig, axes = plt.subplots(4, 6, figsize=(24, 20))  # Adjusting for 6 combinations
-    axes = axes.flatten()  # Flatten the axes array to easily iterate
-    
-    # Iterate over i_plane from 1 to 4
+    fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
+    axes = axes.flatten()
+
     for i_plane in range(1, 5):
-        # Define the column names for this plane
+        # Column names
         t_sum_col = f'P{i_plane}_T_sum_final'
         t_diff_col = f'P{i_plane}_T_diff_final'
         q_sum_col = f'P{i_plane}_Q_sum_final'
+        q_diff_col = f'P{i_plane}_Q_diff_final'
         y_col = f'Y_{i_plane}'
-        
-        # Filter out rows where any of the variables are NaN or 0 for all comparisons
-        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, y_col]].replace(0, np.nan).dropna()
 
-        t_sum = valid_rows[t_sum_col]
-        t_diff = valid_rows[t_diff_col]
-        q_sum = valid_rows[q_sum_col]
-        y = valid_rows[y_col]
+        # Filter valid rows (non-zero)
+        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
         
-        cond = q_sum < 50
-        t_sum = t_sum[cond]
-        t_diff = t_diff[cond]
-        q_sum = q_sum[cond]
-        y = y[cond]
+        # Extract variables and filter low charge
+        cond = valid_rows[q_sum_col] < 50
+        t_sum  = valid_rows.loc[cond, t_sum_col]
+        t_diff = valid_rows.loc[cond, t_diff_col]
+        q_sum  = valid_rows.loc[cond, q_sum_col]
+        q_diff = valid_rows.loc[cond, q_diff_col]
+        y      = valid_rows.loc[cond, y_col]
 
-        # Hexbin plot for all combinations (6 combinations for each i_plane)
-        axes[(i_plane-1)*6].hexbin(t_sum, t_diff, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6].set_title(f'{t_sum_col} vs {t_diff_col}')
-        
-        axes[(i_plane-1)*6 + 1].hexbin(t_sum, q_sum, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 1].set_title(f'{t_sum_col} vs {q_sum_col}')
-        
-        axes[(i_plane-1)*6 + 2].hexbin(t_sum, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 2].set_title(f'{t_sum_col} vs {y_col}')
-        
-        axes[(i_plane-1)*6 + 3].hexbin(t_diff, q_sum, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 3].set_title(f'{t_diff_col} vs {q_sum_col}')
-        
-        axes[(i_plane-1)*6 + 4].hexbin(t_diff, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 4].set_title(f'{t_diff_col} vs {y_col}')
-        
-        axes[(i_plane-1)*6 + 5].hexbin(q_sum, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 5].set_title(f'{q_sum_col} vs {y_col}')
-    
+        base_idx = (i_plane - 1) * 10  # 10 plots per plane
+
+        combinations = [
+            (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+            (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
+            (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
+            (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
+            (t_diff, y,      f'{t_diff_col} vs {y_col}'),
+            (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
+            (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
+            (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
+            (q_diff, y,      f'{q_diff_col} vs {y_col}'),
+            (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+        ]
+
+        for offset, (x, yv, title) in enumerate(combinations):
+            ax = axes[base_idx + offset]
+            ax.hexbin(x, yv, gridsize=50, cmap='turbo')
+            ax.set_title(title)
+
     plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, filtered', fontsize=16)
-    
+    plt.subplots_adjust(top=0.92)
+    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, filtered', fontsize=18)
+
     if save_plots:
         name_of_file = 'rpc_variables_hexbin_combinations_filtered'
         final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -5065,69 +5083,47 @@ if create_plots or create_essential_plots:
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-    
+
     if show_plots: plt.show()
     plt.close()
 
 
-if create_plots or create_essential_plots:
-    fig, axes = plt.subplots(4, 6, figsize=(24, 20))  # Adjusting for 6 combinations
-    axes = axes.flatten()  # Flatten the axes array to easily iterate
+# Now obtain the trigger type ----------------------------------------------------------------
+def create_pre_timtrack_tt(df):
+    def get_pre_timtrack_tt(row):
+        planes_with_charge = []
+        for plane in range(1, 5):
+            charge_columns = [f'P{plane}_Q_sum_final']
+            if any(row[col] != 0 for col in charge_columns):
+                planes_with_charge.append(str(plane))
+        return ''.join(planes_with_charge)
     
-    # Iterate over i_plane from 1 to 4
-    for i_plane in range(1, 5):
-        # Define the column names for this plane
-        t_sum_col = f'P{i_plane}_T_sum_final'
-        t_diff_col = f'P{i_plane}_T_diff_final'
-        q_sum_col = f'P{i_plane}_Q_sum_final'
-        y_col = f'Y_{i_plane}'
-        
-        # Filter out rows where any of the variables are NaN or 0 for all comparisons
-        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, y_col]].replace(0, np.nan).dropna()
+    df['pre_timtrack_tt'] = df.apply(get_pre_timtrack_tt, axis=1)
+    return df
 
-        t_sum = valid_rows[t_sum_col]
-        t_diff = valid_rows[t_diff_col]
-        q_sum = valid_rows[q_sum_col]
-        y = valid_rows[y_col]
-        
-        cond = q_sum > 100
-        t_sum = t_sum[cond]
-        t_diff = t_diff[cond]
-        q_sum = q_sum[cond]
-        y = y[cond]
+# Apply the function to the DataFrame
+calibrated_data = create_pre_timtrack_tt(calibrated_data)
 
-        # Hexbin plot for all combinations (6 combinations for each i_plane)
-        axes[(i_plane-1)*6].hexbin(t_sum, t_diff, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6].set_title(f'{t_sum_col} vs {t_diff_col}')
-        
-        axes[(i_plane-1)*6 + 1].hexbin(t_sum, q_sum, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 1].set_title(f'{t_sum_col} vs {q_sum_col}')
-        
-        axes[(i_plane-1)*6 + 2].hexbin(t_sum, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 2].set_title(f'{t_sum_col} vs {y_col}')
-        
-        axes[(i_plane-1)*6 + 3].hexbin(t_diff, q_sum, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 3].set_title(f'{t_diff_col} vs {q_sum_col}')
-        
-        axes[(i_plane-1)*6 + 4].hexbin(t_diff, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 4].set_title(f'{t_diff_col} vs {y_col}')
-        
-        axes[(i_plane-1)*6 + 5].hexbin(q_sum, y, gridsize=50, cmap='turbo')
-        axes[(i_plane-1)*6 + 5].set_title(f'{q_sum_col} vs {y_col}')
-    
+# if create_essential_plots or create_plots:
+if create_plots:
+    event_counts = calibrated_data['pre_timtrack_tt'].copy().value_counts()
+
+    # Plot the histogram of event counts
+    plt.figure(figsize=(10, 6))
+    event_counts.plot(kind='bar', alpha=0.7)
+    plt.title('Number of Events per pretimtrack TT Label')
+    plt.xlabel('Pre TimTrack TT Label')
+    plt.ylabel('Number of Events')
+    plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    plt.suptitle('STREAMERS. Hexbin Plots for All Variable Combinations by Plane', fontsize=16)
-    
     if save_plots:
-        name_of_file = 'streamer_rpc_variables_hexbin_combinations_filtered'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
+        final_filename = f'{fig_idx}_pre_timtrack_tt.png'
         fig_idx += 1
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-    
+
     if show_plots: plt.show()
     plt.close()
 
@@ -5213,53 +5209,119 @@ alt_fit_slow_results = ['alt_s']
 alt_slow_new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=alt_fit_slow_results)
 calibrated_data = pd.concat([calibrated_data, alt_slow_new_columns_df], axis=1)
 
-# Loop over all tracks
+t_unc = anc_sts  # Uncertainty on T_sum values (adjust based on detector resolution)
+
 for idx, track in calibrated_data.iterrows():
     planes_to_iterate = []
-    
-    # Identify valid planes with charge
+
     for i_plane in range(nplan):
         charge_plane = getattr(track, f'P{i_plane + 1}_Q_sum_final')
-        if charge_plane > 4:
+        if charge_plane > crosstalk_threshold_ns:
             planes_to_iterate.append(i_plane + 1)
 
     planes_to_iterate = np.array(planes_to_iterate)
-    
-    if len(planes_to_iterate) >= 2:  # Only fit if 2 or more points exist
+
+    if len(planes_to_iterate) >= 2:
         tsum = []
         z = []
-        
+
         for iplane in planes_to_iterate:
             t_s = getattr(track, f'P{iplane}_T_sum_final')
             tsum.append(t_s)
             z.append(z_positions[iplane - 1])
 
-        theta = getattr(track, f'alt_theta')
-        phi = getattr(track, f'alt_phi')
-        
-        # Convert to arrays
+        theta = getattr(track, 'alt_theta')
+        phi = getattr(track, 'alt_phi')
+
         tsum = np.array(tsum)
         z = np.array(z)
 
-        # Step 1: Build track direction vector
         v_dir = np.array([
             np.sin(theta) * np.cos(phi),
             np.sin(theta) * np.sin(phi),
             np.cos(theta)
         ])
 
-        # Step 2: Build hit positions in 3D (only z is known, assume y=0, x=0)
         positions = np.stack([np.zeros_like(z), np.zeros_like(z), z], axis=1)
+        proj_dist = positions @ v_dir
 
-        # Step 3: Project each position onto the direction vector to get path length
-        proj_dist = positions @ v_dir  # scalar projection: s = r · v̂
+        s_rel = proj_dist - proj_dist[0]
+        t_rel = tsum - tsum[0]
 
-        # Step 4: Fit T_sum vs. projected distance
-        slope, intercept = np.polyfit(proj_dist - proj_dist[0], tsum - tsum[0], deg=1)
+        # Linear fit: t = s * slope + intercept
+        slope, intercept = np.polyfit(s_rel, t_rel, deg=1)
         calibrated_data.at[idx, 'alt_s'] = slope
 
+        # Compute predicted values and chi2
+        t_fit = slope * s_rel + intercept
+        residuals = t_rel - t_fit
+        chi2 = np.sum((residuals / t_unc) ** 2)
+        calibrated_data.at[idx, 'chi2_tsum_fit'] = chi2
+
+
+
+# ---------------------------------------------------------------------------
+# Put every value close to 0 to effectively 0 -------------------------------
+# ---------------------------------------------------------------------------
+
+# Pre plot
+
+# Put all the individual values of calibrated_data, except 0, in a one dimensional
+# vector and histogram it
+
+# Filter the values inside the machine number window
+eps = 1e-7  # Threshold
 
 if create_essential_plots or create_plots:
+    # Flatten all numeric values except 0
+    flat_values = calibrated_data.select_dtypes(include=[np.number]).values.ravel()
+    flat_values = flat_values[flat_values != 0]
+
+    cond = abs(flat_values) < eps
+    flat_values = flat_values[cond]
+
+    # Plot histogram
+    plt.figure(figsize=(8, 6))
+    plt.hist(flat_values, bins=300, alpha=0.7)
+    plt.xlabel('Value')
+    plt.ylabel('Counts')
+    plt.title('Histogram of All Nonzero Values in calibrated_data')
+    plt.yscale('log')  # Optional: log scale to reveal structure
+    plt.grid(True)
+    plt.tight_layout()
+    if save_plots:
+            name_of_file = 'flat_values_histogram'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+
+def is_small_nonzero(x):
+    return isinstance(x, (int, float)) and x != 0 and abs(x) < eps
+
+# Create mask of small, non-zero numeric values
+mask = calibrated_data.applymap(is_small_nonzero)
+
+# Count total non-zero numeric entries
+nonzero_numeric_mask = calibrated_data.applymap(lambda x: isinstance(x, (int, float)) and x != 0)
+n_total = nonzero_numeric_mask.sum().sum()
+n_small = mask.sum().sum()
+
+# Apply the replacement
+calibrated_data = calibrated_data.mask(mask, 0)
+
+# Report
+pct = 100 * n_small / n_total if n_total > 0 else 0
+print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
+
+if create_essential_plots or create_plots:
+# if create_plots:
+    
+    print("Plotting...")
     
     # ---------------------------------------------------------------------------------------
     # ANGLES PLOTS ------------------------------------------------------------------------
@@ -5310,55 +5372,6 @@ if create_essential_plots or create_plots:
         plt.show()
     plt.close()
     
-    # PLOT 2 -------------------------------------------------------------------------------------------------------------------
-    
-    # Contour plot of alt_chi2 vs alt_theta and alt_phi
-    # Filter Theta between 0 and 1.3
-    plot_data = calibrated_data[(calibrated_data['alt_theta'] > 0) & (calibrated_data['alt_theta'] < 1.3)]
-    theta_values = plot_data['alt_theta'].values
-    phi_values = plot_data['alt_phi'].values
-    chi2_values = np.clip(plot_data['alt_chi2'].values, 0, 1)
-    
-    # Define grid resolution
-    theta_bins = np.linspace(min(theta_values), max(theta_values), 40)
-    phi_bins = np.linspace(min(phi_values), max(phi_values), 40)
-
-    # Create a 2D histogram
-    H, theta_edges, phi_edges = np.histogram2d(theta_values, phi_values, bins=[theta_bins, phi_bins], weights=chi2_values)
-    counts, _, _ = np.histogram2d(theta_values, phi_values, bins=[theta_bins, phi_bins])
-
-    # Compute the average chi2 in each bin
-    with np.errstate(divide='ignore', invalid='ignore'):
-        Chi2_binned = np.where(counts > 0, H / counts, 0)  # Average chi2 in each bin, 0 where no data
-
-    # Define grid for plotting
-    Theta_mid = (theta_edges[:-1] + theta_edges[1:]) / 2
-    Phi_mid = (phi_edges[:-1] + phi_edges[1:]) / 2
-    Theta_grid, Phi_grid = np.meshgrid(Theta_mid, Phi_mid, indexing='ij')
-
-    # Plot binned contour
-    plt.figure(figsize=(8, 6))
-    contour = plt.contourf(Phi_grid, Theta_grid, Chi2_binned, levels=20, cmap='viridis')
-    plt.colorbar(contour, label='Chi-Squared')
-    plt.xlabel('Azimuth (φ) [radians]')
-    plt.ylabel('Zenith (θ) [radians]')
-    plt.title('Binned Contour Plot of Chi-Squared')
-    plt.grid(True)
-
-    if save_plots:
-        name_of_file = 'alternative_fitting_2_results_hexbin_combination_projections'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-
-    # Show plot if enabled
-    if show_plots:
-        plt.show()
-    plt.close()
-    
     
     # ---------------------------------------------------------------------------------------
     # SLOWNESS PLOTS ------------------------------------------------------------------------
@@ -5366,10 +5379,19 @@ if create_essential_plots or create_plots:
     
     # Histogram the slowness calculated
     plt.figure(figsize=(8, 6))
-    v = calibrated_data['alt_s'].replace(0, np.nan).dropna()
+
+    v = calibrated_data['alt_s']
+    v = v[(v != 0) & v.notna()]  # Exclude exact 0 and NaNs
+
+    n_total = len(v)
+    n_small = ( (v > 0) & (abs(v) < eps) ).sum()
+    print(f"{n_small} out of {n_total} values are below {eps} ({100 * n_small / n_total:.2f}%)")
+
     cond = (v > slowness_filter_left) & (v < slowness_filter_right)
     v = v[cond]
+
     plt.hist(v, bins=200, alpha=0.7)
+
     plt.xlabel('Slowness (ns/mm)')
     plt.ylabel('Counts')
     plt.title('Histogram of Slowness')
@@ -5391,12 +5413,241 @@ if create_essential_plots or create_plots:
     if show_plots:
         plt.show()
     plt.close()
+    
+    
+    # Plot chi2_tsum_fit --------------------------------------------------------------------
+    value_inter_med = eps
+    
+    # Histogram the slowness calculated
+    plt.figure(figsize=(8, 6))
+    v = calibrated_data['chi2_tsum_fit'].replace(0, np.nan).dropna()
+    cond = (v > value_inter_med) & (v < 10)
+    v = v[cond]
+    
+    plt.hist(v, bins=100, alpha=0.7)
+    plt.xlabel('Slowness chi2 (ns/mm)')
+    plt.ylabel('Counts')
+    plt.title('Histogram of chi2')
+    plt.grid(True)
+    # plt.xlim(slowness_filter_left, slowness_filter_right)  # Adjust x-axis limits as needed
+    # plt.ylim(slowness_filter_left, slowness_filter_right)  # Adjust y-axis limits as needed
+    plt.tight_layout()
+    
+    if save_plots:
+        name_of_file = 'alt_s_chi2'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
+    plt.close()
+    
+    
+    # Plot chi2_tsum_fit vs alt_s --------------------------------------------------------
+    plt.figure(figsize=(8, 6))
+    plt.scatter(calibrated_data['alt_s'], calibrated_data['chi2_tsum_fit'], alpha=0.8, s = 0.1)
+    plt.xlabel('Slowness (ns/mm)')
+    plt.ylabel('Chi2 T_sum Fit')
+    plt.title('Chi2 T_sum Fit vs Slowness')
+    plt.grid(True)
+    plt.xlim(slowness_filter_left, slowness_filter_right)  # Adjust x-axis limits as needed
+    plt.ylim(0, 10)  # Adjust y-axis limits as needed
+    plt.tight_layout()
+    if save_plots:
+        name_of_file = 'alt_s_vs_chi2_scatter'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
+    plt.close()
+    
+    
+    # HEXBIN
+    x_min, x_max = slowness_filter_left, slowness_filter_right
+    y_min, y_max = eps, 10
+
+    # Filter data within the plotting region
+    mask = (
+        calibrated_data['alt_s'].between(x_min, x_max) &
+        calibrated_data['chi2_tsum_fit'].between(y_min, y_max)
+    )
+    x = calibrated_data.loc[mask, 'alt_s']
+    y = calibrated_data.loc[mask, 'chi2_tsum_fit']
+
+    plt.figure(figsize=(8, 6))
+    plt.hexbin(x, y, gridsize=80, cmap='viridis', bins='log')
+    plt.xlabel('Slowness (ns/mm)')
+    plt.ylabel('Chi2 T_sum Fit')
+    plt.title('Chi2 T_sum Fit vs Slowness (Hexbin)')
+    plt.grid(True)
+    plt.xlim(x_min, x_max)
+    plt.ylim(y_min, y_max)
+    plt.colorbar(label='log10(counts)')
+    plt.tight_layout()
+
+    if save_plots:
+        name_of_file = 'alt_s_vs_chi2_hexbin'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots:
+        plt.show()
+    plt.close()
+
+    
+    # Plot chi2_tsum_fit vs angular fit chi2 --------------------------------------------------------
+    plt.figure(figsize=(8, 6))
+    plt.scatter(calibrated_data['alt_chi2'], calibrated_data['chi2_tsum_fit'], alpha=0.8, s = 0.1)
+    plt.xlabel('Chi 2 angle')
+    plt.ylabel('Chi2 slowness')
+    plt.title('Chi2 angle vs chi2 slowness')
+    plt.grid(True)
+    plt.xlim(0, 10)  # Adjust x-axis limits as needed
+    plt.ylim(0, 10)  # Adjust y-axis limits as needed
+    plt.tight_layout()
+    if save_plots:
+        name_of_file = 'angle_chi2_vs_chi2_scatter'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
+    plt.close()
+    
+    
+    # HEXBIN
+    x_min, x_max = eps, 2
+    y_min, y_max = eps, 2
+
+    # Filter data within the plotting region
+    mask = (
+        calibrated_data['alt_chi2'].between(x_min, x_max) &
+        calibrated_data['chi2_tsum_fit'].between(y_min, y_max)
+    )
+    x = calibrated_data.loc[mask, 'alt_chi2']
+    y = calibrated_data.loc[mask, 'chi2_tsum_fit']
+
+    plt.figure(figsize=(8, 6))
+    plt.hexbin(x, y, gridsize=100, cmap='viridis', bins='log')
+    plt.xlabel('Angle chi2')
+    plt.ylabel('Slowness chi2')
+    plt.title('Chi2 angle vs chi2 slowness')
+    plt.grid(True)
+    plt.xlim(x_min, x_max)
+    plt.ylim(y_min, y_max)
+    plt.colorbar(label='log10(counts)')
+    plt.tight_layout()
+
+    if save_plots:
+        name_of_file = 'angle_chi2_vs_chi2_hexbin'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots:
+        plt.show()
+    plt.close()
+    
+    
+    # Plot alt_theta vs alt_s --------------------------------------------------------
+    plt.figure(figsize=(8, 6))
+    plt.scatter(calibrated_data['alt_theta'], calibrated_data['alt_s'], alpha=0.8, s = 0.1)
+    plt.ylabel('Slowness')
+    plt.xlabel('Theta (zenith)')
+    plt.title('slowness vs theta angle')
+    plt.grid(True)
+    plt.ylim(slowness_filter_left, slowness_filter_right)
+    plt.xlim(0, np.pi)  # Adjust y-axis limits as needed
+    plt.tight_layout()
+    if save_plots:
+        name_of_file = 's_vs_theta_scatter'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
+    plt.close()
+    
+    
+    # Plot alt_theta vs alt_s --------------------------------------------------------
+    plt.figure(figsize=(8, 6))
+    plt.scatter(calibrated_data['alt_phi'], calibrated_data['alt_s'], alpha=0.8, s = 0.1)
+    plt.ylabel('Slowness')
+    plt.xlabel('Phi (Azimuth)')
+    plt.title('slowness vs theta angle')
+    plt.grid(True)
+    plt.ylim(slowness_filter_left, slowness_filter_right)
+    plt.xlim(-1*np.pi, np.pi)  # Adjust y-axis limits as needed
+    plt.tight_layout()
+    if save_plots:
+        name_of_file = 's_vs_phi_scatter'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
+    plt.close()
+
+
+for col in calibrated_data.columns:
+    # Alternative fitting results
+    if 'alt_x' == col or 'alt_y' == col:
+        cond_bound = (calibrated_data[col] > alt_pos_filter) | (calibrated_data[col] < -1*alt_pos_filter)
+        cond_zero = (calibrated_data[col] == 0)
+        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+    if 'alt_theta' == col:
+        cond_bound = (calibrated_data[col] > alt_theta_right_filter) | (calibrated_data[col] < alt_theta_left_filter)
+        cond_zero = (calibrated_data[col] == 0)
+        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+    if 'alt_phi' == col:
+        cond_bound = (calibrated_data[col] > alt_phi_right_filter) | (calibrated_data[col] < alt_phi_left_filter)
+        cond_zero = (calibrated_data[col] == 0)
+        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+    if 'alt_s' == col:
+        cond_bound = (calibrated_data[col] > alt_slowness_filter_right) | (calibrated_data[col] < alt_slowness_filter_left)
+        cond_zero = (calibrated_data[col] == 0)
+        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+
+
+# Make sure the full row is set to 0 or whatever
+cond = (calibrated_data['alt_x'] != 0) & (calibrated_data['alt_y'] != 0) &\
+       (calibrated_data['alt_theta'] != 0) & (calibrated_data['alt_phi'] != 0) &\
+       (calibrated_data['alt_s'] != 0)
+
+calibrated_data = calibrated_data.loc[cond].copy()
 
 print("Alternative fitting done.")
-
-# -----------------------------------------------------------------------------------
-# -----------------------------------------------------------------------------------
-# -----------------------------------------------------------------------------------
 
 
 print("----------------------------------------------------------------------")
@@ -5755,7 +6006,14 @@ for iteration in range(repeat + 1):
                 calibrated_data.at[idx, f'ext_res_tdif_{iplane_ref}'] = v_res[2]
     
     
-    # TimTrack result and residue plots ---------------------------------------
+    # ------------------------------------------------------------------------------
+    # TimTrack result and residue plots --------------------------------------------
+    # ------------------------------------------------------------------------------
+    
+    print("------------------------------------------------------------------------------")
+    print("-------------------- TimTrack result and residue plots -----------------------")
+    print("------------------------------------------------------------------------------")
+    
     if create_essential_plots or (create_plots and residual_plots):
         timtrack_columns = ['x', 'xp', 't0', 'y', 'yp', 's']
         residual_columns = [
@@ -5766,7 +6024,7 @@ for iteration in range(repeat + 1):
         
         # Combined plot for all types
         plot_histograms_and_gaussian(calibrated_data, timtrack_columns, "Combined TimTrack Results", figure_number=1)
-        plot_histograms_and_gaussian(calibrated_data, residual_columns, "Combined Residuals with Gaussian", figure_number=2, fit_gaussian=True, quantile=0.99)
+        # plot_histograms_and_gaussian(calibrated_data, residual_columns, "Combined Residuals with Gaussian", figure_number=2, fit_gaussian=True, quantile=0.99)
         
         # Individual plots for each unique type
         unique_types = calibrated_data['type'].unique()
@@ -5780,44 +6038,44 @@ for iteration in range(repeat + 1):
     
     
     # FILTER 6: TSUM, TDIF, QSUM, QDIF TIMTRACK X, Y, etc. FILTER --> IF THE
-    #   RESULT IS OUT OF RANGE, REMOVE THE MODULE WITH LARGEST RESIDUE
-    for index, row in calibrated_data.iterrows():
-        # Check if x, y, or t0 is outside the desired range
-        if (row['t0'] > t0_right_filter or row['t0'] < t0_left_filter) or \
-            (row['x'] > pos_filter or row['x'] < -pos_filter or row['x'] == 0) or \
-            (row['y'] > pos_filter or row['y'] < -pos_filter or row['y'] == 0) or \
-            (row['xp'] > proj_filter or row['xp'] < -proj_filter or row['xp'] == 0) or \
-            (row['yp'] > proj_filter or row['yp'] < -proj_filter or row['yp'] == 0) or \
-            (row['s'] > slowness_filter_right or row['s'] < slowness_filter_left or row['s'] == 0) or\
-            (row['charge_event'] > charge_event_right_filter or row['charge_event'] < charge_event_left_filter or row['charge_event'] == 0):
+    # RESULT IS OUT OF RANGE, REMOVE THE MODULE WITH LARGEST RESIDUE
+    # for index, row in calibrated_data.iterrows():
+    #     # Check if x, y, or t0 is outside the desired range
+    #     if (row['t0'] > t0_right_filter or row['t0'] < t0_left_filter) or \
+    #         (row['x'] > pos_filter or row['x'] < -pos_filter or row['x'] == 0) or \
+    #         (row['y'] > pos_filter or row['y'] < -pos_filter or row['y'] == 0) or \
+    #         (row['xp'] > proj_filter or row['xp'] < -proj_filter or row['xp'] == 0) or \
+    #         (row['yp'] > proj_filter or row['yp'] < -proj_filter or row['yp'] == 0) or \
+    #         (row['s'] > slowness_filter_right or row['s'] < slowness_filter_left or row['s'] == 0) or\
+    #         (row['charge_event'] > charge_event_right_filter or row['charge_event'] < charge_event_left_filter or row['charge_event'] == 0):
 
-            # Find the module with the largest absolute residue value
-            max_residue = 0
-            module_to_zero = None
+    #         # Find the module with the largest absolute residue value
+    #         max_residue = 0
+    #         module_to_zero = None
             
-            for i in range(1, 5):
-                if res_ana_removing_planes:
-                    res_tsum = abs(row[f'ext_res_tsum_{i}'])
-                    res_tdif = abs(row[f'ext_res_tdif_{i}'])
-                    res_ystr = abs(row[f'ext_res_ystr_{i}'])
-                else:
-                    res_tsum = abs(row[f'res_tsum_{i}'])
-                    res_tdif = abs(row[f'res_tdif_{i}'])
-                    res_ystr = abs(row[f'res_ystr_{i}'])
+    #         for i in range(1, 5):
+    #             if res_ana_removing_planes:
+    #                 res_tsum = abs(row[f'ext_res_tsum_{i}'])
+    #                 res_tdif = abs(row[f'ext_res_tdif_{i}'])
+    #                 res_ystr = abs(row[f'ext_res_ystr_{i}'])
+    #             else:
+    #                 res_tsum = abs(row[f'res_tsum_{i}'])
+    #                 res_tdif = abs(row[f'res_tdif_{i}'])
+    #                 res_ystr = abs(row[f'res_ystr_{i}'])
                 
-                # Calculate the maximum residue for the module
-                max_module_residue = max(res_tsum, res_tdif, res_ystr)
+    #             # Calculate the maximum residue for the module
+    #             max_module_residue = max(res_tsum, res_tdif, res_ystr)
                 
-                if max_module_residue > max_residue:
-                    max_residue = max_module_residue
-                    module_to_zero = i
+    #             if max_module_residue > max_residue:
+    #                 max_residue = max_module_residue
+    #                 module_to_zero = i
     
-            # If a module is identified, set related values to 0
-            if module_to_zero:
-                calibrated_data.at[index, f'Y_{module_to_zero}'] = 0
-                calibrated_data.at[index, f'P{module_to_zero}_T_sum_final'] = 0
-                calibrated_data.at[index, f'P{module_to_zero}_T_diff_final'] = 0
-                calibrated_data.at[index, f'P{module_to_zero}_Q_sum_final'] = 0
+    #         # If a module is identified, set related values to 0
+    #         if module_to_zero:
+    #             calibrated_data.at[index, f'Y_{module_to_zero}'] = 0
+    #             calibrated_data.at[index, f'P{module_to_zero}_T_sum_final'] = 0
+    #             calibrated_data.at[index, f'P{module_to_zero}_T_diff_final'] = 0
+    #             calibrated_data.at[index, f'P{module_to_zero}_Q_sum_final'] = 0
     
     # FILTER 7: TSUM, TDIF, QSUM, QDIF TIMTRACK RESIDUE FILTER --> 0 THE COMPONENT THAT HAS LARGE RESIDUE
     for index, row in calibrated_data.iterrows():
@@ -5840,21 +6098,18 @@ for iteration in range(repeat + 1):
                     calibrated_data.at[index, f'P{i}_T_sum_final'] = 0
                     calibrated_data.at[index, f'P{i}_T_diff_final'] = 0
                     calibrated_data.at[index, f'P{i}_Q_sum_final'] = 0
+                    calibrated_data.at[index, f'P{i}_Q_diff_final'] = 0
                     
-    print("-----------------------------------------")
     four_planes = len(calibrated_data[calibrated_data.type == 1234])
     print(f"Events that are 1234: {four_planes}")
     print(f"Events that are 123: {len(calibrated_data[calibrated_data.type == 123])}")
     print(f"Events that are 234: {len(calibrated_data[calibrated_data.type == 234])}")
-    
     planes134 = len(calibrated_data[calibrated_data.type == 134])
     print(f"Events that are 134: {planes134}")
     planes124 = len(calibrated_data[calibrated_data.type == 124])
     print(f"Events that are 124: {planes124}")
-    
     eff_2 = 1 - (planes134) / (four_planes + planes134 + planes124)
     print(f"First estimate of eff_2 ={eff_2}")
-    
     eff_3 = 1 - (planes124) / (four_planes + planes134 + planes124)
     print(f"First estimate of eff_3 ={eff_3}")
     
@@ -5871,67 +6126,36 @@ new_columns_df = pd.DataFrame({'theta': theta, 'phi': phi}, index=calibrated_dat
 calibrated_data = pd.concat([calibrated_data, new_columns_df], axis=1)
 calibrated_data = calibrated_data.copy()
 
-
-if create_essential_plots or create_plots:
-    # Scatter plot of alt_theta vs alt_phi
-    plt.figure(figsize=(8, 6))
-    plt.scatter(calibrated_data['phi'], calibrated_data['theta'], alpha=0.7, s = 1)
-    plt.xlabel('Azimuth (φ) [radians]')
-    plt.ylabel('Zenith (θ) [radians]')
-    plt.title('Scatter Plot of Fitted Angles')
-    plt.grid(True)
-    plt.show()
-    
-    if save_plots:
-        name_of_file = 'timtrack_fitting_results_scatter_combination_projections'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    if show_plots:
-        plt.show()
-    plt.close()
-
-
 # FILTER 8: X, Y, T FILTER: IGNORE THE EVENT IF (AFTER ALL) ANY OF THEM GOES OUR OF BOUNDS
 for col in calibrated_data.columns:
+    # TimTrack results
     if 't0' == col:
-        calibrated_data.loc[:, col] = np.where(
-            (calibrated_data[col] > t0_right_filter) | (calibrated_data[col] < t0_left_filter), 0, calibrated_data[col])
+        calibrated_data.loc[:, col] = np.where((calibrated_data[col] > t0_right_filter) | (calibrated_data[col] < t0_left_filter), 0, calibrated_data[col])
     if 'x' == col or 'y' == col:
-        cond_bound = (calibrated_data[col] > pos_filter) | (calibrated_data[col] < -pos_filter)
+        cond_bound = (calibrated_data[col] > pos_filter) | (calibrated_data[col] < -1*pos_filter)
         cond_zero = (calibrated_data[col] == 0)
         calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
     if 'xp' == col or 'yp' == col:
-        cond_bound = (calibrated_data[col] > proj_filter) | (calibrated_data[col] < -proj_filter)
+        cond_bound = (calibrated_data[col] > proj_filter) | (calibrated_data[col] < -1*proj_filter)
         cond_zero = (calibrated_data[col] == 0)
         calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
     if 's' == col:
         cond_bound = (calibrated_data[col] > slowness_filter_right) | (calibrated_data[col] < slowness_filter_left)
         cond_zero = (calibrated_data[col] == 0)
         calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
-    
+
 cond = (calibrated_data['x'] != 0) & (calibrated_data['xp'] != 0) &\
        (calibrated_data['y'] != 0) & (calibrated_data['yp'] != 0) &\
        (calibrated_data['s'] != 0) & (calibrated_data['t0'] != 0)
 
-for col in calibrated_data.columns:
-    if 'alt_x' == col or 'alt_y' == col:
-        cond_bound = (calibrated_data[col] > pos_filter) | (calibrated_data[col] < -pos_filter)
-        cond_zero = (calibrated_data[col] == 0)
-        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
-
-# print(calibrated_data.columns)
 final_data = calibrated_data.loc[cond].copy()
+
 
 print("----------------------------------------------------------------------")
 print("----------------------- Calculating some stuff -----------------------")
 print("----------------------------------------------------------------------")
 
 df_plot_ancillary = final_data.copy()
-
-# Keep the rows where charge_event is between 0 and 50
 
 cond = ( df_plot_ancillary['charge_1'] < 250 ) &\
     ( df_plot_ancillary['charge_2'] < 250 ) &\
@@ -5941,391 +6165,223 @@ cond = ( df_plot_ancillary['charge_1'] < 250 ) &\
 df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['charge_event'] > 0) & (df_plot_ancillary['charge_event'] < 600)]
 
-if create_essential_plots or create_plots:
-    from sklearn.mixture import GaussianMixture
-
-    # Define number of Gaussian components (can be changed)
-    num_components = 3  # Modify this to change the number of Gaussian components
-    
-    df_plot = df_plot_ancillary.copy()
-    # Select the number of planes involved
-    # df_plot = df_plot[df_plot['type'].astype(int) >= 100].copy()
-
-    # Fit Gaussian Mixture Model (GMM) with specified components for xp and yp
-    gmm_xp = GaussianMixture(n_components=num_components)
-    gmm_xp.fit(df_plot[['xp']])
-
-    gmm_yp = GaussianMixture(n_components=num_components)
-    gmm_yp.fit(df_plot[['yp']])
-
-    # Extract standard deviations of the fitted Gaussians from the GMM
-    xp_std_devs = np.sqrt(gmm_xp.covariances_).flatten()
-    yp_std_devs = np.sqrt(gmm_yp.covariances_).flatten()
-
-    # Generate data for visualization
-    x_vals = np.linspace(df_plot['xp'].min(), df_plot['xp'].max(), 1000)
-    y_vals = np.linspace(df_plot['yp'].min(), df_plot['yp'].max(), 1000)
-
-    xp_gmm_pdf = np.exp(gmm_xp.score_samples(x_vals.reshape(-1, 1)))
-    yp_gmm_pdf = np.exp(gmm_yp.score_samples(y_vals.reshape(-1, 1)))
-
-    # Define plotting parameters
-    columns_of_interest = ['phi', 'xp', 'yp', 'theta', 'charge_event']
-    num_bins = 100
-    fig, axes = plt.subplots(len(columns_of_interest), len(columns_of_interest), figsize=(15, 15))
-
-    for i in range(len(columns_of_interest)):
-        for j in range(len(columns_of_interest)):
-            ax = axes[i, j]
-            if i < j:
-                ax.axis('off')  # Leave the lower triangle blank
-            elif i == j:
-                # Diagonal: 1D histogram with independent axes
-                hist_data = df_plot[columns_of_interest[i]]
-                hist, bins = np.histogram(hist_data, bins=num_bins, density=True)
-                bin_centers = 0.5 * (bins[1:] + bins[:-1])
-                cmap = plt.get_cmap('turbo')
-
-                for k in range(len(hist)):
-                    ax.bar(bin_centers[k], hist[k], width=bins[1] - bins[0], color=cmap(hist[k] / max(hist)))
-
-                # Overlay GMM fit with std devs in the legend
-                if columns_of_interest[i] == 'xp':
-                    ax.plot(x_vals, xp_gmm_pdf, 'r-', label=f"Std devs: {', '.join([f'{std:.2f}' for std in xp_std_devs])}")
-                    ax.legend(fontsize=8)
-
-                elif columns_of_interest[i] == 'yp':
-                    ax.plot(y_vals, yp_gmm_pdf, 'r-', label=f"Std devs: {', '.join([f'{std:.2f}' for std in yp_std_devs])}")
-                    ax.legend(fontsize=8)
-
-                ax.set_xticks([])
-                ax.set_yticks([])
-            else:
-                # Upper triangle: hexbin plots
-                x_data = df_plot[columns_of_interest[j]]
-                y_data = df_plot[columns_of_interest[i]]
-                hb = ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
-
-            if i != len(columns_of_interest) - 1:
-                ax.set_xticklabels([])  # Remove x-axis labels except for the last row
-            if j != 0:
-                ax.set_yticklabels([])  # Remove y-axis labels except for the first column
-            if i == len(columns_of_interest) - 1:  # Last row, set x-labels
-                ax.set_xlabel(columns_of_interest[j])
-            if j == 0:  # First column, set y-labels
-                ax.set_ylabel(columns_of_interest[i])
-
-    # Print fitted Gaussian parameters
-    print("--------------------------------")
-    for i in range(num_components):
-        print(f"XP Gaussian {i+1} std: {xp_std_devs[i]:.2f}")
-    for i in range(num_components):
-        print(f"YP Gaussian {i+1} std: {yp_std_devs[i]:.2f}")
-    print("--------------------------------")
-
-    # Adjust layout and title
-    plt.subplots_adjust(wspace=0.05, hspace=0.05)
-    plt.suptitle(f"Fitted with {num_components}-Component GMM Fit", fontsize=16)
-
-    # Save plot if enabled
-    if save_plots:
-        name_of_file = 'timtrack_results_hexbin_combination_projections'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-
-    # Show plot if enabled
-    if show_plots:
-        plt.show()
-
-    plt.close()
-
-
 # --------------------------------------------------------------
 
-def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=60):
-    """
-    Generates a hexbin matrix plot with histograms on the diagonal.
-    
-    Parameters:
-    - df: Pandas DataFrame containing the data
-    - columns_of_interest: List of column names to include in the plot
-    - filter_conditions: List of tuples (column, min_value, max_value) to filter df
-    - title: Title of the plot
-    - num_bins: Number of bins for histograms and hexbin plots (default: 60)
-    - save_plots: Boolean to save the plot (default: False)
-    - show_plots: Boolean to display the plot (default: True)
-    - base_directory: Path to save the plot if save_plots is True
-    - fig_idx: Index to differentiate saved plot filenames
-    - plot_list: List to store the saved plot filenames
-    """
-    
-    # 'x', 'y', 'theta', 'phi', 'xp', 'yp', 'charge_event'
-    
-    axis_limits = {
-        'x': [-pos_filter, pos_filter],
-        'y': [-pos_filter, pos_filter],
-        'alt_x': [-pos_filter, pos_filter],
-        'alt_y': [-pos_filter, pos_filter],
-        'theta': [0, np.pi],
-        'phi': [-np.pi, np.pi],
-        'alt_theta': [0, np.pi],
-        'alt_phi': [-np.pi, np.pi],
-        'xp': [-2, 2],
-        'yp': [-2, 2],
-        'charge_event': [0, 600],
-        'charge_1': [0, 250],
-        'charge_2': [0, 250],
-        'charge_3': [0, 250],
-        'charge_4': [0, 250],
-        's': [slowness_filter_left, slowness_filter_right],
-        'alt_s': [slowness_filter_left, slowness_filter_right],
-        'th_chi': [0, 0.03]
-    }
-    
-    # Apply filters
-    for col, min_val, max_val in filter_conditions:
-        df = df[(df[col] >= min_val) & (df[col] <= max_val)]
-    
-    num_var = len(columns_of_interest)
-    fig, axes = plt.subplots(num_var, num_var, figsize=(15, 15))
-    
-    auto_limits = {}
-    for col in columns_of_interest:
-        if col in axis_limits:
-            auto_limits[col] = axis_limits[col]
-        else:
-            auto_limits[col] = [df[col].min(), df[col].max()]
-    
-    for i in range(num_var):
-        for j in range(num_var):
-            ax = axes[i, j]
-            x_col = columns_of_interest[j]
-            y_col = columns_of_interest[i]
-            
-            if i < j:
-                ax.axis('off')  # Leave the lower triangle blank
-            elif i == j:
-                # Diagonal: 1D histogram
-                hist_data = df[x_col]
-                # Remove nans
-                hist_data = hist_data[~np.isnan(hist_data)]
-                # Remove zeroes
-                hist_data = hist_data[hist_data != 0]
-                hist, bins = np.histogram(hist_data, bins=num_bins)
-                bin_centers = 0.5 * (bins[1:] + bins[:-1])
-                norm = plt.Normalize(hist.min(), hist.max())
-                cmap = plt.get_cmap('turbo')
-                
-                for k in range(len(hist)):
-                    ax.bar(bin_centers[k], hist[k], width=bins[1] - bins[0], color=cmap(norm(hist[k])))
-                
-                ax.set_xticks([])
-                ax.set_yticks([])
+if create_plots or create_essential_plots:
 
-                # Apply determined limits
-                ax.set_xlim(auto_limits[x_col])
-                
-                # If the column is 'charge_1, 2, 3 or 4', set logscale in Y
-                if x_col.startswith('charge'):
-                    ax.set_yscale('log')
-                
+    def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=60):
+        """
+        Generates a hexbin matrix plot with histograms on the diagonal.
+        
+        Parameters:
+        - df: Pandas DataFrame containing the data
+        - columns_of_interest: List of column names to include in the plot
+        - filter_conditions: List of tuples (column, min_value, max_value) to filter df
+        - title: Title of the plot
+        - num_bins: Number of bins for histograms and hexbin plots (default: 60)
+        - save_plots: Boolean to save the plot (default: False)
+        - show_plots: Boolean to display the plot (default: True)
+        - base_directory: Path to save the plot if save_plots is True
+        - fig_idx: Index to differentiate saved plot filenames
+        - plot_list: List to store the saved plot filenames
+        """
+        
+        # 'x', 'y', 'theta', 'phi', 'xp', 'yp', 'charge_event'
+        
+        axis_limits = {
+            'x': [-pos_filter, pos_filter],
+            'y': [-pos_filter, pos_filter],
+            'alt_x': [-pos_filter, pos_filter],
+            'alt_y': [-pos_filter, pos_filter],
+            'theta': [0, np.pi],
+            'phi': [-np.pi, np.pi],
+            'alt_theta': [0, np.pi],
+            'alt_phi': [-np.pi, np.pi],
+            'xp': [-2, 2],
+            'yp': [-2, 2],
+            'charge_event': [0, 600],
+            'charge_1': [0, 250],
+            'charge_2': [0, 250],
+            'charge_3': [0, 250],
+            'charge_4': [0, 250],
+            's': [slowness_filter_left, slowness_filter_right],
+            'alt_s': [slowness_filter_left, slowness_filter_right],
+            'th_chi': [0, 0.03]
+        }
+        
+        # Apply filters
+        for col, min_val, max_val in filter_conditions:
+            df = df[(df[col] >= min_val) & (df[col] <= max_val)]
+        
+        num_var = len(columns_of_interest)
+        fig, axes = plt.subplots(num_var, num_var, figsize=(15, 15))
+        
+        auto_limits = {}
+        for col in columns_of_interest:
+            if col in axis_limits:
+                auto_limits[col] = axis_limits[col]
             else:
-                # Upper triangle: hexbin plots
-                x_data = df[x_col]
-                y_data = df[y_col]
-                # Remove zeroes and nans
-                cond = (x_data != 0) & (y_data != 0) & (~np.isnan(x_data)) & (~np.isnan(y_data))
-                x_data = x_data[cond]
-                y_data = y_data[cond]
-                ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
-                ax.set_facecolor(plt.cm.turbo(0))
+                auto_limits[col] = [df[col].min(), df[col].max()]
+        
+        for i in range(num_var):
+            for j in range(num_var):
+                ax = axes[i, j]
+                x_col = columns_of_interest[j]
+                y_col = columns_of_interest[i]
                 
-                square_x = [-150, 150, 150, -150, -150]  # Closing the loop
-                square_y = [-150, -150, 150, 150, -150]
-                ax.plot(square_x, square_y, color='white', linewidth=1)  # Thin white line
+                if i < j:
+                    ax.axis('off')  # Leave the lower triangle blank
+                elif i == j:
+                    # Diagonal: 1D histogram
+                    hist_data = df[x_col]
+                    # Remove nans
+                    hist_data = hist_data[~np.isnan(hist_data)]
+                    # Remove zeroes
+                    hist_data = hist_data[hist_data != 0]
+                    hist, bins = np.histogram(hist_data, bins=num_bins)
+                    bin_centers = 0.5 * (bins[1:] + bins[:-1])
+                    norm = plt.Normalize(hist.min(), hist.max())
+                    cmap = plt.get_cmap('turbo')
+                    
+                    for k in range(len(hist)):
+                        ax.bar(bin_centers[k], hist[k], width=bins[1] - bins[0], color=cmap(norm(hist[k])))
+                    
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+
+                    # Apply determined limits
+                    ax.set_xlim(auto_limits[x_col])
+                    
+                    # If the column is 'charge_1, 2, 3 or 4', set logscale in Y
+                    if x_col.startswith('charge'):
+                        ax.set_yscale('log')
+                    
+                else:
+                    # Upper triangle: hexbin plots
+                    x_data = df[x_col]
+                    y_data = df[y_col]
+                    # Remove zeroes and nans
+                    cond = (x_data != 0) & (y_data != 0) & (~np.isnan(x_data)) & (~np.isnan(y_data))
+                    x_data = x_data[cond]
+                    y_data = y_data[cond]
+                    ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
+                    ax.set_facecolor(plt.cm.turbo(0))
+                    
+                    square_x = [-150, 150, 150, -150, -150]  # Closing the loop
+                    square_y = [-150, -150, 150, 150, -150]
+                    ax.plot(square_x, square_y, color='white', linewidth=1)  # Thin white line
+                    
+                    # Apply determined limits
+                    ax.set_xlim(auto_limits[x_col])
+                    ax.set_ylim(auto_limits[y_col])
                 
-                # Apply determined limits
-                ax.set_xlim(auto_limits[x_col])
-                ax.set_ylim(auto_limits[y_col])
-            
-            if i != num_var - 1:
-                ax.set_xticklabels([])
-            if j != 0:
-                ax.set_yticklabels([])
-            if i == num_var - 1:
-                ax.set_xlabel(x_col)
-            if j == 0:
-                ax.set_ylabel(y_col)
-    
-    plt.subplots_adjust(wspace=0.05, hspace=0.05)
-    plt.suptitle(title)
-    
-    # Save plot if enabled
-    if save_plots:
-        name_of_file = 'timtrack_results_hexbin_combination_projections'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
+                if i != num_var - 1:
+                    ax.set_xticklabels([])
+                if j != 0:
+                    ax.set_yticklabels([])
+                if i == num_var - 1:
+                    ax.set_xlabel(x_col)
+                if j == 0:
+                    ax.set_ylabel(y_col)
+        
+        plt.subplots_adjust(wspace=0.05, hspace=0.05)
+        plt.suptitle(title)
+        
+        # Save plot if enabled
+        if save_plots:
+            name_of_file = 'timtrack_results_hexbin_combination_projections'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
 
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
 
-    # Show plot if enabled
-    if show_plots:
-        plt.show()
+        # Show plot if enabled
+        if show_plots:
+            plt.show()
 
-    plt.close()
-    return fig_idx
+        plt.close()
+        return fig_idx
 
 
-df_cases_2 = [
-    ([("type", 12, 12)], "1-2 cases"),
-    ([("type", 23, 23)], "2-3 cases"),
-    ([("type", 34, 34)], "3-4 cases"),
-    ([("type", 13, 13)], "1-3 cases"),
-    ([("type", 14, 14)], "1-4 cases"),
-    ([("type", 123, 123)], "1-2-3 cases"),
-    ([("type", 234, 234)], "2-3-4 cases"),
-    ([("type", 124, 124)], "1-2-4 cases"),
-    ([("type", 134, 134)], "1-3-4 cases"),
-    ([("type", 1234, 1234)], "1-2-3-4 cases"),
-]
-
-# for filters, title in df_cases_2:
-#     fig_idx = plot_hexbin_matrix(
-#         df_plot_ancillary,
-#         ['x', 'y', 'theta', 'phi', 'xp', 'yp', 'charge_event'],
-#         filters,
-#         title,
-#         save_plots,
-#         show_plots,
-#         base_directories,
-#         fig_idx,
-#         plot_list
-#     )
+    df_cases_2 = [
+        ([("type", 12, 12)], "1-2 cases"),
+        ([("type", 23, 23)], "2-3 cases"),
+        ([("type", 34, 34)], "3-4 cases"),
+        ([("type", 13, 13)], "1-3 cases"),
+        ([("type", 14, 14)], "1-4 cases"),
+        ([("type", 123, 123)], "1-2-3 cases"),
+        ([("type", 234, 234)], "2-3-4 cases"),
+        ([("type", 124, 124)], "1-2-4 cases"),
+        ([("type", 134, 134)], "1-3-4 cases"),
+        ([("type", 1234, 1234)], "1-2-3-4 cases"),
+    ]
 
 
-# for filters, title in df_cases_2:
-#     # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
-#     relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
+    # # Charge of each plane -------------------------------------------------------------------
+    # for filters, title in df_cases_2:
+    #     # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
+    #     relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
 
-#     # Define the columns of interest dynamically
-#     columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp'] + relevant_charges
+    #     # Define the columns of interest dynamically
+    #     columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp'] + relevant_charges
 
-#     # Keep the original filters (if needed) and apply them
-#     fig_idx = plot_hexbin_matrix(
-#         df_plot_ancillary,
-#         columns_of_interest,  # Dynamically set the columns to include relevant charges
-#         filters,  # Keep original filters
-#         title,
-#         save_plots,
-#         show_plots,
-#         base_directories,
-#         fig_idx,
-#         plot_list
-#     )
-
-
-# for filters, title in df_cases_2:
-#     fig_idx = plot_hexbin_matrix(
-#         df_plot_ancillary,
-#         ['x', 'y', 'theta', 'phi', 'xp', 'yp', 's', 'th_chi'],
-#         filters,
-#         title,
-#         save_plots,
-#         show_plots,
-#         base_directories,
-#         fig_idx,
-#         plot_list
-#     )
+    #     # Keep the original filters (if needed) and apply them
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         columns_of_interest,  # Dynamically set the columns to include relevant charges
+    #         filters,  # Keep original filters
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
 
 
-# for filters, title in df_cases_2:
-    
-#     relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-#     relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-#     relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-    
-#     columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp', 's'] + relevant_residues_tsum + relevant_residues_tdif + relevant_residues_ystr
-    
-#     fig_idx = plot_hexbin_matrix(
-#         df_plot_ancillary,
-#         columns_of_interest,
-#         filters,
-#         title,
-#         save_plots,
-#         show_plots,
-#         base_directories,
-#         fig_idx,
-#         plot_list
-#     )
+    # # Residues --------------------------------------------------------------------------------------
+    # for filters, title in df_cases_2:
+    #     relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+    #     relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+    #     relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+        
+    #     columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp', 's'] + relevant_residues_tsum + relevant_residues_tdif + relevant_residues_ystr
+        
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         columns_of_interest,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
 
-# for filters, title in df_cases_2:
-#     fig_idx = plot_hexbin_matrix(
-#         df_plot_ancillary,
-#         ['theta', 'phi', 'alt_theta', 'alt_phi'],
-#         filters,
-#         title,
-#         save_plots,
-#         show_plots,
-#         base_directories,
-#         fig_idx,
-#         plot_list
-#     )
+    # Comparison with alternative fitting -------------------------------------------------------------------
+    for filters, title in df_cases_2:
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            ['alt_x', 'alt_y', 'alt_phi', 'alt_theta', 'alt_s', 'charge_event', 's', 'theta', 'phi', 'y', 'x'],
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
 
-# for filters, title in df_cases_2:
-#     fig_idx = plot_hexbin_matrix(
-#         df_plot_ancillary,
-#         ['x', 'y', 'alt_x', 'alt_y'],
-#         filters,
-#         title,
-#         save_plots,
-#         show_plots,
-#         base_directories,
-#         fig_idx,
-#         plot_list
-#     )
-
-# for filters, title in df_cases_2:
-#     fig_idx = plot_hexbin_matrix(
-#         df_plot_ancillary,
-#         ['alt_x', 'alt_y', 'alt_theta', 'alt_phi'],
-#         filters,
-#         title,
-#         save_plots,
-#         show_plots,
-#         base_directories,
-#         fig_idx,
-#         plot_list
-#     )
-
-for filters, title in df_cases_2:
-    fig_idx = plot_hexbin_matrix(
-        df_plot_ancillary,
-        ['alt_x', 'alt_y', 'alt_phi', 'alt_theta', 'alt_s', 's', 'theta', 'phi', 'y', 'x'],
-        filters,
-        title,
-        save_plots,
-        show_plots,
-        base_directories,
-        fig_idx,
-        plot_list
-    )
-
-# ------------------------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------------------------
 # Including th_chi filtered -------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------
 
 chi_histo = True
-if chi_histo and create_plots:
+if chi_histo and create_plots or create_essential_plots:
     data = df_plot_ancillary['th_chi'].dropna()  # Remove NaN values if any
     data = data[data != 0]
     plt.figure(figsize=(10, 6))
@@ -6334,7 +6390,6 @@ if chi_histo and create_plots:
     plt.xlabel('th_chi', fontsize=14)
     plt.ylabel('Frequency', fontsize=14)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
     
     if save_plots:
         name_of_file = 'th_chi_histo'
@@ -6350,7 +6405,7 @@ if chi_histo and create_plots:
 
 df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['th_chi'] > 0.0001) & (df_plot_ancillary['th_chi'] < 0.02)]
 
-if chi_histo and create_plots:
+if chi_histo and create_plots or create_essential_plots:
     data = df_plot_ancillary['th_chi'].dropna()  # Remove NaN values if any
     data = data[data != 0]
     plt.figure(figsize=(10, 6))
@@ -6376,7 +6431,7 @@ if chi_histo and create_plots:
 df_plot_ancillary = df_plot_ancillary[df_plot_ancillary['type'].astype(int) >= 1000].copy()
 df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['th_chi'] > 0.00125) & (df_plot_ancillary['th_chi'] < 0.02)]
 
-if chi_histo and create_plots:
+if chi_histo and create_plots or create_essential_plots:
     data = df_plot_ancillary['th_chi'].dropna()  # Remove NaN values if any
     data = data[data != 0]
     plt.figure(figsize=(10, 6))
@@ -6399,70 +6454,17 @@ if chi_histo and create_plots:
     plt.close()
 
 
-# if create_plots or create_essential_plots:
-#     df_plot = df_plot_ancillary[df_plot_ancillary['type'].astype(int) >= 1000].copy()
-    
-#     columns_of_interest = ['x', 'y', 'theta', 'phi', 't0', 's', 'th_chi', 'charge_event']
-#     num_bins = 30
-#     fig, axes = plt.subplots(8, 8, figsize=(15, 15))
-#     for i in range(8):
-#         for j in range(8):
-#             ax = axes[i, j]
-#             if i < j:
-#                 ax.axis('off')  # Leave the lower triangle blank
-#             elif i == j:
-#                 # Diagonal: 1D histogram with independent axes
-#                 hist_data = df_plot[columns_of_interest[i]]
-#                 hist, bins = np.histogram(hist_data, bins=num_bins)
-#                 bin_centers = 0.5 * (bins[1:] + bins[:-1])
-#                 norm = plt.Normalize(hist.min(), hist.max())
-#                 cmap = plt.get_cmap('turbo')
-#                 for k in range(len(hist)):
-#                     ax.bar(bin_centers[k], hist[k], width=bins[1] - bins[0], color=cmap(norm(hist[k])))
-#                 ax.set_xticks([])
-#                 ax.set_yticks([])
-#             else:
-#                 # Upper triangle: hexbin plots
-#                 x_data = df_plot[columns_of_interest[j]]
-#                 y_data = df_plot[columns_of_interest[i]]
-#                 hb = ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
-#             if i != 6:
-#                 ax.set_xticklabels([])  # Remove x-axis labels except for the last row
-#             if j != 0:
-#                 ax.set_yticklabels([])  # Remove y-axis labels except for the first column
-#             if i == 7:  # Last row, set x-labels
-#                 ax.set_xlabel(columns_of_interest[j])
-#             if j == 0:  # First column, set y-labels
-#                 ax.set_ylabel(columns_of_interest[i])
-#     plt.subplots_adjust(wspace=0.05, hspace=0.05)
-#     plt.suptitle("Only four planes, chisq filtered")
-    
-#     if save_plots:
-#         name_of_file = 'timtrack_results_hexbin_combination_th_chi'
-#         final_filename = f'{fig_idx}_{name_of_file}.png'
-#         fig_idx += 1
+print("----------------------------------------------------------------------")
+print("----------------------- Final data statistics ------------------------")
+print("----------------------------------------------------------------------")
 
-#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
-    
-#     if show_plots: plt.show()
-#     plt.close()
-
-
-# ------------------------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------------------------
-
-
-print("-----------------------------")
 data_purity = len(final_data) / raw_data_len*100
 print(f"Data purity is {data_purity:.1f}%")
 
 global_variables['purity_of_data_percentage'] = data_purity
 
 # ------------------------------------------------------------------------------------------------
-# Statistical comprobation ----------------------------------------------------
+# Statistical comprobation -----------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------
 
 if create_plots or create_essential_plots:
@@ -6471,17 +6473,19 @@ if create_plots or create_essential_plots:
     test_data['datetime'] = pd.to_datetime(test_data['datetime'], errors='coerce')
     test_data = test_data.set_index('datetime')
     
-    df_plot_1 = test_data.copy()
-    df_plot_2 = test_data[test_data['type'].astype(int) >= 100].copy()
-    df_plot_3 = test_data[test_data['type'].astype(int) >= 1000].copy()
-    df_plot_4 = og_data.copy()  # Original dataset
+    df_plot_1 = og_data.copy()  # Original dataset
+    df_plot_2 = test_data.copy()
+    df_plot_3 = test_data[test_data['type'].astype(int) >= 10].copy()
+    df_plot_4 = test_data[test_data['type'].astype(int) >= 100].copy()
+    df_plot_5 = test_data[test_data['type'].astype(int) >= 1000].copy()
+
+    datasets = {'Original data': df_plot_1, 
+                'Filtered data': df_plot_2, 
+                'At least two planes': df_plot_3, 
+                'At least three planes': df_plot_4, 
+                'Four planes': df_plot_5}
     
-    datasets = {'All Data': df_plot_1, 
-                'Type >= 100': df_plot_2, 
-                'Type >= 1000': df_plot_3, 
-                'Original Data': df_plot_4}
-    
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(1, 5, figsize=(20, 8))
     axes = axes.flatten()  # Flatten axes for easy iteration
     
     for ax, (name, df) in zip(axes, datasets.items()):
@@ -6519,11 +6523,12 @@ if create_plots or create_essential_plots:
         plt.show()
 
 
+
 # ------------------------------------------------------------------------------------------------
 # Time window plotting
 # ------------------------------------------------------------------------------------------------
 
-if create_plots:
+if create_plots or create_essential_plots:
     from matplotlib.cm import get_cmap
 
     cases = [1234, 123, 234, 124, 134, 12, 23, 34, 13, 14, 24]
@@ -6586,6 +6591,8 @@ if create_plots:
     if show_plots:
         plt.show()
 
+a = 1/0
+
 print("----------------------------------------------------------------------")
 print("-------------------------- Save and finish ---------------------------")
 print("----------------------------------------------------------------------")
@@ -6599,13 +6606,13 @@ for key, value in global_variables.items():
         print(f"Warning: Column '{key}' already exists in the DataFrame. Skipping addition.")
 
 # Replace the TimTrack fitting angle results with the alternative ones
-if alternative_fitting:
-    if 'alt_theta' in final_data.columns:
-        final_data['theta'] = final_data['alt_theta']
-        final_data['phi'] = final_data['alt_phi']
-        final_data['x'] = final_data['alt_x']
-        final_data['y'] = final_data['alt_y']
-        final_data['s'] = final_data['alt_s']
+# if alternative_fitting:
+#     if 'alt_theta' in final_data.columns:
+#         final_data['theta'] = final_data['alt_theta']
+#         final_data['phi'] = final_data['alt_phi']
+#         final_data['x'] = final_data['alt_x']
+#         final_data['y'] = final_data['alt_y']
+#         final_data['s'] = final_data['alt_s']
 
 # Round to 4 significant digits -----------------------------------------------
 print("Rounding the dataframe values.")
@@ -6623,7 +6630,6 @@ for col in final_data.select_dtypes(include=[np.number]).columns:
 
 # ---------------------------------------------------------------------------------------------
 # Change 'datetime' column to 'Time'
-# print(final_data.columns)
 
 if 'datetime' in final_data.columns:
     final_data.rename(columns={'datetime': 'Time'}, inplace=True)
@@ -6636,6 +6642,14 @@ else:
 if save_full_data: # Save a full version of the data, for different studies and debugging
     final_data.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
     print(f"Datafile saved in {save_full_filename}'.")
+
+
+# print the column names of final_data
+print("Final data columns:")
+print(final_data.columns.tolist())
+
+a = 1/0
+
 
 # Save a reduced version of the data always, to proceed with the analysis
 columns_to_keep = [
