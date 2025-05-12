@@ -2882,6 +2882,11 @@ if create_essential_plots or create_plots:
 # ------------------------------------------------------------
 # ------------------------------------------------------------
 
+# Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
+# put the four variables in that plane, strip and event to 0
+
+
+
 
 print("----------------------------------------------------------------------")
 print("------------------------ Slewing correction --------------------------")
@@ -2965,7 +2970,6 @@ if slewing_correction:
 
     # Concatenate all results
     slew_df = pd.concat(results, ignore_index=True)
-    
 
     # if create_essential_plots or create_plots:
     if create_plots:
@@ -3649,103 +3653,16 @@ if time_calibration:
             return diff
         
         # Three layers spaced
-        P1s1_P4s1 = []
-        P1s1_P4s2 = []
-        P1s2_P4s1 = []
-        P1s2_P4s2 = []
-        P1s2_P4s3 = []
-        P1s3_P4s2 = []
-        P1s3_P4s3 = []
-        P1s3_P4s4 = []
-        P1s4_P4s3 = []
-        P1s4_P4s4 = []
-        P1s1_P4s3 = []
-        P1s3_P4s1 = []
-        P1s2_P4s4 = []
-        P1s4_P4s2 = []
-        P1s1_P4s4 = []
-        
+        P1s1_P4s1 = []; P1s1_P4s2 = []; P1s2_P4s1 = []; P1s2_P4s2 = []; P1s2_P4s3 = []; P1s3_P4s2 = []; P1s3_P4s3 = []; P1s3_P4s4 = []; P1s4_P4s3 = []; P1s4_P4s4 = []; P1s1_P4s3 = []; P1s3_P4s1 = []; P1s2_P4s4 = []; P1s4_P4s2 = []; P1s1_P4s4 = [];
+
         # Two layers spaced
-        P1s1_P3s1 = []
-        P1s1_P3s2 = []
-        P1s2_P3s1 = []
-        P1s2_P3s2 = []
-        P1s2_P3s3 = []
-        P1s3_P3s2 = []
-        P1s3_P3s3 = []
-        P1s3_P3s4 = []
-        P1s4_P3s3 = []
-        P1s4_P3s4 = []
-        P1s1_P3s3 = []
-        P1s3_P3s1 = []
-        P1s2_P3s4 = []
-        P1s4_P3s2 = []
-        P1s1_P3s4 = []
-        
-        P2s1_P4s1 = []
-        P2s1_P4s2 = []
-        P2s2_P4s1 = []
-        P2s2_P4s2 = []
-        P2s2_P4s3 = []
-        P2s3_P4s2 = []
-        P2s3_P4s3 = []
-        P2s3_P4s4 = []
-        P2s4_P4s3 = []
-        P2s4_P4s4 = []
-        P2s1_P4s3 = []
-        P2s3_P4s1 = []
-        P2s2_P4s4 = []
-        P2s4_P4s2 = []
-        P2s1_P4s4 = []
-        
+        P1s1_P3s1 = []; P1s1_P3s2 = []; P1s2_P3s1 = []; P1s2_P3s2 = []; P1s2_P3s3 = []; P1s3_P3s2 = []; P1s3_P3s3 = []; P1s3_P3s4 = []; P1s4_P3s3 = []; P1s4_P3s4 = []; P1s1_P3s3 = []; P1s3_P3s1 = []; P1s2_P3s4 = []; P1s4_P3s2 = []; P1s1_P3s4 = [];
+        P2s1_P4s1 = []; P2s1_P4s2 = []; P2s2_P4s1 = []; P2s2_P4s2 = []; P2s2_P4s3 = []; P2s3_P4s2 = []; P2s3_P4s3 = []; P2s3_P4s4 = []; P2s4_P4s3 = []; P2s4_P4s4 = []; P2s1_P4s3 = []; P2s3_P4s1 = []; P2s2_P4s4 = []; P2s4_P4s2 = []; P2s1_P4s4 = [];
+
         # One layer spaced
-        P1s1_P2s1 = []
-        P1s1_P2s2 = []
-        P1s2_P2s1 = []
-        P1s2_P2s2 = []
-        P1s2_P2s3 = []
-        P1s3_P2s2 = []
-        P1s3_P2s3 = []
-        P1s3_P2s4 = []
-        P1s4_P2s3 = []
-        P1s4_P2s4 = []
-        P1s1_P2s3 = []
-        P1s3_P2s1 = []
-        P1s2_P2s4 = []
-        P1s4_P2s2 = []
-        P1s1_P2s4 = []
-        
-        P2s1_P3s1 = []
-        P2s1_P3s2 = []
-        P2s2_P3s1 = []
-        P2s2_P3s2 = []
-        P2s2_P3s3 = []
-        P2s3_P3s2 = []
-        P2s3_P3s3 = []
-        P2s3_P3s4 = []
-        P2s4_P3s3 = []
-        P2s4_P3s4 = []
-        P2s1_P3s3 = []
-        P2s3_P3s1 = []
-        P2s2_P3s4 = []
-        P2s4_P3s2 = []
-        P2s1_P3s4 = []
-        
-        P3s1_P4s1 = []
-        P3s1_P4s2 = []
-        P3s2_P4s1 = []
-        P3s2_P4s2 = []
-        P3s2_P4s3 = []
-        P3s3_P4s2 = []
-        P3s3_P4s3 = []
-        P3s3_P4s4 = []
-        P3s4_P4s3 = []
-        P3s4_P4s4 = []
-        P3s1_P4s3 = []
-        P3s3_P4s1 = []
-        P3s2_P4s4 = []
-        P3s4_P4s2 = []
-        P3s1_P4s4 = []
+        P1s1_P2s1 = []; P1s1_P2s2 = []; P1s2_P2s1 = []; P1s2_P2s2 = []; P1s2_P2s3 = []; P1s3_P2s2 = []; P1s3_P2s3 = []; P1s3_P2s4 = []; P1s4_P2s3 = []; P1s4_P2s4 = []; P1s1_P2s3 = []; P1s3_P2s1 = []; P1s2_P2s4 = []; P1s4_P2s2 = []; P1s1_P2s4 = [];
+        P2s1_P3s1 = []; P2s1_P3s2 = []; P2s2_P3s1 = []; P2s2_P3s2 = []; P2s2_P3s3 = []; P2s3_P3s2 = []; P2s3_P3s3 = []; P2s3_P3s4 = []; P2s4_P3s3 = []; P2s4_P3s4 = []; P2s1_P3s3 = []; P2s3_P3s1 = []; P2s2_P3s4 = []; P2s4_P3s2 = []; P2s1_P3s4 = [];
+        P3s1_P4s1 = []; P3s1_P4s2 = []; P3s2_P4s1 = []; P3s2_P4s2 = []; P3s2_P4s3 = []; P3s3_P4s2 = []; P3s3_P4s3 = []; P3s3_P4s4 = []; P3s4_P4s3 = []; P3s4_P4s4 = []; P3s1_P4s3 = []; P3s3_P4s1 = []; P3s2_P4s4 = []; P3s4_P4s2 = []; P3s1_P4s4 = [];
         
         pos_x = []
         v_travel_time = []
@@ -4413,7 +4330,7 @@ if time_calibration:
     
 else:
     calibration_times = time_sum_reference
-    calibrated_data['CRP_avg'] = 1000 # An extreme time to not crush the program
+    calibrated_data['CRT_avg'] = 1000 # An extreme time to not crush the program
     print("Calibration in times was set to the reference! (calibration was not performed)\n", calibration_times)
 
 
@@ -4422,8 +4339,8 @@ print("----------------------------------------------------------------------")
 print("----------------------- Time window filtering ------------------------")
 print("----------------------------------------------------------------------")
 
-time_window_filtering = True
-if time_window_filtering:
+time_window_fitting = True
+if time_window_fitting:
     
     T_sum_columns = calibrated_data.filter(regex='_T_sum_')
 
@@ -4536,6 +4453,7 @@ for plane_id in range(1, 5):
 
     # Binary activation: 1 if charge > crosstalk_threshold_ns
     active_strips_binary = (Q_plane > crosstalk_threshold_ns).astype(int)
+    # active_strips_binary = (Q_plane != 0).astype(int)
 
     # Convert each row to string (e.g. [0, 0, 1, 0] -> '0010')
     binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
@@ -4633,41 +4551,41 @@ if create_essential_plots or create_plots:
 
 # Remove all rows that in filtered_tt are not in the list: 1234, 123, 124, 134, 234, 12, 23, 34, 13, 24, 14
 # filtered_tt_list = ['1234', '123', '124', '134', '234', '12', '23', '34', '13', '24', '14']
-filtered_tt_list = ['1234', '123', '124', '134', '234', '12', '23', '34', '13']
-calibrated_data = calibrated_data[calibrated_data['filtered_tt'].isin(filtered_tt_list)]
+# filtered_tt_list = ['1234', '123', '124', '134', '234', '12', '23', '34', '13']
+# calibrated_data = calibrated_data[calibrated_data['filtered_tt'].isin(filtered_tt_list)]
 
+# # if create_essential_plots or create_plots:
 # if create_essential_plots or create_plots:
-if create_essential_plots or create_plots:
-    event_counts = calibrated_data['filtered_tt'].copy().value_counts()
+#     event_counts = calibrated_data['filtered_tt'].copy().value_counts()
 
-    # Plot the histogram of event counts
-    plt.figure(figsize=(10, 6))
-    event_counts.plot(kind='bar', alpha=0.7)
-    plt.title('Number of Events per Filtered TT Label')
-    plt.xlabel('Filtered TT Label')
-    plt.ylabel('Number of Events')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    if save_plots:
-        final_filename = f'{fig_idx}_filtered_TT_refiltered.png'
-        fig_idx += 1
+#     # Plot the histogram of event counts
+#     plt.figure(figsize=(10, 6))
+#     event_counts.plot(kind='bar', alpha=0.7)
+#     plt.title('Number of Events per Filtered TT Label')
+#     plt.xlabel('Filtered TT Label')
+#     plt.ylabel('Number of Events')
+#     plt.xticks(rotation=45)
+#     plt.tight_layout()
+#     if save_plots:
+#         final_filename = f'{fig_idx}_filtered_TT_refiltered.png'
+#         fig_idx += 1
 
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#         plot_list.append(save_fig_path)
+#         plt.savefig(save_fig_path, format='png')
 
-    if show_plots: plt.show()
-    plt.close()
-
-
-a = 1/0
+#     if show_plots: plt.show()
+#     plt.close()
 
 
 print("----------------------------------------------------------------------")
 print("----------------------- Y position calculation -----------------------")
 print("----------------------------------------------------------------------")
 
+from scipy.ndimage import gaussian_filter1d
+
 y_new_method = True
+blur_y = True
 
 if y_new_method:
     for plane_id in range(1, 5):
@@ -4689,8 +4607,14 @@ if y_new_method:
 
         y_position = weighted_y.sum(axis=1) / active_counts_safe
         y_position[active_counts == 0] = 0  # Enforce 0 when no strips are active
-
-        calibrated_data[f'Y_{plane_id}'] = y_position
+        
+        if blur_y:
+            y_position_blurred = y_position.copy()
+            nonzero_mask = y_position != 0
+            y_position_blurred[nonzero_mask] = np.random.normal(loc=y_position[nonzero_mask], scale=anc_sy)
+            calibrated_data[f'Y_{plane_id}'] = y_position_blurred
+        else:
+            calibrated_data[f'Y_{plane_id}'] = y_position
 
 
 if create_essential_plots:
@@ -4719,6 +4643,127 @@ if create_essential_plots:
     plt.close()
 
 print("Y position calculated.")
+
+
+print("----------------------------------------------------------------------")
+print("-------------------------- Some more tests ---------------------------")
+print("----------------------------------------------------------------------")
+
+from itertools import combinations
+
+for i_plane in range(1, 5):
+    active_col = f'active_strips_P{i_plane}'
+    print(f"\n--- Plane {i_plane} ---")
+
+    # Column names
+    T_sum_cols = [f'T{i_plane}_T_sum_{j+1}' for j in range(4)]
+    T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
+    Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+
+    # Get all unique multi-strip patterns
+    patterns = calibrated_data[active_col].unique()
+    multi_patterns = [p for p in patterns if p != '0000' and p.count('1') > 1]
+
+    for pattern in multi_patterns:
+        active_strips = [i for i, c in enumerate(pattern) if c == '1']
+        if len(active_strips) != 2:
+            continue
+
+        mask = calibrated_data[active_col] == pattern
+        n_events = mask.sum()
+        if n_events == 0:
+            continue
+
+        print(f"Pattern {pattern} ({n_events} events):")
+
+        for i, j in combinations(active_strips, 2):
+            fig, axs = plt.subplots(1, 3, figsize=(15, 5), sharex=False, sharey=False)
+            variable_sets = [
+                ('T_sum', T_sum_cols),
+                ('T_diff', T_diff_cols),
+                ('Q_sum', Q_sum_cols)
+            ]
+
+            for ax, (var_label, cols) in zip(axs, variable_sets):
+                xi = calibrated_data.loc[mask, cols[i]].values
+                yi = calibrated_data.loc[mask, cols[j]].values
+
+                ax.scatter(xi, yi, alpha=0.5, s=10)
+                ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+                        [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+                        'k--', linewidth=1, label='y = x')
+                ax.set_xlabel(f'{var_label} Strip {i+1}')
+                ax.set_ylabel(f'{var_label} Strip {j+1}')
+                ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
+                # Aspect ratio 1:1
+                ax.set_aspect('equal', adjustable='box')
+                ax.grid(True)
+                ax.legend()
+
+            fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+            if save_plots:
+                name_of_file = f'rpc_variables_debug_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
+                final_filename = f'{fig_idx}_{name_of_file}'
+                fig_idx += 1
+
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+
+            if show_plots:
+                plt.show()
+            plt.close()
+            
+            fig, axs = plt.subplots(1, 3, figsize=(15, 5), sharex=False, sharey=False)
+
+            # Other variables
+            for ax, (var_label, cols) in zip(axs, variable_sets):
+                xi = calibrated_data.loc[mask, cols[i]].values
+                yi = calibrated_data.loc[mask, cols[j]].values
+
+                # ax.scatter(xi + yi, ( xi - yi ) / (xi + yi), alpha=0.5, s=10)
+                mask_nonzero = (xi + yi) != 0
+                ax.scatter(xi[mask_nonzero] + yi[mask_nonzero],
+                        (xi[mask_nonzero] - yi[mask_nonzero]) / (xi[mask_nonzero] + yi[mask_nonzero]),
+                        alpha=0.5, s=10)
+
+                # ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+                #         [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+                #         'k--', linewidth=1, label='y = x')
+                ax.set_xlabel(f'{var_label} Strip {i+1}')
+                ax.set_ylabel(f'{var_label} Strip {j+1}')
+                ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
+                # Aspect ratio 1:1
+                # ax.set_aspect('equal', adjustable='box')
+                ax.grid(True)
+                # ax.legend()
+
+            fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+            if save_plots:
+                name_of_file = f'rpc_variables_calculations_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
+                final_filename = f'{fig_idx}_{name_of_file}'
+                fig_idx += 1
+
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+
+            if show_plots:
+                plt.show()
+            plt.close()
+
+
+a = 1/0
+
+
+print("----------------------------------------------------------------------")
+print("---------------- Last part of the Slewing correction -----------------")
+print("----------------------------------------------------------------------")
+
 
 
 print("----------------------------------------------------------------------")
