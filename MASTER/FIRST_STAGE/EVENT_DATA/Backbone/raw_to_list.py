@@ -17,35 +17,63 @@ Created on Thu Jun 20 09:15:33 2024
 @author: csoneira@ucm.es
 """
 
-print("""
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣭⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣹⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣀⣤⠤⢤⣀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⠴⠒⢋⣉⣀⣠⣄⣀⣈⡇
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣾⣯⠴⠚⠉⠉⠀⠀⠀⠀⣤⠏⣿
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡿⡇⠁⠀⠀⠀⠀⡄⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⡿⠿⢛⠁⠁⣸⠀⠀⠀⠀⠀⣤⣾⠵⠚⠁
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⢦⡀⠀⣠⠀⡇⢧⠀⠀⢀⣠⡾⡇⠀⠀⠀⠀⠀⣠⣴⠿⠋⠁⠀⠀⠀⠀⠘⣿⠀⣀⡠⠞⠛⠁⠂⠁⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡈⣻⡦⣞⡿⣷⠸⣄⣡⢾⡿⠁⠀⠀⠀⣀⣴⠟⠋⠁⠀⠀⠀⠀⠐⠠⡤⣾⣙⣶⡶⠃⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣂⡷⠰⣔⣾⣖⣾⡷⢿⣐⣀⣀⣤⢾⣋⠁⠀⠀⠀⣀⢀⣀⣀⣀⣀⠀⢀⢿⠑⠃⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠠⡦⠴⠴⠤⠦⠤⠤⠤⠤⠤⠴⠶⢾⣽⣙⠒⢺⣿⣿⣿⣿⢾⠶⣧⡼⢏⠑⠚⠋⠉⠉⡉⡉⠉⠉⠹⠈⠁⠉⠀⠨⢾⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⠀⠀⠀⠂⠐⠀⠀⠀⠈⣇⡿⢯⢻⣟⣇⣷⣞⡛⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣠⣆⠀⠀⠀⠀⢠⡷⡛⣛⣼⣿⠟⠙⣧⠅⡄⠀⠀⠀⠀⠀⠀⠰⡆⠀⠀⠀⠀⢠⣾⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣴⢶⠏⠉⠀⠀⠀⠀⠀⠿⢠⣴⡟⡗⡾⡒⠖⠉⠏⠁⠀⠀⠀⠀⣀⢀⣠⣧⣀⣀⠀⠀⠀⠚⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⣠⢴⣿⠟⠁⠀⠀⠀⠀⠀⠀⠀⣠⣷⢿⠋⠁⣿⡏⠅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⣿⢭⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⢀⡴⢏⡵⠛⠀⠀⠀⠀⠀⠀⠀⣀⣴⠞⠛⠀⠀⠀⠀⢿⠀⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⢿⠘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⣀⣼⠛⣲⡏⠁⠀⠀⠀⠀⠀⢀⣠⡾⠋⠉⠀⠀⠀⠀⠀⠀⢾⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⡴⠟⠀⢰⡯⠄⠀⠀⠀⠀⣠⢴⠟⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⣹⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⡾⠁⠁⠀⠘⠧⠤⢤⣤⠶⠏⠙⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢾⡃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠘⣇⠂⢀⣀⣀⠤⠞⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠈⠉⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠾⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢼⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-""")
+# print("""
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣭⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣹⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣀⣤⠤⢤⣀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⠴⠒⢋⣉⣀⣠⣄⣀⣈⡇
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣾⣯⠴⠚⠉⠉⠀⠀⠀⠀⣤⠏⣿
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡿⡇⠁⠀⠀⠀⠀⡄⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⡿⠿⢛⠁⠁⣸⠀⠀⠀⠀⠀⣤⣾⠵⠚⠁
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⢦⡀⠀⣠⠀⡇⢧⠀⠀⢀⣠⡾⡇⠀⠀⠀⠀⠀⣠⣴⠿⠋⠁⠀⠀⠀⠀⠘⣿⠀⣀⡠⠞⠛⠁⠂⠁⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡈⣻⡦⣞⡿⣷⠸⣄⣡⢾⡿⠁⠀⠀⠀⣀⣴⠟⠋⠁⠀⠀⠀⠀⠐⠠⡤⣾⣙⣶⡶⠃⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣂⡷⠰⣔⣾⣖⣾⡷⢿⣐⣀⣀⣤⢾⣋⠁⠀⠀⠀⣀⢀⣀⣀⣀⣀⠀⢀⢿⠑⠃⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠠⡦⠴⠴⠤⠦⠤⠤⠤⠤⠤⠴⠶⢾⣽⣙⠒⢺⣿⣿⣿⣿⢾⠶⣧⡼⢏⠑⠚⠋⠉⠉⡉⡉⠉⠉⠹⠈⠁⠉⠀⠨⢾⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⠀⠀⠀⠂⠐⠀⠀⠀⠈⣇⡿⢯⢻⣟⣇⣷⣞⡛⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣠⣆⠀⠀⠀⠀⢠⡷⡛⣛⣼⣿⠟⠙⣧⠅⡄⠀⠀⠀⠀⠀⠀⠰⡆⠀⠀⠀⠀⢠⣾⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣴⢶⠏⠉⠀⠀⠀⠀⠀⠿⢠⣴⡟⡗⡾⡒⠖⠉⠏⠁⠀⠀⠀⠀⣀⢀⣠⣧⣀⣀⠀⠀⠀⠚⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⣠⢴⣿⠟⠁⠀⠀⠀⠀⠀⠀⠀⣠⣷⢿⠋⠁⣿⡏⠅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⣿⢭⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⢀⡴⢏⡵⠛⠀⠀⠀⠀⠀⠀⠀⣀⣴⠞⠛⠀⠀⠀⠀⢿⠀⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⢿⠘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⣀⣼⠛⣲⡏⠁⠀⠀⠀⠀⠀⢀⣠⡾⠋⠉⠀⠀⠀⠀⠀⠀⢾⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⡴⠟⠀⢰⡯⠄⠀⠀⠀⠀⣠⢴⠟⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⣹⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⡾⠁⠁⠀⠘⠧⠤⢤⣤⠶⠏⠙⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢾⡃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠘⣇⠂⢀⣀⣀⠤⠞⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠈⠉⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠾⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢼⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# """)
+
+print("\n                     . .:.:.:.:. .:\\     /:. .:.:.:.:. ,")
+print("               .-._  `..:.:. . .:.:`- -':.:. . .:.:.,'  _.-.")
+print("              .:.:.`-._`-._..-''_...---..._``-.._.-'_.-'.:.:.")
+print("           .:.:. . .:_.`' _..-''._________,``-.._ `.._:. . .:.:.")
+print("        .:.:. . . ,-'_.-''      ||_-(O)-_||      ``-._`-. . . .:.:.")
+print("       .:. . . .,'_.'           '---------'           `._`.. . . .:.")
+print("     :.:. . . ,','               _________               `.`. . . .:.:")
+print("    `.:.:. .,','            _.-''_________``-._            `._.     _.'")
+print("  -._  `._./ /            ,'_.-'' ,       ``-._`.          ,' '`:..'  _.-")
+print(" .:.:`-.._' /           ,','                   `.`.       /'  '  \\\\.-':.:.")
+print(" :.:. . ./ /          ,','               ,       `.`.    / '  '  '\\\\ .:. :")
+print(":.:. . ./ /          / /    ,                      \\ \\  :  '  '  ' \\\\. .:.:")
+print(".:. . ./ /          / /            ,          ,     \\ \\ :  '  '  ' '::. .:.")
+print(":. . .: :    o     / /                               \\ ;'  '  '  ' ':: . .:")
+print(".:. . | |   /_\\   : :     ,                      ,    : '  '  '  ' ' :: .:.")
+print(":. . .| |  ((<))  | |,          ,       ,             |\\'__',-._.' ' ||. .:")
+print(".:.:. | |   `-'   | |---....____                      | ,---\\/--/  ' ||:.:.")
+print("------| |         : :    ,.     ```--..._   ,         |''  '  '  ' ' ||----")
+print("_...--. |  ,       \\ \\             ,.    `-._     ,  /: '  '  '  ' ' ;;..._")
+print(":.:. .| | -O-       \\ \\    ,.                `._    / /:'  '  '  ' ':: .:.:")
+print(".:. . | |_(`__       \\ \\                        `. / / :'  '  '  ' ';;. .:.")
+print(":. . .<' (_)  `>      `.`.          ,.    ,.     ,','   \\  '  '  ' ;;. . .:")
+print(".:. . |):-.--'(         `.`-._  ,.           _,-','      \\ '  '  '//| . .:.")
+print(":. . .;)()(__)(___________`-._`-.._______..-'_.-'_________\\'  '  //_:. . .:")
+print(".:.:,' \\/\\/--\\/--------------------------------------------`._',;'`. `.:.:.")
+print(":.,' ,' ,'  ,'  /   /   /   ,-------------------.   \\   \\   \\  `. `.`. `..:")
+print(",' ,'  '   /   /   /   /   //                   \\\\   \\   \\   \\   \\  ` `.SSt\n")
 
 
 print("----------------------------------------------------------------------")
@@ -248,9 +276,6 @@ else:
     z_2 = 150
     z_3 = 300
     z_4 = 450
-    
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
 
 
 # -----------------------------------------------------------------------------
@@ -340,7 +365,7 @@ if debug_mode:
 
 # General ---------------------------------------------------------------------
 
-# Crosstalk limit
+# Cross-talk limit
 crosstalk_threshold_ns = 3
 
 # -----------------------------------------------------------------------------
@@ -418,12 +443,12 @@ T_diff_RPC_right = 0.8
 # Qsum
 Q_RPC_left = 0
 Q_RPC_right = 500
-#Qdiff
-Q_dif_RPC_left = -100
-Q_dif_RPC_right = 100
+# Qdiff
+Q_dif_RPC_left = -1
+Q_dif_RPC_right = 1
 # Y pos
-Y_RPC_left = -160 # -150
-Y_RPC_right = 160 # 150
+Y_RPC_left = -170 # -150
+Y_RPC_right = 170 # 150
 
 # -----------------------------------------------------------------------------
 # Alternative fitter filter ---------------------------------------------------
@@ -835,8 +860,6 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
     # Quantile filtering
     Q_ch = Q_ch[Q_ch > np.percentile(Q_ch, q_quantile)]
     
-    # num_bins = int(len(Q_ch) / 100)
-    
     # Calculate histogram
     counts, bin_edges = np.histogram(Q_ch, bins='auto')
     
@@ -877,8 +900,6 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
     # Remove values outside the range (-2, 2)
     Q_ch_cal = Q_ch_cal[(Q_ch_cal > -1) & (Q_ch_cal < 2)]
     
-    # Q_ch_cal = Q_ch_cal[Q_ch_cal > np.percentile(Q_ch_cal, q_quantile)]
-    
     # Calculate histogram
     counts, bin_edges = np.histogram(Q_ch_cal, bins='auto')
     
@@ -897,16 +918,13 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
     # Determine the X value (left edge) of the bin where the threshold is crossed
     offset_cal = bin_edges[offset_bin_index]
     
-    # print(offset_cal)
-    
     pedestal = offset + offset_cal
-    
     pedestal = offset
     
     translate_charge_cal = True
     if translate_charge_cal:
         pedestal = pedestal - 0.25
-    
+        
     return pedestal
 
 
@@ -1641,77 +1659,6 @@ print(working_df.columns.to_list())
 # ----------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------
 
-# Print working_df columns, all of them
-if debug_mode:
-    print("Final DataFrame columns:")
-    for col in working_df.columns:
-        print(col)
-
-# # Compute and store the binary topology (active strips per plane)
-# for plane_id in range(1, 5):
-#     # cols = [f'Q{plane_id}_F_1', f'Q{plane_id}_F_2', f'Q{plane_id}_F_3', f'Q{plane_id}_F_4', 
-#     #         f'Q{plane_id}_B_1', f'Q{plane_id}_B_2', f'Q{plane_id}_B_3', f'Q{plane_id}_B_4']
-#     # cols = [f'Q{plane_id}_F_1', f'Q{plane_id}_B_1']
-#     cols = [f'Q{plane_id}_F_1', f'Q{plane_id}_F_2', f'Q{plane_id}_F_3', f'Q{plane_id}_F_4']
-#     Q_plane = working_df[cols].values  # shape (N, 4)
-
-#     # Binary activation: 1 if charge > crosstalk_threshold_ns
-#     active_strips_binary = (Q_plane != 0).astype(int)
-
-#     # Convert each row to string (e.g. [0, 0, 1, 0] -> '0010')
-#     binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
-#     working_df[f'OG_active_strips_P{plane_id}'] = binary_strings
-
-# # Print check
-# print("Active strips per plane calculated.")
-# print(working_df[['OG_active_strips_P1', 'OG_active_strips_P2', 'OG_active_strips_P3', 'OG_active_strips_P4']].head())
-
-# if create_essential_plots or create_plots:
-#     fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 12), sharex=True, sharey=True)
-#     colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red']
-#     y_max = 0
-
-#     # First pass to determine global y-axis limit
-#     event_counts_list = []
-#     for i in [1, 2, 3, 4]:
-#         counts = working_df[f'OG_active_strips_P{i}'].value_counts()
-#         counts = counts[counts.index != '0000']
-#         counts = counts[counts.index != '00']
-#         event_counts_list.append(counts)
-#         if not counts.empty:
-#             y_max = max(y_max, counts.max())
-    
-#     # Get global label order from P1 (or any consistent source)
-#     label_order = working_df['OG_active_strips_P1'].value_counts().drop('0000', errors='ignore').index.tolist()
-#     label_order = working_df['OG_active_strips_P1'].value_counts().drop('00', errors='ignore').index.tolist()
-
-#     # Second pass to plot
-#     for i, ax in zip([1, 2, 3, 4], axes):
-#         event_counts_filt = event_counts_list[i - 1]
-#         event_counts_filt = event_counts_filt.reindex(label_order, fill_value=0)
-
-#         event_counts_filt.plot(kind='bar', ax=ax, color=colors[i - 1], alpha=0.7)
-#         ax.set_title(f'Plane {i}', fontsize=12)
-#         ax.set_ylabel('Counts')
-#         ax.set_ylim(0, y_max * 1.05)
-#         ax.grid(axis='y', linestyle='--', alpha=0.5)
-#         ax.tick_params(axis='x', labelrotation=45)
-
-#     axes[-1].set_xlabel('Active Strip Pattern')
-#     plt.tight_layout()
-
-#     if save_plots:
-#         final_filename = f'{fig_idx}_original_active_strips_all_planes.png'
-#         fig_idx += 1
-#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
-
-#     if show_plots:
-#         plt.show()
-#     plt.close()
-
-
 # Now obtain the trigger type
 def create_original_tt(df):
     def get_original_tt(row):
@@ -2311,12 +2258,14 @@ for key in ['Q1', 'Q2', 'Q3', 'Q4']:
                 charge_test.loc[mask, col_fC] = interpolate_fast_charge(raw[mask])
 
 
-Q_clip_min = 0
-Q_clip_max = 1750
-num_bins = 100
-log_scale = True
+
 
 if create_plots:
+    Q_clip_min = 0
+    Q_clip_max = 1750
+    num_bins = 100
+    log_scale = True
+    
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))
     axes_Q = axes_Q.flatten()
 
@@ -4421,6 +4370,217 @@ if time_window_fitting:
         plt.close()
 
 
+
+print("----------------------------------------------------------------------")
+print("--------------- Cross-talk filtering, will be set to 0 ---------------")
+print("----------------------------------------------------------------------")
+
+crosstalk_removal_and_recalibration = True
+
+if crosstalk_removal_and_recalibration:
+    
+    crstlk_th = crosstalk_threshold_ns
+
+    crosstalk_pedestal = {
+        "crstlk_pedestal_P1s1": 0, "crstlk_pedestal_P1s2": 0, "crstlk_pedestal_P1s3": 0, "crstlk_pedestal_P1s4": 0,
+        "crstlk_pedestal_P2s1": 0, "crstlk_pedestal_P2s2": 0, "crstlk_pedestal_P2s3": 0, "crstlk_pedestal_P2s4": 0,
+        "crstlk_pedestal_P3s1": 0, "crstlk_pedestal_P3s2": 0, "crstlk_pedestal_P3s3": 0, "crstlk_pedestal_P3s4": 0,
+        "crstlk_pedestal_P4s1": 0, "crstlk_pedestal_P4s2": 0, "crstlk_pedestal_P4s3": 0, "crstlk_pedestal_P4s4": 0
+    }
+
+    crosstalk_limits = {
+        "crstlk_limit_P1s1": 0, "crstlk_limit_P1s2": 0, "crstlk_limit_P1s3": 0, "crstlk_limit_P1s4": 0,
+        "crstlk_limit_P2s1": 0, "crstlk_limit_P2s2": 0, "crstlk_limit_P2s3": 0, "crstlk_limit_P2s4": 0,
+        "crstlk_limit_P3s1": 0, "crstlk_limit_P3s2": 0, "crstlk_limit_P3s3": 0, "crstlk_limit_P3s4": 0,
+        "crstlk_limit_P4s1": 0, "crstlk_limit_P4s2": 0, "crstlk_limit_P4s3": 0, "crstlk_limit_P4s4": 0
+    }
+    
+    crosstalk_mean = {
+        "crstlk_mu_P1s1": 0, "crstlk_mu_P1s2": 0, "crstlk_mu_P1s3": 0, "crstlk_mu_P1s4": 0,
+        "crstlk_mu_P2s1": 0, "crstlk_mu_P2s2": 0, "crstlk_mu_P2s3": 0, "crstlk_mu_P2s4": 0,
+        "crstlk_mu_P3s1": 0, "crstlk_mu_P3s2": 0, "crstlk_mu_P3s3": 0, "crstlk_mu_P3s4": 0,
+        "crstlk_mu_P4s1": 0, "crstlk_mu_P4s2": 0, "crstlk_mu_P4s3": 0, "crstlk_mu_P4s4": 0
+    }
+    
+    crosstalk_std = {
+        "crstlk_sigma_P1s1": 0, "crstlk_sigma_P1s2": 0, "crstlk_sigma_P1s3": 0, "crstlk_sigma_P1s4": 0,
+        "crstlk_sigma_P2s1": 0, "crstlk_sigma_P2s2": 0, "crstlk_sigma_P2s3": 0, "crstlk_sigma_P2s4": 0,
+        "crstlk_sigma_P3s1": 0, "crstlk_sigma_P3s2": 0, "crstlk_sigma_P3s3": 0, "crstlk_sigma_P3s4": 0,
+        "crstlk_sigma_P4s1": 0, "crstlk_sigma_P4s2": 0, "crstlk_sigma_P4s3": 0, "crstlk_sigma_P4s4": 0
+    }
+    
+    crosstalk_ampl = {
+        "crstlk_ampl_P1s1": 0, "crstlk_ampl_P1s2": 0, "crstlk_ampl_P1s3": 0, "crstlk_ampl_P1s4": 0,
+        "crstlk_ampl_P2s1": 0, "crstlk_ampl_P2s2": 0, "crstlk_ampl_P2s3": 0, "crstlk_ampl_P2s4": 0,
+        "crstlk_ampl_P3s1": 0, "crstlk_ampl_P3s2": 0, "crstlk_ampl_P3s3": 0, "crstlk_ampl_P3s4": 0,
+        "crstlk_ampl_P4s1": 0, "crstlk_ampl_P4s2": 0, "crstlk_ampl_P4s3": 0, "crstlk_ampl_P4s4": 0
+    }
+    
+    crosstalk_linear = {
+        "crstlk_mx_b_P1s1": [0, 0], "crstlk_mx_b_P1s2": [0, 0], "crstlk_mx_b_P1s3": [0, 0], "crstlk_mx_b_P1s4": [0, 0],
+        "crstlk_mx_b_P2s1": [0, 0], "crstlk_mx_b_P2s2": [0, 0], "crstlk_mx_b_P2s3": [0, 0], "crstlk_mx_b_P2s4": [0, 0],
+        "crstlk_mx_b_P3s1": [0, 0], "crstlk_mx_b_P3s2": [0, 0], "crstlk_mx_b_P3s3": [0, 0], "crstlk_mx_b_P3s4": [0, 0],
+        "crstlk_mx_b_P4s1": [0, 0], "crstlk_mx_b_P4s2": [0, 0], "crstlk_mx_b_P4s3": [0, 0], "crstlk_mx_b_P4s4": [0, 0]
+    }
+
+    crosstalk_fitting = True
+
+    # Gaussian + linear function
+    def gaussian_linear(x, a, mu, sigma, m, b):
+        return a * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2)) + m * x + b
+    
+    for i, key in enumerate(['1', '2', '3', '4']):
+        for j in range(4):
+            col = f'Q{key}_Q_sum_{j+1}'
+            y = working_df[col]
+            
+            Q_clip_min = -2
+            Q_clip_max = 3
+            
+            num_bins = 80
+            data = y[(y != 0) & (y > Q_clip_min) & (y < Q_clip_max)]
+            
+            hist_vals, bin_edges = np.histogram(data, bins=num_bins)
+            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+            try:
+                popt, _ = curve_fit(
+                    gaussian_linear, 
+                    bin_centers, 
+                    hist_vals, 
+                    p0=[max(hist_vals), 0, 1, 0, min(hist_vals)], 
+                    bounds=([0, -1, 0, -np.inf, -np.inf], [2*max(hist_vals), 2, 3, np.inf, np.inf])
+                )
+                
+                a, mu, sigma, m, b = popt
+                
+                crosstalk_ampl[f'crstlk_ampl_P{key}s{j+1}'] = a
+                crosstalk_mean[f'crstlk_mu_P{key}s{j+1}'] = mu
+                crosstalk_std[f'crstlk_sigma_P{key}s{j+1}'] = sigma
+                crosstalk_linear[f'crstlk_mx_b_P{key}s{j+1}'] = [m, b]
+                
+                crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}'] = mu - 2 * sigma
+                crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = mu + 2 * sigma
+                
+            except RuntimeError:
+                continue
+    
+    # if create_plots:
+    if create_plots or create_essential_plots:
+        fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+        axes_Q = axes_Q.flatten()
+
+        for i, key in enumerate(['1', '2', '3', '4']):
+            for j in range(4):
+                col = f'Q{key}_Q_sum_{j+1}'
+                y = working_df[col]
+                
+                Q_clip_min = -2
+                Q_clip_max = 3
+                
+                num_bins = 80
+                data = y[(y != 0) & (y > Q_clip_min) & (y < Q_clip_max)]
+                
+                hist_vals, bin_edges = np.histogram(data, bins=num_bins)
+                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+                axes_Q[i*4 + j].axvline(crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}'], color='blue', linestyle='--', alpha=0.5)
+                axes_Q[i*4 + j].axvline(crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'], color='blue', linestyle='--', alpha=0.5)
+                
+                a = crosstalk_ampl[f'crstlk_ampl_P{key}s{j+1}']
+                mu = crosstalk_mean[f'crstlk_mu_P{key}s{j+1}']
+                sigma = crosstalk_std[f'crstlk_sigma_P{key}s{j+1}']
+                m, b = crosstalk_linear[f'crstlk_mx_b_P{key}s{j+1}']
+                
+                popt = a, mu, sigma, m, b
+                
+                x_fit = np.linspace(Q_clip_min, Q_clip_max, 500)
+                y_fit = gaussian_linear(x_fit, *popt)
+                axes_Q[i*4 + j].plot(x_fit, y_fit, 'r--', label='Gauss + Linear Fit')
+                
+                axes_Q[i*4 + j].hist(data, bins=num_bins, alpha=0.5, label=f'{col}')
+                axes_Q[i*4 + j].set_title(f'{col}')
+                axes_Q[i*4 + j].legend()
+                axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                axes_Q[i*4 + j].set_ylim([0, None])
+                axes_Q[i*4 + j].axvline(0, color='green', linestyle='--', alpha=0.5)
+                
+        # Display a vertical green dashed, alpha = 0.5 line at 0
+        for ax in axes_Q:
+            ax.axvline(0, color='green', linestyle='--', alpha=0.5)
+
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.9)
+        plt.suptitle(f"Cross-talk study for filtering (zoom), mingo0{station}\n{start_time}", fontsize=16)
+        if save_plots:
+            final_filename = f'{fig_idx}_cross_talk_filtering_zoom.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots: plt.show()
+        plt.close(fig_Q)
+
+
+    print("----------------------------------------------------------------------")
+    print("-------------- Filter 5: charge sum crosstalk filtering --------------")
+    print("----------------------------------------------------------------------")
+    for i, key in enumerate(['1', '2', '3', '4']):
+        for j in range(4):
+            for col in working_df.columns:
+                if f'Q{key}_Q_sum_{j+1}' == col:
+                    working_df[col] = np.where( working_df[col] < crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] , 0, working_df[col])
+    
+    print("----------------------------------------------------------------------")
+    print("------------------- Crosstalk pedestal recalibration -----------------")
+    print("----------------------------------------------------------------------")
+    # Apply the pedestal recalibration
+    for i, key in enumerate(['1', '2', '3', '4']):
+        for j in range(4):
+            mask = working_df[f'Q{key}_Q_sum_{j+1}'] != 0
+            working_df.loc[mask, f'Q{key}_Q_sum_{j+1}'] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
+
+
+    if create_plots or create_essential_plots:
+    # if create_plots:
+        fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+        axes_Q = axes_Q.flatten()
+
+        for i, key in enumerate(['1', '2', '3', '4']):
+            for j in range(4):
+                col = f'Q{key}_Q_sum_{j+1}'
+                y = working_df[col]
+                
+                Q_clip_min = -2
+                Q_clip_max = 3
+                
+                num_bins = 80
+                data = y[(y != 0) & (y > Q_clip_min) & (y < Q_clip_max)]
+                
+                axes_Q[i*4 + j].hist(data, bins=num_bins, alpha=0.5, label=f'{col}')
+                axes_Q[i*4 + j].set_title(f'{col}')
+                axes_Q[i*4 + j].legend()
+                axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                axes_Q[i*4 + j].set_ylim([0, None])
+                axes_Q[i*4 + j].axvline(0, color='green', linestyle='--', alpha=0.5)
+                
+        # Display a vertical green dashed, alpha = 0.5 line at 0
+        for ax in axes_Q:
+            ax.axvline(0, color='green', linestyle='--', alpha=0.5)
+
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.9)
+        plt.suptitle(f"Cross-talk check for filtering (zoom), mingo0{station}\n{start_time}", fontsize=16)
+        if save_plots:
+            final_filename = f'{fig_idx}_cross_talk_filtering_zoom_check.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots: plt.show()
+        plt.close(fig_Q)
+
+
 print("----------------------------------------------------------------------")
 print("---------------- Binary topology of active strips --------------------")
 print("----------------------------------------------------------------------")
@@ -4433,7 +4593,7 @@ for plane_id in range(1, 5):
     Q_plane = working_df[cols].values  # shape (N, 4)
 
     # Binary activation: 1 if charge > threshold
-    active_strips_binary = (Q_plane > crosstalk_threshold_ns).astype(int)
+    active_strips_binary = (Q_plane > 0).astype(int)
 
     # Convert to string representations
     binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
@@ -4563,7 +4723,7 @@ print("Y position calculated.")
 
 
 print("----------------------------------------------------------------------")
-print("-------------------------- Some more tests ---------------------------")
+print("----------------- Some more tests (multi-strip data) -----------------")
 print("----------------------------------------------------------------------")
 
 # if create_essential_plots or create_plots:
@@ -4984,7 +5144,7 @@ slow_results = {
 for idx, track in working_df.iterrows():
     planes_to_iterate = [
         i + 1 for i in range(nplan)
-        if getattr(track, f'P{i+1}_Q_sum_final') > crosstalk_threshold_ns
+        if getattr(track, f'P{i+1}_Q_sum_final') > 0
     ]
 
     if len(planes_to_iterate) >= 2:
@@ -5575,9 +5735,10 @@ for iteration in range(repeat + 1):
     working_df.loc[:, timtrack_results] = 0.0
     
     fitted = 0
-    print("-----------------------------")
-    print(f"TimTrack iteration {iteration}")
-    print("-----------------------------")
+    if timtrack_iteration:
+        print("-----------------------------")
+        print(f"TimTrack iteration {iteration}")
+        print("-----------------------------")
     
     if crontab_execution:
         iterator = working_df.iterrows()
@@ -5694,7 +5855,7 @@ for iteration in range(repeat + 1):
             # working_df.at[idx, f'res_tsum_{iplane}'] = res_tsum
             # working_df.at[idx, f'res_tdif_{iplane}'] = res_tdif
             
-            working_df.at[idx, 'processed_tt'] = builtins.int(name_type)
+            working_df.at[idx, 'processed_tt'] = name_type
             
             chi2 = res_ystr**2 + res_tsum**2 + res_tdif**2
             working_df.at[idx, 'th_chi'] = chi2
@@ -5769,13 +5930,9 @@ for iteration in range(repeat + 1):
                 working_df.at[idx, f'ext_res_tdif_{iplane_ref}'] = v_res[2]
     
     
-    # ------------------------------------------------------------------------------
-    # TimTrack result and residue plots --------------------------------------------
-    # ------------------------------------------------------------------------------
-    
-    print("------------------------------------------------------------------------------")
-    print("-------------------- TimTrack result and residue plots -----------------------")
-    print("------------------------------------------------------------------------------")
+    print("----------------------------------------------------------------------")
+    print("----------------- TimTrack result and residue plots ------------------")
+    print("----------------------------------------------------------------------")
     
     if (create_plots and residual_plots):
     # if create_essential_plots or (create_plots and residual_plots):
@@ -5887,8 +6044,16 @@ for iteration in range(repeat + 1):
     print(f"First estimate of eff_3 ={eff_3}")
     
     iteration += 1
-    # End of TimTrack loop ---------------------------------------------------------------
+    
+    
+# ------------------------------------------------------------------------------------
+# End of TimTrack loop ---------------------------------------------------------------
+# ------------------------------------------------------------------------------------
 
+# Set the label to integer
+working_df['processed_tt'] = working_df['processed_tt'].apply(builtins.int)
+
+# Calculate angles
 def calculate_angles(xproj, yproj):
     phi = np.arctan2(yproj, xproj)
     theta = np.arccos(1 / np.sqrt(xproj**2 + yproj**2 + 1))
@@ -5898,7 +6063,11 @@ theta, phi = calculate_angles(working_df['xp'], working_df['yp'])
 new_columns_df = pd.DataFrame({'theta': theta, 'phi': phi}, index=working_df.index)
 working_df = pd.concat([working_df, new_columns_df], axis=1)
 
-# FILTER 8: X, Y, T FILTER: IGNORE THE EVENT IF (AFTER ALL) ANY OF THEM GOES OUR OF BOUNDS
+
+print("----------------------------------------------------------------------")
+print("---------------- Filter 8?. Timtrack results filter ------------------")
+print("----------------------------------------------------------------------")
+
 for col in working_df.columns:
     # TimTrack results
     if 't0' == col:
@@ -5931,6 +6100,7 @@ for col in cols_to_check[1:]:
     cond &= (working_df[col] != 0)
 
 definitive_df = definitive_df[cond]
+
 
 print("----------------------------------------------------------------------")
 print("----------------------- Calculating some stuff -----------------------")
@@ -6232,7 +6402,6 @@ if create_plots or create_essential_plots:
 
     # Create the 2D colored plot
     fig, ax = plt.subplots(figsize=(10, 8))
-    im = ax.imshow(counts, cmap='turbo')
 
     # Set ticks and labels
     ax.set_xticks(np.arange(len(counts.columns)))
@@ -6240,17 +6409,17 @@ if create_plots or create_essential_plots:
     ax.set_xticklabels(counts.columns)
     ax.set_yticklabels(counts.index)
 
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    # plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
     ax.set_xlabel("processed_tt")
     ax.set_ylabel("original_tt")
     ax.set_title("Event counts per (original_tt, processed_tt) combination")
 
-    # Annotate counts on each cell
+    im = ax.imshow(counts, cmap='plasma')
     for i in range(len(counts.index)):
         for j in range(len(counts.columns)):
             value = counts.iloc[i, j]
             if value > 0:
-                ax.text(j, i, str(value), ha="center", va="center", color="white" if value > counts.values.max() * 0.5 else "black")
+                ax.text(j, i, str(value), ha="center", va="center", color="black" if value > counts.values.max() * 0.5 else "white")
 
     # Colorbar
     # cbar = fig.colorbar(im, ax=ax)
@@ -6278,7 +6447,6 @@ data_purity = len(definitive_df) / raw_data_len*100
 print(f"Data purity is {data_purity:.1f}%")
 
 global_variables['purity_of_data_percentage'] = data_purity
-
 
 if create_plots or create_essential_plots:
     plot_ancillary_df = definitive_df.copy()
@@ -6357,7 +6525,7 @@ if create_plots or create_essential_plots:
     colors = cmap(np.linspace(0, 1, len(cases)))
 
     # Define window widths
-    widths = np.linspace(1, 10, 40)
+    widths = np.linspace(0, 0.1, 50)
     plt.figure(figsize=(10, 6))
 
     for idx, case in enumerate(cases):
@@ -6509,7 +6677,10 @@ new_row = {'Time': start_time}
 for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
     for j in range(4):
         strip = j + 1
-        new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
+        if crosstalk_fitting:
+            new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2 - crosstalk_limits[f'crstlk_{module}s{strip}']
+        else:
+            new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
         new_row[f'{module}_s{strip}_T_sum'] = calibration_times[i, j]
         new_row[f'{module}_s{strip}_Q_dif'] = ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
         new_row[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j]
