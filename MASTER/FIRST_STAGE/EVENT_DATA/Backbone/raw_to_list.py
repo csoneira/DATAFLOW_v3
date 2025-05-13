@@ -17,37 +17,84 @@ Created on Thu Jun 20 09:15:33 2024
 @author: csoneira@ucm.es
 """
 
+print("""
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣭⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣹⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣀⣤⠤⢤⣀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⠴⠒⢋⣉⣀⣠⣄⣀⣈⡇
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣾⣯⠴⠚⠉⠉⠀⠀⠀⠀⣤⠏⣿
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡿⡇⠁⠀⠀⠀⠀⡄⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⡿⠿⢛⠁⠁⣸⠀⠀⠀⠀⠀⣤⣾⠵⠚⠁
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⢦⡀⠀⣠⠀⡇⢧⠀⠀⢀⣠⡾⡇⠀⠀⠀⠀⠀⣠⣴⠿⠋⠁⠀⠀⠀⠀⠘⣿⠀⣀⡠⠞⠛⠁⠂⠁⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡈⣻⡦⣞⡿⣷⠸⣄⣡⢾⡿⠁⠀⠀⠀⣀⣴⠟⠋⠁⠀⠀⠀⠀⠐⠠⡤⣾⣙⣶⡶⠃⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣂⡷⠰⣔⣾⣖⣾⡷⢿⣐⣀⣀⣤⢾⣋⠁⠀⠀⠀⣀⢀⣀⣀⣀⣀⠀⢀⢿⠑⠃⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠠⡦⠴⠴⠤⠦⠤⠤⠤⠤⠤⠴⠶⢾⣽⣙⠒⢺⣿⣿⣿⣿⢾⠶⣧⡼⢏⠑⠚⠋⠉⠉⡉⡉⠉⠉⠹⠈⠁⠉⠀⠨⢾⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⠀⠀⠀⠂⠐⠀⠀⠀⠈⣇⡿⢯⢻⣟⣇⣷⣞⡛⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣠⣆⠀⠀⠀⠀⢠⡷⡛⣛⣼⣿⠟⠙⣧⠅⡄⠀⠀⠀⠀⠀⠀⠰⡆⠀⠀⠀⠀⢠⣾⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣴⢶⠏⠉⠀⠀⠀⠀⠀⠿⢠⣴⡟⡗⡾⡒⠖⠉⠏⠁⠀⠀⠀⠀⣀⢀⣠⣧⣀⣀⠀⠀⠀⠚⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⣠⢴⣿⠟⠁⠀⠀⠀⠀⠀⠀⠀⣠⣷⢿⠋⠁⣿⡏⠅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⣿⢭⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⢀⡴⢏⡵⠛⠀⠀⠀⠀⠀⠀⠀⣀⣴⠞⠛⠀⠀⠀⠀⢿⠀⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⢿⠘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⣀⣼⠛⣲⡏⠁⠀⠀⠀⠀⠀⢀⣠⡾⠋⠉⠀⠀⠀⠀⠀⠀⢾⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⡴⠟⠀⢰⡯⠄⠀⠀⠀⠀⣠⢴⠟⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⣹⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⡾⠁⠁⠀⠘⠧⠤⢤⣤⠶⠏⠙⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢾⡃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠘⣇⠂⢀⣀⣀⠤⠞⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠈⠉⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠾⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢼⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+""")
+
+
+print("----------------------------------------------------------------------")
+print("-------------------- RAW TO LIST SCRIPT IS STARTING ------------------")
+print("----------------------------------------------------------------------")
+
 # globals().clear()
 
-import pandas as pd
-import numpy as np
-from scipy.interpolate import CubicSpline
-import sys
-from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
-from scipy.stats import skew
-from scipy.constants import c
-from scipy.optimize import curve_fit
-from tqdm import tqdm
-import scipy.linalg as linalg
-from math import sqrt
-from matplotlib.backends.backend_pdf import PdfPages
-from PIL import Image
+# Standard library
 import os
-from scipy.stats import poisson
+import re
+import sys
+import csv
+import math
+import random
 import shutil
 import builtins
-import random
-import re
-import csv
-from scipy.stats import linregress
-import itertools
-import numpy as np
-import matplotlib.pyplot as plt
-import re
+from datetime import datetime, timedelta
+from collections import defaultdict
 from itertools import combinations
-from scipy.optimize import curve_fit
+from functools import reduce
+
+# Scientific computing
+from math import sqrt
 import numpy as np
+import pandas as pd
+import scipy.linalg as linalg
+from scipy.constants import c
+from scipy.ndimage import gaussian_filter1d
+from scipy.interpolate import CubicSpline
+from scipy.optimize import curve_fit
+from scipy.stats import (norm, poisson, linregress, median_abs_deviation, skew)
+
+# Machine learning
+from sklearn.linear_model import LinearRegression
+
+# Plotting
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from matplotlib.gridspec import GridSpec
+from matplotlib.backends.backend_pdf import PdfPages
+import seaborn as sns
+from mpl_toolkits.mplot3d import Axes3D  # for 3D plotting
+
+# Image processing
+from PIL import Image
+
+# Progress bar
+from tqdm import tqdm
     
 # Store the current time at the start. To time the execution
 start_execution_time_counting = datetime.now()
@@ -257,12 +304,11 @@ uniform_weighted_method = False
 weighted = False
 
 # TimTrack -----------------------------------------
-fixed_speed = True
+fixed_speed = False
 res_ana_removing_planes = False
 timtrack_iteration = False
 number_of_TT_executions = 2
-plot_three_planes = False
-residual_plots = True
+residual_plots = False
 
 if fast_mode:
     print('Working in fast mode.')
@@ -533,7 +579,7 @@ anc_sz = 10 # 5 cm
 # 'discarded_by_time_window', 'one_side_events', 'purity_of_data'
 # -----------------------------------------------------------------------------
 global_variables = {
-    'CRP_avg': 0,
+    'CRT_avg': 0,
     'discarded_by_time_window_percentage': 0,
     'sigmoid_width': 0,
     'background_slope': 0,
@@ -902,7 +948,6 @@ def calibrate_strip_Q_FB(Q_F, Q_B):
     
     return (offset_F - offset_B) / 2
 
-import builtins
 enumerate = builtins.enumerate
 
 def polynomial(x, *coeffs):
@@ -1110,7 +1155,6 @@ def summary(vector):
     mu, std = norm.fit(vector)
     return mu
 
-from scipy.stats import norm
 
 def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     global fig_idx
@@ -1165,74 +1209,6 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
         
     if show_plots: plt.show()
     plt.close()
-    
-    
-# Define the combined function to plot histograms and optionally fit Gaussian
-# def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
-#     global fig_idx
-#     nrows, ncols = (2, 3) if figure_number == 1 else (3, 4)
-    
-#     fig, axs = plt.subplots(nrows, ncols, figsize=(20, 5 * nrows), constrained_layout=True)
-#     axs = axs.flatten()
-
-#     # Define Gaussian function
-#     def gaussian(x, mu, sigma, amplitude):
-#         return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
-
-#     # Plot histograms and fit Gaussian if needed
-#     for i, col in enumerate(columns):
-#         data = df[col].values
-#         data = data[data != 0]  # Filter out zero values
-
-#         # Check if data is empty or has fewer points than needed
-#         if len(data) == 0:
-#             # Leave plot empty if no data
-#             axs[i].text(0.5, 0.5, "No data", transform=axs[i].transAxes, ha='center', va='center', color='gray')
-#             continue
-
-#         # Plot histogram
-#         hist_data, bin_edges, _ = axs[i].hist(data, bins='auto', alpha=0.75, label='Data')
-#         axs[i].set_title(col)
-#         axs[i].set_xlabel('Value')
-#         axs[i].set_ylabel('Frequency')
-
-#         # Fit Gaussian if needed and if there's enough data
-#         if fit_gaussian and len(data) >= 10:
-#             try:
-#                 # Quantile filtering
-#                 lower_bound, upper_bound = np.quantile(data, [(1 - quantile), quantile])
-#                 filtered_data = data[(data >= lower_bound) & (data <= upper_bound)]
-
-#                 if len(filtered_data) < 2:  # Ensure there are enough points to fit a Gaussian
-#                     axs[i].text(0.5, 0.5, "Not enough data to fit", transform=axs[i].transAxes, ha='center', va='center', color='gray')
-#                     continue
-
-#                 # Fit Gaussian to the filtered data
-#                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-#                 popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filtered_data), np.std(filtered_data), max(hist_data)])
-#                 mu, sigma, amplitude = popt
-#                 x = np.linspace(min(filtered_data), max(filtered_data), 1000)
-#                 axs[i].plot(x, gaussian(x, mu, sigma, amplitude), 'r-', label=f'Gaussian Fit\nμ={mu:.2g}, σ={sigma:.2g}')
-#                 axs[i].legend()
-#             except (RuntimeError, ValueError):
-#                 axs[i].text(0.5, 0.5, "Fit failed", transform=axs[i].transAxes, ha='center', va='center', color='red')
-
-#     # Remove unused subplots
-#     for j in range(i + 1, len(axs)):
-#         fig.delaxes(axs[j])
-
-#     plt.suptitle(title, fontsize=16)
-    
-#     if save_plots:
-#         final_filename = f'{fig_idx}_{title.replace(" ", "_")}.png'
-#         fig_idx += 1
-
-#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
-    
-#     if show_plots: plt.show()
-#     plt.close()
 
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
@@ -1276,15 +1252,15 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
                 # Use precomputed quantile bounds
                 if col in quantile_bounds:
                     lower_bound, upper_bound = quantile_bounds[col]
-                    filtered_data = data[(data >= lower_bound) & (data <= upper_bound)]
+                    filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
 
-                if len(filtered_data) < 2:
+                if len(filt_data) < 2:
                     axs[i].text(0.5, 0.5, "Not enough data to fit", transform=axs[i].transAxes, ha='center', va='center', color='gray')
                     continue
 
                 # Fit Gaussian to the histogram data
                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-                popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filtered_data), np.std(filtered_data), max(hist_data)])
+                popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filt_data), np.std(filt_data), max(hist_data)])
                 mu, sigma, amplitude = popt
 
                 # Plot Gaussian fit
@@ -1536,89 +1512,73 @@ with open(file_path, 'r') as infile, open(temp_file, 'w') as outfile, open(rejec
         else:
             rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")  # Save rejected row
 
-data = pd.read_csv(temp_file, header=None, low_memory=False, nrows=limit_number if limit else None)
-data = data.apply(pd.to_numeric, errors='coerce')
+read_df = pd.read_csv(temp_file, header=None, low_memory=False, nrows=limit_number if limit else None)
+read_df = read_df.apply(pd.to_numeric, errors='coerce')
 
 # Print the number of rows in input
-print("*******************************************************")
-print(f"Original file has {read_lines} lines.")
+print(f"\nOriginal file has {read_lines} lines.")
 print(f"Processed file has {written_lines} lines.")
-print("*******************************************************")
-
-# ------------------------------------------------------------------------------------------------------
-
-# data = pd.read_csv(file_path, sep=r'\s+', header=None, nrows=limit_number if limit else None, on_bad_lines='skip', low_memory=False)
+print(f"--> A {written_lines/read_lines*100:.2f}% of the lines were valid.\n")
 
 # Assign name to the columns
-data.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, 71)]
-data['datetime'] = pd.to_datetime(data[['year', 'month', 'day', 'hour', 'minute', 'second']])
+read_df.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, 71)]
+read_df['datetime'] = pd.to_datetime(read_df[['year', 'month', 'day', 'hour', 'minute', 'second']])
+# data = data.drop(columns=['year', 'month', 'day', 'hour', 'minute', 'second'])
+
 
 # ------------------------------------------------------------------------------------------------------
 # Filter 1: by date ------------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------------
-print("----------------------- Filter 1: by date -----------------------")
-filtered_data = data[(data['datetime'] >= left_limit_time) & (data['datetime'] <= right_limit_time)]
-og_data = filtered_data.copy()
-og_data = og_data.set_index('datetime')  # Set 'datetime' as index
-if not isinstance(og_data.index, pd.DatetimeIndex):
+
+print("----------------------------------------------------------------------")
+print("-------------------------- Filter 1: by date -------------------------")
+print("----------------------------------------------------------------------")
+
+selected_df = read_df[(read_df['datetime'] >= left_limit_time) & (read_df['datetime'] <= right_limit_time)]
+if not isinstance(selected_df.set_index('datetime').index, pd.DatetimeIndex):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
-raw_data_len = len(filtered_data)
-# if debug_mode:
-#     print(raw_data_len)
-
 # Print the count frequency of the values in column_6
-print(filtered_data['column_6'].value_counts())
+print(selected_df['column_6'].value_counts())
 # Take only the rows in which column_6 is equal to 1
-filtered_data = filtered_data[filtered_data['column_6'] == 1]
+selected_df = selected_df[selected_df['column_6'] == 1]
 
-raw_data_len = len(filtered_data)
-# if debug_mode:
-#     print(raw_data_len)
+raw_data_len = len(selected_df)
 
-if raw_data_len == 0:  # Use '==' for comparison
-    print(filtered_data['column_6'].head())
+if raw_data_len == 0:
+    print(selected_df['column_6'].head())
     print("No coincidence events.")
     sys.exit()
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
-datetime_value = filtered_data['datetime'][0]
+datetime_value = selected_df['datetime'][0]
 # Take the last datetime value
-end_datetime_value = filtered_data['datetime'].iloc[-1]
+end_datetime_value = selected_df['datetime'].iloc[-1]
 start_time = datetime_value
 end_time = end_datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
 
+
 # -------------------------------------------------------------------------------
-# Input file and data managing to select configuration
+# ------------ Input file and data managing to select configuration -------------
 # -------------------------------------------------------------------------------
 
 if exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
     input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
-    
     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
-    
-    # Filter matching configurations
     matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
-
-    # Select the first matching configuration if available
     if not matching_confs.empty:
         if len(matching_confs) > 1:
             print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
-        
         selected_conf = matching_confs.iloc[0]
         print(f"Selected configuration: {selected_conf['conf']}")
-
-        # Extract z_1 to z_4 values
         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
-
     else:
         print("Error: No matching configuration found for the given date range. Using default z_positions.")
         z_positions = np.array([0, 150, 300, 450])  # In mm
-        
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
@@ -1628,11 +1588,9 @@ z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
 
 
-# -------------------------------------------------------------------------------
-
 print("--------------------------------------------------------------------------")
 print("--------------------------------------------------------------------------")
-print(f"--------------- Starting date is {save_filename_suffix} -----------------")
+print(f"--------------- Starting date is {save_filename_suffix} ---------------------") # This is longer so it displays nicely
 print("--------------------------------------------------------------------------")
 print("--------------------------------------------------------------------------")
 
@@ -1664,14 +1622,17 @@ column_indices = {
 }
 
 # Extract and assign appropriate column names
-columns_data = {'datetime': filtered_data['datetime'].values}
+columns_data = {'datetime': selected_df['datetime'].values}
 for key, idx_range in column_indices.items():
     for i, col_idx in enumerate(idx_range):
         column_name = f'{key}_{i+1}'
-        columns_data[column_name] = filtered_data.iloc[:, col_idx].values
+        columns_data[column_name] = selected_df.iloc[:, col_idx].values
 
 # Create a DataFrame from the columns data
-final_df = pd.DataFrame(columns_data)
+working_df = pd.DataFrame(columns_data)
+working_df["datetime"] = selected_df['datetime']
+
+print(working_df.columns.to_list())
 
 
 # ----------------------------------------------------------------------------------
@@ -1680,10 +1641,10 @@ final_df = pd.DataFrame(columns_data)
 # ----------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------
 
-# Print final_df columns, all of them
+# Print working_df columns, all of them
 if debug_mode:
     print("Final DataFrame columns:")
-    for col in final_df.columns:
+    for col in working_df.columns:
         print(col)
 
 # # Compute and store the binary topology (active strips per plane)
@@ -1692,18 +1653,18 @@ if debug_mode:
 #     #         f'Q{plane_id}_B_1', f'Q{plane_id}_B_2', f'Q{plane_id}_B_3', f'Q{plane_id}_B_4']
 #     # cols = [f'Q{plane_id}_F_1', f'Q{plane_id}_B_1']
 #     cols = [f'Q{plane_id}_F_1', f'Q{plane_id}_F_2', f'Q{plane_id}_F_3', f'Q{plane_id}_F_4']
-#     Q_plane = final_df[cols].values  # shape (N, 4)
+#     Q_plane = working_df[cols].values  # shape (N, 4)
 
 #     # Binary activation: 1 if charge > crosstalk_threshold_ns
 #     active_strips_binary = (Q_plane != 0).astype(int)
 
 #     # Convert each row to string (e.g. [0, 0, 1, 0] -> '0010')
 #     binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
-#     final_df[f'OG_active_strips_P{plane_id}'] = binary_strings
+#     working_df[f'OG_active_strips_P{plane_id}'] = binary_strings
 
 # # Print check
 # print("Active strips per plane calculated.")
-# print(final_df[['OG_active_strips_P1', 'OG_active_strips_P2', 'OG_active_strips_P3', 'OG_active_strips_P4']].head())
+# print(working_df[['OG_active_strips_P1', 'OG_active_strips_P2', 'OG_active_strips_P3', 'OG_active_strips_P4']].head())
 
 # if create_essential_plots or create_plots:
 #     fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 12), sharex=True, sharey=True)
@@ -1713,7 +1674,7 @@ if debug_mode:
 #     # First pass to determine global y-axis limit
 #     event_counts_list = []
 #     for i in [1, 2, 3, 4]:
-#         counts = final_df[f'OG_active_strips_P{i}'].value_counts()
+#         counts = working_df[f'OG_active_strips_P{i}'].value_counts()
 #         counts = counts[counts.index != '0000']
 #         counts = counts[counts.index != '00']
 #         event_counts_list.append(counts)
@@ -1721,8 +1682,8 @@ if debug_mode:
 #             y_max = max(y_max, counts.max())
     
 #     # Get global label order from P1 (or any consistent source)
-#     label_order = final_df['OG_active_strips_P1'].value_counts().drop('0000', errors='ignore').index.tolist()
-#     label_order = final_df['OG_active_strips_P1'].value_counts().drop('00', errors='ignore').index.tolist()
+#     label_order = working_df['OG_active_strips_P1'].value_counts().drop('0000', errors='ignore').index.tolist()
+#     label_order = working_df['OG_active_strips_P1'].value_counts().drop('00', errors='ignore').index.tolist()
 
 #     # Second pass to plot
 #     for i, ax in zip([1, 2, 3, 4], axes):
@@ -1766,16 +1727,17 @@ def create_original_tt(df):
     return df
 
 # Apply the function to the DataFrame
-final_df = create_original_tt(final_df)
+working_df = create_original_tt(working_df)
+working_df['original_tt'] = working_df['original_tt'].apply(builtins.int)
 
-# if create_essential_plots or create_plots:
-if create_plots:
-    event_counts = final_df['original_tt'].copy().value_counts()
+if create_essential_plots or create_plots:
+# if create_plots:
+    event_counts = working_df['original_tt'].value_counts()
 
     # Plot the histogram of event counts
     plt.figure(figsize=(10, 6))
     event_counts.plot(kind='bar', alpha=0.7)
-    plt.title('Number of Events per Original TT Label')
+    plt.title(f'Number of Events per Original TT Label, {start_time}')
     plt.xlabel('Original TT Label')
     plt.ylabel('Number of Events')
     plt.xticks(rotation=45)
@@ -1793,17 +1755,17 @@ if create_plots:
 
 
 # # Add 'event_id' and 'event_label' columns ----------------------------------------------
-# filtered_data['event_id'] = np.arange(len(filtered_data))  # Sequential event identifiers
-# filtered_data['event_label'] = 'date_filtered'  # Label for the events
+# ...['event_id'] = np.arange(len(...))  # Sequential event identifiers
+# ...['event_label'] = 'date_filtered'  # Label for the events
 
 # # Reorder columns to place 'event_id' and 'event_label' as the first columns
 # columns_to_move = ['event_id', 'event_label']
-# remaining_columns = [col for col in filtered_data.columns if col not in columns_to_move]
-# filtered_data = filtered_data[columns_to_move + remaining_columns]
+# remaining_columns = [col for col in ....columns if col not in columns_to_move]
+# ... = ...[columns_to_move + remaining_columns]
 
 # # Save the DataFrame to a CSV file
 # if debug_mode:
-#     filtered_data.to_csv('hey.csv', sep=' ', index=False)
+#     ...to_csv('hey.csv', sep=' ', index=False)
 
 
 # New channel-wise plot -------------------------------------------------------
@@ -1832,8 +1794,8 @@ if create_plots:
         for j in range(4):
             col_F = f'{key}_F_{j+1}'
             col_B = f'{key}_B_{j+1}'
-            y_F = final_df[col_F].copy()
-            y_B = final_df[col_B].copy()
+            y_F = working_df[col_F]
+            y_B = working_df[col_B]
             
             # Plot histograms with T-specific clipping and bins
             axes_T[i*4 + j].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
@@ -1871,8 +1833,8 @@ if create_plots:
         for j in range(4):
             col_F = f'{key.replace("T", "Q")}_F_{j+1}'
             col_B = f'{key.replace("T", "Q")}_B_{j+1}'
-            y_F = final_df[col_F]
-            y_B = final_df[col_B]
+            y_F = working_df[col_F]
+            y_B = working_df[col_B]
             
             # Plot histograms with Q-specific clipping and bins
             axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
@@ -1916,14 +1878,14 @@ if create_plots:
             col_F = f'{key}_F_{j+1}'  # Time F column
             col_B = f'{key}_B_{j+1}'  # Time B column
             
-            y_F = final_df[col_F].copy()  # Time values for front
-            y_B = final_df[col_B].copy()  # Time values for back
+            y_F = working_df[col_F]  # Time values for front
+            y_B = working_df[col_B]  # Time values for back
             
             charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'  # Corresponding charge column for front
             charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'  # Corresponding charge column for back
             
-            charge_F = final_df[charge_col_F].copy()  # Charge values for front
-            charge_B = final_df[charge_col_B].copy()  # Charge values for back
+            charge_F = working_df[charge_col_F]  # Charge values for front
+            charge_B = working_df[charge_col_B]  # Charge values for back
             
             # Apply clipping ranges to the data
             mask_F = (y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max) & (charge_F > Q_clip_min) & (charge_F < Q_clip_max)
@@ -1962,47 +1924,37 @@ if create_plots:
     # Close the plot to avoid excessive memory usage
     plt.close(fig_TQ)
 
-# -----------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------
 
 print("--------------------------------------------------------------------------")
 print("-------------------- Filter 1.1.1: uncalibrated data ---------------------")
 print("--------------------------------------------------------------------------")
-# FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out ------------------------------
+# FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out ------------------
 
-# print("Before filtering:")
-# print(f"Number of non-zero values in {col_F}: {np.sum(final_df[col_F] != 0)}")
-# print(f"Number of non-zero values in {col_B}: {np.sum(final_df[col_B] != 0)}")
-# print(f"Min and Max values for {col_F} before filtering: {final_df[col_F].min()}, {final_df[col_F].max()}")
-
-# Handle NaNs by replacing them with 0
-final_df = final_df.fillna(0)
+for col in working_df.columns:
+    if working_df[col].isna().any():
+        working_df[col].fillna(0, inplace=True)
 
 # Loop through all relevant columns and apply the filtering
-for col in final_df.columns:
+for col in working_df.columns:
     if col.startswith('T') or col.startswith('Q'):  # Check for T and Q columns
         if '_F_' in col:  # Check if '_F_' is in the column name
             # Apply the T_F filter for time columns (T)
             if col.startswith('T'):
-                final_df[col] = np.where((final_df[col] > T_F_right_pre_cal) | (final_df[col] < T_F_left_pre_cal), 0, final_df[col])
+                working_df[col] = np.where((working_df[col] > T_F_right_pre_cal) | (working_df[col] < T_F_left_pre_cal), 0, working_df[col])
             # Apply the Q_F filter for charge columns (Q)
             if col.startswith('Q'):
-                final_df[col] = np.where((final_df[col] > Q_F_right_pre_cal) | (final_df[col] < Q_F_left_pre_cal), 0, final_df[col])
+                working_df[col] = np.where((working_df[col] > Q_F_right_pre_cal) | (working_df[col] < Q_F_left_pre_cal), 0, working_df[col])
         elif '_B_' in col:  # Check if '_B_' is in the column name
             # Apply the T_B filter for time columns (T)
             if col.startswith('T'):
-                final_df[col] = np.where((final_df[col] > T_B_right_pre_cal) | (final_df[col] < T_B_left_pre_cal), 0, final_df[col])
+                working_df[col] = np.where((working_df[col] > T_B_right_pre_cal) | (working_df[col] < T_B_left_pre_cal), 0, working_df[col])
             # Apply the Q_B filter for charge columns (Q)
             if col.startswith('Q'):
-                final_df[col] = np.where((final_df[col] > Q_B_right_pre_cal) | (final_df[col] < Q_B_left_pre_cal), 0, final_df[col])
+                working_df[col] = np.where((working_df[col] > Q_B_right_pre_cal) | (working_df[col] < Q_B_left_pre_cal), 0, working_df[col])
 
 
-# print("After filtering:")
-# print(f"Number of non-zero values in {col_F}: {np.sum(final_df[col_F] != 0)}")
-# print(f"Number of non-zero values in {col_B}: {np.sum(final_df[col_B] != 0)}")
-# print(f"Min and Max values for {col_F} after filtering: {final_df[col_F].min()}, {final_df[col_F].max()}")
-
-
-# New channel-wise plot -------------------------------------------------------
+# New channel-wise plot ----------------------------------------------------------
 log_scale = True
 if debug_mode:
     T_clip_min = -500
@@ -2028,8 +1980,8 @@ if create_plots:
         for j in range(4):
             col_F = f'{key}_F_{j+1}'
             col_B = f'{key}_B_{j+1}'
-            y_F = final_df[col_F]
-            y_B = final_df[col_B]
+            y_F = working_df[col_F]
+            y_B = working_df[col_B]
             
             # Plot histograms with T-specific clipping and bins
             axes_T[i*4 + j].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
@@ -2065,8 +2017,8 @@ if create_plots:
         for j in range(4):
             col_F = f'{key.replace("T", "Q")}_F_{j+1}'
             col_B = f'{key.replace("T", "Q")}_B_{j+1}'
-            y_F = final_df[col_F]
-            y_B = final_df[col_B]
+            y_F = working_df[col_F]
+            y_B = working_df[col_B]
             
             # Plot histograms with Q-specific clipping and bins
             axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
@@ -2106,14 +2058,14 @@ if create_plots:
             col_F = f'{key}_F_{j+1}'  # Time F column
             col_B = f'{key}_B_{j+1}'  # Time B column
             
-            y_F = final_df[col_F].copy()  # Time values for front
-            y_B = final_df[col_B].copy()  # Time values for back
+            y_F = working_df[col_F]  # Time values for front
+            y_B = working_df[col_B]  # Time values for back
             
             charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'  # Corresponding charge column for front
             charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'  # Corresponding charge column for back
             
-            charge_F = final_df[charge_col_F].copy()  # Charge values for front
-            charge_B = final_df[charge_col_B].copy()  # Charge values for back
+            charge_F = working_df[charge_col_F]  # Charge values for front
+            charge_B = working_df[charge_col_B]  # Charge values for back
             
             # Apply clipping ranges to the data
             mask_F = (y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max) & (charge_F > Q_clip_min) & (charge_F < Q_clip_max)
@@ -2158,7 +2110,7 @@ if create_plots:
 # -----------------------------------------------------------------------------
 
 # Count the number of nonzero values in each column
-nonzero_counts = (final_df != 0).sum()
+nonzero_counts = (working_df != 0).sum()
 
 # Identify columns with fewer than 100 nonzero values
 low_value_cols = nonzero_counts[nonzero_counts < 100].index.tolist()
@@ -2179,20 +2131,20 @@ print("-------------------------------------------------------------------------
 print("-------------------- Charge pedestal calibration -------------------------")
 print("--------------------------------------------------------------------------")
 
-charge_test = final_df.copy()
+charge_test = working_df.copy()
 charge_test_copy = charge_test.copy()
 
 # New pedestal calibration for charges ------------------------------------------------
 QF_pedestal = []
 for key in ['1', '2', '3', '4']:
     Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
-    Q_F = final_df[Q_F_cols].values
+    Q_F = working_df[Q_F_cols].values
     
     Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
-    Q_B = final_df[Q_B_cols].values
+    Q_B = working_df[Q_B_cols].values
     
     T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
-    T_F = final_df[T_F_cols].values
+    T_F = working_df[T_F_cols].values
     
     QF_pedestal_component = [calibrate_strip_Q_pedestal(Q_F[:,i], T_F[:,i], Q_B[:,i]) for i in range(4)]
     QF_pedestal.append(QF_pedestal_component)
@@ -2201,13 +2153,13 @@ QF_pedestal = np.array(QF_pedestal)
 QB_pedestal = []
 for key in ['1', '2', '3', '4']:
     Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
-    Q_F = final_df[Q_F_cols].values
+    Q_F = working_df[Q_F_cols].values
     
     Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
-    Q_B = final_df[Q_B_cols].values
+    Q_B = working_df[Q_B_cols].values
     
     T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
-    T_B = final_df[T_B_cols].values
+    T_B = working_df[T_B_cols].values
     
     QB_pedestal_component = [calibrate_strip_Q_pedestal(Q_B[:,i], T_B[:,i], Q_F[:,i]) for i in range(4)]
     QB_pedestal.append(QB_pedestal_component)
@@ -2216,7 +2168,7 @@ QB_pedestal = np.array(QB_pedestal)
 print("\nFront Charge Pedestal:")
 print(QF_pedestal)
 print("\nBack Charge Pedestal:")
-print(QB_pedestal)
+print(QB_pedestal,"\n")
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
@@ -2346,7 +2298,7 @@ def interpolate_fast_charge(width_array):
     width_array = np.asarray(width_array)
     return np.where(width_array == 0, 0, cs(width_array))
 
-# --- Calibrate and store new columns in final_df ---
+# --- Calibrate and store new columns in working_df ---
 for key in ['Q1', 'Q2', 'Q3', 'Q4']:
     for j in range(1, 5):
         for suffix in ['F', 'B']:
@@ -2411,7 +2363,11 @@ if create_plots:
 # -------------------------- Position offset calibration ---------------------------
 # ----------------------------------------------------------------------------------
 
-pos_test = final_df.copy()
+print("--------------------------------------------------------------------------")
+print("-------------------- Position offset calibration -------------------------")
+print("--------------------------------------------------------------------------")
+
+pos_test = working_df.copy()
 for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
     for j in range(4):
         pos_test[f'{key}_diff_{j+1}'] = ( pos_test[f'{key}_F_{j+1}'] - pos_test[f'{key}_B_{j+1}'] ) / 2
@@ -2420,17 +2376,17 @@ pos_test_copy = pos_test.copy()
 Tdiff_cal = []
 for key in ['1', '2', '3', '4']:
     T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
-    T_F = final_df[T_F_cols].values
+    T_F = working_df[T_F_cols].values
     
     T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
-    T_B = final_df[T_B_cols].values
+    T_B = working_df[T_B_cols].values
     
     Tdiff_cal_component = [calibrate_strip_T_diff(T_F[:,i], T_B[:,i]) for i in range(4)]
     Tdiff_cal.append(Tdiff_cal_component)
 Tdiff_cal = np.array(Tdiff_cal)
 
 print("\nTime diff. offset:")
-print(Tdiff_cal)
+print(Tdiff_cal, "\n")
 
 validate_pos_cal = False
 if validate_pos_cal:
@@ -2474,51 +2430,47 @@ if validate_pos_cal:
         if save_plots:
             final_filename = f'{fig_idx}_grand_figure_T_diff_cal.png'
             fig_idx += 1
-            
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
             plt.savefig(save_fig_path, format='png')
-        
         if show_plots: plt.show()
         plt.close(fig_Q)
-
 
 
 # ----------------------------------------------------------------------------------
 # -------------------------- Semisums and semidifferences --------------------------
 # ----------------------------------------------------------------------------------
 
-# Compute T_sum, T_diff, Q_sum, Q_diff ----------------------------------------
-new_columns_data = {'datetime': final_df['datetime'].values}
 for key in ['T1', 'T2', 'T3', 'T4']:
     T_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
     T_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
     Q_F_cols = [f'{key.replace("T", "Q")}_F_{i+1}' for i in range(4)]
     Q_B_cols = [f'{key.replace("T", "Q")}_B_{i+1}' for i in range(4)]
 
-    T_F = final_df[T_F_cols].values
-    T_B = final_df[T_B_cols].values
-    Q_F = final_df[Q_F_cols].values
-    Q_B = final_df[Q_B_cols].values
+    T_F = working_df[T_F_cols].values
+    T_B = working_df[T_B_cols].values
+    Q_F = working_df[Q_F_cols].values
+    Q_B = working_df[Q_B_cols].values
 
+    new_cols = {}
     for i in range(4):
-        new_columns_data[f'{key}_T_sum_{i+1}'] = (T_F[:, i] + T_B[:, i]) / 2
-        new_columns_data[f'{key}_T_diff_{i+1}'] = (T_F[:, i] - T_B[:, i]) / 2
-        new_columns_data[f'{key.replace("T", "Q")}_Q_sum_{i+1}'] = (Q_F[:, i] + Q_B[:, i]) / 2
-        new_columns_data[f'{key.replace("T", "Q")}_Q_diff_{i+1}'] = (Q_F[:, i] - Q_B[:, i]) / 2
+        new_cols[f'{key}_T_sum_{i+1}'] = (T_F[:, i] + T_B[:, i]) / 2
+        new_cols[f'{key}_T_diff_{i+1}'] = (T_F[:, i] - T_B[:, i]) / 2
+        new_cols[f'{key.replace("T", "Q")}_Q_sum_{i+1}'] = (Q_F[:, i] + Q_B[:, i]) / 2
+        new_cols[f'{key.replace("T", "Q")}_Q_diff_{i+1}'] = (Q_F[:, i] - Q_B[:, i]) / 2
 
-new_df = pd.DataFrame(new_columns_data)
+    working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
 
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
+    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in new_df.columns if col != 'datetime']):
-        y = new_df[col]
+    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
+        y = working_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
@@ -2565,26 +2517,26 @@ print("----------------------------------------------------------------------")
 print("-------------------- Filter 2: uncalibrated data ---------------------")
 
 # FILTER 2: TSUM, TDIF, QSUM, QDIF PRECALIBRATED THRESHOLDS --> 0 if out ------------------------------
-for col in new_df.columns:
+for col in working_df.columns:
     if 'T_sum' in col:
-        new_df[col] = np.where((new_df[col] > T_sum_right_pre_cal) | (new_df[col] < T_sum_left_pre_cal), 0, new_df[col])
+        working_df[col] = np.where((working_df[col] > T_sum_right_pre_cal) | (working_df[col] < T_sum_left_pre_cal), 0, working_df[col])
     if 'T_diff' in col:
-        new_df[col] = np.where((new_df[col] > T_diff_pre_cal_threshold) | (new_df[col] < -T_diff_pre_cal_threshold), 0, new_df[col])
+        working_df[col] = np.where((working_df[col] > T_diff_pre_cal_threshold) | (working_df[col] < -T_diff_pre_cal_threshold), 0, working_df[col])
     if 'Q_sum' in col:
-        new_df[col] = np.where((new_df[col] > Q_right_pre_cal) | (new_df[col] < Q_left_pre_cal), 0, new_df[col])
+        working_df[col] = np.where((working_df[col] > Q_right_pre_cal) | (working_df[col] < Q_left_pre_cal), 0, working_df[col])
     if 'Q_diff' in col:
-        new_df[col] = np.where((new_df[col] > Q_diff_pre_cal_threshold) | (new_df[col] < -Q_diff_pre_cal_threshold), 0, new_df[col])
+        working_df[col] = np.where((working_df[col] > Q_diff_pre_cal_threshold) | (working_df[col] < -Q_diff_pre_cal_threshold), 0, working_df[col])
 
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
+    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in new_df.columns if col != 'datetime']):
-        y = new_df[col]
+    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
+        y = working_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
@@ -2622,44 +2574,36 @@ if create_plots:
     plt.close()
 
 
-calibrated_data = new_df.copy()
-calibrated_data['datetime'] = final_df['datetime'] # Add datetime column to calibrated_data
-
-if debug_mode:
-    print(len(calibrated_data))
-
-
 print("----------------------------------------------------------------------")
 print("----------- Charge sum pedestal, calibration and filtering -----------")
 print("----------------------------------------------------------------------")
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
-        mask = new_df[f'{key}_Q_sum_{j+1}'] != 0
-        # calibrated_data.loc[mask, f'{key}_Q_sum_{j+1}'] -= calibration_Q[i][j]
-        calibrated_data.loc[mask, f'{key}_Q_sum_{j+1}'] -= ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
+        mask = working_df[f'{key}_Q_sum_{j+1}'] != 0
+        # working_df.loc[mask, f'{key}_Q_sum_{j+1}'] -= calibration_Q[i][j]
+        working_df.loc[mask, f'{key}_Q_sum_{j+1}'] -= ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
 
 
 print("------------------ Filter 3: charge sum filtering --------------------")
-for col in calibrated_data.columns:
+for col in working_df.columns:
     if 'Q_sum' in col:
-        calibrated_data[col] = np.where((calibrated_data[col] > Q_sum_right_cal) | (calibrated_data[col] < Q_sum_left_cal), 0, calibrated_data[col])
+        working_df[col] = np.where((working_df[col] > Q_sum_right_cal) | (working_df[col] < Q_sum_left_cal), 0, working_df[col])
 
 
 print("----------------------------------------------------------------------")
 print("----------------- Time diff calibration and filtering ----------------")
 print("----------------------------------------------------------------------")
 
-calibrated_data_copy = calibrated_data.copy()
 for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
     for j in range(4):
-        mask = calibrated_data_copy[f'{key}_T_diff_{j+1}'] != 0
-        calibrated_data.loc[mask, f'{key}_T_diff_{j+1}'] -= Tdiff_cal[i][j]
+        mask = working_df[f'{key}_T_diff_{j+1}'] != 0
+        working_df.loc[mask, f'{key}_T_diff_{j+1}'] -= Tdiff_cal[i][j]
 
 print("--------------------- Filter 3.2: time diff filtering ----------------")
-for col in calibrated_data.columns:
+for col in working_df.columns:
     if 'T_diff' in col:
-        calibrated_data[col] = np.where((calibrated_data[col] > T_diff_cal_threshold) | (calibrated_data[col] < -T_diff_cal_threshold), 0, calibrated_data[col])
+        working_df[col] = np.where((working_df[col] > T_diff_cal_threshold) | (working_df[col] < -T_diff_cal_threshold), 0, working_df[col])
 
 
 print("----------------------------------------------------------------------")
@@ -2668,15 +2612,15 @@ print("----------------------------------------------------------------------")
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
-        mask = new_df[f'{key}_Q_diff_{j+1}'] != 0
-        # calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= calibration_Q_FB[i][j]
-        calibrated_data.loc[mask, f'{key}_Q_diff_{j+1}'] -= ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
+        mask = working_df[f'{key}_Q_diff_{j+1}'] != 0
+        # working_df.loc[mask, f'{key}_Q_diff_{j+1}'] -= calibration_Q_FB[i][j]
+        working_df.loc[mask, f'{key}_Q_diff_{j+1}'] -= ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
 
 
 print("------------------ Filter 4: charge diff filtering -------------------")
-for col in calibrated_data.columns:
+for col in working_df.columns:
     if 'Q_diff' in col:
-        calibrated_data[col] = np.where((calibrated_data[col] > Q_diff_cal_threshold) | (calibrated_data[col] < -Q_diff_cal_threshold), 0, calibrated_data[col])
+        working_df[col] = np.where((working_df[col] > Q_diff_cal_threshold) | (working_df[col] < -Q_diff_cal_threshold), 0, working_df[col])
 
 
 # For articles and presentations
@@ -2687,8 +2631,8 @@ for col in calibrated_data.columns:
 #     fig_idx = 0  # Assuming fig_idx is defined earlier
 #     plot_list = []  # Assuming plot_list is defined earlier
 
-#     for i, col in enumerate([col for col in calibrated_data.columns if col != 'datetime'][:len(data)]):
-#         y = calibrated_data[col]
+#     for i, col in enumerate([col for col in working_df.columns if col != 'datetime'][:len(data)]):
+#         y = working_df[col]
 #         if 'Q_sum' in col:
 #             color = 'green'
 #         elif 'Q_diff' in col:
@@ -2727,13 +2671,13 @@ for col in calibrated_data.columns:
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
+    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in new_df.columns if col != 'datetime']):
-        y = calibrated_data[col]
+    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
+        y = working_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
@@ -2779,13 +2723,13 @@ if charge_front_back:
     for key in [1, 2, 3, 4]:
         for i in range(4):
             # Extract data from the DataFrame
-            Q_sum = calibrated_data[f'Q{key}_Q_sum_{i+1}'].values
-            Q_diff = calibrated_data[f'Q{key}_Q_diff_{i+1}'].values
+            Q_sum = working_df[f'Q{key}_Q_sum_{i+1}'].values
+            Q_diff = working_df[f'Q{key}_Q_diff_{i+1}'].values
 
             # Apply condition to filter non-zero Q_sum and Q_diff
             cond = (Q_sum != 0) & (Q_diff != 0)
-            Q_sum_adjusted = Q_sum[cond].copy()
-            Q_diff_adjusted = Q_diff[cond].copy()
+            Q_sum_adjusted = Q_sum[cond]
+            Q_diff_adjusted = Q_diff[cond]
             
             # Skip correction if no data is left after filtering
             if np.sum(Q_sum_adjusted) == 0:
@@ -2797,31 +2741,32 @@ if charge_front_back:
             y_label = "Charge diff"
             name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
             coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
-            calibrated_data.loc[cond, f'Q{key}_Q_diff_{i+1}'] = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
+            working_df.loc[cond, f'Q{key}_Q_diff_{i+1}'] = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
             
-    print('Charge front-back correction performed.')
+    print('\nCharge front-back correction performed.')
     
 else:
     print('Charge front-back correction was selected to not be performed.')
     Q_diff_cal_threshold_FB = 10
 
 
-print("----------------- Filter 5: charge difference FB filtering -----------------")
-for col in calibrated_data.columns:
+print("----------------------------------------------------------------------")
+print("------------- Filter 5: charge difference FB filtering ---------------")
+for col in working_df.columns:
     if 'Q_diff' in col:
-        calibrated_data[col] = np.where(np.abs(calibrated_data[col]) < Q_diff_cal_threshold_FB, calibrated_data[col], 0)
+        working_df[col] = np.where(np.abs(working_df[col]) < Q_diff_cal_threshold_FB, working_df[col], 0)
 
 # ------------------------------------------------------------
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
+    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in new_df.columns if col != 'datetime']):
-        y = calibrated_data[col]
+    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
+        y = working_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
@@ -2859,51 +2804,6 @@ if create_plots:
     plt.close()
 
 
-# ------------------------------------------------------------
-# ------------------------------------------------------------
-
-def create_filtered_tt(df):
-    def get_filtered_tt(row):
-        planes_with_charge = []
-        for plane in range(1, 5):
-            charge_columns = [f'Q{plane}_Q_sum_{i}' for i in range(1, 5)]
-            if any(row[col] != 0 for col in charge_columns):
-                planes_with_charge.append(str(plane))
-        return ''.join(planes_with_charge)
-    
-    df['not_so_filtered_tt'] = df.apply(get_filtered_tt, axis=1)
-    return df
-
-# Apply the function to the DataFrame
-calibrated_data = create_filtered_tt(calibrated_data)
-
-if create_plots:
-# if create_essential_plots or create_plots:
-    event_counts = calibrated_data['not_so_filtered_tt'].copy().value_counts()
-
-    # Plot the histogram of event counts
-    plt.figure(figsize=(10, 6))
-    event_counts.plot(kind='bar', alpha=0.7)
-    plt.title('Number of Events per Filtered TT Label')
-    plt.xlabel('Not so Filtered TT Label')
-    plt.ylabel('Number of Events')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    if save_plots:
-        final_filename = f'{fig_idx}_not_so_filtered_TT.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-
-    if show_plots: plt.show()
-    plt.close()
-
-# ------------------------------------------------------------
-# ------------------------------------------------------------
-
-
 print("----------------------------------------------------------------------")
 print("------------- Filter if any variable in the strip is 0 ---------------")
 print("----------------------------------------------------------------------")
@@ -2911,10 +2811,7 @@ print("----------------------------------------------------------------------")
 # Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
 # put the four variables in that plane, strip and event to 0
 
-# Print all the column names of calibrated_data
-print(calibrated_data.columns.to_list())
-
-total_events = len(calibrated_data)
+total_events = len(working_df)
 
 for plane in range(1, 5):
     for strip in range(1, 5):
@@ -2925,10 +2822,10 @@ for plane in range(1, 5):
         
         # Build mask
         mask = (
-            (calibrated_data[q_sum]  == 0) |
-            (calibrated_data[q_diff] == 0) |
-            (calibrated_data[t_sum]  == 0) |
-            (calibrated_data[t_diff] == 0)
+            (working_df[q_sum]  == 0) |
+            (working_df[q_diff] == 0) |
+            (working_df[t_sum]  == 0) |
+            (working_df[t_diff] == 0)
         )
         
         # Count affected events
@@ -2936,18 +2833,18 @@ for plane in range(1, 5):
         print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
 
         # Zero the affected values
-        calibrated_data.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(new_df.columns) - 1  # Exclude 'datetime'
+    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in new_df.columns if col != 'datetime']):
-        y = calibrated_data[col]
+    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
+        y = working_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
@@ -2987,24 +2884,25 @@ if create_plots:
 
 
 print("----------------------------------------------------------------------")
-print("------------------------ Slewing correction --------------------------")
+print("---------------------- Slewing correction 1/2 ------------------------")
 print("----------------------------------------------------------------------")
 
 if slewing_correction:
-    print("WIP")
     
-    data_df = calibrated_data.copy()
-    
-    # Take only the columns which have T_sum in the name, I mean, inside of the column name
-    # Also _final cannot be in the column name. Also the column called 'type' save it
-    # Extract relevant columns
-    data_df_times = data_df.filter(regex='T_sum')
-    data_df_charges = data_df.filter(regex='Q_sum')
-    data_df_tdiff = data_df.filter(regex='T_diff')
+    # Select desired columns
+    cols = working_df.columns
+    t_sum_cols   = [c for c in cols if 'T_sum' in c and '_final' not in c]
+    q_sum_cols   = [c for c in cols if 'Q_sum' in c and '_final' not in c]
+    t_diff_cols  = [c for c in cols if 'T_diff' in c and '_final' not in c]
+    type_col     = ['type'] if 'type' in cols else []
+
+    data_df_times   = working_df[t_sum_cols]
+    data_df_charges = working_df[q_sum_cols]
+    data_df_tdiff   = working_df[t_diff_cols]
+    type_series     = working_df[type_col] if type_col else None
 
     # Concatenate all relevant data with 'type' column
     data_df_filt = pd.concat([data_df_charges, data_df_times, data_df_tdiff], axis=1)
-    print(data_df_filt.columns.to_list())
     data_slew = data_df_filt
     
     # Select y_pos for each plane
@@ -3210,7 +3108,6 @@ if slewing_correction:
     
     # if create_essential_plots or create_plots:
     if create_plots:
-        import seaborn as sns
         
         pair_labels = [
             (p1, s1, p2, s2)
@@ -3281,10 +3178,6 @@ if slewing_correction:
             
     # if create_essential_plots or create_plots:
     if create_plots:
-        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-        from matplotlib import gridspec
-        
-        import seaborn as sns
         
         pair_labels = [
             (p1, s1, p2, s2)
@@ -3364,7 +3257,6 @@ if slewing_correction:
 
 
     # THE FIT ----------------------------------------------------------------
-    from sklearn.linear_model import LinearRegression
     
     pair_labels = [
             (p1, s1, p2, s2)
@@ -3378,7 +3270,6 @@ if slewing_correction:
     fit_results = []
 
     def robust_z_filter(df, cols, threshold=3.5):
-        from scipy.stats import median_abs_deviation
 
         mask = np.ones(len(df), dtype=bool)
         for col in cols:
@@ -3457,9 +3348,6 @@ if slewing_correction:
     
     # if create_essential_plots or create_plots:
     if create_plots:
-        from mpl_toolkits.mplot3d import Axes3D
-        from matplotlib import gridspec
-        import seaborn as sns
 
         pair_labels = [
             (p1, s1, p2, s2)
@@ -3566,10 +3454,6 @@ if slewing_correction:
     # FIT VALIDATION (reduced to essential plots)
     # if create_essential_plots or create_plots:
     if create_plots:
-
-        from mpl_toolkits.mplot3d import Axes3D
-        from matplotlib import gridspec
-        import seaborn as sns
 
         pair_labels = [
             (p1, s1, p2, s2)
@@ -3687,7 +3571,7 @@ if time_calibration:
         event_matrices = []
         
         # Iterate over each event (row) in the DataFrame
-        for _, row in calibrated_data.iterrows():
+        for _, row in working_df.iterrows():
             event_matrix = []
             for module in ['T1', 'T2', 'T3', 'T4']:
                 # Find the index of the strip with the maximum Q_sum for this module
@@ -4110,19 +3994,18 @@ if time_calibration:
             # print(f"CRT for {var_name} is {CRT:.4g}")
             crt_values[f'CRT_{var_name}'] = CRT
         
-        crt_df = pd.DataFrame(crt_values, index=calibrated_data.index)
-        calibrated_data = pd.concat([calibrated_data, crt_df], axis=1)
-        calibrated_data = calibrated_data.copy()
-        crt_values = calibrated_data.filter(like='CRT_').iloc[0].values
+        crt_df = pd.DataFrame(crt_values, index=working_df.index)
+        working_df = pd.concat([working_df, crt_df], axis=1)
+        crt_values = working_df.filter(like='CRT_').iloc[0].values
         Q1, Q3 = np.percentile(crt_values, [25, 75])
         crt_values = crt_values[crt_values <= 1]
         filtered_crt_values = crt_values[(crt_values >= Q1 - 1.5 * (Q3 - Q1)) & (crt_values <= Q3 + 1.5 * (Q3 - Q1))]
         
-        global_variables['CRP_avg'] = np.mean(filtered_crt_values)*1000
+        global_variables['CRT_avg'] = np.mean(filtered_crt_values)*1000
         
-        # print(f"CRT values: {crt_values}, Filtered: {filtered_crt_values}, Avg: {calibrated_data['CRP_avg'][0]:.4g}")
+        # print(f"CRT values: {crt_values}, Filtered: {filtered_crt_values}, Avg: {working_df['CRT_avg'][0]:.4g}")
         print("---------------------------")
-        print(f"CRT Avg: {global_variables['CRP_avg']:.4g} ps")
+        print(f"CRT Avg: {global_variables['CRT_avg']:.4g} ps")
         print("---------------------------")
         
         # Create row and column indices
@@ -4168,7 +4051,6 @@ if time_calibration:
     if brute_force_analysis:
         # Main itinerary
         itinerary = ["P1s1", "P3s1", "P1s2", "P3s2", "P1s3", "P3s3", "P1s4", "P3s4","P4s4", "P2s4", "P4s3", "P2s3", "P4s2", "P2s2", "P4s1", "P2s1"]
-        import random
         k = 0
         max_iter = 2000000
         brute_force_list = []
@@ -4377,7 +4259,7 @@ if time_calibration:
     
     
     # Time calibration matrix calculated --------------------------------------
-    print("---------------------------")
+    print("------------------------")
     print("Calibration in times is:\n", calibration_times)
     
     diff = np.abs(calibration_times - time_sum_reference) > time_sum_distance
@@ -4390,16 +4272,16 @@ if time_calibration:
     # Applying time calibration
     for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         for j in range(4):
-            mask = calibrated_data[f'{key}_T_sum_{j+1}'] != 0
-            calibrated_data.loc[mask, f'{key}_T_sum_{j+1}'] += calibration_times[i][j]
+            mask = working_df[f'{key}_T_sum_{j+1}'] != 0
+            working_df.loc[mask, f'{key}_T_sum_{j+1}'] += calibration_times[i][j]
     
     
     if create_plots:
         # Prepare a figure with 1x4 subplots (only for times, no positions)
         fig, axs = plt.subplots(1, 4, figsize=(20, 5), constrained_layout=True)
     
-        # Plot histograms for T_sum values from calibrated_data
-        times = [calibrated_data[f'P1_T_sum_{i+1}'] for i in range(4)]
+        # Plot histograms for T_sum values from working_df
+        times = [working_df[f'P1_T_sum_{i+1}'] for i in range(4)]
         titles_times = ["T_sum P1", "T_sum P2", "T_sum P3", "T_sum P4"]
     
         for i, (time, title) in enumerate(zip(times, titles_times)):
@@ -4428,7 +4310,7 @@ if time_calibration:
     
 else:
     calibration_times = time_sum_reference
-    calibrated_data['CRT_avg'] = 1000 # An extreme time to not crush the program
+    working_df['CRT_avg'] = 1000 # An extreme time to not crush the program
     print("Calibration in times was set to the reference! (calibration was not performed)\n", calibration_times)
 
 
@@ -4440,7 +4322,7 @@ print("----------------------------------------------------------------------")
 time_window_fitting = True
 if time_window_fitting:
     
-    T_sum_columns = calibrated_data.filter(regex='_T_sum_')
+    T_sum_columns = working_df.filter(regex='_T_sum_')
 
     t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
     widths = np.linspace(1, 10, 30)  # Scan range of window widths in ns
@@ -4504,7 +4386,6 @@ if time_window_fitting:
         f_vals = s_vals + b_vals
         P_signal = s_vals / f_vals
         P_background = b_vals / f_vals
-        from matplotlib.gridspec import GridSpec
         fig = plt.figure(figsize=(10, 8))
         gs = GridSpec(2, 1, height_ratios=[1, 2], hspace=0.05)
         ax_fill = fig.add_subplot(gs[0])  # Top: signal vs. background fill
@@ -4544,22 +4425,28 @@ print("----------------------------------------------------------------------")
 print("---------------- Binary topology of active strips --------------------")
 print("----------------------------------------------------------------------")
 
-# Compute and store the binary topology (active strips per plane)
+# Collect new columns in a dict first
+active_strip_cols = {}
+
 for plane_id in range(1, 5):
     cols = [f'Q{plane_id}_Q_sum_{i}' for i in range(1, 5)]
-    Q_plane = calibrated_data[cols].values  # shape (N, 4)
+    Q_plane = working_df[cols].values  # shape (N, 4)
 
-    # Binary activation: 1 if charge > crosstalk_threshold_ns
+    # Binary activation: 1 if charge > threshold
     active_strips_binary = (Q_plane > crosstalk_threshold_ns).astype(int)
-    # active_strips_binary = (Q_plane != 0).astype(int)
 
-    # Convert each row to string (e.g. [0, 0, 1, 0] -> '0010')
+    # Convert to string representations
     binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
-    calibrated_data[f'active_strips_P{plane_id}'] = binary_strings
+
+    # Store in dict for later batch insertion
+    active_strip_cols[f'active_strips_P{plane_id}'] = binary_strings
+
+# Concatenate all new columns at once (column-wise)
+working_df = pd.concat([working_df, pd.DataFrame(active_strip_cols, index=working_df.index)], axis=1)
 
 # Print check
 print("Active strips per plane calculated.")
-print(calibrated_data[['active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4']].head())
+print(working_df[['active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4']].head())
 
 # if create_essential_plots or create_plots:
 if create_plots:
@@ -4570,14 +4457,14 @@ if create_plots:
     # First pass to determine global y-axis limit
     event_counts_list = []
     for i in [1, 2, 3, 4]:
-        counts = calibrated_data[f'active_strips_P{i}'].value_counts()
+        counts = working_df[f'active_strips_P{i}'].value_counts()
         counts = counts[counts.index != '0000']
         event_counts_list.append(counts)
         if not counts.empty:
             y_max = max(y_max, counts.max())
     
     # Get global label order from P1 (or any consistent source)
-    label_order = calibrated_data['active_strips_P1'].value_counts().drop('0000', errors='ignore').index.tolist()
+    label_order = working_df['active_strips_P1'].value_counts().drop('0000', errors='ignore').index.tolist()
 
     # Second pass to plot
     for i, ax in zip([1, 2, 3, 4], axes):
@@ -4606,98 +4493,24 @@ if create_plots:
     plt.close()
 
 
-# NOW WE CREATE THE TT LABELS
-
-def create_filtered_tt(df):
-    def get_filtered_tt(row):
-        planes_with_charge = []
-        for plane in range(1, 5):
-            charge_columns = [f'Q{plane}_Q_sum_{i}' for i in range(1, 5)]
-            if any(row[col] != 0 for col in charge_columns):
-                planes_with_charge.append(str(plane))
-        return ''.join(planes_with_charge)
-    
-    df['filtered_tt'] = df.apply(get_filtered_tt, axis=1)
-    return df
-
-# Apply the function to the DataFrame
-calibrated_data = create_filtered_tt(calibrated_data)
-
-# if create_essential_plots or create_plots:
-if create_plots:
-    event_counts = calibrated_data['filtered_tt'].copy().value_counts()
-
-    # Plot the histogram of event counts
-    plt.figure(figsize=(10, 6))
-    event_counts.plot(kind='bar', alpha=0.7)
-    plt.title('Number of Events per Filtered TT Label')
-    plt.xlabel('Filtered TT Label')
-    plt.ylabel('Number of Events')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    if save_plots:
-        final_filename = f'{fig_idx}_filtered_TT.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-
-    if show_plots: plt.show()
-    plt.close()
-
-
-
-# Remove all rows that in filtered_tt are not in the list: 1234, 123, 124, 134, 234, 12, 23, 34, 13, 24, 14
-# filtered_tt_list = ['1234', '123', '124', '134', '234', '12', '23', '34', '13', '24', '14']
-# filtered_tt_list = ['1234', '123', '124', '134', '234', '12', '23', '34', '13']
-# calibrated_data = calibrated_data[calibrated_data['filtered_tt'].isin(filtered_tt_list)]
-
-# # if create_essential_plots or create_plots:
-# if create_essential_plots or create_plots:
-#     event_counts = calibrated_data['filtered_tt'].copy().value_counts()
-
-#     # Plot the histogram of event counts
-#     plt.figure(figsize=(10, 6))
-#     event_counts.plot(kind='bar', alpha=0.7)
-#     plt.title('Number of Events per Filtered TT Label')
-#     plt.xlabel('Filtered TT Label')
-#     plt.ylabel('Number of Events')
-#     plt.xticks(rotation=45)
-#     plt.tight_layout()
-#     if save_plots:
-#         final_filename = f'{fig_idx}_filtered_TT_refiltered.png'
-#         fig_idx += 1
-
-#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
-
-#     if show_plots: plt.show()
-#     plt.close()
-
-
 print("----------------------------------------------------------------------")
 print("----------------------- Y position calculation -----------------------")
 print("----------------------------------------------------------------------")
-
-from scipy.ndimage import gaussian_filter1d
 
 y_new_method = True
 blur_y = True
 
 if y_new_method:
+    y_columns = {}
+
     for plane_id in range(1, 5):
         # Retrieve and convert stored binary string to numeric array
         topo_binary = np.array([
-            list(map(int, s)) for s in calibrated_data[f'active_strips_P{plane_id}']
+            list(map(int, s)) for s in working_df[f'active_strips_P{plane_id}']
         ])  # shape (N, 4)
 
         # Select the corresponding Y position vector
-        if plane_id in [1, 3]:
-            y_vec = y_pos_P1_and_P3
-        else:
-            y_vec = y_pos_P2_and_P4
+        y_vec = y_pos_P1_and_P3 if plane_id in [1, 3] else y_pos_P2_and_P4
 
         # Compute weighted average
         weighted_y = topo_binary * y_vec
@@ -4705,23 +4518,28 @@ if y_new_method:
         active_counts_safe = np.where(active_counts == 0, 1, active_counts)
 
         y_position = weighted_y.sum(axis=1) / active_counts_safe
-        y_position[active_counts == 0] = 0  # Enforce 0 when no strips are active
-        
+        y_position[active_counts == 0] = 0  # enforce zero when no strips are active
+
         if blur_y:
             y_position_blurred = y_position.copy()
             nonzero_mask = y_position != 0
-            y_position_blurred[nonzero_mask] = np.random.normal(loc=y_position[nonzero_mask], scale=anc_sy)
-            calibrated_data[f'Y_{plane_id}'] = y_position_blurred
+            y_position_blurred[nonzero_mask] = np.random.normal(
+                loc=y_position[nonzero_mask],
+                scale=anc_sy
+            )
+            y_columns[f'Y_{plane_id}'] = y_position_blurred
         else:
-            calibrated_data[f'Y_{plane_id}'] = y_position
+            y_columns[f'Y_{plane_id}'] = y_position
 
+    # Insert all new Y_ columns at once
+    working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
 
 if create_essential_plots:
     plt.figure(figsize=(12, 8))
     for i, plane_id in enumerate(range(1, 5), 1):
         plt.subplot(2, 2, i)
         column_name = f'Y_{plane_id}'
-        data = calibrated_data[column_name]
+        data = working_df[column_name]
         
         plt.hist(data[data != 0], bins=50, histtype='stepfilled', alpha=0.7)
         plt.title(f'Y Position Distribution - Plane {plane_id}')
@@ -4748,8 +4566,6 @@ print("----------------------------------------------------------------------")
 print("-------------------------- Some more tests ---------------------------")
 print("----------------------------------------------------------------------")
 
-from itertools import combinations
-
 # if create_essential_plots or create_plots:
 if create_plots:
     for i_plane in range(1, 5):
@@ -4763,7 +4579,7 @@ if create_plots:
         Q_dif_cols = [f'Q{i_plane}_Q_diff_{j+1}' for j in range(4)]
 
         # Get all unique multi-strip patterns
-        patterns = calibrated_data[active_col].unique()
+        patterns = working_df[active_col].unique()
         multi_patterns = [p for p in patterns if p != '0000' and p.count('1') > 1]
 
         for pattern in multi_patterns:
@@ -4771,7 +4587,7 @@ if create_plots:
             if len(active_strips) != 2:
                 continue
 
-            mask = calibrated_data[active_col] == pattern
+            mask = working_df[active_col] == pattern
             n_events = mask.sum()
             if n_events == 0:
                 continue
@@ -4788,8 +4604,8 @@ if create_plots:
                 ]
 
                 for ax, (var_label, cols) in zip(axs, variable_sets):
-                    xi = calibrated_data.loc[mask, cols[i]].values
-                    yi = calibrated_data.loc[mask, cols[j]].values
+                    xi = working_df.loc[mask, cols[i]].values
+                    yi = working_df.loc[mask, cols[j]].values
 
                     ax.scatter(xi, yi, alpha=0.5, s=10)
                     ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
@@ -4823,8 +4639,8 @@ if create_plots:
 
                 # Other variables
                 for ax, (var_label, cols) in zip(axs, variable_sets):
-                    xi = calibrated_data.loc[mask, cols[i]].values
-                    yi = calibrated_data.loc[mask, cols[j]].values
+                    xi = working_df.loc[mask, cols[i]].values
+                    yi = working_df.loc[mask, cols[j]].values
 
                     # ax.scatter(xi + yi, ( xi - yi ) / (xi + yi), alpha=0.5, s=10)
                     mask_nonzero = (xi + yi) != 0
@@ -4861,14 +4677,18 @@ if create_plots:
 
 
 print("----------------------------------------------------------------------")
-print("---------------- Last part of the Slewing correction -----------------")
+print("----------------------- Slewing correction 2/2 -----------------------")
 print("----------------------------------------------------------------------")
 
+print("WIP")
 
 
 print("----------------------------------------------------------------------")
 print("----------------- Setting the variables of each RPC ------------------")
 print("----------------------------------------------------------------------")
+
+# Prepare containers for final results
+final_columns = {}
 
 for i_plane in range(1, 5):
     # Column names
@@ -4878,14 +4698,14 @@ for i_plane in range(1, 5):
     Q_dif_cols = [f'Q{i_plane}_Q_diff_{i+1}' for i in range(4)]
 
     # Extract data
-    T_sums = calibrated_data[T_sum_cols].astype(float).fillna(0).values
-    T_difs = calibrated_data[T_dif_cols].astype(float).fillna(0).values
-    Q_sums = calibrated_data[Q_sum_cols].astype(float).fillna(0).values
-    Q_difs = calibrated_data[Q_dif_cols].astype(float).fillna(0).values
+    T_sums = working_df[T_sum_cols].astype(float).fillna(0).values
+    T_difs = working_df[T_dif_cols].astype(float).fillna(0).values
+    Q_sums = working_df[Q_sum_cols].astype(float).fillna(0).values
+    Q_difs = working_df[Q_dif_cols].astype(float).fillna(0).values
 
     # Decode binary topology
     active_mask = np.array([
-        list(map(int, s)) for s in calibrated_data[f'active_strips_P{i_plane}']
+        list(map(int, s)) for s in working_df[f'active_strips_P{i_plane}']
     ])  # shape (N, 4)
 
     # Compute strip activation count
@@ -4897,16 +4717,21 @@ for i_plane in range(1, 5):
     T_dif_masked = T_difs * active_mask
     Q_dif_masked = Q_difs * active_mask
 
-    calibrated_data[f'P{i_plane}_T_sum_final'] = T_sum_masked.sum(axis=1) / n_active_safe
-    calibrated_data[f'P{i_plane}_T_diff_final'] = T_dif_masked.sum(axis=1) / n_active_safe
+    T_sum_final = T_sum_masked.sum(axis=1) / n_active_safe
+    T_diff_final = T_dif_masked.sum(axis=1) / n_active_safe
 
-    # Zero out where no active strips
-    calibrated_data.loc[n_active == 0, f'P{i_plane}_T_sum_final'] = 0
-    calibrated_data.loc[n_active == 0, f'P{i_plane}_T_diff_final'] = 0
+    # Enforce zero where no active strips
+    T_sum_final[n_active == 0] = 0
+    T_diff_final[n_active == 0] = 0
 
-    # Store total charge
-    calibrated_data[f'P{i_plane}_Q_sum_final'] = (Q_sums * active_mask).sum(axis=1)
-    calibrated_data[f'P{i_plane}_Q_diff_final'] = (Q_difs * active_mask).sum(axis=1)
+    # Store final values in dictionary
+    final_columns[f'P{i_plane}_T_sum_final'] = T_sum_final
+    final_columns[f'P{i_plane}_T_diff_final'] = T_diff_final
+    final_columns[f'P{i_plane}_Q_sum_final'] = (Q_sums * active_mask).sum(axis=1)
+    final_columns[f'P{i_plane}_Q_diff_final'] = Q_dif_masked.sum(axis=1)
+
+# Concatenate all new final columns at once
+working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
 
 
 if create_essential_plots or create_plots:
@@ -4922,7 +4747,7 @@ if create_essential_plots or create_plots:
         y_col = f'Y_{i_plane}'
 
         # Filter valid rows (non-zero)
-        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
+        valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
         
         # Extract variables and filter low charge
         cond = valid_rows[q_sum_col] < 50
@@ -4968,22 +4793,21 @@ if create_essential_plots or create_plots:
     if show_plots: plt.show()
     plt.close()
 
-    
 
 print("--------------------- Filter 6: calibrated data ----------------------")
-for col in calibrated_data.columns:
+for col in working_df.columns:
     if 'T_sum_final' in col:
-        calibrated_data[col] = np.where((calibrated_data[col] < T_sum_RPC_left) | (calibrated_data[col] > T_sum_RPC_right), 0, calibrated_data[col])
+        working_df[col] = np.where((working_df[col] < T_sum_RPC_left) | (working_df[col] > T_sum_RPC_right), 0, working_df[col])
     if 'T_diff_final' in col:
-        calibrated_data[col] = np.where((calibrated_data[col] < T_diff_RPC_left) | (calibrated_data[col] > T_diff_RPC_right), 0, calibrated_data[col])
+        working_df[col] = np.where((working_df[col] < T_diff_RPC_left) | (working_df[col] > T_diff_RPC_right), 0, working_df[col])
     if 'Q_sum_final' in col:
-        calibrated_data[col] = np.where((calibrated_data[col] < Q_RPC_left) | (calibrated_data[col] > Q_RPC_right), 0, calibrated_data[col])
+        working_df[col] = np.where((working_df[col] < Q_RPC_left) | (working_df[col] > Q_RPC_right), 0, working_df[col])
     if 'Q_diff_final' in col:
-        calibrated_data[col] = np.where((calibrated_data[col] < Q_dif_RPC_left) | (calibrated_data[col] > Q_dif_RPC_right), 0, calibrated_data[col])
+        working_df[col] = np.where((working_df[col] < Q_dif_RPC_left) | (working_df[col] > Q_dif_RPC_right), 0, working_df[col])
     if 'Y_' in col:
-        calibrated_data[col] = np.where((calibrated_data[col] < Y_RPC_left) | (calibrated_data[col] > Y_RPC_right), 0, calibrated_data[col])
+        working_df[col] = np.where((working_df[col] < Y_RPC_left) | (working_df[col] > Y_RPC_right), 0, working_df[col])
 
-total_events = len(calibrated_data)
+total_events = len(working_df)
 
 for i_plane in range(1, 5):
     y_col      = f'Y_{i_plane}'
@@ -4995,26 +4819,26 @@ for i_plane in range(1, 5):
     cols = [y_col, t_sum_col, t_diff_col, q_sum_col, q_diff_col]
 
     # Identify affected rows
-    mask = (calibrated_data[cols] == 0).any(axis=1)
+    mask = (working_df[cols] == 0).any(axis=1)
     num_affected = mask.sum()
 
     print(f"Plane {i_plane}: {num_affected} out of {total_events} events affected ({(num_affected / total_events) * 100:.2f}%)")
 
     # Apply zeroing
-    calibrated_data.loc[mask, cols] = 0
+    working_df.loc[mask, cols] = 0
 
 
 # ----------------------------------------------------------------------------------------------------------------
 if stratos_save and station == 1:
     print("Saving X and Y for stratos.")
     
-    stratos_df = calibrated_data.copy()
+    stratos_df = working_df.copy()
     
     # Select columns that start with "Y_" or match "T<number>_T_diff_final"
     filtered_columns = [col for col in stratos_df.columns if col.startswith("Y_") or "_T_diff_final" in col or 'datetime' in col]
 
     # Create a new DataFrame with the selected columns
-    filtered_stratos_df = stratos_df[filtered_columns].copy()
+    filtered_stratos_df = stratos_df[filtered_columns]
 
     # Rename "T<number>_T_diff_final" to "X_<number>" and multiply by 200
     filtered_stratos_df.rename(columns=lambda col: f'X_{col.split("_")[0][1:]}' if "_T_diff_final" in col else col, inplace=True)
@@ -5041,7 +4865,7 @@ if create_plots or create_essential_plots:
         y_col = f'Y_{i_plane}'
 
         # Filter valid rows (non-zero)
-        valid_rows = calibrated_data[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
+        valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
         
         # Extract variables and filter low charge
         cond = valid_rows[q_sum_col] < 50
@@ -5088,53 +4912,6 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
-# Now obtain the trigger type ----------------------------------------------------------------
-def create_pre_timtrack_tt(df):
-    def get_pre_timtrack_tt(row):
-        planes_with_charge = []
-        for plane in range(1, 5):
-            charge_columns = [f'P{plane}_Q_sum_final']
-            if any(row[col] != 0 for col in charge_columns):
-                planes_with_charge.append(str(plane))
-        return ''.join(planes_with_charge)
-    
-    df['pre_timtrack_tt'] = df.apply(get_pre_timtrack_tt, axis=1)
-    return df
-
-# Apply the function to the DataFrame
-calibrated_data = create_pre_timtrack_tt(calibrated_data)
-
-# if create_essential_plots or create_plots:
-if create_plots:
-    event_counts = calibrated_data['pre_timtrack_tt'].copy().value_counts()
-
-    # Plot the histogram of event counts
-    plt.figure(figsize=(10, 6))
-    event_counts.plot(kind='bar', alpha=0.7)
-    plt.title('Number of Events per pretimtrack TT Label')
-    plt.xlabel('Pre TimTrack TT Label')
-    plt.ylabel('Number of Events')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    if save_plots:
-        final_filename = f'{fig_idx}_pre_timtrack_tt.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-
-    if show_plots: plt.show()
-    plt.close()
-
-
-print("----------------------------------------------------------------------")
-print("----------------- Finishing the slewing correction -------------------")
-print("----------------------------------------------------------------------")
-
-print('WIP')
-
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("-------------- Alternative angle and slowness fitting ----------------")
@@ -5163,78 +4940,59 @@ def fit_3d_line(X, Y, Z, sX, sY, sZ):
     chi2 = np.sum((distances / np.sqrt(np.array(sX)**2 + np.array(sY)**2 + np.array(sZ)**2)) ** 2)
     return x_z0, y_z0, theta, phi, chi2
 
-# Initialize results
-alt_fit_results = ['alt_theta', 'alt_phi', 'alt_chi2']
-alt_new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=alt_fit_results)
-calibrated_data = pd.concat([calibrated_data, alt_new_columns_df], axis=1)
+fit_results = {
+    'alt_x': [], 'alt_y': [],
+    'alt_theta': [], 'alt_phi': [],
+    'alt_chi2': []
+}
 
-# Loop over all tracks
-for idx, track in calibrated_data.iterrows():
-    planes_to_iterate = []
-    
-    # Identify valid planes with charge
-    for i_plane in range(nplan):
-        charge_plane = getattr(track, f'P{i_plane + 1}_Q_sum_final')
-        if charge_plane > 4:
-            planes_to_iterate.append(i_plane + 1)
-
-    planes_to_iterate = np.array(planes_to_iterate)
-
-    if len(planes_to_iterate) >= 2:  # Only fit if 2 or more points exist
-        X, Y, Z, sX, sY, sZ = [], [], [], [], [], []
-
-        for iplane in planes_to_iterate:
-            t_d = getattr(track, f'P{iplane}_T_diff_final')
-            x_p = strip_speed * t_d
-            X.append(x_p)
-            Y.append(getattr(track, f'Y_{iplane}'))
-            Z.append(z_positions[iplane - 1])
-            sX.append(anc_sx)
-            sY.append(anc_sy)
-            sZ.append(anc_sz)
-
-        # Fit line
-        x, y, theta, phi, chi2 = fit_3d_line(X, Y, Z, sX, sY, sZ)
-
-        # Store results
-        calibrated_data.at[idx, 'alt_x'] = x
-        calibrated_data.at[idx, 'alt_y'] = y
-        calibrated_data.at[idx, 'alt_theta'] = theta
-        calibrated_data.at[idx, 'alt_phi'] = phi
-        calibrated_data.at[idx, 'alt_chi2'] = chi2
-
-
-# Initialize results
-alt_fit_slow_results = ['alt_s']
-alt_slow_new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=alt_fit_slow_results)
-calibrated_data = pd.concat([calibrated_data, alt_slow_new_columns_df], axis=1)
-
-t_unc = anc_sts  # Uncertainty on T_sum values (adjust based on detector resolution)
-
-for idx, track in calibrated_data.iterrows():
-    planes_to_iterate = []
-
-    for i_plane in range(nplan):
-        charge_plane = getattr(track, f'P{i_plane + 1}_Q_sum_final')
-        if charge_plane > crosstalk_threshold_ns:
-            planes_to_iterate.append(i_plane + 1)
-
-    planes_to_iterate = np.array(planes_to_iterate)
+for idx, track in working_df.iterrows():
+    planes_to_iterate = [
+        i + 1 for i in range(nplan)
+        if getattr(track, f'P{i+1}_Q_sum_final') > 4
+    ]
 
     if len(planes_to_iterate) >= 2:
-        tsum = []
-        z = []
-
+        X, Y, Z = [], [], []
         for iplane in planes_to_iterate:
-            t_s = getattr(track, f'P{iplane}_T_sum_final')
-            tsum.append(t_s)
-            z.append(z_positions[iplane - 1])
+            X.append(strip_speed * getattr(track, f'P{iplane}_T_diff_final'))
+            Y.append(getattr(track, f'Y_{iplane}'))
+            Z.append(z_positions[iplane - 1])
 
-        theta = getattr(track, 'alt_theta')
-        phi = getattr(track, 'alt_phi')
+        sX = [anc_sx] * len(X)
+        sY = [anc_sy] * len(Y)
+        sZ = [anc_sz] * len(Z)
 
-        tsum = np.array(tsum)
-        z = np.array(z)
+        x, y, theta, phi, chi2 = fit_3d_line(X, Y, Z, sX, sY, sZ)
+    else:
+        x = y = theta = phi = chi2 = 0.
+
+    fit_results['alt_x'].append(x)
+    fit_results['alt_y'].append(y)
+    fit_results['alt_theta'].append(theta)
+    fit_results['alt_phi'].append(phi)
+    fit_results['alt_chi2'].append(chi2)
+
+# Add all at once
+working_df = pd.concat([working_df, pd.DataFrame(fit_results, index=working_df.index)], axis=1)
+
+slow_results = {
+    'alt_s': [],
+    'chi2_tsum_fit': []
+}
+
+for idx, track in working_df.iterrows():
+    planes_to_iterate = [
+        i + 1 for i in range(nplan)
+        if getattr(track, f'P{i+1}_Q_sum_final') > crosstalk_threshold_ns
+    ]
+
+    if len(planes_to_iterate) >= 2:
+        tsum = [getattr(track, f'P{iplane}_T_sum_final') for iplane in planes_to_iterate]
+        z = [z_positions[iplane - 1] for iplane in planes_to_iterate]
+
+        theta = track['alt_theta']
+        phi = track['alt_phi']
 
         v_dir = np.array([
             np.sin(theta) * np.cos(phi),
@@ -5246,35 +5004,36 @@ for idx, track in calibrated_data.iterrows():
         proj_dist = positions @ v_dir
 
         s_rel = proj_dist - proj_dist[0]
-        t_rel = tsum - tsum[0]
+        t_rel = np.array(tsum) - tsum[0]
 
-        # Linear fit: t = s * slope + intercept
         slope, intercept = np.polyfit(s_rel, t_rel, deg=1)
-        calibrated_data.at[idx, 'alt_s'] = slope
-
-        # Compute predicted values and chi2
         t_fit = slope * s_rel + intercept
         residuals = t_rel - t_fit
-        chi2 = np.sum((residuals / t_unc) ** 2)
-        calibrated_data.at[idx, 'chi2_tsum_fit'] = chi2
+        chi2 = np.sum((residuals / anc_sts) ** 2)
+    else:
+        slope = chi2 = 0.
 
+    slow_results['alt_s'].append(slope)
+    slow_results['chi2_tsum_fit'].append(chi2)
+
+# Add at once
+working_df = pd.concat([working_df, pd.DataFrame(slow_results, index=working_df.index)], axis=1)
+
+working_df = working_df.copy()
+working_df['alt_th_chi'] = working_df['alt_chi2'] + working_df['chi2_tsum_fit']
 
 
 # ---------------------------------------------------------------------------
 # Put every value close to 0 to effectively 0 -------------------------------
 # ---------------------------------------------------------------------------
 
-# Pre plot
-
-# Put all the individual values of calibrated_data, except 0, in a one dimensional
-# vector and histogram it
-
 # Filter the values inside the machine number window
 eps = 1e-7  # Threshold
 
-if create_essential_plots or create_plots:
+if create_plots:
+# if create_essential_plots or create_plots:
     # Flatten all numeric values except 0
-    flat_values = calibrated_data.select_dtypes(include=[np.number]).values.ravel()
+    flat_values = working_df.select_dtypes(include=[np.number]).values.ravel()
     flat_values = flat_values[flat_values != 0]
 
     cond = abs(flat_values) < eps
@@ -5285,7 +5044,7 @@ if create_essential_plots or create_plots:
     plt.hist(flat_values, bins=300, alpha=0.7)
     plt.xlabel('Value')
     plt.ylabel('Counts')
-    plt.title('Histogram of All Nonzero Values in calibrated_data')
+    plt.title('Histogram of All Nonzero Values in working_df')
     plt.yscale('log')  # Optional: log scale to reveal structure
     plt.grid(True)
     plt.tight_layout()
@@ -5304,22 +5063,23 @@ def is_small_nonzero(x):
     return isinstance(x, (int, float)) and x != 0 and abs(x) < eps
 
 # Create mask of small, non-zero numeric values
-mask = calibrated_data.applymap(is_small_nonzero)
+mask = working_df.applymap(is_small_nonzero)
 
 # Count total non-zero numeric entries
-nonzero_numeric_mask = calibrated_data.applymap(lambda x: isinstance(x, (int, float)) and x != 0)
+nonzero_numeric_mask = working_df.applymap(lambda x: isinstance(x, (int, float)) and x != 0)
 n_total = nonzero_numeric_mask.sum().sum()
 n_small = mask.sum().sum()
 
 # Apply the replacement
-calibrated_data = calibrated_data.mask(mask, 0)
+working_df = working_df.mask(mask, 0)
 
 # Report
 pct = 100 * n_small / n_total if n_total > 0 else 0
 print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
 
-if create_essential_plots or create_plots:
-# if create_plots:
+
+# if create_essential_plots or create_plots:
+if create_plots:
     
     print("Plotting...")
     
@@ -5329,9 +5089,9 @@ if create_essential_plots or create_plots:
     
     # PLOT 1 -------------------------------------------------------------------------------------------------------------------
     # Contour plot of alt_chi2 vs alt_theta and alt_phi
-    theta_values = calibrated_data['alt_theta'].values
-    phi_values = calibrated_data['alt_phi'].values
-    chi2_values = np.clip(calibrated_data['alt_chi2'].values, 0, 1)
+    theta_values = working_df['alt_theta'].values
+    phi_values = working_df['alt_phi'].values
+    chi2_values = np.clip(working_df['alt_chi2'].values, 0, 1)
     
     # Define grid resolution
     theta_bins = np.linspace(min(theta_values), max(theta_values), 40)
@@ -5380,7 +5140,7 @@ if create_essential_plots or create_plots:
     # Histogram the slowness calculated
     plt.figure(figsize=(8, 6))
 
-    v = calibrated_data['alt_s']
+    v = working_df['alt_s']
     v = v[(v != 0) & v.notna()]  # Exclude exact 0 and NaNs
 
     n_total = len(v)
@@ -5420,7 +5180,7 @@ if create_essential_plots or create_plots:
     
     # Histogram the slowness calculated
     plt.figure(figsize=(8, 6))
-    v = calibrated_data['chi2_tsum_fit'].replace(0, np.nan).dropna()
+    v = working_df['chi2_tsum_fit'].replace(0, np.nan).dropna()
     cond = (v > value_inter_med) & (v < 10)
     v = v[cond]
     
@@ -5450,7 +5210,7 @@ if create_essential_plots or create_plots:
     
     # Plot chi2_tsum_fit vs alt_s --------------------------------------------------------
     plt.figure(figsize=(8, 6))
-    plt.scatter(calibrated_data['alt_s'], calibrated_data['chi2_tsum_fit'], alpha=0.8, s = 0.1)
+    plt.scatter(working_df['alt_s'], working_df['chi2_tsum_fit'], alpha=0.8, s = 0.1)
     plt.xlabel('Slowness (ns/mm)')
     plt.ylabel('Chi2 T_sum Fit')
     plt.title('Chi2 T_sum Fit vs Slowness')
@@ -5479,11 +5239,11 @@ if create_essential_plots or create_plots:
 
     # Filter data within the plotting region
     mask = (
-        calibrated_data['alt_s'].between(x_min, x_max) &
-        calibrated_data['chi2_tsum_fit'].between(y_min, y_max)
+        working_df['alt_s'].between(x_min, x_max) &
+        working_df['chi2_tsum_fit'].between(y_min, y_max)
     )
-    x = calibrated_data.loc[mask, 'alt_s']
-    y = calibrated_data.loc[mask, 'chi2_tsum_fit']
+    x = working_df.loc[mask, 'alt_s']
+    y = working_df.loc[mask, 'chi2_tsum_fit']
 
     plt.figure(figsize=(8, 6))
     plt.hexbin(x, y, gridsize=80, cmap='viridis', bins='log')
@@ -5511,7 +5271,7 @@ if create_essential_plots or create_plots:
     
     # Plot chi2_tsum_fit vs angular fit chi2 --------------------------------------------------------
     plt.figure(figsize=(8, 6))
-    plt.scatter(calibrated_data['alt_chi2'], calibrated_data['chi2_tsum_fit'], alpha=0.8, s = 0.1)
+    plt.scatter(working_df['alt_chi2'], working_df['chi2_tsum_fit'], alpha=0.8, s = 0.1)
     plt.xlabel('Chi 2 angle')
     plt.ylabel('Chi2 slowness')
     plt.title('Chi2 angle vs chi2 slowness')
@@ -5540,11 +5300,11 @@ if create_essential_plots or create_plots:
 
     # Filter data within the plotting region
     mask = (
-        calibrated_data['alt_chi2'].between(x_min, x_max) &
-        calibrated_data['chi2_tsum_fit'].between(y_min, y_max)
+        working_df['alt_chi2'].between(x_min, x_max) &
+        working_df['chi2_tsum_fit'].between(y_min, y_max)
     )
-    x = calibrated_data.loc[mask, 'alt_chi2']
-    y = calibrated_data.loc[mask, 'chi2_tsum_fit']
+    x = working_df.loc[mask, 'alt_chi2']
+    y = working_df.loc[mask, 'chi2_tsum_fit']
 
     plt.figure(figsize=(8, 6))
     plt.hexbin(x, y, gridsize=100, cmap='viridis', bins='log')
@@ -5572,7 +5332,7 @@ if create_essential_plots or create_plots:
     
     # Plot alt_theta vs alt_s --------------------------------------------------------
     plt.figure(figsize=(8, 6))
-    plt.scatter(calibrated_data['alt_theta'], calibrated_data['alt_s'], alpha=0.8, s = 0.1)
+    plt.scatter(working_df['alt_theta'], working_df['alt_s'], alpha=0.8, s = 0.1)
     plt.ylabel('Slowness')
     plt.xlabel('Theta (zenith)')
     plt.title('slowness vs theta angle')
@@ -5594,13 +5354,16 @@ if create_essential_plots or create_plots:
         plt.show()
     plt.close()
     
+    # Print the most repeated value in alt_phi column
+    most_repeated_value = working_df['alt_phi'].mode()[0]
+    print(f"Most repeated value in alt_phi column: {most_repeated_value}")
     
     # Plot alt_theta vs alt_s --------------------------------------------------------
     plt.figure(figsize=(8, 6))
-    plt.scatter(calibrated_data['alt_phi'], calibrated_data['alt_s'], alpha=0.8, s = 0.1)
+    plt.scatter(working_df['alt_phi'], working_df['alt_s'], alpha=0.8, s = 0.1)
     plt.ylabel('Slowness')
     plt.xlabel('Phi (Azimuth)')
-    plt.title('slowness vs theta angle')
+    plt.title('slowness vs phi angle')
     plt.grid(True)
     plt.ylim(slowness_filter_left, slowness_filter_right)
     plt.xlim(-1*np.pi, np.pi)  # Adjust y-axis limits as needed
@@ -5620,32 +5383,32 @@ if create_essential_plots or create_plots:
     plt.close()
 
 
-for col in calibrated_data.columns:
+for col in working_df.columns:
     # Alternative fitting results
     if 'alt_x' == col or 'alt_y' == col:
-        cond_bound = (calibrated_data[col] > alt_pos_filter) | (calibrated_data[col] < -1*alt_pos_filter)
-        cond_zero = (calibrated_data[col] == 0)
-        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+        cond_bound = (working_df[col] > alt_pos_filter) | (working_df[col] < -1*alt_pos_filter)
+        cond_zero = (working_df[col] == 0)
+        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
     if 'alt_theta' == col:
-        cond_bound = (calibrated_data[col] > alt_theta_right_filter) | (calibrated_data[col] < alt_theta_left_filter)
-        cond_zero = (calibrated_data[col] == 0)
-        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+        cond_bound = (working_df[col] > alt_theta_right_filter) | (working_df[col] < alt_theta_left_filter)
+        cond_zero = (working_df[col] == 0)
+        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
     if 'alt_phi' == col:
-        cond_bound = (calibrated_data[col] > alt_phi_right_filter) | (calibrated_data[col] < alt_phi_left_filter)
-        cond_zero = (calibrated_data[col] == 0)
-        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+        cond_bound = (working_df[col] > alt_phi_right_filter) | (working_df[col] < alt_phi_left_filter)
+        cond_zero = (working_df[col] == 0)
+        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
     if 'alt_s' == col:
-        cond_bound = (calibrated_data[col] > alt_slowness_filter_right) | (calibrated_data[col] < alt_slowness_filter_left)
-        cond_zero = (calibrated_data[col] == 0)
-        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+        cond_bound = (working_df[col] > alt_slowness_filter_right) | (working_df[col] < alt_slowness_filter_left)
+        cond_zero = (working_df[col] == 0)
+        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
 
 
 # Make sure the full row is set to 0 or whatever
-cond = (calibrated_data['alt_x'] != 0) & (calibrated_data['alt_y'] != 0) &\
-       (calibrated_data['alt_theta'] != 0) & (calibrated_data['alt_phi'] != 0) &\
-       (calibrated_data['alt_s'] != 0)
+# cond = (working_df['alt_x'] != 0) & (working_df['alt_y'] != 0) &\
+#        (working_df['alt_theta'] != 0) & (working_df['alt_phi'] != 0) &\
+#        (working_df['alt_s'] != 0)
 
-calibrated_data = calibrated_data.loc[cond].copy()
+# working_df = working_df.loc[cond]
 
 print("Alternative fitting done.")
 
@@ -5782,14 +5545,14 @@ else:
 nvar = 3
 
 i = 0
-ntrk  = len(calibrated_data)
+ntrk  = len(working_df)
 if limit and limit_number < ntrk: ntrk = limit_number
 print("-----------------------------")
 print(f"{ntrk} events to be fitted")
 
 if res_ana_removing_planes:
     timtrack_results = ['x', 'xp', 'y', 'yp', 't0', 's',
-                    'th_chi', 'res_y', 'res_ts', 'res_td', 'type',
+                    'th_chi', 'res_y', 'res_ts', 'res_td', 'processed_tt',
                     'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
                     'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
                     'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4',
@@ -5797,19 +5560,19 @@ if res_ana_removing_planes:
                     'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
                     'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4']
 else:
-    timtrack_results = ['x', 'xp', 'y', 'yp', 't0', 's', 'type', 'th_chi',
+    timtrack_results = ['x', 'xp', 'y', 'yp', 't0', 's', 'processed_tt', 'th_chi',
                     'charge_1', 'charge_2', 'charge_3', 'charge_4', 'charge_event',
                     'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
                     'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
                     'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4']
 
-new_columns_df = pd.DataFrame(0., index=calibrated_data.index, columns=timtrack_results)
-calibrated_data = pd.concat([calibrated_data, new_columns_df], axis=1)
+new_columns_df = pd.DataFrame(0., index=working_df.index, columns=timtrack_results)
+working_df = pd.concat([working_df, new_columns_df], axis=1)
 
 # TimTrack starts ------------------------------------------------------
 repeat = number_of_TT_executions - 1 if timtrack_iteration else 0
 for iteration in range(repeat + 1):
-    calibrated_data.loc[:, timtrack_results] = 0.0
+    working_df.loc[:, timtrack_results] = 0.0
     
     fitted = 0
     print("-----------------------------")
@@ -5817,9 +5580,9 @@ for iteration in range(repeat + 1):
     print("-----------------------------")
     
     if crontab_execution:
-        iterator = calibrated_data.iterrows()
+        iterator = working_df.iterrows()
     else:
-        iterator = tqdm(calibrated_data.iterrows(), total=calibrated_data.shape[0], desc="Processing events")
+        iterator = tqdm(working_df.iterrows(), total=working_df.shape[0], desc="Processing events")
     
     for idx, track in iterator:
         # INTRODUCTION ------------------------------------------------------------------
@@ -5837,10 +5600,10 @@ for iteration in range(repeat + 1):
                 # Append the plane number to name_type and planes_to_iterate
                 name_type += f'{i_plane + 1}'
                 planes_to_iterate.append(i_plane + 1)
-                calibrated_data.at[idx, f'charge_{i_plane + 1}'] = charge_plane
+                working_df.at[idx, f'charge_{i_plane + 1}'] = charge_plane
                 charge_event += charge_plane
                 
-        calibrated_data.at[idx, 'charge_event'] = charge_event
+        working_df.at[idx, 'charge_event'] = charge_event
         planes_to_iterate = np.array(planes_to_iterate)
         
         # FITTING -----------------------------------------------------------------------
@@ -5917,9 +5680,9 @@ for iteration in range(repeat + 1):
                 vsig = [sy, sts, std]
                 vres = fres(vsf, vdat, lenx, ss, zi)
                 
-                calibrated_data.at[idx, f'res_ystr_{iplane}'] = vres[0]
-                calibrated_data.at[idx, f'res_tsum_{iplane}'] = vres[1]
-                calibrated_data.at[idx, f'res_tdif_{iplane}'] = vres[2]
+                working_df.at[idx, f'res_ystr_{iplane}'] = vres[0]
+                working_df.at[idx, f'res_tsum_{iplane}'] = vres[1]
+                working_df.at[idx, f'res_tdif_{iplane}'] = vres[2]
                 
                 res_ystr  = res_ystr  + vres[0]
                 res_tsum  = res_tsum + vres[1]
@@ -5927,25 +5690,25 @@ for iteration in range(repeat + 1):
                 
             ndf  = ndat - npar    # number of degrees of freedom; was ndat - npar
             
-            # calibrated_data.at[idx, f'res_ystr_{iplane}'] = res_ystr
-            # calibrated_data.at[idx, f'res_tsum_{iplane}'] = res_tsum
-            # calibrated_data.at[idx, f'res_tdif_{iplane}'] = res_tdif
+            # working_df.at[idx, f'res_ystr_{iplane}'] = res_ystr
+            # working_df.at[idx, f'res_tsum_{iplane}'] = res_tsum
+            # working_df.at[idx, f'res_tdif_{iplane}'] = res_tdif
             
-            calibrated_data.at[idx, 'type'] = builtins.int(name_type)
+            working_df.at[idx, 'processed_tt'] = builtins.int(name_type)
             
             chi2 = res_ystr**2 + res_tsum**2 + res_tdif**2
-            calibrated_data.at[idx, 'th_chi'] = chi2
+            working_df.at[idx, 'th_chi'] = chi2
             
-            calibrated_data.at[idx, 'x'] = vsf[0]
-            calibrated_data.at[idx, 'xp'] = vsf[1]
-            calibrated_data.at[idx, 'y'] = vsf[2]
-            calibrated_data.at[idx, 'yp'] = vsf[3]
-            calibrated_data.at[idx, 't0'] = vsf[4]
+            working_df.at[idx, 'x'] = vsf[0]
+            working_df.at[idx, 'xp'] = vsf[1]
+            working_df.at[idx, 'y'] = vsf[2]
+            working_df.at[idx, 'yp'] = vsf[3]
+            working_df.at[idx, 't0'] = vsf[4]
             
             if fixed_speed:
-                calibrated_data.at[idx, 's'] = sc
+                working_df.at[idx, 's'] = sc
             else:
-                calibrated_data.at[idx, 's'] = vsf[5]
+                working_df.at[idx, 's'] = vsf[5]
         
         # Residual analysis with 4-plane tracks (hide a plane and make a fit in the 3 remaining planes)
         if len(planes_to_iterate) == 4 and res_ana_removing_planes:
@@ -6001,9 +5764,9 @@ for iteration in range(repeat + 1):
                 # v_track  = [ iplane_ref, istrip_ref ]
                 v_res    = fres(vs, vdat_ref, lenx, ss, 0)
                 
-                calibrated_data.at[idx, f'ext_res_ystr_{iplane_ref}'] = v_res[0]
-                calibrated_data.at[idx, f'ext_res_tsum_{iplane_ref}'] = v_res[1]
-                calibrated_data.at[idx, f'ext_res_tdif_{iplane_ref}'] = v_res[2]
+                working_df.at[idx, f'ext_res_ystr_{iplane_ref}'] = v_res[0]
+                working_df.at[idx, f'ext_res_tsum_{iplane_ref}'] = v_res[1]
+                working_df.at[idx, f'ext_res_tdif_{iplane_ref}'] = v_res[2]
     
     
     # ------------------------------------------------------------------------------
@@ -6014,7 +5777,8 @@ for iteration in range(repeat + 1):
     print("-------------------- TimTrack result and residue plots -----------------------")
     print("------------------------------------------------------------------------------")
     
-    if create_essential_plots or (create_plots and residual_plots):
+    if (create_plots and residual_plots):
+    # if create_essential_plots or (create_plots and residual_plots):
         timtrack_columns = ['x', 'xp', 't0', 'y', 'yp', 's']
         residual_columns = [
             'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
@@ -6023,23 +5787,32 @@ for iteration in range(repeat + 1):
         ]
         
         # Combined plot for all types
-        plot_histograms_and_gaussian(calibrated_data, timtrack_columns, "Combined TimTrack Results", figure_number=1)
-        # plot_histograms_and_gaussian(calibrated_data, residual_columns, "Combined Residuals with Gaussian", figure_number=2, fit_gaussian=True, quantile=0.99)
+        plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
+        # plot_histograms_and_gaussian(working_df, residual_columns, "Combined Residuals with Gaussian", figure_number=2, fit_gaussian=True, quantile=0.99)
         
-        # Individual plots for each unique type
-        unique_types = calibrated_data['type'].unique()
+        # Individual plots for each unique type - PROCESSED TT
+        unique_types = working_df['processed_tt'].unique()
         for t in unique_types:
-            subset_data = calibrated_data[calibrated_data['type'] == t]
+            subset_data = working_df[working_df['processed_tt'] == t]
             
             # Plot for the 'timtrack_columns' and 'residual_columns' based on type
-            plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Type {t}", figure_number=1)
-            plot_histograms_and_gaussian(subset_data, residual_columns, f"Residuals with Gaussian for Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+            plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
+            plot_histograms_and_gaussian(subset_data, residual_columns, f"Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+        
+        # Individual plots for each unique type - ORIGINAL TT
+        unique_types = working_df['original_tt'].unique()
+        for t in unique_types:
+            subset_data = working_df[working_df['original_tt'] == t]
+            
+            # Plot for the 'timtrack_columns' and 'residual_columns' based on type
+            plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Original Type {t}", figure_number=1)
+            plot_histograms_and_gaussian(subset_data, residual_columns, f"Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
     # -------------------------------------------------------------------------
     
     
     # FILTER 6: TSUM, TDIF, QSUM, QDIF TIMTRACK X, Y, etc. FILTER --> IF THE
     # RESULT IS OUT OF RANGE, REMOVE THE MODULE WITH LARGEST RESIDUE
-    # for index, row in calibrated_data.iterrows():
+    # for index, row in working_df.iterrows():
     #     # Check if x, y, or t0 is outside the desired range
     #     if (row['t0'] > t0_right_filter or row['t0'] < t0_left_filter) or \
     #         (row['x'] > pos_filter or row['x'] < -pos_filter or row['x'] == 0) or \
@@ -6072,41 +5845,41 @@ for iteration in range(repeat + 1):
     
     #         # If a module is identified, set related values to 0
     #         if module_to_zero:
-    #             calibrated_data.at[index, f'Y_{module_to_zero}'] = 0
-    #             calibrated_data.at[index, f'P{module_to_zero}_T_sum_final'] = 0
-    #             calibrated_data.at[index, f'P{module_to_zero}_T_diff_final'] = 0
-    #             calibrated_data.at[index, f'P{module_to_zero}_Q_sum_final'] = 0
+    #             working_df.at[index, f'Y_{module_to_zero}'] = 0
+    #             working_df.at[index, f'P{module_to_zero}_T_sum_final'] = 0
+    #             working_df.at[index, f'P{module_to_zero}_T_diff_final'] = 0
+    #             working_df.at[index, f'P{module_to_zero}_Q_sum_final'] = 0
     
     # FILTER 7: TSUM, TDIF, QSUM, QDIF TIMTRACK RESIDUE FILTER --> 0 THE COMPONENT THAT HAS LARGE RESIDUE
-    for index, row in calibrated_data.iterrows():
+    for index, row in working_df.iterrows():
         for i in range(1, 5):
             if res_ana_removing_planes:
                 if abs(row[f'ext_res_tsum_{i}']) > ext_res_tsum_filter or \
                     abs(row[f'ext_res_tdif_{i}']) > ext_res_tdif_filter or \
                     abs(row[f'ext_res_ystr_{i}']) > ext_res_ystr_filter:
                     
-                    calibrated_data.at[index, f'Y_{i}'] = 0
-                    calibrated_data.at[index, f'P{i}_T_sum_final'] = 0
-                    calibrated_data.at[index, f'P{i}_T_diff_final'] = 0
-                    calibrated_data.at[index, f'P{i}_Q_sum_final'] = 0
+                    working_df.at[index, f'Y_{i}'] = 0
+                    working_df.at[index, f'P{i}_T_sum_final'] = 0
+                    working_df.at[index, f'P{i}_T_diff_final'] = 0
+                    working_df.at[index, f'P{i}_Q_sum_final'] = 0
             else:
                 if abs(row[f'res_tsum_{i}']) > res_tsum_filter or \
                     abs(row[f'res_tdif_{i}']) > res_tdif_filter or \
                     abs(row[f'res_ystr_{i}']) > res_ystr_filter:
                     
-                    calibrated_data.at[index, f'Y_{i}'] = 0
-                    calibrated_data.at[index, f'P{i}_T_sum_final'] = 0
-                    calibrated_data.at[index, f'P{i}_T_diff_final'] = 0
-                    calibrated_data.at[index, f'P{i}_Q_sum_final'] = 0
-                    calibrated_data.at[index, f'P{i}_Q_diff_final'] = 0
+                    working_df.at[index, f'Y_{i}'] = 0
+                    working_df.at[index, f'P{i}_T_sum_final'] = 0
+                    working_df.at[index, f'P{i}_T_diff_final'] = 0
+                    working_df.at[index, f'P{i}_Q_sum_final'] = 0
+                    working_df.at[index, f'P{i}_Q_diff_final'] = 0
                     
-    four_planes = len(calibrated_data[calibrated_data.type == 1234])
+    four_planes = len(working_df[working_df.processed_tt == 1234])
     print(f"Events that are 1234: {four_planes}")
-    print(f"Events that are 123: {len(calibrated_data[calibrated_data.type == 123])}")
-    print(f"Events that are 234: {len(calibrated_data[calibrated_data.type == 234])}")
-    planes134 = len(calibrated_data[calibrated_data.type == 134])
+    print(f"Events that are 123: {len(working_df[working_df.processed_tt == 123])}")
+    print(f"Events that are 234: {len(working_df[working_df.processed_tt == 234])}")
+    planes134 = len(working_df[working_df.processed_tt == 134])
     print(f"Events that are 134: {planes134}")
-    planes124 = len(calibrated_data[calibrated_data.type == 124])
+    planes124 = len(working_df[working_df.processed_tt == 124])
     print(f"Events that are 124: {planes124}")
     eff_2 = 1 - (planes134) / (four_planes + planes134 + planes124)
     print(f"First estimate of eff_2 ={eff_2}")
@@ -6121,53 +5894,66 @@ def calculate_angles(xproj, yproj):
     theta = np.arccos(1 / np.sqrt(xproj**2 + yproj**2 + 1))
     return theta, phi
 
-theta, phi = calculate_angles(calibrated_data['xp'], calibrated_data['yp'])
-new_columns_df = pd.DataFrame({'theta': theta, 'phi': phi}, index=calibrated_data.index)
-calibrated_data = pd.concat([calibrated_data, new_columns_df], axis=1)
-calibrated_data = calibrated_data.copy()
+theta, phi = calculate_angles(working_df['xp'], working_df['yp'])
+new_columns_df = pd.DataFrame({'theta': theta, 'phi': phi}, index=working_df.index)
+working_df = pd.concat([working_df, new_columns_df], axis=1)
 
 # FILTER 8: X, Y, T FILTER: IGNORE THE EVENT IF (AFTER ALL) ANY OF THEM GOES OUR OF BOUNDS
-for col in calibrated_data.columns:
+for col in working_df.columns:
     # TimTrack results
     if 't0' == col:
-        calibrated_data.loc[:, col] = np.where((calibrated_data[col] > t0_right_filter) | (calibrated_data[col] < t0_left_filter), 0, calibrated_data[col])
+        working_df.loc[:, col] = np.where((working_df[col] > t0_right_filter) | (working_df[col] < t0_left_filter), 0, working_df[col])
     if 'x' == col or 'y' == col:
-        cond_bound = (calibrated_data[col] > pos_filter) | (calibrated_data[col] < -1*pos_filter)
-        cond_zero = (calibrated_data[col] == 0)
-        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+        cond_bound = (working_df[col] > pos_filter) | (working_df[col] < -1*pos_filter)
+        cond_zero = (working_df[col] == 0)
+        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
     if 'xp' == col or 'yp' == col:
-        cond_bound = (calibrated_data[col] > proj_filter) | (calibrated_data[col] < -1*proj_filter)
-        cond_zero = (calibrated_data[col] == 0)
-        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+        cond_bound = (working_df[col] > proj_filter) | (working_df[col] < -1*proj_filter)
+        cond_zero = (working_df[col] == 0)
+        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
     if 's' == col:
-        cond_bound = (calibrated_data[col] > slowness_filter_right) | (calibrated_data[col] < slowness_filter_left)
-        cond_zero = (calibrated_data[col] == 0)
-        calibrated_data.loc[:, col] = np.where((cond_bound | cond_zero), 0, calibrated_data[col])
+        cond_bound = (working_df[col] > slowness_filter_right) | (working_df[col] < slowness_filter_left)
+        cond_zero = (working_df[col] == 0)
+        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
+        
 
-cond = (calibrated_data['x'] != 0) & (calibrated_data['xp'] != 0) &\
-       (calibrated_data['y'] != 0) & (calibrated_data['yp'] != 0) &\
-       (calibrated_data['s'] != 0) & (calibrated_data['t0'] != 0)
+# -----------------------------------------------------------------------------
+# Define the last dataframe, the definitive one -------------------------------
+# -----------------------------------------------------------------------------
 
-final_data = calibrated_data.loc[cond].copy()
+definitive_df = working_df.copy()
 
+cols_to_check = ['x', 'xp', 'y', 'yp', 's', 't0']
+
+# cond = reduce(operator.and_, (working_df[col] != 0 for col in cols_to_check))
+cond = (working_df[cols_to_check[0]] != 0)
+for col in cols_to_check[1:]:
+    cond &= (working_df[col] != 0)
+
+definitive_df = definitive_df[cond]
 
 print("----------------------------------------------------------------------")
 print("----------------------- Calculating some stuff -----------------------")
 print("----------------------------------------------------------------------")
 
-df_plot_ancillary = final_data.copy()
+df_plot_ancillary = definitive_df.copy()
 
 cond = ( df_plot_ancillary['charge_1'] < 250 ) &\
     ( df_plot_ancillary['charge_2'] < 250 ) &\
     ( df_plot_ancillary['charge_3'] < 250 ) &\
-    ( df_plot_ancillary['charge_4'] < 250 )
+    ( df_plot_ancillary['charge_4'] < 250 ) &\
+    ( df_plot_ancillary['th_chi'] > eps ) &\
+    ( df_plot_ancillary['th_chi'] < 0.03 ) &\
+    ( df_plot_ancillary['alt_th_chi'] > eps ) &\
+    ( df_plot_ancillary['alt_th_chi'] < 12 )
 
 df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['charge_event'] > 0) & (df_plot_ancillary['charge_event'] < 600)]
 
 # --------------------------------------------------------------
 
-if create_plots or create_essential_plots:
+if create_plots:
+# if create_plots or create_essential_plots:
 
     def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=60):
         """
@@ -6185,8 +5971,6 @@ if create_plots or create_essential_plots:
         - fig_idx: Index to differentiate saved plot filenames
         - plot_list: List to store the saved plot filenames
         """
-        
-        # 'x', 'y', 'theta', 'phi', 'xp', 'yp', 'charge_event'
         
         axis_limits = {
             'x': [-pos_filter, pos_filter],
@@ -6206,7 +5990,8 @@ if create_plots or create_essential_plots:
             'charge_4': [0, 250],
             's': [slowness_filter_left, slowness_filter_right],
             'alt_s': [slowness_filter_left, slowness_filter_right],
-            'th_chi': [0, 0.03]
+            'th_chi': [0, 0.03],
+            'alt_th_chi': [0, 12]
         }
         
         # Apply filters
@@ -6248,8 +6033,6 @@ if create_plots or create_essential_plots:
                     
                     ax.set_xticks([])
                     ax.set_yticks([])
-
-                    # Apply determined limits
                     ax.set_xlim(auto_limits[x_col])
                     
                     # If the column is 'charge_1, 2, 3 or 4', set logscale in Y
@@ -6286,38 +6069,83 @@ if create_plots or create_essential_plots:
         
         plt.subplots_adjust(wspace=0.05, hspace=0.05)
         plt.suptitle(title)
-        
-        # Save plot if enabled
         if save_plots:
             name_of_file = 'timtrack_results_hexbin_combination_projections'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
-
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
             plt.savefig(save_fig_path, format='png')
-
         # Show plot if enabled
         if show_plots:
             plt.show()
-
         plt.close()
         return fig_idx
 
 
+    # df_cases_2 = [
+    #     ([("processed_tt", 12, 12)], "1-2 cases"),
+    #     ([("processed_tt", 23, 23)], "2-3 cases"),
+    #     ([("processed_tt", 34, 34)], "3-4 cases"),
+    #     ([("processed_tt", 13, 13)], "1-3 cases"),
+    #     ([("processed_tt", 14, 14)], "1-4 cases"),
+    #     ([("processed_tt", 123, 123)], "1-2-3 cases"),
+    #     ([("processed_tt", 234, 234)], "2-3-4 cases"),
+    #     ([("processed_tt", 124, 124)], "1-2-4 cases"),
+    #     ([("processed_tt", 134, 134)], "1-3-4 cases"),
+    #     ([("processed_tt", 1234, 1234)], "1-2-3-4 cases"),
+    # ]
+    
     df_cases_2 = [
-        ([("type", 12, 12)], "1-2 cases"),
-        ([("type", 23, 23)], "2-3 cases"),
-        ([("type", 34, 34)], "3-4 cases"),
-        ([("type", 13, 13)], "1-3 cases"),
-        ([("type", 14, 14)], "1-4 cases"),
-        ([("type", 123, 123)], "1-2-3 cases"),
-        ([("type", 234, 234)], "2-3-4 cases"),
-        ([("type", 124, 124)], "1-2-4 cases"),
-        ([("type", 134, 134)], "1-3-4 cases"),
-        ([("type", 1234, 1234)], "1-2-3-4 cases"),
-    ]
+        # From original_tt = 1234
+        ([("original_tt", 1234, 1234), ("processed_tt", 123, 123)], "original=1234, processed=123"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 124, 124)], "original=1234, processed=124"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 134, 134)], "original=1234, processed=134"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 234, 234)], "original=1234, processed=234"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 12, 12)],   "original=1234, processed=12"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 13, 13)],   "original=1234, processed=13"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 14, 14)],   "original=1234, processed=14"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 23, 23)],   "original=1234, processed=23"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 24, 24)],   "original=1234, processed=24"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 34, 34)],   "original=1234, processed=34"),
+        ([("original_tt", 1234, 1234), ("processed_tt", 1234, 1234)], "original=1234, processed=1234"),
 
+        # From original_tt = 124
+        ([("original_tt", 124, 124), ("processed_tt", 12, 12)], "original=124, processed=12"),
+        ([("original_tt", 124, 124), ("processed_tt", 14, 14)], "original=124, processed=14"),
+        ([("original_tt", 124, 124), ("processed_tt", 24, 24)], "original=124, processed=24"),
+        ([("original_tt", 124, 124), ("processed_tt", 124, 124)], "original=124, processed=124"),
+
+        # From original_tt = 134
+        ([("original_tt", 134, 134), ("processed_tt", 13, 13)], "original=134, processed=13"),
+        ([("original_tt", 134, 134), ("processed_tt", 14, 14)], "original=134, processed=14"),
+        ([("original_tt", 134, 134), ("processed_tt", 34, 34)], "original=134, processed=34"),
+        ([("original_tt", 134, 134), ("processed_tt", 134, 134)], "original=134, processed=134"),
+
+        # From original_tt = 123
+        ([("original_tt", 123, 123), ("processed_tt", 12, 12)], "original=123, processed=12"),
+        ([("original_tt", 123, 123), ("processed_tt", 13, 13)], "original=123, processed=13"),
+        ([("original_tt", 123, 123), ("processed_tt", 23, 23)], "original=123, processed=23"),
+        ([("original_tt", 123, 123), ("processed_tt", 123, 123)], "original=123, processed=123"),
+
+        # From original_tt = 234
+        ([("original_tt", 234, 234), ("processed_tt", 23, 23)], "original=234, processed=23"),
+        ([("original_tt", 234, 234), ("processed_tt", 24, 24)], "original=234, processed=24"),
+        ([("original_tt", 234, 234), ("processed_tt", 34, 34)], "original=234, processed=34"),
+        ([("original_tt", 234, 234), ("processed_tt", 234, 234)], "original=234, processed=234"),
+
+        # From original_tt = 12
+        ([("original_tt", 12, 12), ("processed_tt", 12, 12)], "original=12, processed=12"),
+
+        # From original_tt = 23
+        ([("original_tt", 23, 23), ("processed_tt", 23, 23)], "original=23, processed=23"),
+
+        # From original_tt = 34
+        ([("original_tt", 34, 34), ("processed_tt", 34, 34)], "original=34, processed=34"),
+
+        # From original_tt = 13
+        ([("original_tt", 13, 13), ("processed_tt", 13, 13)], "original=13, processed=13"),
+    ]
 
     # # Charge of each plane -------------------------------------------------------------------
     # for filters, title in df_cases_2:
@@ -6374,83 +6202,71 @@ if create_plots or create_essential_plots:
             fig_idx,
             plot_list
         )
-
-
-# ------------------------------------------------------------------------------------------------
-# Including th_chi filtered -------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------------------------
-
-chi_histo = True
-if chi_histo and create_plots or create_essential_plots:
-    data = df_plot_ancillary['th_chi'].dropna()  # Remove NaN values if any
-    data = data[data != 0]
-    plt.figure(figsize=(10, 6))
-    plt.hist(data, bins=300, alpha=0.5, color='blue', log=True)
-    plt.title('Histogram of th_chi', fontsize=16)
-    plt.xlabel('th_chi', fontsize=14)
-    plt.ylabel('Frequency', fontsize=14)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
     
+    # Comparison of chi2 with alternative fitting -------------------------------------------------------------------
+    for filters, title in df_cases_2:
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            ['alt_th_chi', 'alt_s', 's', 'th_chi'],
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
+
+
+# Display the trigger type before and after
+if create_plots or create_essential_plots:
+    analysis_data = working_df[['original_tt', 'processed_tt']]
+    
+    # Create a pivot table to count (original_tt, processed_tt) combinations
+    counts = analysis_data.groupby(['original_tt', 'processed_tt']).size().unstack(fill_value=0)
+
+    # Ensure consistent ordering for display
+    original_order = sorted(analysis_data['original_tt'].unique())
+    processed_order = sorted(analysis_data['processed_tt'].unique())
+    counts = counts.reindex(index=original_order, columns=processed_order, fill_value=0)
+
+    # Create the 2D colored plot
+    fig, ax = plt.subplots(figsize=(10, 8))
+    im = ax.imshow(counts, cmap='turbo')
+
+    # Set ticks and labels
+    ax.set_xticks(np.arange(len(counts.columns)))
+    ax.set_yticks(np.arange(len(counts.index)))
+    ax.set_xticklabels(counts.columns)
+    ax.set_yticklabels(counts.index)
+
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    ax.set_xlabel("processed_tt")
+    ax.set_ylabel("original_tt")
+    ax.set_title("Event counts per (original_tt, processed_tt) combination")
+
+    # Annotate counts on each cell
+    for i in range(len(counts.index)):
+        for j in range(len(counts.columns)):
+            value = counts.iloc[i, j]
+            if value > 0:
+                ax.text(j, i, str(value), ha="center", va="center", color="white" if value > counts.values.max() * 0.5 else "black")
+
+    # Colorbar
+    # cbar = fig.colorbar(im, ax=ax)
+    # cbar.set_label("Count")
+
+    plt.tight_layout()
     if save_plots:
-        name_of_file = 'th_chi_histo'
+        name_of_file = 'trigger_types_og_and_processed'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-    
-    if show_plots: plt.show()
-    plt.close()
-
-df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['th_chi'] > 0.0001) & (df_plot_ancillary['th_chi'] < 0.02)]
-
-if chi_histo and create_plots or create_essential_plots:
-    data = df_plot_ancillary['th_chi'].dropna()  # Remove NaN values if any
-    data = data[data != 0]
-    plt.figure(figsize=(10, 6))
-    plt.hist(data, bins=300, alpha=0.5, color='blue', log=True)
-    plt.title('Histogram of th_chi', fontsize=16)
-    plt.xlabel('th_chi', fontsize=14)
-    plt.ylabel('Frequency', fontsize=14)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    if save_plots:
-        name_of_file = 'th_chi_histo_filt'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    
-    if show_plots: plt.show()
-    plt.close()
-
-
-df_plot_ancillary = df_plot_ancillary[df_plot_ancillary['type'].astype(int) >= 1000].copy()
-df_plot_ancillary = df_plot_ancillary[(df_plot_ancillary['th_chi'] > 0.00125) & (df_plot_ancillary['th_chi'] < 0.02)]
-
-if chi_histo and create_plots or create_essential_plots:
-    data = df_plot_ancillary['th_chi'].dropna()  # Remove NaN values if any
-    data = data[data != 0]
-    plt.figure(figsize=(10, 6))
-    plt.hist(data, bins=300, alpha=0.5, color='blue', log=True)
-    plt.title('Histogram of th_chi, only four planes', fontsize=16)
-    plt.xlabel('th_chi', fontsize=14)
-    plt.ylabel('Frequency', fontsize=14)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    if save_plots:
-        name_of_file = 'th_chi_histo_filt_four_planes'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    
-    if show_plots: plt.show()
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
     plt.close()
 
 
@@ -6458,89 +6274,94 @@ print("----------------------------------------------------------------------")
 print("----------------------- Final data statistics ------------------------")
 print("----------------------------------------------------------------------")
 
-data_purity = len(final_data) / raw_data_len*100
+data_purity = len(definitive_df) / raw_data_len*100
 print(f"Data purity is {data_purity:.1f}%")
 
 global_variables['purity_of_data_percentage'] = data_purity
 
-# ------------------------------------------------------------------------------------------------
-# Statistical comprobation -----------------------------------------------------------------------
-# ------------------------------------------------------------------------------------------------
 
 if create_plots or create_essential_plots:
-    test_data = final_data.copy()
+    plot_ancillary_df = definitive_df.copy()
     
-    test_data['datetime'] = pd.to_datetime(test_data['datetime'], errors='coerce')
-    test_data = test_data.set_index('datetime')
-    
-    df_plot_1 = og_data.copy()  # Original dataset
-    df_plot_2 = test_data.copy()
-    df_plot_3 = test_data[test_data['type'].astype(int) >= 10].copy()
-    df_plot_4 = test_data[test_data['type'].astype(int) >= 100].copy()
-    df_plot_5 = test_data[test_data['type'].astype(int) >= 1000].copy()
+    # Ensure datetime is proper and indexed
+    plot_ancillary_df['datetime'] = pd.to_datetime(plot_ancillary_df['datetime'], errors='coerce')
+    plot_ancillary_df = plot_ancillary_df.set_index('datetime')
 
-    datasets = {'Original data': df_plot_1, 
-                'Filtered data': df_plot_2, 
-                'At least two planes': df_plot_3, 
-                'At least three planes': df_plot_4, 
-                'Four planes': df_plot_5}
-    
-    fig, axes = plt.subplots(1, 5, figsize=(20, 8))
-    axes = axes.flatten()  # Flatten axes for easy iteration
-    
-    for ax, (name, df) in zip(axes, datasets.items()):
-        df.index = pd.to_datetime(df.index, errors='coerce')  # Converts index to datetime
-        events_per_second = df.index.floor('s').value_counts()
-        # print(events_per_second)
-        
-        hist_data = events_per_second.value_counts().sort_index()
-        lambda_estimate = events_per_second.mean()
-        x_values = np.arange(0, hist_data.index.max() + 1)
-        poisson_pmf = poisson.pmf(x_values, lambda_estimate)
-        poisson_pmf_scaled = poisson_pmf * len(events_per_second)
-        ax.bar(hist_data.index, hist_data.values, width=1, color='blue', alpha=0.5, label='Histogram')
-        ax.plot(hist_data.index, hist_data.values, color='blue', alpha=1)
-        ax.plot(x_values, poisson_pmf_scaled, 'r-', lw=2, label=f'Poisson fit ($\\lambda={lambda_estimate:.2f}$ cts/s)')
-        ax.set_title(f'{name} - Histogram and Poisson Fit')
+    # Prepare a container for each group: 2-plane, 3-plane, 4-plane cases
+    grouped_data = {
+        "Two planes": defaultdict(list),
+        "Three planes": defaultdict(list),
+        "Four planes": defaultdict(list)
+    }
+
+    # Classify events by number of planes in original_tt
+    for tt_code in plot_ancillary_df['original_tt'].unique():
+        planes = str(tt_code)
+        count = len(planes)
+        label = f'Case {tt_code}'
+        if count == 2:
+            grouped_data["Two planes"][label] = plot_ancillary_df[plot_ancillary_df['original_tt'] == tt_code]
+        elif count == 3:
+            grouped_data["Three planes"][label] = plot_ancillary_df[plot_ancillary_df['original_tt'] == tt_code]
+        elif count == 4:
+            grouped_data["Four planes"][label] = plot_ancillary_df[plot_ancillary_df['original_tt'] == tt_code]
+
+    # Plotting
+    fig, axes = plt.subplots(1, 3, figsize=(24, 6))
+    colors = plt.colormaps['tab10']
+
+    for ax, (title, group_dict) in zip(axes, grouped_data.items()):
+        for i, (label, df) in enumerate(group_dict.items()):
+            df.index = pd.to_datetime(df.index, errors='coerce')
+            events_per_second = df.index.floor('s').value_counts()
+            hist_data = events_per_second.value_counts().sort_index()
+            lambda_estimate = events_per_second.mean()
+            x_values = np.arange(0, hist_data.index.max() + 1)
+            poisson_pmf = poisson.pmf(x_values, lambda_estimate)
+            poisson_pmf_scaled = poisson_pmf * len(events_per_second)
+
+            ax.bar(hist_data.index, hist_data.values, label=label, alpha=0.8, color=colors(i % 10))
+            ax.plot(x_values, poisson_pmf_scaled, '--', lw=1.5, color=colors(i % 10), alpha=0.6)
+
+        ax.set_title(f'{title}')
         ax.set_xlabel('Number of Events per Second')
         ax.set_ylabel('Frequency')
-        ax.legend()
-    
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    plt.suptitle('Event Rate Histograms with Poisson Fits', fontsize=16, y=1.03)
-    
-    if save_plots:
-        name_of_file = 'events_per_second_'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
+        ax.legend(fontsize='small', loc='upper right')
+        ax.grid(True)
 
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.88)
+    plt.suptitle('Event Rate Histograms by Original_tt Cardinality with Poisson Fits', fontsize=16)
+
+    # Save and show
+    if save_plots:
+        final_filename = f'{fig_idx}_events_per_second_by_plane_cardinality.png'
+        fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-        
+
     if show_plots:
         plt.show()
-
+    plt.close()
 
 
 # ------------------------------------------------------------------------------------------------
-# Time window plotting
+# ------------------------------------ Time window plotting --------------------------------------
 # ------------------------------------------------------------------------------------------------
 
 if create_plots or create_essential_plots:
-    from matplotlib.cm import get_cmap
 
     cases = [1234, 123, 234, 124, 134, 12, 23, 34, 13, 14, 24]
-    cmap = get_cmap('turbo')
+    cmap = plt.colormaps['turbo']
     colors = cmap(np.linspace(0, 1, len(cases)))
 
     # Define window widths
-    widths = np.linspace(1, 20, 40)
+    widths = np.linspace(1, 10, 40)
     plt.figure(figsize=(10, 6))
 
     for idx, case in enumerate(cases):
-        data_case = final_data[final_data["type"] == case].copy()
+        data_case = definitive_df[definitive_df["original_tt"] == case]
         
         # Extract only the _T_sum_ columns
         t_sum_columns = [col for col in data_case.columns if "_T_sum_" in col]
@@ -6569,8 +6390,8 @@ if create_plots or create_essential_plots:
 
         plt.scatter(widths, counts_per_width / np.max(counts_per_width), color=colors[idx], label=f"type {case}")
         counts_per_width = np.array(counts_per_width)
-        counts_per_width_dev = np.array(counts_per_width_dev)
-        plt.fill_between( widths, (counts_per_width - counts_per_width_dev) / np.max(counts_per_width), (counts_per_width + counts_per_width_dev) / np.max(counts_per_width), color=colors[idx], alpha=0.2)
+        # counts_per_width_dev = np.array(counts_per_width_dev)
+        # plt.fill_between( widths, (counts_per_width - counts_per_width_dev) / np.max(counts_per_width), (counts_per_width + counts_per_width_dev) / np.max(counts_per_width), color=colors[idx], alpha=0.2)
 
     plt.xlabel("Window width (ns)")
     plt.ylabel("Average number of non-zero T_sum values in window")
@@ -6580,7 +6401,7 @@ if create_plots or create_essential_plots:
     plt.tight_layout()
     
     if save_plots:
-        name_of_file = 'window_coincidence_count_'
+        name_of_file = 'window_coincidence_count'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
 
@@ -6590,31 +6411,24 @@ if create_plots or create_essential_plots:
         
     if show_plots:
         plt.show()
+        
 
-a = 1/0
-
+print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("-------------------------- Save and finish ---------------------------")
 print("----------------------------------------------------------------------")
+print("----------------------------------------------------------------------")
 
-# Put the global_variables as columns in the final_data dataframe
+# Put the global_variables as columns in the final data dataframe
 for key, value in global_variables.items():
-    if key not in final_data.columns:
+    if key not in definitive_df.columns:
         print(f"Adding {key} to the dataframe.")
-        final_data[key] = value
+        definitive_df[key] = value
     else:
         print(f"Warning: Column '{key}' already exists in the DataFrame. Skipping addition.")
+        
 
-# Replace the TimTrack fitting angle results with the alternative ones
-# if alternative_fitting:
-#     if 'alt_theta' in final_data.columns:
-#         final_data['theta'] = final_data['alt_theta']
-#         final_data['phi'] = final_data['alt_phi']
-#         final_data['x'] = final_data['alt_x']
-#         final_data['y'] = final_data['alt_y']
-#         final_data['s'] = final_data['alt_s']
-
-# Round to 4 significant digits -----------------------------------------------
+# Round to 4 significant digits ---------------------------------------------------------------
 print("Rounding the dataframe values.")
 
 def round_to_4_significant_digits(x):
@@ -6624,49 +6438,72 @@ def round_to_4_significant_digits(x):
     except (builtins.ValueError, builtins.TypeError):
         return x
     
-for col in final_data.select_dtypes(include=[np.number]).columns:
-    final_data.loc[:, col] = final_data[col].apply(round_to_4_significant_digits)
+for col in definitive_df.select_dtypes(include=[np.number]).columns:
+    definitive_df.loc[:, col] = definitive_df[col].apply(round_to_4_significant_digits)
 
 
-# ---------------------------------------------------------------------------------------------
 # Change 'datetime' column to 'Time'
-
-if 'datetime' in final_data.columns:
-    final_data.rename(columns={'datetime': 'Time'}, inplace=True)
+if 'datetime' in definitive_df.columns:
+    definitive_df.rename(columns={'datetime': 'Time'}, inplace=True)
 else:
     print("Column 'datetime' not found in DataFrame!")
-# ---------------------------------------------------------------------------------------------
 
-
-# Save the data ---------------------------------------------------------------
+# Save the data ----------------------------------------------------------------------------
 if save_full_data: # Save a full version of the data, for different studies and debugging
-    final_data.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
-    print(f"Datafile saved in {save_full_filename}'.")
+    definitive_df.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
+    print(f"Datafile saved in {save_full_filename}.")
 
+# Save the main columns, relevant for the posterior analysis
 
-# print the column names of final_data
-print("Final data columns:")
-print(final_data.columns.tolist())
-
-a = 1/0
-
+# Loop on planes and strips to call the Q_P1s1 from Q1_Q_sum_1 etc
+for i, module in enumerate(['1', '2', '3', '4']):
+    for j in range(4):
+        strip = j + 1
+        definitive_df[f'Q_P{module}s{strip}'] = definitive_df[f'Q{module}_Q_sum_{strip}']
 
 # Save a reduced version of the data always, to proceed with the analysis
 columns_to_keep = [
-    'Time', 'CRP_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event',
-    'Q_P1s1', 'Q_P1s2', 'Q_P1s3', 'Q_P1s4',
-    'Q_P2s1', 'Q_P2s2', 'Q_P2s3', 'Q_P2s4',
-    'Q_P3s1', 'Q_P3s2', 'Q_P3s3', 'Q_P3s4',
-    'Q_P4s1', 'Q_P4s2', 'Q_P4s3', 'Q_P4s4'
+    # Timestamp and identifiers
+    'Time', 'original_tt', 'processed_tt',
+
+    # Summary metrics and quality flags
+    'CRT_avg', 'discarded_by_time_window_percentage', 'sigmoid_width',
+    'background_slope', 'one_side_events', 'purity_of_data_percentage',
+    'unc_y', 'unc_tsum', 'unc_tdif', 'th_chi',
+
+    # Per-plane active strip patterns
+    'active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4',
+
+    # Y positions
+    'Y_1', 'Y_2', 'Y_3', 'Y_4',
+
+    # Final time and charge summaries per plane
+    'P1_T_sum_final', 'P1_T_diff_final', 'P1_Q_sum_final', 'P1_Q_diff_final',
+    'P2_T_sum_final', 'P2_T_diff_final', 'P2_Q_sum_final', 'P2_Q_diff_final',
+    'P3_T_sum_final', 'P3_T_diff_final', 'P3_Q_sum_final', 'P3_Q_diff_final',
+    'P4_T_sum_final', 'P4_T_diff_final', 'P4_Q_sum_final', 'P4_Q_diff_final',
+
+    # Alternative reconstruction outputs
+    'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_chi2',
+    'alt_s', 'chi2_tsum_fit', 'alt_th_chi',
+
+    # Classical reconstruction outputs
+    'x', 'xp', 'y', 'yp', 't0', 's', 'th_chi',
+
+    # Strip-level time and charge info (ordered by plane and strip)
+    *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)]
 ]
 
-reduced_df = final_data[columns_to_keep]
+reduced_df = definitive_df[columns_to_keep]
 
 reduced_df.to_csv(save_list_path, index=False, sep=',', float_format='%.5g')
 print(f"Datafile saved in {save_filename}. Path is {save_list_path}")
 
 
+# -----------------------------------------------------------------------------
 # Save the calibrations -------------------------------------------------------
+# -----------------------------------------------------------------------------
+
 new_row = {'Time': start_time}
 
 for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
@@ -6674,9 +6511,7 @@ for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
         strip = j + 1
         new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
         new_row[f'{module}_s{strip}_T_sum'] = calibration_times[i, j]
-        # new_row[f'{module}_s{strip}_Q_dif'] = calibration_Q_FB[i, j]
         new_row[f'{module}_s{strip}_Q_dif'] = ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
-        # new_row[f'{module}_s{strip}_T_dif'] = calibration_T[i, j]
         new_row[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j]
 
 if os.path.exists(csv_path):
@@ -6706,6 +6541,8 @@ else:
 calibrations_df.sort_values(by='Time', inplace=True)
 calibrations_df.to_csv(csv_path, index=False, float_format='%.5g')
 print(f'{csv_path} updated with the calibrations for this folder.')     
+
+a = 1/0
 
 # Create and save the PDF -----------------------------------------------------
 if create_pdf:
