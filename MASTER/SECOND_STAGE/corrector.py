@@ -8,7 +8,6 @@ Created on Mon Jun 24 19:02:22 2024
 """
 
 print("\n\n")
-
 print("                                          _.oo.")
 print("                 _.u[[/;:,.         .odMMMMMM'")
 print("              .o888UU[[[/;:-.  .o@P^    MMM^")
@@ -24,7 +23,6 @@ print("  .dMMM    .o@^ ^;::---...")
 print(" dMMMMMMM@^`       `^^^^")
 print("YMMMUP^")
 print(" ^^")
-
 print("\n\n")
 
 # globals().clear()

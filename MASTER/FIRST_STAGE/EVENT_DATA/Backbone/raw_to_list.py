@@ -47,7 +47,8 @@ Created on Thu Jun 20 09:15:33 2024
 # ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 # """)
 
-print("\n                     . .:.:.:.:. .:\\     /:. .:.:.:.:. ,")
+print("\n\n")
+print("                     . .:.:.:.:. .:\\     /:. .:.:.:.:. ,")
 print("               .-._  `..:.:. . .:.:`- -':.:. . .:.:.,'  _.-.")
 print("              .:.:.`-._`-._..-''_...---..._``-.._.-'_.-'.:.:.")
 print("           .:.:. . .:_.`' _..-''._________,``-.._ `.._:. . .:.:.")
@@ -73,8 +74,8 @@ print(".:. . |):-.--'(         `.`-._  ,.           _,-','      \\ '  '  '//| . 
 print(":. . .;)()(__)(___________`-._`-.._______..-'_.-'_________\\'  '  //_:. . .:")
 print(".:.:,' \\/\\/--\\/--------------------------------------------`._',;'`. `.:.:.")
 print(":.,' ,' ,'  ,'  /   /   /   ,-------------------.   \\   \\   \\  `. `.`. `..:")
-print(",' ,'  '   /   /   /   /   //                   \\\\   \\   \\   \\   \\  ` `.SSt\n")
-
+print(",' ,'  '   /   /   /   /   //                   \\\\   \\   \\   \\   \\  ` `.SSt")
+print("\n\n")
 
 print("----------------------------------------------------------------------")
 print("-------------------- RAW TO LIST SCRIPT IS STARTING ------------------")
@@ -290,7 +291,7 @@ else:
 
 # Plots and savings -------------------------
 crontab_execution = True
-create_plots = False
+create_plots = True
 create_essential_plots = True
 save_plots = True
 show_plots = False
@@ -971,86 +972,6 @@ enumerate = builtins.enumerate
 def polynomial(x, *coeffs):
     return sum(c * x**i for i, c in enumerate(coeffs))
 
-# def scatter_2d_and_fit(xdat, ydat, title, x_label, y_label, name_of_file):
-#     global fig_idx
-    
-#     ydat_translated = ydat
-
-#     xdat_plot = xdat[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
-#     ydat_plot = ydat_translated[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
-#     xdat_pre_fit = xdat[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
-#     ydat_pre_fit = ydat_translated[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
-    
-#     # Fit a polynomial of specified degree using curve_fit
-#     initial_guess = [1] * (degree_of_polynomial + 1)
-#     coeffs, _ = curve_fit(polynomial, xdat_pre_fit, ydat_pre_fit, p0=initial_guess)
-#     y_pre_fit = polynomial(xdat_pre_fit, *coeffs)
-    
-#     # Filter data for fitting based on residues
-#     threshold = front_back_fit_threshold  # Set your desired threshold here
-#     residues = np.abs(ydat_pre_fit - y_pre_fit)  # Calculate residues
-#     xdat_fit = xdat_pre_fit[residues < threshold]
-#     ydat_fit = ydat_pre_fit[residues < threshold]
-    
-#     # Perform fit on filtered data
-#     coeffs, _ = curve_fit(polynomial, xdat_fit, ydat_fit, p0=initial_guess)
-    
-#     y_mean = np.mean(ydat_fit)
-#     y_check = polynomial(xdat_fit, *coeffs)
-#     ss_res = np.sum((ydat_fit - y_check)**2)
-#     ss_tot = np.sum((ydat_fit - y_mean)**2)
-#     r_squared = 1 - (ss_res / ss_tot)
-#     if r_squared < 0.5:
-#         print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
-    
-#     if create_plots:
-#         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
-#         y_fit = polynomial(x_fit, *coeffs)
-        
-#         x_final = xdat_plot
-#         y_final = ydat_plot - polynomial(xdat_plot, *coeffs)
-        
-#         plt.close()
-        
-#         # (16,6) was very nice
-#         if article_format:
-#             ww = (10.84, 4)
-#         else:
-#             ww = (13.33, 5)
-            
-#         plt.figure(figsize=ww)  # Use plt.subplots() to create figure and axis    
-#         plt.scatter(xdat_plot, ydat_plot, s=1, label="Original data points")
-#         # plt.scatter(xdat_pre_fit, ydat_pre_fit, s=1, color="magenta", label="Points for prefitting")
-#         plt.scatter(xdat_fit, ydat_fit, s=1, color="orange", label="Points for fitting")
-#         plt.scatter(x_final, y_final, s=1, color="green", label="Calibrated points")
-#         plt.plot(x_fit, y_fit, 'r-', label='Polynomial Fit: ' + ' '.join([f'a{i}={coeff:.2g}' for i, coeff in enumerate(coeffs[::-1])]))
-        
-#         if not article_format:
-#             plt.title(f"Fig. {output_order}, {title}")
-#         plt.xlabel(x_label)
-#         plt.ylabel(y_label)
-#         plt.xlim([-5, 400])
-#         plt.ylim([-11, 11])
-        
-#         plt.grid()
-#         plt.legend(markerscale=5)  # Increase marker scale by 5 times
-        
-#         plt.tight_layout()
-#         # plt.savefig(f"{output_order}_{name_of_file}.png", format="png")
-        
-#         if save_plots:
-#             name_of_file = 'charge_diff_vs_charge_sum_cal'
-#             final_filename = f'{fig_idx}_{name_of_file}.png'
-#             fig_idx += 1
-            
-#             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#             plot_list.append(save_fig_path)
-#             plt.savefig(save_fig_path, format='png')
-            
-#         if show_plots: plt.show()
-#         plt.close()
-#     return coeffs
-
 
 def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     global fig_idx
@@ -1106,8 +1027,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
         plt.scatter(x_final, y_final, s=1, color="green", label="Calibrated points")
         plt.plot(x_fit, y_fit, 'r-', label='Polynomial Fit: ' + ' '.join([f'a{i}={coeff:.2g}' for i, coeff in enumerate(coeffs[::-1])]))
         
-        if not article_format:
-            plt.title(f"Fig. {output_order}, {title}")
+        plt.title(title)
         plt.xlabel(x_label)
         plt.ylabel(y_label)
         plt.xlim([-5, 200])
@@ -1584,8 +1504,8 @@ save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace(
 
 if exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
-    input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
-    input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
+    input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
+    input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
     matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
     if not matching_confs.empty:
@@ -1677,8 +1597,8 @@ def create_original_tt(df):
 working_df = create_original_tt(working_df)
 working_df['original_tt'] = working_df['original_tt'].apply(builtins.int)
 
-if create_essential_plots or create_plots:
-# if create_plots:
+# if create_essential_plots or create_plots:
+if create_plots:
     event_counts = working_df['original_tt'].value_counts()
 
     # Plot the histogram of event counts
@@ -2413,24 +2333,31 @@ for key in ['T1', 'T2', 'T3', 'T4']:
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
+
+    # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
+    plot_df = working_df.copy()
+    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    
+    num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
-        y = working_df[col]
+    for i, col in enumerate([col for col in plot_df.columns if col != 'datetime']):
+        y = plot_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
-        if 'Q_diff' in col:
+        elif 'Q_diff' in col:
             color = Q_diff_color
-        if 'T_sum' in col:
+        elif 'T_sum' in col:
             color = T_sum_color
-        if 'T_diff' in col:
+        elif 'T_diff' in col:
             color = T_diff_color
+        else:
+            print(col)
+            continue
         axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
-        
         axes[i].set_title(col)
         axes[i].legend()
         if 'Q_sum' in col:
@@ -2440,18 +2367,15 @@ if create_plots:
     for j in range(i + 1, len(axes)):
         fig.delaxes(axes[j])
     
-    plt.tight_layout()
-    plt.suptitle("Uncalibrated data")
-    
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+    fig.suptitle("Uncalibrated data", fontsize=20)  # increase font size
     if save_plots:
         name_of_file = 'uncalibrated'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-    
     if show_plots: 
         plt.show()
     plt.close()
@@ -2479,24 +2403,31 @@ for col in working_df.columns:
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
+
+    # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
+    plot_df = working_df.copy()
+    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    
+    num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
-        y = working_df[col]
+    for i, col in enumerate([col for col in plot_df.columns if col != 'datetime']):
+        y = plot_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
-        if 'Q_diff' in col:
+        elif 'Q_diff' in col:
             color = Q_diff_color
-        if 'T_sum' in col:
+        elif 'T_sum' in col:
             color = T_sum_color
-        if 'T_diff' in col:
+        elif 'T_diff' in col:
             color = T_diff_color
+        else:
+            print(col)
+            continue
         axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
-        
         axes[i].set_title(col)
         axes[i].legend()
         if 'Q_sum' in col:
@@ -2506,9 +2437,8 @@ if create_plots:
     for j in range(i + 1, len(axes)):
         fig.delaxes(axes[j])
     
-    plt.tight_layout()
-    plt.suptitle("Uncalibrated data")
-    
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+    fig.suptitle("Uncalibrated data, filtered", fontsize=20)  # increase font size
     if save_plots:
         name_of_file = 'uncalibrated_filtered'
         final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -2620,24 +2550,31 @@ for col in working_df.columns:
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
+
+    # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
+    plot_df = working_df.copy()
+    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    
+    num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
-        y = working_df[col]
+    for i, col in enumerate([col for col in plot_df.columns if col != 'datetime']):
+        y = plot_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
-        if 'Q_diff' in col:
+        elif 'Q_diff' in col:
             color = Q_diff_color
-        if 'T_sum' in col:
+        elif 'T_sum' in col:
             color = T_sum_color
-        if 'T_diff' in col:
+        elif 'T_diff' in col:
             color = T_diff_color
+        else:
+            print(col)
+            continue
         axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
-        
         axes[i].set_title(col)
         axes[i].legend()
         if 'Q_sum' in col:
@@ -2647,9 +2584,8 @@ if create_plots:
     for j in range(i + 1, len(axes)):
         fig.delaxes(axes[j])
     
-    plt.tight_layout()
-    plt.suptitle("Calibrated filtered data before FB correction")
-    
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+    fig.suptitle("Calibrated filtered data before FB correction", fontsize=20)  # increase font size
     if save_plots:
         name_of_file = 'calibrated_filtered_before_FB_corr'
         final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -2705,28 +2641,34 @@ for col in working_df.columns:
     if 'Q_diff' in col:
         working_df[col] = np.where(np.abs(working_df[col]) < Q_diff_cal_threshold_FB, working_df[col], 0)
 
-# ------------------------------------------------------------
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
+
+    # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
+    plot_df = working_df.copy()
+    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    
+    num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
-        y = working_df[col]
+    for i, col in enumerate([col for col in plot_df.columns if col != 'datetime']):
+        y = plot_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
-        if 'Q_diff' in col:
+        elif 'Q_diff' in col:
             color = Q_diff_color
-        if 'T_sum' in col:
+        elif 'T_sum' in col:
             color = T_sum_color
-        if 'T_diff' in col:
+        elif 'T_diff' in col:
             color = T_diff_color
+        else:
+            print(col)
+            continue
         axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
-        
         axes[i].set_title(col)
         axes[i].legend()
         if 'Q_sum' in col:
@@ -2736,9 +2678,8 @@ if create_plots:
     for j in range(i + 1, len(axes)):
         fig.delaxes(axes[j])
     
-    plt.tight_layout()
-    plt.suptitle("Calibrated filtered data including FB correction")
-    
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+    fig.suptitle("Calibrated filtered data including FB correction", fontsize=20)  # increase font size
     if save_plots:
         name_of_file = 'calibrated_filtered'
         final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -2787,24 +2728,31 @@ for plane in range(1, 5):
 
 # if create_essential_plots or create_plots:
 if create_plots:
-    num_columns = len(working_df.columns) - 1  # Exclude 'datetime'
+
+    # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
+    plot_df = working_df.copy()
+    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    
+    num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
     axes = axes.flatten()
 
-    for i, col in enumerate([col for col in working_df.columns if col != 'datetime']):
-        y = working_df[col]
+    for i, col in enumerate([col for col in plot_df.columns if col != 'datetime']):
+        y = plot_df[col]
         
         if 'Q_sum' in col:
             color = Q_sum_color
-        if 'Q_diff' in col:
+        elif 'Q_diff' in col:
             color = Q_diff_color
-        if 'T_sum' in col:
+        elif 'T_sum' in col:
             color = T_sum_color
-        if 'T_diff' in col:
+        elif 'T_diff' in col:
             color = T_diff_color
+        else:
+            print(col)
+            continue
         axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
-        
         axes[i].set_title(col)
         axes[i].legend()
         if 'Q_sum' in col:
@@ -2814,9 +2762,8 @@ if create_plots:
     for j in range(i + 1, len(axes)):
         fig.delaxes(axes[j])
     
-    plt.tight_layout()
-    plt.suptitle("Calibrated filtered data including FB correction removing zeroes in any variable")
-    
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+    fig.suptitle("Calibrated filtered data including FB correction removing zeroes in any variable", fontsize=20)  # increase font size
     if save_plots:
         name_of_file = 'calibrated_filtered_removed_zeroes'
         final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -2964,16 +2911,20 @@ if slewing_correction:
                 ax1.set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Uncorrected")
                 ax1.set_xlabel("dx (mm)")
                 ax1.set_ylabel("T_sum_diff (ns)")
+                ax1.set_xlim([-300, 300])
+                ax1.set_ylim([-5, 5])
 
                 ax1.scatter(x, t_corrected, s=5, alpha=0.6, color='tab:blue')
                 ax1.set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Corrected")
+                ax1.grid(True, linestyle='--', alpha=0.5)
 
             # Hide unused subplots
             for row in range(1):
                 for col in range(len(current_pairs), batch_size):
                     axes[row, col].set_visible(False)
 
-            plt.suptitle(f"Batch {batch + 1}/{num_batches} — dx vs Time Differences", fontsize=18, y=1.01)
+            fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+            fig.suptitle(f"Batch {batch + 1}/{num_batches} — dx vs Time Differences", fontsize=16)  # increase font size
 
             if save_plots:
                 name_of_file = 'dx_vs_tsum'
@@ -3033,13 +2984,17 @@ if slewing_correction:
                 ax.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
                 ax.set_xlabel("dx (mm)")
                 ax.set_ylabel("travel_time (ns)")
+                ax.set_xlim([-300, 300])
+                ax.set_ylim([0.4, 1.85])
+                ax.grid(True, linestyle='--', alpha=0.5)
 
             # Hide unused subplots
             for col in range(len(current_pairs), batch_size):
                 axes[col].set_visible(False)
-
-            plt.suptitle(f"Batch {batch + 1}/{num_batches} — dx vs Travel Time", fontsize=18, y=1.01)
-
+            
+            fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+            fig.suptitle(f"Batch {batch + 1}/{num_batches} — dx vs Travel Time", fontsize=16)  # increase font size
+            
             if save_plots:
                 name_of_file = 'dx_vs_travel_time'
                 final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -3087,30 +3042,34 @@ if slewing_correction:
                 data = slew_df[mask]
 
                 # Plot Q_sum_semidiff
-                sns.histplot(data['Q_sum_semidiff'], bins=30, kde=True, ax=axes[0, col_idx])
+                sns.histplot(data['Q_sum_semidiff'], bins=100, kde=True, ax=axes[0, col_idx], element='bars', edgecolor=None)
                 axes[0, col_idx].set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Q_diff")
                 axes[0, col_idx].set_xlabel("Q_sum_semidiff")
                 axes[0, col_idx].set_ylabel("Counts")
+                axes[0, col_idx].set_xlim([-40, 40])
 
                 # Plot Q_sum_semisum
-                sns.histplot(data['Q_sum_semisum'], bins=30, kde=True, ax=axes[1, col_idx])
+                sns.histplot(data['Q_sum_semisum'], bins=100, kde=True, ax=axes[1, col_idx], element='bars', edgecolor=None)
                 axes[1, col_idx].set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Q_sum")
                 axes[1, col_idx].set_xlabel("Q_sum_semisum")
                 axes[1, col_idx].set_ylabel("Counts")
+                axes[1, col_idx].set_xlim([0, 60])
 
                 # Plot T_sum_corrected_diff
-                sns.histplot(data['T_sum_corrected_diff'], bins=30, kde=True, ax=axes[2, col_idx])
+                sns.histplot(data['T_sum_corrected_diff'], bins=100, kde=True, ax=axes[2, col_idx], element='bars', edgecolor=None)
                 axes[2, col_idx].set_title(f"P{p1}S{s1} vs P{p2}S{s2} — ΔT corrected")
                 axes[2, col_idx].set_xlabel("T_sum_corrected_diff")
                 axes[2, col_idx].set_ylabel("Counts")
+                axes[2, col_idx].set_xlim([-5, 5])
 
             # Hide unused subplots
             for row in range(3):
                 for col in range(len(current_pairs), batch_size):
                     axes[row, col].set_visible(False)
 
-            plt.suptitle(f"Batch {batch + 1}/{num_batches} — Histograms per Plane/Strip Pair", fontsize=18, y=1.01)
-
+            fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+            fig.suptitle(f"Batch {batch + 1}/{num_batches} — Histograms per Plane/Strip Pair", fontsize=16)  # increase font size
+            
             if save_plots:
                 name_of_file = 'slewing'
                 final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -3174,6 +3133,9 @@ if slewing_correction:
                 ax3d.set_xlabel('ΔT corrected (ns)')
                 ax3d.set_ylabel('Q_sum_semisum')
                 ax3d.set_zlabel('Q_sum_semidiff')
+                ax3d.set_xlim([-5, 5])
+                ax3d.set_ylim([0, 60])
+                ax3d.set_zlim([-40, 40])
 
                 # XY projection
                 ax_xy = fig.add_subplot(spec[2, col_idx])
@@ -3181,15 +3143,20 @@ if slewing_correction:
                 ax_xy.set_xlabel('ΔT corrected')
                 ax_xy.set_ylabel('Q_sum_semisum')
                 ax_xy.set_title('XY projection')
-
+                ax_xy.set_xlim([-5, 5])
+                ax_xy.set_ylim([0, 60])
+                
                 # XZ projection
                 ax_xz = fig.add_subplot(spec[3, col_idx])
                 ax_xz.scatter(x, z, s=5, alpha=0.5, c='tab:red')
                 ax_xz.set_xlabel('ΔT corrected')
                 ax_xz.set_ylabel('Q_sum_semidiff')
                 ax_xz.set_title('XZ projection')
-
-            plt.suptitle(f"Batch {batch + 1}/{num_batches} — 3D Slewing Observables", fontsize=18, y=1.01)
+                ax_xz.set_xlim([-5, 5])
+                ax_xz.set_ylim([-40, 40])
+                
+            fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+            fig.suptitle(f"Batch {batch + 1}/{num_batches} — 3D Slewing Observables", fontsize=16)  # increase font size
 
             if save_plots:
                 name_of_file = 'slewing_3d'
@@ -3251,7 +3218,7 @@ if slewing_correction:
         data = data[
             (data['Q_sum_semidiff'] > -20) & (data['Q_sum_semidiff'] < 20) &
             (data['Q_sum_semisum'] > 10) & (data['Q_sum_semisum'] < 50) &
-            (data['T_sum_corrected_diff'] > -4) & (data['T_sum_corrected_diff'] < 4)
+            (data['T_sum_corrected_diff'] > -3) & (data['T_sum_corrected_diff'] < 3)
         ]
         
         
@@ -3359,6 +3326,9 @@ if slewing_correction:
                 ax3d.set_xlabel('ΔT corrected (ns)')
                 ax3d.set_ylabel('Q_sum_semisum')
                 ax3d.set_zlabel('Q_sum_semidiff')
+                ax3d.set_xlim([-5, 5])
+                ax3d.set_ylim([0, 60])
+                ax3d.set_zlim([-40, 40])
 
                 # XY projection
                 ax_xy = fig.add_subplot(spec[2, col_idx])
@@ -3371,6 +3341,8 @@ if slewing_correction:
                 ax_xy.set_ylabel('Q_sum_semisum')
                 ax_xy.set_title('XY projection')
                 ax_xy.legend(fontsize='x-small')
+                ax_xy.set_xlim([-5, 5])
+                ax_xy.set_ylim([0, 60])
 
                 # XZ projection
                 ax_xz = fig.add_subplot(spec[3, col_idx])
@@ -3383,9 +3355,12 @@ if slewing_correction:
                 ax_xz.set_ylabel('Q_sum_semidiff')
                 ax_xz.set_title('XZ projection')
                 ax_xz.legend(fontsize='x-small')
+                ax_xz.set_xlim([-5, 5])
+                ax_xz.set_ylim([-40, 40])
 
-            plt.suptitle(f"Batch {batch + 1}/{num_batches} — 3D Slewing + Fitted Projections", fontsize=18, y=1.01)
-
+            fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+            fig.suptitle(f"Batch {batch + 1}/{num_batches} — 3D Slewing + Fitted Projections", fontsize=16)  # increase font size
+            
             if save_plots:
                 name_of_file = 'slewing_3d_fitproj'
                 final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -3479,6 +3454,8 @@ if slewing_correction:
                 ax0.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
                 ax0.set_xlabel("T_true")
                 ax0.set_ylabel("T_predicted")
+                ax0.set_xlim([-4, 4])
+                ax0.set_ylim([-4, 4])
 
                 # Residuals histogram
                 ax1 = axes[1, col_idx]
@@ -3487,14 +3464,15 @@ if slewing_correction:
                 ax1.set_xlabel("Residuals (ns)")
                 ax1.set_ylabel("Counts")
                 ax1.set_title("Residual Distribution")
+                ax1.set_xlim([-4, 4])
 
             # Hide unused subplots
             for row in range(2):
                 for col in range(len(current_pairs), batch_size):
                     axes[row, col].set_visible(False)
 
-            plt.suptitle(f"Batch {batch + 1}/{num_batches} — Fit Check (Predicted vs Real, Residuals)", fontsize=18, y=1.01)
-
+            fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
+            fig.suptitle(f"Batch {batch + 1}/{num_batches} — Fit Check (Predicted vs Real, Residuals)", fontsize=16)  # increase font size
             if save_plots:
                 name_of_file = 'model_validation_simple'
                 final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -4224,39 +4202,6 @@ if time_calibration:
             mask = working_df[f'{key}_T_sum_{j+1}'] != 0
             working_df.loc[mask, f'{key}_T_sum_{j+1}'] += calibration_times[i][j]
     
-    
-    if create_plots:
-        # Prepare a figure with 1x4 subplots (only for times, no positions)
-        fig, axs = plt.subplots(1, 4, figsize=(20, 5), constrained_layout=True)
-    
-        # Plot histograms for T_sum values from working_df
-        times = [working_df[f'P1_T_sum_{i+1}'] for i in range(4)]
-        titles_times = ["T_sum P1", "T_sum P2", "T_sum P3", "T_sum P4"]
-    
-        for i, (time, title) in enumerate(zip(times, titles_times)):
-            time_non_zero = time[time != 0]  # Filter out zeros
-            ax = axs[i]  # Access the subplot
-            ax.hist(time_non_zero, bins=100, alpha=0.75)
-            ax.set_title(title)
-            ax.set_xlabel("Time (ns)")
-            ax.set_ylabel("Frequency")
-    
-        # Show the figure for the T_sum histograms
-        plt.suptitle('Histograms of T_sum Values for Each Plane', fontsize=16)
-    
-        if save_plots:
-            name_of_file = 'Tsum_times_calibrated'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
-
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-    
-        if show_plots: 
-            plt.show()
-        plt.close()
-    
 else:
     calibration_times = time_sum_reference
     working_df['CRT_avg'] = 1000 # An extreme time to not crush the program
@@ -4268,13 +4213,16 @@ print("----------------------------------------------------------------------")
 print("----------------------- Time window filtering ------------------------")
 print("----------------------------------------------------------------------")
 
+# Print columns of working_df
+print("Columns of working_df:\n", working_df.columns.to_list())
+
 time_window_fitting = True
 if time_window_fitting:
     
     T_sum_columns = working_df.filter(regex='_T_sum_')
 
     t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
-    widths = np.linspace(1, 10, 30)  # Scan range of window widths in ns
+    widths = np.linspace(1, 20, 60)  # Scan range of window widths in ns
 
     counts_per_width = []
     counts_per_width_dev = []
@@ -4444,12 +4392,23 @@ if crosstalk_removal_and_recalibration:
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
             try:
+                a_min = 0
+                a_max = 2*max(hist_vals)
+                
+                mu_min = 0
+                mu_max = 1
+                
+                sigma_min = 0.25
+                sigma_max = 1
+                
+                print(f"P{key}s{j}")
+                
                 popt, _ = curve_fit(
                     gaussian_linear, 
                     bin_centers, 
                     hist_vals, 
                     p0=[max(hist_vals), 0, 1, 0, min(hist_vals)], 
-                    bounds=([0, -1, 0, -np.inf, -np.inf], [2*max(hist_vals), 2, 3, np.inf, np.inf])
+                    bounds=([a_min, mu_min, sigma_min, -np.inf, -np.inf], [a_max, mu_max, sigma_max, np.inf, np.inf])
                 )
                 
                 a, mu, sigma, m, b = popt
@@ -4464,6 +4423,11 @@ if crosstalk_removal_and_recalibration:
                 
             except RuntimeError:
                 continue
+    
+    print("\nCrosstalk limit after fitting a gaussian to the peak:")
+    values = [crosstalk_limits[f"crstlk_limit_P{p}s{s}"] for p in range(1, 5) for s in range(1, 5)]
+    matrix = np.array(values).reshape(4, 4)
+    print(matrix, '\n')
     
     # if create_plots:
     if create_plots or create_essential_plots:
@@ -4529,7 +4493,8 @@ if crosstalk_removal_and_recalibration:
         for j in range(4):
             for col in working_df.columns:
                 if f'Q{key}_Q_sum_{j+1}' == col:
-                    working_df[col] = np.where( working_df[col] < crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] , 0, working_df[col])
+                    working_df[col] = np.where( working_df[col] < crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'], 0, working_df[col])
+    
     
     print("----------------------------------------------------------------------")
     print("------------------- Crosstalk pedestal recalibration -----------------")
@@ -4591,14 +4556,8 @@ active_strip_cols = {}
 for plane_id in range(1, 5):
     cols = [f'Q{plane_id}_Q_sum_{i}' for i in range(1, 5)]
     Q_plane = working_df[cols].values  # shape (N, 4)
-
-    # Binary activation: 1 if charge > threshold
     active_strips_binary = (Q_plane > 0).astype(int)
-
-    # Convert to string representations
     binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
-
-    # Store in dict for later batch insertion
     active_strip_cols[f'active_strips_P{plane_id}'] = binary_strings
 
 # Concatenate all new columns at once (column-wise)
@@ -4694,7 +4653,9 @@ if y_new_method:
     # Insert all new Y_ columns at once
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
 
-if create_essential_plots:
+
+# if create_essential_plots or create_plots:
+if create_plots:
     plt.figure(figsize=(12, 8))
     for i, plane_id in enumerate(range(1, 5), 1):
         plt.subplot(2, 2, i)
@@ -4726,8 +4687,117 @@ print("----------------------------------------------------------------------")
 print("----------------- Some more tests (multi-strip data) -----------------")
 print("----------------------------------------------------------------------")
 
-# if create_essential_plots or create_plots:
-if create_plots:
+# # if create_essential_plots or create_plots:
+# if create_plots:
+#     for i_plane in range(1, 5):
+#         active_col = f'active_strips_P{i_plane}'
+#         print(f"\n--- Plane {i_plane} ---")
+
+#         # Column names
+#         T_sum_cols = [f'T{i_plane}_T_sum_{j+1}' for j in range(4)]
+#         T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
+#         Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+#         Q_dif_cols = [f'Q{i_plane}_Q_diff_{j+1}' for j in range(4)]
+
+#         # Get all unique multi-strip patterns
+#         patterns = working_df[active_col].unique()
+#         multi_patterns = [p for p in patterns if p != '0000' and p.count('1') > 1]
+
+#         for pattern in multi_patterns:
+#             active_strips = [i for i, c in enumerate(pattern) if c == '1']
+#             if len(active_strips) != 2:
+#                 continue
+
+#             mask = working_df[active_col] == pattern
+#             n_events = mask.sum()
+#             if n_events == 0:
+#                 continue
+
+#             print(f"Pattern {pattern} ({n_events} events):")
+
+#             for i, j in combinations(active_strips, 2):
+#                 fig, axs = plt.subplots(1, 4, figsize=(20, 5), sharex=False, sharey=False)
+#                 variable_sets = [
+#                     ('T_sum', T_sum_cols),
+#                     ('T_diff', T_diff_cols),
+#                     ('Q_sum', Q_sum_cols),
+#                     ('Q_dif', Q_dif_cols)
+#                 ]
+
+#                 for ax, (var_label, cols) in zip(axs, variable_sets):
+#                     xi = working_df.loc[mask, cols[i]].values
+#                     yi = working_df.loc[mask, cols[j]].values
+
+#                     ax.scatter(xi, yi, alpha=0.5, s=10)
+#                     ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+#                             [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+#                             'k--', linewidth=1, label='y = x')
+#                     ax.set_xlabel(f'{var_label} Strip {i+1}')
+#                     ax.set_ylabel(f'{var_label} Strip {j+1}')
+#                     ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
+#                     # Aspect ratio 1:1
+#                     ax.set_aspect('equal', adjustable='box')
+#                     ax.grid(True)
+#                     ax.legend()
+
+#                 fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
+#                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+#                 if save_plots:
+#                     name_of_file = f'rpc_variables_debug_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
+#                     final_filename = f'{fig_idx}_{name_of_file}'
+#                     fig_idx += 1
+
+#                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#                     plot_list.append(save_fig_path)
+#                     plt.savefig(save_fig_path, format='png')
+
+#                 if show_plots:
+#                     plt.show()
+#                 plt.close()
+                
+#                 fig, axs = plt.subplots(1, 4, figsize=(20, 5), sharex=False, sharey=False)
+
+#                 # Other variables
+#                 for ax, (var_label, cols) in zip(axs, variable_sets):
+#                     xi = working_df.loc[mask, cols[i]].values
+#                     yi = working_df.loc[mask, cols[j]].values
+
+#                     # ax.scatter(xi + yi, ( xi - yi ) / (xi + yi), alpha=0.5, s=10)
+#                     mask_nonzero = (xi + yi) != 0
+#                     ax.scatter(xi[mask_nonzero] + yi[mask_nonzero],
+#                             (xi[mask_nonzero] - yi[mask_nonzero]) / (xi[mask_nonzero] + yi[mask_nonzero]),
+#                             alpha=0.5, s=10)
+
+#                     # ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+#                     #         [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
+#                     #         'k--', linewidth=1, label='y = x')
+#                     ax.set_xlabel(f'{var_label} Strip {i+1}')
+#                     ax.set_ylabel(f'{var_label} Strip {j+1}')
+#                     ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
+#                     # Aspect ratio 1:1
+#                     # ax.set_aspect('equal', adjustable='box')
+#                     ax.grid(True)
+#                     # ax.legend()
+
+#                 fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
+#                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+#                 if save_plots:
+#                     name_of_file = f'rpc_variables_calculations_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
+#                     final_filename = f'{fig_idx}_{name_of_file}'
+#                     fig_idx += 1
+
+#                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#                     plot_list.append(save_fig_path)
+#                     plt.savefig(save_fig_path, format='png')
+
+#                 if show_plots:
+#                     plt.show()
+#                 plt.close()
+
+# if create_plots:
+if create_plots or create_essential_plots:
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
         print(f"\n--- Plane {i_plane} ---")
@@ -4738,7 +4808,13 @@ if create_plots:
         Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
         Q_dif_cols = [f'Q{i_plane}_Q_diff_{j+1}' for j in range(4)]
 
-        # Get all unique multi-strip patterns
+        variable_sets = [
+            ('T_sum', T_sum_cols),
+            ('T_diff', T_diff_cols),
+            ('Q_sum', Q_sum_cols),
+            ('Q_dif', Q_dif_cols)
+        ]
+
         patterns = working_df[active_col].unique()
         multi_patterns = [p for p in patterns if p != '0000' and p.count('1') > 1]
 
@@ -4755,75 +4831,68 @@ if create_plots:
             print(f"Pattern {pattern} ({n_events} events):")
 
             for i, j in combinations(active_strips, 2):
-                fig, axs = plt.subplots(1, 4, figsize=(20, 5), sharex=False, sharey=False)
-                variable_sets = [
-                    ('T_sum', T_sum_cols),
-                    ('T_diff', T_diff_cols),
-                    ('Q_sum', Q_sum_cols),
-                    ('Q_dif', Q_dif_cols)
-                ]
+                fig, axs = plt.subplots(2, 4, figsize=(20, 10), sharex=False, sharey=False)
 
-                for ax, (var_label, cols) in zip(axs, variable_sets):
+                for col_idx, (var_label, cols) in enumerate(variable_sets):
                     xi = working_df.loc[mask, cols[i]].values
                     yi = working_df.loc[mask, cols[j]].values
 
+                    # Row 0: xi vs yi
+                    ax = axs[0, col_idx]
                     ax.scatter(xi, yi, alpha=0.5, s=10)
-                    ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
-                            [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
-                            'k--', linewidth=1, label='y = x')
+                    
+                    if var_label == "T_sum":
+                        lim_left = -125
+                        lim_right = -100
+                    elif var_label == "T_diff":
+                        lim_left = -1
+                        lim_right = 1
+                    elif var_label == "Q_sum":
+                        lim_left = 0
+                        lim_right = 60
+                    elif var_label == "Q_dif":
+                        lim_left = -1
+                        lim_right = 1
+                    else:
+                        print(f"Unknown variable label: {var_label}")
+                        continue
+                        
+                    ax.set_xlim(lim_left, lim_right)
+                    ax.set_ylim(lim_left, lim_right)
+
+                    ax.plot([lim_left, lim_right], [lim_left, lim_right], 'k--', lw=1, label='y = x')
                     ax.set_xlabel(f'{var_label} Strip {i+1}')
                     ax.set_ylabel(f'{var_label} Strip {j+1}')
                     ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
-                    # Aspect ratio 1:1
                     ax.set_aspect('equal', adjustable='box')
                     ax.grid(True)
                     ax.legend()
 
-                fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
-                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+                    # Row 1: (xi + yi) vs (xi - yi) / (xi + yi)
+                    ax = axs[1, col_idx]
+                    denom = ( xi + yi ) / 2
+                    valid = denom != 0
+                    x_sum = denom[valid]
+                    y_norm_diff = (xi[valid] - yi[valid]) / x_sum / 2
 
-                if save_plots:
-                    name_of_file = f'rpc_variables_debug_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
-                    final_filename = f'{fig_idx}_{name_of_file}'
-                    fig_idx += 1
+                    if x_sum.size == 0:
+                        continue
 
-                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                    plot_list.append(save_fig_path)
-                    plt.savefig(save_fig_path, format='png')
+                    ax.scatter(x_sum, y_norm_diff, alpha=0.5, s=10)
+                    
+                    ax.set_xlim(lim_left, lim_right)
+                    ax.set_ylim(-1, 1)
 
-                if show_plots:
-                    plt.show()
-                plt.close()
-                
-                fig, axs = plt.subplots(1, 4, figsize=(20, 5), sharex=False, sharey=False)
-
-                # Other variables
-                for ax, (var_label, cols) in zip(axs, variable_sets):
-                    xi = working_df.loc[mask, cols[i]].values
-                    yi = working_df.loc[mask, cols[j]].values
-
-                    # ax.scatter(xi + yi, ( xi - yi ) / (xi + yi), alpha=0.5, s=10)
-                    mask_nonzero = (xi + yi) != 0
-                    ax.scatter(xi[mask_nonzero] + yi[mask_nonzero],
-                            (xi[mask_nonzero] - yi[mask_nonzero]) / (xi[mask_nonzero] + yi[mask_nonzero]),
-                            alpha=0.5, s=10)
-
-                    # ax.plot([min(xi.min(), yi.min()), max(xi.max(), yi.max())],
-                    #         [min(xi.min(), yi.min()), max(xi.max(), yi.max())],
-                    #         'k--', linewidth=1, label='y = x')
-                    ax.set_xlabel(f'{var_label} Strip {i+1}')
-                    ax.set_ylabel(f'{var_label} Strip {j+1}')
-                    ax.set_title(f'{var_label}: Strip {i+1} vs {j+1}')
-                    # Aspect ratio 1:1
-                    # ax.set_aspect('equal', adjustable='box')
+                    ax.set_xlabel(f'{var_label}$_i$ + {var_label}$_j$ / 2')
+                    ax.set_ylabel(f'({var_label}$_i$ - {var_label}$_j$) / ( 2 * sum )')
+                    ax.set_title(f'{var_label}: Sum vs Norm. Diff')
                     ax.grid(True)
-                    # ax.legend()
 
-                fig.suptitle(f'Plane {i_plane}, Pattern {pattern}', fontsize=14)
-                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+                fig.suptitle(f'Plane {i_plane}, Pattern {pattern}, Strips {i+1} & {j+1}', fontsize=16)
+                fig.tight_layout(rect=[0, 0.03, 1, 0.95])
 
                 if save_plots:
-                    name_of_file = f'rpc_variables_calculations_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
+                    name_of_file = f'rpc_variables_2row_P{i_plane}_{pattern}_s{i+1}s{j+1}.png'
                     final_filename = f'{fig_idx}_{name_of_file}'
                     fig_idx += 1
 
@@ -4894,7 +4963,8 @@ for i_plane in range(1, 5):
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
 
 
-if create_essential_plots or create_plots:
+# if create_essential_plots or create_plots:
+if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -5013,6 +5083,7 @@ if stratos_save and station == 1:
 
 # Same for hexbin
 if create_plots or create_essential_plots:
+# if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -5580,7 +5651,7 @@ print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 if fixed_speed:
-    print("Fixed the slowness to the speed of light.")
+    print("Fixed the slowness to 1 / speed of light.")
 else:
     print("Slowness not fixed.")
 
@@ -5763,7 +5834,12 @@ for iteration in range(repeat + 1):
                 planes_to_iterate.append(i_plane + 1)
                 working_df.at[idx, f'charge_{i_plane + 1}'] = charge_plane
                 charge_event += charge_plane
-                
+        
+        try:
+            name_type = int(name_type)
+        except ValueError:
+            name_type = 0
+
         working_df.at[idx, 'charge_event'] = charge_event
         planes_to_iterate = np.array(planes_to_iterate)
         
@@ -6029,7 +6105,7 @@ for iteration in range(repeat + 1):
                     working_df.at[index, f'P{i}_T_diff_final'] = 0
                     working_df.at[index, f'P{i}_Q_sum_final'] = 0
                     working_df.at[index, f'P{i}_Q_diff_final'] = 0
-                    
+    
     four_planes = len(working_df[working_df.processed_tt == 1234])
     print(f"Events that are 1234: {four_planes}")
     print(f"Events that are 123: {len(working_df[working_df.processed_tt == 123])}")
@@ -6092,14 +6168,32 @@ for col in working_df.columns:
 
 definitive_df = working_df.copy()
 
-cols_to_check = ['x', 'xp', 'y', 'yp', 's', 't0']
+# Remove small, non-zero values -----------------------------------------------
+mask = definitive_df.applymap(is_small_nonzero)
+nonzero_numeric_mask = definitive_df.applymap(lambda x: isinstance(x, (int, float)) and x != 0)
+n_total = nonzero_numeric_mask.sum().sum()
+n_small = mask.sum().sum()
+definitive_df = definitive_df.mask(mask, 0)
+pct = 100 * n_small / n_total if n_total > 0 else 0
+print(f"In definitive_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
 
-# cond = reduce(operator.and_, (working_df[col] != 0 for col in cols_to_check))
+
+# Remove rows with zeros in key places ----------------------------------------
+cols_to_check = ['x', 'xp', 'y', 'yp', 's', 't0', 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s']
+
 cond = (working_df[cols_to_check[0]] != 0)
 for col in cols_to_check[1:]:
     cond &= (working_df[col] != 0)
 
+n_before = len(definitive_df)
 definitive_df = definitive_df[cond]
+n_after = len(definitive_df)
+
+# Calculate and print percentage
+percentage_retained = 100 * n_after / n_before if n_before > 0 else 0
+print(f"Rows before: {n_before}")
+print(f"Rows after: {n_after}")
+print(f"Retained: {percentage_retained:.2f}%")
 
 
 print("----------------------------------------------------------------------")
@@ -6396,8 +6490,10 @@ if create_plots or create_essential_plots:
     counts = analysis_data.groupby(['original_tt', 'processed_tt']).size().unstack(fill_value=0)
 
     # Ensure consistent ordering for display
-    original_order = sorted(analysis_data['original_tt'].unique())
-    processed_order = sorted(analysis_data['processed_tt'].unique())
+    original_order = sorted(analysis_data['original_tt'].unique(), reverse=True)
+    processed_unique = analysis_data['processed_tt'].unique()
+    processed_order = list(original_order) + [x for x in processed_unique if x not in original_order]
+
     counts = counts.reindex(index=original_order, columns=processed_order, fill_value=0)
 
     # Create the 2D colored plot
@@ -6414,16 +6510,20 @@ if create_plots or create_essential_plots:
     ax.set_ylabel("original_tt")
     ax.set_title("Event counts per (original_tt, processed_tt) combination")
 
-    im = ax.imshow(counts, cmap='plasma')
+    im = ax.imshow(counts, cmap='plasma', origin='lower')
+    total = counts.values.sum()
+
     for i in range(len(counts.index)):
         for j in range(len(counts.columns)):
             value = counts.iloc[i, j]
             if value > 0:
-                ax.text(j, i, str(value), ha="center", va="center", color="black" if value > counts.values.max() * 0.5 else "white")
-
-    # Colorbar
-    # cbar = fig.colorbar(im, ax=ax)
-    # cbar.set_label("Count")
+                pct = 100 * value / total
+                label = f"{pct:.1f}%"  # One decimal place
+                ax.text(
+                    j, i, label,
+                    ha="center", va="center",
+                    color="black" if value > counts.values.max() * 0.5 else "white"
+                )
 
     plt.tight_layout()
     if save_plots:
@@ -6449,6 +6549,8 @@ print(f"Data purity is {data_purity:.1f}%")
 global_variables['purity_of_data_percentage'] = data_purity
 
 if create_plots or create_essential_plots:
+    
+    column_chosen = "processed_tt"
     plot_ancillary_df = definitive_df.copy()
     
     # Ensure datetime is proper and indexed
@@ -6463,16 +6565,18 @@ if create_plots or create_essential_plots:
     }
 
     # Classify events by number of planes in original_tt
-    for tt_code in plot_ancillary_df['original_tt'].unique():
+    for tt_code in plot_ancillary_df[column_chosen].unique():
         planes = str(tt_code)
         count = len(planes)
         label = f'Case {tt_code}'
+        if count == 1:
+            grouped_data["One plane"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
         if count == 2:
-            grouped_data["Two planes"][label] = plot_ancillary_df[plot_ancillary_df['original_tt'] == tt_code]
+            grouped_data["Two planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
         elif count == 3:
-            grouped_data["Three planes"][label] = plot_ancillary_df[plot_ancillary_df['original_tt'] == tt_code]
+            grouped_data["Three planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
         elif count == 4:
-            grouped_data["Four planes"][label] = plot_ancillary_df[plot_ancillary_df['original_tt'] == tt_code]
+            grouped_data["Four planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
 
     # Plotting
     fig, axes = plt.subplots(1, 3, figsize=(24, 6))
@@ -6488,7 +6592,7 @@ if create_plots or create_essential_plots:
             poisson_pmf = poisson.pmf(x_values, lambda_estimate)
             poisson_pmf_scaled = poisson_pmf * len(events_per_second)
 
-            ax.bar(hist_data.index, hist_data.values, label=label, alpha=0.8, color=colors(i % 10))
+            ax.plot(hist_data.index, hist_data.values, label=label, alpha=0.9, color=colors(i % 10), linewidth = 3)
             ax.plot(x_values, poisson_pmf_scaled, '--', lw=1.5, color=colors(i % 10), alpha=0.6)
 
         ax.set_title(f'{title}')
@@ -6525,11 +6629,11 @@ if create_plots or create_essential_plots:
     colors = cmap(np.linspace(0, 1, len(cases)))
 
     # Define window widths
-    widths = np.linspace(0, 0.1, 50)
+    widths = np.linspace(0, 20, 200)
     plt.figure(figsize=(10, 6))
 
     for idx, case in enumerate(cases):
-        data_case = definitive_df[definitive_df["original_tt"] == case]
+        data_case = definitive_df[definitive_df["processed_tt"] == case]
         
         # Extract only the _T_sum_ columns
         t_sum_columns = [col for col in data_case.columns if "_T_sum_" in col]
@@ -6678,7 +6782,7 @@ for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
     for j in range(4):
         strip = j + 1
         if crosstalk_fitting:
-            new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2 - crosstalk_limits[f'crstlk_{module}s{strip}']
+            new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2 - crosstalk_pedestal[f'crstlk_pedestal_{module}s{strip}']
         else:
             new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
         new_row[f'{module}_s{strip}_T_sum'] = calibration_times[i, j]
@@ -6712,6 +6816,7 @@ else:
 calibrations_df.sort_values(by='Time', inplace=True)
 calibrations_df.to_csv(csv_path, index=False, float_format='%.5g')
 print(f'{csv_path} updated with the calibrations for this folder.')     
+
 
 a = 1/0
 
