@@ -66,6 +66,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from itertools import combinations
 from functools import reduce
+from typing import Dict, Tuple, Iterable
 
 # Scientific computing
 from math import sqrt
@@ -547,6 +548,7 @@ y_width_P1_and_P3 = y_widths[0]
 y_width_P2_and_P4 = y_widths[1]
 y_pos_P1_and_P3 = y_pos(y_width_P1_and_P3)
 y_pos_P2_and_P4 = y_pos(y_width_P2_and_P4)
+total_width = np.sum(y_width_P1_and_P3)
 
 # Miscelanous ----------------------------
 c_mm_ns = c/1000000
@@ -4398,8 +4400,8 @@ if crosstalk_removal_and_recalibration:
     matrix = np.array(values).reshape(4, 4)
     print(matrix, '\n')
     
-    # if create_plots:
-    if create_plots or create_essential_plots:
+    if create_plots:
+    # if create_plots or create_essential_plots:
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
 
@@ -4475,8 +4477,8 @@ if crosstalk_removal_and_recalibration:
             working_df.loc[mask, f'Q{key}_Q_sum_{j+1}'] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
 
 
-    if create_plots or create_essential_plots:
-    # if create_plots:
+    # if create_plots or create_essential_plots:
+    if create_plots:
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
 
@@ -4677,8 +4679,8 @@ if y_new_method:
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
 
 
-if create_essential_plots or create_plots:
-# if create_plots:
+# if create_essential_plots or create_plots:
+if create_plots:
     plt.figure(figsize=(12, 8))
     for i, plane_id in enumerate(range(1, 5), 1):
         plt.subplot(2, 2, i)
@@ -4871,8 +4873,8 @@ for i_plane in range(1, 5):
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
 
 
-# if create_essential_plots or create_plots:
-if create_plots:
+if create_essential_plots or create_plots:
+# if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -4990,8 +4992,8 @@ if stratos_save and station == 1:
 # ----------------------------------------------------------------------------------------------------------------
 
 # Same for hexbin
-if create_plots or create_essential_plots:
-# if create_plots:
+# if create_plots or create_essential_plots:
+if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -5056,144 +5058,141 @@ print("----------------------------------------------------------------------")
 print("-------------- Alternative angle and slowness fitting ----------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
-def fit_3d_line(X, Y, Z, sX, sY, sZ, plane_ids):
-    global tdiff_to_x
 
-    points = np.vstack((X, Y, Z)).T
-    centroid = np.mean(points, axis=0)
-    centered_points = points - centroid
-    _, _, Vt = np.linalg.svd(centered_points)
-    direction_vector = Vt[0]
-    direction_unit = direction_vector / np.linalg.norm(direction_vector)
+# ---------------------------------------------------------------------------
+# 1.  Geometrical line fit (orthogonal-distance regression)
+# ---------------------------------------------------------------------------
+def fit_3d_line(
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    sx: float,
+    sy: float,
+    sz: float,
+    plane_ids: Iterable[int],
+    tdiff_to_x: float,
+) -> Tuple[float, float, float, float, float,
+           Dict[int, float], Dict[int, float]]:
+    """
+    Returns
+    -------
+    x_z0, y_z0              : intercept with z = 0
+    theta, phi              : zenith (0 = down-coming) and azimuth  [rad]
+    chi2                    : χ² of the ODR
+    res_td_dict, res_y_dict : residuals per plane (ΔTdiff units, y units)
+    """
+    pts = np.column_stack((x, y, z))
+    c   = pts.mean(axis=0)
+    d   = np.linalg.svd(pts - c, full_matrices=False)[2][0]   # principal axis
 
-    d_x, d_y, d_z = direction_unit
-    theta = np.arccos(d_z)
-    phi = np.arctan2(d_y, d_x)
+    if d[2] < 0:                                              # enforce d_z > 0
+        d = -d
+    d /= np.linalg.norm(d)
 
-    if d_z != 0:
-        t_0 = -centroid[2] / d_z
-        x_z0 = centroid[0] + t_0 * d_x
-        y_z0 = centroid[1] + t_0 * d_y
-    else:
-        x_z0, y_z0 = np.nan, np.nan
+    theta = np.arccos(d[2])
+    phi   = np.arctan2(d[1], d[0])
 
-    projections = np.dot(centered_points, direction_unit[:, np.newaxis]) * direction_unit
-    residual_vectors = centered_points - projections
+    # z = 0 intercept
+    t0  = -c[2] / d[2] if d[2] != 0 else np.nan
+    xz0 = c[0] + t0 * d[0]
+    yz0 = c[1] + t0 * d[1]
 
-    alt_res_td = residual_vectors[:, 0] / tdiff_to_x
-    alt_res_y = residual_vectors[:, 1]
+    # orthogonal residual vectors
+    proj = np.outer((pts - c) @ d, d)                         # (N,3)
+    res  = (pts - c) - proj
 
-    # Map residuals to plane IDs
-    res_td_dict = {pid: res for pid, res in zip(plane_ids, alt_res_td)}
-    res_y_dict = {pid: res for pid, res in zip(plane_ids, alt_res_y)}
+    res_td = res[:, 0] / tdiff_to_x
+    res_y  = res[:, 1]
 
-    distances = np.linalg.norm(np.cross(centered_points, direction_vector), axis=1)
-    chi2 = np.sum((distances / np.sqrt(np.array(sX)**2 + np.array(sY)**2 + np.array(sZ)**2)) ** 2)
+    chi2 = np.einsum('ij,ij->', res, res) / (sx**2 + sy**2 + sz**2)
 
-    return x_z0, y_z0, theta, phi, chi2, res_td_dict, res_y_dict
-
-
-fit_results = {
-    'alt_x': [], 'alt_y': [],
-    'alt_theta': [], 'alt_phi': [],
-    'alt_chi2': [],
-    'alt_res_tdif_1': [], 'alt_res_tdif_2': [], 'alt_res_tdif_3': [], 'alt_res_tdif_4': [], 
-    'alt_res_ystr_1': [], 'alt_res_ystr_2': [], 'alt_res_ystr_3': [], 'alt_res_ystr_4': []
-}
-
-for idx, track in working_df.iterrows():
-    planes_to_iterate = [
-        i + 1 for i in range(nplan)
-        if getattr(track, f'P{i+1}_Q_sum_final') > 4
-    ]
-
-    if len(planes_to_iterate) >= 2:
-        X, Y, Z = [], [], []
-        for iplane in planes_to_iterate:
-            X.append(strip_speed * getattr(track, f'P{iplane}_T_diff_final'))
-            Y.append(getattr(track, f'Y_{iplane}'))
-            Z.append(z_positions[iplane - 1])
-
-        sX = [anc_sx] * len(X)
-        sY = [anc_sy] * len(Y)
-        sZ = [anc_sz] * len(Z)
-
-        x, y, theta, phi, chi2, res_td_dict, res_y_dict = fit_3d_line(X, Y, Z, sX, sY, sZ, planes_to_iterate)
-    else:
-        x = y = theta = phi = chi2 = 0.0
-        res_td_dict = res_y_dict = {}
-
-    fit_results['alt_x'].append(x)
-    fit_results['alt_y'].append(y)
-    fit_results['alt_theta'].append(theta)
-    fit_results['alt_phi'].append(phi)
-    fit_results['alt_chi2'].append(chi2)
-
-    for plane in range(1, 5):
-        fit_results[f'alt_res_tdif_{plane}'].append(res_td_dict.get(plane, 0.0))
-        fit_results[f'alt_res_ystr_{plane}'].append(res_y_dict.get(plane, 0.0))
-
-# Add all at once
-working_df = pd.concat([working_df, pd.DataFrame(fit_results, index=working_df.index)], axis=1)
+    return (xz0, yz0, float(theta), float(phi), float(chi2),
+            dict(zip(plane_ids, res_td)), dict(zip(plane_ids, res_y)))
 
 
-slow_results = {
-    'alt_s': [],
-    'chi2_tsum_fit': [],
-    'alt_res_tsum_1': [],
-    'alt_res_tsum_2': [],
-    'alt_res_tsum_3': [],
-    'alt_res_tsum_4': []
-}
+# ---------------------------------------------------------------------------
+# 2.  First pass over tracks – geometry
+# ---------------------------------------------------------------------------
+n = len(working_df)
 
-for idx, track in working_df.iterrows():
-    planes_to_iterate = [
-        i + 1 for i in range(nplan)
-        if getattr(track, f'P{i+1}_Q_sum_final') > 0
-    ]
+fit_cols = (
+    ['alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_chi2'] +
+    [f'alt_res_tdif_{p}' for p in range(1, 5)] +
+    [f'alt_res_ystr_{p}' for p in range(1, 5)]
+)
+fit_res = {c: np.zeros(n, dtype=float) for c in fit_cols}
 
-    if len(planes_to_iterate) >= 2:
-        tsum = [getattr(track, f'P{iplane}_T_sum_final') for iplane in planes_to_iterate]
-        z = [z_positions[iplane - 1] for iplane in planes_to_iterate]
+for i, trk in enumerate(working_df.itertuples(index=False)):
+    planes = [p for p in range(1, nplan + 1)
+              if getattr(trk, f'P{p}_Q_sum_final') > 4]
+    if len(planes) < 2:
+        continue
 
-        theta = track['alt_theta']
-        phi = track['alt_phi']
+    x = np.array([strip_speed * getattr(trk, f'P{p}_T_diff_final') for p in planes])
+    y = np.array([getattr(trk, f'Y_{p}')                           for p in planes])
+    z = z_positions[np.array(planes) - 1]
 
-        v_dir = np.array([
-            np.sin(theta) * np.cos(phi),
-            np.sin(theta) * np.sin(phi),
-            np.cos(theta)
-        ])
+    (fit_res['alt_x'][i], fit_res['alt_y'][i],
+     fit_res['alt_theta'][i], fit_res['alt_phi'][i],
+     fit_res['alt_chi2'][i],
+     res_td, res_y) = fit_3d_line(x, y, z,
+                                  anc_sx, anc_sy, anc_sz,
+                                  planes, tdiff_to_x)
 
-        positions = np.stack([np.zeros_like(z), np.zeros_like(z), z], axis=1)
-        proj_dist = positions @ v_dir
-
-        s_rel = proj_dist - proj_dist[0]
-        t_rel = np.array(tsum) - tsum[0]
-
-        slope, intercept = np.polyfit(s_rel, t_rel, deg=1)
-        t_fit = slope * s_rel + intercept
-        residuals = t_rel - t_fit
-        chi2 = np.sum((residuals / anc_sts) ** 2)
-
-        # Map residuals to planes
-        res_tsum_dict = {iplane: res for iplane, res in zip(planes_to_iterate, residuals)}
-    else:
-        slope = chi2 = 0.0
-        res_tsum_dict = {}
-
-    slow_results['alt_s'].append(slope)
-    slow_results['chi2_tsum_fit'].append(chi2)
-
-    for plane in range(1, 5):
-        slow_results[f'alt_res_tsum_{plane}'].append(res_tsum_dict.get(plane, 0.0))
+    for p in range(1, 5):
+        fit_res[f'alt_res_tdif_{p}'][i] = res_td.get(p, 0.0)
+        fit_res[f'alt_res_ystr_{p}'][i] = res_y .get(p, 0.0)
 
 
-# Add at once
-working_df = pd.concat([working_df, pd.DataFrame(slow_results, index=working_df.index)], axis=1)
+# ---------------------------------------------------------------------------
+# 3.  Second pass – slow-timing correlation
+# ---------------------------------------------------------------------------
+slow_cols = ['alt_s', 'chi2_tsum_fit'] + [f'alt_res_tsum_{p}' for p in range(1, 5)]
+slow_res  = {c: np.zeros(n, dtype=float) for c in slow_cols}
 
+for i, trk in enumerate(working_df.itertuples(index=False)):
+    planes = [p for p in range(1, nplan + 1)
+              if getattr(trk, f'P{p}_Q_sum_final') > 0]
+    if len(planes) < 2:
+        continue
+
+    z    = z_positions[np.array(planes) - 1]
+    tsum = np.array([getattr(trk, f'P{p}_T_sum_final') for p in planes])
+
+    θ, φ = fit_res['alt_theta'][i], fit_res['alt_phi'][i]      # values just fitted
+    v    = np.array([np.sin(θ)*np.cos(φ), np.sin(θ)*np.sin(φ), np.cos(θ)])
+
+    # distance along the fitted line for each plane (projection)
+    proj_dist = z * v[2]                                       # x=y=0  →  r·v = z·cosθ
+    s_rel     = proj_dist - proj_dist[0]
+    t_rel     = tsum - tsum[0]
+
+    k, b = np.polyfit(s_rel, t_rel, 1)
+    res  = t_rel - (k * s_rel + b)
+    chi2 = np.sum((res / anc_sts) ** 2)
+
+    slow_res['alt_s'][i]         = k
+    slow_res['chi2_tsum_fit'][i] = chi2
+    for p, r in zip(planes, res):
+        slow_res[f'alt_res_tsum_{p}'][i] = r
+
+
+# ---------------------------------------------------------------------------
+# 4.  Assemble all results and join once
+# ---------------------------------------------------------------------------
+all_res = {**fit_res, **slow_res}
+all_res['alt_th_chi'] = all_res['alt_chi2'] + all_res['chi2_tsum_fit']
+
+new_cols = pd.DataFrame(all_res, index=working_df.index)
+
+# If a column already exists from a previous stage, drop it first
+dupes = new_cols.columns.intersection(working_df.columns)
+working_df = working_df.drop(columns=dupes, errors='ignore')
+
+working_df = working_df.join(new_cols)
+
+# Optional – defragment internal blocks
 working_df = working_df.copy()
-working_df['alt_th_chi'] = working_df['alt_chi2'] + working_df['chi2_tsum_fit']
 
 
 # ---------------------------------------------------------------------------
@@ -6067,6 +6066,53 @@ for col in working_df.columns:
         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
         
 
+print("----------------------------------------------------------------------")
+print("-------------------- Real tracking trigger type ----------------------")
+print("----------------------------------------------------------------------")
+
+# Required constants supplied by the DAQ geometry
+strip_half  = strip_length / 2.0         # x acceptance  : [-strip_half , +strip_half ]
+width_half  = total_width / 2.0          # y acceptance  : [-width_half , +width_half ]
+z_planes    = np.asarray(z_positions)    # shape (nplan,)
+
+# Precompute averages of the two independent fits --------------------------
+x0_avg   = (working_df['x']    + working_df['alt_x'])    * 0.5
+y0_avg   = (working_df['y']    + working_df['alt_y'])    * 0.5
+theta_av = (working_df['theta']+ working_df['alt_theta'])* 0.5
+phi_av   = (working_df['phi']  + working_df['alt_phi'])  * 0.5
+
+vx = np.sin(theta_av) * np.cos(phi_av)                   # direction cosines
+vy = np.sin(theta_av) * np.sin(phi_av)
+vz = np.cos(theta_av)
+
+tracking_vals = np.zeros(len(working_df), dtype=int)
+
+for idx in range(len(working_df)):
+    if vz.iat[idx] <= 0.0:                                # upward track ⇒ no planes
+        continue
+    
+    if x0_avg[idx] == 0 or y0_avg[idx] == 0 or theta_av[idx] == 0 or phi_av[idx] == 0:
+        continue
+
+    planes_hit = []
+    for p, z_p in enumerate(z_planes, start=1):
+        t   = z_p / vz.iat[idx]                           # parameter at plane p
+        x_i = x0_avg.iat[idx] + vx.iat[idx] * t
+        y_i = y0_avg.iat[idx] + vy.iat[idx] * t
+
+        if (-strip_half <= x_i <= strip_half and
+            -width_half <= y_i <= width_half):
+            planes_hit.append(str(p))
+
+    if planes_hit:                                        # concatenate plane numbers
+        tracking_vals[idx] = int(''.join(planes_hit))
+
+tracking_df = pd.DataFrame({'tracking_tt': tracking_vals}, index=working_df.index)
+working_df = working_df.drop(columns=tracking_df.columns.intersection(working_df.columns), errors='ignore')
+working_df = working_df.join(tracking_df)
+working_df = working_df.copy()
+
+
 # -----------------------------------------------------------------------------
 # Define the last dataframe, the definitive one -------------------------------
 # -----------------------------------------------------------------------------
@@ -6158,8 +6204,8 @@ cond = ( df_plot_ancillary['charge_1'] < 250 ) &\
 
 df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 
-# if create_plots:
-if create_plots or create_essential_plots:
+if create_plots:
+# if create_plots or create_essential_plots:
 
     def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=60):
         
@@ -6502,8 +6548,8 @@ if create_plots or create_essential_plots:
 
 # ----------------------------------------------------------------------------------------------------
 
-if create_plots or create_essential_plots:
-# if create_plots:
+# if create_plots or create_essential_plots:
+if create_plots:
 
     df_filtered = df_plot_ancillary.copy()
 
@@ -6554,6 +6600,7 @@ if create_plots or create_essential_plots:
 
 # Display the trigger type before and after
 if create_plots or create_essential_plots:
+# if create_plots:
     analysis_data = working_df[['original_tt', 'processed_tt']]
     
     # Create a pivot table to count (original_tt, processed_tt) combinations
@@ -6608,6 +6655,63 @@ if create_plots or create_essential_plots:
         plt.show()
     plt.close()
 
+
+# Display the trigger type before and after
+if create_plots or create_essential_plots:
+# if create_plots:
+    analysis_data = working_df[['tracking_tt', 'processed_tt']]
+    
+    # Create a pivot table to count (original_tt, processed_tt) combinations
+    counts = analysis_data.groupby(['tracking_tt', 'processed_tt']).size().unstack(fill_value=0)
+
+    # Ensure consistent ordering for display
+    original_order = sorted(analysis_data['tracking_tt'].unique(), reverse=True)
+    processed_unique = analysis_data['processed_tt'].unique()
+    processed_order = list(original_order) + [x for x in processed_unique if x not in original_order]
+
+    counts = counts.reindex(index=original_order, columns=processed_order, fill_value=0)
+
+    # Create the 2D colored plot
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Set ticks and labels
+    ax.set_xticks(np.arange(len(counts.columns)))
+    ax.set_yticks(np.arange(len(counts.index)))
+    ax.set_xticklabels(counts.columns)
+    ax.set_yticklabels(counts.index)
+
+    # plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    ax.set_xlabel("processed_tt")
+    ax.set_ylabel("tracking_tt")
+    ax.set_title("Event counts per (tracking_tt, processed_tt) combination")
+
+    im = ax.imshow(counts, cmap='plasma', origin='lower')
+    total = counts.values.sum()
+
+    for i in range(len(counts.index)):
+        for j in range(len(counts.columns)):
+            value = counts.iloc[i, j]
+            if value > 0:
+                pct = 100 * value / total
+                label = f"{pct:.1f}%"  # One decimal place
+                ax.text(
+                    j, i, label,
+                    ha="center", va="center",
+                    color="black" if value > counts.values.max() * 0.5 else "white"
+                )
+
+    plt.tight_layout()
+    if save_plots:
+        name_of_file = 'trigger_types_tracking_and_processed'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    # Show plot if enabled
+    if show_plots:
+        plt.show()
+    plt.close()
 
 print("----------------------------------------------------------------------")
 print("----------------------- Final data statistics ------------------------")
@@ -6691,7 +6795,8 @@ global_variables['purity_of_data_percentage'] = data_purity
 #     plt.close()
 
 
-if create_plots or create_essential_plots:
+# if create_plots or create_essential_plots:
+if create_plots:
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12))
     colors = plt.colormaps['tab10']
@@ -6763,12 +6868,12 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
-
 # ------------------------------------------------------------------------------------------------
 # ------------------------------------ Time window plotting --------------------------------------
 # ------------------------------------------------------------------------------------------------
 
-if create_plots or create_essential_plots:
+# if create_plots or create_essential_plots:
+if create_plots:
 
     cases = [1234, 123, 234, 124, 134, 12, 23, 34, 13, 14, 24]
     cmap = plt.colormaps['turbo']
@@ -6962,7 +7067,6 @@ else:
 calibrations_df.sort_values(by='Time', inplace=True)
 calibrations_df.to_csv(csv_path, index=False, float_format='%.5g')
 print(f'{csv_path} updated with the calibrations for this folder.')     
-
 
 a = 1/0
 
