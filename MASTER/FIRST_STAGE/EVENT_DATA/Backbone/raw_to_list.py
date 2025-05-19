@@ -111,6 +111,9 @@ if len(sys.argv) < 2:
 
 # Get the station argument
 station = sys.argv[1]
+if station not in ["1", "2", "3", "4"]:
+    print("Error: Invalid station. Please provide a valid station (1, 2, 3, or 4).")
+    sys.exit(1)
 # print(f"Station: {station}")
 
 # -----------------------------------------------------------------------------
@@ -300,6 +303,10 @@ uniform_weighted_method = False
 # RPC variables ------------------------------------
 weighted = False
 
+# Alternative --------------------------------------
+alternative_iteration = True
+number_of_alt_executions = 2
+
 # TimTrack -----------------------------------------
 fixed_speed = False
 res_ana_removing_planes = False
@@ -407,8 +414,8 @@ T_diff_cal_threshold = 1
 # Once calculated the RPC variables -------------------------------------------
 # -----------------------------------------------------------------------------
 # Tsum
-T_sum_RPC_left = -140
-T_sum_RPC_right = -100
+T_sum_RPC_left = -3
+T_sum_RPC_right = 5 # -100
 # Tdiff
 T_diff_RPC_left = -0.8
 T_diff_RPC_right = 0.8
@@ -433,6 +440,10 @@ alt_phi_right_filter = np.pi
 alt_slowness_filter_left = -0.02
 alt_slowness_filter_right = 0.03 # 0.025
 
+alt_res_ystr_filter = 100
+alt_res_tsum_filter = 1
+alt_res_tdif_filter = 0.3
+
 # -----------------------------------------------------------------------------
 # TimTrack filter -------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -446,8 +457,8 @@ charge_event_left_filter = 0
 charge_event_right_filter = 1e6
 
 res_ystr_filter = 100
-res_tsum_filter = 1.5
-res_tdif_filter = 0.4
+res_tsum_filter = 1
+res_tdif_filter = 0.3
 
 ext_res_ystr_filter = 120
 ext_res_tsum_filter = 2
@@ -565,9 +576,9 @@ d0    = 10 # initial value of the convergence parameter
 nplan = 4
 lenx  = strip_length
 
-anc_sy = 30 # 2.5 cm
-anc_sts = 0.4 # 400 ps
-anc_std = 0.07
+anc_sy = 25 # 2.5 cm
+anc_sts = 0.35 # 400 ps
+anc_std = 0.075
 anc_sx = tdiff_to_x * anc_std # 2 cm
 anc_sz = 10 # 5 cm
 
@@ -578,7 +589,6 @@ anc_sz = 10 # 5 cm
 # -----------------------------------------------------------------------------
 global_variables = {
     'CRT_avg': 0,
-    'discarded_by_time_window_percentage': 0,
     'sigmoid_width': 0,
     'background_slope': 0,
     'one_side_events': 0,
@@ -1143,6 +1153,7 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
 
     # Plot histograms and fit Gaussian if needed
     for i, col in enumerate(columns):
+        
         data = df[col].values
         data = data[data != 0]  # Filter out zero values
 
@@ -1150,11 +1161,69 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             axs[i].text(0.5, 0.5, "No data", transform=axs[i].transAxes, ha='center', va='center', color='gray')
             continue
 
+        # Example color map per column type
+        color_map = {
+            "theta": "blue",
+            "phi": "green",
+            "x": "darkorange",
+            "y": "darkorange",
+            "alt_y": "darkorange",
+            "s": "purple",
+            "alt_s": "purple",
+            "th_chi": "red",
+            "res_ystr": "teal",
+            "res_tsum": "brown",
+            "res_tdif": "purple",
+            "t0": "black"
+        }
+
+        # Set default in case no match is found
+        selected_col = 'gray'
+
+        if "theta" in col:
+            left, right = 0, np.pi / 2
+            selected_col = color_map["theta"]
+
+        elif "phi" in col:
+            left, right = -np.pi, np.pi
+            selected_col = color_map["phi"]
+
+        elif "x" in col or col in ["y", "alt_y"]:
+            left, right = -500, 500
+            selected_col = color_map["x"]
+
+        elif col in ["s", "alt_s"]:
+            left, right = slowness_filter_left, slowness_filter_right
+            selected_col = color_map["s"]
+
+        elif "th_chi" in col:
+            left, right = 0, 10
+            selected_col = color_map["th_chi"]
+
+        elif "res_ystr" in col:
+            left, right = -100, 100
+            selected_col = color_map["res_ystr"]
+
+        elif "res_tsum" in col:
+            left, right = -1, 1
+            selected_col = color_map["res_tsum"]
+
+        elif "res_tdif" in col:
+            left, right = -0.3, 0.3
+            selected_col = color_map["res_tdif"]
+
+        elif "t0" in col:
+            left, right = -200, 0
+            selected_col = color_map["t0"]
+
         # Plot histogram
-        hist_data, bin_edges, _ = axs[i].hist(data, bins='auto', alpha=0.75, label='Data')
+        hist_data, bin_edges, _ = axs[i].hist(data, bins='auto', alpha=0.7, label='Data', color=selected_col)
+
         axs[i].set_title(col)
         axs[i].set_xlabel('Value')
         axs[i].set_ylabel('Frequency')
+        
+        axs[i].set_xlim([left, right])
 
         # Fit Gaussian if enabled and data is sufficient
         if fit_gaussian and len(data) >= 10:
@@ -1185,15 +1254,12 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         fig.delaxes(axs[j])
 
     plt.suptitle(title, fontsize=16)
-
     if save_plots:
         final_filename = f'{fig_idx}_{title.replace(" ", "_")}.png'
         fig_idx += 1
-
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-    
     if show_plots:
         plt.show()
     plt.close()
@@ -2200,13 +2266,13 @@ if create_plots:
     plt.close(fig_Q)
 
 
-# ----------------------------------------------------------------------------------
-# -------------------------- Position offset calibration ---------------------------
-# ----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# ------------------------ Position offset calibration ------------------------
+# -----------------------------------------------------------------------------
 
-print("--------------------------------------------------------------------------")
-print("-------------------- Position offset calibration -------------------------")
-print("--------------------------------------------------------------------------")
+print("----------------------------------------------------------------------")
+print("------------------- Position offset calibration ----------------------")
+print("----------------------------------------------------------------------")
 
 pos_test = working_df.copy()
 for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
@@ -3921,9 +3987,6 @@ if time_calibration:
             df.loc[current_prefix, current_suffix] = summary(vector)
             df.loc[current_suffix, current_prefix] = -df.loc[current_prefix, current_suffix]
         
-        print("Antisymmetric matrix:")
-        print(df)
-    
     else:
         # Create row and column indices
         rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
@@ -3939,8 +4002,9 @@ if time_calibration:
             df.loc[l1, l2] = -offset
             df.loc[l2, l1] = offset
         
-        print("Antisymmetric matrix:")
-        print(df)
+    print("Antisymmetric matrix:")
+    print(df.applymap(lambda x: f"{x:.2f}" if pd.notnull(x) else ""))
+
     
     # -----------------------------------------------------------------------------
     # Brute force method
@@ -4184,10 +4248,10 @@ print("----------------------------------------------------------------------")
 print("----------------------- Time window filtering ------------------------")
 print("----------------------------------------------------------------------")
 
-# Print columns of working_df
-print("Columns of working_df:\n", working_df.columns.to_list())
+# Print columns working_df
+# print("Columns of working_df:\n", working_df.columns.to_list())
 
-time_window_fitting = True
+time_window_fitting = False
 if time_window_fitting:
     
     T_sum_columns = working_df.filter(regex='_T_sum_')
@@ -4364,7 +4428,7 @@ if crosstalk_removal_and_recalibration:
 
             try:
                 a_min = 0
-                a_max = 2*max(hist_vals)
+                a_max = 2*max(hist_vals) + 1
                 
                 mu_min = -1
                 mu_max = 1.5
@@ -4873,8 +4937,8 @@ for i_plane in range(1, 5):
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
 
 
-if create_essential_plots or create_plots:
-# if create_plots:
+# if create_essential_plots or create_plots:
+if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -4934,6 +4998,33 @@ if create_essential_plots or create_plots:
     plt.close()
 
 
+print("----------------------------------------------------------------------")
+print("------ Put Tsum in reference to the first strip that is not zero -----")
+print("----------------------------------------------------------------------")
+
+# Define the order of preference
+cols = ["P1_T_sum_final", "P2_T_sum_final", "P3_T_sum_final", "P4_T_sum_final"]
+
+# Stack the values to a 2D array for efficient row-wise processing
+vals = working_df[cols].to_numpy()
+
+# Mask of non-zero values
+nonzero_mask = vals != 0
+
+# Find first non-zero index per row (if any)
+first_nonzero_idx = np.where(nonzero_mask.any(axis=1), nonzero_mask.argmax(axis=1), -1)
+
+# Get the corresponding baseline values
+row_indices = np.arange(len(working_df))
+baseline_vals = vals[row_indices, first_nonzero_idx]
+
+# Subtract baseline row-wise
+vals_normalized = vals - baseline_vals[:, np.newaxis]
+
+# Store back in the DataFrame
+working_df[cols] = vals_normalized
+
+
 print("--------------------- Filter 6: calibrated data ----------------------")
 for col in working_df.columns:
     if 'T_sum_final' in col:
@@ -4991,9 +5082,10 @@ if stratos_save and station == 1:
     filtered_stratos_df.to_csv(save_stratos, index=False, float_format="%.1f")
 # ----------------------------------------------------------------------------------------------------------------
 
+
 # Same for hexbin
-# if create_plots or create_essential_plots:
-if create_plots:
+if create_plots or create_essential_plots:
+# if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -5062,6 +5154,7 @@ print("----------------------------------------------------------------------")
 # ---------------------------------------------------------------------------
 # 1.  Geometrical line fit (orthogonal-distance regression)
 # ---------------------------------------------------------------------------
+
 def fit_3d_line(
     x: np.ndarray,
     y: np.ndarray,
@@ -5111,96 +5204,142 @@ def fit_3d_line(
 
 
 # ---------------------------------------------------------------------------
-# 2.  First pass over tracks – geometry
+# ---------------------------- Loop starts here -----------------------------
 # ---------------------------------------------------------------------------
+
 n = len(working_df)
 
+# Angular definitions
 fit_cols = (
     ['alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_chi2'] +
     [f'alt_res_tdif_{p}' for p in range(1, 5)] +
     [f'alt_res_ystr_{p}' for p in range(1, 5)]
 )
-fit_res = {c: np.zeros(n, dtype=float) for c in fit_cols}
 
-for i, trk in enumerate(working_df.itertuples(index=False)):
-    planes = [p for p in range(1, nplan + 1)
-              if getattr(trk, f'P{p}_Q_sum_final') > 4]
-    if len(planes) < 2:
-        continue
-
-    x = np.array([strip_speed * getattr(trk, f'P{p}_T_diff_final') for p in planes])
-    y = np.array([getattr(trk, f'Y_{p}')                           for p in planes])
-    z = z_positions[np.array(planes) - 1]
-
-    (fit_res['alt_x'][i], fit_res['alt_y'][i],
-     fit_res['alt_theta'][i], fit_res['alt_phi'][i],
-     fit_res['alt_chi2'][i],
-     res_td, res_y) = fit_3d_line(x, y, z,
-                                  anc_sx, anc_sy, anc_sz,
-                                  planes, tdiff_to_x)
-
-    for p in range(1, 5):
-        fit_res[f'alt_res_tdif_{p}'][i] = res_td.get(p, 0.0)
-        fit_res[f'alt_res_ystr_{p}'][i] = res_y .get(p, 0.0)
-
-
-# ---------------------------------------------------------------------------
-# 3.  Second pass – slow-timing correlation
-# ---------------------------------------------------------------------------
+# Slowness definitions
 slow_cols = ['alt_s', 'chi2_tsum_fit'] + [f'alt_res_tsum_{p}' for p in range(1, 5)]
-slow_res  = {c: np.zeros(n, dtype=float) for c in slow_cols}
 
-for i, trk in enumerate(working_df.itertuples(index=False)):
-    planes = [p for p in range(1, nplan + 1)
-              if getattr(trk, f'P{p}_Q_sum_final') > 0]
-    if len(planes) < 2:
-        continue
+# Alternative analysis starts -----------------------------------------------
+repeat = number_of_alt_executions - 1 if alternative_iteration else 0
+for alt_iteration in range(repeat + 1):
+    fitted = 0
+    if alternative_iteration:
+        print(f"Alternative iteration {alt_iteration+1} out of {number_of_alt_executions}.")
+    
+    fit_res = {c: np.zeros(n, dtype=float) for c in fit_cols}
+    slow_res  = {c: np.zeros(n, dtype=float) for c in slow_cols}
+    
+    # Angular part
+    for i, trk in enumerate(working_df.itertuples(index=False)):
+        planes = [p for p in range(1, nplan + 1)
+                if getattr(trk, f'P{p}_Q_sum_final') > 0.1]
+        if len(planes) < 2:
+            continue
 
-    z    = z_positions[np.array(planes) - 1]
-    tsum = np.array([getattr(trk, f'P{p}_T_sum_final') for p in planes])
+        x = np.array([strip_speed * getattr(trk, f'P{p}_T_diff_final') for p in planes])
+        y = np.array([getattr(trk, f'Y_{p}')                           for p in planes])
+        z = z_positions[np.array(planes) - 1]
 
-    θ, φ = fit_res['alt_theta'][i], fit_res['alt_phi'][i]      # values just fitted
-    v    = np.array([np.sin(θ)*np.cos(φ), np.sin(θ)*np.sin(φ), np.cos(θ)])
+        (fit_res['alt_x'][i], fit_res['alt_y'][i],
+        fit_res['alt_theta'][i], fit_res['alt_phi'][i],
+        fit_res['alt_chi2'][i],
+        res_td, res_y) = fit_3d_line(x, y, z,
+                                    anc_sx, anc_sy, anc_sz,
+                                    planes, tdiff_to_x)
 
-    # distance along the fitted line for each plane (projection)
-    proj_dist = z * v[2]                                       # x=y=0  →  r·v = z·cosθ
-    s_rel     = proj_dist - proj_dist[0]
-    t_rel     = tsum - tsum[0]
-
-    k, b = np.polyfit(s_rel, t_rel, 1)
-    res  = t_rel - (k * s_rel + b)
-    chi2 = np.sum((res / anc_sts) ** 2)
-
-    slow_res['alt_s'][i]         = k
-    slow_res['chi2_tsum_fit'][i] = chi2
-    for p, r in zip(planes, res):
-        slow_res[f'alt_res_tsum_{p}'][i] = r
+        for p in range(1, 5):
+            fit_res[f'alt_res_tdif_{p}'][i] = res_td.get(p, 0.0)
+            fit_res[f'alt_res_ystr_{p}'][i] = res_y .get(p, 0.0)
 
 
-# ---------------------------------------------------------------------------
-# 4.  Assemble all results and join once
-# ---------------------------------------------------------------------------
-all_res = {**fit_res, **slow_res}
-all_res['alt_th_chi'] = all_res['alt_chi2'] + all_res['chi2_tsum_fit']
+    # Slowness part
+    for i, trk in enumerate(working_df.itertuples(index=False)):
+        planes = [p for p in range(1, nplan + 1)
+                if getattr(trk, f'P{p}_Q_sum_final') > 0.1]
+        if len(planes) < 2:
+            continue
 
-new_cols = pd.DataFrame(all_res, index=working_df.index)
+        z    = z_positions[np.array(planes) - 1]
+        tsum = np.array([getattr(trk, f'P{p}_T_sum_final') for p in planes])
 
-# If a column already exists from a previous stage, drop it first
-dupes = new_cols.columns.intersection(working_df.columns)
-working_df = working_df.drop(columns=dupes, errors='ignore')
+        θ, φ = fit_res['alt_theta'][i], fit_res['alt_phi'][i]      # values just fitted
+        v    = np.array([np.sin(θ)*np.cos(φ), np.sin(θ)*np.sin(φ), np.cos(θ)])
 
-working_df = working_df.join(new_cols)
+        # distance along the fitted line for each plane (projection)
+        proj_dist = z * v[2]                                       # x=y=0  →  r·v = z·cosθ
+        s_rel     = proj_dist - proj_dist[0]
+        t_rel     = tsum - tsum[0]
 
-# Optional – defragment internal blocks
-working_df = working_df.copy()
+        k, b = np.polyfit(s_rel, t_rel, 1)
+        res  = t_rel - (k * s_rel + b)
+        chi2 = np.sum((res / anc_sts) ** 2)
+
+        slow_res['alt_s'][i]         = k
+        slow_res['chi2_tsum_fit'][i] = chi2
+        for p, r in zip(planes, res):
+            slow_res[f'alt_res_tsum_{p}'][i] = r
+
+
+    # 4.  Assemble all results and join once
+    all_res = {**fit_res, **slow_res}
+    all_res['alt_th_chi'] = all_res['alt_chi2'] + all_res['chi2_tsum_fit']
+
+    new_cols = pd.DataFrame(all_res, index=working_df.index)
+    dupes = new_cols.columns.intersection(working_df.columns)
+    working_df = working_df.drop(columns=dupes, errors='ignore')
+    working_df = working_df.join(new_cols)
+    working_df = working_df.copy()
+
+
+    # Filter according to residual ------------------------------------------------
+    alt_changed_event_count = 0
+    for index, row in working_df.iterrows():
+        alt_changed = False
+        for i in range(1, 5):
+            if abs(row[f'alt_res_tsum_{i}']) > alt_res_tsum_filter or \
+                abs(row[f'alt_res_tdif_{i}']) > alt_res_tdif_filter or \
+                abs(row[f'alt_res_ystr_{i}']) > alt_res_ystr_filter:
+                
+                alt_changed = True
+                working_df.at[index, f'Y_{i}'] = 0
+                working_df.at[index, f'P{i}_T_sum_final'] = 0
+                working_df.at[index, f'P{i}_T_diff_final'] = 0
+                working_df.at[index, f'P{i}_Q_sum_final'] = 0
+                working_df.at[index, f'P{i}_Q_diff_final'] = 0
+        if alt_changed:
+            alt_changed_event_count += 1
+    print(f"--> {alt_changed_event_count} events were residual filtered.")
+    
+    alt_iteration += 1
+
+
+if (create_plots and residual_plots):
+# if create_essential_plots or (create_plots and residual_plots):
+    timtrack_columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
+    residual_columns = [
+        'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
+        'alt_res_tsum_1', 'alt_res_tsum_2', 'alt_res_tsum_3', 'alt_res_tsum_4',
+        'alt_res_tdif_1', 'alt_res_tdif_2', 'alt_res_tdif_3', 'alt_res_tdif_4'
+    ]
+    
+    # Combined plot for all types
+    plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined Alternative method Results", figure_number=1)
+    
+    unique_types = working_df['original_tt'].unique()
+    for t in unique_types:
+        subset_data = working_df[working_df['original_tt'] == t]
+        plot_histograms_and_gaussian(subset_data, timtrack_columns, f"Alternative fitting Results for Original Type {t}", figure_number=1)
+        plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative fitting Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
 
 
 # ---------------------------------------------------------------------------
 # Put every value close to 0 to effectively 0 -------------------------------
 # ---------------------------------------------------------------------------
 
-# Filter the values inside the machine number window
+# Filter the values inside the machine number window ------------------------
 eps = 1e-7  # Threshold
+def is_small_nonzero(x):
+    return isinstance(x, (int, float)) and x != 0 and abs(x) < eps
 
 if create_plots:
 # if create_essential_plots or create_plots:
@@ -5231,30 +5370,22 @@ if create_plots:
         plt.show()
     plt.close()
 
-def is_small_nonzero(x):
-    return isinstance(x, (int, float)) and x != 0 and abs(x) < eps
 
-# Create mask of small, non-zero numeric values
-mask = working_df.applymap(is_small_nonzero)
-
-# Count total non-zero numeric entries
-nonzero_numeric_mask = working_df.applymap(lambda x: isinstance(x, (int, float)) and x != 0)
+# Filter the small values ----------------------------------------------------
+mask = working_df.applymap(is_small_nonzero)  # Create mask of small, non-zero numeric values
+nonzero_numeric_mask = working_df.applymap(lambda x: isinstance(x, (int, float)) and x != 0)  # Count total non-zero numeric entries
 n_total = nonzero_numeric_mask.sum().sum()
 n_small = mask.sum().sum()
-
-# Apply the replacement
-working_df = working_df.mask(mask, 0)
-
-# Report
+working_df = working_df.mask(mask, 0)  # Apply the replacement
 pct = 100 * n_small / n_total if n_total > 0 else 0
-print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
+print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")  # Report
 
 
 # # if create_essential_plots or create_plots:
 # if create_plots:
-    
+
 #     print("Plotting...")
-    
+
 #     # ---------------------------------------------------------------------------------------
 #     # ANGLES PLOTS ------------------------------------------------------------------------
 #     # ---------------------------------------------------------------------------------------
@@ -5304,7 +5435,6 @@ print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct
 #         plt.show()
 #     plt.close()
     
-    
 #     # ---------------------------------------------------------------------------------------
 #     # SLOWNESS PLOTS ------------------------------------------------------------------------
 #     # ---------------------------------------------------------------------------------------
@@ -5346,7 +5476,6 @@ print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct
 #         plt.show()
 #     plt.close()
     
-    
 #     # Plot chi2_tsum_fit --------------------------------------------------------------------
 #     value_inter_med = eps
     
@@ -5379,7 +5508,6 @@ print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct
 #         plt.show()
 #     plt.close()
     
-    
 #     # Plot chi2_tsum_fit vs alt_s --------------------------------------------------------
 #     plt.figure(figsize=(8, 6))
 #     plt.scatter(working_df['alt_s'], working_df['chi2_tsum_fit'], alpha=0.8, s = 0.1)
@@ -5403,7 +5531,6 @@ print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct
 #     if show_plots:
 #         plt.show()
 #     plt.close()
-    
     
 #     # HEXBIN
 #     x_min, x_max = slowness_filter_left, slowness_filter_right
@@ -5439,7 +5566,6 @@ print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct
 #     if show_plots:
 #         plt.show()
 #     plt.close()
-
     
 #     # Plot chi2_tsum_fit vs angular fit chi2 --------------------------------------------------------
 #     plt.figure(figsize=(8, 6))
@@ -5464,7 +5590,6 @@ print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct
 #     if show_plots:
 #         plt.show()
 #     plt.close()
-    
     
 #     # HEXBIN
 #     x_min, x_max = eps, 2
@@ -5500,7 +5625,6 @@ print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct
 #     if show_plots:
 #         plt.show()
 #     plt.close()
-    
     
 #     # Plot alt_theta vs alt_s --------------------------------------------------------
 #     plt.figure(figsize=(8, 6))
@@ -5574,14 +5698,6 @@ for col in working_df.columns:
         cond_zero = (working_df[col] == 0)
         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
 
-
-# Make sure the full row is set to 0 or whatever
-# cond = (working_df['alt_x'] != 0) & (working_df['alt_y'] != 0) &\
-#        (working_df['alt_theta'] != 0) & (working_df['alt_phi'] != 0) &\
-#        (working_df['alt_s'] != 0)
-
-# working_df = working_df.loc[cond]
-
 print("Alternative fitting done.")
 
 
@@ -5593,8 +5709,11 @@ print("----------------------------------------------------------------------")
 
 if fixed_speed:
     print("Fixed the slowness to 1 / speed of light.")
+    npar = 5
 else:
     print("Slowness not fixed.")
+    npar = 6
+
 
 def fmgx(nvar, npar, vs, ss, zi): # G matrix for t measurements in X-axis
     mg = np.zeros([nvar, npar])
@@ -5710,12 +5829,8 @@ def fres(vs, vdat, lenx, ss, zi):  # Residuals array
     vres = [yr, tsr, tdr]
     return vres
 
-if fixed_speed:
-    npar = 5
-else:
-    npar = 6
-nvar = 3
 
+nvar = 3
 i = 0
 ntrk  = len(working_df)
 if limit and limit_number < ntrk: ntrk = limit_number
@@ -5748,9 +5863,7 @@ for iteration in range(repeat + 1):
     
     fitted = 0
     if timtrack_iteration:
-        print("-----------------------------")
-        print(f"TimTrack iteration {iteration}")
-        print("-----------------------------")
+        print(f"TimTrack iteration {iteration+1} out of {number_of_TT_executions}")
     
     if crontab_execution:
         iterator = working_df.iterrows()
@@ -5760,11 +5873,8 @@ for iteration in range(repeat + 1):
     for idx, track in iterator:
         # INTRODUCTION ------------------------------------------------------------------
         track_numeric = pd.to_numeric(track.drop('datetime'), errors='coerce')
-        
-        # -------------------------------------------------------------------------------
         name_type = ""
         planes_to_iterate = []
-        
         charge_event = 0
         for i_plane in range(nplan):
             # Check if the sum of the charges in the current plane is non-zero
@@ -5795,7 +5905,6 @@ for iteration in range(repeat + 1):
             istp = 0   # nb. of fitting steps
             dist = d0
             while dist>cocut:
-                # for iplane, istrip in zip(planes_to_iterate, istrip_list):
                 for iplane in planes_to_iterate:
                     
                     # Data --------------------------------------------------------
@@ -5828,18 +5937,10 @@ for iteration in range(repeat + 1):
         
         # RESIDUAL ANALYSIS ----------------------------------------------------------------------------
         
-        # Standard residual analysis
-        # chi2 = fs2(nvar, npar, vsf, vdat, vsig, lenx, ss, zi) # Theoretical chisq
-        # chi2 = 0 # Theoretical chisq
-        
         # Fit residuals
-        res_ystr = 0
-        res_tsum = 0
-        res_tdif = 0
-        ndat     = 0
+        res_ystr = res_tsum = res_tdif = ndat = 0
         
         if len(planes_to_iterate) > 1:
-            # for iplane, istrip in zip(planes_to_iterate, istrip_list):
             for iplane in planes_to_iterate:
                 
                 ndat = ndat + nvar
@@ -5858,24 +5959,21 @@ for iteration in range(repeat + 1):
                 vsig = [sy, sts, std]
                 vres = fres(vsf, vdat, lenx, ss, zi)
                 
-                working_df.at[idx, f'res_ystr_{iplane}'] = vres[0]
-                working_df.at[idx, f'res_tsum_{iplane}'] = vres[1]
-                working_df.at[idx, f'res_tdif_{iplane}'] = vres[2]
-                
                 res_ystr  = res_ystr  + vres[0]
                 res_tsum  = res_tsum + vres[1]
                 res_tdif  = res_tdif + vres[2]
                 
             ndf  = ndat - npar    # number of degrees of freedom; was ndat - npar
             
-            # working_df.at[idx, f'res_ystr_{iplane}'] = res_ystr
-            # working_df.at[idx, f'res_tsum_{iplane}'] = res_tsum
-            # working_df.at[idx, f'res_tdif_{iplane}'] = res_tdif
+            working_df.at[idx, f'res_ystr_{iplane}'] = res_ystr
+            working_df.at[idx, f'res_tsum_{iplane}'] = res_tsum
+            working_df.at[idx, f'res_tdif_{iplane}'] = res_tdif
             
             working_df.at[idx, 'processed_tt'] = name_type
             
             chi2 = ( res_ystr / anc_sy )**2 + ( res_tsum / anc_sts )**2 + ( res_tdif / anc_std )**2
             working_df.at[idx, 'th_chi'] = chi2
+            working_df.at[idx, f'th_chi_{ndf}'] = chi2
             
             working_df.at[idx, 'x'] = vsf[0]
             working_df.at[idx, 'xp'] = vsf[1]
@@ -5888,7 +5986,9 @@ for iteration in range(repeat + 1):
             else:
                 working_df.at[idx, 's'] = vsf[5]
         
+        # ---------------------------------------------------------------------------------------------
         # Residual analysis with 4-plane tracks (hide a plane and make a fit in the 3 remaining planes)
+        # ---------------------------------------------------------------------------------------------
         if len(planes_to_iterate) == 4 and res_ana_removing_planes:
             
             # for iplane_ref, istrip_ref in zip(planes_to_iterate, istrip_list):
@@ -5905,8 +6005,6 @@ for iteration in range(repeat + 1):
                 # -----------------------------------------------------------------
                 
                 vdat_ref = [ y_strip_ref, t_sum_ref, t_dif_ref]
-                
-                # istrip_list_short = istrip_list[ planes_to_iterate != iplane_ref ]
                 planes_to_iterate_short = planes_to_iterate[planes_to_iterate != iplane_ref]
                 
                 vs     = vsf  # We start with the previous 4-planes fit
@@ -5915,7 +6013,6 @@ for iteration in range(repeat + 1):
                 isP3 = 0
                 dist = d0
                 while dist>cocut:
-                    # for iplane, istrip in zip(planes_to_iterate_short, istrip_list_short):
                     for iplane in planes_to_iterate_short:
                     
                         # Data --------------------------------------------------------
@@ -5939,7 +6036,7 @@ for iteration in range(repeat + 1):
                     dist = fmahd(npar, vs, vs0, merr)
                     
                 vsig = [sy, sts, std]
-                v_res    = fres(vs, vdat_ref, lenx, ss, 0)
+                v_res = fres(vs, vdat_ref, lenx, ss, 0)
                 
                 working_df.at[idx, f'ext_res_ystr_{iplane_ref}'] = v_res[0]
                 working_df.at[idx, f'ext_res_tsum_{iplane_ref}'] = v_res[1]
@@ -5986,29 +6083,24 @@ for iteration in range(repeat + 1):
     #             working_df.at[index, f'P{module_to_zero}_T_diff_final'] = 0
     #             working_df.at[index, f'P{module_to_zero}_Q_sum_final'] = 0
     
-    
-    # FILTER 7: TSUM, TDIF, QSUM, QDIF TIMTRACK RESIDUE FILTER --> 0 THE COMPONENT THAT HAS LARGE RESIDUE
-    # for index, row in working_df.iterrows():
-    #     for i in range(1, 5):
-    #         if res_ana_removing_planes:
-    #             if abs(row[f'ext_res_tsum_{i}']) > ext_res_tsum_filter or \
-    #                 abs(row[f'ext_res_tdif_{i}']) > ext_res_tdif_filter or \
-    #                 abs(row[f'ext_res_ystr_{i}']) > ext_res_ystr_filter:
-                    
-    #                 working_df.at[index, f'Y_{i}'] = 0
-    #                 working_df.at[index, f'P{i}_T_sum_final'] = 0
-    #                 working_df.at[index, f'P{i}_T_diff_final'] = 0
-    #                 working_df.at[index, f'P{i}_Q_sum_final'] = 0
-    #         else:
-    #             if abs(row[f'res_tsum_{i}']) > res_tsum_filter or \
-    #                 abs(row[f'res_tdif_{i}']) > res_tdif_filter or \
-    #                 abs(row[f'res_ystr_{i}']) > res_ystr_filter:
-                    
-    #                 working_df.at[index, f'Y_{i}'] = 0
-    #                 working_df.at[index, f'P{i}_T_sum_final'] = 0
-    #                 working_df.at[index, f'P{i}_T_diff_final'] = 0
-    #                 working_df.at[index, f'P{i}_Q_sum_final'] = 0
-    #                 working_df.at[index, f'P{i}_Q_diff_final'] = 0
+    # Filter according to residual ------------------------------------------------
+    changed_event_count = 0
+    for index, row in working_df.iterrows():
+        changed = False
+        for i in range(1, 5):
+            if abs(row[f'res_tsum_{i}']) > res_tsum_filter or \
+                abs(row[f'res_tdif_{i}']) > res_tdif_filter or \
+                abs(row[f'res_ystr_{i}']) > res_ystr_filter:
+                
+                changed = True
+                working_df.at[index, f'Y_{i}'] = 0
+                working_df.at[index, f'P{i}_T_sum_final'] = 0
+                working_df.at[index, f'P{i}_T_diff_final'] = 0
+                working_df.at[index, f'P{i}_Q_sum_final'] = 0
+                working_df.at[index, f'P{i}_Q_diff_final'] = 0
+        if changed:
+            changed_event_count += 1
+    print(f"--> {changed_event_count} events were residual filtered.")
     
     four_planes = len(working_df[working_df.processed_tt == 1234])
     print(f"Events that are 1234: {four_planes}")
@@ -6018,10 +6110,10 @@ for iteration in range(repeat + 1):
     print(f"Events that are 134: {planes134}")
     planes124 = len(working_df[working_df.processed_tt == 124])
     print(f"Events that are 124: {planes124}")
-    eff_2 = 1 - (planes134) / (four_planes + planes134 + planes124)
-    print(f"First estimate of eff_2 ={eff_2}")
-    eff_3 = 1 - (planes124) / (four_planes + planes134 + planes124)
-    print(f"First estimate of eff_3 ={eff_3}")
+    eff_2 = 1 - (planes134) / (four_planes + planes134)
+    print(f"First estimate of eff_2 ={eff_2:.2f}")
+    eff_3 = 1 - (planes124) / (four_planes + planes124)
+    print(f"First estimate of eff_3 ={eff_3:.2f}")
     
     iteration += 1
     
@@ -6030,10 +6122,10 @@ for iteration in range(repeat + 1):
 # End of TimTrack loop ---------------------------------------------------------------
 # ------------------------------------------------------------------------------------
 
-# Set the label to integer
+# Set the label to integer -----------------------------------------------------------
 working_df['processed_tt'] = working_df['processed_tt'].apply(builtins.int)
 
-# Calculate angles
+# Calculate angles -------------------------------------------------------------------
 def calculate_angles(xproj, yproj):
     phi = np.arctan2(yproj, xproj)
     theta = np.arccos(1 / np.sqrt(xproj**2 + yproj**2 + 1))
@@ -6042,6 +6134,27 @@ def calculate_angles(xproj, yproj):
 theta, phi = calculate_angles(working_df['xp'], working_df['yp'])
 new_columns_df = pd.DataFrame({'theta': theta, 'phi': phi}, index=working_df.index)
 working_df = pd.concat([working_df, new_columns_df], axis=1)
+
+
+# Plot the residuals -----------------------------------------------------------------
+
+if (create_plots and residual_plots):
+# if create_essential_plots or (create_plots and residual_plots):
+    timtrack_columns = ['x', 'theta', 's', 'y', 'phi', 't0']
+    residual_columns = [
+        'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
+        'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
+        'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4'
+    ]
+    
+    # Combined plot for all types
+    plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
+    
+    unique_types = working_df['processed_tt'].unique()
+    for t in unique_types:
+        subset_data = working_df[working_df['processed_tt'] == t]
+        plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
+        plot_histograms_and_gaussian(subset_data, residual_columns, f"Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
 
 
 print("----------------------------------------------------------------------")
@@ -6064,7 +6177,7 @@ for col in working_df.columns:
         cond_bound = (working_df[col] > slowness_filter_right) | (working_df[col] < slowness_filter_left)
         cond_zero = (working_df[col] == 0)
         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-        
+
 
 print("----------------------------------------------------------------------")
 print("-------------------- Real tracking trigger type ----------------------")
@@ -6113,8 +6226,21 @@ working_df = working_df.join(tracking_df)
 working_df = working_df.copy()
 
 
+# Put to zero the rows with traking in only one plane, that is, put 0 if tracking_tt < 10
+for index, row in working_df.iterrows():
+    if row['tracking_tt'] < 10 or row['processed_tt'] < 10 or row['original_tt'] < 10:
+        working_df.at[index, 'x'] = 0
+        working_df.at[index, 'xp'] = 0
+        working_df.at[index, 'y'] = 0
+        working_df.at[index, 'yp'] = 0
+        working_df.at[index, 't0'] = 0
+        working_df.at[index, 's'] = 0
+
+
+# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Define the last dataframe, the definitive one -------------------------------
+# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
 definitive_df = working_df.copy()
@@ -6140,53 +6266,16 @@ n_before = len(definitive_df)
 definitive_df = definitive_df[cond]
 n_after = len(definitive_df)
 
-# Calculate and print percentage
+# Calculate and print percentage ----------------------------------------------
 percentage_retained = 100 * n_after / n_before if n_before > 0 else 0
 print(f"Rows before: {n_before}")
 print(f"Rows after: {n_after}")
 print(f"Retained: {percentage_retained:.2f}%")
 
-
 print("----------------------------------------------------------------------")
-print("----------------- TimTrack result and residue plots ------------------")
-print("----------------------------------------------------------------------")
-
-if (create_plots and residual_plots):
-# if create_essential_plots or (create_plots and residual_plots):
-    timtrack_columns = ['x', 'theta', 's', 'y', 'phi', 't0']
-    residual_columns = [
-        'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
-        'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
-        'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4'
-    ]
-    
-    # Combined plot for all types
-    plot_histograms_and_gaussian(definitive_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
-    
-    unique_types = definitive_df['processed_tt'].unique()
-    for t in unique_types:
-        subset_data = definitive_df[definitive_df['processed_tt'] == t]
-        plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
-        plot_histograms_and_gaussian(subset_data, residual_columns, f"Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
-
-
-if (create_plots and residual_plots):
-# if create_essential_plots or (create_plots and residual_plots):
-    timtrack_columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
-    residual_columns = [
-        'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
-        'alt_res_tsum_1', 'alt_res_tsum_2', 'alt_res_tsum_3', 'alt_res_tsum_4',
-        'alt_res_tdif_1', 'alt_res_tdif_2', 'alt_res_tdif_3', 'alt_res_tdif_4'
-    ]
-    
-    # Combined plot for all types
-    plot_histograms_and_gaussian(definitive_df, timtrack_columns, "Combined Alternative method Results", figure_number=1)
-    
-    unique_types = definitive_df['processed_tt'].unique()
-    for t in unique_types:
-        subset_data = definitive_df[definitive_df['processed_tt'] == t]
-        plot_histograms_and_gaussian(subset_data, timtrack_columns, f"Alternative fitting Results for Processed Type {t}", figure_number=1)
-        plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative fitting Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+print("Unique tracking_tt values:", sorted(definitive_df['tracking_tt'].unique()))
+print("Unique original_tt values:", sorted(definitive_df['original_tt'].unique()))
+print("Unique processed_tt values:", sorted(definitive_df['processed_tt'].unique()))
 
 
 print("----------------------------------------------------------------------")
@@ -6200,12 +6289,16 @@ cond = ( df_plot_ancillary['charge_1'] < 250 ) &\
     ( df_plot_ancillary['charge_3'] < 250 ) &\
     ( df_plot_ancillary['charge_4'] < 250 ) &\
     ( df_plot_ancillary['charge_event'] > 0 ) &\
-    ( df_plot_ancillary['charge_event'] < 200 )
+    ( df_plot_ancillary['charge_event'] < 200 ) &\
+    ( df_plot_ancillary['s'] > -0.01 ) &\
+    ( df_plot_ancillary['s'] < 0.015 ) &\
+    ( df_plot_ancillary['alt_s'] > -0.01 ) &\
+    ( df_plot_ancillary['alt_s'] < 0.015 )
 
 df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 
-if create_plots:
-# if create_plots or create_essential_plots:
+# if create_plots:
+if create_plots or create_essential_plots:
 
     def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=60):
         
@@ -6216,9 +6309,9 @@ if create_plots:
             'y': [-pos_filter, pos_filter],
             'alt_x': [-pos_filter, pos_filter],
             'alt_y': [-pos_filter, pos_filter],
-            'theta': [0, np.pi],
+            'theta': [0, np.pi/2],
             'phi': [-np.pi, np.pi],
-            'alt_theta': [0, np.pi],
+            'alt_theta': [0, np.pi/2],
             'alt_phi': [-np.pi, np.pi],
             'xp': [-2, 2],
             'yp': [-2, 2],
@@ -6328,17 +6421,27 @@ if create_plots:
         return fig_idx
 
 
+    # df_cases_2 = [
+    #     ([("processed_tt", 12, 12)], "1-2 cases"),
+    #     ([("processed_tt", 23, 23)], "2-3 cases"),
+    #     ([("processed_tt", 34, 34)], "3-4 cases"),
+    #     ([("processed_tt", 13, 13)], "1-3 cases"),
+    #     ([("processed_tt", 14, 14)], "1-4 cases"),
+    #     ([("processed_tt", 123, 123)], "1-2-3 cases"),
+    #     ([("processed_tt", 234, 234)], "2-3-4 cases"),
+    #     ([("processed_tt", 124, 124)], "1-2-4 cases"),
+    #     ([("processed_tt", 134, 134)], "1-3-4 cases"),
+    #     ([("processed_tt", 1234, 1234)], "1-2-3-4 cases"),
+    # ]
+    
+    
     df_cases_2 = [
-        ([("processed_tt", 12, 12)], "1-2 cases"),
-        ([("processed_tt", 23, 23)], "2-3 cases"),
-        ([("processed_tt", 34, 34)], "3-4 cases"),
-        ([("processed_tt", 13, 13)], "1-3 cases"),
-        ([("processed_tt", 14, 14)], "1-4 cases"),
-        ([("processed_tt", 123, 123)], "1-2-3 cases"),
-        ([("processed_tt", 234, 234)], "2-3-4 cases"),
-        ([("processed_tt", 124, 124)], "1-2-4 cases"),
-        ([("processed_tt", 134, 134)], "1-3-4 cases"),
-        ([("processed_tt", 1234, 1234)], "1-2-3-4 cases"),
+        ([("tracking_tt", 12, 12)], "1-2 cases"),
+        ([("tracking_tt", 23, 23)], "2-3 cases"),
+        ([("tracking_tt", 34, 34)], "3-4 cases"),
+        ([("tracking_tt", 123, 123)], "1-2-3 cases"),
+        ([("tracking_tt", 234, 234)], "2-3-4 cases"),
+        ([("tracking_tt", 1234, 1234)], "1-2-3-4 cases"),
     ]
     
     # df_cases_2 = [
@@ -6398,7 +6501,7 @@ if create_plots:
     #     # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
     #     relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
 
-    #     # Define the columns of interest dynamically
+    #     # Define the columns - interest dynamically
     #     columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp'] + relevant_charges
 
     #     # Keep the original filters (if needed) and apply them
@@ -6531,6 +6634,20 @@ if create_plots:
             plot_list
         )
     
+    # Comparison with alternative fitting -------------------------------------------------------------------
+    for filters, title in df_cases_2:
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            ['alt_s', 'alt_theta', 'theta', 's'],
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
+    
     # Comparison of chi2 with alternative fitting -------------------------------------------------------------------
     # for filters, title in df_cases_2:
     #     fig_idx = plot_hexbin_matrix(
@@ -6546,10 +6663,8 @@ if create_plots:
     #     )
 
 
-# ----------------------------------------------------------------------------------------------------
-
-# if create_plots or create_essential_plots:
-if create_plots:
+if create_plots or create_essential_plots:
+# if create_plots:
 
     df_filtered = df_plot_ancillary.copy()
 
@@ -6595,37 +6710,79 @@ if create_plots:
         plt.show()
     plt.close()
 
-# ----------------------------------------------------------------------------------------------------
 
-
-# Display the trigger type before and after
 if create_plots or create_essential_plots:
 # if create_plots:
-    analysis_data = working_df[['original_tt', 'processed_tt']]
-    
-    # Create a pivot table to count (original_tt, processed_tt) combinations
-    counts = analysis_data.groupby(['original_tt', 'processed_tt']).size().unstack(fill_value=0)
 
-    # Ensure consistent ordering for display
-    original_order = sorted(analysis_data['original_tt'].unique(), reverse=True)
-    processed_unique = analysis_data['processed_tt'].unique()
-    processed_order = list(original_order) + [x for x in processed_unique if x not in original_order]
+    df_filtered = df_plot_ancillary.copy()
 
-    counts = counts.reindex(index=original_order, columns=processed_order, fill_value=0)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=False)
+    colors = plt.cm.tab10.colors
+    bins = np.linspace(0, np.pi, 150)
 
-    # Create the 2D colored plot
+    tt_values = sorted(df_filtered['tracking_tt'].dropna().unique(), key=lambda x: int(x))
+
+    for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('alt_theta', r'$\theta_{\mathrm{alt}}$')]):
+        for col_idx, (xlim_val, col_label) in enumerate([(np.pi, 'Full range'), (1.2, 'Zoom-in')]):
+            ax = axes[row_idx, col_idx]
+            for i, tt_val in enumerate(tt_values):
+                df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
+                theta_vals = df_tt[theta_col].dropna()
+                if len(theta_vals) < 10:
+                    continue
+
+                label = f'{tt_val}'
+                ax.hist(theta_vals, bins=bins, histtype='step', linewidth=1,
+                        color=colors[i % len(colors)], label=label)
+
+            ax.set_xlim(0, xlim_val)
+            ax.set_xlabel(row_label + r' [rad]')
+            if col_idx == 0:
+                ax.set_ylabel('Counts')
+            ax.set_title(f'{row_label} — {col_label}')
+            ax.grid(True)
+            if row_idx == 0 and col_idx == 1:
+                ax.legend(title='tracking_tt', fontsize='small')
+
+    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ Distributions by Tracking TT Type', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    if save_plots:
+        final_filename = f'{fig_idx}_theta_alt_theta_tracking_tt_2x2.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots:
+        plt.show()
+    plt.close()
+
+
+# -----------------------------------------------------------------------------
+# -------------- Correlate trigger types in different stages ------------------
+# -----------------------------------------------------------------------------
+
+def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_idx, base_dir,
+                        show_plots=False, save_plots=False, plot_list=None):
+
+    analysis_data = df[[row_label, col_label]]
+    counts = analysis_data.groupby([row_label, col_label]).size().unstack(fill_value=0)
+
+    row_order = sorted(analysis_data[row_label].unique(), reverse=True)
+    col_unique = analysis_data[col_label].unique()
+    col_order = list(row_order) + [x for x in col_unique if x not in row_order]
+    counts = counts.reindex(index=row_order, columns=col_order, fill_value=0)
+
     fig, ax = plt.subplots(figsize=(10, 8))
-
-    # Set ticks and labels
     ax.set_xticks(np.arange(len(counts.columns)))
     ax.set_yticks(np.arange(len(counts.index)))
     ax.set_xticklabels(counts.columns)
     ax.set_yticklabels(counts.index)
 
-    # plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-    ax.set_xlabel("processed_tt")
-    ax.set_ylabel("original_tt")
-    ax.set_title("Event counts per (original_tt, processed_tt) combination")
+    ax.set_xlabel(col_label)
+    ax.set_ylabel(row_label)
+    ax.set_title(title)
 
     im = ax.imshow(counts, cmap='plasma', origin='lower')
     total = counts.values.sum()
@@ -6635,83 +6792,65 @@ if create_plots or create_essential_plots:
             value = counts.iloc[i, j]
             if value > 0:
                 pct = 100 * value / total
-                label = f"{pct:.1f}%"  # One decimal place
-                ax.text(
-                    j, i, label,
-                    ha="center", va="center",
-                    color="black" if value > counts.values.max() * 0.5 else "white"
-                )
+                if pct > 1:
+                    ax.text(j, i, f"{pct:.1f}%",
+                            ha="center", va="center",
+                            color="black" if value > counts.values.max() * 0.5 else "white")
 
     plt.tight_layout()
     if save_plots:
-        name_of_file = 'trigger_types_og_and_processed'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
+        final_filename = f'{fig_idx}_{filename_suffix}.png'
+        save_fig_path = os.path.join(base_dir, final_filename)
+        if plot_list is not None:
+            plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-    # Show plot if enabled
     if show_plots:
         plt.show()
     plt.close()
 
+    return fig_idx + 1
 
-# Display the trigger type before and after
+
 if create_plots or create_essential_plots:
-# if create_plots:
-    analysis_data = working_df[['tracking_tt', 'processed_tt']]
-    
-    # Create a pivot table to count (original_tt, processed_tt) combinations
-    counts = analysis_data.groupby(['tracking_tt', 'processed_tt']).size().unstack(fill_value=0)
+    fig_idx = plot_tt_correlation(
+        df=df_plot_ancillary,
+        row_label='original_tt',
+        col_label='processed_tt',
+        title='Event counts per (original_tt, processed_tt) combination',
+        filename_suffix='trigger_types_og_and_processed',
+        fig_idx=fig_idx,
+        base_dir=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list
+    )
 
-    # Ensure consistent ordering for display
-    original_order = sorted(analysis_data['tracking_tt'].unique(), reverse=True)
-    processed_unique = analysis_data['processed_tt'].unique()
-    processed_order = list(original_order) + [x for x in processed_unique if x not in original_order]
+    fig_idx = plot_tt_correlation(
+        df=df_plot_ancillary,
+        row_label='tracking_tt',
+        col_label='processed_tt',
+        title='Event counts per (tracking_tt, processed_tt) combination',
+        filename_suffix='trigger_types_tracking_and_processed',
+        fig_idx=fig_idx,
+        base_dir=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list
+    )
 
-    counts = counts.reindex(index=original_order, columns=processed_order, fill_value=0)
+    fig_idx = plot_tt_correlation(
+        df=df_plot_ancillary,
+        row_label='tracking_tt',
+        col_label='original_tt',
+        title='Event counts per (tracking_tt, original_tt) combination',
+        filename_suffix='trigger_types_tracking_and_original',
+        fig_idx=fig_idx,
+        base_dir=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list
+    )
 
-    # Create the 2D colored plot
-    fig, ax = plt.subplots(figsize=(10, 8))
-
-    # Set ticks and labels
-    ax.set_xticks(np.arange(len(counts.columns)))
-    ax.set_yticks(np.arange(len(counts.index)))
-    ax.set_xticklabels(counts.columns)
-    ax.set_yticklabels(counts.index)
-
-    # plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-    ax.set_xlabel("processed_tt")
-    ax.set_ylabel("tracking_tt")
-    ax.set_title("Event counts per (tracking_tt, processed_tt) combination")
-
-    im = ax.imshow(counts, cmap='plasma', origin='lower')
-    total = counts.values.sum()
-
-    for i in range(len(counts.index)):
-        for j in range(len(counts.columns)):
-            value = counts.iloc[i, j]
-            if value > 0:
-                pct = 100 * value / total
-                label = f"{pct:.1f}%"  # One decimal place
-                ax.text(
-                    j, i, label,
-                    ha="center", va="center",
-                    color="black" if value > counts.values.max() * 0.5 else "white"
-                )
-
-    plt.tight_layout()
-    if save_plots:
-        name_of_file = 'trigger_types_tracking_and_processed'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    # Show plot if enabled
-    if show_plots:
-        plt.show()
-    plt.close()
 
 print("----------------------------------------------------------------------")
 print("----------------------- Final data statistics ------------------------")
@@ -6942,7 +7081,7 @@ print("-------------------------- Save and finish ---------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
-# Put the global_variables as columns in the final data dataframe
+# Put the global_variables as columns in the final data dataframe -------------
 for key, value in global_variables.items():
     if key not in definitive_df.columns:
         print(f"Adding {key} to the dataframe.")
@@ -6951,74 +7090,55 @@ for key, value in global_variables.items():
         print(f"Warning: Column '{key}' already exists in the DataFrame. Skipping addition.")
         
 
-# Round to 4 significant digits ---------------------------------------------------------------
-print("Rounding the dataframe values.")
-
+# Round to 4 significant digits -----------------------------------------------
 def round_to_4_significant_digits(x):
     try:
-        # Use builtins.float to avoid any overridden names
-        return builtins.float(f"{builtins.float(x):.4g}")
+        return builtins.float(f"{builtins.float(x):.4g}")  # Use builtins.float to avoid any overridden names
     except (builtins.ValueError, builtins.TypeError):
         return x
-    
+
+print("Rounding the dataframe values.") 
 for col in definitive_df.select_dtypes(include=[np.number]).columns:
     definitive_df.loc[:, col] = definitive_df[col].apply(round_to_4_significant_digits)
 
 
-# Change 'datetime' column to 'Time'
+# Change 'datetime' column to 'Time' ------------------------------------------
 if 'datetime' in definitive_df.columns:
     definitive_df.rename(columns={'datetime': 'Time'}, inplace=True)
 else:
     print("Column 'datetime' not found in DataFrame!")
 
-# Save the data ----------------------------------------------------------------------------
+# Save the data ---------------------------------------------------------------
 if save_full_data: # Save a full version of the data, for different studies and debugging
     definitive_df.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
     print(f"Datafile saved in {save_full_filename}.")
 
-# Save the main columns, relevant for the posterior analysis
-
-# Loop on planes and strips to call the Q_P1s1 from Q1_Q_sum_1 etc
+# Save the main columns, relevant for the posterior analysis ------------------
 for i, module in enumerate(['1', '2', '3', '4']):
     for j in range(4):
         strip = j + 1
         definitive_df[f'Q_P{module}s{strip}'] = definitive_df[f'Q{module}_Q_sum_{strip}']
 
-# Save a reduced version of the data always, to proceed with the analysis
 columns_to_keep = [
     # Timestamp and identifiers
-    'Time', 'original_tt', 'processed_tt',
+    'Time', 'original_tt', 'processed_tt', 'tracking_tt',
 
     # Summary metrics and quality flags
-    'CRT_avg', 'discarded_by_time_window_percentage', 'sigmoid_width',
-    'background_slope', 'one_side_events', 'purity_of_data_percentage',
-    'unc_y', 'unc_tsum', 'unc_tdif', 'th_chi',
-
-    # Per-plane active strip patterns
-    'active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4',
-
-    # Y positions
-    'Y_1', 'Y_2', 'Y_3', 'Y_4',
-
-    # Final time and charge summaries per plane
-    'P1_T_sum_final', 'P1_T_diff_final', 'P1_Q_sum_final', 'P1_Q_diff_final',
-    'P2_T_sum_final', 'P2_T_diff_final', 'P2_Q_sum_final', 'P2_Q_diff_final',
-    'P3_T_sum_final', 'P3_T_diff_final', 'P3_Q_sum_final', 'P3_Q_diff_final',
-    'P4_T_sum_final', 'P4_T_diff_final', 'P4_Q_sum_final', 'P4_Q_diff_final',
+    'CRT_avg', 'sigmoid_width', 'background_slope',
+    'one_side_events', 'purity_of_data_percentage',
+    'unc_y', 'unc_tsum', 'unc_tdif',
 
     # Alternative reconstruction outputs
-    'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_chi2',
-    'alt_s', 'chi2_tsum_fit', 'alt_th_chi',
+    'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s', 'alt_th_chi',
 
-    # Classical reconstruction outputs
-    'x', 'xp', 'y', 'yp', 't0', 's', 'th_chi',
+    # TimTrack reconstruction outputs
+    'x', 'y', 'theta', 'phi', 's', 'th_chi',
 
     # Strip-level time and charge info (ordered by plane and strip)
     *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)]
 ]
 
 reduced_df = definitive_df[columns_to_keep]
-
 reduced_df.to_csv(save_list_path, index=False, sep=',', float_format='%.5g')
 print(f"Datafile saved in {save_filename}. Path is {save_list_path}")
 
