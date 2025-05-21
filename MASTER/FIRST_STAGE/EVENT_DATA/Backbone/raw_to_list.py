@@ -414,7 +414,7 @@ T_diff_cal_threshold = 1
 # Once calculated the RPC variables -------------------------------------------
 # -----------------------------------------------------------------------------
 # Tsum
-T_sum_RPC_left = -3
+T_sum_RPC_left = -1
 T_sum_RPC_right = 5 # -100
 # Tdiff
 T_diff_RPC_left = -0.8
@@ -3046,7 +3046,6 @@ if slewing_correction:
                 plt.show()
             plt.close()
 
-
     
     # if create_essential_plots or create_plots:
     if create_plots:
@@ -3262,8 +3261,8 @@ if slewing_correction:
         # Apply it to your DataFrame:
         # data = robust_z_filter(data, ['Q_sum_semidiff', 'Q_sum_semisum', 'T_sum_corrected_diff'])
         
-        not_use_q = True
-        if not_use_q:
+        not_use_q_semisum = False
+        if not_use_q_semisum:
             X = data[['Q_sum_semidiff']].values
             y = data['T_sum_corrected_diff'].values
 
@@ -3272,6 +3271,7 @@ if slewing_correction:
             
             b_semidiff = model.coef_[0]
             a_semisum = 0
+            r2_score = model.score(X, y)
         else:
             X = data[['Q_sum_semisum', 'Q_sum_semidiff']].values
             y = data['T_sum_corrected_diff'].values
@@ -3281,6 +3281,7 @@ if slewing_correction:
             
             a_semisum = model.coef_[0]
             b_semidiff = model.coef_[1]
+            r2_score = model.score(X, y)
 
         # Store results
         fit_results.append({
@@ -3289,7 +3290,8 @@ if slewing_correction:
             'a_semisum': a_semisum,
             'b_semidiff': b_semidiff,
             'c_offset': model.intercept_,
-            'n_points': len(data)
+            'n_points': len(data),
+            'r2_score': r2_score
         })
 
     # Create dataframe with all model parameters
@@ -3310,7 +3312,7 @@ if slewing_correction:
             for s2 in range(1, 5)
         ]
 
-        batch_size = 4
+        batch_size = 8
         num_batches = int(np.ceil(len(pair_labels) / batch_size))
 
         for batch in range(num_batches):
@@ -3424,7 +3426,7 @@ if slewing_correction:
             for s2 in range(1, 5)
         ]
 
-        batch_size = 4
+        batch_size = 8
         num_batches = int(np.ceil(len(pair_labels) / batch_size))
         
         for batch in range(num_batches):
@@ -4519,16 +4521,26 @@ if crosstalk_removal_and_recalibration:
             plt.savefig(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close(fig_Q)
-
+    
 
     print("----------------------------------------------------------------------")
     print("-------------- Filter 5: charge sum crosstalk filtering --------------")
     print("----------------------------------------------------------------------")
+    
+    new_columns = {}
     for i, key in enumerate(['1', '2', '3', '4']):
         for j in range(4):
-            for col in working_df.columns:
-                if f'Q{key}_Q_sum_{j+1}' == col:
-                    working_df[col] = np.where( working_df[col] < crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'], 0, working_df[col])
+            col_name = f'Q{key}_Q_sum_{j+1}'
+            if col_name in working_df.columns:
+                new_col_name = f'{col_name}_with_crstlk'
+                original_col = working_df[col_name]
+                new_columns[new_col_name] = original_col.copy()
+                working_df[col_name] = np.where( original_col < crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'], 0, original_col )
+
+    if new_columns:
+        working_df = pd.concat([working_df, pd.DataFrame(new_columns)], axis=1)
+
+    working_df = working_df.copy()
     
     
     print("----------------------------------------------------------------------")
@@ -4885,6 +4897,116 @@ print("----------------------------------------------------------------------")
 
 print("WIP")
 
+if slewing_correction:
+    
+    # if create_essential_plots or create_plots:
+    if create_plots:
+        
+        plt.figure(figsize=(8, 5))
+        plt.hist(slewing_fit_df["r2_score"], bins=20, alpha=0.7)
+        plt.xlabel("R² Score")
+        plt.ylabel("Frequency")
+        plt.title("Histogram of R² Scores from Slewing Fits")
+        plt.grid(True, linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        if save_plots:
+            name_of_file = 'r2_scores'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+
+        if show_plots: plt.show()
+        plt.close()
+    
+    # Step 1: Select pairs with good fit quality
+    r2_threshold = 0.2
+    good_fits_df = slewing_fit_df[slewing_fit_df["r2_score"] > r2_threshold].copy()
+
+    # Store good fit keys
+    good_fit_keys = [
+        ((row["plane1"], row["strip1"]), (row["plane2"], row["strip2"]))
+        for _, row in good_fits_df.iterrows()
+    ]
+
+    # Step 2: Process event-by-event and apply correction collectively
+    tsum_cols = [col for col in working_df.columns if col.startswith('T') and 'T_sum' in col and '_final' not in col]
+    qsum_cols = [col for col in working_df.columns if col.startswith('Q') and 'Q_sum' in col and '_final' not in col]
+    ps_labels = [(int(col[1]), int(col[-1])) for col in tsum_cols]
+
+    # Backup original data for plotting comparison later
+    working_df_uncorrected = working_df[tsum_cols].copy()
+
+    # Create dictionary of valid fit parameters for fast lookup
+    fit_dict = {}
+
+    for _, row in slewing_fit_df.iterrows():
+        if row['r2_score'] > r2_threshold:
+            key = (int(row['plane1']), int(row['strip1']), int(row['plane2']), int(row['strip2']))
+            fit_dict[key] = (row['a_semisum'], row['b_semidiff'], row['c_offset'])
+
+
+    # Apply slewing correction event-by-event
+    for idx, row in working_df.iterrows():
+        # Identify strips with valid T and Q in this event
+        present_ps = [(p, s) for p, s in ps_labels if row.get(f"T{p}_T_sum_{s}", 0) != 0 and row.get(f"Q{p}_Q_sum_{s}", 0) != 0]
+        
+        if len(present_ps) < 2:
+            continue
+
+        # Find which of the good fit pairs are present in this event
+        valid_pairs_in_event = []
+        for (ps1, ps2) in good_fit_keys:
+            if ps1 in present_ps and ps2 in present_ps:
+                valid_pairs_in_event.append((ps1, ps2))
+
+        if not valid_pairs_in_event:
+            continue
+
+        # Store multiple corrected tsum estimates
+        corrected_deltas_by_ps = {ps: [] for ps in present_ps}
+
+        # Loop over all valid pairs and apply correction symmetrically
+        for (p1s, p2s) in valid_pairs_in_event:
+            p1, s1 = p1s
+            p2, s2 = p2s
+
+            t1 = row[f"T{int(p1)}_T_sum_{int(s1)}"]
+            t2 = row[f"T{int(p2)}_T_sum_{int(s2)}"]
+            q1 = row[f"Q{int(p1)}_Q_sum_{int(s1)}"]
+            q2 = row[f"Q{int(p2)}_Q_sum_{int(s2)}"]
+
+            key_forward = (p1, s1, p2, s2)
+            key_reverse = (p2, s2, p1, s1)
+
+            if key_forward in fit_dict:
+                a, b, c = fit_dict[key_forward]
+                delta_measured = t1 - t2
+                delta_q = 0.5 * (q1 - q2)
+                correction = a * 0.5 * (q1 + q2) + b * delta_q
+                corrected_diff = delta_measured - correction
+                # Reconstruct both
+                corrected_deltas_by_ps[(p1, s1)].append(corrected_diff / 2)
+                corrected_deltas_by_ps[(p2, s2)].append(-corrected_diff / 2)
+
+            elif key_reverse in fit_dict:
+                a, b, c = fit_dict[key_reverse]
+                delta_measured = t2 - t1
+                delta_q = 0.5 * (q2 - q1)
+                correction = a * 0.5 * (q2 + q1) + b * delta_q
+                corrected_diff = delta_measured - correction
+                corrected_deltas_by_ps[(p2, s2)].append(corrected_diff / 2)
+                corrected_deltas_by_ps[(p1, s1)].append(-corrected_diff / 2)
+
+        # Compute average corrected value for each T_sum and apply
+        mean_correction = np.mean([np.mean(v) for v in corrected_deltas_by_ps.values() if v])
+        for (p, s), values in corrected_deltas_by_ps.items():
+            if values:
+                corrected_value = mean_correction + np.mean(values)
+                working_df.at[idx, f"T{p}_T_sum_{s}"] = corrected_value
+
 
 print("----------------------------------------------------------------------")
 print("----------------- Setting the variables of each RPC ------------------")
@@ -5002,26 +5124,13 @@ print("----------------------------------------------------------------------")
 print("------ Put Tsum in reference to the first strip that is not zero -----")
 print("----------------------------------------------------------------------")
 
-# Define the order of preference
 cols = ["P1_T_sum_final", "P2_T_sum_final", "P3_T_sum_final", "P4_T_sum_final"]
-
-# Stack the values to a 2D array for efficient row-wise processing
 vals = working_df[cols].to_numpy()
-
-# Mask of non-zero values
 nonzero_mask = vals != 0
-
-# Find first non-zero index per row (if any)
 first_nonzero_idx = np.where(nonzero_mask.any(axis=1), nonzero_mask.argmax(axis=1), -1)
-
-# Get the corresponding baseline values
 row_indices = np.arange(len(working_df))
 baseline_vals = vals[row_indices, first_nonzero_idx]
-
-# Subtract baseline row-wise
-vals_normalized = vals - baseline_vals[:, np.newaxis]
-
-# Store back in the DataFrame
+vals_normalized = vals - baseline_vals[:, np.newaxis] + 1
 working_df[cols] = vals_normalized
 
 
@@ -6388,6 +6497,12 @@ if create_plots or create_essential_plots:
                     ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
                     ax.set_facecolor(plt.cm.turbo(0))
                     
+                    if "alt_s" in x_col and "s" in x_col or "s" in y_col and "alt_s" in y_col:
+                        # Draw a line in the diagonal y = x
+                        line_x = np.linspace(-0.01, 0.015, 100)
+                        line_y = line_x
+                        ax.plot(line_x, line_y, color='white', linewidth=1)  # Thin white line
+                    
                     square_x = [-150, 150, 150, -150, -150]  # Closing the loop
                     square_y = [-150, -150, 150, 150, -150]
                     ax.plot(square_x, square_y, color='white', linewidth=1)  # Thin white line
@@ -7118,6 +7233,7 @@ for i, module in enumerate(['1', '2', '3', '4']):
     for j in range(4):
         strip = j + 1
         definitive_df[f'Q_P{module}s{strip}'] = definitive_df[f'Q{module}_Q_sum_{strip}']
+        definitive_df[f'Q_P{module}s{strip}_with_crstlk'] = definitive_df[f'Q{module}_Q_sum_{strip}_with_crstlk']
 
 columns_to_keep = [
     # Timestamp and identifiers
@@ -7135,7 +7251,10 @@ columns_to_keep = [
     'x', 'y', 'theta', 'phi', 's', 'th_chi',
 
     # Strip-level time and charge info (ordered by plane and strip)
-    *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)]
+    *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)],
+    
+    # Strip-level time and charge info with crosstalk
+    *[f'Q_P{p}s{s}_with_crstlk' for p in range(1, 5) for s in range(1, 5)]
 ]
 
 reduced_df = definitive_df[columns_to_keep]
@@ -7188,7 +7307,7 @@ calibrations_df.sort_values(by='Time', inplace=True)
 calibrations_df.to_csv(csv_path, index=False, float_format='%.5g')
 print(f'{csv_path} updated with the calibrations for this folder.')     
 
-a = 1/0
+# a = 1/0
 
 # Create and save the PDF -----------------------------------------------------
 if create_pdf:

@@ -1,6 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+'''
+columns_to_keep = [
+    # Timestamp and identifiers
+    'Time', 'original_tt', 'processed_tt', 'tracking_tt',
+
+    # Summary metrics and quality flags
+    'CRT_avg', 'sigmoid_width', 'background_slope',
+    'one_side_events', 'purity_of_data_percentage',
+    'unc_y', 'unc_tsum', 'unc_tdif',
+
+    # Alternative reconstruction outputs
+    'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s', 'alt_th_chi',
+
+    # TimTrack reconstruction outputs
+    'x', 'y', 'theta', 'phi', 's', 'th_chi',
+
+    # Strip-level time and charge info (ordered by plane and strip)
+    *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)]
+]
+'''
+
 import numpy as np
 import pandas as pd
 import sys
@@ -16,7 +37,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import poisson
 from scipy.optimize import minimize
 
-last_file_test = True
+last_file_test = False
 reanalyze_completed = True
 update_big_event_file = False
 
@@ -25,7 +46,9 @@ update_big_event_file = False
 #     update_big_event_file = True
 
 print("----------------------------------------------------------------------")
+print("----------------------------------------------------------------------")
 print("--------- Running event_accumulator.py -------------------------------")
+print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 # -----------------------------------------------------------------------------
@@ -44,12 +67,42 @@ print(f"Station: {station}")
 
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
+
+# -----------------------------------------------------------------------------
+# -------------------------- Variables of execution ---------------------------
 # -----------------------------------------------------------------------------
 
-remove_outliers = False
+remove_outliers = True
 create_plots = True
 save_plots = True
 create_pdf = True
+force_replacement = True  # Creates a new datafile even if there is already one that looks complete
+show_plots = False
+caye_high_mid_limit_angle = 15
+
+hans_high_mid_limit_angle = 10
+hans_low_mid_limit_angle = 40
+
+polya_fit = True
+real_strip_case_study = False
+multiplicity_calculations = True
+crosstalk_probability = True
+georgys = False
+
+event_acc_global_variables = {
+    "poisson_rejected": 0,
+    "hans_reg_high_to_mid": hans_high_mid_limit_angle,
+    "hans_reg_mid_to_low": hans_low_mid_limit_angle,
+    "caye_reg_high_to_mid": caye_high_mid_limit_angle,
+}
+
+event_acc_global_variables["poisson_rejected"] = 0
+
+
+print("----------------------------------------------------------------------")
+print("--------------------- Starting the directories -----------------------")
+print("----------------------------------------------------------------------")
+
 fig_idx = 0
 plot_list = []
 
@@ -73,6 +126,7 @@ base_directories = {
     "completed_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_COMPLETED"),
     
     "acc_events_directory": os.path.join(working_directory, "ACC_EVENTS_DIRECTORY"),
+    "full_acc_events_directory": os.path.join(working_directory, "FULL_ACC_EVENTS_DIRECTORY"),
     "acc_rejected_directory": os.path.join(working_directory, "ACC_REJECTED"),
 }
 
@@ -143,54 +197,6 @@ for file_name in files_to_copy:
     except Exception as e:
         print(f"Failed to copy {file_name}: {e}")
 
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# Define input file path -----------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
-
-if os.path.exists(input_file_config_path):
-    # It is a csv
-    input_file = pd.read_csv(input_file_config_path, skiprows=1)
-    
-    print("Input configuration file found.")
-    exists_input_file = True
-    
-    # Print the head
-    # print(input_file.head())
-    
-else:
-    exists_input_file = False
-    print("Input configuration file does not exist.")
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Configurations --------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-force_replacement = True  # Creates a new datafile even if there is already one that looks complete
-show_plots = False
-caye_high_mid_limit_angle = 15
-
-hans_high_mid_limit_angle = 10
-hans_low_mid_limit_angle = 40
-
-# crosstalk_threshold = 1.2
-# regions = ['High', 'N', 'E', 'S', 'W']
-# test_filename = 'list_events_2024.12.16_23.27.54.txt'
-
-event_acc_global_variables = {
-    "poisson_rejected": 0,
-    "hans_reg_high_to_mid": hans_high_mid_limit_angle,
-    "hans_reg_mid_to_low": hans_low_mid_limit_angle,
-    "caye_reg_high_to_mid": caye_high_mid_limit_angle,
-}
-
-event_acc_global_variables["poisson_rejected"] = 0
-
 # -----------------------------------------------------------------------------
 # Functions -------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -220,8 +226,8 @@ def classify_region_hans(row):
     phi = row['phi'] * 180/np.pi
     theta = row['theta'] * 180/np.pi
     
-    if int(row['type']) <= 100:
-        return 'None'
+    # if int(row['type']) <= 100:
+    #     return 'None'
     
     if 0 <= theta < hans_high_mid_limit_angle:
         return 'V'
@@ -263,12 +269,13 @@ def round_to_significant_digits(x):
         return float(f"{x:.6g}")
     return x
 
-def clean_type_column(x):
-    return str(int(float(x))) if isinstance(x, (float, int, str)) and not pd.isna(x) else x
+# def clean_type_column(x):
+#     return str(int(float(x))) if isinstance(x, (float, int, str)) and not pd.isna(x) else x
 
-# -----------------------------------------------------------------------------
-# Main Script -----------------------------------------------------------------
-# -----------------------------------------------------------------------------
+
+print("----------------------------------------------------------------------")
+print("---------------------------- Main script -----------------------------")
+print("----------------------------------------------------------------------")
 
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
@@ -371,24 +378,14 @@ else:
 
 # This is for all cases
 file_path = processing_file_path
-
-# Input file
 df = pd.read_csv(file_path, sep=',')
-
-# Data preparation
 df['Time'] = pd.to_datetime(df['Time'], errors='coerce') # Added errors='coerce' to handle NaT values
-
-# Print the number of events (rows) in the file
 print(f"Number of events in the file: {len(df)}")
 
-# Get the minimum value directly from the column (may include NaT)
 min_time_original = df['Time'].min()
 max_time_original = df['Time'].max()
-
-# Filter out invalid or null datetime values
 valid_times = df['Time'].dropna()
 
-# Get the smallest valid datetime
 if not valid_times.empty:
     min_time_valid = valid_times.min()
     
@@ -398,16 +395,16 @@ if not valid_times.empty:
         print("Original min value (including NaT):", min_time_original)
         print("Valid min value (ignoring NaT):", min_time_valid)
     
-    # Use the valid min datetime
     first_datetime = min_time_valid
-    
-    # Define filename save suffix in the format 'yy-mm-dd_HH.MM.SS'
     filename_save_suffix = first_datetime.strftime('%y-%m-%d_%H.%M.%S')
 else:
     # first_datetime = None
     sys.exit("No valid datetime values found in the 'Time' column. Exiting...")
 
 print("Filename save suffix:", filename_save_suffix)
+
+full_save_filename = f"full_accumulated_events_{filename_save_suffix}.csv"
+full_save_path = os.path.join(base_directories["full_acc_events_directory"], full_save_filename)
 
 save_filename = f"accumulated_events_{filename_save_suffix}.csv"
 save_path = os.path.join(base_directories["acc_events_directory"], save_filename)
@@ -416,150 +413,29 @@ save_pdf_filename = f"pdf_{filename_save_suffix}.pdf"
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 
-# ---------------------------------------------------------------------------------------------------------------------
-# Input file reading --------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------------
+print("----------------------------------------------------------------------")
+print("------------------------ Input file reading --------------------------")
+print("----------------------------------------------------------------------")
 
-# if exists_input_file:
-#     start_time = min_time_original
-#     end_time = max_time_original
+input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
 
-#     # Print types of start and end dates
-#     # print(f"Start date type: {type(start_time)}") # Start date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
-#     # print(f"End date type: {type(end_time)}") # End date type: <class 'pandas._libs.tslibs.timestamps.Timestamp'>
-
-#     input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
-#     input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
-
-#     # Ensure no NaN in 'end' column
-#     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
+if os.path.exists(input_file_config_path):
+    input_file = pd.read_csv(input_file_config_path, skiprows=1)
     
-#     matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
+    print("Input configuration file found.")
+    exists_input_file = True
     
-#     if not matching_confs.empty:
-    
-#         if len(matching_confs) > 1:
-#             print(f"Warning: Multiple configurations match the date range ({start_time} to {end_time}).")
-                
-#             # Create an empty dictionary to hold new column values
-#             new_columns = {
-#                 "over_P1": [],
-#                 "P1-P2": [],
-#                 "P2-P3": [],
-#                 "P3-P4": [],
-#                 "phi_north": []
-#             }
-
-#             # Print df columns
-#             # print(df.columns)
-
-#             # Assign values based on corresponding time range
-#             for timestamp in df["Time"]:
-#                 # Find matching configuration
-#                 match = input_file[
-#                     (input_file["start"] <= timestamp) & (input_file["end"] >= timestamp)
-#                 ]
-                
-#                 if not match.empty:
-#                     # Take the first matching row
-#                     selected_conf = match.iloc[0]
-#                     new_columns["over_P1"].append(selected_conf.get("over_P1", np.nan))
-#                     new_columns["P1-P2"].append(selected_conf.get("P1-P2", np.nan))
-#                     new_columns["P2-P3"].append(selected_conf.get("P2-P3", np.nan))
-#                     new_columns["P3-P4"].append(selected_conf.get("P3-P4", np.nan))
-#                     new_columns["phi_north"].append(selected_conf.get("phi_north", np.nan))
-#                 else:
-#                     # No matching configuration, fill with NaN
-#                     new_columns["over_P1"].append(np.nan)
-#                     new_columns["P1-P2"].append(np.nan)
-#                     new_columns["P2-P3"].append(np.nan)
-#                     new_columns["P3-P4"].append(np.nan)
-#                     new_columns["phi_north"].append(0)  # Default value for phi_north
-
-#             df_new_cols = pd.DataFrame(new_columns)
-#             df_extended = pd.concat([df, df_new_cols], axis=1)
-#             df_extended.fillna(method='ffill', inplace=True)
-#             df = df_extended
-
-#             # print(df.columns)
-#             # print(df.head())
-#             # print(df.tail())
-            
-#         if len(matching_confs) == 1:
-#             selected_conf = matching_confs.iloc[0]
-#             print(f"Only one selected configuration: {selected_conf['conf']}")
-            
-#             df["over_P1"] = selected_conf.get("over_P1", np.nan)
-#             df["P1-P2"] = selected_conf.get("P1-P2", np.nan)
-#             df["P2-P3"] = selected_conf.get("P2-P3", np.nan)
-#             df["P3-P4"] = selected_conf.get("P3-P4", np.nan)
-#             df["phi_north"] = selected_conf.get("phi_north", 0)
-
-#     else:
-#         # Create new columns with default values
-#         df["over_P1"] = 0
-#         df["P1-P2"] = 0
-#         df["P2-P3"] = 0
-#         df["P3-P4"] = 0
-#         df["phi_north"] = 0
-
-# else:
-#     # Create new columns with default values
-#     df["over_P1"] = 0
-#     df["P1-P2"] = 0
-#     df["P2-P3"] = 0
-#     df["P3-P4"] = 0
-#     df["phi_north"] = 0
-
-
-
-# print("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH")
-# if exists_input_file:
-#     # Ensure `start` and `end` columns are in datetime format
-#     input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
-#     input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
-    
-#     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
-    
-#     # Filter matching configurations
-#     matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
-
-#     # Select the first matching configuration if available
-#     if not matching_confs.empty:
-#         if len(matching_confs) > 1:
-#             print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
-        
-#         selected_conf = matching_confs.iloc[0]
-#         print(f"Selected configuration: {selected_conf['conf']}")
-
-#         # Extract z_1 to z_4 values
-#         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
-
-#     else:
-#         print("Error: No matching configuration found for the given date range. Using default z_positions.")
-#         z_positions = np.array([0, 150, 300, 450])  # In mm
-        
-# else:
-#     print("Error: No input file. Using default z_positions.")
-#     z_positions = np.array([0, 150, 300, 450])  # In mm
-
-# # Print the resulting z_positions
-# z_positions = z_positions - z_positions[0]
-# print(f"Z positions: {z_positions}")
-
-# print("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH")
-
-# ---------------------------------------------------------------------------------------------------------------------
-# Input file reading --------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------------
+else:
+    exists_input_file = False
+    print("Input configuration file does not exist.")
 
 if exists_input_file:
     start_time = min_time_original
     end_time = max_time_original
     
     # Read and preprocess the input file only once
-    input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
-    input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
+    input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
+    input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
 
     # Filter matching configurations based on start_time and end_time
@@ -639,25 +515,32 @@ else:
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
 
+z1 = z_positions[0]
+z2 = z_positions[1]
+z3 = z_positions[2]
+z4 = z_positions[3]
 
-# ---------------------------------------------------------------------------------------------------------------------
+print(df.columns.to_list())
+
+# Rename every column that contains Q_M... for  Q_P...
+for col in df.columns:
+    if "Q_M" in col:
+        new_col = col.replace("Q_M", "Q_P")
+        df.rename(columns={col: new_col}, inplace=True)
+
+print(df.columns.to_list())
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Start the analysis --------------------------------------------------------
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
+print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------- Starting the analysis ------------------------")
 print("----------------------------------------------------------------------")
+print("----------------------------------------------------------------------")
 
-# ---------------------------------------------------------------------------
-# Polya fit -----------------------------------------------------------------
-# ---------------------------------------------------------------------------
+print("----------------------------------------------------------------------")
+print("----------------------------- Polya fit ------------------------------")
+print("----------------------------------------------------------------------")
 
-polya_fit = True
 if polya_fit:
     print("Polya fit. WIP.")
 
@@ -709,7 +592,6 @@ if polya_fit:
 
 
     # NO CROSSTALK SECTION --------------------------------------------------------------------------
-
     # Read and concatenate all files
     df_list = df_list_OG.copy()
     merged_df = pd.concat(df_list, ignore_index=True)
@@ -728,7 +610,7 @@ if polya_fit:
                 if "Q_" in col and "s" in col:
                     merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)     
 
-    columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event']
+    columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
     merged_df = merged_df.drop(columns=columns_to_drop)
 
     # For all the columns apply the calibration and not change the name of the columns
@@ -738,7 +620,7 @@ if polya_fit:
     # For each module, calculate the total charge per event, then store them in a dataframe
     total_charge = pd.DataFrame()
     for i in range(1, 5):
-        total_charge[f"Q_M{i}"] = merged_df[[f"Q_M{i}s{j}" for j in range(1, 5)]].sum(axis=1)
+        total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
 
 
     import numpy as np
@@ -764,7 +646,7 @@ if polya_fit:
     for idx, module in enumerate(range(1, 5)):
 
         # Load and preprocess data
-        data = total_charge[f"Q_M{module}"].dropna().to_numpy().flatten()
+        data = total_charge[f"Q_P{module}"].dropna().to_numpy().flatten()
         data = data[data != 0] / q_e  # convert to e–
 
         # Histogram
@@ -862,13 +744,10 @@ if polya_fit:
     print(df_polya_fit)
 
 
+print("----------------------------------------------------------------------")
+print("-------------------- Real adjacent and single cases ------------------")
+print("----------------------------------------------------------------------")
 
-
-# ---------------------------------------------------------------------------
-# Real adjacent and single cases --------------------------------------------
-# ---------------------------------------------------------------------------
-
-real_strip_case_study = False
 if real_strip_case_study:
     print("Real strip case study. WIP.")
 
@@ -926,7 +805,7 @@ if real_strip_case_study:
 
         return result
 
-    columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event']
+    columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
     merged_df = merged_df.drop(columns=columns_to_drop)
 
     print(merged_df.columns.to_list())
@@ -937,19 +816,19 @@ if real_strip_case_study:
 
 
     # Initialize dictionaries to store charge distributions
-    singles = {f'single_M{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
-    double_adj = {f'double_M{i}_s{j}{j+1}': [] for i in range(1, 5) for j in range(1, 4)}
-    double_non_adj = {f'double_M{i}_s{pair[0]}{pair[1]}': [] for i in range(1, 5) for pair in [(1,3), (2,4), (1,4)]}
-    triple_adj = {f'triple_M{i}_s{j}{j+1}{j+2}': [] for i in range(1, 5) for j in range(1, 3)}
-    triple_non_adj = {f'triple_M{i}_s{triplet[0]}{triplet[1]}{triplet[2]}': [] for i in range(1, 5) for triplet in [(1,2,4), (1,3,4)]}
-    quadruples = {f'quadruple_M{i}_s1234': [] for i in range(1, 5)}
+    singles = {f'single_P{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
+    double_adj = {f'double_P{i}_s{j}{j+1}': [] for i in range(1, 5) for j in range(1, 4)}
+    double_non_adj = {f'double_P{i}_s{pair[0]}{pair[1]}': [] for i in range(1, 5) for pair in [(1,3), (2,4), (1,4)]}
+    triple_adj = {f'triple_P{i}_s{j}{j+1}{j+2}': [] for i in range(1, 5) for j in range(1, 3)}
+    triple_non_adj = {f'triple_P{i}_s{triplet[0]}{triplet[1]}{triplet[2]}': [] for i in range(1, 5) for triplet in [(1,2,4), (1,3,4)]}
+    quadruples = {f'quadruple_P{i}_s1234': [] for i in range(1, 5)}
 
     # Loop over modules
     for i in range(1, 5):
         charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
 
         for j in range(1, 5):  # Loop over strips
-            col_name = f"Q_M{i}s{j}"  # Column name
+            col_name = f"Q_P{i}s{j}"  # Column name
             v = merged_df[col_name].fillna(0).to_numpy()  # Ensure no NaNs
             charge_matrix[:, j - 1] = v  # Store strip charge
 
@@ -962,34 +841,34 @@ if real_strip_case_study:
 
             # Single detection
             if count == 1:
-                key = f'single_M{i}_s{nonzero_strips[0]}'
+                key = f'single_P{i}_s{nonzero_strips[0]}'
                 singles[key].append((charges[0],))
 
             # Double adjacent
             elif count == 2 and nonzero_strips[1] - nonzero_strips[0] == 1:
-                key = f'double_M{i}_s{nonzero_strips[0]}{nonzero_strips[1]}'
+                key = f'double_P{i}_s{nonzero_strips[0]}{nonzero_strips[1]}'
                 double_adj[key].append(tuple(charges))
 
             # Double non-adjacent
             elif count == 2 and nonzero_strips[1] - nonzero_strips[0] > 1:
-                key = f'double_M{i}_s{nonzero_strips[0]}{nonzero_strips[1]}'
+                key = f'double_P{i}_s{nonzero_strips[0]}{nonzero_strips[1]}'
                 if key in double_non_adj:
                     double_non_adj[key].append(tuple(charges))
 
             # Triple adjacent
             elif count == 3 and (nonzero_strips[2] - nonzero_strips[0] == 2):
-                key = f'triple_M{i}_s{nonzero_strips[0]}{nonzero_strips[1]}{nonzero_strips[2]}'
+                key = f'triple_P{i}_s{nonzero_strips[0]}{nonzero_strips[1]}{nonzero_strips[2]}'
                 triple_adj[key].append(tuple(charges))
 
             # Triple non-adjacent
             elif count == 3 and (nonzero_strips[2] - nonzero_strips[0] > 2):
-                key = f'triple_M{i}_s{nonzero_strips[0]}{nonzero_strips[1]}{nonzero_strips[2]}'
+                key = f'triple_P{i}_s{nonzero_strips[0]}{nonzero_strips[1]}{nonzero_strips[2]}'
                 if key in triple_non_adj:
                     triple_non_adj[key].append(tuple(charges))
 
             # Quadruple detection
             elif count == 4:
-                key = f'quadruple_M{i}_s1234'
+                key = f'quadruple_P{i}_s1234'
                 quadruples[key].append(tuple(charges))
 
     # Convert results to DataFrames
@@ -1146,8 +1025,6 @@ if real_strip_case_study:
 
     # List the keys
     print(real_multiplicities.keys())
-
-
     cases = ["real_single", "real_double", "real_triple", "real_quadruple"]
 
     for case in cases:
@@ -1338,11 +1215,10 @@ else:
     print("Real strip case study not available yet. WIP.")
 
 
-# ---------------------------------------------------------------------------
-# Multiplicity calculations -------------------------------------------------
-# ---------------------------------------------------------------------------
+print("----------------------------------------------------------------------")
+print("----------------------- Multiplicity calculations --------------------")
+print("----------------------------------------------------------------------")
 
-multiplicity_calculations = True
 if multiplicity_calculations:
     print("Multiplicity calculations. WIP.")
 
@@ -1437,7 +1313,7 @@ if multiplicity_calculations:
                             merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)     
 
 
-    columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event']
+    columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
     merged_df = merged_df.drop(columns=columns_to_drop)
 
     print(merged_df.columns.to_list())
@@ -1451,7 +1327,7 @@ if multiplicity_calculations:
     for i in range(1, 5):
         for j in range(1, 5):
                 # Get the column name
-                col_name = f"Q_M{i}s{j}"
+                col_name = f"Q_P{i}s{j}"
                 
                 # Plot the histogram
                 v = merged_df[col_name]
@@ -1477,22 +1353,22 @@ if multiplicity_calculations:
 
     # Create a vector of minimum and other of maximum charge for double adjacent detections, for each module
     # Dictionaries to store min and max charge values for double-adjacent detections
-    double_adjacent_M1_min, double_adjacent_M1_max = [], []
-    double_adjacent_M2_min, double_adjacent_M2_max = [], []
-    double_adjacent_M3_min, double_adjacent_M3_max = [], []
-    double_adjacent_M4_min, double_adjacent_M4_max = [], []
+    double_adjacent_P1_min, double_adjacent_P1_max = [], []
+    double_adjacent_P2_min, double_adjacent_P2_max = [], []
+    double_adjacent_P3_min, double_adjacent_P3_max = [], []
+    double_adjacent_P4_min, double_adjacent_P4_max = [], []
 
-    double_non_adjacent_M1_min, double_non_adjacent_M1_max = [], []
-    double_non_adjacent_M2_min, double_non_adjacent_M2_max = [], []
-    double_non_adjacent_M3_min, double_non_adjacent_M3_max = [], []
-    double_non_adjacent_M4_min, double_non_adjacent_M4_max = [], []
+    double_non_adjacent_P1_min, double_non_adjacent_P1_max = [], []
+    double_non_adjacent_P2_min, double_non_adjacent_P2_max = [], []
+    double_non_adjacent_P3_min, double_non_adjacent_P3_max = [], []
+    double_non_adjacent_P4_min, double_non_adjacent_P4_max = [], []
 
     # Loop over modules
     for i in range(1, 5):
         charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
 
         for j in range(1, 5):  # Loop over strips
-                col_name = f"Q_M{i}s{j}"  # Column name
+                col_name = f"Q_P{i}s{j}"  # Column name
                 v = merged_df[col_name].fillna(0).to_numpy()  # Ensure no NaNs
                 charge_matrix[:, j - 1] = v  # Store strip charge
 
@@ -1508,67 +1384,67 @@ if multiplicity_calculations:
                     max_charge = np.max(charges)
 
                     if i == 1:
-                            double_adjacent_M1_min.append(min_charge)
-                            double_adjacent_M1_max.append(max_charge)
+                            double_adjacent_P1_min.append(min_charge)
+                            double_adjacent_P1_max.append(max_charge)
                     elif i == 2:
-                            double_adjacent_M2_min.append(min_charge)
-                            double_adjacent_M2_max.append(max_charge)
+                            double_adjacent_P2_min.append(min_charge)
+                            double_adjacent_P2_max.append(max_charge)
                     elif i == 3:
-                            double_adjacent_M3_min.append(min_charge)
-                            double_adjacent_M3_max.append(max_charge)
+                            double_adjacent_P3_min.append(min_charge)
+                            double_adjacent_P3_max.append(max_charge)
                     elif i == 4:
-                            double_adjacent_M4_min.append(min_charge)
-                            double_adjacent_M4_max.append(max_charge)
+                            double_adjacent_P4_min.append(min_charge)
+                            double_adjacent_P4_max.append(max_charge)
                             
                 if count == 2 and np.all(np.diff(nonzero_strips) != 1):
                     min_charge = np.min(charges)
                     max_charge = np.max(charges)
 
                     if i == 1:
-                            double_non_adjacent_M1_min.append(min_charge)
-                            double_non_adjacent_M1_max.append(max_charge)
+                            double_non_adjacent_P1_min.append(min_charge)
+                            double_non_adjacent_P1_max.append(max_charge)
                     elif i == 2:
-                            double_non_adjacent_M2_min.append(min_charge)
-                            double_non_adjacent_M2_max.append(max_charge)
+                            double_non_adjacent_P2_min.append(min_charge)
+                            double_non_adjacent_P2_max.append(max_charge)
                     elif i == 3:
-                            double_non_adjacent_M3_min.append(min_charge)
-                            double_non_adjacent_M3_max.append(max_charge)
+                            double_non_adjacent_P3_min.append(min_charge)
+                            double_non_adjacent_P3_max.append(max_charge)
                     elif i == 4:
-                            double_non_adjacent_M4_min.append(min_charge)
-                            double_non_adjacent_M4_max.append(max_charge)
+                            double_non_adjacent_P4_min.append(min_charge)
+                            double_non_adjacent_P4_max.append(max_charge)
                     
                 
 
     # Convert lists to DataFrames for better visualization
-    df_double_adj_M1 = pd.DataFrame({"Min": double_adjacent_M1_min, "Max": double_adjacent_M1_max, "Sum": np.array(double_adjacent_M1_min) + np.array(double_adjacent_M1_max)})
-    df_double_adj_M2 = pd.DataFrame({"Min": double_adjacent_M2_min, "Max": double_adjacent_M2_max, "Sum": np.array(double_adjacent_M2_min) + np.array(double_adjacent_M2_max)})
-    df_double_adj_M3 = pd.DataFrame({"Min": double_adjacent_M3_min, "Max": double_adjacent_M3_max, "Sum": np.array(double_adjacent_M3_min) + np.array(double_adjacent_M3_max)})
-    df_double_adj_M4 = pd.DataFrame({"Min": double_adjacent_M4_min, "Max": double_adjacent_M4_max, "Sum": np.array(double_adjacent_M4_min) + np.array(double_adjacent_M4_max)})
+    df_double_adj_M1 = pd.DataFrame({"Min": double_adjacent_P1_min, "Max": double_adjacent_P1_max, "Sum": np.array(double_adjacent_P1_min) + np.array(double_adjacent_P1_max)})
+    df_double_adj_M2 = pd.DataFrame({"Min": double_adjacent_P2_min, "Max": double_adjacent_P2_max, "Sum": np.array(double_adjacent_P2_min) + np.array(double_adjacent_P2_max)})
+    df_double_adj_M3 = pd.DataFrame({"Min": double_adjacent_P3_min, "Max": double_adjacent_P3_max, "Sum": np.array(double_adjacent_P3_min) + np.array(double_adjacent_P3_max)})
+    df_double_adj_M4 = pd.DataFrame({"Min": double_adjacent_P4_min, "Max": double_adjacent_P4_max, "Sum": np.array(double_adjacent_P4_min) + np.array(double_adjacent_P4_max)})
 
-    df_double_non_adj_M1 = pd.DataFrame({"Min": double_non_adjacent_M1_min, "Max": double_non_adjacent_M1_max, "Sum": np.array(double_non_adjacent_M1_min) + np.array(double_non_adjacent_M1_max)})
-    df_double_non_adj_M2 = pd.DataFrame({"Min": double_non_adjacent_M2_min, "Max": double_non_adjacent_M2_max, "Sum": np.array(double_non_adjacent_M2_min) + np.array(double_non_adjacent_M2_max)})
-    df_double_non_adj_M3 = pd.DataFrame({"Min": double_non_adjacent_M3_min, "Max": double_non_adjacent_M3_max, "Sum": np.array(double_non_adjacent_M3_min) + np.array(double_non_adjacent_M3_max)})
-    df_double_non_adj_M4 = pd.DataFrame({"Min": double_non_adjacent_M4_min, "Max": double_non_adjacent_M4_max, "Sum": np.array(double_non_adjacent_M4_min) + np.array(double_non_adjacent_M4_max)})
+    df_double_non_adj_M1 = pd.DataFrame({"Min": double_non_adjacent_P1_min, "Max": double_non_adjacent_P1_max, "Sum": np.array(double_non_adjacent_P1_min) + np.array(double_non_adjacent_P1_max)})
+    df_double_non_adj_M2 = pd.DataFrame({"Min": double_non_adjacent_P2_min, "Max": double_non_adjacent_P2_max, "Sum": np.array(double_non_adjacent_P2_min) + np.array(double_non_adjacent_P2_max)})
+    df_double_non_adj_M3 = pd.DataFrame({"Min": double_non_adjacent_P3_min, "Max": double_non_adjacent_P3_max, "Sum": np.array(double_non_adjacent_P3_min) + np.array(double_non_adjacent_P3_max)})
+    df_double_non_adj_M4 = pd.DataFrame({"Min": double_non_adjacent_P4_min, "Max": double_non_adjacent_P4_max, "Sum": np.array(double_non_adjacent_P4_min) + np.array(double_non_adjacent_P4_max)})
 
 
     # Same, but for three strip cases -----------------------------------------------------------------------------------------------
     # Dictionaries to store min, mid, and max charge values for triple adjacent detections
-    triple_adjacent_M1_min, triple_adjacent_M1_mid, triple_adjacent_M1_max = [], [], []
-    triple_adjacent_M2_min, triple_adjacent_M2_mid, triple_adjacent_M2_max = [], [], []
-    triple_adjacent_M3_min, triple_adjacent_M3_mid, triple_adjacent_M3_max = [], [], []
-    triple_adjacent_M4_min, triple_adjacent_M4_mid, triple_adjacent_M4_max = [], [], []
+    triple_adjacent_P1_min, triple_adjacent_P1_mid, triple_adjacent_P1_max = [], [], []
+    triple_adjacent_P2_min, triple_adjacent_P2_mid, triple_adjacent_P2_max = [], [], []
+    triple_adjacent_P3_min, triple_adjacent_P3_mid, triple_adjacent_P3_max = [], [], []
+    triple_adjacent_P4_min, triple_adjacent_P4_mid, triple_adjacent_P4_max = [], [], []
 
-    triple_non_adjacent_M1_min, triple_non_adjacent_M1_mid, triple_non_adjacent_M1_max = [], [], []
-    triple_non_adjacent_M2_min, triple_non_adjacent_M2_mid, triple_non_adjacent_M2_max = [], [], []
-    triple_non_adjacent_M3_min, triple_non_adjacent_M3_mid, triple_non_adjacent_M3_max = [], [], []
-    triple_non_adjacent_M4_min, triple_non_adjacent_M4_mid, triple_non_adjacent_M4_max = [], [], []
+    triple_non_adjacent_P1_min, triple_non_adjacent_P1_mid, triple_non_adjacent_P1_max = [], [], []
+    triple_non_adjacent_P2_min, triple_non_adjacent_P2_mid, triple_non_adjacent_P2_max = [], [], []
+    triple_non_adjacent_P3_min, triple_non_adjacent_P3_mid, triple_non_adjacent_P3_max = [], [], []
+    triple_non_adjacent_P4_min, triple_non_adjacent_P4_mid, triple_non_adjacent_P4_max = [], [], []
 
     # Loop over modules
     for i in range(1, 5):
         charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
 
         for j in range(1, 5):  # Loop over strips
-            col_name = f"Q_M{i}s{j}"  # Column name
+            col_name = f"Q_P{i}s{j}"  # Column name
             v = merged_df[col_name].fillna(0).to_numpy()  # Ensure no NaNs
             charge_matrix[:, j - 1] = v  # Store strip charge
 
@@ -1584,53 +1460,53 @@ if multiplicity_calculations:
                 min_charge, mid_charge, max_charge = np.sort(charges)
 
                 if i == 1:
-                    triple_adjacent_M1_min.append(min_charge)
-                    triple_adjacent_M1_mid.append(mid_charge)
-                    triple_adjacent_M1_max.append(max_charge)
+                    triple_adjacent_P1_min.append(min_charge)
+                    triple_adjacent_P1_mid.append(mid_charge)
+                    triple_adjacent_P1_max.append(max_charge)
                 elif i == 2:
-                    triple_adjacent_M2_min.append(min_charge)
-                    triple_adjacent_M2_mid.append(mid_charge)
-                    triple_adjacent_M2_max.append(max_charge)
+                    triple_adjacent_P2_min.append(min_charge)
+                    triple_adjacent_P2_mid.append(mid_charge)
+                    triple_adjacent_P2_max.append(max_charge)
                 elif i == 3:
-                    triple_adjacent_M3_min.append(min_charge)
-                    triple_adjacent_M3_mid.append(mid_charge)
-                    triple_adjacent_M3_max.append(max_charge)
+                    triple_adjacent_P3_min.append(min_charge)
+                    triple_adjacent_P3_mid.append(mid_charge)
+                    triple_adjacent_P3_max.append(max_charge)
                 elif i == 4:
-                    triple_adjacent_M4_min.append(min_charge)
-                    triple_adjacent_M4_mid.append(mid_charge)
-                    triple_adjacent_M4_max.append(max_charge)
+                    triple_adjacent_P4_min.append(min_charge)
+                    triple_adjacent_P4_mid.append(mid_charge)
+                    triple_adjacent_P4_max.append(max_charge)
 
             # Triple non-adjacent: 3 non-consecutive strips
             if count == 3 and not np.all(np.diff(nonzero_strips) == 1):
                 min_charge, mid_charge, max_charge = np.sort(charges)
 
                 if i == 1:
-                    triple_non_adjacent_M1_min.append(min_charge)
-                    triple_non_adjacent_M1_mid.append(mid_charge)
-                    triple_non_adjacent_M1_max.append(max_charge)
+                    triple_non_adjacent_P1_min.append(min_charge)
+                    triple_non_adjacent_P1_mid.append(mid_charge)
+                    triple_non_adjacent_P1_max.append(max_charge)
                 elif i == 2:
-                    triple_non_adjacent_M2_min.append(min_charge)
-                    triple_non_adjacent_M2_mid.append(mid_charge)
-                    triple_non_adjacent_M2_max.append(max_charge)
+                    triple_non_adjacent_P2_min.append(min_charge)
+                    triple_non_adjacent_P2_mid.append(mid_charge)
+                    triple_non_adjacent_P2_max.append(max_charge)
                 elif i == 3:
-                    triple_non_adjacent_M3_min.append(min_charge)
-                    triple_non_adjacent_M3_mid.append(mid_charge)
-                    triple_non_adjacent_M3_max.append(max_charge)
+                    triple_non_adjacent_P3_min.append(min_charge)
+                    triple_non_adjacent_P3_mid.append(mid_charge)
+                    triple_non_adjacent_P3_max.append(max_charge)
                 elif i == 4:
-                    triple_non_adjacent_M4_min.append(min_charge)
-                    triple_non_adjacent_M4_mid.append(mid_charge)
-                    triple_non_adjacent_M4_max.append(max_charge)
+                    triple_non_adjacent_P4_min.append(min_charge)
+                    triple_non_adjacent_P4_mid.append(mid_charge)
+                    triple_non_adjacent_P4_max.append(max_charge)
 
     # Convert lists to DataFrames for better visualization
-    df_triple_adj_M1 = pd.DataFrame({"Min": triple_adjacent_M1_min, "Mid": triple_adjacent_M1_mid, "Max": triple_adjacent_M1_max, "Sum": np.array(triple_adjacent_M1_min) + np.array(triple_adjacent_M1_mid) + np.array(triple_adjacent_M1_max)})
-    df_triple_adj_M2 = pd.DataFrame({"Min": triple_adjacent_M2_min, "Mid": triple_adjacent_M2_mid, "Max": triple_adjacent_M2_max, "Sum": np.array(triple_adjacent_M2_min) + np.array(triple_adjacent_M2_mid) + np.array(triple_adjacent_M2_max)})
-    df_triple_adj_M3 = pd.DataFrame({"Min": triple_adjacent_M3_min, "Mid": triple_adjacent_M3_mid, "Max": triple_adjacent_M3_max, "Sum": np.array(triple_adjacent_M3_min) + np.array(triple_adjacent_M3_mid) + np.array(triple_adjacent_M3_max)})
-    df_triple_adj_M4 = pd.DataFrame({"Min": triple_adjacent_M4_min, "Mid": triple_adjacent_M4_mid, "Max": triple_adjacent_M4_max, "Sum": np.array(triple_adjacent_M4_min) + np.array(triple_adjacent_M4_mid) + np.array(triple_adjacent_M4_max)})
+    df_triple_adj_M1 = pd.DataFrame({"Min": triple_adjacent_P1_min, "Mid": triple_adjacent_P1_mid, "Max": triple_adjacent_P1_max, "Sum": np.array(triple_adjacent_P1_min) + np.array(triple_adjacent_P1_mid) + np.array(triple_adjacent_P1_max)})
+    df_triple_adj_M2 = pd.DataFrame({"Min": triple_adjacent_P2_min, "Mid": triple_adjacent_P2_mid, "Max": triple_adjacent_P2_max, "Sum": np.array(triple_adjacent_P2_min) + np.array(triple_adjacent_P2_mid) + np.array(triple_adjacent_P2_max)})
+    df_triple_adj_M3 = pd.DataFrame({"Min": triple_adjacent_P3_min, "Mid": triple_adjacent_P3_mid, "Max": triple_adjacent_P3_max, "Sum": np.array(triple_adjacent_P3_min) + np.array(triple_adjacent_P3_mid) + np.array(triple_adjacent_P3_max)})
+    df_triple_adj_M4 = pd.DataFrame({"Min": triple_adjacent_P4_min, "Mid": triple_adjacent_P4_mid, "Max": triple_adjacent_P4_max, "Sum": np.array(triple_adjacent_P4_min) + np.array(triple_adjacent_P4_mid) + np.array(triple_adjacent_P4_max)})
 
-    df_triple_non_adj_M1 = pd.DataFrame({"Min": triple_non_adjacent_M1_min, "Mid": triple_non_adjacent_M1_mid, "Max": triple_non_adjacent_M1_max, "Sum": np.array(triple_non_adjacent_M1_min) + np.array(triple_non_adjacent_M1_mid) + np.array(triple_non_adjacent_M1_max)})
-    df_triple_non_adj_M2 = pd.DataFrame({"Min": triple_non_adjacent_M2_min, "Mid": triple_non_adjacent_M2_mid, "Max": triple_non_adjacent_M2_max, "Sum": np.array(triple_non_adjacent_M2_min) + np.array(triple_non_adjacent_M2_mid) + np.array(triple_non_adjacent_M2_max)})
-    df_triple_non_adj_M3 = pd.DataFrame({"Min": triple_non_adjacent_M3_min, "Mid": triple_non_adjacent_M3_mid, "Max": triple_non_adjacent_M3_max, "Sum": np.array(triple_non_adjacent_M3_min) + np.array(triple_non_adjacent_M3_mid) + np.array(triple_non_adjacent_M3_max)})
-    df_triple_non_adj_M4 = pd.DataFrame({"Min": triple_non_adjacent_M4_min, "Mid": triple_non_adjacent_M4_mid, "Max": triple_non_adjacent_M4_max, "Sum": np.array(triple_non_adjacent_M4_min) + np.array(triple_non_adjacent_M4_mid) + np.array(triple_non_adjacent_M4_max)})
+    df_triple_non_adj_M1 = pd.DataFrame({"Min": triple_non_adjacent_P1_min, "Mid": triple_non_adjacent_P1_mid, "Max": triple_non_adjacent_P1_max, "Sum": np.array(triple_non_adjacent_P1_min) + np.array(triple_non_adjacent_P1_mid) + np.array(triple_non_adjacent_P1_max)})
+    df_triple_non_adj_M2 = pd.DataFrame({"Min": triple_non_adjacent_P2_min, "Mid": triple_non_adjacent_P2_mid, "Max": triple_non_adjacent_P2_max, "Sum": np.array(triple_non_adjacent_P2_min) + np.array(triple_non_adjacent_P2_mid) + np.array(triple_non_adjacent_P2_max)})
+    df_triple_non_adj_M3 = pd.DataFrame({"Min": triple_non_adjacent_P3_min, "Mid": triple_non_adjacent_P3_mid, "Max": triple_non_adjacent_P3_max, "Sum": np.array(triple_non_adjacent_P3_min) + np.array(triple_non_adjacent_P3_mid) + np.array(triple_non_adjacent_P3_max)})
+    df_triple_non_adj_M4 = pd.DataFrame({"Min": triple_non_adjacent_P4_min, "Mid": triple_non_adjacent_P4_mid, "Max": triple_non_adjacent_P4_max, "Sum": np.array(triple_non_adjacent_P4_min) + np.array(triple_non_adjacent_P4_mid) + np.array(triple_non_adjacent_P4_max)})
 
     # ---------------------------------------------------------------------------------------------------------------------------------
 
@@ -1645,7 +1521,7 @@ if multiplicity_calculations:
         charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
 
         for j in range(1, 5):  # Loop over strips
-            col_name = f"Q_M{i}s{j}"  # Column name
+            col_name = f"Q_P{i}s{j}"  # Column name
             v = merged_df[col_name].fillna(0).to_numpy()  # Ensure no NaNs
             charge_matrix[:, j - 1] = v  # Store strip charge
 
@@ -2097,479 +1973,383 @@ if multiplicity_calculations:
     plt.close()
 
 
-# Assume coeff_tables_normalized is your dictionary (as printed above)
+    # Assume coeff_tables_normalized is your dictionary (as printed above)
 
-# Filter out 'Total' and stack the rest into one DataFrame
-df_mult_fit = (
-    pd.concat(
-        {k: v for k, v in coeff_tables_normalized.items() if k != 'Total'},
-        names=["detection_type", "multiplicity"]
+    # Filter out 'Total' and stack the rest into one DataFrame
+    df_mult_fit = (
+        pd.concat(
+            {k: v for k, v in coeff_tables_normalized.items() if k != 'Total'},
+            names=["detection_type", "multiplicity"]
+        )
+        .reset_index()
+        .rename(columns={"level_1": "multiplicity"})
     )
-    .reset_index()
-    .rename(columns={"level_1": "multiplicity"})
-)
-
-# Optional: display or save
-# print(df_mult_fit)
-
-
-# ---------------------------------------------------------------------------
-# Crosstalk probability respect the charge ----------------------------------
-# ---------------------------------------------------------------------------
-
-n_bins = 100
-right_lim = 1400 # 1250
-crosstalk_limit = 2.5 #2.6
-charge_vector = np.linspace(crosstalk_limit, right_lim, n_bins)
-
-remove_streamer = False
-streamer_limit = 90
-
-FEE_calibration = {
-    "Width": [
-        0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-        160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
-        300, 310, 320, 330, 340, 350, 360, 370, 380, 390
-    ],
-    "Fast Charge": [
-        4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-        9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
-        1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
-        1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
-        2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-        2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
-        2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
-    ]
-}
-
-# Create the DataFrame
-FEE_calibration = pd.DataFrame(FEE_calibration)
-from scipy.interpolate import CubicSpline
-# Convert to NumPy arrays for interpolation
-width_table = FEE_calibration['Width'].to_numpy()
-fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-# Create a cubic spline interpolator
-cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
-
-def interpolate_fast_charge(width):
-    """
-    Interpolates the Fast Charge for given Width values using cubic spline interpolation.
-    Parameters:
-    - width (float or np.ndarray): The Width value(s) to interpolate in ns.
-    Returns:
-    - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-    """
-    width = np.asarray(width)  # Ensure input is a NumPy array
-    # Keep zero values unchanged
-    result = np.where(width == 0, 0, cs(width))
-    return result
-
-df_list_OG = [df]  # Adjust delimiter if needed
-
-
-# NO CROSSTALK SECTION --------------------------------------------------------------------------
-
-# Read and concatenate all files
-df_list = df_list_OG.copy()
-merged_df = pd.concat(df_list, ignore_index=True)
-merged_df.drop_duplicates(inplace=True)
-
-# merged_df = df.copy()
-
-remove_crosstalk = True
-if remove_crosstalk or remove_streamer:
-    if remove_crosstalk:
-        for col in merged_df.columns:
-            if "Q_" in col and "s" in col:
-                merged_df[col] = merged_df[col].apply(lambda x: 0 if x < crosstalk_limit else x)
-                      
-    if remove_streamer:
-        for col in merged_df.columns:
-            if "Q_" in col and "s" in col:
-                merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)     
-
-# if create_plots:
-#       # Create a 4x4 subfigure
-#       fig, axs = plt.subplots(4, 4, figsize=(12, 12))
-#       for i in range(1, 5):
-#             for j in range(1, 5):
-#                   # Get the column name
-#                   col_name = f"Q_M{i}s{j}"
-                  
-#                   # Plot the histogram
-#                   v = merged_df[col_name]
-#                   v = v[v != 0]
-#                   axs[i-1, j-1].hist(v, bins=200, range=(0, 5))
-#                   axs[i-1, j-1].set_title(col_name)
-#                   axs[i-1, j-1].set_xlabel("Charge")
-#                   axs[i-1, j-1].set_ylabel("Frequency")
-#                   axs[i-1, j-1].grid(True)
-
-#       plt.tight_layout()
-#       figure_name = "zoom_pre_cal_all_channels.png"
-#       plt.savefig(figure_save_path + figure_name, dpi=600)
-#       plt.close()
-
-columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event']
-merged_df = merged_df.drop(columns=columns_to_drop)
-
-# For all the columns apply the calibration and not change the name of the columns
-for col in merged_df.columns:
-    merged_df[col] = interpolate_fast_charge(merged_df[col])
-
-# Initialize dictionaries to store charge distributions
-singles = {f'single_M{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
-
-# Loop over modules
-for i in range(1, 5):
-    charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
-
-    for j in range(1, 5):  # Loop over strips
-        col_name = f"Q_M{i}s{j}"  # Column name
-        v = merged_df[col_name].fillna(0).to_numpy()  # Ensure no NaNs
-        charge_matrix[:, j - 1] = v  # Store strip charge
-
-    # Classify events based on strip charge distribution
-    nonzero_counts = (charge_matrix > 0).sum(axis=1)  # Count nonzero strips per event
-
-    for event_idx, count in enumerate(nonzero_counts):
-        nonzero_strips = np.where(charge_matrix[event_idx, :] > 0)[0] + 1  # Get active strip indices (1-based)
-        charges = charge_matrix[event_idx, nonzero_strips - 1]  # Get nonzero charges
-
-        # Single detection
-        if count == 1:
-            key = f'single_M{i}_s{nonzero_strips[0]}'
-            singles[key].append((charges[0],))
-
-# Convert results to DataFrames
-df_singles = {k: pd.DataFrame(v, columns=["Charge1"]) for k, v in singles.items()}
-
-# Assuming df_singles and crosstalk_limit are already defined
-bin_edges = charge_vector
-histograms_no_crosstalk = {}
-
-print("Histograms for no crosstalk")
-for m in range(1, 5):
-    for s in range(1, 5):
-        key = f"M{m}_s{s}"
-        data = df_singles[f"single_M{m}_s{s}"]['Charge1'].values
-        hist, _ = np.histogram(data, bins=bin_edges)
-        histograms_no_crosstalk[key] = hist
-
-
-# YES CROSSTALK SECTION -------------------------------------------------------------------------
-
-# Read and concatenate all files
-df_list = df_list_OG.copy()
-merged_df = pd.concat(df_list, ignore_index=True)
-merged_df.drop_duplicates(inplace=True)
-
-remove_crosstalk = False
-if remove_crosstalk or remove_streamer:
-    if remove_crosstalk:
-        for col in merged_df.columns:
-            if "Q_" in col and "s" in col:
-                merged_df[col] = merged_df[col].apply(lambda x: 0 if x < crosstalk_limit else x)
-                      
-    if remove_streamer:
-        for col in merged_df.columns:
-            if "Q_" in col and "s" in col:
-                merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)     
-
-# if create_plots:
-#       # Create a 4x4 subfigure
-#       fig, axs = plt.subplots(4, 4, figsize=(12, 12))
-#       for i in range(1, 5):
-#             for j in range(1, 5):
-#                   # Get the column name
-#                   col_name = f"Q_M{i}s{j}"
-                  
-#                   # Plot the histogram
-#                   v = merged_df[col_name]
-#                   v = v[v != 0]
-#                   axs[i-1, j-1].hist(v, bins=200, range=(0, 5))
-#                   axs[i-1, j-1].set_title(col_name)
-#                   axs[i-1, j-1].set_xlabel("Charge")
-#                   axs[i-1, j-1].set_ylabel("Frequency")
-#                   axs[i-1, j-1].grid(True)
-
-#       plt.tight_layout()
-#       figure_name = "zoom_pre_cal_all_channels.png"
-#       plt.savefig(figure_save_path + figure_name, dpi=600)
-#       plt.close()
-
-columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 't0', 's', 'type', 'charge_event']
-merged_df = merged_df.drop(columns=columns_to_drop)
-
-# For all the columns apply the calibration and not change the name of the columns
-for col in merged_df.columns:
-    merged_df[col] = interpolate_fast_charge(merged_df[col])
-
-# Initialize dictionaries to store charge distributions
-singles = {f'single_M{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
-
-# Loop over modules
-for i in range(1, 5):
-    charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
-
-    for j in range(1, 5):  # Loop over strips
-        col_name = f"Q_M{i}s{j}"  # Column name
-        v = merged_df[col_name].fillna(0).to_numpy()  # Ensure no NaNs
-        charge_matrix[:, j - 1] = v  # Store strip charge
-
-    # Classify events based on strip charge distribution
-    nonzero_counts = (charge_matrix > 0).sum(axis=1)  # Count nonzero strips per event
-
-    for event_idx, count in enumerate(nonzero_counts):
-        nonzero_strips = np.where(charge_matrix[event_idx, :] > 0)[0] + 1  # Get active strip indices (1-based)
-        charges = charge_matrix[event_idx, nonzero_strips - 1]  # Get nonzero charges
-
-        # Single detection
-        if count == 1:
-            key = f'single_M{i}_s{nonzero_strips[0]}'
-            singles[key].append((charges[0],))
-
-# Convert results to DataFrames
-df_singles = {k: pd.DataFrame(v, columns=["Charge1"]) for k, v in singles.items()}
-
-# print(df_singles["single_M1_s1"]['Charge1'].values)
-
-# Assuming df_singles and crosstalk_limit are already defined
-bin_edges = charge_vector
-histograms_yes_crosstalk = {}
-
-print("Histograms for yes crosstalk")
-for m in range(1, 5):
-    for s in range(1, 5):
-        key = f"M{m}_s{s}"
-        data = df_singles[f"single_M{m}_s{s}"]['Charge1'].values
-        hist, _ = np.histogram(data, bins=bin_edges)
-        histograms_yes_crosstalk[key] = hist
-
-def compute_fraction_and_uncertainty(
-    charge_edges, hist_no, hist_yes
-):
-    """
-    Compute fraction f = (N_no - N_yes)/(N_no + N_yes),
-    plus its propagated Poisson uncertainty.
-    
-    Parameters
-    ----------
-    charge_edges : 1D array
-        Bin edges used for the histograms (length = number_of_bins + 1).
-    hist_no : dict of 1D arrays
-        Dictionary keyed by 'M#_s#' with histogram counts for 'no crosstalk'.
-    hist_yes : dict of 1D arrays
-        Dictionary keyed by 'M#_s#' with histogram counts for 'yes crosstalk'.
-
-    Returns
-    -------
-    x_vals : 1D array
-        The x-coordinates for plotting, i.e. `charge_edges[:-1]`.
-    fraction_dict : dict of 1D arrays
-        fraction_dict[key] = (N_no - N_yes)/(N_no + N_yes) per bin.
-    uncertainty_dict : dict of 1D arrays
-        Uncertainty from Poisson statistics, same shape as fraction arrays.
-    """
-    fraction_dict = {}
-    uncertainty_dict = {}
-
-    # We remove the last edge to match the histogram "counts" length:
-    x_vals = charge_edges[:-1]
-
-    for key in hist_no:
-        # Just for clarity
-        Nn = hist_no[key]   # 'no crosstalk' counts
-        Ny = hist_yes[key]  # 'yes crosstalk' counts
-        D = Nn + Ny         # denominator
-
-        # Fraction
-        with np.errstate(divide='ignore', invalid='ignore'):
-            f = (Nn - Ny) / D
-            # If D=0 => f -> undefined => set to 0
-            f[np.isnan(f)] = 0  
-
-        # Poisson errors for counts
-        sigma_Nn = np.sqrt(Nn)
-        sigma_Ny = np.sqrt(Ny)
-
-        # Partial derivatives
-        # df/dNn =  2*Ny / D^2
-        # df/dNy = -2*Nn / D^2
-        with np.errstate(divide='ignore', invalid='ignore'):
-            df_dNn = 2 * Ny / (D**2)
-            df_dNy = -2 * Nn / (D**2)
-
-            # Total variance
-            sigma_f_sq = (df_dNn**2) * (sigma_Nn**2) + (df_dNy**2) * (sigma_Ny**2)
-            # If D=0, that might lead to NaN
-            sigma_f = np.sqrt(sigma_f_sq)
-            sigma_f[np.isnan(sigma_f)] = 0
-
-        fraction_dict[key] = f
-        uncertainty_dict[key] = sigma_f
-
-    return x_vals, fraction_dict, uncertainty_dict
-
-# ---------------------------------------------------------------------
-# Example usage to produce the 4x4 grid of plots:
-# ---------------------------------------------------------------------
-
-# 1. Compute fraction + uncertainty
-x_vals, fraction_hist, frac_err = compute_fraction_and_uncertainty(
-    charge_vector,  # bin edges from your snippet
-    histograms_no_crosstalk,
-    histograms_yes_crosstalk
-)
-
-# 2. Plot in 4x4
-fig, axs = plt.subplots(4, 4, figsize=(16, 12), sharex=True, sharey=True)
-fig.suptitle(f"Crosstalk probability with Poisson Error Bands, mingo0{station}", fontsize=14)
-
-for m in range(1, 5):
-    for s in range(1, 5):
-        ax = axs[m-1, s-1]
-        key = f"M{m}_s{s}"
-
-        y_vals = fraction_hist[key]
-        y_err  = frac_err[key]
-
-        ax.plot(x_vals, y_vals, label=key)
-        ax.fill_between(x_vals, y_vals - y_err, y_vals + y_err, alpha=0.3)
-        ax.set_ylim(0, 1)         # Because fraction can be negative if N_yes > N_no
-        ax.set_title(key)
-        ax.grid(True)
-
-# Better spacing
-for ax in axs[-1, :]:
-    ax.set_xlabel("Charge")
-for ax in axs[:, 0]:
-    ax.set_ylabel("Probability")
-
-# plt.tight_layout(rect=[0, 0, 1, 0.95])
-plt.tight_layout()
-figure_name = f"crosstalk_probability_mingo0{station}"
-if save_plots:
-    name_of_file = figure_name
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-if show_plots: plt.show()
-plt.close()
-
-
-# Fit a sigmoidal and store the fitting values to compare with temperature, etc.
-
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
-import pandas as pd
-import os
-
-# --- 1. Define 3-parameter sigmoid (bounded to [0,1]) ---
-def sigmoid_3p(x, x0, k):
-    exp_arg = np.clip(-k * (x - x0), -500, 500)
-    return 1 / (1 + np.exp(exp_arg))
-
-# --- 2. Compute fractions and uncertainties ---
-x_vals, fraction_hist, frac_err = compute_fraction_and_uncertainty(
-    charge_vector,
-    histograms_no_crosstalk,
-    histograms_yes_crosstalk
-)
-
-fit_results = []
-
-# --- 3. Plot and fit ---
-fig, axs = plt.subplots(4, 4, figsize=(16, 12), sharex=True, sharey=True)
-fig.suptitle(f"Crosstalk probability with Sigmoid Fit, mingo0{station}", fontsize=14)
-
-for m in range(1, 5):
-    for s in range(1, 5):
-        ax = axs[m-1, s-1]
-        key = f"M{m}_s{s}"
-        y_vals_full = fraction_hist[key]
-        y_err_full  = frac_err[key]
-
-        # Restrict to x in [200, 1300]
-        domain_mask = (x_vals >= 200) & (x_vals <= 1300)
-        x_domain = x_vals[domain_mask]
-        y_vals = y_vals_full[domain_mask]
-        y_err  = y_err_full[domain_mask]
-
-        # Restrict further to transition region: y in [0.05, 0.95]
-        trans_mask = (y_vals > 0.05) & (y_vals < 0.95)
-        x_fit = x_domain[trans_mask]
-        y_fit = y_vals[trans_mask]
-        y_err_fit = y_err[trans_mask]
-
-        # Skip if too little data
-        if len(x_fit) < 5:
-            popt = [np.nan, np.nan]
-        else:
-            # Initial guess
-            x0_guess = x_fit[np.argmin(np.abs(y_fit - 0.5))]
-            k_guess = 0.05  # shallow initial slope
-
-            try:
-                popt, pcov = curve_fit(sigmoid_3p, x_fit, y_fit, p0=[x0_guess, k_guess],
-                                       sigma=np.where(y_err_fit == 0, 1e-6, y_err_fit),
-                                       absolute_sigma=True, maxfev=10000)
-            except RuntimeError:
+
+    # Optional: display or save
+    # print(df_mult_fit)
+
+
+print("----------------------------------------------------------------------")
+print("------------ Crosstalk probability respect the charge ----------------")
+print("----------------------------------------------------------------------")
+
+if crosstalk_probability:
+    n_bins = 100
+    right_lim = 1400 # 1250
+    crosstalk_limit = 2 #2.6
+    charge_vector = np.linspace(crosstalk_limit, right_lim, n_bins)
+
+    remove_streamer = False
+    streamer_limit = 90
+
+    FEE_calibration = {
+        "Width": [
+            0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+            160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
+            300, 310, 320, 330, 340, 350, 360, 370, 380, 390
+        ],
+        "Fast Charge": [
+            4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
+            9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
+            1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
+            1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
+            2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
+            2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
+            2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
+        ]
+    }
+
+    # Create the DataFrame
+    FEE_calibration = pd.DataFrame(FEE_calibration)
+    from scipy.interpolate import CubicSpline
+    # Convert to NumPy arrays for interpolation
+    width_table = FEE_calibration['Width'].to_numpy()
+    fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
+    # Create a cubic spline interpolator
+    cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
+
+    def interpolate_fast_charge(width):
+        """
+        Interpolates the Fast Charge for given Width values using cubic spline interpolation.
+        Parameters:
+        - width (float or np.ndarray): The Width value(s) to interpolate in ns.
+        Returns:
+        - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
+        """
+        width = np.asarray(width)  # Ensure input is a NumPy array
+        # Keep zero values unchanged
+        result = np.where(width == 0, 0, cs(width))
+        return result
+
+    df_list_OG = [df]  # Adjust delimiter if needed
+
+
+    # NO CROSSTALK SECTION --------------------------------------------------------------------------
+
+    # Read and concatenate all files
+    df_list = df_list_OG.copy()
+    merged_df = pd.concat(df_list, ignore_index=True)
+    merged_df.drop_duplicates(inplace=True)
+
+    columns_to_keep = [f"Q_P{i}s{j}" for i in range(1, 5) for j in range(1, 5)]
+    merged_df = merged_df[columns_to_keep]
+
+    # For all the columns apply the calibration and not change the name of the columns
+    for col in merged_df.columns:
+        merged_df[col] = interpolate_fast_charge(merged_df[col])
+
+    # Initialize dictionaries to store charge distributions
+    singles = {f'single_P{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
+
+    # Loop over modules
+    for i in range(1, 5):
+        charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
+
+        for j in range(1, 5):  # Loop over strips
+            col_name = f"Q_P{i}s{j}"  # Column name
+            v = merged_df[col_name].fillna(0).to_numpy()  # Ensure no NaNs
+            charge_matrix[:, j - 1] = v  # Store strip charge
+
+        # Classify events based on strip charge distribution
+        nonzero_counts = (charge_matrix > 0).sum(axis=1)  # Count nonzero strips per event
+
+        for event_idx, count in enumerate(nonzero_counts):
+            nonzero_strips = np.where(charge_matrix[event_idx, :] > 0)[0] + 1  # Get active strip indices (1-based)
+            charges = charge_matrix[event_idx, nonzero_strips - 1]  # Get nonzero charges
+
+            # Single detection
+            if count == 1:
+                key = f'single_P{i}_s{nonzero_strips[0]}'
+                singles[key].append((charges[0],))
+
+    # Convert results to DataFrames
+    df_singles = {k: pd.DataFrame(v, columns=["Charge1"]) for k, v in singles.items()}
+
+    # Assuming df_singles and crosstalk limit are already defined
+    bin_edges = charge_vector
+    histograms_no_crosstalk = {}
+
+    print("Histograms for no crosstalk")
+    for m in range(1, 5):
+        for s in range(1, 5):
+            key = f"P{m}_s{s}"
+            data = df_singles[f"single_P{m}_s{s}"]['Charge1'].values
+            hist, _ = np.histogram(data, bins=bin_edges)
+            histograms_no_crosstalk[key] = hist
+
+
+    # YES CROSSTALK SECTION -------------------------------------------------------------------------
+
+    # Read and concatenate all files
+    df_list = df_list_OG.copy()
+    merged_df = pd.concat(df_list, ignore_index=True)
+    merged_df.drop_duplicates(inplace=True)
+
+    columns_to_keep = [f"Q_P{i}s{j}_with_crstlk" for i in range(1, 5) for j in range(1, 5)]
+    merged_df = merged_df[columns_to_keep]
+
+    # For all the columns apply the calibration and not change the name of the columns
+    for col in merged_df.columns:
+        merged_df[col] = interpolate_fast_charge(merged_df[col])
+
+    # Initialize dictionaries to store charge distributions
+    singles = {f'single_P{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
+
+    # Loop over modules
+    for i in range(1, 5):
+        charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
+
+        for j in range(1, 5):  # Loop over strips
+            col_name = f"Q_P{i}s{j}_with_crstlk"  # Column name
+            v = merged_df[col_name].fillna(0).to_numpy()  # Ensure no NaNs
+            charge_matrix[:, j - 1] = v  # Store strip charge
+
+        # Classify events based on strip charge distribution
+        nonzero_counts = (charge_matrix > 0).sum(axis=1)  # Count nonzero strips per event
+
+        for event_idx, count in enumerate(nonzero_counts):
+            nonzero_strips = np.where(charge_matrix[event_idx, :] > 0)[0] + 1  # Get active strip indices (1-based)
+            charges = charge_matrix[event_idx, nonzero_strips - 1]  # Get nonzero charges
+
+            # Single detection
+            if count == 1:
+                key = f'single_P{i}_s{nonzero_strips[0]}'
+                singles[key].append((charges[0],))
+
+    # Convert results to DataFrames
+    df_singles = {k: pd.DataFrame(v, columns=["Charge1"]) for k, v in singles.items()}
+
+    # Assuming df_singles and crosstalklimit are already defined
+    bin_edges = charge_vector
+    histograms_yes_crosstalk = {}
+
+    print("Histograms for yes crosstalk")
+    for m in range(1, 5):
+        for s in range(1, 5):
+            key = f"P{m}_s{s}"
+            data = df_singles[f"single_P{m}_s{s}"]['Charge1'].values
+            hist, _ = np.histogram(data, bins=bin_edges)
+            histograms_yes_crosstalk[key] = hist
+
+    def compute_fraction_and_uncertainty(charge_edges, hist_no, hist_yes):
+        fraction_dict = {}
+        uncertainty_dict = {}
+
+        # We remove the last edge to match the histogram "counts" length:
+        x_vals = charge_edges[:-1]
+
+        for key in hist_no:
+            # Just for clarity
+            Nn = hist_no[key]   # 'no crosstalk' counts
+            Ny = hist_yes[key]  # 'yes crosstalk' counts
+            D = Nn + Ny         # denominator
+
+            # Fraction
+            with np.errstate(divide='ignore', invalid='ignore'):
+                f = (Nn - Ny) / D
+                # If D=0 => f -> undefined => set to 0
+                f[np.isnan(f)] = 0  
+
+            # Poisson errors for counts
+            sigma_Nn = np.sqrt(Nn)
+            sigma_Ny = np.sqrt(Ny)
+
+            # Partial derivatives
+            # df/dNn =  2*Ny / D^2
+            # df/dNy = -2*Nn / D^2
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df_dNn = 2 * Ny / (D**2)
+                df_dNy = -2 * Nn / (D**2)
+
+                # Total variance
+                sigma_f_sq = (df_dNn**2) * (sigma_Nn**2) + (df_dNy**2) * (sigma_Ny**2)
+                # If D=0, that might lead to NaN
+                sigma_f = np.sqrt(sigma_f_sq)
+                sigma_f[np.isnan(sigma_f)] = 0
+
+            fraction_dict[key] = f
+            uncertainty_dict[key] = sigma_f
+
+        return x_vals, fraction_dict, uncertainty_dict
+
+    # ---------------------------------------------------------------------
+    # Example usage to produce the 4x4 grid of plots:
+    # ---------------------------------------------------------------------
+
+    # 1. Compute fraction + uncertainty
+    x_vals, fraction_hist, frac_err = compute_fraction_and_uncertainty(
+        charge_vector,  # bin edges from your snippet
+        histograms_no_crosstalk,
+        histograms_yes_crosstalk
+    )
+
+    # 2. Plot in 4x4
+    fig, axs = plt.subplots(4, 4, figsize=(16, 12), sharex=True, sharey=True)
+    fig.suptitle(f"Crosstalk probability with Poisson Error Bands, mingo0{station}", fontsize=14)
+
+    for m in range(1, 5):
+        for s in range(1, 5):
+            ax = axs[m-1, s-1]
+            key = f"P{m}_s{s}"
+
+            y_vals = fraction_hist[key]
+            y_err  = frac_err[key]
+
+            ax.plot(x_vals, y_vals, label=key)
+            ax.fill_between(x_vals, y_vals - y_err, y_vals + y_err, alpha=0.3)
+            ax.set_ylim(0, 1)         # Because fraction can be negative if N_yes > N_no
+            ax.set_title(key)
+            ax.grid(True)
+
+    # Better spacing
+    for ax in axs[-1, :]:
+        ax.set_xlabel("Charge")
+    for ax in axs[:, 0]:
+        ax.set_ylabel("Probability")
+
+    # plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout()
+    figure_name = f"crosstalk_probability_mingo0{station}"
+    if save_plots:
+        name_of_file = figure_name
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots: plt.show()
+    plt.close()
+
+
+    # Fit a sigmoidal and store the fitting values to compare with temperature, etc.
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy.optimize import curve_fit
+    import pandas as pd
+    import os
+
+    # --- 1. Define 3-parameter sigmoid (bounded to [0,1]) ---
+    def sigmoid_3p(x, x0, k):
+        exp_arg = np.clip(-k * (x - x0), -500, 500)
+        return 1 / (1 + np.exp(exp_arg))
+
+    # --- 2. Compute fractions and uncertainties ---
+    x_vals, fraction_hist, frac_err = compute_fraction_and_uncertainty(
+        charge_vector,
+        histograms_no_crosstalk,
+        histograms_yes_crosstalk
+    )
+
+    fit_results = []
+
+    # --- 3. Plot and fit ---
+    fig, axs = plt.subplots(4, 4, figsize=(16, 12), sharex=True, sharey=True)
+    fig.suptitle(f"Crosstalk probability with Sigmoid Fit, mingo0{station}", fontsize=14)
+
+    for m in range(1, 5):
+        for s in range(1, 5):
+            ax = axs[m-1, s-1]
+            key = f"P{m}_s{s}"
+            y_vals_full = fraction_hist[key]
+            y_err_full  = frac_err[key]
+
+            # Restrict to x in [200, 1300]
+            domain_mask = (x_vals >= 200) & (x_vals <= 1300)
+            x_domain = x_vals[domain_mask]
+            y_vals = y_vals_full[domain_mask]
+            y_err  = y_err_full[domain_mask]
+
+            # Restrict further to transition region: y in [0.05, 0.95]
+            trans_mask = (y_vals > 0.05) & (y_vals < 0.95)
+            x_fit = x_domain[trans_mask]
+            y_fit = y_vals[trans_mask]
+            y_err_fit = y_err[trans_mask]
+
+            # Skip if too little data
+            if len(x_fit) < 5:
                 popt = [np.nan, np.nan]
+            else:
+                # Initial guess
+                x0_guess = x_fit[np.argmin(np.abs(y_fit - 0.5))]
+                k_guess = 0.05  # shallow initial slope
 
-        # --- 4. Store fit results ---
-        fit_results.append({
-            'key': key,
-            'x0': popt[0],
-            'k': popt[1]
-        })
+                try:
+                    popt, pcov = curve_fit(sigmoid_3p, x_fit, y_fit, p0=[x0_guess, k_guess],
+                                        sigma=np.where(y_err_fit == 0, 1e-6, y_err_fit),
+                                        absolute_sigma=True, maxfev=10000)
+                except RuntimeError:
+                    popt = [np.nan, np.nan]
 
-        # --- 5. Plot raw data ---
-        ax.plot(x_vals, y_vals_full, label=key)
-        ax.fill_between(x_vals, y_vals_full - y_err_full, y_vals_full + y_err_full, alpha=0.3)
-        ax.set_ylim(0, 1)
-        ax.set_title(key)
-        ax.grid(True)
+            # --- 4. Store fit results ---
+            fit_results.append({
+                'key': key,
+                'x0': popt[0],
+                'k': popt[1]
+            })
 
-        # --- 6. Plot sigmoid fit ---
-        if not np.any(np.isnan(popt)):
-            x_dense = np.linspace(200, 1300, 300)
-            y_dense = sigmoid_3p(x_dense, *popt)
-            ax.plot(x_dense, y_dense, 'r--', label='Sigmoid fit')
+            # --- 5. Plot raw data ---
+            ax.plot(x_vals, y_vals_full, label=key)
+            ax.fill_between(x_vals, y_vals_full - y_err_full, y_vals_full + y_err_full, alpha=0.3)
+            ax.set_ylim(0, 1)
+            ax.set_title(key)
+            ax.grid(True)
 
-# --- 7. Axis labels and layout ---
-for ax in axs[-1, :]:
-    ax.set_xlabel("Charge")
-for ax in axs[:, 0]:
-    ax.set_ylabel("Probability")
-axs[0, 0].legend()
+            # --- 6. Plot sigmoid fit ---
+            if not np.any(np.isnan(popt)):
+                x_dense = np.linspace(200, 1300, 300)
+                y_dense = sigmoid_3p(x_dense, *popt)
+                ax.plot(x_dense, y_dense, 'r--', label='Sigmoid fit')
 
-plt.tight_layout()
-figure_name = f"crosstalk_probability_mingo0{station}"
-if save_plots:
-    name_of_file = figure_name
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-if show_plots:
-    plt.show()
-plt.close()
+    # --- 7. Axis labels and layout ---
+    for ax in axs[-1, :]:
+        ax.set_xlabel("Charge")
+    for ax in axs[:, 0]:
+        ax.set_ylabel("Probability")
+    axs[0, 0].legend()
 
-# --- 8. Save fit results ---
-df_cross_fit = pd.DataFrame(fit_results)
-print(df_cross_fit)
+    plt.tight_layout()
+    figure_name = f"crosstalk_probability_mingo0{station}"
+    if save_plots:
+        name_of_file = figure_name
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+
+    # --- 8. Save fit results ---
+    df_cross_fit = pd.DataFrame(fit_results)
+    print(df_cross_fit)
 
 
-# ---------------------------------------------------------------------------
-# Spectral index and Georgy's efficiency calculations -----------------------
-# ---------------------------------------------------------------------------
+print("----------------------------------------------------------------------")
+print("------------- cos^n and Georgy's efficiency calculations -------------")
+print("----------------------------------------------------------------------")
 
-georgys = False
 if georgys:
 
     # Drop NaN values from theta
@@ -2606,43 +2386,51 @@ if georgys:
     plt.close()
 
 print("\n\n\n")
-print(df.columns)
+print(df.columns.to_list())
 
 
-# ---------------------------------------------------------------------------
-# Continue the analysis -----------------------------------------------------
-# ---------------------------------------------------------------------------
-
+print("----------------------------------------------------------------------")
 print("------------------------- Regions asigning ---------------------------")
+print("----------------------------------------------------------------------")
 
-print("Region assigning...")
+print("Original Region assigning...")
 df['region'] = df.apply(classify_region, axis=1)
 
 print("Hans' region assigning...")
 df['region_hans'] = df.apply(classify_region_hans, axis=1)
 
 # Clean type column
-print("Cleaning the type column...")
-df['type'] = df['type'].apply(clean_type_column)
+# print("Cleaning the type column...")
+# df['type'] = df['type'].apply(clean_type_column)
 
 
-print("--------------------- Derived metrics pre-aggregation ------------------------")
+print("----------------------------------------------------------------------")
+print("----------------- Derived metrics pre-aggregation --------------------")
+print("----------------------------------------------------------------------")
 
 # Derived metrics
 print("Derived metrics...")
 for i in range(1, 5):
-    df[f'Q_{i}'] = df[[f'Q_M{i}s{j}' for j in range(1, 5)]].sum(axis=1)
+    df[f'Q_{i}'] = df[[f'Q_P{i}s{j}' for j in range(1, 5)]].sum(axis=1)
     df[f'count_in_{i}'] = (df[f'Q_{i}'] != 0).astype(int)
     df[f'avalanche_{i}'] = ((df[f'Q_{i}'] != 0) & (df[f'Q_{i}'] < 100)).astype(int)
     df[f'streamer_{i}'] = (df[f'Q_{i}'] > 100).astype(int)
+
+
+# Streamer percentage
+for i in range(1, 5):
+    resampled_df[f"streamer_percent_{i}"] = (
+        (resampled_df[f"streamer_{i}"] / resampled_df[f"count_in_{i}"])
+        .fillna(0) * 100
+    )
+
 
 # ADD THE TOTAL CHARGE OF THE EVENT
 for i in range(1, 5):
     df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
 
-
 for i in range(1, 5):
-    cols = [f"Q_M{i}s{j}" for j in range(1, 5)]
+    cols = [f"Q_P{i}s{j}" for j in range(1, 5)]
     q = df[cols].copy()
     
     # Basic counts
@@ -2660,7 +2448,7 @@ for i in range(1, 5):
     barycenter = df[f"cluster_barycenter_{i}"]
     squared_diff = (strip_positions.reshape(1, -1) - barycenter.values[:, None]) ** 2
     weighted_squared = q.values * squared_diff
-    rms = np.sqrt(weighted_squared.sum(axis=1) / df[f"cluster_charge_{i}"].replace(0, np.nan))
+    rms = np.sqrt( abs( weighted_squared.sum(axis=1) / df[f"cluster_charge_{i}"].replace(0, np.nan) ) )
     df[f"cluster_rms_{i}"] = rms
 
 # Aggregate over all modules (i = 1 to 4)
@@ -2692,6 +2480,9 @@ for i in range(1, 5):
     q = df[f"cluster_charge_{i}"]
     bc = df[f"cluster_barycenter_{i}"]
     numerator += q * bc
+
+
+# Some plots of these calculations --------------------------------------------
 
 df["weighted_global_barycenter"] = numerator / charge_sum
 
@@ -2798,7 +2589,7 @@ if show_plots: plt.show()
 plt.close()
 
 
-# Topology --------------------------------------------------------------------------------
+# Topology --------------------------------------------------------------------
 
 df["topology"] = df[[f"cluster_size_{i}" for i in range(1, 5)]].astype(str).agg("".join, axis=1)
 
@@ -3004,215 +2795,9 @@ if show_plots:
 plt.close()
 
 
-# ---------------------------------------------------------------------------------------
-# ------------------------------ Passed type determination ------------------------------
-# ---------------------------------------------------------------------------------------
-
-z1 = z_positions[0]
-z2 = z_positions[1]
-z3 = z_positions[2]
-z4 = z_positions[3]
-
-# Take the x, y, theta, phi and z_positions and determine, if x, y are set in z1, if the trace
-# determined is inside the planes at the heights of z1, z2, z3 and z4
-# and if the trace is inside the planes, then we can say that the type is passed, and create a
-# column called passed and in the value of the column the planes it passed thrpugh, like 123 if passed trhough planes 1, 2 and 3,
-# 12 if passed through plane 1 and 2, and so on. z_positions is a configuration of the detector
-# and do not change, but x ,y, theta, phi are the values of the event, and they are selected with
-# df['x'], df['y'], df['theta'], df['phi']. A plane is determined, at a given z, by x being inside
-# -150, 150, and by y being inside -150, 150. Create a histogram with the number of counts per each label
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# Define z_positions for the detector planes
-z_positions = [z1, z2, z3, z4]  # Replace with actual z positions
-
-xlim = 190
-ylim = 190
-
-# Function to check if the trace at given z is inside the plane bounds
-def is_inside_plane(x, y):
-    global xlim, ylim
-    return -1*xlim <= x <= xlim and -1*ylim <= y <= ylim
-
-# Function to compute the x, y positions at a given z for a trace based on theta and phi
-def trace_at_z(x0, y0, theta, phi, z_pos):
-    # Calculate the distance the trace moves in the z direction
-    z_diff = z_pos
-    # Calculate the displacement in x and y based on the trace angle
-    x = x0 + z_diff * np.tan(theta) * np.cos(phi)
-    y = y0 + z_diff * np.tan(theta) * np.sin(phi)
-    return x, y
-
-# Initialize the dataframe (df) with x, y, theta, phi, assuming the dataframe exists
-# df['x'], df['y'], df['theta'], df['phi'] should already be in the dataframe
-
-# Function to determine which planes the trace passes through
-def determine_passed_planes(row, z_positions):
-    x0, y0, theta, phi = row['x'], row['y'], row['theta'], row['phi']
-    passed = []
-    
-    # Iterate through each z position and check if the trace passes through that plane
-    for i, z in enumerate(z_positions):
-        x, y = trace_at_z(x0, y0, theta, phi, z)
-        if is_inside_plane(x, y):
-            passed.append(str(i + 1))  # Plane labels are 1, 2, 3, 4
-            
-    return ''.join(passed) if passed else '0'  # '0' if no plane is passed
-
-# Apply the function to each row in the dataframe and create the 'passed' column
-df['passed'] = df.apply(lambda row: determine_passed_planes(row, z_positions), axis=1)
-
-# Create a histogram to count occurrences of each label in the 'passed' column
-passed_counts = df['passed'].value_counts().sort_index()
-
-# Plot the histogram
-plt.figure(figsize=(10, 6))
-plt.bar(passed_counts.index.astype(str), passed_counts.values)
-plt.xlabel('Planes Passed Through')
-plt.ylabel('Count')
-plt.title(f'Number of Events Passing Through Different Planes\nabs(X) < {xlim}, abs(Y) < {ylim}')
-
-if save_plots:
-    name_of_file = 'passed_type'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-
-if show_plots:
-    plt.show()
-plt.close()
-
-
-# ---------------------------------------------------------------------------------------------------
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# Define z_positions for the detector planes
-z_positions = [z1, z2, z3, z4]  # Replace with actual z positions
-
-xlim = 190
-ylim = 190
-
-# Function to check if the trace at given z is inside the plane bounds
-def is_inside_plane(x, y):
-    global xlim, ylim
-    return -1*xlim <= x <= xlim and -1*ylim <= y <= ylim
-
-# Function to compute the x, y positions at a given z for a trace based on theta and phi
-def trace_at_z(x0, y0, theta, phi, z_pos):
-    # Calculate the distance the trace moves in the z direction
-    z_diff = z_pos
-    # Calculate the displacement in x and y based on the trace angle
-    x = x0 + z_diff * np.tan(theta) * np.cos(phi)
-    y = y0 + z_diff * np.tan(theta) * np.sin(phi)
-    return x, y
-
-# Function to determine which planes the trace passes through
-def determine_passed_planes(row, z_positions):
-    x0, y0, theta, phi = row['x'], row['y'], row['theta'], row['phi']
-    passed = []
-    
-    # Iterate through each z position and check if the trace passes through that plane
-    for i, z in enumerate(z_positions):
-        x, y = trace_at_z(x0, y0, theta, phi, z)
-        if is_inside_plane(x, y):
-            passed.append(str(i + 1))  # Plane labels are 1, 2, 3, 4
-            
-    return ''.join(passed) if passed else '0'  # '0' if no plane is passed
-
-# Apply the function to each row in the dataframe and create the 'passed' column
-df['passed'] = df.apply(lambda row: determine_passed_planes(row, z_positions), axis=1)
-
-# Define charge windows (i_vals and j_vals) for charge cuts
-i_vals = np.arange(0, 21, 10)  # e.g., [0, 10]
-j_vals = np.arange(100, 301, 100)  # e.g., [90]
-
-# Plot configuration
-plt.figure(figsize=(12, 6))
-color_cycle = plt.cm.viridis(np.linspace(0, 1, len(i_vals) * len(j_vals)))
-
-k = 0  # color index
-for i_min in i_vals:
-    for j_max in j_vals:
-        # Define passed_label: '1' if charge in range (i_min, j_max) and passed through planes, else '0'
-        def compute_passed_label(row):
-            passed_label = ""
-            for m in range(1, 5):  # Check for each plane (Q_1 to Q_4)
-                charge_col = f"Q_{m}"  # Charge column names: Q_1, Q_2, Q_3, Q_4
-                if i_min <= row[charge_col] <= j_max:  # Check if the charge is within the cut for this plane
-                    label = determine_passed_planes(row, z_positions)
-                    if label:
-                        passed_label = label
-            return passed_label if passed_label else '0'  # '0' if no planes are passed or charge doesn't meet criteria
-
-        col_name = f"passed_label_{i_min}_{j_max}"
-        df[col_name] = df.apply(compute_passed_label, axis=1)
-
-        # Get normalized histogram
-        passed_counts = df[col_name].value_counts(normalize=False)
-        passed_counts = passed_counts[passed_counts.index != "0"]  # Exclude '0' label (not passing any planes)
-
-        if not passed_counts.empty:
-            # Prepare integer x-axis
-            x_vals = np.arange(len(passed_counts))
-            labels = passed_counts.index  # Binary or label strings for planes passed
-
-            # Plot bars
-            plt.bar(
-                x_vals,
-                passed_counts.values,
-                alpha=0.25,
-                color=color_cycle[k % len(color_cycle)],
-                edgecolor='black',
-                label=f"{i_min}–{j_max}"
-            )
-
-            # Plot connecting lines
-            plt.plot(
-                x_vals,
-                passed_counts.values,
-                alpha=0.75,
-                color=color_cycle[k % len(color_cycle)]
-            )
-
-            # Set the x-axis ticks to the label strings
-            plt.xticks(x_vals, labels, rotation=90)
-            k += 1
-
-# Final plot details
-plt.xlabel("Passed Planes (for given charge window)")
-plt.ylabel("Relative Frequency")
-plt.title(f'Number of Events Passing Through Different Planes\nabs(X) < {xlim}, abs(Y) < {ylim}')
-plt.xticks(rotation=90)
-plt.legend(title="Charge window (i–j)", bbox_to_anchor=(1.05, 1), loc='upper left')
-plt.tight_layout()
-plt.subplots_adjust(top=0.92)
-
-# Save or show the plot
-if save_plots:
-    name_of_file = 'passed_label_charge_windows'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-
-if show_plots:
-    plt.show()
-plt.close()
-
-
-
-
-
-print("------------------------- Aggregation and Poisson filtering ----------------------------")
+print("----------------------------------------------------------------------")
+print("----------------- Aggregation and Poisson filtering ------------------")
+print("----------------------------------------------------------------------")
 
 df['events'] = 1
 
@@ -3223,7 +2808,7 @@ agg_dict = {
     'y': [custom_mean, custom_std],
     'theta': [custom_mean, custom_std],
     'phi': [custom_mean, custom_std],
-    't0': [custom_mean, custom_std],
+    # 't0': [custom_mean, custom_std],
     's': [custom_mean, custom_std],
     'type': lambda x: pd.Series(x).value_counts().to_dict(),
     # 'new_type': lambda x: pd.Series(x).value_counts().to_dict(),
@@ -3319,10 +2904,12 @@ if remove_outliers:
             plt.savefig(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close()
+        
     # Now, if any value is outside of the tails of the poisson distribution, we can remove it
     # so obtain the extremes, obtain the seconds in which the values are outside of the distribution
     # and remove those seconds from a copy of the original df, so a new resampled_df can be created
     # with the new data
+    
     # Ensure 'events' is a flat Series
     events_series = resampled_second_df['events']
     # Count how many values fall below or above the bounds
@@ -3373,9 +2960,10 @@ if remove_outliers:
 else:
     resampled_df = df.resample('1min', on='Time').agg(agg_dict)
 
-# ----------------------------------------------------------------------
 
-print("------------------------- Some renaming ----------------------------")
+print("----------------------------------------------------------------------")
+print("--------------------------- Some renaming ----------------------------")
+print("----------------------------------------------------------------------")
 
 resampled_df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in resampled_df.columns.values]
 
@@ -3395,7 +2983,9 @@ resampled_df.rename(columns=lambda x: x.replace('custom_mean', 'mean').replace('
 resampled_df.rename(columns=lambda x: x.replace('_sum', ''), inplace=True)
 
 
-print("------------------------- Column aggregation ----------------------------")
+print("----------------------------------------------------------------------")
+print("------------------------ Column aggregation --------------------------")
+print("----------------------------------------------------------------------")
 
 # Region-specific count aggregation
 region_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region'])
@@ -3406,7 +2996,9 @@ region_hans_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region_hans'])
 resampled_df = resampled_df.join(region_hans_counts, how='left').fillna(0)
 
 
-print("------------------------- Counting types ----------------------------")
+print("----------------------------------------------------------------------")
+print("-------------------------- Counting types ----------------------------")
+print("----------------------------------------------------------------------")
 
 # Split 'type_<lambda>' dictionary into separate columns for each type
 if 'type_<lambda>' in resampled_df.columns:
@@ -3416,49 +3008,13 @@ if 'type_<lambda>' in resampled_df.columns:
     resampled_df.drop(columns=['type_<lambda>'], inplace=True)
 
 
-print("------------------------- More derived metrics ----------------------------")
-
-# Streamer percentage
-for i in range(1, 5):
-    resampled_df[f"streamer_percent_{i}"] = (
-        (resampled_df[f"streamer_{i}"] / resampled_df[f"count_in_{i}"])
-        .fillna(0) * 100
-    )
-
-# -----------------------------------------------------------------------------
-# Saving the file -------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
 print("----------------------------------------------------------------------")
-print("-------------------------- Saving and finishing ---------------------------")
 print("----------------------------------------------------------------------")
-
-
-# Polya fitting values
-print(df_polya_fit)
-
-# Crosstalk fitting
-print(df_cross_fit)
-
-# Multiplicity fitting
-print(df_mult_fit)
-
-
-print("-------------------------- Saving the file ---------------------------")
+print("----------------------- Saving and finishing -------------------------")
+print("----------------------------------------------------------------------")
+print("----------------------------------------------------------------------")
 
 resampled_df.reset_index(inplace=True)
-
-# Show the head and tail
-print(resampled_df.head())
-print(resampled_df.tail())
-
-# Print the columns
-print(resampled_df.columns)
-
-
-# -------------------------------------------------------------------
-
-import pandas as pd
 
 # --- Flatten df_polya_fit ---
 df_polya_flat = df_polya_fit.set_index('module').add_prefix('polya_')  # polya_module_1 → polya_theta, etc.
@@ -3486,16 +3042,45 @@ flat_all = pd.concat([flat_polya, flat_cross, flat_mult], axis=1)
 flat_all_repeated = pd.concat([flat_all] * len(resampled_df), ignore_index=True)
 resampled_df = pd.concat([resampled_df.reset_index(drop=True), flat_all_repeated], axis=1)
 
-print("\n\n-------------------------------------------------------------------------")
+
+print("----------------------------------------------------------------------")
+print("------------------------- Saving the data ----------------------------")
+print("----------------------------------------------------------------------")
+
 # Print the columns of resampled_df
+print("\n\n")
 print(resampled_df.columns.to_list())
-print(resampled_df)
+print("\n\n")
 
 resampled_df = resampled_df.applymap(round_to_significant_digits)
 
 # Save the newly created file to ACC_EVENTS_DIRECTORY --------------------------
-resampled_df.to_csv(save_path, sep=',', index=False)
-print(f"Saved data to file: {save_path}")
+resampled_df.to_csv(full_save_path, sep=',', index=False)
+print(f"Complete datafile saved in {full_save_filename}. Path is {full_save_path}")
+
+columns_to_keep = [
+    # Timestamp and identifiers
+    'Time'
+    # 'Time', 'original_tt', 'processed_tt', 'tracking_tt',
+
+    # # Summary metrics and quality flags
+    # 'CRT_avg', 'sigmoid_width', 'background_slope',
+    # 'one_side_events', 'purity_of_data_percentage',
+    # 'unc_y', 'unc_tsum', 'unc_tdif',
+
+    # # Alternative reconstruction outputs
+    # 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s', 'alt_th_chi',
+
+    # # TimTrack reconstruction outputs
+    # 'x', 'y', 'theta', 'phi', 's', 'th_chi',
+
+    # # Strip-level time and charge info (ordered by plane and strip)
+    # *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)]
+]
+
+reduced_df = resampled_df[columns_to_keep]
+reduced_df.to_csv(save_path, index=False, sep=',', float_format='%.5g')
+print(f"Reduced columns datafile saved in {save_filename}. Path is {save_path}")
 
 # Move the original file in file_path to completed_directory
 print("Moving file to COMPLETED directory...")
@@ -3503,9 +3088,10 @@ shutil.move(file_path, completed_file_path)
 print(f"File moved to: {completed_file_path}")
 
 
-print("-------------------------- Saving the PDF ---------------------------")
+print("----------------------------------------------------------------------")
+print("--------------------------- Saving the PDF ---------------------------")
+print("----------------------------------------------------------------------")
 
-# Create and save the PDF -----------------------------------------------------
 if create_pdf:
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
@@ -3535,3 +3121,5 @@ if create_pdf:
 if os.path.exists(figure_directory):
     print("Removing figure directory...")
     os.rmdir(figure_directory)
+
+print("event_accumulator.py finished.\n\n")
