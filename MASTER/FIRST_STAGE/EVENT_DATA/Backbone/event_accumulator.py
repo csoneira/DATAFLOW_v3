@@ -34,6 +34,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 from scipy.stats import poisson
 from scipy.optimize import minimize
 
@@ -197,25 +198,10 @@ for file_name in files_to_copy:
     except Exception as e:
         print(f"Failed to copy {file_name}: {e}")
 
+
 # -----------------------------------------------------------------------------
 # Functions -------------------------------------------------------------------
 # -----------------------------------------------------------------------------
-
-def classify_region(row):
-    phi = row['phi'] * 180 / np.pi  + row['phi_north'] # Convert phi to degrees
-    theta = row['theta'] * 180 / np.pi
-    if 0 <= theta < caye_high_mid_limit_angle:
-        return 'High'
-    elif caye_high_mid_limit_angle <= theta <= 90:
-        if -45 <= phi < 45:
-            return 'N'
-        elif 45 <= phi < 135:
-            return 'E'
-        elif -135 <= phi < -45:
-            return 'W'
-        else:
-            return 'S'
-
 
 # Hans' angular map division
 high_regions_hans = ['V']
@@ -511,6 +497,9 @@ else:
     df["P3-P4"] = 0
     df["phi_north"] = 0
 
+# Every phi_norht that is nan, put 0
+df['phi_north'] = df['phi_north'].fillna(0)
+
 # Adjust z_positions and print
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
@@ -520,15 +509,180 @@ z2 = z_positions[1]
 z3 = z_positions[2]
 z4 = z_positions[3]
 
-print(df.columns.to_list())
-
 # Rename every column that contains Q_M... for  Q_P...
 for col in df.columns:
     if "Q_M" in col:
         new_col = col.replace("Q_M", "Q_P")
         df.rename(columns={col: new_col}, inplace=True)
 
-print(df.columns.to_list())
+df['new_x'] = ( df['x'] + df['alt_x'] ) / 2
+df['new_y'] = ( df['y'] + df['alt_y'] ) / 2
+df['new_theta'] = ( df['theta'] + df['alt_theta'] ) / 2
+df['new_phi'] = ( df['phi'] + df['alt_phi'] ) / 2
+df['new_s'] = ( df['s'] + df['alt_s'] ) / 2
+df['new_th_chi'] = ( df['th_chi'] + df['alt_th_chi'] ) / 2
+
+
+def classify_region(row):
+    phi = row['new_phi'] * 180 / np.pi  + row['phi_north'] # Convert phi to degrees
+    theta = row['new_theta'] * 180 / np.pi
+    
+    phi = ((phi + 180) % 360) - 180
+    
+    if 0 < theta < caye_high_mid_limit_angle:
+        return 'High'
+    elif caye_high_mid_limit_angle <= theta <= 90:
+        if -45 <= phi < 45:
+            return 'N'
+        elif 45 <= phi < 135:
+            return 'E'
+        elif -135 <= phi < -45:
+            return 'W'
+        else:
+            return 'S'
+
+
+def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
+    global fig_idx
+    nrows, ncols = (2, 3) if figure_number == 1 else (3, 4)
+    
+    fig, axs = plt.subplots(nrows, ncols, figsize=(20, 5 * nrows), constrained_layout=True)
+    axs = axs.flatten()
+
+    # Define Gaussian function
+    def gaussian(x, mu, sigma, amplitude):
+        return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
+
+    # Precompute quantiles for faster filtering
+    if fit_gaussian:
+        quantile_bounds = {}
+        for col in columns:
+            data = df[col].values
+            data = data[data != 0]
+            if len(data) > 0:
+                quantile_bounds[col] = np.quantile(data, [(1 - quantile), quantile])
+
+    # Plot histograms and fit Gaussian if needed
+    for i, col in enumerate(columns):
+        
+        data = df[col].values
+        data = data[data != 0]  # Filter out zero values
+
+        if len(data) == 0:  # Skip if no data
+            axs[i].text(0.5, 0.5, "No data", transform=axs[i].transAxes, ha='center', va='center', color='gray')
+            continue
+
+        # Example color map per column type
+        color_map = {
+            "theta": "blue",
+            "phi": "green",
+            "x": "darkorange",
+            "y": "darkorange",
+            "alt_y": "darkorange",
+            "s": "purple",
+            "alt_s": "purple",
+            "th_chi": "red",
+            "res_ystr": "teal",
+            "res_tsum": "brown",
+            "res_tdif": "purple",
+            "t0": "black"
+        }
+
+        # Set default in case no match is found
+        selected_col = 'gray'
+
+        if "theta" in col:
+            left, right = 0, np.pi / 2
+            selected_col = color_map["theta"]
+
+        elif "phi" in col:
+            left, right = -np.pi, np.pi
+            selected_col = color_map["phi"]
+
+        elif "x" in col or col in ["y", "alt_y", "new_y"]:
+            left, right = -500, 500
+            selected_col = color_map["x"]
+
+        elif col in ["s", "alt_s", "new_s"]:
+            left, right = -0.01, 0.02
+            selected_col = color_map["s"]
+
+        elif "th_chi" in col:
+            left, right = 0, 10
+            selected_col = color_map["th_chi"]
+
+        elif "res_ystr" in col:
+            left, right = -100, 100
+            selected_col = color_map["res_ystr"]
+
+        elif "res_tsum" in col:
+            left, right = -1, 1
+            selected_col = color_map["res_tsum"]
+
+        elif "res_tdif" in col:
+            left, right = -0.3, 0.3
+            selected_col = color_map["res_tdif"]
+
+        elif "t0" in col:
+            left, right = -200, 0
+            selected_col = color_map["t0"]
+
+        # Plot histogram
+        hist_data, bin_edges, _ = axs[i].hist(data, bins='auto', alpha=0.7, label='Data', color=selected_col)
+
+        axs[i].set_title(col)
+        axs[i].set_xlabel('Value')
+        axs[i].set_ylabel('Frequency')
+        
+        axs[i].set_xlim([left, right])
+
+        # Fit Gaussian if enabled and data is sufficient
+        if fit_gaussian and len(data) >= 10:
+            try:
+                # Use precomputed quantile bounds
+                if col in quantile_bounds:
+                    lower_bound, upper_bound = quantile_bounds[col]
+                    filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
+
+                if len(filt_data) < 2:
+                    axs[i].text(0.5, 0.5, "Not enough data to fit", transform=axs[i].transAxes, ha='center', va='center', color='gray')
+                    continue
+
+                # Fit Gaussian to the histogram data
+                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filt_data), np.std(filt_data), max(hist_data)])
+                mu, sigma, amplitude = popt
+
+                # Plot Gaussian fit
+                x = np.linspace(lower_bound, upper_bound, 1000)
+                axs[i].plot(x, gaussian(x, mu, sigma, amplitude), 'r-', label=f'Gaussian Fit\nμ={mu:.2g}, σ={sigma:.2g}')
+                axs[i].legend()
+            except (RuntimeError, ValueError):
+                axs[i].text(0.5, 0.5, "Fit failed", transform=axs[i].transAxes, ha='center', va='center', color='red')
+
+    # Remove unused subplots
+    for j in range(i + 1, len(axs)):
+        fig.delaxes(axs[j])
+
+    plt.suptitle(title, fontsize=16)
+    if save_plots:
+        final_filename = f'{fig_idx}_{title.replace(" ", "_")}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+    
+columns = ['x', 'theta', 's', 'y', 'phi', 'th_chi']
+plot_histograms_and_gaussian(df, columns, "TimTrack Results", figure_number=1)
+
+columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
+plot_histograms_and_gaussian(df, columns, "Alternative Results", figure_number=1)
+
+columns = ['new_x', 'new_theta', 'new_s', 'new_y', 'new_phi', 'new_th_chi']
+plot_histograms_and_gaussian(df, columns, "Averaged Results", figure_number=1)
 
 
 print("----------------------------------------------------------------------")
@@ -608,7 +762,7 @@ if polya_fit:
         if remove_streamer:
             for col in merged_df.columns:
                 if "Q_" in col and "s" in col:
-                    merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)     
+                    merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
 
     columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
     merged_df = merged_df.drop(columns=columns_to_drop)
@@ -621,7 +775,6 @@ if polya_fit:
     total_charge = pd.DataFrame()
     for i in range(1, 5):
         total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
-
 
     import numpy as np
     import matplotlib.pyplot as plt
@@ -650,7 +803,7 @@ if polya_fit:
         data = data[data != 0] / q_e  # convert to e–
 
         # Histogram
-        counts, bin_edges = np.histogram(data, bins=100, range=(0, 1.1e7))
+        counts, bin_edges = np.histogram(data, bins=300, range=(0, 1.1e7))
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
         
         bin_center = bin_centers[counts >= 0.05 * max(counts)][0]
@@ -758,9 +911,6 @@ if real_strip_case_study:
     # Drop duplicates if necessary
     merged_df.drop_duplicates(inplace=True)
 
-    # Print the column names
-    print(merged_df.columns.to_list())
-
     FEE_calibration = {
         "Width": [
             0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
@@ -807,8 +957,6 @@ if real_strip_case_study:
 
     columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
     merged_df = merged_df.drop(columns=columns_to_drop)
-
-    print(merged_df.columns.to_list())
 
     # For all the columns apply the calibration and not change the name of the columns
     for col in merged_df.columns:
@@ -1146,7 +1294,6 @@ if real_strip_case_study:
     cases = ["real_single", "real_double", "real_triple", "real_quadruple"]
     modules = ["M1", "M2", "M3", "M4"]
 
-
     for case in cases:
         fig_rows = len(modules)
         max_columns = 0
@@ -1251,9 +1398,6 @@ if multiplicity_calculations:
     # Drop duplicates if necessary
     merged_df.drop_duplicates(inplace=True)
 
-    # Print the column names
-    print(merged_df.columns.to_list())
-
     FEE_calibration = {
         "Width": [
             0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
@@ -1315,8 +1459,6 @@ if multiplicity_calculations:
 
     columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
     merged_df = merged_df.drop(columns=columns_to_drop)
-
-    print(merged_df.columns.to_list())
 
     # For all the columns apply the calibration and not change the name of the columns
     for col in merged_df.columns:
@@ -1887,9 +2029,6 @@ if multiplicity_calculations:
         print(df_percent.to_string())  # Forces output in all environments
 
 
-    import matplotlib.pyplot as plt
-    import numpy as np
-
     # Module colors
     module_colors = ["r", "orange", "g", "b"]
 
@@ -1933,9 +2072,6 @@ if multiplicity_calculations:
 
     # Now, multiply each coefficient by the total number of events in the module and the type
     # then sum them all up asnd obtain for each module a coeff. vs total number plot
-
-    # Final plot: total number of events per component per module
-    import matplotlib.pyplot as plt
 
     components = [f"S{i}" for i in range(1, number_of_particles_bound_up + 1)]
     x = np.arange(len(components))
@@ -2350,40 +2486,157 @@ print("----------------------------------------------------------------------")
 print("------------- cos^n and Georgy's efficiency calculations -------------")
 print("----------------------------------------------------------------------")
 
+georgys = True
 if georgys:
+    
+    df_filtered = df.copy()
 
-    # Drop NaN values from theta
-    theta_clean = df["theta"].dropna()
+    tt_values = sorted(df_filtered['tracking_tt'].dropna().unique(), key=lambda x: int(x))
+    n_tt = len(tt_values)
+    ncols = 2
+    nrows = (n_tt + 1) // ncols
 
-    # Define intervals
-    in_0_pi2 = ((theta_clean > 0) & (theta_clean < np.pi / 2)).sum()
-    in_pi2_pi = ((theta_clean > np.pi / 2) & (theta_clean < np.pi)).sum()
-    total = len(theta_clean)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 5 * nrows), squeeze=False)
+    
+    nbins = 50
+    theta_bins = np.linspace(0, np.pi/2, nbins)
+    phi_bins = np.linspace(-np.pi, np.pi, nbins)
+    colors = plt.cm.viridis
 
-    # Compute percentages
-    pct_0_pi2 = 100 * in_0_pi2 / total
-    pct_pi2_pi = 100 * in_pi2_pi / total
+    for idx, tt_val in enumerate(tt_values):
+        row_idx, col_idx = divmod(idx, ncols)
+        ax = axes[row_idx][col_idx]
+        
+        df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
+        theta_vals = df_tt['new_theta'].dropna()
+        phi_vals = df_tt['new_phi'].dropna()
 
-    print(f"θ ∈ (0, π/2):  {pct_0_pi2:.2f}% of events")
-    print(f"θ ∈ (π/2, π):  {pct_pi2_pi:.2f}% of events")
+        if len(theta_vals) < 10 or len(phi_vals) < 10:
+            ax.set_visible(False)
+            continue
 
-    plt.figure(figsize=(8, 5))
-    plt.hist(df["theta"].dropna(), bins=200, alpha=0.7)
-    plt.xlabel("Theta (rad)")
-    plt.ylabel("Counts")
-    plt.title("Histogram of θ")
-    plt.grid(True)
-    plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
-    plt.tight_layout()
+        h = ax.hist2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins], cmap='viridis', norm=mpl.colors.LogNorm())
+        ax.set_title(f'tracking_tt = {tt_val}')
+        ax.set_xlabel(r'$\theta$ [rad]')
+        ax.set_ylabel(r'$\phi$ [rad]')
+        ax.grid(True)
+
+        fig.colorbar(h[3], ax=ax, label='Counts')
+
+    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each tracking_tt Type', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
     if save_plots:
-        name_of_file = 'theta'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
+        final_filename = f'{fig_idx}_theta_phi_tracking_tt_2D.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-    if show_plots: plt.show()
+
+    if show_plots:
+        plt.show()
     plt.close()
+    
+    
+    
+    df_filtered = df.copy()
+
+    tt_values = sorted(df_filtered['processed_tt'].dropna().unique(), key=lambda x: int(x))
+    n_tt = len(tt_values)
+    ncols = 2
+    nrows = (n_tt + 1) // ncols
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 5 * nrows), squeeze=False)
+    
+    nbins = 50
+    theta_bins = np.linspace(0, np.pi/2, nbins)
+    phi_bins = np.linspace(-np.pi, np.pi, nbins)
+    colors = plt.cm.viridis
+
+    for idx, tt_val in enumerate(tt_values):
+        row_idx, col_idx = divmod(idx, ncols)
+        ax = axes[row_idx][col_idx]
+        
+        df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
+        theta_vals = df_tt['new_theta'].dropna()
+        phi_vals = df_tt['new_phi'].dropna()
+
+        if len(theta_vals) < 10 or len(phi_vals) < 10:
+            ax.set_visible(False)
+            continue
+
+        h = ax.hist2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins], cmap='viridis', norm=mpl.colors.LogNorm())
+        ax.set_title(f'processed_tt = {tt_val}')
+        ax.set_xlabel(r'$\theta$ [rad]')
+        ax.set_ylabel(r'$\phi$ [rad]')
+        ax.grid(True)
+
+        fig.colorbar(h[3], ax=ax, label='Counts')
+
+    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each processed_tt Type', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    if save_plots:
+        final_filename = f'{fig_idx}_theta_phi_processed_tt_2D.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots:
+        plt.show()
+    plt.close()
+    
+    
+    
+    df_filtered = df.copy()
+
+    tt_values = sorted(df_filtered['original_tt'].dropna().unique(), key=lambda x: int(x))
+    n_tt = len(tt_values)
+    ncols = 2
+    nrows = (n_tt + 1) // ncols
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 5 * nrows), squeeze=False)
+    
+    nbins = 50
+    theta_bins = np.linspace(0, np.pi/2, nbins)
+    phi_bins = np.linspace(-np.pi, np.pi, nbins)
+    colors = plt.cm.viridis
+
+    for idx, tt_val in enumerate(tt_values):
+        row_idx, col_idx = divmod(idx, ncols)
+        ax = axes[row_idx][col_idx]
+        
+        df_tt = df_filtered[df_filtered['original_tt'] == tt_val]
+        theta_vals = df_tt['new_theta'].dropna()
+        phi_vals = df_tt['new_phi'].dropna()
+
+        if len(theta_vals) < 10 or len(phi_vals) < 10:
+            ax.set_visible(False)
+            continue
+
+        h = ax.hist2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins], cmap='viridis', norm=mpl.colors.LogNorm())
+        ax.set_title(f'original_tt = {tt_val}')
+        ax.set_xlabel(r'$\theta$ [rad]')
+        ax.set_ylabel(r'$\phi$ [rad]')
+        ax.grid(True)
+
+        fig.colorbar(h[3], ax=ax, label='Counts')
+
+    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each original_tt Type', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    if save_plots:
+        final_filename = f'{fig_idx}_theta_phi_original_tt_2D.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots:
+        plt.show()
+    plt.close()
+
 
 print("\n\n\n")
 print(df.columns.to_list())
@@ -2393,15 +2646,62 @@ print("----------------------------------------------------------------------")
 print("------------------------- Regions asigning ---------------------------")
 print("----------------------------------------------------------------------")
 
+# columns = ['x', 'theta', 's', 'y', 'phi', 'th_chi']
+# plot_histograms_and_gaussian(df, columns, "TimTrack Results pre-classification", figure_number=1)
+
 print("Original Region assigning...")
 df['region'] = df.apply(classify_region, axis=1)
+print(df['region'].value_counts())
 
-print("Hans' region assigning...")
-df['region_hans'] = df.apply(classify_region_hans, axis=1)
+# print("Hans' region assigning...")
+# df['region_hans'] = df.apply(classify_region_hans, axis=1)
 
 # Clean type column
 # print("Cleaning the type column...")
 # df['type'] = df['type'].apply(clean_type_column)
+
+new_region_assigning = False
+
+if new_region_assigning:
+    print("New Region assigning...")
+    # Parameters
+    n_theta = 9  # number of bins in theta (0 to 90)
+    n_phi = 18    # number of bins in phi (-180 to 180)
+    r_theta = 10  # angular radius in degrees
+    r_phi = 20    # angular radius in degrees
+
+    # Convert angles
+    df['theta_deg'] = df['new_theta'] * 180 / np.pi
+    df['phi_deg'] = (df['new_phi'] * 180 / np.pi + df['phi_north']) % 360
+    df['phi_deg'] = df['phi_deg'].apply(lambda x: x if x <= 180 else x - 360)  # keep in [-180, 180]
+
+    # Define center points
+    theta_centers = np.linspace(0, 90, n_theta)
+    phi_centers = np.linspace(-180, 180, n_phi, endpoint=False)
+
+    # Storage
+    region_matrix = {}
+
+    # Build regions
+    for i, theta_c in enumerate(theta_centers):
+        for j, phi_c in enumerate(phi_centers):
+            theta_min = theta_c - r_theta
+            theta_max = theta_c + r_theta
+            phi_min = (phi_c - r_phi + 180) % 360 - 180
+            phi_max = (phi_c + r_phi + 180) % 360 - 180
+
+            # Handle cyclic phi distance
+            delta_phi = np.abs((df['phi_deg'] - phi_c + 180) % 360 - 180)
+            in_phi = delta_phi <= r_phi
+            in_theta = (df['theta_deg'] >= theta_min) & (df['theta_deg'] <= theta_max)
+
+            # Column name with clean formatting
+            col_name = f"new_region_theta_{theta_min:.1f}_{theta_max:.1f}_phi_{phi_min:.1f}_{phi_max:.1f}"
+            region_matrix[col_name] = (in_theta & in_phi).astype(int)
+
+    # Merge to original DataFrame
+    region_df = pd.DataFrame(region_matrix, index=df.index)
+    df = pd.concat([df, region_df], axis=1)
 
 
 print("----------------------------------------------------------------------")
@@ -2412,387 +2712,378 @@ print("----------------------------------------------------------------------")
 print("Derived metrics...")
 for i in range(1, 5):
     df[f'Q_{i}'] = df[[f'Q_P{i}s{j}' for j in range(1, 5)]].sum(axis=1)
-    df[f'count_in_{i}'] = (df[f'Q_{i}'] != 0).astype(int)
-    df[f'avalanche_{i}'] = ((df[f'Q_{i}'] != 0) & (df[f'Q_{i}'] < 100)).astype(int)
+    df[f'count_in_{i}'] = (df[f'Q_{i}'] > 0).astype(int)
     df[f'streamer_{i}'] = (df[f'Q_{i}'] > 100).astype(int)
-
 
 # Streamer percentage
 for i in range(1, 5):
-    resampled_df[f"streamer_percent_{i}"] = (
-        (resampled_df[f"streamer_{i}"] / resampled_df[f"count_in_{i}"])
+    df[f"streamer_percent_{i}"] = (
+        (df[f"streamer_{i}"] / df[f"count_in_{i}"])
         .fillna(0) * 100
     )
 
+df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
 
-# ADD THE TOTAL CHARGE OF THE EVENT
-for i in range(1, 5):
-    df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
-
-for i in range(1, 5):
-    cols = [f"Q_P{i}s{j}" for j in range(1, 5)]
-    q = df[cols].copy()
+# for i in range(1, 5):
+#     cols = [f"Q_P{i}s{j}" for j in range(1, 5)]
+#     q = df[cols].copy()
     
-    # Basic counts
-    df[f"cluster_size_{i}"] = (q > 0).sum(axis=1)
-    df[f"cluster_charge_{i}"] = q.sum(axis=1)
-    df[f"cluster_max_q_{i}"] = q.max(axis=1)
-    df[f"cluster_q_ratio_{i}"] = df[f"cluster_max_q_{i}"] / df[f"cluster_charge_{i}"].replace(0, np.nan)
+#     # Basic counts
+#     df[f"cluster_size_{i}"] = (q > 0).sum(axis=1)
+#     df[f"cluster_charge_{i}"] = q.sum(axis=1)
+#     df[f"cluster_max_q_{i}"] = q.max(axis=1)
+#     df[f"cluster_q_ratio_{i}"] = df[f"cluster_max_q_{i}"] / df[f"cluster_charge_{i}"].replace(0, np.nan)
 
-    # Charge-weighted barycenter
-    strip_positions = np.array([1, 2, 3, 4])
-    weighted_sum = (q * strip_positions).sum(axis=1)
-    df[f"cluster_barycenter_{i}"] = weighted_sum / df[f"cluster_charge_{i}"].replace(0, np.nan)
+#     # Charge-weighted barycenter
+#     strip_positions = np.array([1, 2, 3, 4])
+#     weighted_sum = (q * strip_positions).sum(axis=1)
+#     df[f"cluster_barycenter_{i}"] = weighted_sum / df[f"cluster_charge_{i}"].replace(0, np.nan)
 
-    # Charge-weighted RMS
-    barycenter = df[f"cluster_barycenter_{i}"]
-    squared_diff = (strip_positions.reshape(1, -1) - barycenter.values[:, None]) ** 2
-    weighted_squared = q.values * squared_diff
-    rms = np.sqrt( abs( weighted_squared.sum(axis=1) / df[f"cluster_charge_{i}"].replace(0, np.nan) ) )
-    df[f"cluster_rms_{i}"] = rms
+#     # Charge-weighted RMS
+#     barycenter = df[f"cluster_barycenter_{i}"]
+#     squared_diff = (strip_positions.reshape(1, -1) - barycenter.values[:, None]) ** 2
+#     weighted_squared = q.values * squared_diff
+#     rms = np.sqrt( abs( weighted_squared.sum(axis=1) / df[f"cluster_charge_{i}"].replace(0, np.nan) ) )
+#     df[f"cluster_rms_{i}"] = rms
 
-# Aggregate over all modules (i = 1 to 4)
-cluster_size_cols = [f"cluster_size_{i}" for i in range(1, 5)]
-cluster_charge_cols = [f"cluster_charge_{i}" for i in range(1, 5)]
-cluster_rms_cols = [f"cluster_rms_{i}" for i in range(1, 5)]
-cluster_barycenter_cols = [f"cluster_barycenter_{i}" for i in range(1, 5)]
+# # Aggregate over all modules (i = 1 to 4)
+# cluster_size_cols = [f"cluster_size_{i}" for i in range(1, 5)]
+# cluster_charge_cols = [f"cluster_charge_{i}" for i in range(1, 5)]
+# cluster_rms_cols = [f"cluster_rms_{i}" for i in range(1, 5)]
+# cluster_barycenter_cols = [f"cluster_barycenter_{i}" for i in range(1, 5)]
 
-# Mean cluster size
-df["mean_cluster_size"] = df[cluster_size_cols].mean(axis=1)
+# # Mean cluster size
+# df["mean_cluster_size"] = df[cluster_size_cols].mean(axis=1)
 
-# Mean cluster size weighted by module charge
-charge_sum = df[cluster_charge_cols].sum(axis=1).replace(0, np.nan)
-weighted_cluster_size = (df[cluster_size_cols].values * df[cluster_charge_cols].values).sum(axis=1)
-df["mean_cluster_size_weighted_q"] = weighted_cluster_size / charge_sum
+# # Mean cluster size weighted by module charge
+# charge_sum = df[cluster_charge_cols].sum(axis=1).replace(0, np.nan)
+# weighted_cluster_size = (df[cluster_size_cols].values * df[cluster_charge_cols].values).sum(axis=1)
+# df["mean_cluster_size_weighted_q"] = weighted_cluster_size / charge_sum
 
-# Total cluster charge
-df["total_cluster_charge"] = df[cluster_charge_cols].sum(axis=1)
+# # Total cluster charge
+# df["total_cluster_charge"] = df[cluster_charge_cols].sum(axis=1)
 
-# Maximum RMS
-df["max_cluster_rms"] = df[cluster_rms_cols].max(axis=1)
+# # Maximum RMS
+# df["max_cluster_rms"] = df[cluster_rms_cols].max(axis=1)
 
-# Minimum barycenter (across modules)
-df["min_cluster_barycenter"] = df[cluster_barycenter_cols].min(axis=1)
+# # Minimum barycenter (across modules)
+# df["min_cluster_barycenter"] = df[cluster_barycenter_cols].min(axis=1)
 
-# Charge-weighted global barycenter across modules
-numerator = np.zeros(len(df))
-for i in range(1, 5):
-    q = df[f"cluster_charge_{i}"]
-    bc = df[f"cluster_barycenter_{i}"]
-    numerator += q * bc
-
-
-# Some plots of these calculations --------------------------------------------
-
-df["weighted_global_barycenter"] = numerator / charge_sum
-
-print(df.columns)
-
-# --- Collect relevant column groups ---
-per_module_cols = []
-for i in range(1, 5):
-    per_module_cols += [
-        f"cluster_size_{i}",
-        f"cluster_charge_{i}",
-        # f"cluster_max_q_{i}",
-        f"cluster_q_ratio_{i}",
-        f"cluster_barycenter_{i}",
-        f"cluster_rms_{i}",
-        # f"Q_{i}",
-        # f"avalanche_{i}",
-        # f"streamer_{i}",
-    ]
-
-event_level_cols = [
-    # "Q_event",
-    "mean_cluster_size",
-    "mean_cluster_size_weighted_q",
-    "total_cluster_charge",
-    "max_cluster_rms",
-    "min_cluster_barycenter",
-    "weighted_global_barycenter",
-]
+# # Charge-weighted global barycenter across modules
+# numerator = np.zeros(len(df))
+# for i in range(1, 5):
+#     q = df[f"cluster_charge_{i}"]
+#     bc = df[f"cluster_barycenter_{i}"]
+#     numerator += q * bc
 
 
-# --- Plot histograms module-wise ---
+# # Some plots of these calculations --------------------------------------------
+# df["weighted_global_barycenter"] = numerator / charge_sum
+# print(df.columns)
 
-all_metrics = per_module_cols
-all_metrics = sorted(all_metrics)
+# # --- Collect relevant column groups ---
+# per_module_cols = []
+# for i in range(1, 5):
+#     per_module_cols += [
+#         f"cluster_size_{i}",
+#         f"cluster_charge_{i}",
+#         # f"cluster_max_q_{i}",
+#         f"cluster_q_ratio_{i}",
+#         f"cluster_barycenter_{i}",
+#         f"cluster_rms_{i}",
+#         # f"Q_{i}",
+#         # f"avalanche_{i}",
+#         # f"streamer_{i}",
+#     ]
 
-ncols = 4
-nrows = (len(all_metrics) + ncols - 1) // ncols
-
-fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
-axes = axes.flatten()
-
-for i, col in enumerate(all_metrics):
-    if col in df.columns:
-        ax = axes[i]
-        data = df[col]
-        data = data[np.isfinite(data)]  # drop NaNs
-        ax.hist(data, bins=50, alpha=0.7)
-        ax.set_title(col.replace('_', ' '))
-        ax.set_xlabel('Value')
-        ax.set_ylabel('Entries')
-
-# Hide unused subplots
-for j in range(i+1, len(axes)):
-    axes[j].axis('off')
-
-plt.tight_layout()
-plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
-if save_plots:
-    name_of_file = 'charge_statistics_per_module'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-if show_plots: plt.show()
-plt.close()
-
-# --- Plot histograms event-wise ---
-
-all_metrics = event_level_cols
-all_metrics = sorted(all_metrics)
-
-ncols = 4
-nrows = (len(all_metrics) + ncols - 1) // ncols
-
-fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
-axes = axes.flatten()
-
-for i, col in enumerate(all_metrics):
-    if col in df.columns:
-        ax = axes[i]
-        data = df[col]
-        data = data[np.isfinite(data)]  # drop NaNs
-        ax.hist(data, bins=50, alpha=0.7)
-        ax.set_title(col.replace('_', ' '))
-        ax.set_xlabel('Value')
-        ax.set_ylabel('Entries')
-
-# Hide unused subplots
-for j in range(i+1, len(axes)):
-    axes[j].axis('off')
-
-plt.tight_layout()
-plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
-if save_plots:
-    name_of_file = 'charge_statistics_global'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-if show_plots: plt.show()
-plt.close()
+# event_level_cols = [
+#     # "Q_event",
+#     "mean_cluster_size",
+#     "mean_cluster_size_weighted_q",
+#     "total_cluster_charge",
+#     "max_cluster_rms",
+#     "min_cluster_barycenter",
+#     "weighted_global_barycenter",
+# ]
 
 
-# Topology --------------------------------------------------------------------
+# all_metrics = per_module_cols
+# all_metrics = sorted(all_metrics)
 
-df["topology"] = df[[f"cluster_size_{i}" for i in range(1, 5)]].astype(str).agg("".join, axis=1)
+# ncols = 4
+# nrows = (len(all_metrics) + ncols - 1) // ncols
 
-topology_counts = df["topology"].value_counts(normalize=True)
-topology_filtered = topology_counts[topology_counts >= 0.001]  # keep ≥ 0.1%
+# fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
+# axes = axes.flatten()
 
-# Plot
-plt.figure(figsize=(12, 6)) 
-plt.bar(topology_filtered.index, topology_filtered.values)
-plt.xlabel("Topology (cluster sizes per plane)")
-plt.ylabel("Number of Events")
-plt.title("Event Topology Frequency Histogram")
-plt.xticks(rotation=90)
-plt.tight_layout()
-plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
-if save_plots:
-    name_of_file = 'topology'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-if show_plots: plt.show()
-plt.close()
+# for i, col in enumerate(all_metrics):
+#     if col in df.columns:
+#         ax = axes[i]
+#         data = df[col]
+#         data = data[np.isfinite(data)]  # drop NaNs
+#         ax.hist(data, bins=50, alpha=0.7)
+#         ax.set_title(col.replace('_', ' '))
+#         ax.set_xlabel('Value')
+#         ax.set_ylabel('Entries')
+
+# # Hide unused subplots
+# for j in range(i+1, len(axes)):
+#     axes[j].axis('off')
+
+# plt.tight_layout()
+# plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
+# if save_plots:
+#     name_of_file = 'charge_statistics_per_module'
+#     final_filename = f'{fig_idx}_{name_of_file}.png'
+#     fig_idx += 1
+#     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#     plot_list.append(save_fig_path)
+#     plt.savefig(save_fig_path, format='png')
+# if show_plots: plt.show()
+# plt.close()
+
+# # --- Plot histograms event-wise ---
+
+# all_metrics = event_level_cols
+# all_metrics = sorted(all_metrics)
+
+# ncols = 4
+# nrows = (len(all_metrics) + ncols - 1) // ncols
+
+# fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
+# axes = axes.flatten()
+
+# for i, col in enumerate(all_metrics):
+#     if col in df.columns:
+#         ax = axes[i]
+#         data = df[col]
+#         data = data[np.isfinite(data)]  # drop NaNs
+#         ax.hist(data, bins=50, alpha=0.7)
+#         ax.set_title(col.replace('_', ' '))
+#         ax.set_xlabel('Value')
+#         ax.set_ylabel('Entries')
+
+# # Hide unused subplots
+# for j in range(i+1, len(axes)):
+#     axes[j].axis('off')
+
+# plt.tight_layout()
+# plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
+# if save_plots:
+#     name_of_file = 'charge_statistics_global'
+#     final_filename = f'{fig_idx}_{name_of_file}.png'
+#     fig_idx += 1
+#     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#     plot_list.append(save_fig_path)
+#     plt.savefig(save_fig_path, format='png')
+# if show_plots: plt.show()
+# plt.close()
 
 
-# Topology per charges --------------------------------------------------------------------------------
+# # Topology --------------------------------------------------------------------
 
-i_vals = np.arange(0, 21, 10)     # From 0 to 80 in steps of 20
-j_vals = [90]  # Only the value 100
+# df["topology"] = df[[f"cluster_size_{i}" for i in range(1, 5)]].astype(str).agg("".join, axis=1)
 
-plt.figure(figsize=(12, 6))
-color_cycle = plt.cm.viridis(np.linspace(0, 1, len(i_vals) * len(j_vals)))
+# topology_counts = df["topology"].value_counts(normalize=True)
+# topology_filtered = topology_counts[topology_counts >= 0.001]  # keep ≥ 0.1%
 
-k = 0  # color index
-for i_min in i_vals:
-    for j_max in j_vals:
-        # Define topology_i_j as a 4-digit string based on charge cuts
-        def compute_topology(row):
-            topology_digits = []
-            for m in range(1, 5):
-                q = row[f"Q_{m}"]
-                s = row[f"cluster_size_{m}"]
-                digit = str(s) if i_min <= q <= j_max else "0"
-                topology_digits.append(digit)
-            return "".join(topology_digits)
+# # Plot
+# plt.figure(figsize=(12, 6)) 
+# plt.bar(topology_filtered.index, topology_filtered.values)
+# plt.xlabel("Topology (cluster sizes per plane)")
+# plt.ylabel("Number of Events")
+# plt.title("Event Topology Frequency Histogram")
+# plt.xticks(rotation=90)
+# plt.tight_layout()
+# plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
+# if save_plots:
+#     name_of_file = 'topology'
+#     final_filename = f'{fig_idx}_{name_of_file}.png'
+#     fig_idx += 1
+#     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#     plot_list.append(save_fig_path)
+#     plt.savefig(save_fig_path, format='png')
+# if show_plots: plt.show()
+# plt.close()
 
-        col_name = f"topology_{i_min}_{j_max}"
-        df[col_name] = df.apply(compute_topology, axis=1)
 
-        # Get normalized histogram
-        topo_counts = df[col_name].value_counts(normalize=True)
-        topo_counts = topo_counts[topo_counts >= 0.001]
-        topo_counts = topo_counts[topo_counts.index != "0000"]
-        topo_counts = topo_counts[topo_counts.index.map(lambda x: sum(c != '0' for c in x) > 1)]
+# # Topology per charges --------------------------------------------------------------------------------
+
+# i_vals = np.arange(0, 21, 10)     # From 0 to 80 in steps of 20
+# j_vals = [90]  # Only the value 100
+
+# plt.figure(figsize=(12, 6))
+# color_cycle = plt.cm.viridis(np.linspace(0, 1, len(i_vals) * len(j_vals)))
+
+# k = 0  # color index
+# for i_min in i_vals:
+#     for j_max in j_vals:
+#         # Define topology_i_j as a 4-digit string based on charge cuts
+#         def compute_topology(row):
+#             topology_digits = []
+#             for m in range(1, 5):
+#                 q = row[f"Q_{m}"]
+#                 s = row[f"cluster_size_{m}"]
+#                 digit = str(s) if i_min <= q <= j_max else "0"
+#                 topology_digits.append(digit)
+#             return "".join(topology_digits)
+
+#         col_name = f"topology_{i_min}_{j_max}"
+#         df[col_name] = df.apply(compute_topology, axis=1)
+
+#         # Get normalized histogram
+#         topo_counts = df[col_name].value_counts(normalize=True)
+#         topo_counts = topo_counts[topo_counts >= 0.001]
+#         topo_counts = topo_counts[topo_counts.index != "0000"]
+#         topo_counts = topo_counts[topo_counts.index.map(lambda x: sum(c != '0' for c in x) > 1)]
         
-        if not topo_counts.empty:
-            # Prepare integer x-axis
-            x_vals = np.arange(len(topo_counts))
-            labels = topo_counts.index  # topology strings
+#         if not topo_counts.empty:
+#             # Prepare integer x-axis
+#             x_vals = np.arange(len(topo_counts))
+#             labels = topo_counts.index  # topology strings
 
-            # Plot bars
-            plt.bar(
-                x_vals,
-                topo_counts.values,
-                alpha=0.25,
-                color=color_cycle[k % len(color_cycle)],
-                edgecolor='black',
-                label=f"{i_min}–{j_max}"
-            )
+#             # Plot bars
+#             plt.bar(
+#                 x_vals,
+#                 topo_counts.values,
+#                 alpha=0.25,
+#                 color=color_cycle[k % len(color_cycle)],
+#                 edgecolor='black',
+#                 label=f"{i_min}–{j_max}"
+#             )
 
-            # Plot connecting lines
-            plt.plot(
-                x_vals,
-                topo_counts.values,
-                alpha=0.75,
-                color=color_cycle[k % len(color_cycle)]
-            )
+#             # Plot connecting lines
+#             plt.plot(
+#                 x_vals,
+#                 topo_counts.values,
+#                 alpha=0.75,
+#                 color=color_cycle[k % len(color_cycle)]
+#             )
 
-            # Set the x-axis ticks to the topology strings
-            plt.xticks(x_vals, labels, rotation=90)
-            k += 1
+#             # Set the x-axis ticks to the topology strings
+#             plt.xticks(x_vals, labels, rotation=90)
+#             k += 1
 
-plt.xlabel("Topology (cluster sizes per plane)")
-plt.ylabel("Relative Frequency")
-plt.title("Overlaid Topology Histograms for Charge Windows")
-plt.xticks(rotation=90)
-plt.legend(title="Q window (i–j)", bbox_to_anchor=(1.05, 1), loc='upper left')
-plt.tight_layout()
-plt.subplots_adjust(top=0.92)
+# plt.xlabel("Topology (cluster sizes per plane)")
+# plt.ylabel("Relative Frequency")
+# plt.title("Overlaid Topology Histograms for Charge Windows")
+# plt.xticks(rotation=90)
+# plt.legend(title="Q window (i–j)", bbox_to_anchor=(1.05, 1), loc='upper left')
+# plt.tight_layout()
+# plt.subplots_adjust(top=0.92)
 
-if save_plots:
-    name_of_file = 'topology_charge_windows'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-if show_plots:
-    plt.show()
-plt.close()
-
-
-# Binary topology --------------------------------------------------------------------------------
-
-df["binary_topology"] = (df[[f"cluster_size_{i}" for i in range(1, 5)]] > 0).astype(int).astype(str).agg("".join, axis=1)
-
-topology_counts = df["binary_topology"].value_counts(normalize=True)
-topology_filtered = topology_counts[topology_counts >= 0.00000001]  # keep ≥ 0.1%
-
-# Plot
-plt.figure(figsize=(12, 6)) 
-plt.bar(topology_filtered.index, topology_filtered.values)
-plt.xlabel("Topology (cluster sizes per plane)")
-plt.ylabel("Number of Events")
-plt.title("Event Topology Frequency Histogram")
-plt.xticks(rotation=90)
-plt.tight_layout()
-plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
-if save_plots:
-    name_of_file = 'binary_topology'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-if show_plots: plt.show()
-plt.close()
+# if save_plots:
+#     name_of_file = 'topology_charge_windows'
+#     final_filename = f'{fig_idx}_{name_of_file}.png'
+#     fig_idx += 1
+#     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#     plot_list.append(save_fig_path)
+#     plt.savefig(save_fig_path, format='png')
+# if show_plots:
+#     plt.show()
+# plt.close()
 
 
-# Binary Topology per charges --------------------------------------------------------------------------------
+# # Binary topology --------------------------------------------------------------------------------
 
-i_vals = np.arange(0, 21, 10)  # e.g., [0, 10]
-j_vals = [300]                 # e.g., [90]
+# df["binary_topology"] = (df[[f"cluster_size_{i}" for i in range(1, 5)]] > 0).astype(int).astype(str).agg("".join, axis=1)
 
-plt.figure(figsize=(12, 6))
-color_cycle = plt.cm.viridis(np.linspace(0, 1, len(i_vals) * len(j_vals)))
+# topology_counts = df["binary_topology"].value_counts(normalize=True)
+# topology_filtered = topology_counts[topology_counts >= 0.00000001]  # keep ≥ 0.1%
 
-k = 0  # color index
-for i_min in i_vals:
-    for j_max in j_vals:
-        # Define binary_topology_i_j: '1' if Q in range and cluster_size > 0, else '0'
-        def compute_binary_topology(row):
-            return "".join(
-                ['1' if (i_min <= row[f"Q_{m}"] <= j_max and row[f"cluster_size_{m}"] > 0) else '0'
-                 for m in range(1, 5)]
-            )
+# # Plot
+# plt.figure(figsize=(12, 6)) 
+# plt.bar(topology_filtered.index, topology_filtered.values)
+# plt.xlabel("Topology (cluster sizes per plane)")
+# plt.ylabel("Number of Events")
+# plt.title("Event Topology Frequency Histogram")
+# plt.xticks(rotation=90)
+# plt.tight_layout()
+# plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
+# if save_plots:
+#     name_of_file = 'binary_topology'
+#     final_filename = f'{fig_idx}_{name_of_file}.png'
+#     fig_idx += 1
+#     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#     plot_list.append(save_fig_path)
+#     plt.savefig(save_fig_path, format='png')
+# if show_plots: plt.show()
+# plt.close()
 
-        col_name = f"binary_topology_{i_min}_{j_max}"
-        df[col_name] = df.apply(compute_binary_topology, axis=1)
 
-        # Get normalized histogram
-        topo_counts = df[col_name].value_counts(normalize=False)
-        # topo_counts = topo_counts[topo_counts >= 0.001]
-        topo_counts = topo_counts[topo_counts.index != "0000"]
-        topo_counts = topo_counts[topo_counts.index.map(lambda x: sum(c != '0' for c in x) > 1)]
+# # Binary Topology per charges --------------------------------------------------------------------------------
 
-        if not topo_counts.empty:
-            # Prepare integer x-axis
-            x_vals = np.arange(len(topo_counts))
-            labels = topo_counts.index  # binary topology strings
+# i_vals = np.arange(0, 21, 10)  # e.g., [0, 10]
+# j_vals = [300]                 # e.g., [90]
 
-            # Plot bars
-            plt.bar(
-                x_vals,
-                topo_counts.values,
-                alpha=0.25,
-                color=color_cycle[k % len(color_cycle)],
-                edgecolor='black',
-                label=f"{i_min}–{j_max}"
-            )
+# plt.figure(figsize=(12, 6))
+# color_cycle = plt.cm.viridis(np.linspace(0, 1, len(i_vals) * len(j_vals)))
 
-            # Plot connecting lines
-            plt.plot(
-                x_vals,
-                topo_counts.values,
-                alpha=0.75,
-                color=color_cycle[k % len(color_cycle)]
-            )
+# k = 0  # color index
+# for i_min in i_vals:
+#     for j_max in j_vals:
+#         # Define binary_topology_i_j: '1' if Q in range and cluster_size > 0, else '0'
+#         def compute_binary_topology(row):
+#             return "".join(
+#                 ['1' if (i_min <= row[f"Q_{m}"] <= j_max and row[f"cluster_size_{m}"] > 0) else '0'
+#                  for m in range(1, 5)]
+#             )
 
-            # Set the x-axis ticks to the binary topology strings
-            plt.xticks(x_vals, labels, rotation=90)
-            k += 1
+#         col_name = f"binary_topology_{i_min}_{j_max}"
+#         df[col_name] = df.apply(compute_binary_topology, axis=1)
 
-plt.xlabel("Binary Topology (active modules)")
-plt.ylabel("Relative Frequency")
-plt.title("Overlaid Binary Topology Histograms for Charge Windows")
-plt.xticks(rotation=90)
-plt.legend(title="Q window (i–j)", bbox_to_anchor=(1.05, 1), loc='upper left')
-plt.tight_layout()
-plt.subplots_adjust(top=0.92)
+#         # Get normalized histogram
+#         topo_counts = df[col_name].value_counts(normalize=False)
+#         # topo_counts = topo_counts[topo_counts >= 0.001]
+#         topo_counts = topo_counts[topo_counts.index != "0000"]
+#         topo_counts = topo_counts[topo_counts.index.map(lambda x: sum(c != '0' for c in x) > 1)]
 
-if save_plots:
-    name_of_file = 'binary_topology_charge_windows'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
+#         if not topo_counts.empty:
+#             # Prepare integer x-axis
+#             x_vals = np.arange(len(topo_counts))
+#             labels = topo_counts.index  # binary topology strings
 
-if show_plots:
-    plt.show()
-plt.close()
+#             # Plot bars
+#             plt.bar(
+#                 x_vals,
+#                 topo_counts.values,
+#                 alpha=0.25,
+#                 color=color_cycle[k % len(color_cycle)],
+#                 edgecolor='black',
+#                 label=f"{i_min}–{j_max}"
+#             )
+
+#             # Plot connecting lines
+#             plt.plot(
+#                 x_vals,
+#                 topo_counts.values,
+#                 alpha=0.75,
+#                 color=color_cycle[k % len(color_cycle)]
+#             )
+
+#             # Set the x-axis ticks to the binary topology strings
+#             plt.xticks(x_vals, labels, rotation=90)
+#             k += 1
+
+# plt.xlabel("Binary Topology (active modules)")
+# plt.ylabel("Relative Frequency")
+# plt.title("Overlaid Binary Topology Histograms for Charge Windows")
+# plt.xticks(rotation=90)
+# plt.legend(title="Q window (i–j)", bbox_to_anchor=(1.05, 1), loc='upper left')
+# plt.tight_layout()
+# plt.subplots_adjust(top=0.92)
+
+# if save_plots:
+#     name_of_file = 'binary_topology_charge_windows'
+#     final_filename = f'{fig_idx}_{name_of_file}.png'
+#     fig_idx += 1
+#     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#     plot_list.append(save_fig_path)
+#     plt.savefig(save_fig_path, format='png')
+
+# if show_plots:
+#     plt.show()
+# plt.close()
 
 
 print("----------------------------------------------------------------------")
@@ -2803,30 +3094,57 @@ df['events'] = 1
 
 # Aggregation logic
 agg_dict = {
+    # Values to sum ---------------------------------------------------
     'events': 'sum',
-    'x': [custom_mean, custom_std],
-    'y': [custom_mean, custom_std],
-    'theta': [custom_mean, custom_std],
-    'phi': [custom_mean, custom_std],
-    # 't0': [custom_mean, custom_std],
-    's': [custom_mean, custom_std],
-    'type': lambda x: pd.Series(x).value_counts().to_dict(),
-    # 'new_type': lambda x: pd.Series(x).value_counts().to_dict(),
+    'count_in_1': 'sum',
+    'count_in_2': 'sum',
+    'count_in_3': 'sum',
+    'count_in_4': 'sum',
+    
+    # Values to count
+    'original_tt': lambda x: pd.Series(x).value_counts().to_dict(),
+    'processed_tt': lambda x: pd.Series(x).value_counts().to_dict(),
+    'tracking_tt': lambda x: pd.Series(x).value_counts().to_dict(),
+    
+    # Values to average -----------------------------------------------
+    # Fitting values
+    'new_x': [custom_mean, custom_std],
+    'new_y': [custom_mean, custom_std],
+    'new_theta': [custom_mean, custom_std],
+    'new_phi': [custom_mean, custom_std],
+    'new_s': [custom_mean, custom_std],
+    'new_th_chi': [custom_mean, custom_std],
+    
+    # Derived metrics
     'Q_event': [custom_mean, custom_std],
-    "over_P1": "mean",
-    "P1-P2": "mean",
-    "P2-P3": "mean",
-    "P3-P4": "mean",
-    "phi_north": "mean",
-    "CRT_avg": "mean"
+    'streamer_percent_1': custom_mean,
+    'streamer_percent_2': custom_mean,
+    'streamer_percent_3': custom_mean,
+    'streamer_percent_4': custom_mean,
+    
+    # Quality flags
+    'CRT_avg': custom_mean,
+    'sigmoid_width': custom_mean,
+    'background_slope': custom_mean,
+    'one_side_events': custom_mean,
+    'purity_of_data_percentage': custom_mean,
+    'unc_y': custom_mean,
+    'unc_tsum': custom_mean,
+    'unc_tdif': custom_mean,
+    
+    # Configuration parameters
+    "over_P1": custom_mean,
+    "P1-P2": custom_mean,
+    "P2-P3": custom_mean,
+    "P3-P4": custom_mean,
+    "phi_north": custom_mean,
 }
 
-for i in range(1, 5):
-    agg_dict.update({
-        f'count_in_{i}': 'sum',
-        f'avalanche_{i}': 'sum',
-        f'streamer_{i}': 'sum'
-    })
+# Add all new region columns with sum aggregation
+for col in df.columns:
+    if col.startswith("new_region_theta_"):
+        agg_dict[col] = 'sum'
+
 
 # Fit a Poisson distribution to the 1-second data and removed outliers based on the Poisson -------------------------
 if remove_outliers:
@@ -2967,33 +3285,42 @@ print("----------------------------------------------------------------------")
 
 resampled_df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in resampled_df.columns.values]
 
-rename_map = {
-    "over_P1_mean": "over_P1",
-    "P1-P2_mean": "P1-P2",
-    "P2-P3_mean": "P2-P3",
-    "P3-P4_mean": "P3-P4",
-    "phi_north_mean": "phi_north"
-}
-resampled_df.rename(columns=rename_map, inplace=True)
+# rename_map = {
+#     "over_P1_mean": "over_P1",
+#     "P1-P2_mean": "P1-P2",
+#     "P2-P3_mean": "P2-P3",
+#     "P3-P4_mean": "P3-P4",
+#     "phi_north_mean": "phi_north"
+# }
+# resampled_df.rename(columns=rename_map, inplace=True)
 
-# Replace custom_mean by mean and custom_std by std
 resampled_df.rename(columns=lambda x: x.replace('custom_mean', 'mean').replace('custom_std', 'std'), inplace=True)
-
-# Replace sum by nothing
 resampled_df.rename(columns=lambda x: x.replace('_sum', ''), inplace=True)
+resampled_df.rename(columns=lambda x: x.replace('_mean', ''), inplace=True)
+resampled_df.rename(columns=lambda x: x.replace('new_', ''), inplace=True)
 
 
 print("----------------------------------------------------------------------")
 print("------------------------ Column aggregation --------------------------")
 print("----------------------------------------------------------------------")
 
-# Region-specific count aggregation
+# Region-specific count aggregation -------------------------------------------
 region_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region'])
 resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
 
-# Hans' region-specific count aggregation
-region_hans_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region_hans'])
-resampled_df = resampled_df.join(region_hans_counts, how='left').fillna(0)
+# Hans' region-specific count aggregation -------------------------------------
+# region_hans_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region_hans'])
+# resampled_df = resampled_df.join(region_hans_counts, how='left').fillna(0)
+
+# New region-specific count aggregation ---------------------------------------
+# Floor time to 1-minute bins
+df['Time_floor'] = df['Time'].dt.floor('1min')
+# Select only the binary region columns
+region_cols = [col for col in df.columns if col.startswith('region_theta_')]
+# Group by floored time and sum the binary indicators
+region_counts = df.groupby('Time_floor')[region_cols].sum()
+# Join to resampled_df (assuming resampled_df has time index compatible with Time_floor)
+resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
 
 
 print("----------------------------------------------------------------------")
@@ -3001,11 +3328,13 @@ print("-------------------------- Counting types ----------------------------")
 print("----------------------------------------------------------------------")
 
 # Split 'type_<lambda>' dictionary into separate columns for each type
-if 'type_<lambda>' in resampled_df.columns:
-    type_dict_col = resampled_df['type_<lambda>']
-    for type_key in df['type'].unique():
-        resampled_df[f'type_{type_key}'] = type_dict_col.apply(lambda x: x.get(type_key, 0) if isinstance(x, dict) else 0)
-    resampled_df.drop(columns=['type_<lambda>'], inplace=True)
+types = ["original_tt", "processed_tt", "tracking_tt"]
+for type_key in types:
+    if f'{type_key}_<lambda>' in resampled_df.columns:
+        type_dict_col = resampled_df[f'{type_key}_<lambda>']
+        for type_key_unique in df[type_key].unique():
+            resampled_df[f'{type_key}_{type_key_unique}'] = type_dict_col.apply(lambda x: x.get(type_key_unique, 0) if isinstance(x, dict) else 0)
+        resampled_df.drop(columns=[f'{type_key}_<lambda>'], inplace=True)
 
 
 print("----------------------------------------------------------------------")
@@ -3016,31 +3345,31 @@ print("----------------------------------------------------------------------")
 
 resampled_df.reset_index(inplace=True)
 
-# --- Flatten df_polya_fit ---
-df_polya_flat = df_polya_fit.set_index('module').add_prefix('polya_')  # polya_module_1 → polya_theta, etc.
+# # --- Flatten df_polya_fit ---
+# df_polya_flat = df_polya_fit.set_index('module').add_prefix('polya_')  # polya_module_1 → polya_theta, etc.
 
-# --- Flatten df_cross_fit ---
-df_cross_flat = df_cross_fit.set_index('key').add_prefix('cross_')  # cross_M1_s1_x0, cross_M1_s1_k
+# # --- Flatten df_cross_fit ---
+# df_cross_flat = df_cross_fit.set_index('key').add_prefix('cross_')  # cross_M1_s1_x0, cross_M1_s1_k
 
-# --- Flatten df_mult_fit ---
-df_mult_long = df_mult_fit.melt(id_vars=['detection_type', 'multiplicity'], var_name='module', value_name='value')
-df_mult_long['colname'] = (
-    df_mult_long['detection_type'] + '_' +
-    df_mult_long['multiplicity'] + '_' +
-    df_mult_long['module']
-)
-df_mult_flat = df_mult_long.set_index('colname')['value'].to_frame().T.add_prefix('mult_')  # single row
+# # --- Flatten df_mult_fit ---
+# df_mult_long = df_mult_fit.melt(id_vars=['detection_type', 'multiplicity'], var_name='module', value_name='value')
+# df_mult_long['colname'] = (
+#     df_mult_long['detection_type'] + '_' +
+#     df_mult_long['multiplicity'] + '_' +
+#     df_mult_long['module']
+# )
+# df_mult_flat = df_mult_long.set_index('colname')['value'].to_frame().T.add_prefix('mult_')  # single row
 
-# --- Combine all into one row DataFrame ---
-flat_polya = df_polya_flat.stack().to_frame().T
-flat_cross = df_cross_flat.stack().to_frame().T
-flat_mult = df_mult_flat
+# # --- Combine all into one row DataFrame ---
+# flat_polya = df_polya_flat.stack().to_frame().T
+# flat_cross = df_cross_flat.stack().to_frame().T
+# flat_mult = df_mult_flat
 
-flat_all = pd.concat([flat_polya, flat_cross, flat_mult], axis=1)
+# flat_all = pd.concat([flat_polya, flat_cross, flat_mult], axis=1)
 
-# --- Repeat and merge with resampled_df ---
-flat_all_repeated = pd.concat([flat_all] * len(resampled_df), ignore_index=True)
-resampled_df = pd.concat([resampled_df.reset_index(drop=True), flat_all_repeated], axis=1)
+# # --- Repeat and merge with resampled_df ---
+# flat_all_repeated = pd.concat([flat_all] * len(resampled_df), ignore_index=True)
+# resampled_df = pd.concat([resampled_df.reset_index(drop=True), flat_all_repeated], axis=1)
 
 
 print("----------------------------------------------------------------------")
