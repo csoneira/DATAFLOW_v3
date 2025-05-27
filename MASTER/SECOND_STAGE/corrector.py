@@ -25,7 +25,6 @@ print("YMMMUP^")
 print(" ^^")
 print("\n\n")
 
-# globals().clear()
 
 import numpy as np
 import pandas as pd
@@ -37,13 +36,23 @@ import os
 from sklearn.linear_model import LinearRegression
 from datetime import datetime, timedelta
 import sys
+from scipy.optimize import least_squares
+from scipy.ndimage import gaussian_filter1d
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.linear_model import LinearRegression
+from scipy.optimize import curve_fit
+from scipy.stats import norm
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.stats import halfnorm
+from scipy.stats import norm
 
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
-
-# Define station number
 
 # Check if the script has an argument
 if len(sys.argv) < 2:
@@ -55,6 +64,7 @@ if len(sys.argv) < 2:
 station = sys.argv[1]
 print(f"Station: {station}")
 
+
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Header ----------------------------------------------------------------------
@@ -65,7 +75,6 @@ print(f"Station: {station}")
 # resampling_window = '10T'  # '10T' # '5T' stands for 5 minutes. Adjust based on your needs.
 # HMF_ker = 5 # It must be odd.
 # MAF_ker = 1
-# skip_in_limits = 1
 
 remove_outliers = True
 
@@ -77,16 +86,14 @@ show_errorbar = False
 
 recalculate_pressure_coeff = True
 
-res_win_min = 60 # 180 Resampling window minutes
+res_win_min = 15 # 180 Resampling window minutes
 # HMF_ker = 1 # It must be odd. Horizontal Median Filter
 # MAF_ker = 1 # Moving Average Filter
 
 outlier_filter = 4 #3
 
 high_order_correction = True
-date_selection = True  # Set to True if you want to filter by date
-
-skip_in_limits = 1
+date_selection = False  # Set to True if you want to filter by date
 
 # This should come from an input file
 eta_P = -0.162 # pressure_coeff_input
@@ -105,19 +112,15 @@ z_score_th_pres_corr = 5
 # Define the base folder and file paths
 grafana_directory = os.path.expanduser(f"~/DATAFLOW_v3/GRAFANA_DATA")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
-
 base_folder = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/SECOND_STAGE")
-filepath = f"{base_folder}/cp_total_data_table.csv"
-print("---------------------------------------------------- A MODIFIED DATAFILE IS BEING TAKEN, WATCH OUT!!!!!!!!! ---------------------------------")
+filepath = f"{base_folder}/total_data_table.csv"
 save_filename = f"{base_folder}/large_corrected_table.csv"
 grafana_save_filename = f"{grafana_directory}/data_for_grafana_{station}.csv"
-
 figure_path = f"{base_folder}/"
 fig_idx = 0
-
-# Create the folders if they dont exist
 os.makedirs(base_folder, exist_ok=True)
 os.makedirs(grafana_directory, exist_ok=True)
+
 
 # -----------------------------------------------------------------------------
 # To not touch unless necesary ------------------------------------------------
@@ -127,23 +130,15 @@ resampling_window = f'{res_win_min}min'  # '10min' # '5min' stands for 5 minutes
 
 # Columns to sum
 angular_regions = ['High', 'N', 'S', 'E', 'W']
-detection_types = ['type_1234', 'type_123', 'type_234', 'type_124', 'type_134', 'type_12', 'type_23', 'type_34', 'type_13', 'type_14', 'type_24']
-# charge_types = ['count_in_1_sum', 'avalanche_1_sum', 'streamer_1_sum',
-#                 'count_in_2_sum', 'avalanche_2_sum', 'streamer_2_sum',
-#                 'count_in_3_sum', 'avalanche_3_sum', 'streamer_3_sum',
-#                 'count_in_4_sum', 'avalanche_4_sum', 'streamer_4_sum']
 
-charge_types = ['count_in_1', 'avalanche_1', 'streamer_1',
-                'count_in_2', 'avalanche_2', 'streamer_2',
-                'count_in_3', 'avalanche_3', 'streamer_3',
-                'count_in_4', 'avalanche_4', 'streamer_4']
+original_types = [ 'original_tt_123', 'original_tt_1234', 'original_tt_23', 'original_tt_12', 'original_tt_234', 'original_tt_34', 'original_tt_124', 'original_tt_134', 'original_tt_13' ]
+detection_types = [ 'processed_tt_123', 'processed_tt_34', 'processed_tt_23', 'processed_tt_12', 'processed_tt_234', 'processed_tt_124', 'processed_tt_1234', 'processed_tt_14', 'processed_tt_134', 'processed_tt_24', 'processed_tt_13' ]
+tracking_types = [ 'tracking_tt_123', 'tracking_tt_234', 'tracking_tt_23', 'tracking_tt_12', 'tracking_tt_1234', 'tracking_tt_34' ]
 
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Function definition ---------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
+charge_types = ['count_in_1',
+                'count_in_2',
+                'count_in_3',
+                'count_in_4']
 
 
 # -----------------------------------------------------------------------------
@@ -151,9 +146,6 @@ charge_types = ['count_in_1', 'avalanche_1', 'streamer_1',
 # Introduction ----------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
-
-# Add a part that sets limits on the date to complete only the lacking part in 
-# the large corrected table.
 
 # -----------------------------------------------------------------------------
 # Reading ---------------------------------------------------------------------
@@ -163,27 +155,20 @@ charge_types = ['count_in_1', 'avalanche_1', 'streamer_1',
 print('Reading the big CSV datafile...')
 data_df = pd.read_csv(filepath)
 
+print("\n\n")
+print(data_df.columns.to_list())
+print("\n\n")
+
 print("Putting zeroes to NaNs...")
 data_df = data_df.replace(0, np.nan)
 
 print(filepath)
 print('File loaded successfully.')
 
-# Define input file path -----------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
-
-if os.path.exists(input_file_config_path):
-    input_file = pd.read_csv(input_file_config_path, skiprows=1, decimal = ",")
-    
-    print("Input configuration file found.")
-    exists_input_file = True
-    
-else:
-    exists_input_file = False
-    print("Input configuration file does not exist.")
 
 
-# Preprocess the data to remove rows with invalid datetime format
+
+# Preprocess the data to remove rows with invalid datetime format -------------------------------------------------------------------------------
 print('Validating datetime format in "Time" column...')
 try:
     # Try parsing 'Time' column with the specified format
@@ -192,20 +177,19 @@ except Exception as e:
     print(f"Error while parsing datetime: {e}")
     exit(1)
 
-# Drop rows where 'Time' could not be parsed
+# Drop rows where 'Time' could not be parsed -------------------------------------------------------------------------------
 invalid_rows = data_df['Time'].isna().sum()
 if invalid_rows > 0:
     print(f"Removing {invalid_rows} rows with invalid datetime format.")
     data_df = data_df.dropna(subset=['Time'])
 else:
     print("No rows with invalid datetime format removed.")
-
 print('Datetime validation completed successfully.')
 
-min_time_original = data_df['Time'].min()
-max_time_original = data_df['Time'].max()
 
-# Check if the results file exists
+
+
+# Check if the results file exists -------------------------------------------------------------------------------
 if os.path.exists(save_filename):
     results_df = pd.read_csv(save_filename)
     
@@ -223,12 +207,11 @@ else:
 # Define the end date as today
 end_date = datetime.now()
 
+
+
+
+# Date filtering -------------------------------------------------------------------------------
 if date_selection:
-# if date_selection and start_date is not None:
-    # start_date = pd.to_datetime("2024-03-23 00:00:00")  # Use a string in 'YYYY-MM-DD' format
-    # start_date = pd.to_datetime("2024-03-27 00:00:00")  # Use a string in 'YYYY-MM-DD' format
-    # end_date = pd.to_datetime("2024-03-31 07:30:00")
-    
     start_date = pd.to_datetime("2024-05-10 00:00:00")  # Use a string in 'YYYY-MM-DD' format
     end_date = pd.to_datetime("2024-05-11 12:00:00")
     
@@ -242,54 +225,189 @@ if date_selection:
 print(f"Filtered data contains {len(data_df)} rows.")
 
 
+
+
+remove_non_data_points = True
+if remove_non_data_points:
+    # Remove rows where 'events' is NaN or zero
+    print(f"Original data contains {len(data_df)} rows before removing non-data points.")
+    data_df = data_df.dropna(subset=['events'])
+    data_df = data_df[data_df['events'] != 0]
+    print(f"Filtered data contains {len(data_df)} rows after removing non-data points.")
+
+
+
+
+# Define input file path -------------------------------------------------------------------------------
+input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+if os.path.exists(input_file_config_path):
+    input_file = pd.read_csv(input_file_config_path, skiprows=1, decimal = ",")
+    print("Input configuration file found.")
+    exists_input_file = True
+else:
+    exists_input_file = False
+    print("Input configuration file does not exist.")
+
+if exists_input_file:
+    # Parse start/end timestamps in the configuration file
+    input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
+    input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
+    input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
+
+    # Prepare empty Series aligned with data_df index
+    acc_cols = {
+        "acc_1": pd.Series(index=data_df.index, dtype='float'),
+        "acc_2": pd.Series(index=data_df.index, dtype='float'),
+        "acc_3": pd.Series(index=data_df.index, dtype='float'),
+        "acc_4": pd.Series(index=data_df.index, dtype='float')
+    }
+
+    # Assign values to each row in data_df based on timestamp match
+    for idx, timestamp in data_df["Time"].items():
+        match = input_file[(input_file["start"] <= timestamp) & (input_file["end"] >= timestamp)]
+        if not match.empty:
+            selected = match.iloc[0]
+            acc_cols["acc_1"].at[idx] = selected.get("acc_1", 1)
+            acc_cols["acc_2"].at[idx] = selected.get("acc_2", 1)
+            acc_cols["acc_3"].at[idx] = selected.get("acc_3", 1)
+            acc_cols["acc_4"].at[idx] = selected.get("acc_4", 1)
+        else:
+            # Default values if no match
+            acc_cols["acc_1"].at[idx] = 1
+            acc_cols["acc_2"].at[idx] = 1
+            acc_cols["acc_3"].at[idx] = 1
+            acc_cols["acc_4"].at[idx] = 1
+
+    # Assign the new acc_* columns to data_df
+    for col in ["acc_1", "acc_2", "acc_3", "acc_4"]:
+        data_df[col] = pd.to_numeric(acc_cols[col], errors='coerce').fillna(1)
+
+else:
+    print("No input file found. Default values set.")
+    for col in ["acc_1", "acc_2", "acc_3", "acc_4"]:
+        data_df[col] = 1
+
+
 # -----------------------------------------------------------------------------
 # Outlier removal -------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+
+if remove_outliers:
+    
+    if create_plots:
+        # Step 1: Clean the data
+        series = data_df['events'].copy()
+        series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+
+        # Step 2: Z-score filter (±3σ)
+        mean = series_clean.mean()
+        std = series_clean.std()
+        z_scores = (series_clean - mean) / std
+        mask = np.abs(z_scores) <= 3
+        filtered = series_clean[mask]
+
+        # Remove outliers from original dataframe
+        data_df = data_df.loc[filtered.index].copy()
+
+        # Step 3: Fit normal distribution to filtered data
+        mu, sigma = norm.fit(filtered)
+
+        # Step 4: Histogram with Poisson uncertainties (raw data before filtering)
+        bins = 200
+        counts, bin_edges = np.histogram(series_clean, bins=bins)
+        bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
+        bin_width = bin_edges[1] - bin_edges[0]
+
+        total_count = np.sum(counts)
+        density = counts / (total_count * bin_width)
+        density_err = np.sqrt(counts) / (total_count * bin_width)
+
+        # Step 5: PDF
+        x = np.linspace(series_clean.min(), series_clean.max(), 1000)
+        pdf = norm.pdf(x, loc=mu, scale=sigma)
+
+        # Step 6: Plot
+        plt.figure()
+        plt.errorbar(bin_centers, density, yerr=density_err, fmt='o', alpha=0.6, label='Data with $\sqrt{N}$ error')
+        plt.plot(x, pdf, 'r--', label=f'Normal Fit\n$\mu$={mu:.2f}, $\sigma$={sigma:.2f}')
+        plt.axvline(norm.ppf(0.001, mu, sigma), color='k', linestyle='--', label='0.1% cutoff')
+        plt.axvline(norm.ppf(0.999, mu, sigma), color='k', linestyle='--', label='99.9% cutoff')
+
+        plt.title('Normal Fit with Z-score Filtering')
+        plt.xlabel('Value')
+        plt.ylabel('Density')
+        plt.legend()
+
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            if 'fig_idx' not in locals():
+                fig_idx = 0
+            new_figure_path = f"{figure_path}{fig_idx}_histo.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format='png', dpi=300)
+        plt.close()
+
+
+
 if remove_outliers:
     print('Removing outliers and zero values...')
-    def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
+    def remove_outliers_and_zeroes(series_og):
         global fig_idx
         
-        """
-        Create a mask of rows that are outliers or have zero values.
-        """
+        series = series_og.copy()
         median = series.mean()
         # median = series.median()
         std = series.std()
         z_scores = abs((series - median) / std)
         # z_scores = (series - median) / std
         
-        plt.hist(z_scores, bins=100)
-        plt.title('Z-Scores Distribution')
-        plt.xlabel('Z-Score')
-        plt.ylabel('Frequency')
-        if show_plots: 
+        # Remove zeroes for fitting
+        filtered = z_scores[z_scores > 0]
+        filtered = filtered[filtered < np.quantile(filtered, 0.99)]
+
+        loc = 0
+        scale = halfnorm.fit(filtered, floc=loc)[1]  # only fit the scale
+        cutoff = halfnorm.ppf(0.999, loc=loc, scale=scale)
+
+        # Plot
+        x = np.linspace(filtered.min(), filtered.max(), 1000)
+        pdf = halfnorm.pdf(x, loc=loc, scale=scale)
+
+        plt.hist(filtered, bins=100, density=True, alpha=0.6, label='Data')
+        plt.plot(x, pdf, 'r--', label=f'Half-Normal Fit\nσ={scale:.2f}')
+        plt.axvline(cutoff, color='k', linestyle='--', label=f'99.9% cutoff = {cutoff:.2f}')
+        plt.title('Half-Normal Fit and 99.9% Cutoff')
+        plt.xlabel('Value')
+        plt.ylabel('Density')
+        plt.legend()
+
+        if show_plots:
             plt.show()
         elif save_plots:
-            new_figure_path = figure_path + f"{fig_idx}" + "_original_z.png"
+            new_figure_path = figure_path + f"{fig_idx}" + "_half_normal_fit.png"
             fig_idx += 1
             print(f"Saving figure to {new_figure_path}")
-            plt.savefig(new_figure_path, format = 'png', dpi = 300)
+            plt.savefig(new_figure_path, format='png', dpi=300)
         plt.close()
-        
-        # print(z_scores)
-        # Create a mask for rows where z_scores > z_thresh or values are zero
-        mask = (z_scores > z_thresh) | (series == 0)
+
+        # Mask: outliers above cutoff or zero entries
+        mask = (z_scores > cutoff) | (z_scores == 0)
         return mask
 
     # Initialize a mask of all False, meaning no rows are removed initially
     rows_to_remove = pd.Series(False, index=data_df.index)
-    rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df['events'])
-    # for region in angular_regions:
-    #     rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[region])
-
+    columns = ['events']
+    for col in columns:
+        rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[col])
+    
+    # rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df['events'])
     data_df_cleaned = data_df[~rows_to_remove].copy()
-
     # Now, `data_df_cleaned` contains only rows that pass the conditions.
     print(f"Original DataFrame shape: {data_df.shape}")
     print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
-
     data_df = data_df_cleaned.copy()
 
 
@@ -298,8 +416,8 @@ if remove_outliers:
 # -----------------------------------------------------------------------------
 
 data_df.set_index('Time', inplace=True)
-data_df["number_of_rows"] = 1
-columns_to_sum = angular_regions + detection_types + charge_types + ["number_of_rows"] + ["events"]
+data_df["number_of_mins"] = 1
+columns_to_sum = angular_regions + detection_types + charge_types + ["number_of_mins"] + ["events"]
 columns_to_mean = [col for col in data_df.columns if col not in columns_to_sum]
 
 # Custom aggregation function
@@ -310,104 +428,157 @@ data_df = data_df.resample(resampling_window).agg({
 
 data_df.reset_index(inplace=True)
 
-# --------------------------------------------------------------------------------
-# Calculating a 'counts' column that is the sum of all regions and its uncertainty
-# --------------------------------------------------------------------------------
 
-data_df['count_regions'] = data_df[angular_regions].sum(axis=1)
-data_df['count_regions_uncertainty'] = np.sqrt(data_df['count_regions'])
+# -----------------------------------------------------------------------------
+# ------------------------------ Plotting stuff -------------------------------
+# -----------------------------------------------------------------------------
 
-data_df['count_types'] = data_df[detection_types].sum(axis=1)
-data_df['count_types_uncertainty'] = np.sqrt(data_df['count_types'])
+def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', title=None, figsize=(14, 6), save_path=None):
+    """
+    Plot sensors_ext_Pressure_ext and a group of columns vs. time on two subplots.
 
-# ------------------------------------------------------------------------------------------
-data_df['count'] = data_df['events'] # Until I have a better definition of the count
-data_df['count_uncertainty'] = np.sqrt(data_df['count'])
-# ------------------------------------------------------------------------------------------
+    Parameters:
+        df (pd.DataFrame): DataFrame containing the data.
+        group_cols (list of str): List of column names to plot in lower panel.
+        time_col (str): Column name representing time (default: 'Time').
+        title (str): Optional title for the figure.
+        figsize (tuple): Size of the figure.
+        save_path (str): If provided, saves the figure to this path.
+    """
+    global fig_idx
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=figsize, gridspec_kw={'height_ratios': [1, 1]})
 
-data_df['rate'] = data_df['count'] / ( data_df["number_of_rows"] * 60 )  # Counts per second (Hz)
-data_df['unc_rate'] = np.sqrt(data_df['count']) / ( data_df["number_of_rows"] * 60 )
+    # Plot pressure
+    ax1.plot(df[time_col], df[x_column], label=x_label, color='tab:blue')
+    ax1.set_ylabel(x_label)
+    ax1.set_title(title if title else 'Group Signals')
+    ax1.grid(True)
+    ax1.legend()
 
-# Other calculations
-data_df['hv_mean'] = ( data_df['hv_HVneg'] + data_df['hv_HVpos'] ) / 2
-
-
-# Input file reading --------------------------------------------------------------------------------------------------------
-
-if exists_input_file:
-    start_time = min_time_original
-    end_time = max_time_original
-
-    input_file["start"] = pd.to_datetime(input_file["start"], dayfirst=True)
-    input_file["end"] = pd.to_datetime(input_file["end"], dayfirst=True)
-
-    # Ensure no NaN in 'end' column
-    input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
-
-    # Create an empty dictionary to hold new column values
-    new_columns = {
-        "acc_1": [],
-        "acc_2": [],
-        "acc_3": [],
-        "acc_4": []
-    }
-
-    # Assign values based on corresponding time range
-    for timestamp in data_df["Time"]:
-        # Find matching configuration
-        match = input_file[ (input_file["start"] <= timestamp) & (input_file["end"] >= timestamp) ]
-        
-        if not match.empty:
-            # Take the first matching row
-            selected_conf = match.iloc[0]
-            # print("Configuration number is: ", selected_conf["conf"])
-            new_columns["acc_1"].append(selected_conf.get("acc_1", 1))
-            new_columns["acc_2"].append(selected_conf.get("acc_2", 1))
-            new_columns["acc_3"].append(selected_conf.get("acc_3", 1))
-            new_columns["acc_4"].append(selected_conf.get("acc_4", 1))
+    # Plot group of columns
+    for col in group_cols:
+        if col in df.columns:
+            ax2.plot(df[time_col], df[col], label=col)
         else:
-            # print("No matching configuration, fill with 1...")
-            new_columns["acc_1"].append(1)
-            new_columns["acc_2"].append(1)
-            new_columns["acc_3"].append(1)
-            new_columns["acc_4"].append(1)
+            print(f"Warning: column '{col}' not found in DataFrame")
 
-    # Convert dictionary to DataFrame
-    df_new_cols = pd.DataFrame(new_columns)
+    ax2.set_ylabel('Group Signals')
+    ax2.set_xlabel('Time')
+    ax2.grid(True)
+    ax2.legend()
 
-    # Merge with the original dataframe
-    df_extended = pd.concat([data_df, df_new_cols], axis=1)
+    plt.tight_layout()
 
-    # Fill missing values with the original values where applicable
-    df_extended.fillna(method='ffill', inplace=True)
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + f"{fig_idx}" + "_multiple.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+    plt.close()
 
-    # Print the new columns
-    data_df = df_extended
+
+def plot_grouped_series(df, group_cols, time_col='Time', title=None, figsize=(14, 4), save_path=None):
+    """
+    Plot time series for multiple groups of columns. Each sublist in `group_cols` is plotted in a separate subplot.
     
-else:
-    print("No input file found. Default values set.")
-    data_df["acc_1"] = 1
-    data_df["acc_2"] = 1
-    data_df["acc_3"] = 1
-    data_df["acc_4"] = 1
+    Parameters:
+        df (pd.DataFrame): DataFrame with time series data.
+        group_cols (list of list of str): Each sublist contains column names to overlay in one subplot.
+        time_col (str): Name of the time column.
+        title (str): Title for the entire figure.
+        figsize (tuple): Size of each subplot.
+        save_path (str): If provided, save the figure to this path.
+    """
+    global fig_idx
     
-# ---------------------------------------------------------------------------------------------------------------------
+    n_plots = len(group_cols)
+    fig, axes = plt.subplots(n_plots, 1, sharex=True, figsize=(figsize[0], figsize[1] * n_plots))
+    
+    if n_plots == 1:
+        axes = [axes]  # Make iterable
+    
+    for idx, cols in enumerate(group_cols):
+        ax = axes[idx]
+        for col in cols:
+            if col in df.columns:
+                ax.plot(df[time_col], df[col], label=col)
+            else:
+                print(f"Warning: column '{col}' not found in DataFrame")
+        ax.set_ylabel(' / '.join(cols))
+        ax.grid(True)
+        ax.legend(loc='best')
 
-# Turn all the acc_* into numeric columns
-data_df["acc_1"] = pd.to_numeric(data_df["acc_1"])
-data_df["acc_2"] = pd.to_numeric(data_df["acc_2"])
-data_df["acc_3"] = pd.to_numeric(data_df["acc_3"])
-data_df["acc_4"] = pd.to_numeric(data_df["acc_4"])
+    axes[-1].set_xlabel('Time')
+    if title:
+        fig.suptitle(title, fontsize=14)
+        fig.subplots_adjust(top=0.95)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.96] if title else None)
 
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Efficiency calculation and corrections --------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + f"{fig_idx}" + "_multiple.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+    plt.close()
 
-# -----------------------------------------------------------------------------
-# Calculate efficiency and uncertainty of the efficiency
-# -----------------------------------------------------------------------------
+
+# group_cols = [ 'original_tt_123', 'original_tt_12', 'original_tt_234', 'original_tt_34', 'original_tt_23', 'original_tt_1234', 'original_tt_134', 'original_tt_124', 'original_tt_13']
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'pressure', group_cols, title='Pressure and Selected Columns')
+
+# group_cols = [ 'processed_tt_123', 'processed_tt_12', 'processed_tt_234', 'processed_tt_34', 'processed_tt_23', 'processed_tt_1234', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14', 'processed_tt_124' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'pressure', group_cols, title='Pressure and Selected Columns')
+
+# group_cols = [ 'x', 'y']
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'theta' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = ['phi']
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'th_chi' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = ['s']
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'purity_of_data_percentage' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'rates_Multiplexer1', 'rates_M2', 'rates_M3', 'rates_M4' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'rates_CM1', 'rates_CM2', 'rates_CM3', 'rates_CM4' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'sigmoid_width' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'background_slope' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------- Calculating some columns ---------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+data_df['rate'] = data_df['events'] / ( data_df["number_of_mins"] * 60 )  # Counts per second (Hz)
+data_df['unc_rate'] = np.sqrt(data_df['events']) / ( data_df["number_of_mins"] * 60 )
+
+data_df['hv_mean'] = ( data_df['hv_HVneg'] + data_df['hv_HVpos'] ) / 2
+data_df['current_mean'] = ( data_df['hv_CurrentNeg'] + data_df['hv_CurrentPos'] ) / 2
 
 
 print('----------------------------------------------------------------------')
@@ -420,13 +591,6 @@ print('----------------------------------------------------------------------')
 print('--------------- 1. Standard method (includes system) -----------------')
 print('----------------------------------------------------------------------')
 
-# Define the function to calculate efficiency uncertainty
-# def calculate_efficiency_uncertainty(N_measured, N_passed):
-#     if N_passed > 0:
-#         return np.sqrt((N_measured / N_passed**2) + (N_measured**2 / N_passed**3))
-#     else:
-#         return np.nan
-
 def calculate_efficiency_uncertainty(N_measured, N_passed):
     # Ensure that the inputs are Series, handle element-wise computation
     uncertainty = np.where(N_passed > 0,
@@ -435,52 +599,55 @@ def calculate_efficiency_uncertainty(N_measured, N_passed):
     
     return uncertainty
 
-# Print all the columns starting with type_
-print(data_df.columns[data_df.columns.str.startswith('type_')])
-
-# 'type_1234', 'type_123', 'type_234', 'type_124', 'type_134', 'type_12',
-# 'type_23', 'type_34', 'type_13', 'type_14', 'type_24'
+# Print all the columns starting with processed_tt_
+print(data_df.columns[data_df.columns.str.startswith('_tt')])
 
 # Create explicit columns for detected and passed
-data_df['detected_1'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_12', 'type_13', 'type_14']].sum(axis=1, skipna=True)
-data_df['detected_2'] = data_df[['type_1234', 'type_123', 'type_234', 'type_124', 'type_12', 'type_23', 'type_24']].sum(axis=1, skipna=True)
-data_df['detected_3'] = data_df[['type_1234', 'type_123', 'type_234', 'type_134', 'type_23', 'type_34', 'type_13']].sum(axis=1, skipna=True)
-data_df['detected_4'] = data_df[['type_1234', 'type_234', 'type_124', 'type_134', 'type_34', 'type_14', 'type_24']].sum(axis=1, skipna=True)
+# data_df['passed_1'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_13',                    'processed_tt_14', 'processed_tt_12',                                                          ]].sum(axis=1, skipna=True)
+# data_df['passed_2'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_13', 'processed_tt_24', 'processed_tt_14', 'processed_tt_12', 'processed_tt_23',                                     ]].sum(axis=1, skipna=True)
+# data_df['passed_3'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_13', 'processed_tt_24', 'processed_tt_14',                    'processed_tt_23', 'processed_tt_34',                                    ]].sum(axis=1, skipna=True)
+# data_df['passed_4'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134',                    'processed_tt_24', 'processed_tt_14',                                       'processed_tt_34',               ]].sum(axis=1, skipna=True)
 
-data_df['passed_1'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234', 'type_12', 'type_13', 'type_14']].sum(axis=1, skipna=True)
-data_df['passed_2'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234', 'type_12', 'type_23', 'type_13', 'type_14', 'type_24']].sum(axis=1, skipna=True)
-data_df['passed_3'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234', 'type_34', 'type_23', 'type_13', 'type_14', 'type_24']].sum(axis=1, skipna=True)
-data_df['passed_4'] = data_df[['type_1234', 'type_123', 'type_124', 'type_134', 'type_234', 'type_34', 'type_14', 'type_24']].sum(axis=1, skipna=True)
+data_df['passed_1'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134',   ]].sum(axis=1, skipna=True)
+data_df['passed_2'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134',   ]].sum(axis=1, skipna=True)
+data_df['passed_3'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134',   ]].sum(axis=1, skipna=True)
+data_df['passed_4'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134',   ]].sum(axis=1, skipna=True)
 
-# Interpolate all the NaNs
-# data_df = data_df.interpolate(method='linear', limit_direction='both')
+data_df['detected_1'] = data_df[['processed_tt_1234', 'processed_tt_123',                     'processed_tt_124', 'processed_tt_134' ]].sum(axis=1, skipna=True)
+data_df['detected_2'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124',                    ]].sum(axis=1, skipna=True)
+data_df['detected_3'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234',                     'processed_tt_134' ]].sum(axis=1, skipna=True)
+data_df['detected_4'] = data_df[['processed_tt_1234',                     'processed_tt_234', 'processed_tt_124', 'processed_tt_134' ]].sum(axis=1, skipna=True)
+
+# data_df['passed_1'] = data_df[['tracking_tt_1234', 'tracking_tt_123', 'tracking_tt_234', 'tracking_tt_12',                                    ]].sum(axis=1, skipna=True)
+# data_df['passed_2'] = data_df[['tracking_tt_1234', 'tracking_tt_123', 'tracking_tt_234', 'tracking_tt_12', 'tracking_tt_23',                  ]].sum(axis=1, skipna=True)
+# data_df['passed_3'] = data_df[['tracking_tt_1234', 'tracking_tt_123', 'tracking_tt_234',                   'tracking_tt_23', 'tracking_tt_34' ]].sum(axis=1, skipna=True)
+# data_df['passed_4'] = data_df[['tracking_tt_1234', 'tracking_tt_123', 'tracking_tt_234',                                     'tracking_tt_34' ]].sum(axis=1, skipna=True)
+
+# data_df['detected_1'] = data_df[['processed_tt_1234', 'processed_tt_123',                     'processed_tt_124', 'processed_tt_134', 'processed_tt_13',                    'processed_tt_14', 'processed_tt_12',                                                        ]].sum(axis=1, skipna=True)
+# data_df['detected_2'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234', 'processed_tt_124',                                        'processed_tt_24',                    'processed_tt_12', 'processed_tt_23'                                    ]].sum(axis=1, skipna=True)
+# data_df['detected_3'] = data_df[['processed_tt_1234', 'processed_tt_123', 'processed_tt_234',                     'processed_tt_134', 'processed_tt_13',                                                          'processed_tt_23', 'processed_tt_34'                                    ]].sum(axis=1, skipna=True)
+# data_df['detected_4'] = data_df[['processed_tt_1234',                     'processed_tt_234', 'processed_tt_124', 'processed_tt_134',                    'processed_tt_24', 'processed_tt_14',                                       'processed_tt_34'               ]].sum(axis=1, skipna=True)
+
+data_df['non_detected_1'] = data_df[['processed_tt_234']].sum(axis=1, skipna=True)
+data_df['non_detected_2'] = data_df[['processed_tt_134']].sum(axis=1, skipna=True)
+data_df['non_detected_3'] = data_df[['processed_tt_124']].sum(axis=1, skipna=True)
+data_df['non_detected_4'] = data_df[['processed_tt_123']].sum(axis=1, skipna=True)
+
 
 print('Detected and passed calculated.')
-
-# Set columns to 0 if detected or passed values are NaN or 0
-# def handle_zero_or_nan(row, detected_col, passed_col):
-#     if row[detected_col] == 0 or row[passed_col] == 0:
-#         return np.nan
-#     return row[detected_col] / row[passed_col]
-
-# def handle_uncertainty(row, detected_col, passed_col):
-#     if row[detected_col] == 0 or row[passed_col] == 0:
-#         return np.nan
-#     return calculate_efficiency_uncertainty(row[detected_col], row[passed_col])
-
-
-
 print("Calculating efficiencies...")
 
 # Calculate efficiencies and uncertainties explicitly
-from scipy.ndimage import gaussian_filter1d
 
 # Replace all zeroes by NaNs and do not interpolate
 data_df = data_df.replace(0, np.nan)
 
 rolling_effs = False
 if rolling_effs:
-    cols_to_interpolate = ['detected_1', 'detected_2', 'detected_3', 'detected_4', 'passed_1', 'passed_2', 'passed_3', 'passed_4']
+    cols_to_interpolate = ['non_detected_1', 'non_detected_2', 'non_detected_3', 'non_detected_4',
+                           'detected_1', 'detected_2', 'detected_3', 'detected_4',
+                           'passed_1', 'passed_2', 'passed_3', 'passed_4']
+    
     data_df[cols_to_interpolate] = data_df[cols_to_interpolate].replace(0, np.nan).interpolate(method='linear')
     
     sum_window, med_window = 5, 1
@@ -493,14 +660,9 @@ if rolling_effs:
     if rolling_sum:
         for col in cols_to_interpolate:
             data_df[col] = data_df[col].rolling(window=sum_window, center=True, min_periods=1).sum()
-    
 
-# data_df['eff_1'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_1', 'passed_1'), axis=1)
-# data_df['eff_2'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_2', 'passed_2'), axis=1)
-# data_df['eff_3'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_3', 'passed_3'), axis=1)
-# data_df['eff_4'] = data_df.apply(lambda row: handle_zero_or_nan(row, 'detected_4', 'passed_4'), axis=1)
 
-def handle_efficiency_and_uncertainty_all(data_df, detected_cols, passed_cols):
+def handle_efficiency_and_uncertainty_all(data_df, detected_cols, passed_cols, undetected_method):
     # Create empty columns for efficiencies and uncertainties
     efficiency_cols = [f'eff_{i}' for i in range(1, 5)]
     uncertainty_cols = [f'anc_unc_eff_{i}' for i in range(1, 5)]
@@ -509,34 +671,54 @@ def handle_efficiency_and_uncertainty_all(data_df, detected_cols, passed_cols):
     for i in range(4):  # For eff_1, eff_2, ..., eff_4
         detected_col = detected_cols[i]
         passed_col = passed_cols[i]
+        
+        if undetected_method == False:
+        
+            # Vectorized efficiency calculation (row-wise operation)
+            data_df[efficiency_cols[i]] = np.where(
+                (data_df[detected_col] != 0) & (data_df[passed_col] != 0),
+                data_df[detected_col] / data_df[passed_col],
+                np.nan
+            )
 
-        # Vectorized efficiency calculation (row-wise operation)
-        data_df[efficiency_cols[i]] = np.where(
-            (data_df[detected_col] != 0) & (data_df[passed_col] != 0),
-            data_df[detected_col] / data_df[passed_col],
-            np.nan
-        )
+            # Vectorized uncertainty calculation (row-wise operation)
+            data_df[uncertainty_cols[i]] = np.where(
+                (data_df[detected_col] != 0) & (data_df[passed_col] != 0),
+                calculate_efficiency_uncertainty(data_df[detected_col], data_df[passed_col]),
+                np.nan
+            )
+        
+        else:
+            
+            # Vectorized efficiency calculation (row-wise operation)
+            data_df[efficiency_cols[i]] = np.where(
+                (data_df[detected_col] != 0) & (data_df[passed_col] != 0),
+                1 - data_df[detected_col] / data_df[passed_col],
+                np.nan
+            )
 
-        # Vectorized uncertainty calculation (row-wise operation)
-        data_df[uncertainty_cols[i]] = np.where(
-            (data_df[detected_col] != 0) & (data_df[passed_col] != 0),
-            calculate_efficiency_uncertainty(data_df[detected_col], data_df[passed_col]),
-            np.nan
-        )
+            # Vectorized uncertainty calculation (row-wise operation)
+            data_df[uncertainty_cols[i]] = np.where(
+                (data_df[detected_col] != 0) & (data_df[passed_col] != 0),
+                calculate_efficiency_uncertainty(data_df[detected_col], data_df[passed_col]),
+                np.nan
+            )
 
     return data_df
 
+
 # Define columns for detected and passed values
+non_detected_columns = ['non_detected_1', 'non_detected_2', 'non_detected_3', 'non_detected_4']
 detected_columns = ['detected_1', 'detected_2', 'detected_3', 'detected_4']
 passed_columns = ['passed_1', 'passed_2', 'passed_3', 'passed_4']
 
 # Apply the function for all detected and passed columns
-data_df = handle_efficiency_and_uncertainty_all(data_df, detected_columns, passed_columns)
+undetected_method = True
+if undetected_method:
+    data_df = handle_efficiency_and_uncertainty_all(data_df, non_detected_columns, passed_columns, undetected_method=True)
+else:
+    data_df = handle_efficiency_and_uncertainty_all(data_df, detected_columns, passed_columns, undetected_method=False)
 
-# data_df['anc_unc_eff_1'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_1', 'passed_1'), axis=1)
-# data_df['anc_unc_eff_2'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_2', 'passed_2'), axis=1)
-# data_df['anc_unc_eff_3'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_3', 'passed_3'), axis=1)
-# data_df['anc_unc_eff_4'] = data_df.apply(lambda row: handle_uncertainty(row, 'detected_4', 'passed_4'), axis=1)
 
 # Add the systematic uncertainties to the efficiency calculation
 data_df['unc_eff_1'] = np.sqrt( data_df['anc_unc_eff_1']**2 + systematic_unc[0]**2 )
@@ -544,39 +726,578 @@ data_df['unc_eff_2'] = np.sqrt( data_df['anc_unc_eff_2']**2 + systematic_unc[1]*
 data_df['unc_eff_3'] = np.sqrt( data_df['anc_unc_eff_3']**2 + systematic_unc[2]**2 )
 data_df['unc_eff_4'] = np.sqrt( data_df['anc_unc_eff_4']**2 + systematic_unc[3]**2 )
 
-data_df['final_eff_1'] = data_df['eff_1'] / data_df['acc_1']
-data_df['final_eff_2'] = data_df['eff_2'] / data_df['acc_2']
-data_df['final_eff_3'] = data_df['eff_3'] / data_df['acc_3']
-data_df['final_eff_4'] = data_df['eff_4'] / data_df['acc_4']
 
-data_df['unc_final_eff_1'] = data_df['unc_eff_1'] / data_df['acc_1']
-data_df['unc_final_eff_2'] = data_df['unc_eff_2'] / data_df['acc_2']
-data_df['unc_final_eff_3'] = data_df['unc_eff_3'] / data_df['acc_3']
-data_df['unc_final_eff_4'] = data_df['unc_eff_4'] / data_df['acc_4']
+acceptance_corr = False
+if acceptance_corr:
+    data_df['basic_eff_1'] = data_df['eff_1'] / data_df['acc_1']
+    data_df['basic_eff_2'] = data_df['eff_2'] / data_df['acc_2']
+    data_df['basic_eff_3'] = data_df['eff_3'] / data_df['acc_3']
+    data_df['basic_eff_4'] = data_df['eff_4'] / data_df['acc_4']
+else:
+    data_df['basic_eff_1'] = data_df['eff_1']
+    data_df['basic_eff_2'] = data_df['eff_2']
+    data_df['basic_eff_3'] = data_df['eff_3']
+    data_df['basic_eff_4'] = data_df['eff_4']
+
+
+data_df['unc_basic_eff_1'] = data_df['unc_eff_1'] / data_df['acc_1']
+data_df['unc_basic_eff_2'] = data_df['unc_eff_2'] / data_df['acc_2']
+data_df['unc_basic_eff_3'] = data_df['unc_eff_3'] / data_df['acc_3']
+data_df['unc_basic_eff_4'] = data_df['unc_eff_4'] / data_df['acc_4']
+
+
 
 # Calculate the average efficiency
-# data_df['eff_global'] = data_df[['eff_1', 'eff_2', 'eff_3', 'eff_4']].mean(axis=1)
-data_df['eff_global'] = data_df[['final_eff_1', 'final_eff_2', 'final_eff_3']].mean(axis=1)
-# data_df['eff_global'] = data_df[['final_eff_1', 'final_eff_2', 'final_eff_3']].median(axis=1)
+data_df['eff_global'] = data_df[['basic_eff_2', 'basic_eff_3']].mean(axis=1)
 
 # Calculate the uncertainty for the average efficiency
 data_df['unc_eff_global'] = np.sqrt(
-    (data_df['unc_eff_1'] ** 2 +
-     data_df['unc_eff_2'] ** 2 +
-     data_df['unc_eff_3'] ** 2 +
-     data_df['unc_eff_4'] ** 2) / 4
+    (data_df['unc_eff_2'] ** 2 +
+     data_df['unc_eff_3'] ** 2) / 2
 )
 
+
+
+
+
+
+if undetected_method:
+    data_df['basic_eff_1'] = data_df['basic_eff_2']
+    data_df['basic_eff_4'] = data_df['basic_eff_3']
+
+
+# # -----------------------------------------------------------------------------------------------------------------------------------
+# # First equality case: corrected different trigger types separately -----------------------------------------------------------------
+# # -----------------------------------------------------------------------------------------------------------------------------------
+
+# data_df['eff_1234'] = data_df['basic_eff_1'] * data_df['basic_eff_2'] * data_df['basic_eff_3'] *  data_df['basic_eff_4']
+# data_df['eff_134'] = data_df['basic_eff_1'] * ( 1 - data_df['basic_eff_2']) * data_df['basic_eff_3'] *  data_df['basic_eff_4']
+# data_df['eff_124'] = data_df['basic_eff_1'] * data_df['basic_eff_2'] * ( 1 - data_df['basic_eff_3'] ) *  data_df['basic_eff_4']
+
+# data_df['corrected_tt_1234'] = data_df['processed_tt_1234'] / data_df['eff_1234']
+# data_df['corrected_tt_134'] = data_df['processed_tt_134'] / data_df['eff_134']
+# data_df['corrected_tt_124'] = data_df['processed_tt_124'] / data_df['eff_124']
+
+# # These should be the same, if the efficiencies are alright --------------------------------------------------------------
+# group_cols = [ 'corrected_tt_1234' , 'corrected_tt_124', 'corrected_tt_134']
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+
+# # -----------------------------------------------------------------------------------------------------------------------------------
+# # Second equality case: the sum of cases should be the same as the corrected 1234 ---------------------------------------------------
+# # -----------------------------------------------------------------------------------------------------------------------------------
+
+# data_df['summed_tt_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_134'] + data_df['processed_tt_124']
+# data_df['comp_eff'] = data_df['basic_eff_1'] * data_df['basic_eff_2'] * data_df['basic_eff_3'] *  data_df['basic_eff_4'] + \
+#                         data_df['basic_eff_1'] * ( 1 - data_df['basic_eff_2']) * data_df['basic_eff_3'] *  data_df['basic_eff_4'] + \
+#                         data_df['basic_eff_1'] * data_df['basic_eff_2'] * ( 1 - data_df['basic_eff_3'] ) *  data_df['basic_eff_4']
+# data_df['corrected_tt_three_four'] = data_df['summed_tt_1234'] / data_df['comp_eff']
+
+# # These should be the same, if the efficiencies are alright --------------------------------------------------------------
+# group_cols = [ 'corrected_tt_three_four' , 'corrected_tt_1234']
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+
+
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import root
+
+
+def solve_efficiencies(row):
+    A = row['processed_tt_1234']
+    B = row['processed_tt_134']
+    C = row['processed_tt_124']
+
+    # System of equations to solve
+    def equations(vars):
+        e1, e2, e3 = vars  # Let e4 = e1
+        e4 = e1
+
+        eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
+        eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
+
+        eff_combined = (
+            e1 * e2 * e3 * e4 +
+            e1 * (1 - e2) * e3 * e4 +
+            e1 * e2 * (1 - e3) * e4
+        )
+        eq3 = (A + B + C) / eff_combined - A / (e1 * e2 * e3 * e4)
+
+        return [eq1, eq2, eq3]
+
+    # Initial guess
+    initial_guess = [0.9, 0.9, 0.9]
+    result = root(equations, initial_guess, method='hybr')
+
+    if result.success and np.all((0 < result.x) & (result.x < 1)):
+        e1, e2, e3 = result.x
+        e4 = e1
+        return pd.Series([e1, e2, e3, e4])
+    else:
+        return pd.Series([np.nan, np.nan, np.nan, np.nan])
+
+# Solve row by row
+# data_df[['eff_sys_1', 'eff_sys_2', 'eff_sys_3', 'eff_sys_4']] = data_df.apply(solve_efficiencies, axis=1)
+
+
+
+
+def solve_efficiencies_four_planes(row):
+    A = row['processed_tt_1234']
+    B = row['processed_tt_134']
+    C = row['processed_tt_124']
+
+    # System of equations to solve
+    def equations_1(vars):
+        e2, e3 = vars
+
+        eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
+        eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
+
+        return [eq1, eq2]
+    
+    def equations_2(vars):
+        e2, e3 = vars
+
+        eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
+
+        eff_combined = (
+            e2 * e3 +
+            (1 - e2) * e3 +
+            e2 * (1 - e3)
+        )
+        eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
+        
+        return [eq2, eq3]
+    
+    def equations_3(vars):
+        e2, e3 = vars
+
+        eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
+
+        eff_combined = (
+            e2 * e3 +
+            (1 - e2) * e3 +
+            e2 * (1 - e3)
+        )
+        eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
+        
+        return [eq1, eq3]
+    
+    # Initial guess
+    initial_guess = [0.9, 0.9]
+    result_1 = root(equations_1, initial_guess, method='hybr')
+    result_2 = root(equations_2, initial_guess, method='hybr')
+    result_3 = root(equations_3, initial_guess, method='hybr')
+
+    if result_1.success and np.all((0 < result_1.x) & (result_1.x < 1)) and\
+        result_2.success and np.all((0 < result_2.x) & (result_2.x < 1)) and\
+        result_3.success and np.all((0 < result_3.x) & (result_3.x < 1)):
+
+        e2_1, e3_1 = result_1.x
+        e2_2, e3_2 = result_2.x
+        e2_3, e3_3 = result_3.x
+        
+        e2 = ( e2_1 + e2_2 + e2_3 ) / 3 
+        e3 = ( e3_1 + e3_2 + e3_3 ) / 3 
+        
+        e4 = e1 = 0.9
+        return pd.Series([e1, e2, e3, e4])
+    else:
+        return pd.Series([np.nan, np.nan, np.nan, np.nan])
+
+
+data_df[['eff_sys_1', 'eff_sys_2', 'eff_sys_3', 'eff_sys_4']] = data_df.apply(solve_efficiencies_four_planes, axis=1)
+
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# First equality case: corrected different trigger types separately -----------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------------------------------
+
+data_df['eff_1234'] = data_df['eff_sys_1'] * data_df['eff_sys_2'] * data_df['eff_sys_3'] *  data_df['eff_sys_4']
+data_df['eff_134'] = data_df['eff_sys_1'] * ( 1 - data_df['eff_sys_2']) * data_df['eff_sys_3'] *  data_df['eff_sys_4']
+data_df['eff_124'] = data_df['eff_sys_1'] * data_df['eff_sys_2'] * ( 1 - data_df['eff_sys_3'] ) *  data_df['eff_sys_4']
+
+data_df['corrected_tt_1234'] = data_df['processed_tt_1234'] / data_df['eff_1234']
+data_df['corrected_tt_134'] = data_df['processed_tt_134'] / data_df['eff_134']
+data_df['corrected_tt_124'] = data_df['processed_tt_124'] / data_df['eff_124']
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Second equality case: the sum of cases should be the same as the corrected 1234 ---------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------------------------------
+
+data_df['summed_tt_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_134'] + data_df['processed_tt_124']
+data_df['comp_eff'] = data_df['eff_sys_1'] * data_df['eff_sys_2'] * data_df['eff_sys_3'] *  data_df['eff_sys_4'] + \
+                        data_df['eff_sys_1'] * ( 1 - data_df['eff_sys_2']) * data_df['eff_sys_3'] *  data_df['eff_sys_4'] + \
+                        data_df['eff_sys_1'] * data_df['eff_sys_2'] * ( 1 - data_df['eff_sys_3'] ) *  data_df['eff_sys_4']
+data_df['corrected_tt_three_four'] = data_df['summed_tt_1234'] / data_df['comp_eff']
+
+# These should be the same, if the efficiencies are alright --------------------------------------------------------------
+group_cols = [ 'corrected_tt_three_four', 'corrected_tt_1234', 'corrected_tt_134', 'corrected_tt_124']
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Three plane cases, strictly
+# -----------------------------------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------------------------------
+
+# 'processed_tt_234', 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
+# 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+
+# -------------------------------------------------------------------------------------------------------
+# Subdetector 123 ---------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------
+
+data_df['subdetector_123_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123']
+data_df['subdetector_123_12'] = data_df['processed_tt_12'] + data_df['processed_tt_124']
+data_df['subdetector_123_23'] = data_df['processed_tt_23'] + data_df['processed_tt_234']
+data_df['subdetector_123_13'] = data_df['processed_tt_13'] + data_df['processed_tt_134']
+
+A = data_df['subdetector_123_123']
+B = data_df['subdetector_123_13']
+data_df['eff_sys_123_2'] = A / ( A + B )
+
+# Newly calculated eff
+data_df['subdetector_123_eff_123'] = data_df['eff_sys_1'] * data_df['eff_sys_123_2'] * data_df['eff_sys_3']
+data_df['subdetector_123_123_corr'] = data_df['subdetector_123_123'] / data_df['subdetector_123_eff_123']
+
+data_df['subdetector_123_eff_13'] = data_df['eff_sys_1'] * ( 1 - data_df['eff_sys_123_2'] ) * data_df['eff_sys_3']
+data_df['subdetector_123_13_corr'] = data_df['subdetector_123_13'] / data_df['subdetector_123_eff_13']
+
+data_df['subdetector_123_eff_summed'] = data_df['subdetector_123_eff_123'] + data_df['subdetector_123_eff_13']
+data_df['subdetector_123_summed_corr'] = ( data_df['subdetector_123_123'] + data_df['subdetector_123_13'] ) / data_df['subdetector_123_eff_summed']
+
+# group_cols = [ 'subdetector_123_summed_corr', 'subdetector_123_123_corr' , 'subdetector_123_13_corr']
+# # plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'eff_sys_123_2', 'eff_sys_2' ]
+# # plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+
+# -------------------------------------------------------------------------------------------------------
+# Subdetector 234 ---------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------
+
+data_df['subdetector_234_234'] = data_df['processed_tt_1234'] + data_df['processed_tt_234']
+data_df['subdetector_234_23'] = data_df['processed_tt_23']  + data_df['processed_tt_123']
+data_df['subdetector_234_34'] = data_df['processed_tt_34'] + data_df['processed_tt_134']
+data_df['subdetector_234_24'] = data_df['processed_tt_24'] + data_df['processed_tt_124']
+
+A = data_df['subdetector_234_234']
+B = data_df['subdetector_234_24']
+data_df['eff_sys_234_3'] = A / ( A + B )
+
+# Newly calculated eff
+data_df['subdetector_234_eff_234'] = data_df['eff_sys_2'] * data_df['eff_sys_234_3'] * data_df['eff_sys_4']
+data_df['subdetector_234_234_corr'] = data_df['subdetector_234_234'] / data_df['subdetector_234_eff_234']
+
+data_df['subdetector_234_eff_24'] = data_df['eff_sys_2'] * ( 1 - data_df['eff_sys_234_3'] ) * data_df['eff_sys_4']
+data_df['subdetector_234_24_corr'] = data_df['subdetector_234_24'] / data_df['subdetector_234_eff_24']
+
+data_df['subdetector_234_eff_summed'] = data_df['subdetector_234_eff_234'] + data_df['subdetector_234_eff_24']
+data_df['subdetector_234_summed_corr'] = ( data_df['subdetector_234_234'] + data_df['subdetector_234_24'] ) / data_df['subdetector_234_eff_summed']
+
+# group_cols = [ 'subdetector_234_summed_corr', 'subdetector_234_234_corr' , 'subdetector_234_24_corr']
+# # plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'eff_sys_234_3', 'eff_sys_3' ]
+# # plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+
+# -------------------------------------------------------------------------------------------------------
+# Stimated differences in efficiency --------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------
+
+data_df['eff_2_diff'] = ( data_df['eff_sys_123_2'] - data_df['eff_sys_2'] ) / data_df['eff_sys_2'] * 100
+data_df['eff_3_diff'] = ( data_df['eff_sys_234_3'] - data_df['eff_sys_3'] ) / data_df['eff_sys_3'] * 100
+
+# group_cols = [ 'eff_2_diff', 'eff_3_diff', 'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4', ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+
+
+# -------------------------------------------------------------------------------------------------------
+# Noise derivations -------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------
+
+data_df['eff_delta_2'] = data_df['eff_sys_123_2'] - data_df['eff_sys_2']
+data_df['noise_frac_2'] = data_df['eff_delta_2'] / (data_df['eff_sys_2'] - data_df['eff_delta_2'])
+data_df['noise_rate_2'] = data_df['noise_frac_2'] * data_df['subdetector_123_123'] / ( data_df["number_of_mins"] * 60 )  # or + 13 if total 2-plane
+
+# Likewise for detector 3
+data_df['eff_delta_3'] = data_df['eff_sys_234_3'] - data_df['eff_sys_3']
+data_df['noise_frac_3'] = data_df['eff_delta_3'] / (data_df['eff_sys_3'] - data_df['eff_delta_3'])
+data_df['noise_rate_3'] = data_df['noise_frac_3'] * data_df['subdetector_234_234'] / ( data_df["number_of_mins"] * 60 )
+
+
+# group_cols = [ 'noise_rate_2', 'streamer_percent_2', ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+# group_cols = [ 'noise_rate_3', 'streamer_percent_3', ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['streamer_percent_2', 'streamer_percent_3'],
+    ['rates_M2', 'rates_M3'],
+    ['th_chi'],
+    ['sigmoid_width'],
+    ['background_slope'],
+    ['noise_rate_2', 'noise_rate_3'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+
+
+# -------------------------------------------------------------------------------------------------------
+# Noise study -------------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------
+
+# 'processed_tt_234', 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
+# 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+
+time_window = 200e-9  # 200 ns
+data_df['noise_23'] = 2 * time_window * data_df['rates_M2'] * data_df['rates_M3']
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['rates_M2', 'rates_M3'],
+    ['sigmoid_width'],
+    ['background_slope'],
+    ['noise_23'],
+    ['noise_rate_2', 'noise_rate_3']
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+
+
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['rates_M2', 'rates_M3'],
+    ['noise_23'],
+    ['processed_tt_12'],
+    ['processed_tt_23'],
+    ['processed_tt_34'],
+    ['processed_tt_24'],
+    ['processed_tt_13'],
+    ['processed_tt_14'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['rates_M2', 'rates_M3'],
+    ['noise_23'],
+    ['processed_tt_123'],
+    ['processed_tt_234'],
+    ['processed_tt_134'],
+    ['processed_tt_124'],
+    ['processed_tt_1234'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['rates_M2', 'rates_M3'],
+    ['noise_23'],
+    ['original_tt_12'],
+    ['original_tt_23'],
+    ['original_tt_34'],
+    ['original_tt_13'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['rates_M2', 'rates_M3'],
+    ['noise_23'],
+    ['original_tt_123'],
+    ['original_tt_234'],
+    ['original_tt_134'],
+    ['original_tt_124'],
+    ['original_tt_1234'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['rates_M2', 'rates_M3'],
+    ['tracking_tt_12'],
+    ['tracking_tt_23'],
+    ['tracking_tt_34'],
+    ['tracking_tt_123'],
+    ['tracking_tt_234'],
+    ['tracking_tt_1234'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+
+print('----------------------------------------------------------------------')
+print('-------------- Following the subdetectors good idea ------------------')
+print('----------------------------------------------------------------------')
+
+# 'processed_tt_234', 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
+# 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+
+data_df['final_eff_1'] = data_df['eff_sys_2']
+data_df['final_eff_2'] = data_df['eff_sys_123_2']
+data_df['final_eff_3'] = data_df['eff_sys_234_3']
+data_df['final_eff_4'] = data_df['eff_sys_3']
+
+e1 = data_df['final_eff_1']
+e2 = data_df['final_eff_2']
+e3 = data_df['final_eff_3']
+e4 = data_df['final_eff_4']
+
+# Detector 1234
+# 'processed_tt_1234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_14'
+data_df['detector_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
+
+data_df['detector_1234'] = data_df['detector_1234']  / ( data_df["number_of_mins"] * 60 )
+
+data_df['detector_1234_eff'] = e1 * e2 * e3 * e4 + \
+    e1 * (1 - e2) * e3 * e4 + \
+    e1 * e2 * (1 - e3) * e4 + \
+    e1 * (1 - e2) * (1 - e3) * e4
+
+# Detector 123
+# 'processed_tt_123', 'processed_tt_1234',  
+# 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+data_df['detector_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123'] + \
+    data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_124'] + data_df['processed_tt_14'] 
+
+data_df['detector_123'] = data_df['detector_123'] / ( data_df["number_of_mins"] * 60 )
+
+data_df['detector_123_eff'] = e1 * e2 * e3 + \
+    e1 * (1 - e2) * e3
+
+# Detector 234
+# 'processed_tt_234', 'processed_tt_1234', 'processed_tt_14'
+# 'processed_tt_124', 'processed_tt_24', 'processed_tt_134',
+data_df['detector_234'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
+    data_df['processed_tt_14'] + data_df['processed_tt_124'] + data_df['processed_tt_24'] + data_df['processed_tt_134']
+
+data_df['detector_234'] = data_df['detector_234'] / ( data_df["number_of_mins"] * 60 )
+
+data_df['detector_234_eff'] = e2 * e3 * e4 + \
+    e2 * (1 - e3) * e4
+
+# Detector 12
+# 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 
+# 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+data_df['detector_12'] = data_df['processed_tt_12'] + data_df['processed_tt_123'] + \
+    data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
+
+data_df['detector_12'] = data_df['detector_12'] / ( data_df["number_of_mins"] * 60 )
+
+data_df['detector_12_eff'] = e1 * e2
+
+# Detector 23
+# 'processed_tt_234', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
+# 'processed_tt_124', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+data_df['detector_23'] = data_df['processed_tt_234'] + data_df['processed_tt_123'] + \
+    data_df['processed_tt_1234'] + data_df['processed_tt_23'] + data_df['processed_tt_124'] + \
+        data_df['processed_tt_24'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14']
+
+data_df['detector_23'] = data_df['detector_23'] / ( data_df["number_of_mins"] * 60 )
+
+data_df['detector_23_eff'] = e2 * e3
+
+# Detector 34
+# 'processed_tt_234', 'processed_tt_1234',
+# 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_134', 'processed_tt_14'
+data_df['detector_34'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
+    data_df['processed_tt_124'] + data_df['processed_tt_34'] + data_df['processed_tt_24'] + \
+        data_df['processed_tt_134'] + data_df['processed_tt_14']
+
+data_df['detector_34'] = data_df['detector_34'] / ( data_df["number_of_mins"] * 60 )
+
+data_df['detector_34_eff'] = e3 * e4
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['detector_1234'],
+    ['detector_123'],
+    ['detector_234'],
+    ['detector_12'],
+    ['detector_23'],
+    ['detector_34'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['detector_1234_eff'],
+    ['detector_123_eff'],
+    ['detector_234_eff'],
+    ['detector_12_eff'],
+    ['detector_23_eff'],
+    ['detector_34_eff'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+a = 1/0
+
+
+
+print('----------------------------------------------------------------------')
+print('------------------ Final efficiencies definition ---------------------')
+print('----------------------------------------------------------------------')
+
+
+data_df['final_eff_1'] = data_df['eff_sys_2']
+data_df['final_eff_2'] = data_df['eff_sys_2']
+data_df['final_eff_3'] = data_df['eff_sys_3']
+data_df['final_eff_4'] = data_df['eff_sys_3']
+
+
+
 # -------------------------------------------------------------------------------------------------------------------------
-# Calculate the systematic for the efficiencies ---------------------------------------------------------------------------
+# Calculate the fit for the efficiencies ----------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------------------
 
-# 1
-if create_plots:
-    filtered_df = data_df.dropna(subset=['final_eff_1', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+eff_fitting = True
+if eff_fitting:
+    filtered_df = data_df.dropna(subset=['basic_eff_1', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
     x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
     y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
-    z = filtered_df['final_eff_1'].values
+    z = filtered_df['basic_eff_1'].values
     X = np.hstack((x, y))
     model = LinearRegression()
     model.fit(X, z)
@@ -586,12 +1307,10 @@ if create_plots:
     data_df['eff_fit_1'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
     data_df['unc_eff_fit_1'] = 1
 
-# 2
-if create_plots:
-    filtered_df = data_df.dropna(subset=['final_eff_2', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+    filtered_df = data_df.dropna(subset=['basic_eff_2', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
     x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
     y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
-    z = filtered_df['final_eff_2'].values
+    z = filtered_df['basic_eff_2'].values
     X = np.hstack((x, y))
     model = LinearRegression()
     model.fit(X, z)
@@ -601,12 +1320,10 @@ if create_plots:
     data_df['eff_fit_2'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
     data_df['unc_eff_fit_2'] = 1
 
-# 3
-if create_plots:
-    filtered_df = data_df.dropna(subset=['final_eff_3', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+    filtered_df = data_df.dropna(subset=['basic_eff_3', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
     x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
     y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
-    z = filtered_df['final_eff_3'].values
+    z = filtered_df['basic_eff_3'].values
     X = np.hstack((x, y))
     model = LinearRegression()
     model.fit(X, z)
@@ -616,12 +1333,10 @@ if create_plots:
     data_df['eff_fit_3'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
     data_df['unc_eff_fit_3'] = 1
 
-# 4
-if create_plots:
-    filtered_df = data_df.dropna(subset=['final_eff_4', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+    filtered_df = data_df.dropna(subset=['basic_eff_4', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
     x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
     y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
-    z = filtered_df['final_eff_4'].values
+    z = filtered_df['basic_eff_4'].values
     X = np.hstack((x, y))
     model = LinearRegression()
     model.fit(X, z)
@@ -631,72 +1346,23 @@ if create_plots:
     data_df['eff_fit_4'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
     data_df['unc_eff_fit_4'] = 1
 
-# -----------------------------------------------------------------------------
-# Correct by eff using the equation system ------------------------------------
-# -----------------------------------------------------------------------------
-
-if create_plots:
-    print("Creating efficiency and rate plots...")
-    
-    # Create four subplots in a single column, sharing the same x-axis
-    fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(17, 14), sharex=True)
-    
-    for i in range(1, 5):  # Loop from 1 to 4
-        ax = axes[i-1]  # pick the appropriate subplot
-        
-        # Plot final_eff_i
-        ax.plot(data_df['Time'], data_df[f'final_eff_{i}'], 
-                label=f'Eff. {i}', color=f'C{i}', alpha=0.5)
-        
-        # Plot eff_fit_i
-        ax.plot(data_df['Time'], data_df[f'eff_fit_{i}'], 
-                label=f'Eff. {i} Fit', color=f'C{i}', alpha=1)
-        
-        # Fill between uncertainty bands
-        ax.fill_between(data_df['Time'],
-                        data_df[f'final_eff_{i}'] - data_df[f'unc_final_eff_{i}'],
-                        data_df[f'final_eff_{i}'] + data_df[f'unc_final_eff_{i}'],
-                        color=f'C{i}', alpha=0.2)
-        
-        # Labeling and titles
-        ax.set_ylabel('Efficiency')
-        ax.set_ylim(0.5, 1.0)
-        ax.set_title(f'Efficiency {i} over Time')
-        ax.legend(loc='upper left')
-    
-    # Label the common x-axis at the bottom
-    axes[-1].set_xlabel('Time')
-
-    plt.tight_layout()
-
-    # Save or show the plot
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + "_eff_standard_method_compared_to_fit.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-
-    plt.close()
 
 
 if create_plots:
+
     print("Creating efficiency comparison scatter plot...")
-
     fig, ax = plt.subplots(figsize=(10, 7))
-
     for i in range(1, 5):  # Modules 1 to 4
         ax.scatter(
             data_df[f'eff_fit_{i}'],
-            data_df[f'final_eff_{i}'],
+            data_df[f'basic_eff_{i}'],
             alpha=0.5,
             s=1,
             label=f'Module {i}',
             color=f'C{i}'
         )
     
-    low_lim = 0.6
+    low_lim = 0.8
     
     # Plot y = x reference line
     ax.plot([low_lim, 1.0], [low_lim, 1.0], 'k--', linewidth=1, label='Ideal (y = x)')
@@ -718,162 +1384,141 @@ if create_plots:
         fig_idx += 1
         print(f"Saving figure to {new_figure_path}")
         plt.savefig(new_figure_path, format='png', dpi=300)
+    plt.close()
+
+
+
+
+
+
+if create_plots:
+    fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(17, 14), sharex=True)
+    for i in range(1, 5):  # Loop from 1 to 4
+        ax = axes[i-1]  # pick the appropriate subplot
+        # Plot basic_eff_i
+        
+        ax.plot(data_df['Time'], 1 - data_df[f'non_detected_{i}'] * data_df[f"acc_{i}"] / data_df[f'passed_{i}'], 
+                label=f'Eff. {i}, undetected', color=f'C{i}', alpha=1)
+        
+        ax.plot(data_df['Time'], data_df[f'detected_{i}'] * data_df[f"acc_{i}"] / data_df[f'passed_{i}'], 
+                label=f'Eff. {i}, detected', color=f'C{i+4}', alpha=1)
+        
+        
+        ax.plot(data_df['Time'], data_df[f'basic_eff_{i}'], 
+                label=f'Final Eff. {i}', color=f'C{i + 8}', alpha=1)
+        ax.fill_between(data_df['Time'],
+                        data_df[f'basic_eff_{i}'] - data_df[f'unc_basic_eff_{i}'],
+                        data_df[f'basic_eff_{i}'] + data_df[f'unc_basic_eff_{i}'],
+                        alpha=0.2, color=f'C{i}')
+        
+        ax.plot(data_df['Time'], data_df[f'eff_fit_{i}'], 
+                label=f'Eff. {i} Fit', color=f'C{i + 12}', alpha=1)
+        
+        ax.plot(data_df['Time'], data_df[f'eff_sys_{i}'], 
+                label=f'Eff. {i} from System solving', color=f'C{i + 16}', alpha=1)
+        
+        # Labeling and titles
+        ax.set_ylabel('Efficiency')
+        ax.set_ylim(0.8, 1.0)
+        ax.set_title(f'Detected and passed')
+        ax.legend(loc='upper left')
+        
+    # Label the common x-axis at the bottom
+    axes[-1].set_xlabel('Time')
+    plt.tight_layout()
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + f"{fig_idx}" + "_eff_all.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+    plt.close()
+
+
+
+# --------------------------------------------------------------------------------------------------------
+
+
+
+
+a = 1/0
+
+# --------------------------------------------------------------------------------------------------------
+
+e1 = data_df['eff_sys_1']
+e2 = data_df['eff_sys_2']
+e3 = data_df['eff_sys_3']
+e4 = data_df['eff_sys_4']
+
+# Define all trigger patterns and their efficiencies
+pattern_defs = {
+    '1234': e1 * e2 * e3 * e4,
+    '124':  e1 * e2 * (1 - e3) * e4,
+    '134':  e1 * (1 - e2) * e3 * e4,
+    # Add more patterns here if needed
+}
+
+# Initialize totals
+total_rate = 0
+total_eff = 0
+
+# Loop over all patterns
+for patt, eff in pattern_defs.items():
+    colname = f'processed_tt_{patt}'
+    if colname in data_df.columns:
+        total_rate += data_df[colname]
+        total_eff  += eff
+
+# Compute final efficiency-corrected rate
+data_df['rate_eff_corr'] = total_rate / total_eff / ( data_df["number_of_mins"] * 60 )
+
+data_df['uncorrected'] = total_rate / ( data_df["number_of_mins"] * 60 )
+
+
+group_cols = [ 'rate_eff_corr', 'uncorrected']
+plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+group_cols = [ 'uncorrected',]
+plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+
+
+
+
+
+if create_plots:
+    print("Creating efficiency and rate plots...")
+    
+    # Create four subplots in a single column, sharing the same x-axis
+    fig, axes = plt.subplots(nrows=1, ncols=1, figsize=(10, 6), sharex=True)
+    
+    ax = axes  # pick the appropriate subplot
+    ax.plot(data_df['Time'], data_df[f'rate_eff_corr'], 
+            label=f'ad', color=f'b', alpha=0.5)
+    
+    ax.set_title(f'Corrected rate over Time')
+    ax.legend(loc='upper left')
+    
+    # Label the common x-axis at the bottom
+    axes.set_xlabel('Time')
+
+    plt.tight_layout()
+
+    # Save or show the plot
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + f"{fig_idx}" + "_eff_new_method.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
 
     plt.close()
 
 
-from scipy.optimize import least_squares
-
-##############################
-# 1) Detection Probability
-##############################
-
-def detection_prob(pattern, e1, e2, e3, e4, subset):
-    """Compute the probability of detecting a muon in 'pattern' given 'subset'."""
-    if pattern == '1234':
-        return e1*e2*e3*e4 if subset == '1234' else 0.0
-    if pattern == '123':
-        return e1*e2*e3 if subset == '123' else (e1*e2*e3*(1-e4) if subset == '1234' else 0.0)
-    if pattern == '234':
-        return e2*e3*e4 if subset == '234' else ((1-e1)*e2*e3*e4 if subset == '1234' else 0.0)
-    if pattern == '124':
-        return e1*e2*e4*(1-e3) if subset == '1234' else 0.0
-    if pattern == '134':
-        return e1*e3*e4*(1-e2) if subset == '1234' else 0.0
-    if pattern == '12':
-        if subset == '12':
-            return e1*e2
-        elif subset == '123':
-            return e1*e2*(1-e3)
-        elif subset == '1234':
-            return e1*e2*(1-e3)*(1-e4)
-        return 0.0
-    if pattern == '23':
-        if subset == '23':
-            return e2*e3
-        elif subset == '123':
-            return (1-e1)*e2*e3
-        elif subset == '234':
-            return e2*e3*(1-e4)
-        elif subset == '1234':
-            return (1-e1)*e2*e3*(1-e4)
-        return 0.0
-    if pattern == '34':
-        if subset == '34':
-            return e3*e4
-        elif subset == '234':
-            return (1-e2)*e3*e4
-        elif subset == '1234':
-            return (1-e1)*(1-e2)*e3*e4
-        return 0.0
-    if pattern == '13':
-        if subset == '123':
-            return e1*(1-e2)*e3
-        elif subset == '1234':
-            return e1*(1-e2)*e3*(1-e4)
-        return 0.0
-    return 0.0
-
-
-##############################
-# 2) Solve for subset rates
-##############################
-
-def solve_for_subsets(row):
-    """
-    Solve for x_12, x_23, x_34, x_123, x_234, x_1234
-    while taking e1, e2, e3, e4 from 'eff_global', 'final_eff_2', 'final_eff_3', and 'eff_global'.
-    """
-    # Gather measured patterns (fill NaNs with 0)
-    measured_patterns = [
-        ('12',   row.get('type_12', 0)),
-        ('13',   row.get('type_13', 0)),
-        ('23',   row.get('type_23', 0)),
-        ('34',   row.get('type_34', 0)),
-        ('123',  row.get('type_123', 0)),
-        ('124',  row.get('type_124', 0)),
-        ('134',  row.get('type_134', 0)),
-        ('234',  row.get('type_234', 0)),
-        ('1234', row.get('type_1234', 0)),
-    ]
-    # Convert any NaNs to 0
-    measured_patterns = [(pat, 0 if pd.isna(v) else v) for (pat, v) in measured_patterns]
-
-    # Fix plane efficiencies from columns (not fitting them!)
-    e1_val = row.get('eff_fit_1', 0.8)
-    e2_val = row.get('eff_fit_2', 0.8)
-    e3_val = row.get('eff_fit_3', 0.8)
-    # e4_val = row.get('eff_fit_4', 0.8)
-    e4_val = (e1_val + e2_val + e3_val) / 3 # ev_val is the mean of the other three
-    
-    # Define the 6 unknown subsets
-    subset_names = ['12', '23', '34', '123', '234', '1234']
-
-    # Initial guess for x_... (counts). We'll assume ~100 or any positive.
-    p0 = [100]*len(subset_names)
-
-    # Bounds for [0, 1e10]
-    lb = [0]*len(subset_names)
-    ub = [1e10]*len(subset_names)
-
-    # Residual function
-    def residuals(p):
-        x_vals = dict(zip(subset_names, p))
-        res_arr = []
-        for (pattern, R_meas) in measured_patterns:
-            # Sum up x_subset * detection_prob( ... ) for each possible subset
-            model_val = sum(x_vals[sub]*detection_prob(pattern, e1_val, e2_val, e3_val, e4_val, sub)
-                            for sub in subset_names)
-            res_arr.append(model_val - R_meas)
-        return np.array(res_arr, dtype=float)
-
-    # Solve with least_squares
-    res = least_squares(residuals, p0, bounds=(lb, ub), max_nfev=50000)
-
-    if not res.success:
-        return pd.Series({'status': 'failed', 'residual_sum_sq': np.nan})
-
-    best = res.x
-    out = {'status': 'success', 'residual_sum_sq': np.sum(res.fun**2)}
-    for i, label in enumerate(subset_names):
-        out[f'x_{label}'] = best[i]
-    return pd.Series(out)
-
-
-##############################
-# 3) Run row-by-row & store
-##############################
-
-# Drop all the NaN in type_ and in  eff_ columns
-df_unfolded = data_df.dropna(subset=['type_12', 'type_23', 'type_34', 'type_123', 'type_234', 'type_1234',
-                                     'eff_fit_1', 'eff_fit_2', 'eff_fit_3', 'eff_fit_4']).apply(solve_for_subsets, axis=1)
-# df_unfolded = data_df.apply(solve_for_subsets, axis=1)
-
-# Sum of all x_... for each row
-df_unfolded["total_count"] = (
-    df_unfolded["x_12"] + df_unfolded["x_23"] + df_unfolded["x_34"]
-    + df_unfolded["x_123"] + df_unfolded["x_234"] + df_unfolded["x_1234"]
-)
-
-# Convert from counts to rates (assuming 'data_df["number_of_rows"] * 60' is your measuring time in seconds)
-for subset in ["12", "23", "34", "123", "234", "1234"]:
-    data_df[f'new_sys_{subset}'] = df_unfolded[f'x_{subset}'] / (data_df["number_of_rows"] * 60)
-
-# Overall corrected rate
-data_df["eff_corr"] = df_unfolded["total_count"] / (data_df["number_of_rows"] * 60)
-data_df["unc_eff_corr"] = 1
-
-# Example of how you might derive a new efficiency measure
-# (assuming data_df['rate'] is some measured rate)
-data_df["eff_new"] = data_df['rate'] / data_df["eff_corr"]
-
-# Copy plane efficiencies to new columns if desired
-data_df["new_sys_e1"] = data_df["final_eff_1"]
-data_df["new_sys_e2"] = data_df["final_eff_2"]
-data_df["new_sys_e3"] = data_df["final_eff_3"]
-data_df["new_sys_e4"] = data_df["final_eff_4"]
-
-print("Done! 'df_unfolded' has the fitted x_... columns, and 'data_df' now has new_sys_* rates.")
+a = 1/0
 
 
 # -----------------------------------------------------------------------------
@@ -882,7 +1527,7 @@ print('----------------------------------------------------------------------')
 print('------ 2. Geometric method (requires complete angular spectra) -------')
 print('----------------------------------------------------------------------')
 
-print("Georgy's method, WIP...")
+print("WIP...")
 
 # -----------------------------------------------------------------------------
 
@@ -922,12 +1567,12 @@ if create_plots:
     
     
     # Plot the measured: 12, 23, 34, 123, 234, 1234, 13, 24, 14
-    ax2.plot(data_df['Time'], data_df['type_12'] / (data_df["number_of_rows"] * 60), label='Measured 12', color='C1')
-    ax2.plot(data_df['Time'], data_df['type_23'] / (data_df["number_of_rows"] * 60), label='Measured 23', color='C2')
-    ax2.plot(data_df['Time'], data_df['type_34'] / (data_df["number_of_rows"] * 60), label='Measured 34', color='C3')
-    ax2.plot(data_df['Time'], data_df['type_123'] / (data_df["number_of_rows"] * 60), label='Measured 123', color='C4')
-    ax2.plot(data_df['Time'], data_df['type_234'] / (data_df["number_of_rows"] * 60), label='Measured 234', color='C5')
-    ax2.plot(data_df['Time'], data_df['type_1234'] / (data_df["number_of_rows"] * 60), label='Measured 1234', color='C6')
+    ax2.plot(data_df['Time'], data_df['processed_tt_12'] / (data_df["number_of_mins"] * 60), label='Measured 12', color='C1')
+    ax2.plot(data_df['Time'], data_df['processed_tt_23'] / (data_df["number_of_mins"] * 60), label='Measured 23', color='C2')
+    ax2.plot(data_df['Time'], data_df['processed_tt_34'] / (data_df["number_of_mins"] * 60), label='Measured 34', color='C3')
+    ax2.plot(data_df['Time'], data_df['processed_tt_123'] / (data_df["number_of_mins"] * 60), label='Measured 123', color='C4')
+    ax2.plot(data_df['Time'], data_df['processed_tt_234'] / (data_df["number_of_mins"] * 60), label='Measured 234', color='C5')
+    ax2.plot(data_df['Time'], data_df['processed_tt_1234'] / (data_df["number_of_mins"] * 60), label='Measured 1234', color='C6')
     
     ax2.set_ylim(0.1, 5)
     ax2.set_xlabel('Time')
@@ -961,11 +1606,6 @@ if create_plots:
 
     plt.close()
 
-
-import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from sklearn.linear_model import LinearRegression
 
 
 if create_plots:
@@ -1114,8 +1754,6 @@ print('----------------------------------------------------------------------')
 print('----------------------------------------------------------------------')
 print('---------------------- Pressure correction started -------------------')
 print('----------------------------------------------------------------------')
-
-from scipy.optimize import curve_fit
 
 # Define the exponential model
 def fit_model(x, beta, a):
@@ -1709,6 +2347,7 @@ if create_plots:
 
     plt.close()
 
+
 # -----------------------------------------------------------------------------
 # Smoothing filters -----------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -1732,7 +2371,6 @@ if create_plots:
 #         data_df[region] = data_df[region].rolling(window=window_size, center=True).mean()
     
 # # Remove the points in the time limit
-# skip = skip_in_limits # 15 was ok
 # data_df = data_df.iloc[skip:-skip]
 
 

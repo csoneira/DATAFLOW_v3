@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-test = False
+test = True
 
 import sys
 from datetime import datetime, timedelta
@@ -100,7 +100,7 @@ nc_100mbar_file = os.path.join(copernicus_directory, f"{location}_100mbar_temper
 
 # Define start date and file path
 if test:
-    start_date = datetime.now() - timedelta(weeks=2)
+    start_date = datetime.now() - timedelta(weeks=4)
 else:
     start_date = datetime(2023, 7, 1)
     

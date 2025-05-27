@@ -1,26 +1,56 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-'''
-columns_to_keep = [
-    # Timestamp and identifiers
-    'Time', 'original_tt', 'processed_tt', 'tracking_tt',
+"""
+Created on Thu Jun 20 09:15:33 2024
 
-    # Summary metrics and quality flags
-    'CRT_avg', 'sigmoid_width', 'background_slope',
-    'one_side_events', 'purity_of_data_percentage',
-    'unc_y', 'unc_tsum', 'unc_tdif',
+@author: csoneira@ucm.es
+"""
 
-    # Alternative reconstruction outputs
-    'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s', 'alt_th_chi',
+print("\n\n")
+print("              _-o#&&*''''?d:>b\\_")
+print("          _o/\"`''  '',, dMF9MMMMMHo_")
+print("       .o&#'        `\"MbHMMMMMMMMMMMHo.")
+print("     .o\"\" '         vodM*$&&HMMMMMMMMMM?.")
+print("    ,'              $M&ood,~'`(&##MMMMMMH\\")
+print("   /               ,MMMMMMM#b?#bobMMMMHMMML")
+print("  &              ?MMMMMMMMMMMMMMMMM7MMM$R*Hk")
+print(" ?$.            :MMMMMMMMMMMMMMMMMMM/HMMM|`*L")
+print("|               |MMMMMMMMMMMMMMMMMMMMbMH'   T,")
+print("$H#:            `*MMMMMMMMMMMMMMMMMMMMb#}'  `?")
+print("]MMH#             \"\"*\"\"\"\"*#MMMMMMMMMMMMM'    -")
+print("MMMMMb_                   |MMMMMMMMMMMP'     :")
+print("HMMMMMMMHo                 `MMMMMMMMMT       .")
+print("?MMMMMMMMP                  9MMMMMMMM}       -")
+print("-?MMMMMMM                  |MMMMMMMMM?,d-    '")
+print(" :|MMMMMM-                 `MMMMMMMT .M|.   :")
+print("  .9MMM[                    &MMMMM*' `'    .")
+print("   :9MMk                    `MMM#\"        -")
+print("     &M}                     `          .-")
+print("      `&.                             .")
+print("        `~,   .                     ./")
+print("            . _                  .-")
+print("              '`--._,dd###pp=\"\"'")
+print("\n\n")
 
-    # TimTrack reconstruction outputs
-    'x', 'y', 'theta', 'phi', 's', 'th_chi',
 
-    # Strip-level time and charge info (ordered by plane and strip)
-    *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)]
-]
-'''
+# # Timestamp and identifiers
+# 'Time', 'original_tt', 'processed_tt', 'tracking_tt',
+
+# # Summary metrics and quality flags
+# 'CRT_avg', 'sigmoid_width', 'background_slope',
+# 'one_side_events', 'purity_of_data_percentage',
+# 'unc_y', 'unc_tsum', 'unc_tdif',
+
+# # Alternative reconstruction outputs
+# 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s', 'alt_th_chi',
+
+# # TimTrack reconstruction outputs
+# 'x', 'y', 'theta', 'phi', 's', 'th_chi',
+
+# # Strip-level time and charge info (ordered by plane and strip)
+# *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)]
+
 
 import numpy as np
 import pandas as pd
@@ -163,8 +193,8 @@ for filename in os.listdir(source_dir):
         with open(file_path, "r") as f:
             line_count = sum(1 for _ in f)
 
-        # Move the file if it has < 15 or > 100 rows
-        if line_count < 15 or line_count > 300:
+        # Move the file if it has < 10 or > 300 rows
+        if line_count < 10 or line_count > 300:
             shutil.move(file_path, os.path.join(rejected_dir, filename))
             print(f"Moved: {filename}")
 
@@ -698,10 +728,10 @@ print("----------------------------------------------------------------------")
 if polya_fit:
     print("Polya fit. WIP.")
 
-    remove_crosstalk = True
+    remove_crosstalk = False
     remove_streamer = True
     crosstalk_limit = 1
-    streamer_limit = 900
+    streamer_limit = 100
 
     FEE_calibration = {
         "Width": [
@@ -750,15 +780,16 @@ if polya_fit:
     df_list = df_list_OG.copy()
     merged_df = pd.concat(df_list, ignore_index=True)
     merged_df.drop_duplicates(inplace=True)
-
+    
+    print(merged_df.columns.to_list())
+    
+    print(merged_df['original_tt'])
+    
+    merged_df = merged_df[ merged_df['original_tt'] == 1234 ]
+    
     # merged_df = df.copy()
 
-    if remove_crosstalk or remove_streamer:
-        if remove_crosstalk:
-            for col in merged_df.columns:
-                if "Q_" in col and "s" in col:
-                    merged_df[col] = merged_df[col].apply(lambda x: 0 if x < crosstalk_limit else x)
-                        
+    if remove_crosstalk or remove_streamer:    
         if remove_streamer:
             for col in merged_df.columns:
                 if "Q_" in col and "s" in col:
@@ -803,7 +834,7 @@ if polya_fit:
         data = data[data != 0] / q_e  # convert to e–
 
         # Histogram
-        counts, bin_edges = np.histogram(data, bins=300, range=(0, 1.1e7))
+        counts, bin_edges = np.histogram(data, bins=50, range=(0, 1.1e7))
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
         
         bin_center = bin_centers[counts >= 0.05 * max(counts)][0]
@@ -811,13 +842,15 @@ if polya_fit:
         x_fit = bin_centers[mask]
         y_fit = counts[mask]
 
-        # Fit
-        p0 = [1, 1e6, 0.6, max(counts), 1e6]
-        bounds = ([0, 0, 0, 0, -1e16], [100, 1e16, 1, 1e16, 1e16])
+        # Fit theta, nbar, alpha, A, offset
+        p0 = [1, 1e6, 1, max(counts), 1e6]
+        bounds = ([0, 0, 0, 0, -1e16], [20, 1e16, 1,  max(counts), 1e16])
         popt, _ = curve_fit(polya_induced_charge, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=100000)
         theta_fit, nbar_fit, alpha_fit, A_fit, offset_fit = popt
         
         # Store fit results
+        from scipy.special import gamma
+
         polya_results = {
             "module": module,
             "theta": theta_fit,
@@ -825,8 +858,20 @@ if polya_fit:
             "alpha": alpha_fit,
             "A": A_fit,
             "offset": offset_fit,
-            "nbar/alpha": nbar_fit / alpha_fit
+
+            # Effective / composite parameters
+            "nbar/alpha": nbar_fit / alpha_fit,
+            "offset/nbar": offset_fit / nbar_fit,
+            "alpha/nbar": alpha_fit / nbar_fit,
+            "eta_curvature": (theta_fit + 1) * (alpha_fit / nbar_fit),
+            "width_proxy": nbar_fit / np.sqrt(theta_fit + 1),
+            
+            # Mode (only valid for theta > 1)
+            "Q_mode": ((nbar_fit * (theta_fit - 1)) - (alpha_fit * offset_fit)) / (alpha_fit**2 * theta_fit)
+                    if theta_fit > 1 else 0,
         }
+
+        
         if 'polya_fit_list' not in locals():
             polya_fit_list = []
         polya_fit_list.append(polya_results)
@@ -894,7 +939,8 @@ if polya_fit:
     df_polya_fit = pd.DataFrame(polya_fit_list)
 
     print("Polya fit results:")
-    print(df_polya_fit)
+    with pd.option_context('display.precision', 1):
+        print(df_polya_fit)
 
 
 print("----------------------------------------------------------------------")
@@ -2715,13 +2761,6 @@ for i in range(1, 5):
     df[f'count_in_{i}'] = (df[f'Q_{i}'] > 0).astype(int)
     df[f'streamer_{i}'] = (df[f'Q_{i}'] > 100).astype(int)
 
-# Streamer percentage
-for i in range(1, 5):
-    df[f"streamer_percent_{i}"] = (
-        (df[f"streamer_{i}"] / df[f"count_in_{i}"])
-        .fillna(0) * 100
-    )
-
 df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
 
 # for i in range(1, 5):
@@ -3100,6 +3139,10 @@ agg_dict = {
     'count_in_2': 'sum',
     'count_in_3': 'sum',
     'count_in_4': 'sum',
+    'streamer_1': 'sum',
+    'streamer_2': 'sum',
+    'streamer_3': 'sum',
+    'streamer_4': 'sum',
     
     # Values to count
     'original_tt': lambda x: pd.Series(x).value_counts().to_dict(),
@@ -3117,10 +3160,6 @@ agg_dict = {
     
     # Derived metrics
     'Q_event': [custom_mean, custom_std],
-    'streamer_percent_1': custom_mean,
-    'streamer_percent_2': custom_mean,
-    'streamer_percent_3': custom_mean,
-    'streamer_percent_4': custom_mean,
     
     # Quality flags
     'CRT_avg': custom_mean,
@@ -3336,6 +3375,9 @@ for type_key in types:
             resampled_df[f'{type_key}_{type_key_unique}'] = type_dict_col.apply(lambda x: x.get(type_key_unique, 0) if isinstance(x, dict) else 0)
         resampled_df.drop(columns=[f'{type_key}_<lambda>'], inplace=True)
 
+# Streamer percentage
+for i in range(1, 5):
+    resampled_df[f"streamer_percent_{i}"] = ( (resampled_df[f"streamer_{i}"] / resampled_df[f"count_in_{i}"]).fillna(0) * 100 )
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -3345,8 +3387,48 @@ print("----------------------------------------------------------------------")
 
 resampled_df.reset_index(inplace=True)
 
-# # --- Flatten df_polya_fit ---
-# df_polya_flat = df_polya_fit.set_index('module').add_prefix('polya_')  # polya_module_1 → polya_theta, etc.
+
+with pd.option_context('display.precision', 1):
+    print(df_polya_fit)
+
+print("\n\n")
+# Flatten df_polya_fit into wide format
+df_single_row = df_polya_fit.set_index('module').stack().rename('value').reset_index()
+df_single_row['column'] = 'polya_' + df_single_row['level_1'] + '_' + df_single_row['module'].astype(str)
+
+# Fix: pivot without setting index=None
+df_wide = df_single_row.pivot(columns='column', values='value')
+df_wide.columns.name = None  # remove column index name
+df_wide = df_wide.reset_index(drop=True)
+
+# Check available columns
+print(df_wide.columns.to_list())
+
+# Optional: restrict to specific subset of columns
+df_wide = df_wide[[
+    'polya_A_1', 'polya_A_2', 'polya_A_3', 'polya_A_4',
+    'polya_theta_1', 'polya_theta_2', 'polya_theta_3', 'polya_theta_4',
+    'polya_nbar/alpha_1', 'polya_nbar/alpha_2', 'polya_nbar/alpha_3', 'polya_nbar/alpha_4',
+]]
+
+# Repeat values to match number of rows in resampled_df
+df_polya_expanded = pd.concat([df_wide] * len(resampled_df), ignore_index=True)
+
+# Merge with original DataFrame
+resampled_df = pd.concat([resampled_df, df_polya_expanded], axis=1)
+
+# Optional print
+with pd.option_context('display.precision', 3):
+    print(resampled_df[df_wide.columns])
+
+
+
+
+# print(df_polya_flat.columns)
+# print(df_polya_flat.columns)
+# df_polya = df_polya_flat['polya_theta', 'polya_nbar/alpha', 'polya_A']
+
+# print(df_polya)
 
 # # --- Flatten df_cross_fit ---
 # df_cross_flat = df_cross_fit.set_index('key').add_prefix('cross_')  # cross_M1_s1_x0, cross_M1_s1_k
@@ -3364,6 +3446,8 @@ resampled_df.reset_index(inplace=True)
 # flat_polya = df_polya_flat.stack().to_frame().T
 # flat_cross = df_cross_flat.stack().to_frame().T
 # flat_mult = df_mult_flat
+
+# print(flat_polya)
 
 # flat_all = pd.concat([flat_polya, flat_cross, flat_mult], axis=1)
 
@@ -3388,23 +3472,38 @@ resampled_df.to_csv(full_save_path, sep=',', index=False)
 print(f"Complete datafile saved in {full_save_filename}. Path is {full_save_path}")
 
 columns_to_keep = [
-    # Timestamp and identifiers
-    'Time'
-    # 'Time', 'original_tt', 'processed_tt', 'tracking_tt',
+    # Introductory
+    'Time',
+    
+    # Columns to sum -----------------------------------------------------------
+    
+    # Basic counts
+    'events', 'count_in_1', 'count_in_2', 'count_in_3', 'count_in_4',
+    
+    # Detection types
+    'original_tt_123', 'original_tt_12', 'original_tt_234', 'original_tt_34', 'original_tt_23', 'original_tt_1234', 'original_tt_134', 'original_tt_124', 'original_tt_13',
+    'processed_tt_123', 'processed_tt_12', 'processed_tt_234', 'processed_tt_34', 'processed_tt_23', 'processed_tt_1234', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14', 'processed_tt_124',
+    'tracking_tt_1234', 'tracking_tt_123', 'tracking_tt_12', 'tracking_tt_234', 'tracking_tt_34', 'tracking_tt_23',
+    
+    # Region-specific counts
+    'High', 'N', 'S', 'E', 'W',
+    
+    # Counts to average ---------------------------------------------------------
+    
+    # Summary metrics and quality flags
+    'CRT_avg', 'sigmoid_width', 'background_slope',
+    'one_side_events', 'purity_of_data_percentage',
+    'unc_y', 'unc_tsum', 'unc_tdif',
 
-    # # Summary metrics and quality flags
-    # 'CRT_avg', 'sigmoid_width', 'background_slope',
-    # 'one_side_events', 'purity_of_data_percentage',
-    # 'unc_y', 'unc_tsum', 'unc_tdif',
+    # Reconstruction outputs
+    'x', 'y', 'theta', 'phi', 's', 'th_chi',
+    'x_std', 'y_std', 'theta_std', 'phi_std', 's_std', 'th_chi_std',
 
-    # # Alternative reconstruction outputs
-    # 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s', 'alt_th_chi',
-
-    # # TimTrack reconstruction outputs
-    # 'x', 'y', 'theta', 'phi', 's', 'th_chi',
-
-    # # Strip-level time and charge info (ordered by plane and strip)
-    # *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)]
+    'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4',
+    
+    # Configuration parameters
+    "over_P1", "P1-P2", "P2-P3", "P3-P4", "phi_north",
+    
 ]
 
 reduced_df = resampled_df[columns_to_keep]

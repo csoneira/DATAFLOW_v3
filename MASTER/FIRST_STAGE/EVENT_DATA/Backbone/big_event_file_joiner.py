@@ -16,16 +16,14 @@ import matplotlib.pyplot as plt
 from scipy.stats import poisson
 from scipy.optimize import minimize
 
-last_file_test = False
-reanalyze_completed = True
-update_big_event_file = False
-
 # If the minutes of the time of execution are between 0 and 5 then put update_big_event_file to True
 # if datetime.now().minute < 5:
 #     update_big_event_file = True
 
 print("----------------------------------------------------------------------")
-print("--------- Running big_event_file_joiner.py -------------------------------")
+print("----------------------------------------------------------------------")
+print("----------------- Running big_event_file_joiner.py -------------------")
+print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 # -----------------------------------------------------------------------------
@@ -44,12 +42,6 @@ print(f"Station: {station}")
 
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
-# -----------------------------------------------------------------------------
-
-remove_outliers = True
-create_plots = True
-save_plots = True
-create_pdf = True
 fig_idx = 0
 plot_list = []
 
@@ -96,22 +88,22 @@ if files:  # Check if the directory contains any files
 # Move small or too big files in the destination folder to a directory of rejected -----------
 # --------------------------------------------------------------------------------------------
 
-source_dir = base_directories["acc_events_directory"]
-rejected_dir = base_directories["acc_rejected_directory"]
+# source_dir = base_directories["acc_events_directory"]
+# rejected_dir = base_directories["acc_rejected_directory"]
 
-for filename in os.listdir(source_dir):
-    file_path = os.path.join(source_dir, filename)
+# for filename in os.listdir(source_dir):
+#     file_path = os.path.join(source_dir, filename)
     
-    # Check if it's a file
-    if os.path.isfile(file_path):
-        # Count the number of lines in the file
-        with open(file_path, "r") as f:
-            line_count = sum(1 for _ in f)
+#     # Check if it's a file
+#     if os.path.isfile(file_path):
+#         # Count the number of lines in the file
+#         with open(file_path, "r") as f:
+#             line_count = sum(1 for _ in f)
 
-        # Move the file if it has < 15 or > 100 rows
-        if line_count < 15 or line_count > 300:
-            shutil.move(file_path, os.path.join(rejected_dir, filename))
-            print(f"Moved: {filename}")
+#         # Move the file if it has < 15 or > 100 rows
+#         if line_count < 10 or line_count > 300:
+#             shutil.move(file_path, os.path.join(rejected_dir, filename))
+#             print(f"Moved: {filename}")
 
 
 list_events_directory = base_directories["list_events_directory"]
@@ -139,24 +131,6 @@ for file_name in files_to_copy:
     except Exception as e:
         print(f"Failed to copy {file_name}: {e}")
 
-    
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Configurations --------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-force_replacement = True  # Creates a new datafile even if there is already one that looks complete
-show_plots = False
-high_mid_limit_angle = 15
-
-# ---------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------
 
 from tqdm import tqdm
 
@@ -171,11 +145,6 @@ def round_to_significant_digits(x):
 
 def combine_duplicates(group):
     # print("-----------------------------------------------------------------")
-    
-    # Save the index of the first row in the group
-    # first_index = group.index[0]
-    # if first_index > 5:
-    #     return group.iloc[[0]]
     
     # Drop fully NaN rows (except 'Time')
     group = group.dropna(subset=[col for col in group.columns if col not in ["Time", "execution_date"]], how='all')
@@ -207,8 +176,25 @@ def combine_duplicates(group):
         weights = consecutive_group["events"].fillna(0)  # Ensure no NaNs in weights
 
         # Columns to average (weighted)
-        avg_columns = [col for col in group.columns if any(suffix in col for suffix in ["_mean", "_std", "_percent", "over_P1", "P2-P3", "P3-P4", "phi_north"])]
+        suffixes = [
+            # Summary metrics and quality flags
+            'CRT_avg', 'sigmoid_width', 'background_slope',
+            'one_side_events', 'purity_of_data_percentage',
+            'unc_y', 'unc_tsum', 'unc_tdif',
 
+            # Reconstruction outputs
+            'x', 'y', 'theta', 'phi', 's', 'th_chi',
+            'x_std', 'y_std', 'theta_std', 'phi_std', 's_std', 'th_chi_std',
+
+            # Streamer fractions
+            'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4',
+
+            # Config
+            'over_P1', 'P1-P2', 'P2-P3', 'P3-P4', 'phi_north',
+        ]
+
+        avg_columns = [col for col in group.columns if any(s in col for s in suffixes)]
+    
         # All other columns (except "Time") are summed
         sum_columns = [col for col in group.columns if col not in avg_columns and col not in ["Time"]]
 

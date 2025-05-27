@@ -162,7 +162,7 @@ process_files('Odroid_', ["Date", "Hour", "DiskFill1", "DiskFill2", "DiskFillX"]
               "odroid_aggregated.csv")
 
 # Process flow files
-process_files('Flow_', ["Date", "Hour", "FlowRate1", "FlowRate2", "FlowRate3", "FlowRate4"],
+process_files('Flow', ["Date", "Hour", "FlowRate1", "FlowRate2", "FlowRate3", "FlowRate4"],
               "flow_aggregated.csv")
 
 print('All files processed...')

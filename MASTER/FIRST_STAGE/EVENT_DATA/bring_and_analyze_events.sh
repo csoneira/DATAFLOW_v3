@@ -14,6 +14,13 @@ fi
 # echo "bring_and_analyze_events.sh started on: $(date '+%Y-%m-%d %H:%M:%S')"
 
 station=$1
+
+# If $1 is not 1, 2, 3, 4, exit
+if [[ ! "$station" =~ ^[1-4]$ ]]; then
+  echo "Error: Invalid station number. Please provide a number between 1 and 4."
+  exit 1
+fi
+
 # echo "Station: $station"
 # ----------------------------------------------
 
