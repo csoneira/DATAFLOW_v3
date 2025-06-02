@@ -459,7 +459,7 @@ ext_res_tdif_filter = 1
 # Time sum
 CRT_gaussian_fit_quantile = 0.03
 strip_time_diff_bound = 10
-# time_coincidence_window = 7
+coincidence_window_ns = 10.0  # ns
 
 # Front-back charge
 distance_sum_charges_left_fit = -5
@@ -587,53 +587,6 @@ global_variables['discarded_by_time_window'] = 1
 # Function definition ---------------------------------------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
-
-# Calibration functions
-
-# def calibrate_strip_T(column, num_bins=100):
-#     """
-#     Calibrates a given column of T values by filtering and determining an offset.
-
-#     Parameters:
-#         column (numpy.ndarray): Input array of T values.
-#         num_bins (int): Number of bins to use in the histogram.
-
-#     Returns:
-#         float: Calculated offset.
-#     """
-    
-#     T_rel_th = 0.9
-    
-#     # Apply mask to filter values within the threshold
-#     mask = (np.abs(column) < T_diff_pre_cal_threshold)
-#     column = column[mask]
-    
-#     # Remove zero values
-#     column = column[column != 0]
-    
-#     # Calculate histogram
-#     counts, bin_edges = np.histogram(column, bins=num_bins)
-    
-#     # Find the maximum number of counts in any bin
-#     max_counts = np.max(counts)
-    
-#     # Identify bins with counts above the relative threshold
-#     valid_bins = (counts > T_rel_th * max_counts)
-    
-#     # Filter the original column values based on the valid bins
-#     column_filt = []
-#     for i, valid in enumerate(valid_bins):
-#         if valid:
-#             # Include values within the range of this bin
-#             bin_min = bin_edges[i]
-#             bin_max = bin_edges[i + 1]
-#             column_filt.extend(column[(column >= bin_min) & (column < bin_max)])
-#     column_filt = np.array(column_filt)
-    
-#     # Calculate the offset using the mean of the filtered values
-#     offset = np.mean([np.min(column_filt), np.max(column_filt)])
-    
-#     return offset
 
 
 def calibrate_strip_T_diff(T_F, T_B):
@@ -994,11 +947,11 @@ def summary_skew(vdat):
 
 
 def summary(vector):
+    global strip_time_diff_bound
     quantile_left = CRT_gaussian_fit_quantile * 100
     quantile_right = 100 - CRT_gaussian_fit_quantile * 100
     
     vector = np.array(vector)  # Convert list to NumPy array
-    strip_time_diff_bound = 10
     cond = (vector > -strip_time_diff_bound) & (vector < strip_time_diff_bound)  # This should result in a boolean array
     vector = vector[cond]
     
@@ -1019,7 +972,7 @@ def summary(vector):
 
 
 def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
-    global fig_idx
+    global fig_idx, strip_time_diff_bound
 
     fig = plt.figure(figsize=(8, 5))
     ax = fig.add_subplot(1, 1, 1)
@@ -1029,7 +982,6 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     #                           label=f"All hits, {len(vdat)} events, {summary_skew(vdat)}", density=False)
     
     vdat = np.array(vdat)  # Convert list to NumPy array
-    strip_time_diff_bound = 10
     cond = (vdat > -strip_time_diff_bound) & (vdat < strip_time_diff_bound)  # This should result in a boolean array
     vdat = vdat[cond]
     
@@ -2661,7 +2613,7 @@ if create_plots:
 
 
 print("----------------------------------------------------------------------")
-print("---------- Filter if any variable in the strip is 0 (1/2) ------------")
+print("---------- Filter if any variable in the strip is 0 (1/3) ------------")
 print("----------------------------------------------------------------------")
 
 # Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
@@ -4406,7 +4358,7 @@ if crosstalk_removal_and_recalibration:
 
 
 print("----------------------------------------------------------------------")
-print("---------- Filter if any variable in the strip is 0 (2/2) ------------")
+print("---------- Filter if any variable in the strip is 0 (2/3) ------------")
 print("----------------------------------------------------------------------")
 
 # Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
@@ -4501,131 +4453,6 @@ if create_plots:
     if show_plots:
         plt.show()
     plt.close()
-
-
-print("----------------------------------------------------------------------")
-print("----------------------- Y position calculation -----------------------")
-print("----------------------------------------------------------------------")
-
-y_new_method = True
-blur_y = True
-
-strip_limits = [
-    [ [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2], [-98/2, 98/2] ],  
-    [ [-98/2, 98/2], [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2] ],
-    [ [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2], [-98/2, 98/2] ],
-    [ [-98/2, 98/2], [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2] ],
-]
-
-# if y_new_method:
-#     y_columns = {}
-
-#     for plane_id in range(1, 5):
-#         # Retrieve and convert stored binary string to numeric array
-#         topo_binary = np.array([
-#             list(map(int, s)) for s in working_df[f'active_strips_P{plane_id}']
-#         ])  # shape (N, 4)
-
-#         # Select the corresponding Y position vector
-#         y_vec = y_pos_P1_and_P3 if plane_id in [1, 3] else y_pos_P2_and_P4
-        
-#         # Compute weighted average
-#         weighted_y = topo_binary * y_vec
-#         active_counts = topo_binary.sum(axis=1)
-#         active_counts_safe = np.where(active_counts == 0, 1, active_counts)
-
-#         y_position = weighted_y.sum(axis=1) / active_counts_safe
-#         y_position[active_counts == 0] = 0  # enforce zero when no strips are active
-
-#         if blur_y:
-#             y_position_blurred = y_position.copy()
-#             nonzero_mask = y_position != 0
-#             y_position_blurred[nonzero_mask] = np.random.normal(
-#                 loc=y_position[nonzero_mask],
-#                 scale=anc_sy
-#             )
-#             y_columns[f'Y_{plane_id}'] = y_position_blurred
-#         else:
-#             y_columns[f'Y_{plane_id}'] = y_position
-
-
-if y_new_method:
-    y_columns = {}
-
-    for plane_id in range(1, 5):
-        # Decode binary strip activity per plane into shape (N_events, 4)
-        topo_binary = np.array([
-            list(map(int, s)) for s in working_df[f'active_strips_P{plane_id}']
-        ])
-
-        # y-position vector by plane ID
-        y_vec = y_pos_P1_and_P3 if plane_id in [1, 3] else y_pos_P2_and_P4
-
-        # Initial weighted y estimate (default for multi-strip)
-        weighted_y = topo_binary * y_vec
-        active_counts = topo_binary.sum(axis=1)
-        active_counts_safe = np.where(active_counts == 0, 1, active_counts)
-
-        y_position = weighted_y.sum(axis=1) / active_counts_safe
-        y_position[active_counts == 0] = 0  # zero when no strips active
-
-        # Apply uniform blur to single-strip cases
-        one_strip_mask = active_counts == 1
-        one_strip_indices = np.where(one_strip_mask)[0]
-
-        for idx in one_strip_indices:
-            strip_id = np.argmax(topo_binary[idx])  # active strip
-            y_central = y_vec[strip_id]
-            y_min, y_max = strip_limits[plane_id - 1][strip_id]
-            width = y_max - y_min
-
-            y_position[idx] = np.random.uniform(
-                low=y_central - width / 2,
-                high=y_central + width / 2
-            )
-
-        # Apply Gaussian blur to the rest: non-zero and not already blurred
-        if blur_y:
-            gaussian_blur_mask = (y_position != 0) & (~one_strip_mask)
-            y_position[gaussian_blur_mask] = np.random.normal(
-                loc=y_position[gaussian_blur_mask],
-                scale=anc_sy / np.sqrt(2)
-            )
-
-        # Store result
-        y_columns[f'Y_{plane_id}'] = y_position
-
-    # Insert all new Y_ columns at once
-    working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
-
-
-# if create_essential_plots or create_plots:
-if create_plots:
-    plt.figure(figsize=(12, 8))
-    for i, plane_id in enumerate(range(1, 5), 1):
-        plt.subplot(2, 2, i)
-        column_name = f'Y_{plane_id}'
-        data = working_df[column_name]
-        
-        plt.hist(data[data != 0], bins=50, histtype='stepfilled', alpha=0.7)
-        plt.title(f'Y Position Distribution - Plane {plane_id}')
-        plt.xlabel('Y Position (a.u.)')
-        plt.ylabel('Counts')
-        plt.grid(True)
-
-    plt.tight_layout()
-    if save_plots:
-        name_of_file = 'new_Y'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    if show_plots:
-        plt.show()
-    plt.close()
-
-print("Y position calculated.")
 
 
 print("----------------------------------------------------------------------")
@@ -4851,231 +4678,8 @@ if slewing_correction:
 
 
 print("----------------------------------------------------------------------")
-print("------------------------ Time window fitting -------------------------")
+print("--------------------- Defining preprocessed_tt -----------------------")
 print("----------------------------------------------------------------------")
-
-# Print columns working_df
-# print("Columns of working_df:\n", working_df.columns.to_list())
-
-# time_window_fitting = True
-# if time_window_fitting:
-    
-#     T_sum_columns = working_df.filter(regex='_T_sum_')
-
-#     t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
-#     widths = np.linspace(0, 5, 100)  # Scan range of window widths in ns
-
-#     counts_per_width = []
-#     counts_per_width_dev = []
-
-#     for w in widths:
-#         count_in_window = []
-#         for row in t_sum_data:
-#             row_no_zeros = row[row != 0]
-#             if len(row_no_zeros) == 0:
-#                 count_in_window.append(0)
-#                 continue
-
-#             stat = np.mean(row_no_zeros)  # or np.median(row_no_zeros)
-#             lower = stat - w / 2
-#             upper = stat + w / 2
-#             n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
-#             count_in_window.append(n_in_window)
-
-#         counts_per_width.append(np.mean(count_in_window))
-#         counts_per_width_dev.append(np.std(count_in_window))
-
-#     counts_per_width = np.array(counts_per_width)
-#     counts_per_width_dev = np.array(counts_per_width_dev)
-#     counts_per_width_norm = counts_per_width / np.max(counts_per_width)
-
-#     # Define model function: signal (logistic) + linear background
-#     def signal_plus_background(w, S, w0, tau, B):
-#         return S / (1 + np.exp(-(w - w0) / tau)) + B * w
-
-#     # Initial guess: [signal_height, center, width, background_slope]
-#     p0 = [1.0, 1.0, 0.5, 0.02]
-
-#     # Fit
-#     popt, pcov = curve_fit(signal_plus_background, widths, counts_per_width_norm, p0=p0)
-
-#     # Extract parameters
-#     S_fit, w0_fit, tau_fit, B_fit = popt
-#     print(f"Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Sigmoid center w0 = {w0_fit:.4f} ns\n  Sigmoid width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
-
-#     global_variables['sigmoid_width'] = tau_fit
-#     global_variables['background_slope'] = B_fit
-
-#     # if create_plots:
-#     if create_essential_plots or create_plots:
-#         fig, ax = plt.subplots(figsize=(10, 6))
-#         ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
-#         # ax.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
-#         ax.set_xlabel("Window width (ns)")
-#         ax.set_ylabel("Normalized average # of T_sum values in window")
-#         ax.set_title("Fraction of hits within stat-centered window vs width")
-#         ax.grid(True)
-#         w_fit = np.linspace(min(widths), max(widths), 300)
-#         f_fit = signal_plus_background(w_fit, *popt)
-#         ax.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
-#         ax.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
-#         s_vals = S_fit / (1 + np.exp(-(w_fit - w0_fit) / tau_fit))
-#         b_vals = B_fit * w_fit
-#         f_vals = s_vals + b_vals
-#         P_signal = s_vals / f_vals
-#         P_background = b_vals / f_vals
-#         fig = plt.figure(figsize=(10, 8))
-#         gs = GridSpec(2, 1, height_ratios=[1, 2], hspace=0.05)
-#         ax_fill = fig.add_subplot(gs[0])  # Top: signal vs. background fill
-#         ax_main = fig.add_subplot(gs[1], sharex=ax_fill)  # Bottom: your original plot
-#         ax_fill.fill_between(w_fit, 0, P_signal, color='green', alpha=0.4, label='Signal')
-#         ax_fill.fill_between(w_fit, P_signal, 1, color='red', alpha=0.4, label='Background')
-#         ax_fill.set_ylabel("Fraction")
-#         ax_fill.set_ylim(np.min(P_signal), 1)
-#         # ax_fill.set_yticks([0.25, 0.5, 0.75, 1.0])
-#         ax_fill.legend(loc="upper right")
-#         ax_fill.set_title("Estimated Signal and Background Fractions per Window Width")
-#         plt.setp(ax_fill.get_xticklabels(), visible=False)
-#         ax_main.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
-#         # ax_main.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
-#         ax_main.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
-#         ax_main.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
-#         ax_main.set_xlabel("Window width (ns)")
-#         ax_main.set_ylabel("Normalized average # of T_sum values in window")
-#         ax_main.grid(True)
-#         fit_summary = (f"Fit: S = {S_fit:.3f}, w₀ = {w0_fit:.3f} ns, " f"τ = {tau_fit:.3f} ns, B = {B_fit:.4f}/ns")
-#         ax_main.plot([], [], ' ', label=fit_summary)  # invisible handle to add text
-#         ax_main.legend()
-        
-#         if save_plots:
-#             name_of_file = 'stat_window_accumulation'
-#             final_filename = f'{fig_idx}_{name_of_file}.png'
-#             fig_idx += 1
-#             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#             plot_list.append(save_fig_path)
-#             plt.savefig(save_fig_path, format='png')
-#         if show_plots:
-#             plt.show()
-#         plt.close()
-
-
-# time_window_fitting = True
-# if time_window_fitting:
-    
-#     # Define the coincidence window
-#     print("----------------------- Time window filtering ------------------------")
-    
-#     coincidence_window_ns = 7.0
-#     half_window = coincidence_window_ns / 2.0
-
-#     # Identify all _T_sum_ columns
-#     T_sum_columns = working_df.filter(regex='_T_sum_').columns
-
-#     # Process each row individually
-#     for idx, row in working_df.iterrows():
-#         t_sum_values = row[T_sum_columns].values
-#         nonzero = t_sum_values[t_sum_values != 0]
-        
-#         if len(nonzero) == 0:
-#             continue  # Skip if no valid T_sum
-        
-#         # Center: median (or mean)
-#         center = np.median(nonzero)
-#         lower = center - half_window
-#         upper = center + half_window
-
-#         # Mask for keeping values within window
-#         mask = (t_sum_values >= lower) & (t_sum_values <= upper)
-#         new_values = np.where(mask, t_sum_values, 0.0)
-
-#         # Update the original dataframe row
-#         working_df.loc[idx, T_sum_columns] = new_values
-    
-    
-#     print("---------------------------- Fitting loop ----------------------------")
-    
-#     # Loop on Unique original_tt values: [12, 13, 23, 34, 123, 124, 134, 234, 1234]
-#     for original_tt in [12, 13, 23, 34, 123, 124, 134, 234, 1234]:
-#         # Create a mask for the current original_tt
-#         mask = working_df['original_tt'] == original_tt
-
-#         # Filter the DataFrame based on the mask
-#         filtered_df = working_df[mask]
-
-#         # Check if there are any rows in the filtered DataFrame
-#         if len(filtered_df) > 0:
-#             print(f"\nProcessing original_tt: {original_tt} with {len(filtered_df)} events.")
-#             # Perform your analysis on filtered_df here
-#             # For example, you can call the time window fitting function here
-#         T_sum_columns = filtered_df.filter(regex='_T_sum_')
-
-#         t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
-        
-#         nonzero_rows = [np.any(row != 0) for row in t_sum_data]
-#         if not any(nonzero_rows):
-#             print(f"\n[Warning] Skipping Original TT {original_tt}: no non-zero T_sum data.")
-#             continue
-        
-#         widths = np.linspace(0, 12, 100)  # Scan range of window widths in ns
-        
-#         counts_per_width = []
-#         counts_per_width_dev = []
-
-#         for w in widths:
-#             count_in_window = []
-#             for row in t_sum_data:
-#                 row_no_zeros = row[row != 0]
-#                 if len(row_no_zeros) == 0:
-#                     count_in_window.append(0)
-#                     continue
-
-#                 stat = np.mean(row_no_zeros)  # or np.median(row_no_zeros)
-#                 lower = stat - w / 2
-#                 upper = stat + w / 2
-#                 n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
-#                 count_in_window.append(n_in_window)
-
-#             counts_per_width.append(np.mean(count_in_window))
-#             counts_per_width_dev.append(np.std(count_in_window))
-
-#         counts_per_width = np.array(counts_per_width)
-#         counts_per_width_dev = np.array(counts_per_width_dev)
-#         counts_per_width_norm = counts_per_width / np.max(counts_per_width)
-
-#         # Define model function: signal (logistic) + linear background
-#         # def signal_plus_background(w, S, w0, tau, B):
-#         #     return S / (1 + np.exp(-(w - w0) / tau)) + B * w
-        
-#         from scipy.special import erf
-#         def signal_plus_background(w, S, w0, sigma, B):
-#             return 0.5 * S * (1 + erf((w - w0) / (np.sqrt(2) * sigma))) + B * w
-
-#         p0 = [1.0, 1.0, 0.5, 0.02]
-        
-#         # Convert to NumPy arrays (if not already)
-#         widths = np.asarray(widths)
-#         counts_per_width_norm = np.asarray(counts_per_width_norm)
-
-#         # Create a mask for valid (finite) values
-#         valid_mask = np.isfinite(widths) & np.isfinite(counts_per_width_norm)
-
-#         # Apply mask to both x and y data
-#         widths_clean = widths[valid_mask]
-#         counts_clean = counts_per_width_norm[valid_mask]
-        
-#         if len(counts_clean) == 0 or len(widths_clean) == 0:
-#             print(f"[Warning] Skipping Original TT {original_tt}: no valid data.")
-#             continue
-        
-#         # Then fit
-#         popt, pcov = curve_fit(signal_plus_background, widths_clean, counts_clean, p0=p0)
-                
-#         S_fit, w0_fit, tau_fit, B_fit = popt
-#         print(f"Original TT {original_tt} - Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Transition center w0 = {w0_fit:.4f} ns\n  Transition width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
-
-#         global_variables[f'sigmoid_width_{original_tt}'] = tau_fit
-#         global_variables[f'background_slope_{original_tt}'] = B_fit
-
 
 def compute_preprocessed_tt(row):
     name = ''
@@ -5098,135 +4702,113 @@ def compute_preprocessed_tt(row):
 # Apply to all rows
 working_df["preprocessed_tt"] = working_df.apply(compute_preprocessed_tt, axis=1)
 
-print(working_df["preprocessed_tt"].unique())
 
-# Correct the selection of T_sum columns using the original filtering logic:
-# T_sum columns must be identified *after* filtering per original_tt
+print("----------------------------------------------------------------------")
+print("----------------------- Time window filtering ------------------------")
+print("----------------------------------------------------------------------")
 
+# Pre removal of outliers
 spread_results = []
-
 for preprocessed_tt in sorted(working_df["preprocessed_tt"].unique()):
-    # Filter for current original_tt
     filtered_df = working_df[working_df["preprocessed_tt"] == preprocessed_tt].copy()
-
-    # Identify T_sum columns for this subset
     T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
-
-    # Compute intra-event spread (ΔT = max - min of non-zero T_sum)
-    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(
-        lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1
-    )
+    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
     filtered_df["T_sum_spread"] = t_sum_spread_tt
-
-    # Store for summary
     spread_results.append(filtered_df)
-
-# Concatenate all filtered data with correct T_sum_spread
 spread_df = pd.concat(spread_results, ignore_index=True)
 
-# Updated group statistics
-spread_stats_corrected = spread_df.groupby("preprocessed_tt")["T_sum_spread"].agg(['mean', 'std', 'median', 'count'])
+# if create_plots:
+if create_essential_plots or create_plots:
+    fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
+    axs = axs.flatten()
+    for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
+        subset = spread_df[spread_df["preprocessed_tt"] == tt]
+        v = subset["T_sum_spread"].dropna()
+        v = v[v < coincidence_window_ns * 1.2]
+        axs[i].hist(v, bins=50, alpha=0.7)
+        axs[i].set_title(f"TT = {tt}")
+        axs[i].set_xlabel("ΔT (ns)")
+        axs[i].set_ylabel("Events")
+        axs[i].axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
+    fig.suptitle("Non filtered. Intra-Event T_sum Spread by preprocessed_tt")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        hist_filename = f'{fig_idx}_tsum_spread_histograms.png'
+        fig_idx += 1
+        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+        plot_list.append(hist_path)
+        fig.savefig(hist_path, format='png')
+    if show_plots: plt.show()
+    plt.close(fig)
 
-# Updated plots
+# Removal of outliers
+def zero_outlier_tsum(row, threshold=coincidence_window_ns):
+    t_sum_cols = [col for col in row.index if '_T_sum_' in col]
+    t_sum_vals = row[t_sum_cols].copy()
+    nonzero_vals = t_sum_vals[t_sum_vals != 0]
+    if len(nonzero_vals) < 2: return row
+    center = np.median(nonzero_vals)
+    deviations = np.abs(nonzero_vals - center)
+    outliers = deviations > threshold / 2
+    for col in outliers.index[outliers]: row[col] = 0.0
+    return row
+working_df = working_df.apply(zero_outlier_tsum, axis=1)
 
-# 1. Histograms of T_sum spread per original_tt
-fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
-axs = axs.flatten()
+# Post removal of outliers
+spread_results = []
+for preprocessed_tt in sorted(working_df["preprocessed_tt"].unique()):
+    filtered_df = working_df[working_df["preprocessed_tt"] == preprocessed_tt].copy()
+    T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
+    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
+    filtered_df["T_sum_spread"] = t_sum_spread_tt
+    spread_results.append(filtered_df)
+spread_df = pd.concat(spread_results, ignore_index=True)
 
-for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
-    subset = spread_df[spread_df["preprocessed_tt"] == tt]
-    v = subset["T_sum_spread"].dropna()
-    v = v[v < 6]  # Filter out extreme values for better visibility
-    axs[i].hist(v, bins=200, alpha=0.7)
-    axs[i].set_title(f"TT = {tt}")
-    axs[i].set_xlabel("ΔT (ns)")
-    axs[i].set_ylabel("Events")
-
-fig.suptitle("Corrected Intra-Event T_sum Spread by preprocessed_tt")
-fig.tight_layout(rect=[0, 0, 1, 0.95])
-
-if save_plots:
-    hist_filename = f'{fig_idx}_tsum_spread_histograms.png'
-    fig_idx += 1
-    hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
-    plot_list.append(hist_path)
-    fig.savefig(hist_path, format='png')  # Explicit save
-if show_plots:
-    plt.show()
-plt.close(fig)
-
-
-
-# 2. Updated bar chart of signal-like event fraction
-threshold = 10.0
-fraction_clean_corrected = spread_df.groupby("preprocessed_tt")["T_sum_spread"].apply(
-    lambda x: np.sum(x < threshold) / np.sum(~x.isna())
-)
-
-
-
-plt.figure(figsize=(8, 5))
-fraction_clean_corrected.sort_index().plot(kind='bar')
-plt.ylabel("Fraction with ΔT < 2 ns")
-plt.title("Corrected Signal-like Event Fraction per preprocessed_tt")
-plt.grid(True)
-
-if save_plots:
-    name_of_file = f'timing_test'
-    final_filename = f'{fig_idx}_{name_of_file}.png'
-    fig_idx += 1
-    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    plot_list.append(save_fig_path)
-    plt.savefig(save_fig_path, format='png')
-if show_plots:
-    plt.show()
-plt.close()
+# if create_plots:
+if create_essential_plots or create_plots:
+    fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
+    axs = axs.flatten()
+    for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
+        subset = spread_df[spread_df["preprocessed_tt"] == tt]
+        v = subset["T_sum_spread"].dropna()
+        # v = v[v < 6]
+        axs[i].hist(v, bins=50, alpha=0.7)
+        axs[i].set_title(f"TT = {tt}")
+        axs[i].set_xlabel("ΔT (ns)")
+        axs[i].set_ylabel("Events")
+        axs[i].axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
+    fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by preprocessed_tt")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered.png'
+        fig_idx += 1
+        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+        plot_list.append(hist_path)
+        fig.savefig(hist_path, format='png')
+    if show_plots: plt.show()
+    plt.close(fig)
 
 
-# ---------------------------------------------------------------------------------------
-
-
-a = 1/0
-
-from scipy.special import erf
-
-time_window_fitting = True
-coincidence_window_ns = 7.0
-half_window = coincidence_window_ns / 2.0
-
-if time_window_fitting:
+if create_plots:
+# if create_essential_plots or create_plots:
     # Identify all _T_sum_ columns
     T_sum_columns = working_df.filter(regex='_T_sum_').columns
     replaced_count = 0  # Global counter
 
-    for original_tt in [12, 13, 23, 34, 123, 124, 134, 234, 1234]:
-        mask = working_df['original_tt'] == original_tt
+    for preprocessed_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
+        mask = working_df['preprocessed_tt'] == preprocessed_tt
         filtered_df = working_df[mask].copy()  # Work on a copy for fitting
 
         if len(filtered_df) == 0:
             continue
 
-        # Filtering of T_sum values in-place
-        for idx, row in filtered_df.iterrows():
-            t_sum_values = row[T_sum_columns].values
-            nonzero = t_sum_values[t_sum_values != 0]
-            if len(nonzero) == 0:
-                continue
-            center = np.median(nonzero)
-            lower = center - half_window
-            upper = center + half_window
-            mask_vals = (t_sum_values >= lower) & (t_sum_values <= upper)
-            replaced = np.sum(~mask_vals & (t_sum_values != 0))
-            replaced_count += replaced
-            filtered_df.loc[idx, T_sum_columns] = np.where(mask_vals, t_sum_values, 0.0)
-
         # Extract filtered T_sum data
         t_sum_data = filtered_df[T_sum_columns].values
         if not np.any(t_sum_data != 0):
-            print(f"[Warning] Skipping Original TT {original_tt}: all T_sum values filtered out.")
+            print(f"[Warning] Skipping Preprocessed TT {preprocessed_tt}: all T_sum values filtered out.")
             continue
 
-        widths = np.linspace(0, 12, 100)
+        widths = np.linspace(0, coincidence_window_ns, 20)
         counts_per_width = []
         counts_per_width_dev = []
 
@@ -5249,91 +4831,191 @@ if time_window_fitting:
         counts_per_width_dev = np.array(counts_per_width_dev)
         valid_mask = np.isfinite(counts_per_width) & (counts_per_width > 0)
         if not np.any(valid_mask):
-            print(f"[Warning] Skipping Original TT {original_tt}: no valid window accumulation.")
+            print(f"[Warning] Skipping Preprocessed TT {preprocessed_tt}: no valid window accumulation.")
             continue
-        # counts_per_width_norm = counts_per_width / np.max(counts_per_width)
-        counts_per_width_norm = counts_per_width
+        counts_per_width_norm = counts_per_width / np.max(counts_per_width)
+        # counts_per_width_norm = counts_per_width
 
-        # Fitting with erf model
-        def signal_plus_background(w, S, w0, sigma, B):
-            return 0.5 * S * (1 + erf((w - w0) / (np.sqrt(2) * sigma))) + B * w
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window', color='blue', s=30)
+        ax.axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
+        ax.set_xlabel("Window width (ns)")
+        ax.set_ylabel("Normalized average # of T_sum values in window")
+        ax.set_title(f"Fraction of hits within stat-centered window vs width (TT = {preprocessed_tt})")
+        ax.grid(True)
+        ax.legend()
 
-        p0 = [1.0, 1.0, 0.5, 0.02]
-        try:
-            popt, pcov = curve_fit(signal_plus_background, widths[valid_mask], counts_per_width_norm[valid_mask], p0=p0)
-        except RuntimeError:
-            print(f"[Warning] Fit failed for Original TT {original_tt}.")
-            continue
+        if save_plots:
+            name_of_file = f'stat_window_accumulation_{preprocessed_tt}'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
 
-        S_fit, w0_fit, tau_fit, B_fit = popt
-        print(f"Original TT {original_tt} - Fit parameters:\n"
-              f"  Signal amplitude S = {S_fit:.4f}\n"
-              f"  Transition center w0 = {w0_fit:.4f} ns\n"
-              f"  Transition width σ = {tau_fit:.4f} ns\n"
-              f"  Background slope B = {B_fit:.6f} per ns")
 
-        global_variables[f'sigmoid_width_{original_tt}'] = tau_fit
-        global_variables[f'background_slope_{original_tt}'] = B_fit
+print("----------------------------------------------------------------------")
+print("---------- Filter if any variable in the strip is 0 (3/3) ------------")
+print("----------------------------------------------------------------------")
 
-        # if create_plots:
-        if create_essential_plots or create_plots:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
-            # ax.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
-            ax.set_xlabel("Window width (ns)")
-            ax.set_ylabel("Normalized average # of T_sum values in window")
-            ax.set_title("Fraction of hits within stat-centered window vs width")
-            ax.grid(True)
-            w_fit = np.linspace(min(widths), max(widths), 300)
+# Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
+# put the four variables in that plane, strip and event to 0
+
+total_events = len(working_df)
+
+for plane in range(1, 5):
+    for strip in range(1, 5):
+        q_sum  = f'Q{plane}_Q_sum_{strip}'
+        q_diff = f'Q{plane}_Q_diff_{strip}'
+        t_sum  = f'T{plane}_T_sum_{strip}'
+        t_diff = f'T{plane}_T_diff_{strip}'
+        
+        # Build mask
+        mask = (
+            (working_df[q_sum]  == 0) |
+            (working_df[q_diff] == 0) |
+            (working_df[t_sum]  == 0) |
+            (working_df[t_diff] == 0)
+        )
+        
+        # Count affected events
+        num_affected_events = mask.sum()
+        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
+
+        # Zero the affected values
+        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+
+
+print("----------------------------------------------------------------------")
+print("----------------------- Y position calculation -----------------------")
+print("----------------------------------------------------------------------")
+
+y_new_method = True
+blur_y = True
+
+strip_limits = [
+    [ [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2], [-98/2, 98/2] ],  
+    [ [-98/2, 98/2], [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2] ],
+    [ [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2], [-98/2, 98/2] ],
+    [ [-98/2, 98/2], [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2] ],
+]
+
+# if y_new_method:
+#     y_columns = {}
+
+#     for plane_id in range(1, 5):
+#         # Retrieve and convert stored binary string to numeric array
+#         topo_binary = np.array([
+#             list(map(int, s)) for s in working_df[f'active_strips_P{plane_id}']
+#         ])  # shape (N, 4)
+
+#         # Select the corresponding Y position vector
+#         y_vec = y_pos_P1_and_P3 if plane_id in [1, 3] else y_pos_P2_and_P4
+        
+#         # Compute weighted average
+#         weighted_y = topo_binary * y_vec
+#         active_counts = topo_binary.sum(axis=1)
+#         active_counts_safe = np.where(active_counts == 0, 1, active_counts)
+
+#         y_position = weighted_y.sum(axis=1) / active_counts_safe
+#         y_position[active_counts == 0] = 0  # enforce zero when no strips are active
+
+#         if blur_y:
+#             y_position_blurred = y_position.copy()
+#             nonzero_mask = y_position != 0
+#             y_position_blurred[nonzero_mask] = np.random.normal(
+#                 loc=y_position[nonzero_mask],
+#                 scale=anc_sy
+#             )
+#             y_columns[f'Y_{plane_id}'] = y_position_blurred
+#         else:
+#             y_columns[f'Y_{plane_id}'] = y_position
+
+if y_new_method:
+    y_columns = {}
+
+    for plane_id in range(1, 5):
+        # Decode binary strip activity per plane into shape (N_events, 4)
+        topo_binary = np.array([
+            list(map(int, s)) for s in working_df[f'active_strips_P{plane_id}']
+        ])
+
+        # y-position vector by plane ID
+        y_vec = y_pos_P1_and_P3 if plane_id in [1, 3] else y_pos_P2_and_P4
+
+        # Initial weighted y estimate (default for multi-strip)
+        weighted_y = topo_binary * y_vec
+        active_counts = topo_binary.sum(axis=1)
+        active_counts_safe = np.where(active_counts == 0, 1, active_counts)
+
+        y_position = weighted_y.sum(axis=1) / active_counts_safe
+        y_position[active_counts == 0] = 0  # zero when no strips active
+
+        # Apply uniform blur to single-strip cases
+        one_strip_mask = active_counts == 1
+        one_strip_indices = np.where(one_strip_mask)[0]
+
+        for idx in one_strip_indices:
+            strip_id = np.argmax(topo_binary[idx])  # active strip
+            y_central = y_vec[strip_id]
+            y_min, y_max = strip_limits[plane_id - 1][strip_id]
+            width = y_max - y_min
+
+            y_position[idx] = np.random.uniform(
+                low=y_central - width / 2,
+                high=y_central + width / 2
+            )
+
+        # Apply Gaussian blur to the rest: non-zero and not already blurred
+        if blur_y:
+            gaussian_blur_mask = (y_position != 0) & (~one_strip_mask)
+            y_position[gaussian_blur_mask] = np.random.normal(
+                loc=y_position[gaussian_blur_mask],
+                scale=anc_sy / np.sqrt(2)
+            )
+
+        # Store result
+        y_columns[f'Y_{plane_id}'] = y_position
+
+    # Insert all new Y_ columns at once
+    working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
+
+
+if create_essential_plots or create_plots:
+# if create_plots:
+    for preprocessed_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
+        mask = working_df['preprocessed_tt'] == preprocessed_tt
+        filtered_df = working_df[mask].copy()  # Work on a copy for fitting
+    
+        plt.figure(figsize=(12, 8))
+        for i, plane_id in enumerate(range(1, 5), 1):
+            plt.subplot(2, 2, i)
+            column_name = f'Y_{plane_id}'
+            data = filtered_df[column_name]
             
-            f_fit = signal_plus_background(w_fit, *popt)
-            ax.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
-            ax.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
-            s_vals = S_fit / (1 + np.exp(-(w_fit - w0_fit) / tau_fit))
-            b_vals = B_fit * w_fit
-            f_vals = s_vals + b_vals
-            P_signal = s_vals / f_vals
-            P_background = b_vals / f_vals
-            fig = plt.figure(figsize=(10, 8))
-            gs = GridSpec(2, 1, height_ratios=[1, 2], hspace=0.05)
-            ax_fill = fig.add_subplot(gs[0])  # Top: signal vs. background fill
-            ax_main = fig.add_subplot(gs[1], sharex=ax_fill)  # Bottom: your original plot
-            ax_fill.fill_between(w_fit, 0, P_signal, color='green', alpha=0.4, label='Signal')
-            ax_fill.fill_between(w_fit, P_signal, 1, color='red', alpha=0.4, label='Background')
-            ax_fill.set_ylabel("Fraction")
-            ax_fill.set_ylim(np.min(P_signal), 1)
-            
-            # ax_fill.set_yticks([0.25, 0.5, 0.75, 1.0])
-            ax_fill.legend(loc="upper right")
-            ax_fill.set_title(f"Estimated Signal and Background Fractions per Window Width, Original TT: {original_tt}")
-            plt.setp(ax_fill.get_xticklabels(), visible=False)
-            ax_main.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
-            # ax_main.axvline(x=time_coincidence_window, color='red', linestyle='--', label='Time coincidence window')
-            
-            ax_main.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
-            ax_main.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
-            
-            ax_main.set_xlabel("Window width (ns)")
-            ax_main.set_ylabel("Normalized average # of T_sum values in window")
-            ax_main.grid(True)
-            
-            fit_summary = (f"Fit: S = {S_fit:.3f}, w₀ = {w0_fit:.3f} ns, " f"τ = {tau_fit:.3f} ns, B = {B_fit:.4f}/ns")
-            ax_main.plot([], [], ' ', label=fit_summary)  # invisible handle to add text
-            ax_main.legend()
-            
-            if save_plots:
-                name_of_file = f'stat_window_accumulation_{original_tt}'
-                final_filename = f'{fig_idx}_{name_of_file}.png'
-                fig_idx += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
-            if show_plots:
-                plt.show()
-            plt.close()
+            plt.hist(data[data != 0], bins='auto', histtype='stepfilled', alpha=0.7)
+            plt.title(f'Y Position Distribution - Plane {plane_id}')
+            plt.xlabel('Y Position (a.u.)')
+            plt.ylabel('Counts')
+            plt.grid(True)
+        
+        plt.suptitle(f'Y Position Distribution for preprocessed_tt = {preprocessed_tt}', fontsize=16)
+        plt.tight_layout()
+        if save_plots:
+            name_of_file = 'Y_{preprocessed_tt}'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
 
-
-print(f"\n[Info] Total _T_sum_ values replaced (set to 0) due to ±{half_window:.1f} ns filtering: {replaced_count}")
+print("Y position calculated.")
 
 
 print("----------------------------------------------------------------------")
@@ -6373,15 +6055,289 @@ working_df = working_df.join(tracking_df)
 working_df = working_df.copy()
 
 
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# The noise determination, if everything goes well ----------------------------
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+def compute_definitive_tt(row):
+    name = ''
+    for plane in range(1, 5):
+        this_plane = False
+        q_sum_col  = f'P{plane}_Q_sum_final'
+        q_diff_col = f'P{plane}_Q_diff_final'
+        t_sum_col  = f'P{plane}_T_sum_final'
+        t_diff_col = f'P{plane}_T_diff_final'
+        
+        if (row[q_sum_col] != 0 and row[q_diff_col] != 0 and
+            row[t_sum_col] != 0 and row[t_diff_col] != 0):
+            this_plane = True
+        
+        if this_plane:
+            name += str(plane)
+            
+    return int(name) if name else 0  # Return 0 if no plane is valid
+
+# Apply to all rows
+working_df["definitive_tt"] = working_df.apply(compute_definitive_tt, axis=1)
+
+time_window_fitting = True
+if time_window_fitting:
+    
+    print("---------------------------- Fitting loop ----------------------------")
+    
+    for definitive_tt in [ 234 , 123 ,  34, 1234 ,  23   ,12  ,124  ,  134   ,  24 , 13  , 14]:
+        # Create a mask for the current definitive_tt
+        mask = working_df['definitive_tt'] == definitive_tt
+
+        # Filter the DataFrame based on the mask
+        filtered_df = working_df[mask]
+
+        # Check if there are any rows in the filtered DataFrame
+        if len(filtered_df) > 0:
+            print(f"\nProcessing definitive_tt: {definitive_tt} with {len(filtered_df)} events.")
+        T_sum_columns = filtered_df.filter(regex='_T_sum_')
+
+        t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
+        
+        nonzero_rows = [np.any(row != 0) for row in t_sum_data]
+        if not any(nonzero_rows):
+            print(f"\n[Warning] Skipping definitive_tt {definitive_tt}: no non-zero T_sum data.")
+            continue
+        
+        widths = np.linspace(0, coincidence_window_ns, 60)  # Scan range of window widths in ns
+        
+        counts_per_width = []
+        counts_per_width_dev = []
+
+        for w in widths:
+            count_in_window = []
+            for row in t_sum_data:
+                row_no_zeros = row[row != 0]
+                if len(row_no_zeros) == 0:
+                    count_in_window.append(0)
+                    continue
+
+                stat = np.mean(row_no_zeros)  # or np.median(row_no_zeros)
+                lower = stat - w / 2
+                upper = stat + w / 2
+                n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
+                count_in_window.append(n_in_window)
+
+            counts_per_width.append(np.mean(count_in_window))
+            counts_per_width_dev.append(np.std(count_in_window))
+
+        counts_per_width = np.array(counts_per_width)
+        counts_per_width_dev = np.array(counts_per_width_dev)
+        counts_per_width_norm = counts_per_width / np.max(counts_per_width)
+
+        # Define model function: signal (logistic) + linear background
+        # def signal_plus_background(w, S, w0, tau, B):
+        #     return S / (1 + np.exp(-(w - w0) / tau)) + B * w
+        
+        from scipy.special import erf
+        def signal_plus_background(w, S, w0, sigma, B):
+            return 0.5 * S * (1 + erf((w - w0) / (np.sqrt(2) * sigma))) + B * w
+
+        p0 = [1.0, 1.0, 0.5, 0.02]
+        
+        # Convert to NumPy arrays (if not already)
+        widths = np.asarray(widths)
+        counts_per_width_norm = np.asarray(counts_per_width_norm)
+
+        # Create a mask for valid (finite) values
+        valid_mask = np.isfinite(widths) & np.isfinite(counts_per_width_norm)
+
+        # Apply mask to both x and y data
+        widths_clean = widths[valid_mask]
+        counts_clean = counts_per_width_norm[valid_mask]
+        
+        if len(counts_clean) == 0 or len(widths_clean) == 0:
+            print(f"[Warning] Skipping definitive_tt {definitive_tt}: no valid data.")
+            continue
+        
+        # Then fit
+        popt, pcov = curve_fit(signal_plus_background, widths_clean, counts_clean, p0=p0)
+                
+        S_fit, w0_fit, tau_fit, B_fit = popt
+        print(f"definitive_tt {definitive_tt} - Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Transition center w0 = {w0_fit:.4f} ns\n  Transition width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
+
+        global_variables[f'sigmoid_width_{definitive_tt}'] = tau_fit
+        global_variables[f'background_slope_{definitive_tt}'] = B_fit
+
+        # if create_plots:
+        if create_essential_plots or create_plots:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
+            # ax.axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
+            ax.set_xlabel("Window width (ns)")
+            ax.set_ylabel("Normalized average # of T_sum values in window")
+            ax.set_title("Fraction of hits within stat-centered window vs width")
+            ax.grid(True)
+            w_fit = np.linspace(min(widths), max(widths), 300)
+            f_fit = signal_plus_background(w_fit, *popt)
+            ax.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
+            ax.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
+            s_vals = S_fit / (1 + np.exp(-(w_fit - w0_fit) / tau_fit))
+            b_vals = B_fit * w_fit
+            f_vals = s_vals + b_vals
+            P_signal = s_vals / f_vals
+            P_background = b_vals / f_vals
+            fig = plt.figure(figsize=(10, 8))
+            gs = GridSpec(2, 1, height_ratios=[1, 2], hspace=0.05)
+            ax_fill = fig.add_subplot(gs[0])  # Top: signal vs. background fill
+            ax_main = fig.add_subplot(gs[1], sharex=ax_fill)  # Bottom: your original plot
+            ax_fill.fill_between(w_fit, 0, P_signal, color='green', alpha=0.4, label='Signal')
+            ax_fill.fill_between(w_fit, P_signal, 1, color='red', alpha=0.4, label='Background')
+            ax_fill.set_ylabel("Fraction")
+            ax_fill.set_ylim(np.min(P_signal), 1)
+            # ax_fill.set_yticks([0.25, 0.5, 0.75, 1.0])
+            ax_fill.legend(loc="upper right")
+            ax_fill.set_title(f"Estimated Signal and Background Fractions per Window Width, definitive_tt = {definitive_tt}")
+            plt.setp(ax_fill.get_xticklabels(), visible=False)
+            ax_main.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
+            # ax_main.axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
+            ax_main.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
+            ax_main.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
+            ax_main.set_xlabel("Window width (ns)")
+            ax_main.set_ylabel("Normalized average # of T_sum values in window")
+            ax_main.grid(True)
+            fit_summary = (f"Fit: S = {S_fit:.3f}, w₀ = {w0_fit:.3f} ns, " f"τ = {tau_fit:.3f} ns, B = {B_fit:.4f}/ns")
+            ax_main.plot([], [], ' ', label=fit_summary)  # invisible handle to add text
+            ax_main.legend()
+            
+            if save_plots:
+                name_of_file = f'stat_window_accumulation_{definitive_tt}'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+            if show_plots:
+                plt.show()
+            plt.close()
+
+
+# -----------------------------------------------------------------------------
+# Last filterings -------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
 # Put to zero the rows with traking in only one plane, that is, put 0 if tracking_tt < 10
 for index, row in working_df.iterrows():
-    if row['tracking_tt'] < 10 or row['processed_tt'] < 10 or row['original_tt'] < 10:
+    if row['tracking_tt'] < 10 or row['processed_tt'] < 10 or row['original_tt'] < 10 or row['definitive_tt'] < 10:
         working_df.at[index, 'x'] = 0
         working_df.at[index, 'xp'] = 0
         working_df.at[index, 'y'] = 0
         working_df.at[index, 'yp'] = 0
         working_df.at[index, 't0'] = 0
         working_df.at[index, 's'] = 0
+
+
+# -----------------------------------------------------------------------------
+# -------------- Correlate trigger types in different stages ------------------
+# -----------------------------------------------------------------------------
+
+def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_idx, base_dir,
+                        show_plots=False, save_plots=False, plot_list=None):
+
+    analysis_data = df[[row_label, col_label]]
+    counts = analysis_data.groupby([row_label, col_label]).size().unstack(fill_value=0)
+
+    row_order = sorted(analysis_data[row_label].unique(), reverse=True)
+    col_unique = analysis_data[col_label].unique()
+    col_order = list(row_order) + [x for x in col_unique if x not in row_order]
+    counts = counts.reindex(index=row_order, columns=col_order, fill_value=0)
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.set_xticks(np.arange(len(counts.columns)))
+    ax.set_yticks(np.arange(len(counts.index)))
+    ax.set_xticklabels(counts.columns)
+    ax.set_yticklabels(counts.index)
+
+    ax.set_xlabel(col_label)
+    ax.set_ylabel(row_label)
+    ax.set_title(title)
+
+    im = ax.imshow(counts, cmap='plasma', origin='lower')
+    total = counts.values.sum()
+
+    for i in range(len(counts.index)):
+        for j in range(len(counts.columns)):
+            value = counts.iloc[i, j]
+            if value > 0:
+                pct = 100 * value / total
+                if pct > 1:
+                    ax.text(j, i, f"{pct:.1f}%",
+                            ha="center", va="center",
+                            color="black" if value > counts.values.max() * 0.5 else "white")
+
+    plt.tight_layout()
+    if save_plots:
+        final_filename = f'{fig_idx}_{filename_suffix}.png'
+        save_fig_path = os.path.join(base_dir, final_filename)
+        if plot_list is not None:
+            plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+
+    return fig_idx + 1
+
+
+if create_plots or create_essential_plots:
+    fig_idx = plot_tt_correlation(
+        df=working_df,
+        row_label='original_tt',
+        col_label='processed_tt',
+        title='Event counts per (original_tt, processed_tt) combination',
+        filename_suffix='trigger_types_og_and_processed',
+        fig_idx=fig_idx,
+        base_dir=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list
+    )
+
+    fig_idx = plot_tt_correlation(
+        df=working_df,
+        row_label='tracking_tt',
+        col_label='processed_tt',
+        title='Event counts per (tracking_tt, processed_tt) combination',
+        filename_suffix='trigger_types_tracking_and_processed',
+        fig_idx=fig_idx,
+        base_dir=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list
+    )
+
+    fig_idx = plot_tt_correlation(
+        df=working_df,
+        row_label='tracking_tt',
+        col_label='original_tt',
+        title='Event counts per (tracking_tt, original_tt) combination',
+        filename_suffix='trigger_types_tracking_and_original',
+        fig_idx=fig_idx,
+        base_dir=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list
+    )
+    
+    fig_idx = plot_tt_correlation(
+        df=working_df,
+        row_label='original_tt',
+        col_label='definitive_tt',
+        title='Event counts per (original_tt, definitive_tt) combination',
+        filename_suffix='trigger_types_definitive_tt_and_original',
+        fig_idx=fig_idx,
+        base_dir=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -6399,7 +6355,7 @@ n_total = nonzero_numeric_mask.sum().sum()
 n_small = mask.sum().sum()
 definitive_df = definitive_df.mask(mask, 0)
 pct = 100 * n_small / n_total if n_total > 0 else 0
-print(f"In definitive_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
+print(f"\nIn definitive_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
 
 
 # Remove rows with zeros in key places ----------------------------------------
@@ -6431,12 +6387,11 @@ print("----------------------------------------------------------------------")
 
 df_plot_ancillary = definitive_df.copy()
 
-cond = ( df_plot_ancillary['charge_1'] < 200 ) &\
-    ( df_plot_ancillary['charge_2'] < 200 ) &\
-    ( df_plot_ancillary['charge_3'] < 200 ) &\
-    ( df_plot_ancillary['charge_4'] < 200 ) &\
+cond = ( df_plot_ancillary['charge_1'] < 100 ) &\
+    ( df_plot_ancillary['charge_2'] < 100 ) &\
+    ( df_plot_ancillary['charge_3'] < 100 ) &\
+    ( df_plot_ancillary['charge_4'] < 100 ) &\
     ( df_plot_ancillary['charge_event'] > 0 ) &\
-    ( df_plot_ancillary['charge_event'] < 200 ) &\
     ( df_plot_ancillary['s'] > slowness_filter_left ) &\
     ( df_plot_ancillary['s'] < slowness_filter_right ) &\
     ( df_plot_ancillary['alt_s'] > alt_slowness_filter_left ) &\
@@ -6447,11 +6402,10 @@ df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 # if create_plots:
 if create_plots or create_essential_plots:
 
-    def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=60):
-        
-        tdif_lim = 0.2
+    def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=40):
         
         axis_limits = {
+            # Static
             'x': [-pos_filter, pos_filter],
             'y': [-pos_filter, pos_filter],
             'alt_x': [-pos_filter, pos_filter],
@@ -6462,15 +6416,17 @@ if create_plots or create_essential_plots:
             'alt_phi': [-np.pi, np.pi],
             'xp': [-1*proj_filter, proj_filter],
             'yp': [-1*proj_filter, proj_filter],
-            'charge_event': [0, 200],
-            'charge_1': [0, 200],
-            'charge_2': [0, 200],
-            'charge_3': [0, 200],
-            'charge_4': [0, 200],
             's': [slowness_filter_left, slowness_filter_right],
             'alt_s': [alt_slowness_filter_left, alt_slowness_filter_right],
             # 'th_chi': [0, 0.03],
             # 'alt_th_chi': [0, 12],
+            
+            # Dinamic
+            'charge_event': [0, 400],
+            'charge_1': [0, 100],
+            'charge_2': [0, 100],
+            'charge_3': [0, 100],
+            'charge_4': [0, 100],
             'res_ystr_1': [-res_ystr_filter, res_ystr_filter], 'res_ystr_2': [-res_ystr_filter, res_ystr_filter], 'res_ystr_3': [-res_ystr_filter, res_ystr_filter], 'res_ystr_4': [-res_ystr_filter, res_ystr_filter],
             'res_tsum_1': [-res_tsum_filter, res_tsum_filter], 'res_tsum_2': [-res_tsum_filter, res_tsum_filter], 'res_tsum_3': [-res_tsum_filter, res_tsum_filter], 'res_tsum_4': [-res_tsum_filter, res_tsum_filter],
             'res_tdif_1': [-res_tdif_filter, res_tdif_filter], 'res_tdif_2': [-res_tdif_filter, res_tdif_filter], 'res_tdif_3': [-res_tdif_filter, res_tdif_filter], 'res_tdif_4': [-res_tdif_filter, res_tdif_filter],
@@ -6588,13 +6544,26 @@ if create_plots or create_essential_plots:
     # ]
     
     
+    # df_cases_2 = [
+    #     ([("tracking_tt", 12, 12)], "1-2 cases"),
+    #     ([("tracking_tt", 23, 23)], "2-3 cases"),
+    #     ([("tracking_tt", 34, 34)], "3-4 cases"),
+    #     ([("tracking_tt", 123, 123)], "1-2-3 cases"),
+    #     ([("tracking_tt", 234, 234)], "2-3-4 cases"),
+    #     ([("tracking_tt", 1234, 1234)], "1-2-3-4 cases"),
+    # ]
+    
     df_cases_2 = [
-        ([("tracking_tt", 12, 12)], "1-2 cases"),
-        ([("tracking_tt", 23, 23)], "2-3 cases"),
-        ([("tracking_tt", 34, 34)], "3-4 cases"),
-        ([("tracking_tt", 123, 123)], "1-2-3 cases"),
-        ([("tracking_tt", 234, 234)], "2-3-4 cases"),
-        ([("tracking_tt", 1234, 1234)], "1-2-3-4 cases"),
+        ([("definitive_tt", 12, 12)], "1-2 cases"),
+        ([("definitive_tt", 23, 23)], "2-3 cases"),
+        ([("definitive_tt", 34, 34)], "3-4 cases"),
+        ([("definitive_tt", 123, 123)], "1-2-3 cases"),
+        ([("definitive_tt", 234, 234)], "2-3-4 cases"),
+        ([("definitive_tt", 1234, 1234)], "1-2-3-4 cases"),
+        ([("processed_tt", 13, 13)], "1-3 cases"),
+        ([("processed_tt", 14, 14)], "1-4 cases"),
+        ([("processed_tt", 124, 124)], "1-2-4 cases"),
+        ([("processed_tt", 134, 134)], "1-3-4 cases"),
     ]
     
     # df_cases_2 = [
@@ -6649,26 +6618,27 @@ if create_plots or create_essential_plots:
     # ]
 
 
-    # # Charge of each plane -------------------------------------------------------------------
-    # for filters, title in df_cases_2:
-    #     # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
-    #     relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
+    # Charge of each plane -------------------------------------------------------------------
+    for filters, title in df_cases_2:
+        # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
+        relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
 
-    #     # Define the columns - interest dynamically
-    #     columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp'] + relevant_charges
+        # Define the columns - interest dynamically
+        # columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp'] + relevant_charges
+        columns_of_interest = relevant_charges
 
-    #     # Keep the original filters (if needed) and apply them
-    #     fig_idx = plot_hexbin_matrix(
-    #         df_plot_ancillary,
-    #         columns_of_interest,  # Dynamically set the columns to include relevant charges
-    #         filters,  # Keep original filters
-    #         title,
-    #         save_plots,
-    #         show_plots,
-    #         base_directories,
-    #         fig_idx,
-    #         plot_list
-    #     )
+        # Keep the original filters (if needed) and apply them
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            columns_of_interest,  # Dynamically set the columns to include relevant charges
+            filters,  # Keep original filters
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
 
 
     # # Residues --------------------------------------------------------------------------------------
@@ -6745,53 +6715,19 @@ if create_plots or create_essential_plots:
     #         plot_list
     #     )
     
-    # Comparison with alternative fitting -------------------------------------------------------------------
-    # for filters, title in df_cases_2:
-    #     fig_idx = plot_hexbin_matrix(
-    #         df_plot_ancillary,
-    #         ['alt_x', 'alt_y', 'y', 'x'],
-    #         filters,
-    #         title,
-    #         save_plots,
-    #         show_plots,
-    #         base_directories,
-    #         fig_idx,
-    #         plot_list
-    #     )
-    
-    # Comparison with alternative fitting -------------------------------------------------------------------
-    # for filters, title in df_cases_2:
-    #     fig_idx = plot_hexbin_matrix(
-    #         df_plot_ancillary,
-    #         ['alt_phi', 'alt_theta', 'theta', 'phi'],
-    #         filters,
-    #         title,
-    #         save_plots,
-    #         show_plots,
-    #         base_directories,
-    #         fig_idx,
-    #         plot_list
-    #     )
-    
-    # Comparison with alternative fitting -------------------------------------------------------------------
-    # for filters, title in df_cases_2:
-    #     fig_idx = plot_hexbin_matrix(
-    #         df_plot_ancillary,
-    #         ['alt_s', 'charge_event', 's'],
-    #         filters,
-    #         title,
-    #         save_plots,
-    #         show_plots,
-    #         base_directories,
-    #         fig_idx,
-    #         plot_list
-    #     )
-    
+    # plot_col = ['alt_th_chi', 'alt_s', 's', 'th_chi']
+    # plot_col = ['alt_x', 'alt_y', 'y', 'x']
+    # plot_col = ['alt_s', 'charge_event', 's']
+    # plot_col = ['alt_s', 'alt_theta', 'theta', 's']
+    # plt_col = ['alt_th_chi', 'alt_s', 's', 'th_chi']
+    # plot_col = ['alt_phi', 'alt_theta', 'theta', 'phi']
+    plot_col = ['x', 'y', 'theta', 'phi', 'th_chi', 'alt_th_chi', 's', 'alt_s']
+
     # Comparison with alternative fitting -------------------------------------------------------------------
     for filters, title in df_cases_2:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
-            ['alt_s', 'alt_theta', 'theta', 's'],
+            plot_col,
             filters,
             title,
             save_plots,
@@ -6800,20 +6736,7 @@ if create_plots or create_essential_plots:
             fig_idx,
             plot_list
         )
-    
-    # Comparison of chi2 with alternative fitting -------------------------------------------------------------------
-    # for filters, title in df_cases_2:
-    #     fig_idx = plot_hexbin_matrix(
-    #         df_plot_ancillary,
-    #         ['alt_th_chi', 'alt_s', 's', 'th_chi'],
-    #         filters,
-    #         title,
-    #         save_plots,
-    #         show_plots,
-    #         base_directories,
-    #         fig_idx,
-    #         plot_list
-    #     )
+
 
 
 if create_plots or create_essential_plots:
@@ -6910,99 +6833,6 @@ if create_plots or create_essential_plots:
     if show_plots:
         plt.show()
     plt.close()
-
-
-# -----------------------------------------------------------------------------
-# -------------- Correlate trigger types in different stages ------------------
-# -----------------------------------------------------------------------------
-
-def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_idx, base_dir,
-                        show_plots=False, save_plots=False, plot_list=None):
-
-    analysis_data = df[[row_label, col_label]]
-    counts = analysis_data.groupby([row_label, col_label]).size().unstack(fill_value=0)
-
-    row_order = sorted(analysis_data[row_label].unique(), reverse=True)
-    col_unique = analysis_data[col_label].unique()
-    col_order = list(row_order) + [x for x in col_unique if x not in row_order]
-    counts = counts.reindex(index=row_order, columns=col_order, fill_value=0)
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax.set_xticks(np.arange(len(counts.columns)))
-    ax.set_yticks(np.arange(len(counts.index)))
-    ax.set_xticklabels(counts.columns)
-    ax.set_yticklabels(counts.index)
-
-    ax.set_xlabel(col_label)
-    ax.set_ylabel(row_label)
-    ax.set_title(title)
-
-    im = ax.imshow(counts, cmap='plasma', origin='lower')
-    total = counts.values.sum()
-
-    for i in range(len(counts.index)):
-        for j in range(len(counts.columns)):
-            value = counts.iloc[i, j]
-            if value > 0:
-                pct = 100 * value / total
-                if pct > 1:
-                    ax.text(j, i, f"{pct:.1f}%",
-                            ha="center", va="center",
-                            color="black" if value > counts.values.max() * 0.5 else "white")
-
-    plt.tight_layout()
-    if save_plots:
-        final_filename = f'{fig_idx}_{filename_suffix}.png'
-        save_fig_path = os.path.join(base_dir, final_filename)
-        if plot_list is not None:
-            plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    if show_plots:
-        plt.show()
-    plt.close()
-
-    return fig_idx + 1
-
-
-if create_plots or create_essential_plots:
-    fig_idx = plot_tt_correlation(
-        df=df_plot_ancillary,
-        row_label='original_tt',
-        col_label='processed_tt',
-        title='Event counts per (original_tt, processed_tt) combination',
-        filename_suffix='trigger_types_og_and_processed',
-        fig_idx=fig_idx,
-        base_dir=base_directories["figure_directory"],
-        show_plots=show_plots,
-        save_plots=save_plots,
-        plot_list=plot_list
-    )
-
-    fig_idx = plot_tt_correlation(
-        df=df_plot_ancillary,
-        row_label='tracking_tt',
-        col_label='processed_tt',
-        title='Event counts per (tracking_tt, processed_tt) combination',
-        filename_suffix='trigger_types_tracking_and_processed',
-        fig_idx=fig_idx,
-        base_dir=base_directories["figure_directory"],
-        show_plots=show_plots,
-        save_plots=save_plots,
-        plot_list=plot_list
-    )
-
-    fig_idx = plot_tt_correlation(
-        df=df_plot_ancillary,
-        row_label='tracking_tt',
-        col_label='original_tt',
-        title='Event counts per (tracking_tt, original_tt) combination',
-        filename_suffix='trigger_types_tracking_and_original',
-        fig_idx=fig_idx,
-        base_dir=base_directories["figure_directory"],
-        show_plots=show_plots,
-        save_plots=save_plots,
-        plot_list=plot_list
-    )
 
 
 print("----------------------------------------------------------------------")
@@ -7161,74 +6991,6 @@ if create_plots:
     plt.close()
 
 
-# ------------------------------------------------------------------------------------------------
-# ------------------------------------ Time window plotting --------------------------------------
-# ------------------------------------------------------------------------------------------------
-
-# if create_plots or create_essential_plots:
-if create_plots:
-
-    cases = [1234, 123, 234, 124, 134, 12, 23, 34, 13, 14, 24]
-    cmap = plt.colormaps['turbo']
-    colors = cmap(np.linspace(0, 1, len(cases)))
-
-    # Define window widths
-    widths = np.linspace(0, 20, 200)
-    plt.figure(figsize=(10, 6))
-
-    for idx, case in enumerate(cases):
-        data_case = definitive_df[definitive_df["processed_tt"] == case]
-        
-        # Extract only the _T_sum_ columns
-        t_sum_columns = [col for col in data_case.columns if "_T_sum_" in col]
-        t_sum_data = data_case[t_sum_columns].values  # shape: (n_events, 16)
-
-        counts_per_width = []
-        counts_per_width_dev = []
-        
-        for w in widths:
-            count_in_window = []
-
-            for row in t_sum_data:
-                row_no_zeros = row[row != 0]
-                if len(row_no_zeros) == 0:
-                    count_in_window.append(0)
-                    continue
-
-                stat = np.mean(row_no_zeros)
-                lower = stat - w / 2
-                upper = stat + w / 2
-                n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
-                count_in_window.append(n_in_window)
-
-            counts_per_width.append(np.mean(count_in_window))
-            counts_per_width_dev.append(np.std(count_in_window))
-
-        plt.scatter(widths, counts_per_width / np.max(counts_per_width), color=colors[idx], label=f"type {case}")
-        counts_per_width = np.array(counts_per_width)
-        # counts_per_width_dev = np.array(counts_per_width_dev)
-        # plt.fill_between( widths, (counts_per_width - counts_per_width_dev) / np.max(counts_per_width), (counts_per_width + counts_per_width_dev) / np.max(counts_per_width), color=colors[idx], alpha=0.2)
-
-    plt.xlabel("Window width (ns)")
-    plt.ylabel("Average number of non-zero T_sum values in window")
-    plt.title("Counts inside statistic-centered window vs w")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    
-    if save_plots:
-        name_of_file = 'window_coincidence_count'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-        
-    if show_plots:
-        plt.show()
-        
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("-------------------------- Save and finish ---------------------------")
@@ -7274,13 +7036,15 @@ for i, module in enumerate(['1', '2', '3', '4']):
         definitive_df[f'Q_P{module}s{strip}'] = definitive_df[f'Q{module}_Q_sum_{strip}']
         definitive_df[f'Q_P{module}s{strip}_with_crstlk'] = definitive_df[f'Q{module}_Q_sum_{strip}_with_crstlk']
 
+sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
+background_cols = [col for col in df.columns if col.startswith('background_slope_')]
+
 columns_to_keep = [
     # Timestamp and identifiers
     'Time', 'original_tt', 'processed_tt', 'tracking_tt',
 
     # Summary metrics and quality flags
-    'CRT_avg', 'sigmoid_width', 'background_slope',
-    'one_side_events', 'purity_of_data_percentage',
+    'CRT_avg', 'one_side_events', 'purity_of_data_percentage',
     'unc_y', 'unc_tsum', 'unc_tdif',
 
     # Alternative reconstruction outputs
@@ -7295,6 +7059,11 @@ columns_to_keep = [
     # Strip-level time and charge info with crosstalk
     *[f'Q_P{p}s{s}_with_crstlk' for p in range(1, 5) for s in range(1, 5)]
 ]
+
+sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
+background_cols = [col for col in df.columns if col.startswith('background_slope_')]
+
+columns_to_keep.extend(sigmoid_cols + background_cols)
 
 reduced_df = definitive_df[columns_to_keep]
 reduced_df.to_csv(save_list_path, index=False, sep=',', float_format='%.5g')

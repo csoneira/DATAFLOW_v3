@@ -34,24 +34,6 @@ print("              '`--._,dd###pp=\"\"'")
 print("\n\n")
 
 
-# # Timestamp and identifiers
-# 'Time', 'original_tt', 'processed_tt', 'tracking_tt',
-
-# # Summary metrics and quality flags
-# 'CRT_avg', 'sigmoid_width', 'background_slope',
-# 'one_side_events', 'purity_of_data_percentage',
-# 'unc_y', 'unc_tsum', 'unc_tdif',
-
-# # Alternative reconstruction outputs
-# 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s', 'alt_th_chi',
-
-# # TimTrack reconstruction outputs
-# 'x', 'y', 'theta', 'phi', 's', 'th_chi',
-
-# # Strip-level time and charge info (ordered by plane and strip)
-# *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)]
-
-
 import numpy as np
 import pandas as pd
 import sys
@@ -177,6 +159,7 @@ if files:  # Check if the directory contains any files
     for file in files:
         os.remove(os.path.join(figure_directory, file))
 
+
 # --------------------------------------------------------------------------------------------
 # Move small or too big files in the destination folder to a directory of rejected -----------
 # --------------------------------------------------------------------------------------------
@@ -194,7 +177,7 @@ for filename in os.listdir(source_dir):
             line_count = sum(1 for _ in f)
 
         # Move the file if it has < 10 or > 300 rows
-        if line_count < 10 or line_count > 300:
+        if line_count < 2 or line_count > 10000:
             shutil.move(file_path, os.path.join(rejected_dir, filename))
             print(f"Moved: {filename}")
 
@@ -3132,8 +3115,8 @@ print("----------------------------------------------------------------------")
 df['events'] = 1
 
 # Aggregation logic
+# Start with your static aggregation dictionary
 agg_dict = {
-    # Values to sum ---------------------------------------------------
     'events': 'sum',
     'count_in_1': 'sum',
     'count_in_2': 'sum',
@@ -3144,13 +3127,10 @@ agg_dict = {
     'streamer_3': 'sum',
     'streamer_4': 'sum',
     
-    # Values to count
     'original_tt': lambda x: pd.Series(x).value_counts().to_dict(),
     'processed_tt': lambda x: pd.Series(x).value_counts().to_dict(),
     'tracking_tt': lambda x: pd.Series(x).value_counts().to_dict(),
     
-    # Values to average -----------------------------------------------
-    # Fitting values
     'new_x': [custom_mean, custom_std],
     'new_y': [custom_mean, custom_std],
     'new_theta': [custom_mean, custom_std],
@@ -3158,26 +3138,28 @@ agg_dict = {
     'new_s': [custom_mean, custom_std],
     'new_th_chi': [custom_mean, custom_std],
     
-    # Derived metrics
     'Q_event': [custom_mean, custom_std],
     
-    # Quality flags
     'CRT_avg': custom_mean,
-    'sigmoid_width': custom_mean,
-    'background_slope': custom_mean,
     'one_side_events': custom_mean,
     'purity_of_data_percentage': custom_mean,
     'unc_y': custom_mean,
     'unc_tsum': custom_mean,
     'unc_tdif': custom_mean,
     
-    # Configuration parameters
     "over_P1": custom_mean,
     "P1-P2": custom_mean,
     "P2-P3": custom_mean,
     "P3-P4": custom_mean,
     "phi_north": custom_mean,
 }
+
+# Dynamically add all sigmoid_width_XXX and background_slope_XXX columns
+sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
+background_cols = [col for col in df.columns if col.startswith('background_slope_')]
+
+for col in sigmoid_cols + background_cols:
+    agg_dict[col] = custom_mean
 
 # Add all new region columns with sum aggregation
 for col in df.columns:
@@ -3471,6 +3453,9 @@ resampled_df = resampled_df.applymap(round_to_significant_digits)
 resampled_df.to_csv(full_save_path, sep=',', index=False)
 print(f"Complete datafile saved in {full_save_filename}. Path is {full_save_path}")
 
+sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
+background_cols = [col for col in df.columns if col.startswith('background_slope_')]
+
 columns_to_keep = [
     # Introductory
     'Time',
@@ -3491,8 +3476,7 @@ columns_to_keep = [
     # Counts to average ---------------------------------------------------------
     
     # Summary metrics and quality flags
-    'CRT_avg', 'sigmoid_width', 'background_slope',
-    'one_side_events', 'purity_of_data_percentage',
+    'CRT_avg', 'one_side_events', 'purity_of_data_percentage',
     'unc_y', 'unc_tsum', 'unc_tdif',
 
     # Reconstruction outputs
@@ -3502,9 +3486,24 @@ columns_to_keep = [
     'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4',
     
     # Configuration parameters
-    "over_P1", "P1-P2", "P2-P3", "P3-P4", "phi_north",
-    
+    "over_P1", "P1-P2", "P2-P3", "P3-P4", "phi_north",   
 ]
+
+sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
+background_cols = [col for col in df.columns if col.startswith('background_slope_')]
+
+columns_to_keep.extend(sigmoid_cols + background_cols)
+
+# Filter columns_to_keep to include only those present in resampled_df
+valid_columns = [col for col in columns_to_keep if col in resampled_df.columns]
+
+# Optionally, fill missing columns with NaN (or zeros) before subsetting
+missing_columns = [col for col in columns_to_keep if col not in resampled_df.columns]
+for col in missing_columns:
+    resampled_df[col] = np.nan  # or 0, depending on context
+
+# Now subset safely
+reduced_df = resampled_df[columns_to_keep]
 
 reduced_df = resampled_df[columns_to_keep]
 reduced_df.to_csv(save_path, index=False, sep=',', float_format='%.5g')

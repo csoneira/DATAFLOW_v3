@@ -86,7 +86,7 @@ show_errorbar = False
 
 recalculate_pressure_coeff = True
 
-res_win_min = 15 # 180 Resampling window minutes
+res_win_min = 10 # 180 Resampling window minutes
 # HMF_ker = 1 # It must be odd. Horizontal Median Filter
 # MAF_ker = 1 # Moving Average Filter
 
@@ -979,9 +979,9 @@ data_df['subdetector_123_summed_corr'] = ( data_df['subdetector_123_123'] + data
 # # plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
 # plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
 
-# group_cols = [ 'eff_sys_123_2', 'eff_sys_2' ]
-# # plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
-# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+group_cols = [ 'eff_sys_123_2', 'eff_sys_2' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
 
 
 # -------------------------------------------------------------------------------------------------------
@@ -1011,9 +1011,9 @@ data_df['subdetector_234_summed_corr'] = ( data_df['subdetector_234_234'] + data
 # # plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
 # plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
 
-# group_cols = [ 'eff_sys_234_3', 'eff_sys_3' ]
-# # plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
-# plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
+group_cols = [ 'eff_sys_234_3', 'eff_sys_3' ]
+# plot_pressure_and_group(data_df, 'sensors_ext_Pressure_ext', 'Pressure', group_cols, title='Pressure and Selected Columns')
+plot_pressure_and_group(data_df, 'sensors_ext_Temperature_ext', 'temperature', group_cols, title='Temperature and Selected Columns')
 
 
 # -------------------------------------------------------------------------------------------------------
@@ -1148,6 +1148,18 @@ group_cols = [
 plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
 
 
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['original_tt_134'],
+    ['original_tt_124'],
+    ['original_tt_1234'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+
 group_cols = [
     ['sensors_ext_Pressure_ext'],
     ['sensors_ext_Temperature_ext'],
@@ -1162,7 +1174,6 @@ group_cols = [
 plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
 
 
-
 print('----------------------------------------------------------------------')
 print('-------------- Following the subdetectors good idea ------------------')
 print('----------------------------------------------------------------------')
@@ -1170,9 +1181,14 @@ print('----------------------------------------------------------------------')
 # 'processed_tt_234', 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
 # 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
 
+# data_df['final_eff_1'] = data_df['eff_sys_2']
+# data_df['final_eff_2'] = data_df['eff_sys_123_2']
+# data_df['final_eff_3'] = data_df['eff_sys_234_3']
+# data_df['final_eff_4'] = data_df['eff_sys_3']
+
 data_df['final_eff_1'] = data_df['eff_sys_2']
-data_df['final_eff_2'] = data_df['eff_sys_123_2']
-data_df['final_eff_3'] = data_df['eff_sys_234_3']
+data_df['final_eff_2'] = data_df['eff_sys_2']
+data_df['final_eff_3'] = data_df['eff_sys_3']
 data_df['final_eff_4'] = data_df['eff_sys_3']
 
 e1 = data_df['final_eff_1']
@@ -1190,6 +1206,7 @@ data_df['detector_1234_eff'] = e1 * e2 * e3 * e4 + \
     e1 * (1 - e2) * e3 * e4 + \
     e1 * e2 * (1 - e3) * e4 + \
     e1 * (1 - e2) * (1 - e3) * e4
+
 
 # Detector 123
 # 'processed_tt_123', 'processed_tt_1234',  
@@ -1272,7 +1289,144 @@ group_cols = [
 plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
 
 
-a = 1/0
+# Now correcting by efficiency
+data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
+data_df['detector_123_eff_corr'] = data_df['detector_123'] / data_df['detector_123_eff']
+data_df['detector_234_eff_corr'] = data_df['detector_234'] / data_df['detector_234_eff']
+data_df['detector_12_eff_corr'] = data_df['detector_12'] / data_df['detector_12_eff']
+data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
+data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['detector_1234_eff_corr'],
+    ['detector_123_eff_corr'],
+    ['detector_234_eff_corr'],
+    ['detector_12_eff_corr'],
+    ['detector_23_eff_corr'],
+    ['detector_34_eff_corr'],
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+
+
+from scipy.stats import pearsonr
+
+def plot_eff_vs_rate(data_df, eff_col, rate_col, corrected_col, label_suffix=''):
+    """
+    Plot detector efficiency vs original and corrected rate, show correlation coefficients and fit lines.
+
+    Parameters:
+    - data_df: DataFrame containing the data
+    - eff_col: column name with efficiency values
+    - rate_col: original raw rate column
+    - corrected_col: corrected rate column
+    - label_suffix: string to append to legend labels
+    """
+    global fig_idx, show_plots, save_plots, figure_path
+
+    # Drop NaNs
+    valid = data_df[[eff_col, rate_col, corrected_col]].dropna()
+    x = valid[eff_col].values
+    y_orig = valid[rate_col].values
+    y_corr = valid[corrected_col].values
+
+    # Compute Pearson correlations
+    corr_orig, _ = pearsonr(x, y_orig)
+    corr_corr, _ = pearsonr(x, y_corr)
+
+    # Linear fits
+    p_orig = np.polyfit(x, y_orig, 1)
+    p_corr = np.polyfit(x, y_corr, 1)
+    x_fit = np.linspace(x.min(), x.max(), 500)
+
+    plt.figure(figsize=(8, 6))
+    plt.scatter(x, y_orig, alpha=0.7, label=f'Original rate {label_suffix}', s=2)
+    plt.scatter(x, y_corr, alpha=0.7, label=f'Corrected rate {label_suffix}', s=2)
+    plt.plot(x_fit, np.polyval(p_orig, x_fit), linestyle='--', linewidth=1.0, label='Fit: Original rate')
+    plt.plot(x_fit, np.polyval(p_corr, x_fit), linestyle='--', linewidth=1.0, label='Fit: Corrected rate')
+
+    plt.xlabel('Efficiency')
+    plt.ylabel('Rate')
+    plt.title(f'Efficiency vs. Rate {label_suffix}')
+    plt.grid(True)
+
+    textstr = f'Corr (original): {corr_orig:.3f}\nCorr (corrected): {corr_corr:.3f}'
+    plt.gcf().text(0.15, 0.80, textstr, fontsize=10, bbox=dict(boxstyle="round", facecolor='white', alpha=0.5))
+
+    plt.legend()
+    plt.tight_layout()
+
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + f"{fig_idx}" + "_scatter.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+    plt.close()
+
+
+
+
+detector_labels = ['1234', '123', '234', '12', '23', '34']
+
+for label in detector_labels:
+    eff_col = f'detector_{label}_eff'
+    rate_col = f'detector_{label}'
+    corrected_col = f'detector_{label}_eff_corr'
+
+    plot_eff_vs_rate(
+        data_df,
+        eff_col=eff_col,
+        rate_col=rate_col,
+        corrected_col=corrected_col,
+        label_suffix=label,
+    )
+
+
+
+# New
+
+data_df['new_1234'] = data_df['processed_tt_1234']  / ( data_df["number_of_mins"] * 60 )
+data_df['new_1234_eff'] = e2 * e3
+data_df['new_1234_eff_corr'] = data_df['new_1234'] / data_df['new_1234_eff']
+
+data_df['new_124'] = data_df['processed_tt_124']  / ( data_df["number_of_mins"] * 60 )
+data_df['new_124_eff'] = e2 * (1 - e3)
+data_df['new_124_eff_corr'] = data_df['new_124'] / data_df['new_124_eff']
+
+data_df['new_134'] = data_df['processed_tt_134']  / ( data_df["number_of_mins"] * 60 )
+data_df['new_134_eff'] = (1 - e2) * e3
+data_df['new_134_eff_corr'] = data_df['new_134'] / data_df['new_134_eff']
+
+data_df['total_four_plane'] = data_df['new_1234'] + data_df['new_124'] + data_df['new_134']
+data_df['total_four_plane_eff'] = data_df['new_1234_eff'] + data_df['new_124_eff'] + data_df['new_134_eff']
+data_df['total_four_plane_eff_corr'] = data_df['total_four_plane'] / data_df['total_four_plane_eff']
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['new_1234_eff_corr'],
+    ['new_124_eff_corr'],
+    ['new_134_eff_corr']
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['new_1234_eff'],
+    ['new_124_eff'],
+    ['new_134_eff']
+]
+plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
+
+
+# a = 1/0
 
 
 
@@ -1286,6 +1440,7 @@ data_df['final_eff_2'] = data_df['eff_sys_2']
 data_df['final_eff_3'] = data_df['eff_sys_3']
 data_df['final_eff_4'] = data_df['eff_sys_3']
 
+data_df['final_eff'] = ( data_df['final_eff_1'] + data_df['final_eff_2'] + data_df['final_eff_3'] + data_df['final_eff_4'] ) / 4
 
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -1420,6 +1575,7 @@ if create_plots:
         # Labeling and titles
         ax.set_ylabel('Efficiency')
         ax.set_ylim(0.8, 1.0)
+        ax.grid(True)
         ax.set_title(f'Detected and passed')
         ax.legend(loc='upper left')
         
@@ -1442,7 +1598,7 @@ if create_plots:
 
 
 
-a = 1/0
+# a = 1/0
 
 # --------------------------------------------------------------------------------------------------------
 
@@ -1518,7 +1674,7 @@ if create_plots:
     plt.close()
 
 
-a = 1/0
+# a = 1/0
 
 
 # -----------------------------------------------------------------------------
@@ -1549,190 +1705,190 @@ print('Efficiency calculations performed.')
 
 # Assuming data_df is already loaded and contains the necessary columns
 
-if create_plots:
-    print("Creating efficiency and rate plots...")
+# if create_plots:
+#     print("Creating efficiency and rate plots...")
 
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(17, 10), sharex=True)
+#     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(17, 10), sharex=True)
 
-    # Plot efficiencies
-    # Plot new_system_e1, new_system_e2, new_system_e3, new_system_e4
-    ax1.plot(data_df['Time'], data_df['eff_fit_1'], label='Eff. fitted 1', color='C4')
-    ax1.plot(data_df['Time'], data_df['eff_fit_2'], label='Eff. fitted 2', color='C5')
-    ax1.plot(data_df['Time'], data_df['eff_fit_3'], label='Eff. fitted 3', color='C6')
-    ax1.plot(data_df['Time'], data_df['eff_fit_4'], label='Eff. fitted 4', color='C7')
-    ax1.set_ylabel('Efficiency')
-    ax1.set_ylim(0.5, 1.0)
-    ax1.set_title('Efficiencies over Time')
-    ax1.legend(loc='upper left')
+#     # Plot efficiencies
+#     # Plot new_system_e1, new_system_e2, new_system_e3, new_system_e4
+#     ax1.plot(data_df['Time'], data_df['eff_fit_1'], label='Eff. fitted 1', color='C4')
+#     ax1.plot(data_df['Time'], data_df['eff_fit_2'], label='Eff. fitted 2', color='C5')
+#     ax1.plot(data_df['Time'], data_df['eff_fit_3'], label='Eff. fitted 3', color='C6')
+#     ax1.plot(data_df['Time'], data_df['eff_fit_4'], label='Eff. fitted 4', color='C7')
+#     ax1.set_ylabel('Efficiency')
+#     ax1.set_ylim(0.5, 1.0)
+#     ax1.set_title('Efficiencies over Time')
+#     ax1.legend(loc='upper left')
     
     
-    # Plot the measured: 12, 23, 34, 123, 234, 1234, 13, 24, 14
-    ax2.plot(data_df['Time'], data_df['processed_tt_12'] / (data_df["number_of_mins"] * 60), label='Measured 12', color='C1')
-    ax2.plot(data_df['Time'], data_df['processed_tt_23'] / (data_df["number_of_mins"] * 60), label='Measured 23', color='C2')
-    ax2.plot(data_df['Time'], data_df['processed_tt_34'] / (data_df["number_of_mins"] * 60), label='Measured 34', color='C3')
-    ax2.plot(data_df['Time'], data_df['processed_tt_123'] / (data_df["number_of_mins"] * 60), label='Measured 123', color='C4')
-    ax2.plot(data_df['Time'], data_df['processed_tt_234'] / (data_df["number_of_mins"] * 60), label='Measured 234', color='C5')
-    ax2.plot(data_df['Time'], data_df['processed_tt_1234'] / (data_df["number_of_mins"] * 60), label='Measured 1234', color='C6')
+#     # Plot the measured: 12, 23, 34, 123, 234, 1234, 13, 24, 14
+#     ax2.plot(data_df['Time'], data_df['processed_tt_12'] / (data_df["number_of_mins"] * 60), label='Measured 12', color='C1')
+#     ax2.plot(data_df['Time'], data_df['processed_tt_23'] / (data_df["number_of_mins"] * 60), label='Measured 23', color='C2')
+#     ax2.plot(data_df['Time'], data_df['processed_tt_34'] / (data_df["number_of_mins"] * 60), label='Measured 34', color='C3')
+#     ax2.plot(data_df['Time'], data_df['processed_tt_123'] / (data_df["number_of_mins"] * 60), label='Measured 123', color='C4')
+#     ax2.plot(data_df['Time'], data_df['processed_tt_234'] / (data_df["number_of_mins"] * 60), label='Measured 234', color='C5')
+#     ax2.plot(data_df['Time'], data_df['processed_tt_1234'] / (data_df["number_of_mins"] * 60), label='Measured 1234', color='C6')
     
-    ax2.set_ylim(0.1, 5)
-    ax2.set_xlabel('Time')
-    ax2.set_ylabel('Rate')
-    ax2.set_title('Original Rates over Time')
-    ax2.legend(loc='upper left')
+#     ax2.set_ylim(0.1, 5)
+#     ax2.set_xlabel('Time')
+#     ax2.set_ylabel('Rate')
+#     ax2.set_title('Original Rates over Time')
+#     ax2.legend(loc='upper left')
     
-    ax3.plot(data_df['Time'], data_df['new_sys_12'], label='Crossing 12 (fitted)', color='C1')
-    ax3.plot(data_df['Time'], data_df['new_sys_23'], label='Crossing 23', color='C2')
-    ax3.plot(data_df['Time'], data_df['new_sys_34'], label='Crossing 34', color='C3')
-    ax3.plot(data_df['Time'], data_df['new_sys_123'], label='Crossing 123', color='C4')
-    ax3.plot(data_df['Time'], data_df['new_sys_234'], label='Crossing 234', color='C5')
-    ax3.plot(data_df['Time'], data_df['new_sys_1234'], label='Crossing 1234', color='C6')
+#     ax3.plot(data_df['Time'], data_df['new_sys_12'], label='Crossing 12 (fitted)', color='C1')
+#     ax3.plot(data_df['Time'], data_df['new_sys_23'], label='Crossing 23', color='C2')
+#     ax3.plot(data_df['Time'], data_df['new_sys_34'], label='Crossing 34', color='C3')
+#     ax3.plot(data_df['Time'], data_df['new_sys_123'], label='Crossing 123', color='C4')
+#     ax3.plot(data_df['Time'], data_df['new_sys_234'], label='Crossing 234', color='C5')
+#     ax3.plot(data_df['Time'], data_df['new_sys_1234'], label='Crossing 1234', color='C6')
 
-    ax3.set_ylim(0.1, 5)
-    ax3.set_xlabel('Time')
-    ax3.set_ylabel('Rate')
-    ax3.set_title('Corrected by efficiency Rates over Time')
-    ax3.legend(loc='upper left')
+#     ax3.set_ylim(0.1, 5)
+#     ax3.set_xlabel('Time')
+#     ax3.set_ylabel('Rate')
+#     ax3.set_title('Corrected by efficiency Rates over Time')
+#     ax3.legend(loc='upper left')
     
-    plt.tight_layout()
+#     plt.tight_layout()
 
-    # Save or show the plot
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + "_effs_rates_new_sys.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
+#     # Save or show the plot
+#     if show_plots:
+#         plt.show()
+#     elif save_plots:
+#         new_figure_path = figure_path + f"{fig_idx}" + "_effs_rates_new_sys.png"
+#         fig_idx += 1
+#         print(f"Saving figure to {new_figure_path}")
+#         plt.savefig(new_figure_path, format='png', dpi=300)
 
-    plt.close()
+#     plt.close()
 
 
 
-if create_plots:
-    filtered_df = data_df.dropna(subset=['eff_new', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+# if create_plots:
+#     filtered_df = data_df.dropna(subset=['eff_new', 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
     
-    # Extract relevant columns
-    x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
-    y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
-    z = filtered_df['eff_new'].values
+#     # Extract relevant columns
+#     x = filtered_df['sensors_ext_Pressure_ext'].values.reshape(-1, 1)
+#     y = filtered_df['sensors_ext_Temperature_ext'].values.reshape(-1, 1)
+#     z = filtered_df['eff_new'].values
     
-    # Fit a plane using linear regression
-    X = np.hstack((x, y))
-    model = LinearRegression()
-    model.fit(X, z)
+#     # Fit a plane using linear regression
+#     X = np.hstack((x, y))
+#     model = LinearRegression()
+#     model.fit(X, z)
     
-    # Parameters of the fitted plane
-    a, b = model.coef_
-    c = model.intercept_
-    formula = f"Eff = {a:.4g} * P + {b:.4g} * T + {c:.4g}"
-    print(f"Fitted plane: {formula}")
+#     # Parameters of the fitted plane
+#     a, b = model.coef_
+#     c = model.intercept_
+#     formula = f"Eff = {a:.4g} * P + {b:.4g} * T + {c:.4g}"
+#     print(f"Fitted plane: {formula}")
     
-    data_df['eff_fit'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
-    data_df['unc_eff_fit'] = 1
+#     data_df['eff_fit'] = a * data_df['sensors_ext_Pressure_ext'] + b * data_df['sensors_ext_Temperature_ext'] + c
+#     data_df['unc_eff_fit'] = 1
     
-    # Predicted plane
-    z_pred = model.predict(X)
-    residuals = z - z_pred
+#     # Predicted plane
+#     z_pred = model.predict(X)
+#     residuals = z - z_pred
     
-    # Create meshgrid for visualization
-    x_range = np.linspace(x.min(), x.max(), 30)
-    y_range = np.linspace(y.min(), y.max(), 30)
-    X_mesh, Y_mesh = np.meshgrid(x_range, y_range)
-    Z_mesh = model.predict(np.c_[X_mesh.ravel(), Y_mesh.ravel()]).reshape(X_mesh.shape)
+#     # Create meshgrid for visualization
+#     x_range = np.linspace(x.min(), x.max(), 30)
+#     y_range = np.linspace(y.min(), y.max(), 30)
+#     X_mesh, Y_mesh = np.meshgrid(x_range, y_range)
+#     Z_mesh = model.predict(np.c_[X_mesh.ravel(), Y_mesh.ravel()]).reshape(X_mesh.shape)
     
-    # Create a figure with four subplots (2x2 layout)
-    fig = plt.figure(figsize=(14, 12))
+#     # Create a figure with four subplots (2x2 layout)
+#     fig = plt.figure(figsize=(14, 12))
     
-    # 3D scatter plot with fitted plane (Isometric view)
-    ax1 = fig.add_subplot(221, projection='3d')
-    ax1.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax1.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
-    ax1.set_xlabel('Pressure', labelpad=10)
-    ax1.set_ylabel('Temperature', labelpad=10)
-    ax1.set_zlabel('Efficiency', labelpad=10)
-    ax1.view_init(elev=30, azim=-60)
+#     # 3D scatter plot with fitted plane (Isometric view)
+#     ax1 = fig.add_subplot(221, projection='3d')
+#     ax1.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
+#     ax1.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
+#     ax1.set_xlabel('Pressure', labelpad=10)
+#     ax1.set_ylabel('Temperature', labelpad=10)
+#     ax1.set_zlabel('Efficiency', labelpad=10)
+#     ax1.view_init(elev=30, azim=-60)
 
-    # 3D scatter plot (View along Pressure axis)
-    ax2 = fig.add_subplot(222, projection='3d')
-    ax2.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax2.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
-    ax2.set_ylabel('Temperature', labelpad=10)
-    ax2.set_zlabel('Efficiency', labelpad=10)
-    ax2.set_xticks([])
-    ax2.view_init(elev=0, azim=0)
+#     # 3D scatter plot (View along Pressure axis)
+#     ax2 = fig.add_subplot(222, projection='3d')
+#     ax2.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
+#     ax2.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
+#     ax2.set_ylabel('Temperature', labelpad=10)
+#     ax2.set_zlabel('Efficiency', labelpad=10)
+#     ax2.set_xticks([])
+#     ax2.view_init(elev=0, azim=0)
 
-    # 3D scatter plot (View along Temperature axis)
-    ax3 = fig.add_subplot(223, projection='3d')
-    ax3.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax3.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
-    ax3.set_xlabel('Pressure', labelpad=10)
-    ax3.set_zlabel('Efficiency', labelpad=10)
-    ax3.set_yticks([])
-    ax3.view_init(elev=0, azim=-90)
+#     # 3D scatter plot (View along Temperature axis)
+#     ax3 = fig.add_subplot(223, projection='3d')
+#     ax3.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
+#     ax3.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
+#     ax3.set_xlabel('Pressure', labelpad=10)
+#     ax3.set_zlabel('Efficiency', labelpad=10)
+#     ax3.set_yticks([])
+#     ax3.view_init(elev=0, azim=-90)
 
-    # 3D scatter plot (Top-down view)
-    ax4 = fig.add_subplot(224, projection='3d')
-    ax4.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
-    ax4.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
-    ax4.set_xlabel('Pressure', labelpad=10)
-    ax4.set_ylabel('Temperature', labelpad=10)
-    ax4.set_zticks([])
-    ax4.view_init(elev=90, azim=-90)
+#     # 3D scatter plot (Top-down view)
+#     ax4 = fig.add_subplot(224, projection='3d')
+#     ax4.scatter(x, y, z, c=z, cmap='turbo', marker='o', s=10, alpha=0.7)
+#     ax4.plot_surface(X_mesh, Y_mesh, Z_mesh, color='cyan', alpha=0.5)
+#     ax4.set_xlabel('Pressure', labelpad=10)
+#     ax4.set_ylabel('Temperature', labelpad=10)
+#     ax4.set_zticks([])
+#     ax4.view_init(elev=90, azim=-90)
     
-    plt.suptitle(f'"Eff" New. Efficiency vs Pressure and Temperature with Fitted Plane\n{formula}')
+#     plt.suptitle(f'"Eff" New. Efficiency vs Pressure and Temperature with Fitted Plane\n{formula}')
     
-    plt.tight_layout()
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + "_3D_fit.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format = 'png', dpi = 300)
-    plt.close()
+#     plt.tight_layout()
+#     if show_plots:
+#         plt.show()
+#     elif save_plots:
+#         new_figure_path = figure_path + f"{fig_idx}" + "_3D_fit.png"
+#         fig_idx += 1
+#         print(f"Saving figure to {new_figure_path}")
+#         plt.savefig(new_figure_path, format = 'png', dpi = 300)
+#     plt.close()
     
-    # Create another figure to show residuals
-    fig_res = plt.figure(figsize=(14, 12))
+#     # Create another figure to show residuals
+#     fig_res = plt.figure(figsize=(14, 12))
     
-    # Residuals plots
-    ax1_res = fig_res.add_subplot(221, projection='3d')
-    sc1_res = ax1_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
-    ax1_res.set_xlabel('Pressure', labelpad=10)
-    ax1_res.set_ylabel('Temperature', labelpad=10)
-    ax1_res.set_zlabel('Residuals', labelpad=10)
-    ax1_res.view_init(elev=30, azim=-60)
-    # fig_res.colorbar(sc1_res, ax=ax1_res, label='Residuals')
+#     # Residuals plots
+#     ax1_res = fig_res.add_subplot(221, projection='3d')
+#     sc1_res = ax1_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
+#     ax1_res.set_xlabel('Pressure', labelpad=10)
+#     ax1_res.set_ylabel('Temperature', labelpad=10)
+#     ax1_res.set_zlabel('Residuals', labelpad=10)
+#     ax1_res.view_init(elev=30, azim=-60)
+#     # fig_res.colorbar(sc1_res, ax=ax1_res, label='Residuals')
     
-    ax2_res = fig_res.add_subplot(222, projection='3d')
-    ax2_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
-    ax2_res.set_ylabel('Temperature', labelpad=10)
-    ax2_res.set_zlabel('Residuals', labelpad=10)
-    ax2_res.set_xticks([])
-    ax2_res.view_init(elev=0, azim=0)
+#     ax2_res = fig_res.add_subplot(222, projection='3d')
+#     ax2_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
+#     ax2_res.set_ylabel('Temperature', labelpad=10)
+#     ax2_res.set_zlabel('Residuals', labelpad=10)
+#     ax2_res.set_xticks([])
+#     ax2_res.view_init(elev=0, azim=0)
     
-    ax3_res = fig_res.add_subplot(223, projection='3d')
-    ax3_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
-    ax3_res.set_xlabel('Pressure', labelpad=10)
-    ax3_res.set_zlabel('Residuals', labelpad=10)
-    ax3_res.set_yticks([])
-    ax3_res.view_init(elev=0, azim=-90)
+#     ax3_res = fig_res.add_subplot(223, projection='3d')
+#     ax3_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
+#     ax3_res.set_xlabel('Pressure', labelpad=10)
+#     ax3_res.set_zlabel('Residuals', labelpad=10)
+#     ax3_res.set_yticks([])
+#     ax3_res.view_init(elev=0, azim=-90)
     
-    ax4_res = fig_res.add_subplot(224, projection='3d')
-    ax4_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
-    ax4_res.set_xlabel('Pressure', labelpad=10)
-    ax4_res.set_ylabel('Temperature', labelpad=10)
-    ax4_res.set_zticks([])
-    ax4_res.view_init(elev=90, azim=-90)
+#     ax4_res = fig_res.add_subplot(224, projection='3d')
+#     ax4_res.scatter(x, y, residuals, c=residuals, cmap='coolwarm', marker='o', s=10, alpha=0.7)
+#     ax4_res.set_xlabel('Pressure', labelpad=10)
+#     ax4_res.set_ylabel('Temperature', labelpad=10)
+#     ax4_res.set_zticks([])
+#     ax4_res.view_init(elev=90, azim=-90)
     
-    plt.tight_layout()
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + "_residuals.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format = 'png', dpi = 300)
-    plt.close()
+#     plt.tight_layout()
+#     if show_plots:
+#         plt.show()
+#     elif save_plots:
+#         new_figure_path = figure_path + f"{fig_idx}" + "_residuals.png"
+#         fig_idx += 1
+#         print(f"Saving figure to {new_figure_path}")
+#         plt.savefig(new_figure_path, format = 'png', dpi = 300)
+#     plt.close()
 
 
 # -----------------------------------------------------------------------------
@@ -1872,10 +2028,19 @@ def quantile_mean(data_df, region, lower_quantile=0.1, upper_quantile=0.9):
 # -------------------------- LOOPING THE DATA -----------------------------------
 # -------------------------------------------------------------------------------
 
-# region = 'eff_corr'
+region = 'rate_eff_corr'
 angular_regions = ['High', 'N', 'S', 'E', 'W']
-trigger_types_corrected = ['new_sys_12', 'new_sys_23', 'new_sys_34', 'new_sys_123', 'new_sys_234', 'new_sys_1234']
-regions_to_correct = ['eff_corr'] + angular_regions + trigger_types_corrected
+
+trigger_types_corrected = ['detector_1234_eff_corr', 
+                           'detector_123_eff_corr', 
+                           'detector_234_eff_corr', 
+                           'detector_12_eff_corr',
+                           'detector_23_eff_corr',
+                           'detector_34_eff_corr',]
+
+new_test = ['new_1234_eff_corr', 'new_124_eff_corr', 'new_134_eff_corr']
+
+regions_to_correct = ['rate_eff_corr'] + angular_regions + trigger_types_corrected + new_test
 
 log_delta_I_df = pd.DataFrame(columns=['Region', 'Log_I_over_I0', 'Delta_P', 'Unc_Log_I_over_I0', 'Unc_Delta_P', 'Eta_P', 'Unc_Eta_P'])
 
@@ -2014,8 +2179,8 @@ plt.figure(figsize=(12, 8))
 for region in log_delta_I_df['Region']:
     
     # If region does not contain new_, skip it
-    if 'new_' not in region:
-        continue
+    # if 'new_' not in region:
+    #     continue
     
     # Extract data for the current region
     region_data = log_delta_I_df[log_delta_I_df['Region'] == region]
@@ -2060,9 +2225,9 @@ plt.close()
 # ---------------------------------------------------------------------------------------------------
 
 # Filter regions that contain 'new_' to plot
-regions_to_plot = [region for region in log_delta_I_df['Region'] if 'new_' in region]
+# regions_to_plot = [region for region in log_delta_I_df['Region'] if 'new_' in region]
 
-# Create subplots dynamically based on the number of regions to plot
+regions_to_plot = new_test
 num_regions = len(regions_to_plot)
 fig, axes = plt.subplots(nrows=num_regions, figsize=(12, 20), sharex=True, sharey=True)
 
@@ -2110,7 +2275,7 @@ plt.tight_layout()
 if show_plots: 
     plt.show()
 elif save_plots:
-    new_figure_path = figure_path + f"{fig_idx}" + "_GIANT_PRESSURE_PLOT.png"
+    new_figure_path = figure_path + f"{fig_idx}" + "_GIANT_PRESSURE_PLOT_TTs.png"
     fig_idx += 1
     print(f"Saving figure to {new_figure_path}")
     plt.savefig(new_figure_path, format='png', dpi=300)
@@ -2120,11 +2285,67 @@ plt.close()
 
 
 
+
+regions_to_plot = angular_regions
+num_regions = len(regions_to_plot)
+fig, axes = plt.subplots(nrows=num_regions, figsize=(12, 20), sharex=True, sharey=True)
+
+# Loop through all regions and plot them in separate subplots
+for idx, region in enumerate(regions_to_plot):
+    
+    # Extract data for the current region
+    region_data = log_delta_I_df[log_delta_I_df['Region'] == region]
+
+    # Access the full vectors (they are stored as columns, so we directly use them)
+    delta_P = region_data['Delta_P'].values[0]  # Access the vector (1D)
+    log_I_over_I0 = region_data['Log_I_over_I0'].values[0]  # Access the vector (1D)
+    unc_delta_P = region_data['Unc_Delta_P'].values[0]  # Access the vector (1D)
+    unc_log_I_over_I0 = region_data['Unc_Log_I_over_I0'].values[0]  # Access the vector (1D)
+    
+    eta_P = region_data['Eta_P'].values[0]  # Scalar value for eta_P
+    eta_P_ordinate = region_data['Eta_P_ordinate'].values[0]  # Scalar value for eta_P_ordinate
+    
+    # Plot scatter for the current region on the appropriate subplot
+    ax = axes[idx]  # Get the correct subplot based on idx
+    ax.scatter(delta_P, log_I_over_I0, label=f'{region} Fit', s=1, alpha=0.8, marker='.')
+
+    # Calculate the fitted values using the fit model
+    fitted_values = fit_model(delta_P, eta_P, eta_P_ordinate)
+
+    # Plot the line using eta_P (beta) and eta_P_ordinate (a)
+    ax.plot(delta_P, fitted_values, label=f"{region} Fit Line", color=f'C{idx}', alpha=0.7)
+    
+    # Optional: plot with error bars if needed
+    if show_errorbar:
+        ax.errorbar(delta_P, log_I_over_I0, xerr=abs(unc_delta_P), yerr=abs(unc_log_I_over_I0), fmt='o', label=f'{region} Fit with Errors')
+
+    # Add labels and title to the subplots
+    ax.set_xlabel('Delta P')
+    ax.set_ylabel('Log (I / I0)')
+    ax.set_ylim(-0.6, 0.5)
+    ax.set_title(f'Efficiency Fit for {region}')
+    ax.legend()
+    ax.grid(True)
+
+# Adjust layout to prevent overlap
+plt.tight_layout()
+
+# Show or save the plot
+if show_plots: 
+    plt.show()
+elif save_plots:
+    new_figure_path = figure_path + f"{fig_idx}" + "_GIANT_PRESSURE_PLOT_regions.png"
+    fig_idx += 1
+    print(f"Saving figure to {new_figure_path}")
+    plt.savefig(new_figure_path, format='png', dpi=300)
+
+plt.close()
+
+
 # ---------------------------------------------------------------------------------------------------
 
-# Add a new outlier filter to the pressure correction
-region = "eff_corr"
-after_press_z_score_th = 0.5
+# # Add a new outlier filter to the pressure correction
+after_press_z_score_th = 2
 
 if remove_outliers:
     print('Removing outliers and zero values...')
@@ -2207,7 +2428,7 @@ if high_order_correction:
     data_df['delta_H_over_H0'] = data_df['delta_H'] / H0
 
     # Initialize a DataFrame to store the results
-    high_order_results = pd.DataFrame(columns=['Region', 'A', 'B', 'C'])
+    high_order_results = pd.DataFrame(columns=['Region', 'A', 'B', 'C', 'D'])
 
     # Function to fit the data and calculate coefficients A, B, C
     def calculate_coefficients(region, I0, delta_I):
@@ -2216,7 +2437,7 @@ if high_order_correction:
         delta_I_over_I0 = delta_I / I0
 
         # Fit linear regression model without intercept
-        model = LinearRegression(fit_intercept=False)
+        model = LinearRegression(fit_intercept=True)
         df = pd.DataFrame({
             'delta_I_over_I0': delta_I_over_I0,
             'delta_Tg_over_Tg0': data_df['delta_Tg_over_Tg0'],
@@ -2229,6 +2450,7 @@ if high_order_correction:
             y = df['delta_I_over_I0']
             model.fit(X, y)
             A, B, C = model.coef_
+            D = model.intercept_
 
             fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
 
@@ -2241,7 +2463,7 @@ if high_order_correction:
 
             # Build a line from min(x) to max(x), ignoring the other variables
             x_line = np.linspace(x.min(), x.max(), 100)
-            y_line = A * x_line  # slope = A, intercept = 0 (since fit_intercept=False)
+            y_line = A * x_line + D  # slope = A, intercept = 0 (since fit_intercept=False)
             ax.plot(x_line, y_line, color='red', label=f'Partial Fit, {A*100:.1f}% = {A*100*Tg0:.1f}% / K')
 
             ax.set_xlabel('$\Delta T^{\mathrm{ground}} / T^{\mathrm{ground}}_{0}$')
@@ -2255,7 +2477,7 @@ if high_order_correction:
             ax.scatter(x, y_data, alpha=0.7, label='Data', s=1, color = "green")
 
             x_line = np.linspace(x.min(), x.max(), 100)
-            y_line = B * x_line  # slope = B
+            y_line = B * x_line + D  # slope = B
             ax.plot(x_line, y_line, color='red', label=f'Partial Fit, {B*100:.1f}% = {B*100*Th0:.1f}% / K')
 
             ax.set_xlabel('$\Delta T^{100\ \mathrm{mbar}} / T^{100\ \mathrm{mbar}}_{0}$')
@@ -2268,7 +2490,7 @@ if high_order_correction:
             ax.scatter(x, y_data, alpha=0.7, label='Data', s=1, color = "purple")
 
             x_line = np.linspace(x.min(), x.max(), 100)
-            y_line = C * x_line  # slope = C
+            y_line = C * x_line + D # slope = C
             ax.plot(x_line, y_line, color='red', label=f'Partial Fit, {C*100:.1f}% = {C*100*H0:.1f}% / m')
 
             ax.set_xlabel('$\Delta h^{100\ \mathrm{mbar}} / h^{100\ \mathrm{mbar}}_{0}$')
@@ -2288,8 +2510,8 @@ if high_order_correction:
 
             plt.close()
         else:
-            A, B, C = np.nan, np.nan, np.nan  # Handle case where there are no valid data points
-        return A, B, C
+            A, B, C, D = np.nan, np.nan, np.nan  # Handle case where there are no valid data points
+        return A, B, C, D
 
     # Calculate coefficients and create corrected rate columns for each region
     regions = [region]
@@ -2297,11 +2519,11 @@ if high_order_correction:
     for region in regions:
         I0_region_corrected = data_df[f'{region}_pressure_corrected'].mean()
         data_df[f'delta_I_{region}_corrected'] = data_df[f'{region}_pressure_corrected'] - I0_region_corrected
-        A, B, C = calculate_coefficients(region, I0_region_corrected, data_df[f'delta_I_{region}_corrected'])
-        high_order_results = pd.concat([high_order_results, pd.DataFrame({'Region': [region], 'A': [A], 'B': [B], 'C': [C]})], ignore_index=True)
+        A, B, C, D = calculate_coefficients(region, I0_region_corrected, data_df[f'delta_I_{region}_corrected'])
+        high_order_results = pd.concat([high_order_results, pd.DataFrame({'Region': [region], 'A': [A], 'B': [B], 'C': [C], 'D': [D]})], ignore_index=True)
         
         # Create corrected rate column for the region
-        data_df[f'{region}_high_order_corrected'] = data_df[f'{region}_pressure_corrected'] * (1 - (A * data_df['delta_Tg'] / Tg0 + B * data_df['delta_Th'] / Th0 + C * data_df['delta_H'] / H0))
+        data_df[f'{region}_high_order_corrected'] = data_df[f'{region}_pressure_corrected'] * (1 - (A * data_df['delta_Tg'] / Tg0 + B * data_df['delta_Th'] / Th0 + C * data_df['delta_H'] / H0 + D))
 
 else:
     print("High order correction not applied.")
@@ -2315,22 +2537,22 @@ if create_plots:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
 
     # Plot efficiencies
-    ax1.plot(data_df['Time'], data_df['eff_fit'], label='Efficiency from the new fit', color='C5')
-    ax1.plot(data_df['Time'], data_df['eff_new'], label='Original / Corrected with new system', color='C4')
+    ax1.plot(data_df['Time'], data_df['final_eff'], label='Final efficiency', color='C5')
+    # ax1.plot(data_df['Time'], data_df['eff_new'], label='Original / Corrected with new system', color='C4')
     ax1.set_ylabel('Efficiency')
     ax1.set_ylim(0.5, 1)
     ax1.set_title('Efficiencies over Time')
     ax1.legend(loc='upper left')
 
-    ax2.plot(data_df['Time'], data_df['rate'], label='OG rate', color='C3')
-    ax2.plot(data_df['Time'], data_df['eff_corr'], label='Eff. (from new system) corr. rate', color='C8')
+    ax2.plot(data_df['Time'], data_df['uncorrected'], label='Uncorrected rate', color='C3')
+    ax2.plot(data_df['Time'], data_df['rate_eff_corr'], label='Eff. corr. rate', color='C8')
     ax2.plot(data_df['Time'], data_df[f'pres_{region}'], label='Pressure corrected rate', color='C9')
     ax2.plot(data_df['Time'], data_df[f'{region}_high_order_corrected'], label='High order corrected rate', color='C10')
     ax2.set_xlabel('Time')
     ax2.set_ylabel('Rate')
     # ax2.set_ylim(12, 16)
     # ax2.set_ylim(16, 18)
-    ax2.set_ylim(5, 15)
+    ax2.set_ylim(8, 11)
     ax2.set_title('Rates over Time')
     ax2.legend(loc='upper left')
 

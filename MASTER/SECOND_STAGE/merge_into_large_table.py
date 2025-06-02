@@ -93,6 +93,9 @@ print(merged_df.info())
 print("First few rows of merged data:")
 print(merged_df.head())
 
+print("Last few rows of merged data:")
+print(merged_df.tail())
+
 # Save the merged dataframe
 # if os.path.exists(output_file):
 #     # If the output file already exists, load it and append new rows
