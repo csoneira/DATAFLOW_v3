@@ -9,6 +9,11 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # Save copy the core files
 0 5 * * * rsync -av --exclude="STATIONS" --exclude=".git" --exclude=".gitignore" ~/DATAFLOW_v3/ ~/SAFE_DATAFLOW_v3/
 
+# -----------
+# NMDB update
+# -----------
+0 2 * * * /bin/bash /home/cayetano/DATAFLOW_v3/MASTER/THIRD_STAGE/nmdb_retrieval.sh >> /home/cayetano/DATAFLOW_v3/MASTER/THIRD_STAGE/update_log.txt 2>&1
+
 # -----------------
 # Grafana splitting
 # -----------------
