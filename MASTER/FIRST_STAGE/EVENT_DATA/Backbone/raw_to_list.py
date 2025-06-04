@@ -467,7 +467,7 @@ coincidence_window_cal_ns = 4.0  # ns
 
 # Pedestal charge calibration
 pedestal_left = -3
-pedestal_right = 4
+pedestal_right = 3
 
 # Front-back charge
 distance_sum_charges_left_fit = -5
@@ -654,7 +654,8 @@ def calibrate_strip_T_diff(T_F, T_B):
     T_F = T_F[cond]
     T_B = T_B[cond]
     
-    T_diff = ( T_F - T_B ) / 2
+    # T_diff = ( T_F - T_B ) / 2
+    T_diff = ( T_B - T_F ) / 2
     
     # print("Zeroes:")
     # print(len(T_diff[T_diff == 0]))
@@ -2395,10 +2396,15 @@ for key in ['T1', 'T2', 'T3', 'T4']:
 
     new_cols = {}
     for i in range(4):
-        new_cols[f'{key}_T_sum_{i+1}'] = (T_F[:, i] + T_B[:, i]) / 2
-        new_cols[f'{key}_T_diff_{i+1}'] = (T_F[:, i] - T_B[:, i]) / 2
-        new_cols[f'{key.replace("T", "Q")}_Q_sum_{i+1}'] = (Q_F[:, i] + Q_B[:, i]) / 2
-        new_cols[f'{key.replace("T", "Q")}_Q_diff_{i+1}'] = (Q_F[:, i] - Q_B[:, i]) / 2
+        # new_cols[f'{key}_T_sum_{i+1}'] = (T_F[:, i] + T_B[:, i]) / 2
+        # new_cols[f'{key}_T_diff_{i+1}'] = (T_F[:, i] - T_B[:, i]) / 2
+        # new_cols[f'{key.replace("T", "Q")}_Q_sum_{i+1}'] = (Q_F[:, i] + Q_B[:, i]) / 2
+        # new_cols[f'{key.replace("T", "Q")}_Q_diff_{i+1}'] = (Q_F[:, i] - Q_B[:, i]) / 2
+        
+        new_cols[f'{key}_T_sum_{i+1}'] = (T_B[:, i] + T_F[:, i]) / 2
+        new_cols[f'{key}_T_diff_{i+1}'] = (T_B[:, i] - T_F[:, i]) / 2
+        new_cols[f'{key.replace("T", "Q")}_Q_sum_{i+1}'] = (Q_B[:, i] + Q_F[:, i]) / 2
+        new_cols[f'{key.replace("T", "Q")}_Q_diff_{i+1}'] = (Q_B[:, i] - Q_F[:, i]) / 2
 
     working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
 
@@ -5880,8 +5886,8 @@ def fres(vs, vdat, lenx, ss, zi):  # Residuals array
     yfit  = Y0 + YP * zi
     tffit = T0 + S0 * kz * zi + (lenx/2 + xfit) * ss
     tbfit = T0 + S0 * kz * zi + (lenx/2 - xfit) * ss
-    tsfit = 0.5 * (tffit + tbfit)
-    tdfit = 0.5 * (tffit - tbfit)
+    tsfit = 0.5 * (tbfit + tffit)
+    tdfit = 0.5 * (tbfit - tffit)
     # Data values
     ydat  = vdat[0]
     tsdat = vdat[1]
