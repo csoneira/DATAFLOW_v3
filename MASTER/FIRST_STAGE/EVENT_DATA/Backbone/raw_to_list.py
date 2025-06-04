@@ -345,8 +345,8 @@ if debug_mode:
     Q_B_left_pre_cal = -500
     Q_B_right_pre_cal = 500
 else:
-    T_F_left_pre_cal = -135
-    T_F_right_pre_cal = -95
+    T_F_left_pre_cal = -130
+    T_F_right_pre_cal = -100
 
     T_B_left_pre_cal = T_F_left_pre_cal
     T_B_right_pre_cal = T_F_right_pre_cal
@@ -386,7 +386,7 @@ Q_sum_left_cal = -20
 Q_sum_right_cal = 300
 # Qdif
 Q_diff_cal_threshold = 10
-Q_diff_cal_threshold_FB = 1.25
+Q_diff_cal_threshold_FB = 5 # 1.25
 # Tsum
 # ...
 # Tdif
@@ -405,8 +405,8 @@ T_diff_RPC_right = 0.8
 Q_RPC_left = 0
 Q_RPC_right = 500
 # Qdiff
-Q_dif_RPC_left = -2
-Q_dif_RPC_right = 2
+Q_dif_RPC_left = -4
+Q_dif_RPC_right = 4
 # Y pos
 Y_RPC_left = -170 # -150
 Y_RPC_right = 170 # 150
@@ -458,8 +458,12 @@ ext_res_tdif_filter = 1
 
 # Time sum
 CRT_gaussian_fit_quantile = 0.03
-strip_time_diff_bound = 10
-coincidence_window_ns = 10.0  # ns
+coincidence_window_og_ns = 7.0  # ns
+coincidence_window_cal_ns = 4.0  # ns
+
+# Pedestal charge calibration
+pedestal_left = -3
+pedestal_right = 4
 
 # Front-back charge
 distance_sum_charges_left_fit = -5
@@ -813,7 +817,7 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other):
     Q_ch_cal = Q_ch - offset
     
     # Remove values outside the range (-2, 2)
-    Q_ch_cal = Q_ch_cal[(Q_ch_cal > -1) & (Q_ch_cal < 2)]
+    Q_ch_cal = Q_ch_cal[(Q_ch_cal > pedestal_left) & (Q_ch_cal < pedestal_right)]
     
     # Calculate histogram
     counts, bin_edges = np.histogram(Q_ch_cal, bins='auto')
@@ -880,6 +884,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     if r_squared < 0.5:
         print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
     
+    # if create_plots or create_essential_plots:
     if create_plots:
         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
         y_fit = polynomial(x_fit, *coeffs)
@@ -947,12 +952,12 @@ def summary_skew(vdat):
 
 
 def summary(vector):
-    global strip_time_diff_bound
+    global coincidence_window_cal_ns
     quantile_left = CRT_gaussian_fit_quantile * 100
     quantile_right = 100 - CRT_gaussian_fit_quantile * 100
     
     vector = np.array(vector)  # Convert list to NumPy array
-    cond = (vector > -strip_time_diff_bound) & (vector < strip_time_diff_bound)  # This should result in a boolean array
+    cond = (vector > -coincidence_window_cal_ns) & (vector < coincidence_window_cal_ns)  # This should result in a boolean array
     vector = vector[cond]
     
     if len(vector) < 100:
@@ -972,7 +977,7 @@ def summary(vector):
 
 
 def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
-    global fig_idx, strip_time_diff_bound
+    global fig_idx, coincidence_window_cal_ns
 
     fig = plt.figure(figsize=(8, 5))
     ax = fig.add_subplot(1, 1, 1)
@@ -982,7 +987,7 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     #                           label=f"All hits, {len(vdat)} events, {summary_skew(vdat)}", density=False)
     
     vdat = np.array(vdat)  # Convert list to NumPy array
-    cond = (vdat > -strip_time_diff_bound) & (vdat < strip_time_diff_bound)  # This should result in a boolean array
+    cond = (vdat > -coincidence_window_cal_ns) & (vdat < coincidence_window_cal_ns)  # This should result in a boolean array
     vdat = vdat[cond]
     
     counts, bins, _ = ax.hist(vdat, bins=bin_number, alpha=0.5, color="red",
@@ -2006,8 +2011,8 @@ if validate_charge_pedestal_calibration:
         plt.close(fig_Q)
         
         
-    # if create_plots or create_essential_plots:
-    if create_plots:
+    if create_plots or create_essential_plots:
+    # if create_plots:
         # ZOOOOOOOOOOOOOOOOOOOM ------------------------------------------------
         # Create the grand figure for Q values
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2020,8 +2025,8 @@ if validate_charge_pedestal_calibration:
                 y_F = charge_test[col_F]
                 y_B = charge_test[col_B]
                 
-                Q_clip_min = -5
-                Q_clip_max = 5
+                Q_clip_min = pedestal_left
+                Q_clip_max = pedestal_right
                 
                 # Plot histograms with Q-specific clipping and bins
                 axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
@@ -2031,7 +2036,53 @@ if validate_charge_pedestal_calibration:
                 axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
                 axes_Q[i*4 + j].legend()
                 # Show between -5 and 5
-                axes_Q[i*4 + j].set_xlim([-5, 5])
+                axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+        # Display a vertical green dashed, alpha = 0.5 line at 0
+        for ax in axes_Q:
+            ax.axvline(0, color='green', linestyle='--', alpha=0.5)
+        
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.9)
+        plt.suptitle(f"Grand Figure for pedestal substracted values (zoom), mingo0{station}\n{start_time}", fontsize=16)
+        
+        if save_plots:
+            final_filename = f'{fig_idx}_grand_figure_Q_pedestal_zoom.png'
+            fig_idx += 1
+            
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        
+        if show_plots: plt.show()
+        plt.close(fig_Q)
+    
+    
+    if create_plots or create_essential_plots:
+    # if create_plots:
+        # ZOOOOOOOOOOOOOM ------------------------------------------------
+        # Create the grand figure for Q values
+        fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+        axes_Q = axes_Q.flatten()
+        
+        for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+            for j in range(4):
+                col_F = f'{key}_F_{j+1}'
+                col_B = f'{key}_B_{j+1}'
+                y_F = charge_test[col_F]
+                y_B = charge_test[col_B]
+                
+                Q_clip_min = pedestal_left * 2
+                Q_clip_max = pedestal_right * 8
+                
+                # Plot histograms with Q-specific clipping and bins
+                axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                                    bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
+                axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                                    bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
+                axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
+                axes_Q[i*4 + j].legend()
+                # Show between -5 and 5
+                axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
         # Display a vertical green dashed, alpha = 0.5 line at 0
         for ax in axes_Q:
             ax.axvline(0, color='green', linestyle='--', alpha=0.5)
@@ -2094,8 +2145,6 @@ for key in ['Q1', 'Q2', 'Q3', 'Q4']:
                 mask = (raw != 0) & np.isfinite(raw)
                 charge_test[col_fC] = 0.0  # initialize
                 charge_test.loc[mask, col_fC] = interpolate_fast_charge(raw[mask])
-
-
 
 
 if create_plots:
@@ -2297,6 +2346,94 @@ if create_plots:
     if show_plots: 
         plt.show()
     plt.close()
+
+
+print("----------------------------------------------------------------------")
+print("-------------------- Time window filtering (1/2) ---------------------")
+print("----------------------------------------------------------------------")
+
+# Pre removal of outliers
+spread_results = []
+for original_tt in sorted(working_df["original_tt"].unique()):
+    filtered_df = working_df[working_df["original_tt"] == original_tt].copy()
+    T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
+    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
+    filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
+    spread_results.append(filtered_df)
+spread_df = pd.concat(spread_results, ignore_index=True)
+
+# if create_plots:
+if create_essential_plots or create_plots:
+    fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
+    axs = axs.flatten()
+    for i, tt in enumerate(sorted(spread_df["original_tt"].unique())):
+        subset = spread_df[spread_df["original_tt"] == tt]
+        v = subset["T_sum_spread_OG"].dropna()
+        v = v[v < coincidence_window_og_ns * 2]
+        axs[i].hist(v, bins=100, alpha=0.7)
+        axs[i].set_title(f"TT = {tt}")
+        axs[i].set_xlabel("ΔT (ns)")
+        axs[i].set_ylabel("Events")
+        axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')
+        # Logscale
+        axs[i].set_yscale('log')
+    fig.suptitle("Non filtered. Intra-Event T_sum Spread by original_tt")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        hist_filename = f'{fig_idx}_tsum_spread_histograms_OG.png'
+        fig_idx += 1
+        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+        plot_list.append(hist_path)
+        fig.savefig(hist_path, format='png')
+    if show_plots: plt.show()
+    plt.close(fig)
+
+# Removal of outliers
+def zero_outlier_tsum(row, threshold=coincidence_window_og_ns):
+    t_sum_cols = [col for col in row.index if '_T_sum_' in col]
+    t_sum_vals = row[t_sum_cols].copy()
+    nonzero_vals = t_sum_vals[t_sum_vals != 0]
+    if len(nonzero_vals) < 2: return row
+    center = np.median(nonzero_vals)
+    deviations = np.abs(nonzero_vals - center)
+    outliers = deviations > threshold / 2
+    for col in outliers.index[outliers]: row[col] = 0.0
+    return row
+working_df = working_df.apply(zero_outlier_tsum, axis=1)
+
+# Post removal of outliers
+spread_results = []
+for original_tt in sorted(working_df["original_tt"].unique()):
+    filtered_df = working_df[working_df["original_tt"] == original_tt].copy()
+    T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
+    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
+    filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
+    spread_results.append(filtered_df)
+spread_df = pd.concat(spread_results, ignore_index=True)
+
+# if create_plots:
+if create_essential_plots or create_plots:
+    fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
+    axs = axs.flatten()
+    for i, tt in enumerate(sorted(spread_df["original_tt"].unique())):
+        subset = spread_df[spread_df["original_tt"] == tt]
+        v = subset["T_sum_spread_OG"].dropna()
+        axs[i].hist(v, bins=100, alpha=0.7)
+        axs[i].set_title(f"TT = {tt}")
+        axs[i].set_xlabel("ΔT (ns)")
+        axs[i].set_ylabel("Events")
+        axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
+        axs[i].set_yscale('log')
+    fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by original_tt")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered_OG.png'
+        fig_idx += 1
+        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+        plot_list.append(hist_path)
+        fig.savefig(hist_path, format='png')
+    if show_plots: plt.show()
+    plt.close(fig)
 
 
 print("----------------------------------------------------------------------")
@@ -2560,8 +2697,8 @@ for col in working_df.columns:
         working_df[col] = np.where(np.abs(working_df[col]) < Q_diff_cal_threshold_FB, working_df[col], 0)
 
 
-# if create_essential_plots or create_plots:
-if create_plots:
+if create_essential_plots or create_plots:
+# if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
     plot_df = working_df.copy()
@@ -4186,8 +4323,8 @@ if crosstalk_removal_and_recalibration:
             col = f'Q{key}_Q_sum_{j+1}'
             y = working_df[col]
             
-            Q_clip_min = -2
-            Q_clip_max = 3
+            Q_clip_min = pedestal_left
+            Q_clip_max = pedestal_right
             
             num_bins = 80
             data = y[(y != 0) & (y > Q_clip_min) & (y < Q_clip_max)]
@@ -4327,8 +4464,8 @@ if crosstalk_removal_and_recalibration:
                 col = f'Q{key}_Q_sum_{j+1}'
                 y = working_df[col]
                 
-                Q_clip_min = -2
-                Q_clip_max = 3
+                Q_clip_min = pedestal_left
+                Q_clip_max = pedestal_right
                 
                 num_bins = 80
                 data = y[(y != 0) & (y > Q_clip_min) & (y < Q_clip_max)]
@@ -4704,7 +4841,7 @@ working_df["preprocessed_tt"] = working_df.apply(compute_preprocessed_tt, axis=1
 
 
 print("----------------------------------------------------------------------")
-print("----------------------- Time window filtering ------------------------")
+print("-------------------- Time window filtering (2/2) ---------------------")
 print("----------------------------------------------------------------------")
 
 # Pre removal of outliers
@@ -4724,12 +4861,14 @@ if create_essential_plots or create_plots:
     for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
         subset = spread_df[spread_df["preprocessed_tt"] == tt]
         v = subset["T_sum_spread"].dropna()
-        v = v[v < coincidence_window_ns * 1.2]
-        axs[i].hist(v, bins=50, alpha=0.7)
+        v = v[v < coincidence_window_cal_ns * 2]
+        axs[i].hist(v, bins=100, alpha=0.7)
         axs[i].set_title(f"TT = {tt}")
         axs[i].set_xlabel("ΔT (ns)")
         axs[i].set_ylabel("Events")
-        axs[i].axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
+        axs[i].axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
+        # Logscale
+        axs[i].set_yscale('log')
     fig.suptitle("Non filtered. Intra-Event T_sum Spread by preprocessed_tt")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
@@ -4742,7 +4881,7 @@ if create_essential_plots or create_plots:
     plt.close(fig)
 
 # Removal of outliers
-def zero_outlier_tsum(row, threshold=coincidence_window_ns):
+def zero_outlier_tsum(row, threshold=coincidence_window_cal_ns):
     t_sum_cols = [col for col in row.index if '_T_sum_' in col]
     t_sum_vals = row[t_sum_cols].copy()
     nonzero_vals = t_sum_vals[t_sum_vals != 0]
@@ -4771,12 +4910,12 @@ if create_essential_plots or create_plots:
     for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
         subset = spread_df[spread_df["preprocessed_tt"] == tt]
         v = subset["T_sum_spread"].dropna()
-        # v = v[v < 6]
-        axs[i].hist(v, bins=50, alpha=0.7)
+        axs[i].hist(v, bins=100, alpha=0.7)
         axs[i].set_title(f"TT = {tt}")
         axs[i].set_xlabel("ΔT (ns)")
         axs[i].set_ylabel("Events")
-        axs[i].axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
+        axs[i].axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
+        axs[i].set_yscale('log')
     fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by preprocessed_tt")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
@@ -4808,7 +4947,7 @@ if create_plots:
             print(f"[Warning] Skipping Preprocessed TT {preprocessed_tt}: all T_sum values filtered out.")
             continue
 
-        widths = np.linspace(0, coincidence_window_ns, 20)
+        widths = np.linspace(0, coincidence_window_cal_ns, 20)
         counts_per_width = []
         counts_per_width_dev = []
 
@@ -4838,7 +4977,7 @@ if create_plots:
 
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window', color='blue', s=30)
-        ax.axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
+        ax.axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
         ax.set_xlabel("Window width (ns)")
         ax.set_ylabel("Normalized average # of T_sum values in window")
         ax.set_title(f"Fraction of hits within stat-centered window vs width (TT = {preprocessed_tt})")
@@ -6106,7 +6245,7 @@ if time_window_fitting:
             print(f"\n[Warning] Skipping definitive_tt {definitive_tt}: no non-zero T_sum data.")
             continue
         
-        widths = np.linspace(0, coincidence_window_ns, 60)  # Scan range of window widths in ns
+        widths = np.linspace(0, coincidence_window_cal_ns, 60)  # Scan range of window widths in ns
         
         counts_per_width = []
         counts_per_width_dev = []
@@ -6170,7 +6309,7 @@ if time_window_fitting:
         if create_essential_plots or create_plots:
             fig, ax = plt.subplots(figsize=(10, 6))
             ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
-            # ax.axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
+            ax.axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
             ax.set_xlabel("Window width (ns)")
             ax.set_ylabel("Normalized average # of T_sum values in window")
             ax.set_title("Fraction of hits within stat-centered window vs width")
@@ -6197,7 +6336,6 @@ if time_window_fitting:
             ax_fill.set_title(f"Estimated Signal and Background Fractions per Window Width, definitive_tt = {definitive_tt}")
             plt.setp(ax_fill.get_xticklabels(), visible=False)
             ax_main.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
-            # ax_main.axvline(x=coincidence_window_ns, color='red', linestyle='--', label='Time coincidence window')
             ax_main.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
             ax_main.axhline(S_fit, color='green', linestyle=':', alpha=0.6, label=f'Signal plateau ≈ {S_fit:.2f}')
             ax_main.set_xlabel("Window width (ns)")
