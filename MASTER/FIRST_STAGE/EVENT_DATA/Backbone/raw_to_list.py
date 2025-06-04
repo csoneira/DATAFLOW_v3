@@ -5884,8 +5884,8 @@ def fres(vs, vdat, lenx, ss, zi):  # Residuals array
     # Fitted values
     xfit  = X0 + XP * zi
     yfit  = Y0 + YP * zi
-    tffit = T0 + S0 * kz * zi + (lenx/2 + xfit) * ss
-    tbfit = T0 + S0 * kz * zi + (lenx/2 - xfit) * ss
+    tbfit = T0 + S0 * kz * zi + (lenx/2 + xfit) * ss
+    tffit = T0 + S0 * kz * zi + (lenx/2 - xfit) * ss
     tsfit = 0.5 * (tbfit + tffit)
     tdfit = 0.5 * (tbfit - tffit)
     # Data values
