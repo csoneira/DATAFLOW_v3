@@ -7,11 +7,27 @@ Created on 2025-01-01
 @author: csoneira@ucm.es
 """
 
+print("\n\n")
+print("                     `. ___")
+print("                    __,' __`.                _..----....____")
+print("        __...--.'``;.   ,.   ;``--..__     .'    ,-._    _.-'")
+print("  _..-''-------'   `'   `'   `'     O ``-''._   (,;') _,'")
+print(",'________________                          \\`-._`-',")
+print(" `._              ```````````------...___   '-.._'-:")
+print("    ```--.._      ,.                     ````--...__\\-.")
+print("            `.--. `-`                       ____    |  |`")
+print("              `. `.                       ,'`````.  ;  ;`")
+print("                `._`.        __________   `.      \\'__/`")
+print("                   `-:._____/______/___/____`.     \\  `")
+print("                               |       `._    `.    \\")
+print("                               `._________`-.   `.   `.___")
+print("                                             SSt  `------'`")
+print("\n\n")
+
 import sys
 import numpy as np
 import pandas as pd
 from io import StringIO
-
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
@@ -33,10 +49,12 @@ import numpy as np
 from scipy.stats import halfnorm
 from scipy.stats import norm
 from scipy.stats import pearsonr
-
 import sys
 import pandas as pd
 from io import StringIO
+
+sta_time = datetime(2025, 5, 25)
+end_time = datetime(2025, 6, 3, 11)
 
 # ----------- Configuration and Input ------------
 if len(sys.argv) != 2 or sys.argv[1] not in {'1', '2', '3', '4'}:
@@ -48,6 +66,17 @@ nmdb_path = "/home/cayetano/DATAFLOW_v3/MASTER/THIRD_STAGE/nmdb_combined.csv"
 corrected_path = f"/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0{station_index}/SECOND_STAGE/large_corrected_table.csv"
 output_path = f"/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0{station_index}/THIRD_STAGE/third_stage_table.csv"
 figure_path = f"/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0{station_index}/THIRD_STAGE/FIGURES/"
+
+# City of the detector. 1: Madrid, 2: Warsaw, 3: Puebla, 4: Monterrey
+city_names = {
+    '1': 'Madrid',
+    '2': 'Warsaw',
+    '3': 'Puebla',
+    '4': 'Monterrey'
+}
+# Get the city name based on the station index
+city_name = city_names.get(station_index, 'Unknown City')
+
 
 # Create output directory if it doesn't exist
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -113,8 +142,6 @@ station_df = station_df.apply(pd.to_numeric, errors='coerce').assign(Time=statio
 
 
 # ----------- Time filtering --------------------------------------
-sta_time = datetime(2025, 6, 1)
-end_time = datetime(2025, 6, 3)
 nmdb_df = nmdb_df[(nmdb_df["Time"] >= sta_time) & (nmdb_df["Time"] < end_time)]
 station_df = station_df[(station_df["Time"] >= sta_time) & (station_df["Time"] < end_time)]
 
@@ -199,6 +226,10 @@ def plot_grouped_series(df, group_cols, time_col='Time', title=None, figsize=(14
         ax.set_ylabel(' / '.join(cols))
         ax.grid(True)
         
+        # Add a watermark that says "Preliminary"
+        ax.text(0.3, 0.35, 'Preliminary', fontsize=40, color='gray', alpha=0.5,
+                transform=ax.transAxes, ha='center', va='center', rotation=10, weight='bold')
+        
         ax.legend(loc='best')
         ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
 
@@ -250,10 +281,13 @@ group_cols = [
 ]
 plot_grouped_series(data_df, group_cols, title=f"Station {station_index} Data")
 
+
+data_df["miniTRASGO"] = data_df["total_best_sum"]
+
 group_cols = [
-    [ 'total_best_sum', 'KIEL2', 'LMKS', ]
+    [ 'miniTRASGO', 'KIEL2', 'LMKS', ]
 ]
-plot_grouped_series(data_df, group_cols, title=f"Station {station_index} Data")
+plot_grouped_series(data_df, group_cols, title=f"{city_name}. Station {station_index} Corrected. Normalized rate compared with NMDB.")
 
 
 
