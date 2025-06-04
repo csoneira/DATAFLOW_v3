@@ -72,11 +72,6 @@ print(f"Station: {station}")
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# This works fine for total counts:
-# resampling_window = '10T'  # '10T' # '5T' stands for 5 minutes. Adjust based on your needs.
-# HMF_ker = 5 # It must be odd.
-# MAF_ker = 1
-
 remove_outliers = True
 
 # Plotting configuration
@@ -88,8 +83,14 @@ show_errorbar = False
 recalculate_pressure_coeff = True
 
 res_win_min = 30 # 180 Resampling window minutes
-# HMF_ker = 1 # It must be odd. Horizontal Median Filter
-# MAF_ker = 1 # Moving Average Filter
+
+if int(station) == 4:
+    res_win_min = 30
+
+print(f"Resampling window set to {res_win_min} minutes.")
+
+HMF_ker = 3 # It must be odd. Horizontal Median Filter
+MAF_ker = 0 # Moving Average Filter
 
 outlier_filter = 4 #3
 
@@ -296,38 +297,38 @@ else:
 
 if remove_outliers:
     
+    # Step 1: Clean the data
+    series = data_df['events'].copy()
+    series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+
+    # Step 2: Z-score filter (±3σ)
+    mean = series_clean.mean()
+    std = series_clean.std()
+    z_scores = (series_clean - mean) / std
+    mask = np.abs(z_scores) <= 3
+    filtered = series_clean[mask]
+
+    # Remove outliers from original dataframe
+    data_df = data_df.loc[filtered.index].copy()
+
+    # Step 3: Fit normal distribution to filtered data
+    mu, sigma = norm.fit(filtered)
+
+    # Step 4: Histogram with Poisson uncertainties (raw data before filtering)
+    bins = 200
+    counts, bin_edges = np.histogram(series_clean, bins=bins)
+    bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
+    bin_width = bin_edges[1] - bin_edges[0]
+
+    total_count = np.sum(counts)
+    density = counts / (total_count * bin_width)
+    density_err = np.sqrt(counts) / (total_count * bin_width)
+
+    # Step 5: PDF
+    x = np.linspace(series_clean.min(), series_clean.max(), 1000)
+    pdf = norm.pdf(x, loc=mu, scale=sigma)
+    
     if create_plots:
-        # Step 1: Clean the data
-        series = data_df['events'].copy()
-        series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
-
-        # Step 2: Z-score filter (±3σ)
-        mean = series_clean.mean()
-        std = series_clean.std()
-        z_scores = (series_clean - mean) / std
-        mask = np.abs(z_scores) <= 3
-        filtered = series_clean[mask]
-
-        # Remove outliers from original dataframe
-        data_df = data_df.loc[filtered.index].copy()
-
-        # Step 3: Fit normal distribution to filtered data
-        mu, sigma = norm.fit(filtered)
-
-        # Step 4: Histogram with Poisson uncertainties (raw data before filtering)
-        bins = 200
-        counts, bin_edges = np.histogram(series_clean, bins=bins)
-        bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-        bin_width = bin_edges[1] - bin_edges[0]
-
-        total_count = np.sum(counts)
-        density = counts / (total_count * bin_width)
-        density_err = np.sqrt(counts) / (total_count * bin_width)
-
-        # Step 5: PDF
-        x = np.linspace(series_clean.min(), series_clean.max(), 1000)
-        pdf = norm.pdf(x, loc=mu, scale=sigma)
-
         # Step 6: Plot
         plt.figure()
         plt.errorbar(bin_centers, density, yerr=density_err, fmt='o', alpha=0.6, label='Data with $\sqrt{N}$ error')
@@ -343,20 +344,19 @@ if remove_outliers:
         if show_plots:
             plt.show()
         elif save_plots:
-            if 'fig_idx' not in locals():
-                fig_idx = 0
             new_figure_path = f"{figure_path}{fig_idx}_histo.png"
             fig_idx += 1
             print(f"Saving figure to {new_figure_path}")
             plt.savefig(new_figure_path, format='png', dpi=300)
         plt.close()
-
+    else:
+        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
 if remove_outliers:
     print('Removing outliers and zero values...')
     def remove_outliers_and_zeroes(series_og):
-        global fig_idx
+        global create_plots, fig_idx
         
         series = series_og.copy()
         median = series.mean()
@@ -372,27 +372,28 @@ if remove_outliers:
         loc = 0
         scale = halfnorm.fit(filtered, floc=loc)[1]  # only fit the scale
         cutoff = halfnorm.ppf(0.999, loc=loc, scale=scale)
+        
+        if create_plots:
+            # Plot
+            x = np.linspace(filtered.min(), filtered.max(), 1000)
+            pdf = halfnorm.pdf(x, loc=loc, scale=scale)
 
-        # Plot
-        x = np.linspace(filtered.min(), filtered.max(), 1000)
-        pdf = halfnorm.pdf(x, loc=loc, scale=scale)
+            plt.hist(filtered, bins=100, density=True, alpha=0.6, label='Data')
+            plt.plot(x, pdf, 'r--', label=f'Half-Normal Fit\nσ={scale:.2f}')
+            plt.axvline(cutoff, color='k', linestyle='--', label=f'99.9% cutoff = {cutoff:.2f}')
+            plt.title('Half-Normal Fit and 99.9% Cutoff')
+            plt.xlabel('Value')
+            plt.ylabel('Density')
+            plt.legend()
 
-        plt.hist(filtered, bins=100, density=True, alpha=0.6, label='Data')
-        plt.plot(x, pdf, 'r--', label=f'Half-Normal Fit\nσ={scale:.2f}')
-        plt.axvline(cutoff, color='k', linestyle='--', label=f'99.9% cutoff = {cutoff:.2f}')
-        plt.title('Half-Normal Fit and 99.9% Cutoff')
-        plt.xlabel('Value')
-        plt.ylabel('Density')
-        plt.legend()
-
-        if show_plots:
-            plt.show()
-        elif save_plots:
-            new_figure_path = figure_path + f"{fig_idx}" + "_half_normal_fit.png"
-            fig_idx += 1
-            print(f"Saving figure to {new_figure_path}")
-            plt.savefig(new_figure_path, format='png', dpi=300)
-        plt.close()
+            if show_plots:
+                plt.show()
+            elif save_plots:
+                new_figure_path = figure_path + f"{fig_idx}" + "_half_normal_fit.png"
+                fig_idx += 1
+                print(f"Saving figure to {new_figure_path}")
+                plt.savefig(new_figure_path, format='png', dpi=300)
+            plt.close()
 
         # Mask: outliers above cutoff or zero entries
         mask = (z_scores > cutoff) | (z_scores == 0)
@@ -446,39 +447,41 @@ def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', 
         figsize (tuple): Size of the figure.
         save_path (str): If provided, saves the figure to this path.
     """
-    global fig_idx
+    global create_plots, fig_idx
     
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=figsize, gridspec_kw={'height_ratios': [1, 1]})
+    if create_plots:
+        
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=figsize, gridspec_kw={'height_ratios': [1, 1]})
 
-    # Plot pressure
-    ax1.plot(df[time_col], df[x_column], label=x_label, color='tab:blue')
-    ax1.set_ylabel(x_label)
-    ax1.set_title(title if title else 'Group Signals')
-    ax1.grid(True)
-    ax1.legend()
+        # Plot pressure
+        ax1.plot(df[time_col], df[x_column], label=x_label, color='tab:blue')
+        ax1.set_ylabel(x_label)
+        ax1.set_title(title if title else 'Group Signals')
+        ax1.grid(True)
+        ax1.legend()
 
-    # Plot group of columns
-    for col in group_cols:
-        if col in df.columns:
-            ax2.plot(df[time_col], df[col], label=col)
-        else:
-            print(f"Warning: column '{col}' not found in DataFrame")
+        # Plot group of columns
+        for col in group_cols:
+            if col in df.columns:
+                ax2.plot(df[time_col], df[col], label=col)
+            else:
+                print(f"Warning: column '{col}' not found in DataFrame")
 
-    ax2.set_ylabel('Group Signals')
-    ax2.set_xlabel('Time')
-    ax2.grid(True)
-    ax2.legend()
-
-    plt.tight_layout()
-
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + "_multiple.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-    plt.close()
+        ax2.set_ylabel('Group Signals')
+        ax2.set_xlabel('Time')
+        ax2.grid(True)
+        ax2.legend()
+        plt.tight_layout()
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + f"{fig_idx}" + "_multiple.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format='png', dpi=300)
+        plt.close()
+    else:
+        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
 import matplotlib.ticker as mtick
@@ -495,43 +498,47 @@ def plot_grouped_series(df, group_cols, time_col='Time', title=None, figsize=(14
         figsize (tuple): Size of each subplot.
         save_path (str): If provided, save the figure to this path.
     """
-    global fig_idx
+    global create_plots, fig_idx
     
-    n_plots = len(group_cols)
-    fig, axes = plt.subplots(n_plots, 1, sharex=True, figsize=(figsize[0], figsize[1] * n_plots))
+    if create_plots:
     
-    if n_plots == 1:
-        axes = [axes]  # Make iterable
-    
-    for idx, cols in enumerate(group_cols):
-        ax = axes[idx]
-        for col in cols:
-            if col in df.columns:
-                ax.plot(df[time_col], df[col], label=col)
-            else:
-                print(f"Warning: column '{col}' not found in DataFrame")
-        ax.set_ylabel(' / '.join(cols))
-        ax.grid(True)
+        n_plots = len(group_cols)
+        fig, axes = plt.subplots(n_plots, 1, sharex=True, figsize=(figsize[0], figsize[1] * n_plots))
         
-        ax.legend(loc='best')
+        if n_plots == 1:
+            axes = [axes]  # Make iterable
         
-        ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
+        for idx, cols in enumerate(group_cols):
+            ax = axes[idx]
+            for col in cols:
+                if col in df.columns:
+                    ax.plot(df[time_col], df[col], label=col)
+                else:
+                    print(f"Warning: column '{col}' not found in DataFrame")
+            ax.set_ylabel(' / '.join(cols))
+            ax.grid(True)
+            
+            ax.legend(loc='best')
+            
+            ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
 
-    axes[-1].set_xlabel('Time')
-    if title:
-        fig.suptitle(title, fontsize=14)
-        fig.subplots_adjust(top=0.95)
-    
-    plt.tight_layout(rect=[0, 0, 1, 0.96] if title else None)
+        axes[-1].set_xlabel('Time')
+        if title:
+            fig.suptitle(title, fontsize=14)
+            fig.subplots_adjust(top=0.95)
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.96] if title else None)
 
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + "_multiple.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-    plt.close()
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + f"{fig_idx}" + "_multiple.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format='png', dpi=300)
+        plt.close()
+    else:
+        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
 # group_cols = [ 'original_tt_123', 'original_tt_12', 'original_tt_234', 'original_tt_34', 'original_tt_23', 'original_tt_1234', 'original_tt_134', 'original_tt_124', 'original_tt_13']
@@ -1084,52 +1091,57 @@ def plot_eff_vs_rate(data_df, eff_col, rate_col, label_suffix):
     - corrected_col: corrected rate column
     - label_suffix: string to append to legend labels
     """
-    global fig_idx, show_plots, save_plots, figure_path
-
-    # Drop NaNs
-    valid = data_df[[eff_col, rate_col]].dropna()
-    x = valid[eff_col].values
-    y_orig = valid[rate_col].values
-
-    # Compute Pearson correlations
-    corr_orig, _ = pearsonr(x, y_orig)
-
-    # Linear fits
-    p_orig = np.polyfit(x, y_orig, 1)
-    x_fit = np.linspace(x.min(), x.max(), 500)
     
-    fig, ax = plt.subplots(figsize=(8, 6))
+    global create_plots, fig_idx, show_plots, save_plots, figure_path
     
-    ax.scatter(x, y_orig, alpha=0.7, label=f'{label_suffix}', s=2)
-    ax.plot(x_fit, np.polyval(p_orig, x_fit), linestyle='--', linewidth=1.0, label='Fit')
-    
-    ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
-    
-    # Plot a x = y line
-    plt.plot(x_fit, x_fit, color='gray', linestyle=':', linewidth=1.0, label='y = x')
-    
-    plt.xlabel('Efficiency')
-    plt.ylabel('Rate')
-    plt.title(f'Efficiency calculated with three and two planes {label_suffix}')
-    plt.grid(True)
-    
-    # Axes equal
-    plt.axis('equal')
+    if create_plots:
 
-    textstr = f'Corr (original): {corr_orig:.3f}'
-    plt.gcf().text(0.15, 0.80, textstr, fontsize=10, bbox=dict(boxstyle="round", facecolor='white', alpha=0.5))
+        # Drop NaNs
+        valid = data_df[[eff_col, rate_col]].dropna()
+        x = valid[eff_col].values
+        y_orig = valid[rate_col].values
 
-    plt.legend()
-    plt.tight_layout()
+        # Compute Pearson correlations
+        corr_orig, _ = pearsonr(x, y_orig)
 
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + f"_eff_scatter_new_{label_suffix}.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-    plt.close()
+        # Linear fits
+        p_orig = np.polyfit(x, y_orig, 1)
+        x_fit = np.linspace(x.min(), x.max(), 500)
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        ax.scatter(x, y_orig, alpha=0.7, label=f'{label_suffix}', s=2)
+        ax.plot(x_fit, np.polyval(p_orig, x_fit), linestyle='--', linewidth=1.0, label='Fit')
+        
+        ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
+        
+        # Plot a x = y line
+        plt.plot(x_fit, x_fit, color='gray', linestyle=':', linewidth=1.0, label='y = x')
+        
+        plt.xlabel('Efficiency')
+        plt.ylabel('Rate')
+        plt.title(f'Efficiency calculated with three and two planes {label_suffix}')
+        plt.grid(True)
+        
+        # Axes equal
+        plt.axis('equal')
+
+        textstr = f'Corr (original): {corr_orig:.3f}'
+        plt.gcf().text(0.15, 0.80, textstr, fontsize=10, bbox=dict(boxstyle="round", facecolor='white', alpha=0.5))
+
+        plt.legend()
+        plt.tight_layout()
+
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + f"{fig_idx}" + f"_eff_scatter_new_{label_suffix}.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format='png', dpi=300)
+        plt.close()
+    else:
+        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
 # group_cols = [ 'eff_sys_123_2', 'eff_sys_2' ]
@@ -1366,40 +1378,44 @@ else:
 
 
 def plot_eff_vs_rate(data_df, eff_col, rate_col, corrected_col, label_suffix=''):
-    global fig_idx, show_plots, save_plots, figure_path
-    valid = data_df[[eff_col, rate_col, corrected_col]].dropna()
-    x = valid[eff_col].values
-    y_orig = valid[rate_col].values
-    y_corr = valid[corrected_col].values
-    # Compute Pearson correlations
-    corr_orig, _ = pearsonr(x, y_orig)
-    corr_corr, _ = pearsonr(x, y_corr)
-    # Linear fits
-    p_orig = np.polyfit(x, y_orig, 1)
-    p_corr = np.polyfit(x, y_corr, 1)
-    x_fit = np.linspace(x.min(), x.max(), 500)
-    plt.figure(figsize=(8, 6))
-    plt.scatter(x, y_orig, alpha=0.7, label=f'Original rate {label_suffix}', s=2)
-    plt.scatter(x, y_corr, alpha=0.7, label=f'Corrected rate {label_suffix}', s=2)
-    plt.plot(x_fit, np.polyval(p_orig, x_fit), linestyle='--', linewidth=1.0, label='Fit: Original rate')
-    plt.plot(x_fit, np.polyval(p_corr, x_fit), linestyle='--', linewidth=1.0, label='Fit: Corrected rate')
-    # ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
-    plt.xlabel('Efficiency')
-    plt.ylabel('Rate')
-    plt.title(f'Efficiency vs. Rate {label_suffix}')
-    plt.grid(True)
-    textstr = f'Corr (original): {corr_orig:.3f}\nCorr (corrected): {corr_corr:.3f}'
-    plt.gcf().text(0.15, 0.80, textstr, fontsize=10, bbox=dict(boxstyle="round", facecolor='white', alpha=0.5))
-    plt.legend()
-    plt.tight_layout()
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + "_scatter.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-    plt.close()
+    global create_plots, fig_idx, show_plots, save_plots, figure_path
+    
+    if create_plots:
+        valid = data_df[[eff_col, rate_col, corrected_col]].dropna()
+        x = valid[eff_col].values
+        y_orig = valid[rate_col].values
+        y_corr = valid[corrected_col].values
+        # Compute Pearson correlations
+        corr_orig, _ = pearsonr(x, y_orig)
+        corr_corr, _ = pearsonr(x, y_corr)
+        # Linear fits
+        p_orig = np.polyfit(x, y_orig, 1)
+        p_corr = np.polyfit(x, y_corr, 1)
+        x_fit = np.linspace(x.min(), x.max(), 500)
+        plt.figure(figsize=(8, 6))
+        plt.scatter(x, y_orig, alpha=0.7, label=f'Original rate {label_suffix}', s=2)
+        plt.scatter(x, y_corr, alpha=0.7, label=f'Corrected rate {label_suffix}', s=2)
+        plt.plot(x_fit, np.polyval(p_orig, x_fit), linestyle='--', linewidth=1.0, label='Fit: Original rate')
+        plt.plot(x_fit, np.polyval(p_corr, x_fit), linestyle='--', linewidth=1.0, label='Fit: Corrected rate')
+        # ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
+        plt.xlabel('Efficiency')
+        plt.ylabel('Rate')
+        plt.title(f'Efficiency vs. Rate {label_suffix}')
+        plt.grid(True)
+        textstr = f'Corr (original): {corr_orig:.3f}\nCorr (corrected): {corr_corr:.3f}'
+        plt.gcf().text(0.15, 0.80, textstr, fontsize=10, bbox=dict(boxstyle="round", facecolor='white', alpha=0.5))
+        plt.legend()
+        plt.tight_layout()
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + f"{fig_idx}" + "_scatter.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format='png', dpi=300)
+        plt.close()
+    else:
+        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
 print('----------------------------------------------------------------------')
@@ -1531,58 +1547,62 @@ from sklearn.linear_model import LinearRegression
 import numpy as np
 
 def fit_and_plot_eff_vs_rate(df, eff_col, rate_col, label_suffix):
-    global fig_idx, show_plots, save_plots, figure_path
-    # Drop rows with NaNs in either column
-    valid = df[[eff_col, rate_col]].dropna()
-    x = valid[[eff_col]].values  # 2D
-    y = valid[rate_col].values   # 1D
-
-    # Fit linear model
-    model = LinearRegression()
-    model.fit(x, y)
-    y_pred = model.predict(x)
-    a, b = model.coef_[0], model.intercept_
-    r2 = model.score(x, y)
+    global create_plots, fig_idx, show_plots, save_plots, figure_path
     
-    y_flat = y - y_pred + y.mean()
+    if create_plots:
+        # Drop rows with NaNs in either column
+        valid = df[[eff_col, rate_col]].dropna()
+        x = valid[[eff_col]].values  # 2D
+        y = valid[rate_col].values   # 1D
 
-    # Plot
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, sharey=True, figsize=(6, 6), gridspec_kw={'hspace': 0.15})
+        # Fit linear model
+        model = LinearRegression()
+        model.fit(x, y)
+        y_pred = model.predict(x)
+        a, b = model.coef_[0], model.intercept_
+        r2 = model.score(x, y)
+        
+        y_flat = y - y_pred + y.mean()
 
-    # Top: original
-    ax1.scatter(x, y, s=1, label='Data', alpha=0.7)
-    ax1.plot(x, y_pred, color='red', linewidth=0.5, label=f'Fit: y = {a:.3f}x + {b:.3f}\n$R^2$ = {r2:.3f}')
-    ax1.axhline(y.mean(), color='gray', linestyle='--', linewidth=0.5, label='Mean rate')
-    ax1.set_ylabel(rate_col)
-    ax1.set_title(f'Detector {label_suffix} — Original')
-    ax1.legend(fontsize=8)
-    ax1.grid(True)
+        # Plot
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, sharey=True, figsize=(6, 6), gridspec_kw={'hspace': 0.15})
 
-    # Bottom: decorrelated
-    ax2.scatter(x, y_flat, s=1, color='tab:orange', alpha=0.7, label='Decorrelated')
-    ax2.axhline(y.mean(), color='gray', linestyle='--', linewidth=0.5, label='Mean rate')
-    ax2.set_xlabel(eff_col)
-    ax2.set_ylabel(rate_col)
-    ax2.set_title(f'Detector {label_suffix} — Slope Subtracted')
-    ax2.legend(fontsize=8)
-    ax2.grid(True)
+        # Top: original
+        ax1.scatter(x, y, s=1, label='Data', alpha=0.7)
+        ax1.plot(x, y_pred, color='red', linewidth=0.5, label=f'Fit: y = {a:.3f}x + {b:.3f}\n$R^2$ = {r2:.3f}')
+        ax1.axhline(y.mean(), color='gray', linestyle='--', linewidth=0.5, label='Mean rate')
+        ax1.set_ylabel(rate_col)
+        ax1.set_title(f'Detector {label_suffix} — Original')
+        ax1.legend(fontsize=8)
+        ax1.grid(True)
 
-    plt.tight_layout()
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + "_eff_linear.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-    plt.close()
+        # Bottom: decorrelated
+        ax2.scatter(x, y_flat, s=1, color='tab:orange', alpha=0.7, label='Decorrelated')
+        ax2.axhline(y.mean(), color='gray', linestyle='--', linewidth=0.5, label='Mean rate')
+        ax2.set_xlabel(eff_col)
+        ax2.set_ylabel(rate_col)
+        ax2.set_title(f'Detector {label_suffix} — Slope Subtracted')
+        ax2.legend(fontsize=8)
+        ax2.grid(True)
 
-    # Print fitted parameters
-    print(f"Detector {label_suffix}:")
-    print(f"  a (slope)     = {a:.6f}")
-    print(f"  b (intercept) = {b:.6f}")
-    print(f"  R²            = {r2:.6f}")
-    print("-" * 50)
+        plt.tight_layout()
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + f"{fig_idx}" + "_eff_linear.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format='png', dpi=300)
+        plt.close()
+
+        # Print fitted parameters
+        print(f"Detector {label_suffix}:")
+        print(f"  a (slope)     = {a:.6f}")
+        print(f"  b (intercept) = {b:.6f}")
+        print(f"  R²            = {r2:.6f}")
+        print("-" * 50)
+    else:
+        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 # Apply to all detectors
 for label in detector_labels:
@@ -1645,22 +1665,26 @@ for label in detector_labels:
     rate_col = f'detector_{label}_eff_corr'
 
     valid = data_df[[eff_prime_col, rate_col]].dropna()
-    plt.figure(figsize=(5, 4))
-    plt.scatter(valid[eff_prime_col], valid[rate_col], s=2, alpha=0.7)
-    plt.xlabel(f"{eff_prime_col}")
-    plt.ylabel(f"{rate_col}")
-    plt.title(f"Decorrelated: {label}")
-    plt.axhline(valid[rate_col].mean(), linestyle='--', color='gray', linewidth=0.5)
-    plt.grid(True)
-    plt.tight_layout()
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = figure_path + f"{fig_idx}" + "_wow.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-    plt.close()
+    
+    if create_plots:
+        plt.figure(figsize=(5, 4))
+        plt.scatter(valid[eff_prime_col], valid[rate_col], s=2, alpha=0.7)
+        plt.xlabel(f"{eff_prime_col}")
+        plt.ylabel(f"{rate_col}")
+        plt.title(f"Decorrelated: {label}")
+        plt.axhline(valid[rate_col].mean(), linestyle='--', color='gray', linewidth=0.5)
+        plt.grid(True)
+        plt.tight_layout()
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + f"{fig_idx}" + "_decorrelated.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format='png', dpi=300)
+        plt.close()
+    else:
+        print(f"Plotting is disabled for {label}. Set `create_plots = True` to enable plotting.")
 
 
 group_cols = [
@@ -1941,77 +1965,80 @@ from matplotlib.patches import Patch
 import numpy as np
 
 def plot_combined_efficiency_views(filtered_df, final_eff_col, fit_func, plane_number):
-    global fig_idx, show_plots, save_plots, figure_path
+    global create_plots, fig_idx, show_plots, save_plots, figure_path
+    
+    if create_plots:
+        x = filtered_df['sensors_ext_Pressure_ext'].values
+        y = filtered_df['sensors_ext_Temperature_ext'].values
+        z = filtered_df[final_eff_col].values
 
-    x = filtered_df['sensors_ext_Pressure_ext'].values
-    y = filtered_df['sensors_ext_Temperature_ext'].values
-    z = filtered_df[final_eff_col].values
+        x_fit = np.linspace(x.min(), x.max(), 200)
+        y_fit = np.linspace(y.min(), y.max(), 200)
 
-    x_fit = np.linspace(x.min(), x.max(), 200)
-    y_fit = np.linspace(y.min(), y.max(), 200)
+        fig = plt.figure(figsize=(16, 12))
 
-    fig = plt.figure(figsize=(16, 12))
+        # --- 3D Surface Plot ---
+        ax1 = fig.add_subplot(2, 2, 1, projection='3d')
+        ax1.scatter(x, y, z, color='blue', alpha=0.6, s=8, label='Measured')
 
-    # --- 3D Surface Plot ---
-    ax1 = fig.add_subplot(2, 2, 1, projection='3d')
-    ax1.scatter(x, y, z, color='blue', alpha=0.6, s=8, label='Measured')
+        x_surf, y_surf = np.meshgrid(
+            np.linspace(x.min(), x.max(), 50),
+            np.linspace(y.min(), y.max(), 50)
+        )
+        z_surf = fit_func(x_surf, y_surf)
+        ax1.plot_surface(x_surf, y_surf, z_surf, color='red', alpha=0.2, edgecolor='k', linewidth=0.1)
 
-    x_surf, y_surf = np.meshgrid(
-        np.linspace(x.min(), x.max(), 50),
-        np.linspace(y.min(), y.max(), 50)
-    )
-    z_surf = fit_func(x_surf, y_surf)
-    ax1.plot_surface(x_surf, y_surf, z_surf, color='red', alpha=0.2, edgecolor='k', linewidth=0.1)
+        ax1.set_xlabel('Pressure [P]')
+        ax1.set_ylabel('Temperature [T]')
+        ax1.set_zlabel('Efficiency')
+        ax1.set_zlim(0.8, 1)
+        ax1.set_title(f'3D Fit: Plane {plane_number}')
+        ax1.legend(handles=[
+            Line2D([0], [0], marker='o', color='w', label='Measured', markerfacecolor='blue', markersize=6),
+            Patch(facecolor='red', edgecolor='k', label='Fitted Surface', alpha=0.3)
+        ])
 
-    ax1.set_xlabel('Pressure [P]')
-    ax1.set_ylabel('Temperature [T]')
-    ax1.set_zlabel('Efficiency')
-    ax1.set_zlim(0.8, 1)
-    ax1.set_title(f'3D Fit: Plane {plane_number}')
-    ax1.legend(handles=[
-        Line2D([0], [0], marker='o', color='w', label='Measured', markerfacecolor='blue', markersize=6),
-        Patch(facecolor='red', edgecolor='k', label='Fitted Surface', alpha=0.3)
-    ])
+        # --- Eff vs Pressure ---
+        ax2 = fig.add_subplot(2, 2, 2)
+        ax2.scatter(x, z, alpha=0.4, label='Measured')
+        ax2.plot(x_fit, fit_func(x_fit, np.mean(y)), 'r-', label='Fit at avg T')
+        ax2.set_xlabel('Pressure')
+        ax2.set_ylabel('Efficiency')
+        ax2.set_ylim(0.8, 1)
+        ax2.set_title('Projection: Efficiency vs Pressure')
+        ax2.legend()
 
-    # --- Eff vs Pressure ---
-    ax2 = fig.add_subplot(2, 2, 2)
-    ax2.scatter(x, z, alpha=0.4, label='Measured')
-    ax2.plot(x_fit, fit_func(x_fit, np.mean(y)), 'r-', label='Fit at avg T')
-    ax2.set_xlabel('Pressure')
-    ax2.set_ylabel('Efficiency')
-    ax2.set_ylim(0.8, 1)
-    ax2.set_title('Projection: Efficiency vs Pressure')
-    ax2.legend()
+        # --- Eff vs Temperature ---
+        ax3 = fig.add_subplot(2, 2, 3)
+        ax3.scatter(y, z, alpha=0.4, label='Measured')
+        ax3.plot(y_fit, fit_func(np.mean(x), y_fit), 'r-', label='Fit at avg P')
+        ax3.set_xlabel('Temperature')
+        ax3.set_ylabel('Efficiency')
+        ax3.set_ylim(0.8, 1)
+        ax3.set_title('Projection: Efficiency vs Temperature')
+        ax3.legend()
 
-    # --- Eff vs Temperature ---
-    ax3 = fig.add_subplot(2, 2, 3)
-    ax3.scatter(y, z, alpha=0.4, label='Measured')
-    ax3.plot(y_fit, fit_func(np.mean(x), y_fit), 'r-', label='Fit at avg P')
-    ax3.set_xlabel('Temperature')
-    ax3.set_ylabel('Efficiency')
-    ax3.set_ylim(0.8, 1)
-    ax3.set_title('Projection: Efficiency vs Temperature')
-    ax3.legend()
+        # --- Efficiency heatmap slice (optional projection plane) ---
+        ax4 = fig.add_subplot(2, 2, 4)
+        sc = ax4.scatter(x, y, c=z, cmap='viridis', s=10)
+        ax4.set_xlabel('Pressure')
+        ax4.set_ylabel('Temperature')
+        ax4.set_title('Efficiency Color Map')
+        plt.colorbar(sc, ax=ax4, label='Efficiency')
 
-    # --- Efficiency heatmap slice (optional projection plane) ---
-    ax4 = fig.add_subplot(2, 2, 4)
-    sc = ax4.scatter(x, y, c=z, cmap='viridis', s=10)
-    ax4.set_xlabel('Pressure')
-    ax4.set_ylabel('Temperature')
-    ax4.set_title('Efficiency Color Map')
-    plt.colorbar(sc, ax=ax4, label='Efficiency')
+        plt.suptitle(f'Efficiency Fitting Overview – Plane {plane_number}', fontsize=14)
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-    plt.suptitle(f'Efficiency Fitting Overview – Plane {plane_number}', fontsize=14)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-
-    if show_plots:
-        plt.show()
-    elif save_plots:
-        new_figure_path = f"{figure_path}{fig_idx}_overview.png"
-        fig_idx += 1
-        print(f"Saving figure to {new_figure_path}")
-        plt.savefig(new_figure_path, format='png', dpi=300)
-    plt.close()
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            new_figure_path = f"{figure_path}{fig_idx}_overview.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format='png', dpi=300)
+        plt.close()
+    else:
+        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 if eff_fitting:
     for i in range(1, 5):
@@ -2096,6 +2123,8 @@ if create_plots:
         print(f"Saving figure to {new_figure_path}")
         plt.savefig(new_figure_path, format='png', dpi=300)
     plt.close()
+else:
+    print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 print('Efficiency calculations performed.')
 
@@ -2126,7 +2155,7 @@ def fit_model(x, beta, a):
     return beta / 100 * x + a
 
 def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = None):
-    global fig_idx
+    global create_plots, fig_idx
     
     log_I_over_I0 = np.log(I_over_I0)
     unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0  # Propagate relative errors
@@ -2153,19 +2182,22 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = Non
         # z_scores = (df['log_I_over_I0'] - df['log_I_over_I0'].median()) / df['log_I_over_I0'].std()
         
         # Make a small histogram of the z_scores to see the distribution
-        plt.hist(z_scores, bins=400)
-        plt.axvline(x=z_score_th_pres_corr, color='r', linestyle='--', label='Threshold')
-        plt.title(f'{region}\nZ-Scores Distribution')
-        plt.xlabel('Z-Score')
-        plt.ylabel('Frequency')
-        if show_plots: 
-            plt.show()
-        elif save_plots:
-            new_figure_path = figure_path + f"{fig_idx}" + "_pre_pressure_z" + f"{region}" + ".png"
-            fig_idx += 1
-            print(f"Saving figure to {new_figure_path}")
-            plt.savefig(new_figure_path, format = 'png', dpi = 300)
-        plt.close()
+        if create_plots:
+            plt.hist(z_scores, bins=400)
+            plt.axvline(x=z_score_th_pres_corr, color='r', linestyle='--', label='Threshold')
+            plt.title(f'{region}\nZ-Scores Distribution')
+            plt.xlabel('Z-Score')
+            plt.ylabel('Frequency')
+            if show_plots: 
+                plt.show()
+            elif save_plots:
+                new_figure_path = figure_path + f"{fig_idx}" + "_pre_pressure_z" + f"{region}" + ".png"
+                fig_idx += 1
+                print(f"Saving figure to {new_figure_path}")
+                plt.savefig(new_figure_path, format = 'png', dpi = 300)
+            plt.close()
+        else:
+            print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
         
         df = df[z_scores < z_score_th_pres_corr]
         
@@ -2334,16 +2366,14 @@ for region in regions_to_correct:
         log_I_over_I0 = np.log(I_over_I0)
         unc_log_I_over_I0 = unc_I_over_I0 / I_over_I0
         
+        df = pd.DataFrame({
+            'delta_P': delta_P,
+            'log_I_over_I0': log_I_over_I0,
+            'unc_delta_P': unc_delta_P,
+            'unc_log_I_over_I0': unc_I_over_I0 / I_over_I0
+        })
+        
         if create_plots:
-            log_I_over_I0 = np.log(I_over_I0)
-            
-            df = pd.DataFrame({
-                'delta_P': delta_P,
-                'log_I_over_I0': log_I_over_I0,
-                'unc_delta_P': unc_delta_P,
-                'unc_log_I_over_I0': unc_I_over_I0 / I_over_I0
-            })
-            
             plt.figure()
             if show_errorbar:
                 plt.errorbar(df['delta_P'], df['log_I_over_I0'], xerr=abs(df['unc_delta_P']), yerr=abs(df['unc_log_I_over_I0']), fmt='o', label='Data with Uncertainty')
@@ -2367,6 +2397,8 @@ for region in regions_to_correct:
                 print(f"Saving figure to {new_figure_path}")
                 plt.savefig(new_figure_path, format = 'png', dpi = 300)
             plt.close()
+        else:
+            print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
     # Create corrected rate column for the region
@@ -2387,51 +2419,54 @@ for region in regions_to_correct:
 # Convert the list of dictionaries into a DataFrame after the loop
 log_delta_I_df = pd.DataFrame(results)
 
-# --- Plotting the vectors ---
-plt.figure(figsize=(12, 8))
+if create_plots:
+    # --- Plotting the vectors ---
+    plt.figure(figsize=(12, 8))
 
-# Loop through all regions
-for region in log_delta_I_df['Region']:
-    
-    # Extract data for the current region
-    region_data = log_delta_I_df[log_delta_I_df['Region'] == region]
+    # Loop through all regions
+    for region in log_delta_I_df['Region']:
+        
+        # Extract data for the current region
+        region_data = log_delta_I_df[log_delta_I_df['Region'] == region]
 
-    # Access the full vectors (they are stored as columns, so we directly use them)
-    delta_P = region_data['Delta_P'].values[0]  # Access the vector (1D)
-    log_I_over_I0 = region_data['Log_I_over_I0'].values[0]  # Access the vector (1D)
-    unc_delta_P = region_data['Unc_Delta_P'].values[0]  # Access the vector (1D)
-    unc_log_I_over_I0 = region_data['Unc_Log_I_over_I0'].values[0]  # Access the vector (1D)
-    
-    eta_P = region_data['Eta_P'].values[0]  # Scalar value for eta_P
-    eta_P_ordinate = region_data['Eta_P_ordinate'].values[0]  # Scalar value for eta_P_ordinate
-    
-    # Plot scatter for the current region
-    plt.scatter(delta_P, log_I_over_I0, label=f'{region} Fit', s=2, alpha=0.8, marker='.')
+        # Access the full vectors (they are stored as columns, so we directly use them)
+        delta_P = region_data['Delta_P'].values[0]  # Access the vector (1D)
+        log_I_over_I0 = region_data['Log_I_over_I0'].values[0]  # Access the vector (1D)
+        unc_delta_P = region_data['Unc_Delta_P'].values[0]  # Access the vector (1D)
+        unc_log_I_over_I0 = region_data['Unc_Log_I_over_I0'].values[0]  # Access the vector (1D)
+        
+        eta_P = region_data['Eta_P'].values[0]  # Scalar value for eta_P
+        eta_P_ordinate = region_data['Eta_P_ordinate'].values[0]  # Scalar value for eta_P_ordinate
+        
+        # Plot scatter for the current region
+        plt.scatter(delta_P, log_I_over_I0, label=f'{region} Fit', s=2, alpha=0.8, marker='.')
 
-    # Calculate the fitted values using the fit model
-    fitted_values = fit_model(delta_P, eta_P, eta_P_ordinate)
+        # Calculate the fitted values using the fit model
+        fitted_values = fit_model(delta_P, eta_P, eta_P_ordinate)
 
-    # Plot the line using eta_P (beta) and eta_P_ordinate (a)
-    plt.plot(delta_P, fitted_values, label=f"{region} Fit Line", color=f'C{list(log_delta_I_df["Region"]).index(region)}', alpha=0.7)
-    
-    # Optional: plot with error bars if needed
-    if show_errorbar:
-        plt.errorbar(delta_P, log_I_over_I0, xerr=abs(unc_delta_P), yerr=abs(unc_log_I_over_I0), fmt='o', label=f'{region} Fit with Errors')
+        # Plot the line using eta_P (beta) and eta_P_ordinate (a)
+        plt.plot(delta_P, fitted_values, label=f"{region} Fit Line", color=f'C{list(log_delta_I_df["Region"]).index(region)}', alpha=0.7)
+        
+        # Optional: plot with error bars if needed
+        if show_errorbar:
+            plt.errorbar(delta_P, log_I_over_I0, xerr=abs(unc_delta_P), yerr=abs(unc_log_I_over_I0), fmt='o', label=f'{region} Fit with Errors')
 
-plt.xlabel('Delta P')
-plt.ylabel('Log (I / I0)')
-plt.ylim(-0.6, 0.5)
-plt.title('Efficiency Fits for Different Regions')
-plt.legend()
-plt.grid(True)
-if show_plots:
-    plt.show()
-elif save_plots:
-    new_figure_path = figure_path + f"{fig_idx}" + "_GIANT_PRESSURE_PLOT.png"
-    fig_idx += 1
-    print(f"Saving figure to {new_figure_path}")
-    plt.savefig(new_figure_path, format = 'png', dpi = 300)
-plt.close()
+    plt.xlabel('Delta P')
+    plt.ylabel('Log (I / I0)')
+    plt.ylim(-0.6, 0.5)
+    plt.title('Efficiency Fits for Different Regions')
+    plt.legend()
+    plt.grid(True)
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + f"{fig_idx}" + "_GIANT_PRESSURE_PLOT.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format = 'png', dpi = 300)
+    plt.close()
+else:
+    print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -2439,60 +2474,62 @@ plt.close()
 # Filter regions that contain 'new_' to plot
 # regions_to_plot = [region for region in log_delta_I_df['Region'] if 'new_' in region]
 
-regions_to_plot = regions_to_correct
-num_regions = len(regions_to_plot)
-fig, axes = plt.subplots(nrows=num_regions, figsize=(12, 20), sharex=True, sharey=True)
+if create_plots:
+    regions_to_plot = regions_to_correct
+    num_regions = len(regions_to_plot)
+    fig, axes = plt.subplots(nrows=num_regions, figsize=(12, 20), sharex=True, sharey=True)
 
-# Loop through all regions and plot them in separate subplots
-for idx, region in enumerate(regions_to_plot):
-    
-    # Extract data for the current region
-    region_data = log_delta_I_df[log_delta_I_df['Region'] == region]
+    # Loop through all regions and plot them in separate subplots
+    for idx, region in enumerate(regions_to_plot):
+        
+        # Extract data for the current region
+        region_data = log_delta_I_df[log_delta_I_df['Region'] == region]
 
-    # Access the full vectors (they are stored as columns, so we directly use them)
-    delta_P = region_data['Delta_P'].values[0]  # Access the vector (1D)
-    log_I_over_I0 = region_data['Log_I_over_I0'].values[0]  # Access the vector (1D)
-    unc_delta_P = region_data['Unc_Delta_P'].values[0]  # Access the vector (1D)
-    unc_log_I_over_I0 = region_data['Unc_Log_I_over_I0'].values[0]  # Access the vector (1D)
-    
-    eta_P = region_data['Eta_P'].values[0]  # Scalar value for eta_P
-    eta_P_ordinate = region_data['Eta_P_ordinate'].values[0]  # Scalar value for eta_P_ordinate
-    
-    # Plot scatter for the current region on the appropriate subplot
-    ax = axes[idx]  # Get the correct subplot based on idx
-    ax.scatter(delta_P, log_I_over_I0, label=f'{region} Fit', s=1, alpha=0.8, marker='.')
+        # Access the full vectors (they are stored as columns, so we directly use them)
+        delta_P = region_data['Delta_P'].values[0]  # Access the vector (1D)
+        log_I_over_I0 = region_data['Log_I_over_I0'].values[0]  # Access the vector (1D)
+        unc_delta_P = region_data['Unc_Delta_P'].values[0]  # Access the vector (1D)
+        unc_log_I_over_I0 = region_data['Unc_Log_I_over_I0'].values[0]  # Access the vector (1D)
+        
+        eta_P = region_data['Eta_P'].values[0]  # Scalar value for eta_P
+        eta_P_ordinate = region_data['Eta_P_ordinate'].values[0]  # Scalar value for eta_P_ordinate
+        
+        # Plot scatter for the current region on the appropriate subplot
+        ax = axes[idx]  # Get the correct subplot based on idx
+        ax.scatter(delta_P, log_I_over_I0, label=f'{region} Fit', s=1, alpha=0.8, marker='.')
 
-    # Calculate the fitted values using the fit model
-    fitted_values = fit_model(delta_P, eta_P, eta_P_ordinate)
+        # Calculate the fitted values using the fit model
+        fitted_values = fit_model(delta_P, eta_P, eta_P_ordinate)
 
-    # Plot the line using eta_P (beta) and eta_P_ordinate (a)
-    ax.plot(delta_P, fitted_values, label=f"{region} Fit Line", color=f'C{idx}', alpha=0.7)
-    
-    # Optional: plot with error bars if needed
-    if show_errorbar:
-        ax.errorbar(delta_P, log_I_over_I0, xerr=abs(unc_delta_P), yerr=abs(unc_log_I_over_I0), fmt='o', label=f'{region} Fit with Errors')
+        # Plot the line using eta_P (beta) and eta_P_ordinate (a)
+        ax.plot(delta_P, fitted_values, label=f"{region} Fit Line", color=f'C{idx}', alpha=0.7)
+        
+        # Optional: plot with error bars if needed
+        if show_errorbar:
+            ax.errorbar(delta_P, log_I_over_I0, xerr=abs(unc_delta_P), yerr=abs(unc_log_I_over_I0), fmt='o', label=f'{region} Fit with Errors')
 
-    # Add labels and title to the subplots
-    ax.set_xlabel('Delta P')
-    ax.set_ylabel('Log (I / I0)')
-    ax.set_ylim(-0.6, 0.5)
-    ax.set_title(f'Efficiency Fit for {region}')
-    ax.legend()
-    ax.grid(True)
+        # Add labels and title to the subplots
+        ax.set_xlabel('Delta P')
+        ax.set_ylabel('Log (I / I0)')
+        ax.set_ylim(-0.6, 0.5)
+        ax.set_title(f'Efficiency Fit for {region}')
+        ax.legend()
+        ax.grid(True)
 
-# Adjust layout to prevent overlap
-plt.tight_layout()
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
 
-# Show or save the plot
-if show_plots: 
-    plt.show()
-elif save_plots:
-    new_figure_path = figure_path + f"{fig_idx}" + "_GIANT_PRESSURE_PLOT_TTs.png"
-    fig_idx += 1
-    print(f"Saving figure to {new_figure_path}")
-    plt.savefig(new_figure_path, format='png', dpi=300)
-
-plt.close()
+    # Show or save the plot
+    if show_plots: 
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + f"{fig_idx}" + "_GIANT_PRESSURE_PLOT_TTs.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+    plt.close()
+else:
+    print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 # ---------------------------------------------------------------------------------------------------
 
@@ -2503,7 +2540,7 @@ remove_outliers = True
 if remove_outliers:
     print('Removing outliers and zero values...')
     def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
-        global fig_idx
+        global create_plots, fig_idx
         
         """
         Create a mask of rows that are outliers or have zero values.
@@ -2514,20 +2551,23 @@ if remove_outliers:
         # z_scores = abs((series - median) / std)
         z_scores = (series - median) / std
         
-        plt.hist(z_scores, bins=300)
-        plt.axvline(x=z_thresh, color='r', linestyle='--', label='Threshold')
-        plt.axvline(x=-1*z_thresh, color='r', linestyle='--', label='Threshold')
-        plt.title('Z-Scores Distribution')
-        plt.xlabel('Z-Score')
-        plt.ylabel('Frequency')
-        if show_plots: 
-            plt.show()
-        elif save_plots:
-            new_figure_path = figure_path + f"{fig_idx}" + "_after_pressure_corr_z.png"
-            fig_idx += 1
-            print(f"Saving figure to {new_figure_path}")
-            plt.savefig(new_figure_path, format = 'png', dpi = 300)
-        plt.close()
+        if create_plots:
+            plt.hist(z_scores, bins=300)
+            plt.axvline(x=z_thresh, color='r', linestyle='--', label='Threshold')
+            plt.axvline(x=-1*z_thresh, color='r', linestyle='--', label='Threshold')
+            plt.title('Z-Scores Distribution')
+            plt.xlabel('Z-Score')
+            plt.ylabel('Frequency')
+            if show_plots: 
+                plt.show()
+            elif save_plots:
+                new_figure_path = figure_path + f"{fig_idx}" + "_after_pressure_corr_z.png"
+                fig_idx += 1
+                print(f"Saving figure to {new_figure_path}")
+                plt.savefig(new_figure_path, format = 'png', dpi = 300)
+            plt.close()
+        else:
+            print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
         
         # print(z_scores)
         # Create a mask for rows where z_scores > z_thresh or values are zero
@@ -2551,7 +2591,7 @@ print('----------------------------------------------------------------------')
 if high_order_correction:
     
     def calculate_coefficients(region, I0, delta_I):
-        global fig_idx
+        global create_plots, fig_idx
         
         delta_I_over_I0 = delta_I / I0
 
@@ -2570,74 +2610,78 @@ if high_order_correction:
             model.fit(X, y)
             A, B, C = model.coef_
             D = model.intercept_
+            
+            if create_plots:
+                fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
 
-            fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
+                scatter_kwargs = {'alpha': 0.5, 's': 10}
+                line_kwargs = {'color': 'red', 'linewidth': 1.5}
+                fontsize = 12
 
-            scatter_kwargs = {'alpha': 0.5, 's': 10}
-            line_kwargs = {'color': 'red', 'linewidth': 1.5}
-            fontsize = 12
+                # 1) ΔT_ground / T_ground_0
+                ax = axes[0]
+                x = df['delta_Tg_over_Tg0']
+                y_data = df['delta_I_over_I0']
+                x_line = np.linspace(x.min(), x.max(), 200)
+                y_line = A * x_line + D
 
-            # 1) ΔT_ground / T_ground_0
-            ax = axes[0]
-            x = df['delta_Tg_over_Tg0']
-            y_data = df['delta_I_over_I0']
-            x_line = np.linspace(x.min(), x.max(), 200)
-            y_line = A * x_line + D
+                ax.scatter(x, y_data, color='blue', label='Data', **scatter_kwargs)
+                ax.plot(x_line, y_line, label=fr'Fit: $A$ = {A:.3f}', **line_kwargs)
 
-            ax.scatter(x, y_data, color='blue', label='Data', **scatter_kwargs)
-            ax.plot(x_line, y_line, label=fr'Fit: $A$ = {A:.3f}', **line_kwargs)
+                ax.set_xlabel(r'$\Delta T_{\mathrm{ground}} / T^{0}_{\mathrm{ground}}$', fontsize=fontsize)
+                ax.set_ylabel(r'$\Delta I / I_0$', fontsize=fontsize)
+                ax.set_title(f'Effect of Ground Temperature – {region}', fontsize=fontsize)
+                ax.grid(True)
+                ax.legend(fontsize=10)
 
-            ax.set_xlabel(r'$\Delta T_{\mathrm{ground}} / T^{0}_{\mathrm{ground}}$', fontsize=fontsize)
-            ax.set_ylabel(r'$\Delta I / I_0$', fontsize=fontsize)
-            ax.set_title(f'Effect of Ground Temperature – {region}', fontsize=fontsize)
-            ax.grid(True)
-            ax.legend(fontsize=10)
+                # 2) ΔT_100mbar / T_100mbar_0
+                ax = axes[1]
+                x = df['delta_Th_over_Th0']
+                x_line = np.linspace(x.min(), x.max(), 200)
+                y_line = B * x_line + D
 
-            # 2) ΔT_100mbar / T_100mbar_0
-            ax = axes[1]
-            x = df['delta_Th_over_Th0']
-            x_line = np.linspace(x.min(), x.max(), 200)
-            y_line = B * x_line + D
+                ax.scatter(x, y_data, color='green', label='Data', **scatter_kwargs)
+                ax.plot(x_line, y_line, label=fr'Fit: $B$ = {B:.3f}', **line_kwargs)
 
-            ax.scatter(x, y_data, color='green', label='Data', **scatter_kwargs)
-            ax.plot(x_line, y_line, label=fr'Fit: $B$ = {B:.3f}', **line_kwargs)
+                ax.set_xlabel(r'$\Delta T_{100\ \mathrm{mbar}} / T^{0}_{100\ \mathrm{mbar}}$', fontsize=fontsize)
+                ax.set_title(f'Effect of 100 mbar Temp. – {region}', fontsize=fontsize)
+                ax.grid(True)
+                ax.legend(fontsize=10)
 
-            ax.set_xlabel(r'$\Delta T_{100\ \mathrm{mbar}} / T^{0}_{100\ \mathrm{mbar}}$', fontsize=fontsize)
-            ax.set_title(f'Effect of 100 mbar Temp. – {region}', fontsize=fontsize)
-            ax.grid(True)
-            ax.legend(fontsize=10)
+                # 3) Δh_100mbar / h_100mbar_0
+                ax = axes[2]
+                x = df['delta_H_over_H0']
+                x_line = np.linspace(x.min(), x.max(), 200)
+                y_line = C * x_line + D
 
-            # 3) Δh_100mbar / h_100mbar_0
-            ax = axes[2]
-            x = df['delta_H_over_H0']
-            x_line = np.linspace(x.min(), x.max(), 200)
-            y_line = C * x_line + D
+                ax.scatter(x, y_data, color='purple', label='Data', **scatter_kwargs)
+                ax.plot(x_line, y_line, label=fr'Fit: $C$ = {C:.3f}', **line_kwargs)
 
-            ax.scatter(x, y_data, color='purple', label='Data', **scatter_kwargs)
-            ax.plot(x_line, y_line, label=fr'Fit: $C$ = {C:.3f}', **line_kwargs)
+                ax.set_xlabel(r'$\Delta h_{100\ \mathrm{mbar}} / h^{0}_{100\ \mathrm{mbar}}$', fontsize=fontsize)
+                ax.set_title(f'Effect of 100 mbar Height – {region}', fontsize=fontsize)
+                ax.grid(True)
+                ax.legend(fontsize=10)
 
-            ax.set_xlabel(r'$\Delta h_{100\ \mathrm{mbar}} / h^{0}_{100\ \mathrm{mbar}}$', fontsize=fontsize)
-            ax.set_title(f'Effect of 100 mbar Height – {region}', fontsize=fontsize)
-            ax.grid(True)
-            ax.legend(fontsize=10)
+                # Supertitle
+                plt.suptitle(
+                    fr'Normalized Correction Coefficients for {region}: '
+                    fr'$A$ = {A:.5f}, $B$ = {B:.3f}, $C$ = {C:.3f}, $D$ = {D:.3f}',
+                    fontsize=15,
+                    y=1.05
+                )
 
-            # Supertitle
-            plt.suptitle(
-                fr'Normalized Correction Coefficients for {region}: '
-                fr'$A$ = {A:.5f}, $B$ = {B:.3f}, $C$ = {C:.3f}, $D$ = {D:.3f}',
-                fontsize=15,
-                y=1.05
-            )
-
-            plt.tight_layout()
-            if show_plots:
-                plt.show()
-            elif save_plots:
-                new_figure_path = figure_path + f"{fig_idx}" + f"_{region}_high_order.png"
-                fig_idx += 1
-                print(f"Saving figure to {new_figure_path}")
-                plt.savefig(new_figure_path, format='png', dpi=300)
-            plt.close()
+                plt.tight_layout()
+                if show_plots:
+                    plt.show()
+                elif save_plots:
+                    new_figure_path = figure_path + f"{fig_idx}" + f"_{region}_high_order.png"
+                    fig_idx += 1
+                    print(f"Saving figure to {new_figure_path}")
+                    plt.savefig(new_figure_path, format='png', dpi=300)
+                plt.close()
+            else:
+                print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+                
         else:
             A, B, C, D = np.nan, np.nan, np.nan  # Handle case where there are no valid data points
         return A, B, C, D
@@ -2914,17 +2958,18 @@ if create_plots:
 # Smoothing filters -----------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# # Horizontal Median Filter ----------------------------------------------------
-# ker = HMF_ker # 61
+# Horizontal Median Filter ----------------------------------------------------
 
-# # Apply median filter to columns of interest
-# if ker > 0:
-#     data_df[f'pres_{region}'] = medfilt(data_df[f'pres_{region}'], kernel_size=ker)
-# else:
-#     print('Horizontal Median Filter not applied.')
+# Apply median filter to columns of interest
+if HMF_ker > 0:
+    print(f"Median filter applied with kernel size: {HMF_ker}, which are {HMF_ker * res_win_min} min")
+    for region in regions_to_correct:
+        data_df[f'pres_{region}'] = medfilt(data_df[f'pres_{region}'], kernel_size=HMF_ker)
+else:
+    print('Horizontal Median Filter not applied.')
 
 
-# # Moving Average Filter -------------------------------------------------------
+# Moving Average Filter -------------------------------------------------------
 # window_size = MAF_ker # 5   # This includes the current point, so it averages n before and n after
 
 # # Apply moving average filter to columns of interest
@@ -2968,8 +3013,13 @@ print('Efficiency and atmospheric corrections completed and saved to corrected_t
 # Saving short table ----------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+data_df['totally_corrected_rate'] = data_df[f'total_best_sum']
+data_df['unc_totally_corrected_rate'] = data_df['unc_total_best_sum']
+data_df['global_eff'] = data_df['definitive_eff']
+data_df['unc_global_eff'] = data_df['unc_definitive_eff']
+
 # Create a new DataFrame for Grafana
-grafana_df = data_df[['Time', 'pressure_lab', 'total_best_sum', 'unc_total_best_sum', 'definitive_eff', 'unc_definitive_eff']].copy()
+grafana_df = data_df[['Time', 'pressure_lab', 'totally_corrected_rate', 'unc_totally_corrected_rate', 'global_eff', 'unc_global_eff']].copy()
 
 # Rename the columns
 grafana_df.columns = ['Time', 'P', 'rate', 'u_rate', 'eff', 'u_eff']

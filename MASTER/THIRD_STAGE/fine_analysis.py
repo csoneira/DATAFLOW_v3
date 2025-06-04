@@ -290,6 +290,14 @@ group_cols = [
 plot_grouped_series(data_df, group_cols, title=f"{city_name}. Station {station_index} Corrected. Normalized rate compared with NMDB.")
 
 
+data_df["miniTRASGO"] = data_df["detector_12_eff_corr_pressure_corrected"]
+
+group_cols = [
+    [ 'miniTRASGO', 'MXCO', ]
+]
+plot_grouped_series(data_df, group_cols, title=f"{city_name}. Station {station_index} Corrected. Normalized rate compared with NMDB.")
+
+
 
 # ----------- Save Output ------------
 data_df.to_csv(output_path, index=False)
