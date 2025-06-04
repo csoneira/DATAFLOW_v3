@@ -83,6 +83,9 @@ from PIL import Image
 
 # Progress bar
 from tqdm import tqdm
+
+import warnings
+warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
     
 # Store the current time at the start. To time the execution
 start_execution_time_counting = datetime.now()
@@ -458,7 +461,8 @@ ext_res_tdif_filter = 1
 
 # Time sum
 CRT_gaussian_fit_quantile = 0.03
-coincidence_window_og_ns = 7.0  # ns
+coincidence_window_og_ns = 15  # ns
+coincidence_window_precal_ns = 7  # ns
 coincidence_window_cal_ns = 4.0  # ns
 
 # Pedestal charge calibration
@@ -1459,11 +1463,11 @@ z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
 
 
-print("--------------------------------------------------------------------------")
-print("--------------------------------------------------------------------------")
-print(f"--------------- Starting date is {save_filename_suffix} ---------------------") # This is longer so it displays nicely
-print("--------------------------------------------------------------------------")
-print("--------------------------------------------------------------------------")
+print("----------------------------------------------------------------------")
+print("----------------------------------------------------------------------")
+print(f"------------- Starting date is {save_filename_suffix} -------------------") # This is longer so it displays nicely
+print("----------------------------------------------------------------------")
+print("----------------------------------------------------------------------")
 
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
@@ -1710,12 +1714,12 @@ if create_plots:
     # Close the plot to avoid excessive memory usage
     plt.close(fig_TQ)
 
-# ---------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
-print("--------------------------------------------------------------------------")
-print("-------------------- Filter 1.1.1: uncalibrated data ---------------------")
-print("--------------------------------------------------------------------------")
-# FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out ------------------
+print("----------------------------------------------------------------------")
+print("------------------ Filter 1.1.1: uncalibrated data -------------------")
+print("----------------------------------------------------------------------")
+# FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out --------------
 
 for col in working_df.columns:
     if working_df[col].isna().any():
@@ -1910,8 +1914,109 @@ if low_value_cols:
     final_path = os.path.join(base_directories["error_directory"], file_name)
     print(f"Moving {file_path} to the error directory {final_path}...")
     shutil.move(file_path, final_path)
-    
     sys.exit(1)
+
+
+for key in ['T1', 'T2', 'T3', 'T4']:
+    T_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
+    T_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
+
+    T_F = working_df[T_F_cols].values
+    T_B = working_df[T_B_cols].values
+
+    new_cols = {}
+    for i in range(4):
+        new_cols[f'{key}_time_OG_sum_{i+1}'] = (T_F[:, i] + T_B[:, i]) / 2
+
+    working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
+
+
+print("----------------------------------------------------------------------")
+print("-------------------- Time window filtering (1/3) ---------------------")
+print("----------------------------------------------------------------------")
+
+# Pre removal of outliers
+spread_results = []
+for original_tt in sorted(working_df["original_tt"].unique()):
+    filtered_df = working_df[working_df["original_tt"] == original_tt].copy()
+    T_sum_columns_tt = filtered_df.filter(regex='_time_OG_sum_').columns
+    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
+    filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
+    spread_results.append(filtered_df)
+spread_df = pd.concat(spread_results, ignore_index=True)
+
+# if create_plots:
+if create_essential_plots or create_plots:
+    fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
+    axs = axs.flatten()
+    for i, tt in enumerate(sorted(spread_df["original_tt"].unique())):
+        subset = spread_df[spread_df["original_tt"] == tt]
+        v = subset["T_sum_spread_OG"].dropna()
+        v = v[v < coincidence_window_og_ns * 3]
+        axs[i].hist(v, bins=100, alpha=0.7)
+        axs[i].set_title(f"TT = {tt}")
+        axs[i].set_xlabel("ΔT (ns)")
+        axs[i].set_ylabel("Events")
+        axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')
+        # Logscale
+        axs[i].set_yscale('log')
+    fig.suptitle("Non filtered. Intra-Event T_sum Spread by original_tt")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        hist_filename = f'{fig_idx}_tsum_spread_histograms_OG.png'
+        fig_idx += 1
+        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+        plot_list.append(hist_path)
+        fig.savefig(hist_path, format='png')
+    if show_plots: plt.show()
+    plt.close(fig)
+
+# Removal of outliers
+def zero_outlier_tsum(row, threshold=coincidence_window_og_ns):
+    t_sum_cols = [col for col in row.index if 'T' in col]
+    t_sum_vals = row[t_sum_cols].copy()
+    nonzero_vals = t_sum_vals[t_sum_vals != 0]
+    if len(nonzero_vals) < 2: return row
+    center = np.median(nonzero_vals)
+    deviations = np.abs(nonzero_vals - center)
+    outliers = deviations > threshold / 2
+    for col in outliers.index[outliers]: row[col] = 0.0
+    return row
+working_df = working_df.apply(zero_outlier_tsum, axis=1)
+
+# Post removal of outliers
+spread_results = []
+for original_tt in sorted(working_df["original_tt"].unique()):
+    filtered_df = working_df[working_df["original_tt"] == original_tt].copy()
+    T_sum_columns_tt = filtered_df.filter(regex='_time_OG_sum_').columns
+    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
+    filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
+    spread_results.append(filtered_df)
+spread_df = pd.concat(spread_results, ignore_index=True)
+
+# if create_plots:
+if create_essential_plots or create_plots:
+    fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
+    axs = axs.flatten()
+    for i, tt in enumerate(sorted(spread_df["original_tt"].unique())):
+        subset = spread_df[spread_df["original_tt"] == tt]
+        v = subset["T_sum_spread_OG"].dropna()
+        axs[i].hist(v, bins=100, alpha=0.7)
+        axs[i].set_title(f"TT = {tt}")
+        axs[i].set_xlabel("ΔT (ns)")
+        axs[i].set_ylabel("Events")
+        axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
+        axs[i].set_yscale('log')
+    fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by original_tt")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered_OG.png'
+        fig_idx += 1
+        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+        plot_list.append(hist_path)
+        fig.savefig(hist_path, format='png')
+    if show_plots: plt.show()
+    plt.close(fig)
 
 
 print("--------------------------------------------------------------------------")
@@ -2349,7 +2454,7 @@ if create_plots:
 
 
 print("----------------------------------------------------------------------")
-print("-------------------- Time window filtering (1/2) ---------------------")
+print("-------------------- Time window filtering (2/3) ---------------------")
 print("----------------------------------------------------------------------")
 
 # Pre removal of outliers
@@ -2369,12 +2474,12 @@ if create_essential_plots or create_plots:
     for i, tt in enumerate(sorted(spread_df["original_tt"].unique())):
         subset = spread_df[spread_df["original_tt"] == tt]
         v = subset["T_sum_spread_OG"].dropna()
-        v = v[v < coincidence_window_og_ns * 2]
+        v = v[v < coincidence_window_precal_ns * 3]
         axs[i].hist(v, bins=100, alpha=0.7)
         axs[i].set_title(f"TT = {tt}")
         axs[i].set_xlabel("ΔT (ns)")
         axs[i].set_ylabel("Events")
-        axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')
+        axs[i].axvline(x=coincidence_window_precal_ns, color='red', linestyle='--', label='Time coincidence window')
         # Logscale
         axs[i].set_yscale('log')
     fig.suptitle("Non filtered. Intra-Event T_sum Spread by original_tt")
@@ -2389,7 +2494,7 @@ if create_essential_plots or create_plots:
     plt.close(fig)
 
 # Removal of outliers
-def zero_outlier_tsum(row, threshold=coincidence_window_og_ns):
+def zero_outlier_tsum(row, threshold=coincidence_window_precal_ns):
     t_sum_cols = [col for col in row.index if '_T_sum_' in col]
     t_sum_vals = row[t_sum_cols].copy()
     nonzero_vals = t_sum_vals[t_sum_vals != 0]
@@ -2422,7 +2527,7 @@ if create_essential_plots or create_plots:
         axs[i].set_title(f"TT = {tt}")
         axs[i].set_xlabel("ΔT (ns)")
         axs[i].set_ylabel("Events")
-        axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
+        axs[i].axvline(x=coincidence_window_precal_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
         axs[i].set_yscale('log')
     fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by original_tt")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
@@ -4841,7 +4946,7 @@ working_df["preprocessed_tt"] = working_df.apply(compute_preprocessed_tt, axis=1
 
 
 print("----------------------------------------------------------------------")
-print("-------------------- Time window filtering (2/2) ---------------------")
+print("-------------------- Time window filtering (3/3) ---------------------")
 print("----------------------------------------------------------------------")
 
 # Pre removal of outliers
@@ -5144,7 +5249,7 @@ if create_essential_plots or create_plots:
         plt.suptitle(f'Y Position Distribution for preprocessed_tt = {preprocessed_tt}', fontsize=16)
         plt.tight_layout()
         if save_plots:
-            name_of_file = 'Y_{preprocessed_tt}'
+            name_of_file = f'Y_{preprocessed_tt}'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
