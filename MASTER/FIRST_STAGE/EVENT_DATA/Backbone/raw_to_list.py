@@ -4441,7 +4441,7 @@ if crosstalk_removal_and_recalibration:
                 a_min = 0
                 a_max = 2*max(hist_vals) + 1
                 
-                mu_min = -0.9 # -1
+                mu_min = pedestal_left # -1
                 mu_max = 3 # 1.5
                 
                 sigma_min = 0.25
