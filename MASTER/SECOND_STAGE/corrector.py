@@ -77,7 +77,7 @@ remove_outliers = True
 # Plotting configuration
 show_plots = False
 save_plots = True
-create_plots = True
+create_plots = False
 show_errorbar = False
 
 recalculate_pressure_coeff = True
