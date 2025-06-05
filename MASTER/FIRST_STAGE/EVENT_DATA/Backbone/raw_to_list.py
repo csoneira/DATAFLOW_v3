@@ -467,7 +467,7 @@ coincidence_window_cal_ns = 4.0  # ns
 
 # Pedestal charge calibration
 pedestal_left = -3
-pedestal_right = 3
+pedestal_right = 2
 
 # Front-back charge
 distance_sum_charges_left_fit = -5
