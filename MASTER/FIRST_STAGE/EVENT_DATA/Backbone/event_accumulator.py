@@ -1270,8 +1270,6 @@ if charge_vs_angle:
         plt.close()
 # ------------------------------------------------------------------------------------------------------------------------
 
-a = 1/0
-
 
 print("----------------------------------------------------------------------")
 print("----------------------------- Polya fit ------------------------------")
@@ -1845,8 +1843,6 @@ if polya_fit:
     with pd.option_context('display.precision', 1):
         print(df_polya_fit)
 
-a = 1/0
-
 
 print("----------------------------------------------------------------------")
 print("-------------------- Real adjacent and single cases ------------------")
@@ -2340,7 +2336,7 @@ if multiplicity_calculations:
     crosstalk_limit = 0.1 #2.6
 
     remove_streamer = True
-    streamer_limit = 110
+    streamer_limit = 100
 
     # Read and concatenate all files
     df_list = [df]  # Adjust delimiter if needed
@@ -2404,6 +2400,8 @@ if multiplicity_calculations:
 
     # For all the columns apply the calibration and not change the name of the columns
     for col in merged_df.columns:
+        if "processed_tt" in col:
+            continue
         merged_df[col] = interpolate_fast_charge(merged_df[col])
 
     # Create a 4x4 subfigure
@@ -2595,7 +2593,60 @@ if multiplicity_calculations:
     # ---------------------------------------------------------------------------------------------------------------------------------
 
     # Create vectors of charge for single detection, double adjacent detections, triple adjacent detections and quadruple detections for each module
+    
+    # Dictionaries to store charge values for single and quadruple detections
+    single_sample_M1, single_sample_M2, single_sample_M3, single_sample_M4 = [], [], [], []
+    
+    merged_sample_df = merged_df.copy()
+    
+    print(merged_sample_df["processed_tt"])
+    
+    merged_sample_df = merged_sample_df[ merged_sample_df["processed_tt"] == 1234 ]
+    
+    # Loop over modules
+    for i in range(1, 5):
+        charge_matrix = np.zeros((len(merged_sample_df), 4))  # Stores strip-wise charges for this module
 
+        for j in range(1, 5):  # Loop over strips
+            col_name = f"Q_P{i}s{j}"  # Column name
+            v = merged_sample_df[col_name].fillna(0).to_numpy()  # Ensure no NaNs
+            charge_matrix[:, j - 1] = v  # Store strip charge
+
+        # Classify events based on strip charge distribution
+        nonzero_counts = (charge_matrix > 0).sum(axis=1)  # Count nonzero strips per event
+
+        for event_idx, count in enumerate(nonzero_counts):
+            nonzero_strips = np.where(charge_matrix[event_idx, :] > 0)[0]  # Get active strip indices
+            charges = charge_matrix[event_idx, nonzero_strips]  # Get nonzero charges
+
+            # Single detection: exactly 1 strip has charge
+            if count == 1:
+                if i == 1:
+                    single_sample_M1.append(charges[0])
+                elif i == 2:
+                    single_sample_M2.append(charges[0])
+                elif i == 3:
+                    single_sample_M3.append(charges[0])
+                elif i == 4:
+                    single_sample_M4.append(charges[0])
+
+    # Convert lists to DataFrames for better visualization
+    df_single_sample_M1 = pd.DataFrame({"Charge": single_sample_M1})
+    df_single_sample_M2 = pd.DataFrame({"Charge": single_sample_M2})
+    df_single_sample_M3 = pd.DataFrame({"Charge": single_sample_M3})
+    df_single_sample_M4 = pd.DataFrame({"Charge": single_sample_M4})
+    
+    df_single_sample_M1_sum = df_single_sample_M1["Charge"]
+    df_single_sample_M2_sum = df_single_sample_M2["Charge"]
+    df_single_sample_M3_sum = df_single_sample_M3["Charge"]
+    df_single_sample_M4_sum = df_single_sample_M4["Charge"]
+    
+    df_single_sample_M1_sum = df_single_sample_M1_sum[ df_single_sample_M1_sum > 0 ]
+    df_single_sample_M2_sum = df_single_sample_M2_sum[ df_single_sample_M2_sum > 0 ]
+    df_single_sample_M3_sum = df_single_sample_M3_sum[ df_single_sample_M3_sum > 0 ]
+    df_single_sample_M4_sum = df_single_sample_M4_sum[ df_single_sample_M4_sum > 0 ]
+    
+    
     # Dictionaries to store charge values for single and quadruple detections
     single_M1, single_M2, single_M3, single_M4 = [], [], [], []
     quadruple_M1, quadruple_M2, quadruple_M3, quadruple_M4 = [], [], [], []
@@ -2803,7 +2854,7 @@ if multiplicity_calculations:
 
     # Parameters
     selected_alpha = 0.7
-    bin_number = 250 # 250
+    bin_number = 100 # 250
     right_lim = 4500
     module_colors = ["r", "orange", "g", "b"]
     n_events = 20000
@@ -2820,14 +2871,19 @@ if multiplicity_calculations:
         [df_quadruple_M1_sum, df_quadruple_M2_sum, df_quadruple_M3_sum, df_quadruple_M4_sum],
     ]
     singles = [df_single_M1_sum, df_single_M2_sum, df_single_M3_sum, df_single_M4_sum]
-
+    singles_sample = [df_single_sample_M1_sum, df_single_sample_M2_sum, df_single_sample_M3_sum, df_single_sample_M4_sum]
+    
     # Step 1: Precompute 1–number_of_particles_bound_up single sums for each module
     hist_basis_all_modules = []  # [ [H1, H2, ..., H6] for each module ]
 
-    number_of_particles_bound_up = 12
+    number_of_particles_bound_up = 6
 
-    for single_data in singles:
+    for single_data in singles_sample:
         single_data = np.array(single_data)
+        
+        # Apply a gaussian filter to smooth the data a little bit
+        # single_data = gaussian_filter1d(single_data, sigma=1)
+        
         module_hists = []
         for n in range(1, number_of_particles_bound_up + 1):
             samples = np.random.choice(single_data, size=(n_events, n), replace=True).sum(axis=1)
@@ -3177,6 +3233,9 @@ if multiplicity_calculations:
     # Create new columns called PX_induction_section with th e best induction section value
     for i in range(1, 5):
         df[f"P{i}_induction_section"] = best_induction_sections[i - 1]
+
+
+a = 1/0
 
 
 print("----------------------------------------------------------------------")
