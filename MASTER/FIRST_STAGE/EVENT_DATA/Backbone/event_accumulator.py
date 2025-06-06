@@ -831,6 +831,8 @@ df['subdetector_1234_tt'] = df['processed_tt']
 
 from scipy.ndimage import gaussian_filter1d
 
+create_essential_plots = True
+
 eff_vs_angle = True
 if eff_vs_angle:
 
@@ -1208,6 +1210,69 @@ print("----------------------- Starting the analysis ------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
+
+print("----------------------------------------------------------------------")
+print("-------------------- Charge respect zenith angle ---------------------")
+print("----------------------------------------------------------------------")
+
+# Charge checking --------------------------------------------------------------------------------------------------------
+charge_vs_angle = True
+if charge_vs_angle:
+    
+    for i in range(1, 5):
+        df[f"Q_P{i}"] = 0
+        for j in range(1, 5):
+            # Get the column name
+            col_name = f"Q_P{i}s{j}"
+            df[f"Q_P{i}"] += df[col_name]
+    
+    num_bins = 100
+    n_divisions = 4
+    theta_edges = np.linspace(0, np.pi/3, n_divisions + 1)
+    
+    # Plotting with theta ranges
+    if create_plots or create_essential_plots:
+        fig, axs = plt.subplots(2, 2, figsize=(10, 8))  # Adjust size as needed
+
+        for i in range(1, 5):
+            row = (i - 1) // 2
+            col = (i - 1) % 2
+            ax = axs[row, col]
+
+            col_name = f"Q_P{i}"
+            for k in range(n_divisions):
+                mask = (df["new_theta"] >= theta_edges[k]) & (df["new_theta"] < theta_edges[k+1]) & (df["processed_tt"] > 10)
+                v = df.loc[mask, col_name]
+                v = v[v != 0]
+                label = f"{theta_edges[k]:.2f} ≤ θ < {theta_edges[k+1]:.2f}"
+                ax.hist(v, bins=num_bins, range=(0, 100), alpha=0.5, label=label, histtype='step', linewidth=1.5, density=True)
+
+            ax.set_title(col_name)
+            ax.set_xlabel("Charge")
+            ax.set_ylabel("Frequency")
+            ax.grid(True)
+            ax.legend()
+
+        plt.tight_layout()
+
+
+        plt.tight_layout()
+        figure_name = f"angular_charge_mingo0{station}"
+        if save_plots:
+            name_of_file = figure_name
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
+# ------------------------------------------------------------------------------------------------------------------------
+
+a = 1/0
+
+
 print("----------------------------------------------------------------------")
 print("----------------------------- Polya fit ------------------------------")
 print("----------------------------------------------------------------------")
@@ -1270,9 +1335,7 @@ if polya_fit:
     
     print(merged_df.columns.to_list())
     
-    print(merged_df['original_tt'])
-    
-    merged_df = merged_df[ merged_df['original_tt'] == 1234 ]
+    merged_df = merged_df[ merged_df['processed_tt'] == 1234 ]
     
     # merged_df = df.copy()
 
@@ -1428,6 +1491,361 @@ if polya_fit:
     print("Polya fit results:")
     with pd.option_context('display.precision', 1):
         print(df_polya_fit)
+
+
+
+
+if polya_fit:
+    print("Polya fit respect to the angle. WIP.")
+
+    remove_crosstalk = False
+    remove_streamer = True
+    crosstalk_limit = 1
+    streamer_limit = 100
+
+    FEE_calibration = {
+        "Width": [
+            0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+            160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
+            300, 310, 320, 330, 340, 350, 360, 370, 380, 390
+        ],
+        "Fast Charge": [
+            4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
+            9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
+            1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
+            1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
+            2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
+            2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
+            2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
+        ]
+    }
+
+    # Create the DataFrame
+    FEE_calibration = pd.DataFrame(FEE_calibration)
+    from scipy.interpolate import CubicSpline
+    # Convert to NumPy arrays for interpolation
+    width_table = FEE_calibration['Width'].to_numpy()
+    fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
+    # Create a cubic spline interpolator
+    cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
+
+    def interpolate_fast_charge(width):
+        """
+        Interpolates the Fast Charge for given Width values using cubic spline interpolation.
+        Parameters:
+        - width (float or np.ndarray): The Width value(s) to interpolate in ns.
+        Returns:
+        - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
+        """
+        width = np.asarray(width)  # Ensure input is a NumPy array
+        # Keep zero values unchanged
+        result = np.where(width == 0, 0, cs(width))
+        return result
+
+    df_list_OG = [df]  # Adjust delimiter if needed
+    df_list = df_list_OG.copy()
+    merged_df = pd.concat(df_list, ignore_index=True)
+    merged_df.drop_duplicates(inplace=True)
+    
+    print(merged_df.columns.to_list())
+    
+    merged_df = merged_df[ merged_df['processed_tt'] > 10 ]
+    merged_df = merged_df[ merged_df['new_theta'] < 0.5 ]
+
+    if remove_crosstalk or remove_streamer:    
+        if remove_streamer:
+            for col in merged_df.columns:
+                if "Q_" in col and "s" in col:
+                    merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
+
+    columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
+    merged_df = merged_df.drop(columns=columns_to_drop)
+
+    # For all the columns apply the calibration and not change the name of the columns
+    for col in merged_df.columns:
+        merged_df[col] = interpolate_fast_charge(merged_df[col])
+
+    # For each module, calculate the total charge per event, then store them in a dataframe
+    total_charge = pd.DataFrame()
+    for i in range(1, 5):
+        total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
+
+    # Constants
+    q_e = 1.602e-4  # fC
+
+    # Polya model
+    def polya_induced_charge(Q, theta, nbar, alpha, A, offset):
+        n = Q * alpha + offset
+        norm = ((theta + 1) ** (theta + 1)) / gamma(theta + 1)
+        return A * norm * (n / nbar)**theta * np.exp(-(theta + 1) * n / nbar)
+
+    # Prepare figure
+    fig, axs = plt.subplots(
+        3, 4, figsize=(17, 5), sharex='col', 
+        gridspec_kw={'height_ratios': [4, 1, 1]}
+    )
+
+    for idx, module in enumerate(range(1, 5)):
+
+        # Load and preprocess data
+        data = total_charge[f"Q_P{module}"].dropna().to_numpy().flatten()
+        data = data[data != 0] / q_e  # convert to e–
+
+        # Histogram
+        counts, bin_edges = np.histogram(data, bins=50, range=(0, 1.1e7))
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        
+        bin_center = bin_centers[counts >= 0.05 * max(counts)][0]
+        mask = (bin_centers > bin_center) & (counts > 0)
+        x_fit = bin_centers[mask]
+        y_fit = counts[mask]
+
+        # Fit theta, nbar, alpha, A, offset
+        p0 = [1, 1e6, 1, max(counts), 1e6]
+        bounds = ([0, 0, 0, 0, -1e16], [20, 1e16, 1,  max(counts), 1e16])
+        popt, _ = curve_fit(polya_induced_charge, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=100000)
+        theta_fit, nbar_fit, alpha_fit, A_fit, offset_fit = popt
+        
+        # Store fit results
+        from scipy.special import gamma
+
+        # Fine x for fit curve
+        x_fine = np.linspace(0, 1.1e7, 300)
+        y_model = polya_induced_charge(x_fine, *popt)
+
+        # Residuals
+        residuals = y_fit - polya_induced_charge(x_fit, *popt)
+        residuals_norm = residuals / y_fit * 100
+
+        # Plot index
+        ax1 = axs[0, idx]
+        ax2 = axs[1, idx]
+        ax3 = axs[2, idx]
+
+        plot_label = (
+            rf"$\theta={theta_fit:.2f},\ \mathrm{{off}}={offset_fit:.2f},\ "
+            rf"\bar{{n}}/\alpha={nbar_fit / alpha_fit:.3g}$"
+        )
+        ax1.plot(x_fine, y_model, "r--", label = plot_label)
+        ax1.plot(x_fit, y_fit, 'bo', markersize = 2)
+        ax1.set_title(f"Module {module}")
+        ax1.legend(fontsize=8)
+        ax1.grid(True)
+        if idx == 0:
+            ax1.set_ylabel("Entries")
+
+        # --- Residuals ---
+        ax2.axhline(0, color='gray', linestyle='--')
+        ax2.plot(x_fit, residuals, 'k.')
+        if idx == 0:
+            ax2.set_ylabel("Res.")
+
+        ax2.grid(True)
+
+        # --- Normalized residuals ---
+        ax3.axhline(0, color='gray', linestyle='--')
+        ax3.plot(x_fit, residuals_norm, 'k.')
+        if idx == 0:
+            ax3.set_ylabel("Res. (%)")
+        ax3.set_xlabel("Induced equivalent electrons")
+        ax3.set_ylim(-10, 100)
+        ax3.grid(True)
+
+    plt.tight_layout()
+    figure_name = f"polya_fit_zenith_mingo0{station}"
+    if save_plots:
+        name_of_file = figure_name
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots: plt.show()
+    plt.close()
+
+    df_polya_fit = pd.DataFrame(polya_fit_list)
+
+    print("Polya fit results:")
+    with pd.option_context('display.precision', 1):
+        print(df_polya_fit)
+
+
+
+if polya_fit:
+    print("Polya fit respect to the angle. WIP.")
+
+    remove_crosstalk = False
+    remove_streamer = True
+    crosstalk_limit = 1
+    streamer_limit = 100
+
+    FEE_calibration = {
+        "Width": [
+            0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+            160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
+            300, 310, 320, 330, 340, 350, 360, 370, 380, 390
+        ],
+        "Fast Charge": [
+            4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
+            9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
+            1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
+            1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
+            2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
+            2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
+            2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
+        ]
+    }
+
+    # Create the DataFrame
+    FEE_calibration = pd.DataFrame(FEE_calibration)
+    from scipy.interpolate import CubicSpline
+    # Convert to NumPy arrays for interpolation
+    width_table = FEE_calibration['Width'].to_numpy()
+    fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
+    # Create a cubic spline interpolator
+    cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
+
+    def interpolate_fast_charge(width):
+        """
+        Interpolates the Fast Charge for given Width values using cubic spline interpolation.
+        Parameters:
+        - width (float or np.ndarray): The Width value(s) to interpolate in ns.
+        Returns:
+        - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
+        """
+        width = np.asarray(width)  # Ensure input is a NumPy array
+        # Keep zero values unchanged
+        result = np.where(width == 0, 0, cs(width))
+        return result
+
+    df_list_OG = [df]  # Adjust delimiter if needed
+    df_list = df_list_OG.copy()
+    merged_df = pd.concat(df_list, ignore_index=True)
+    merged_df.drop_duplicates(inplace=True)
+    
+    print(merged_df.columns.to_list())
+    
+    merged_df = merged_df[ merged_df['processed_tt'] > 10 ]
+    merged_df = merged_df[ merged_df['new_theta'] > 0.5 ]
+
+    if remove_crosstalk or remove_streamer:    
+        if remove_streamer:
+            for col in merged_df.columns:
+                if "Q_" in col and "s" in col:
+                    merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
+
+    columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
+    merged_df = merged_df.drop(columns=columns_to_drop)
+
+    # For all the columns apply the calibration and not change the name of the columns
+    for col in merged_df.columns:
+        merged_df[col] = interpolate_fast_charge(merged_df[col])
+
+    # For each module, calculate the total charge per event, then store them in a dataframe
+    total_charge = pd.DataFrame()
+    for i in range(1, 5):
+        total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
+
+    # Constants
+    q_e = 1.602e-4  # fC
+
+    # Polya model
+    def polya_induced_charge(Q, theta, nbar, alpha, A, offset):
+        n = Q * alpha + offset
+        norm = ((theta + 1) ** (theta + 1)) / gamma(theta + 1)
+        return A * norm * (n / nbar)**theta * np.exp(-(theta + 1) * n / nbar)
+
+    # Prepare figure
+    fig, axs = plt.subplots(
+        3, 4, figsize=(17, 5), sharex='col', 
+        gridspec_kw={'height_ratios': [4, 1, 1]}
+    )
+
+    for idx, module in enumerate(range(1, 5)):
+
+        # Load and preprocess data
+        data = total_charge[f"Q_P{module}"].dropna().to_numpy().flatten()
+        data = data[data != 0] / q_e  # convert to e–
+
+        # Histogram
+        counts, bin_edges = np.histogram(data, bins=50, range=(0, 1.1e7))
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        
+        bin_center = bin_centers[counts >= 0.05 * max(counts)][0]
+        mask = (bin_centers > bin_center) & (counts > 0)
+        x_fit = bin_centers[mask]
+        y_fit = counts[mask]
+
+        # Fit theta, nbar, alpha, A, offset
+        p0 = [1, 1e6, 1, max(counts), 1e6]
+        bounds = ([0, 0, 0, 0, -1e16], [20, 1e16, 1,  max(counts), 1e16])
+        popt, _ = curve_fit(polya_induced_charge, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=100000)
+        theta_fit, nbar_fit, alpha_fit, A_fit, offset_fit = popt
+        
+        # Store fit results
+        from scipy.special import gamma
+
+        # Fine x for fit curve
+        x_fine = np.linspace(0, 1.1e7, 300)
+        y_model = polya_induced_charge(x_fine, *popt)
+
+        # Residuals
+        residuals = y_fit - polya_induced_charge(x_fit, *popt)
+        residuals_norm = residuals / y_fit * 100
+
+        # Plot index
+        ax1 = axs[0, idx]
+        ax2 = axs[1, idx]
+        ax3 = axs[2, idx]
+
+        plot_label = (
+            rf"$\theta={theta_fit:.2f},\ \mathrm{{off}}={offset_fit:.2f},\ "
+            rf"\bar{{n}}/\alpha={nbar_fit / alpha_fit:.3g}$"
+        )
+        ax1.plot(x_fine, y_model, "r--", label = plot_label)
+        ax1.plot(x_fit, y_fit, 'bo', markersize = 2)
+        ax1.set_title(f"Module {module}")
+        ax1.legend(fontsize=8)
+        ax1.grid(True)
+        if idx == 0:
+            ax1.set_ylabel("Entries")
+
+        # --- Residuals ---
+        ax2.axhline(0, color='gray', linestyle='--')
+        ax2.plot(x_fit, residuals, 'k.')
+        if idx == 0:
+            ax2.set_ylabel("Res.")
+
+        ax2.grid(True)
+
+        # --- Normalized residuals ---
+        ax3.axhline(0, color='gray', linestyle='--')
+        ax3.plot(x_fit, residuals_norm, 'k.')
+        if idx == 0:
+            ax3.set_ylabel("Res. (%)")
+        ax3.set_xlabel("Induced equivalent electrons")
+        ax3.set_ylim(-10, 100)
+        ax3.grid(True)
+
+    plt.tight_layout()
+    figure_name = f"polya_fit_zenith_mingo0{station}"
+    if save_plots:
+        name_of_file = figure_name
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots: plt.show()
+    plt.close()
+
+    df_polya_fit = pd.DataFrame(polya_fit_list)
+
+    print("Polya fit results:")
+    with pd.option_context('display.precision', 1):
+        print(df_polya_fit)
+
+a = 1/0
 
 
 print("----------------------------------------------------------------------")
