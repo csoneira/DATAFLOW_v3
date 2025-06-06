@@ -50,7 +50,7 @@ import matplotlib as mpl
 from scipy.stats import poisson
 from scipy.optimize import minimize
 
-last_file_test = False
+last_file_test = True
 reanalyze_completed = True
 update_big_event_file = False
 
@@ -535,6 +535,510 @@ df['new_phi'] = ( df['phi'] + df['alt_phi'] ) / 2
 df['new_s'] = ( df['s'] + df['alt_s'] ) / 2
 df['new_th_chi'] = ( df['th_chi'] + df['alt_th_chi'] ) / 2
 
+# Print all the column names of df
+print("Columns in the dataframe:")
+for col in df.columns:
+    print(f"- {col}")
+    
+
+print(df["processed_tt"])
+
+
+# print("----------------------------------------------------------------------")
+# print("-------------------- Efficiency respect the angle --------------------")
+# print("----------------------------------------------------------------------")
+
+# eff_vs_angle = True
+# if eff_vs_angle:
+    
+#     nbins = 20
+#     right = np.pi/3
+#     print("Calculating angular efficiencies...")
+    
+#     # Three plane cases ---------------------------------------------------------------------
+    
+#     df_filtered = df.copy()
+#     bins = np.linspace(0, right, nbins)
+#     bin_centers = 0.5 * (bins[:-1] + bins[1:])
+
+#     # Compute histograms for relevant TT types
+#     counts_per_tt = {}
+#     for tt_val in ['1234', '134', '124']:
+#         df_tt = df_filtered[df_filtered['processed_tt'] == int(tt_val)]
+#         theta_vals = df_tt['new_theta'].dropna()
+#         if len(theta_vals) < 10:
+#             continue
+#         counts, _ = np.histogram(theta_vals, bins=bins)
+#         counts_per_tt[tt_val] = counts
+
+#     # Extract counts and ensure zero arrays if missing
+#     n_1234 = counts_per_tt.get('1234', np.zeros(len(bin_centers)))
+#     n_134  = counts_per_tt.get('134',  np.zeros(len(bin_centers)))
+#     n_124  = counts_per_tt.get('124',  np.zeros(len(bin_centers)))
+
+#     # Compute efficiencies safely
+#     with np.errstate(divide='ignore', invalid='ignore'):
+#         eff2 = np.divide(n_1234, n_134 + n_1234)
+#         eff3 = np.divide(n_1234, n_124 + n_1234)
+#         eff2[np.isnan(eff2)] = 0
+#         eff3[np.isnan(eff3)] = 0
+
+#     print("Efficiency calculations complete.")
+
+#     # =======================
+#     # PLOTTING SECTION
+#     # =======================
+#     if create_plots or create_essential_plots:
+
+#         # Plot raw counts
+#         fig_counts, ax_counts = plt.subplots(figsize=(7, 5))
+#         colors = plt.cm.tab10.colors
+
+#         for i, tt_val in enumerate(['1234', '134', '124']):
+#             if tt_val in counts_per_tt:
+#                 ax_counts.hist(bin_centers, bins=bins, weights=counts_per_tt[tt_val],
+#                                histtype='step', linewidth=1,
+#                                color=colors[i % len(colors)], label=tt_val)
+
+#         ax_counts.set_xlim(0, right)
+#         ax_counts.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+#         ax_counts.set_ylabel('Counts')
+#         ax_counts.set_title(r'Zoomed $\theta_{\mathrm{new}}$ Distributions')
+#         ax_counts.grid(True)
+#         ax_counts.legend(title='processed_tt', fontsize='small')
+#         plt.tight_layout()
+
+#         if save_plots:
+#             filename = f'{fig_idx}_new_theta_zoom_counts.png'
+#             fig_idx += 1
+#             path = os.path.join(base_directories["figure_directory"], filename)
+#             plot_list.append(path)
+#             plt.savefig(path)
+
+#         if show_plots:
+#             plt.show()
+#         plt.close()
+
+#         # Plot efficiencies
+#         fig_eff, ax_eff = plt.subplots(figsize=(7, 5))
+#         ax_eff.plot(bin_centers, eff2, label=r'$\varepsilon_2 = \frac{1234}{134 + 1234}$',
+#                     drawstyle='steps-mid', color='blue')
+#         ax_eff.plot(bin_centers, eff3, label=r'$\varepsilon_3 = \frac{1234}{124 + 1234}$',
+#                     drawstyle='steps-mid', color='green')
+
+#         ax_eff.set_xlim(0, right)
+#         ax_eff.set_ylim(0, 1)
+#         ax_eff.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+#         ax_eff.set_ylabel('Efficiency')
+#         ax_eff.set_title('Angular Efficiency Estimates')
+#         ax_eff.grid(True)
+#         ax_eff.legend(fontsize='small')
+#         plt.tight_layout()
+
+#         if save_plots:
+#             filename = f'{fig_idx}_new_theta_eff2_eff3_three_planes.png'
+#             fig_idx += 1
+#             path = os.path.join(base_directories["figure_directory"], filename)
+#             plot_list.append(path)
+#             plt.savefig(path)
+
+#         if show_plots:
+#             plt.show()
+#         plt.close()
+    
+    
+#     # Two plane cases ----------------------------------------------------------------------
+
+#     # Compute histograms for relevant TT types
+#     counts_per_tt_2 = {}
+#     for tt_val in ['123', '13']:
+#         df_tt = df_filtered[df_filtered['processed_tt'] == int(tt_val)]
+#         theta_vals = df_tt['new_theta'].dropna()
+#         if len(theta_vals) < 10:
+#             continue
+#         counts, _ = np.histogram(theta_vals, bins=bins)
+#         counts_per_tt_2[tt_val] = counts
+
+#     # Extract counts and ensure zero arrays if missing
+#     n_123 = counts_per_tt_2.get('123', np.zeros(len(bin_centers)))
+#     n_13  = counts_per_tt_2.get('13',  np.zeros(len(bin_centers)))
+
+#     # Compute efficiencies safely
+#     with np.errstate(divide='ignore', invalid='ignore'):
+#         eff2 = np.divide(n_123, n_13 + n_123)
+#         eff2[np.isnan(eff2)] = 0
+
+#     df_filtered = df.copy()
+#     bins = np.linspace(0, right, nbins)
+#     bin_centers = 0.5 * (bins[:-1] + bins[1:])
+
+#     # Compute histograms for relevant TT types
+#     counts_per_tt = {}
+#     for tt_val in ['234', '24']:
+#         df_tt = df_filtered[df_filtered['processed_tt'] == int(tt_val)]
+#         theta_vals = df_tt['new_theta'].dropna()
+#         if len(theta_vals) < 10:
+#             continue
+#         counts, _ = np.histogram(theta_vals, bins=bins)
+#         counts_per_tt[tt_val] = counts
+
+#     # Extract counts and ensure zero arrays if missing
+#     n_234 = counts_per_tt.get('234', np.zeros(len(bin_centers)))
+#     n_24  = counts_per_tt.get('24',  np.zeros(len(bin_centers)))
+
+#     # Compute efficiencies safely
+#     with np.errstate(divide='ignore', invalid='ignore'):
+#         eff3 = np.divide(n_234, n_24 + n_234)
+#         eff3[np.isnan(eff3)] = 0
+
+#     print("Efficiency calculations complete.")
+
+#     # =======================
+#     # PLOTTING SECTION
+#     # =======================
+#     if create_plots or create_essential_plots:
+
+#         # Plot raw counts
+#         fig_counts, ax_counts = plt.subplots(figsize=(7, 5))
+#         colors = plt.cm.tab10.colors
+
+#         for i, tt_val in enumerate(['123', '13']):
+#             if tt_val in counts_per_tt_2:
+#                 ax_counts.hist(bin_centers, bins=bins, weights=counts_per_tt_2[tt_val],
+#                                histtype='step', linewidth=1,
+#                                color=colors[i % len(colors)], label=tt_val)
+#         for i, tt_val in enumerate(['234', '24']):
+#             if tt_val in counts_per_tt:
+#                 ax_counts.hist(bin_centers, bins=bins, weights=counts_per_tt[tt_val],
+#                                histtype='step', linewidth=1,
+#                                color=colors[(i + 2) % len(colors)], label=tt_val)
+#         ax_counts.set_xlim(0, right)
+#         ax_counts.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+#         ax_counts.set_ylabel('Counts')
+#         ax_counts.set_title(r'Zoomed $\theta_{\mathrm{new}}$ Distributions')
+#         ax_counts.grid(True)
+#         ax_counts.legend(title='processed_tt', fontsize='small')
+#         plt.tight_layout()
+
+#         if save_plots:
+#             filename = f'{fig_idx}_new_theta_zoom_counts.png'
+#             fig_idx += 1
+#             path = os.path.join(base_directories["figure_directory"], filename)
+#             plot_list.append(path)
+#             plt.savefig(path)
+
+#         if show_plots:
+#             plt.show()
+#         plt.close()
+
+#         # Plot efficiencies
+#         fig_eff, ax_eff = plt.subplots(figsize=(7, 5))
+#         ax_eff.plot(bin_centers, eff2, label=r'$\varepsilon_2 = \frac{123}{13 + 123}$',
+#                     drawstyle='steps-mid', color='blue', alpha = 0.7)
+#         ax_eff.plot(bin_centers, eff3, label=r'$\varepsilon_3 = \frac{234}{24 + 234}$',
+#                     drawstyle='steps-mid', color='orange', alpha = 0.7)
+
+#         ax_eff.set_xlim(0, right)
+#         ax_eff.set_ylim(0, 1)
+#         ax_eff.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+#         ax_eff.set_ylabel('Efficiency')
+#         ax_eff.set_title('Angular Efficiency Estimates')
+#         ax_eff.grid(True)
+#         ax_eff.legend(fontsize='small')
+#         plt.tight_layout()
+
+#         if save_plots:
+#             filename = f'{fig_idx}_new_theta_eff2_eff3_two_planes.png'
+#             fig_idx += 1
+#             path = os.path.join(base_directories["figure_directory"], filename)
+#             plot_list.append(path)
+#             plt.savefig(path)
+
+#         if show_plots:
+#             plt.show()
+#         plt.close()
+
+print("----------------------------------------------------------------------")
+print("-------------------- Efficiency respect the angle --------------------")
+print("----------------------------------------------------------------------")
+
+# Create a new column called subdetector_123_tt using a dictionary that takes processed_tt and puts:
+# 1234 -> 123
+
+# 123  -> 123
+#  234 -> 234
+# 12 4 -> 12
+# 1 34 -> 13
+
+# 12   -> 12
+#  23  -> 23
+#   34 -> 3
+# 1 3  -> 13
+#  2 4 -> 2
+# 1  4 -> 1
+
+
+# Create a new column called subdetector_234_tt using a dictionary that takes processed_tt and puts:
+# 1234 -> 234
+
+# 123  -> 23
+#  234 -> 234
+# 12 4 -> 24
+# 1 34 -> 34
+
+# 12   -> 2
+#  23  -> 23
+#   34 -> 34
+# 1 3  -> 3
+#  2 4 -> 24
+# 1  4 -> 4
+
+
+# Mapping definitions
+map_123 = {
+    1234: 123,
+    123: 123,
+    234: 234,
+    124: 12,
+    134: 13,
+    12: 12,
+    23: 23,
+    34: 3,
+    13: 13,
+    24: 2,
+    14: 1
+}
+
+map_234 = {
+    1234: 234,
+    123: 23,
+    234: 234,
+    124: 24,
+    134: 34,
+    12: 2,
+    23: 23,
+    34: 34,
+    13: 3,
+    24: 24,
+    14: 4
+}
+
+
+# Apply mappings to new columns
+df['subdetector_123_tt'] = df['processed_tt'].map(map_123)
+df['subdetector_234_tt'] = df['processed_tt'].map(map_234)
+df['subdetector_1234_tt'] = df['processed_tt']
+
+from scipy.ndimage import gaussian_filter1d
+
+eff_vs_angle = True
+if eff_vs_angle:
+
+    nbins = 20
+    right = np.pi / 3
+    blurring = True
+    blurring_sigma = 2
+
+    bins = np.linspace(0, right, nbins)
+    bin_centers = 0.5 * (bins[:-1] + bins[1:])
+    df_filtered = df.copy()
+
+    print("Calculating angular efficiencies...")
+
+    # TT combinations: (numerator, denominator, column_name, label, color)
+    tt_combos = [
+        ('1234', '134', 'subdetector_1234_tt', r'3-plane eff_2 $= \frac{1234}{134 + 1234}$', 'blue'),
+        ('123',  '13',  'subdetector_123_tt',  r'2-plane eff_2 $= \frac{123}{13 + 123}$',     'red'),
+        ('1234', '124', 'subdetector_1234_tt', r'3-plane eff_3 $= \frac{1234}{124 + 1234}$', 'green'),
+        ('234',  '24',  'subdetector_234_tt',  r'2-plane eff_3 $= \frac{234}{24 + 234}$',     'orange'),
+    ]
+
+    # Build unified set of all TT values needed, grouped by column
+    unique_tt_per_col = {}
+    for num, den, col, _, _ in tt_combos:
+        unique_tt_per_col.setdefault(col, set()).update([num, den])
+
+    # Compute histograms for each TT value within each subdetector column
+    counts_per_tt = {}
+    for col, tt_set in unique_tt_per_col.items():
+        for tt in tt_set:
+            df_tt = df_filtered[df_filtered[col] == int(tt)]
+            theta_vals = df_tt['new_theta'].dropna()
+            if len(theta_vals) < 10:
+                continue
+            counts, _ = np.histogram(theta_vals, bins=bins)
+            if blurring:
+                counts = gaussian_filter1d(counts, sigma=blurring_sigma, mode='nearest')
+            counts_per_tt[(col, tt)] = counts
+
+    # Compute efficiencies
+    eff_results = []
+    for num_tt, den_tt, col, label, color in tt_combos:
+        n_num = counts_per_tt.get((col, num_tt), np.zeros(len(bin_centers)))
+        n_den = counts_per_tt.get((col, den_tt), np.zeros(len(bin_centers)))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            eff = np.divide(n_num, n_num + n_den)
+            eff[np.isnan(eff)] = 0
+            err = np.sqrt(np.divide(n_num * n_den, (n_num + n_den)**3,
+                                    out=np.zeros_like(n_num, dtype=float),
+                                    where=(n_num + n_den) > 0))
+        eff_results.append((eff, err, label, color))
+
+    print("Efficiency calculations complete.")
+
+    # Plot raw angular distributions
+    if create_plots or create_essential_plots:
+        fig_counts, ax_counts = plt.subplots(figsize=(7, 5))
+        colors = plt.cm.tab10.colors
+        plotted_labels = set()
+
+        for i, (col, tt_set) in enumerate(unique_tt_per_col.items()):
+            for j, tt in enumerate(sorted(tt_set)):
+                counts = counts_per_tt.get((col, tt), None)
+                if counts is not None and tt not in plotted_labels:
+                    ax_counts.hist(bin_centers, bins=bins, weights=counts,
+                                   histtype='step', linewidth=1,
+                                   color=colors[(i + j) % len(colors)], label=str(tt))
+                    plotted_labels.add(tt)
+
+        ax_counts.set_xlim(0, right)
+        ax_counts.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+        ax_counts.set_ylabel('Counts')
+        ax_counts.set_title(r'Zoomed $\theta_{\mathrm{new}}$ Distributions')
+        ax_counts.grid(True)
+        ax_counts.legend(title='processed_tt', fontsize='small')
+        plt.tight_layout()
+
+        if save_plots:
+            filename = f'{fig_idx}_new_theta_zoom_counts_all.png'
+            fig_idx += 1
+            path = os.path.join(base_directories["figure_directory"], filename)
+            plot_list.append(path)
+            plt.savefig(path)
+
+        if show_plots:
+            plt.show()
+        plt.close()
+
+    # Plot efficiencies
+    if create_plots or create_essential_plots:
+        fig_eff, ax_eff = plt.subplots(figsize=(7, 5))
+
+        for eff, err, label, color in eff_results:
+            ax_eff.plot(bin_centers, eff, label=label, color=color)
+            ax_eff.fill_between(bin_centers, eff - err, eff + err, alpha=0.3, color=color)
+
+        ax_eff.set_xlim(0, right)
+        ax_eff.set_ylim(0.5, 1)
+        ax_eff.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+        ax_eff.set_ylabel('Efficiency')
+        ax_eff.set_title('Angular Efficiency Estimates')
+        ax_eff.grid(True)
+        ax_eff.legend(fontsize='small')
+        plt.tight_layout()
+
+        if save_plots:
+            filename = f'{fig_idx}_new_theta_efficiencies_all.png'
+            fig_idx += 1
+            path = os.path.join(base_directories["figure_directory"], filename)
+            plot_list.append(path)
+            plt.savefig(path)
+
+        if show_plots:
+            plt.show()
+        plt.close()
+
+
+    from scipy.optimize import curve_fit
+    
+    fit_params_list = []
+    
+    # Define convex power-law model
+    def power_law(theta, a, n, eps0):
+        return a * theta**n + eps0
+
+    # Plot efficiencies and fits
+    if create_plots or create_essential_plots:
+        fig_eff, ax_eff = plt.subplots(figsize=(7, 5))
+
+        for eff, err, label, color in eff_results:
+            # Plot measured efficiency
+            ax_eff.plot(bin_centers, eff, label=label, color=color)
+            ax_eff.fill_between(bin_centers, eff - err, eff + err, alpha=0.3, color=color)
+
+            # Fit and overlay convex power-law model
+            try:
+                # Mask: only keep reasonable efficiency values
+                mask = (eff >= 0.5) & (eff <= 1.01)
+                theta_fit = bin_centers[mask]
+                eff_fit_data = eff[mask]
+
+                popt, _ = curve_fit(
+                    power_law,
+                    theta_fit,
+                    eff_fit_data,
+                    p0=[1.0, 2.0, 0.7],
+                    maxfev=10000
+                )
+                
+                fit_params_list.append({
+                    'label': label,
+                    'color': color,
+                    'a': popt[0],
+                    'n': popt[1],
+                    'eps0': popt[2]
+                })
+                
+                eff_fit = power_law(bin_centers, *popt)  # Evaluate on full domain for plotting
+                ax_eff.plot(bin_centers, eff_fit, '--', color=color, linewidth=1.2)
+            except RuntimeError:
+                print(f"[WARN] Fit failed for: {label}")
+
+        ax_eff.set_xlim(0, right)
+        ax_eff.set_ylim(0.5, 1.05)
+        ax_eff.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+        ax_eff.set_ylabel('Efficiency')
+        ax_eff.set_title('Angular Efficiency Estimates with Convex Fits')
+        ax_eff.grid(True)
+        ax_eff.legend(fontsize='small')
+        plt.tight_layout()
+
+        if save_plots:
+            filename = f'{fig_idx}_new_theta_efficiencies_all_with_fit.png'
+            fig_idx += 1
+            path = os.path.join(base_directories["figure_directory"], filename)
+            plot_list.append(path)
+            plt.savefig(path)
+
+        if show_plots:
+            plt.show()
+        plt.close()
+        
+        import pandas as pd
+
+        df_fits = pd.DataFrame(fit_params_list)
+        print("Fitted parameters for convex power-law models:")
+        print(df_fits)
+        
+        # Save in new columns the fitted parameters
+        for _, row in df_fits.iterrows():
+            if "eff_2" in row["label"] and "3-plane" in row["label"]:
+                df["P2_3fold_a"] = row["a"]
+                df["P2_3fold_n"] = row["n"]
+                df["P2_3fold_eps0"] = row["eps0"]
+            elif "eff_2" in row["label"] and "2-plane" in row["label"]:
+                df["P2_2fold_a"] = row["a"]
+                df["P2_2fold_n"] = row["n"]
+                df["P2_2fold_eps0"] = row["eps0"]
+            elif "eff_3" in row["label"] and "3-plane" in row["label"]:
+                df["P3_3fold_a"] = row["a"]
+                df["P3_3fold_n"] = row["n"]
+                df["P3_3fold_eps0"] = row["eps0"]
+            elif "eff_3" in row["label"] and "2-plane" in row["label"]:
+                df["P4_2fold_a"] = row["a"]
+                df["P4_2fold_n"] = row["n"]
+                df["P4_2fold_eps0"] = row["eps0"]
+        
 
 def classify_region(row):
     phi = row['new_phi'] * 180 / np.pi  + row['phi_north'] # Convert phi to degrees
@@ -1414,11 +1918,11 @@ if multiplicity_calculations:
 
     # Take the cluster size 1 charge spectrum per plane for four-plane coincidence events
 
-    remove_crosstalk = True
-    crosstalk_limit = 3.5 #2.6
+    remove_crosstalk = False
+    crosstalk_limit = 0.1 #2.6
 
     remove_streamer = True
-    streamer_limit = 90
+    streamer_limit = 110
 
     # Read and concatenate all files
     df_list = [df]  # Adjust delimiter if needed
@@ -1457,15 +1961,6 @@ if multiplicity_calculations:
     cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
 
     def interpolate_fast_charge(width):
-        """
-        Interpolates the Fast Charge for given Width values using cubic spline interpolation.
-
-        Parameters:
-        - width (float or np.ndarray): The Width value(s) to interpolate in ns.
-
-        Returns:
-        - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-        """
         width = np.asarray(width)  # Ensure input is a NumPy array
 
         # Keep zero values unchanged
@@ -1503,7 +1998,7 @@ if multiplicity_calculations:
                 # Plot the histogram
                 v = merged_df[col_name]
                 v = v[v != 0]
-                axs[i-1, j-1].hist(v, bins=200, range=(0, 1500))
+                axs[i-1, j-1].hist(v, bins=100, range=(0, 1200))
                 axs[i-1, j-1].set_title(col_name)
                 axs[i-1, j-1].set_xlabel("Charge")
                 axs[i-1, j-1].set_ylabel("Frequency")
@@ -2152,6 +2647,118 @@ if multiplicity_calculations:
 
     # Optional: display or save
     # print(df_mult_fit)
+    
+    
+    print("---------- Induction section determination using the LUT -------------")
+    print("Eventually this part of the code should be done directly with the binary_topology values.")
+    
+    df_single_M1_sum = df_single_M1_sum[ df_single_M1_sum > 0 ]
+    df_single_M2_sum = df_single_M2_sum[ df_single_M2_sum > 0 ]
+    df_single_M3_sum = df_single_M3_sum[ df_single_M3_sum > 0 ]
+    df_single_M4_sum = df_single_M4_sum[ df_single_M4_sum > 0 ]
+
+    df_double_adj_M1_sum = df_double_adj_M1_sum[ df_double_adj_M1_sum > 0 ]
+    df_double_adj_M2_sum = df_double_adj_M2_sum[ df_double_adj_M2_sum > 0 ]
+    df_double_adj_M3_sum = df_double_adj_M3_sum[ df_double_adj_M3_sum > 0 ]
+    df_double_adj_M4_sum = df_double_adj_M4_sum[ df_double_adj_M4_sum > 0 ]
+
+    df_triple_adj_M1_sum = df_triple_adj_M1_sum[ df_triple_adj_M1_sum > 0 ]
+    df_triple_adj_M2_sum = df_triple_adj_M2_sum[ df_triple_adj_M2_sum > 0 ]
+    df_triple_adj_M3_sum = df_triple_adj_M3_sum[ df_triple_adj_M3_sum > 0 ]
+    df_triple_adj_M4_sum = df_triple_adj_M4_sum[ df_triple_adj_M4_sum > 0 ]
+
+    df_quadruple_M1_sum = df_quadruple_M1_sum[ df_quadruple_M1_sum > 0 ]
+    df_quadruple_M2_sum = df_quadruple_M2_sum[ df_quadruple_M2_sum > 0 ]
+    df_quadruple_M3_sum = df_quadruple_M3_sum[ df_quadruple_M3_sum > 0 ]
+    df_quadruple_M4_sum = df_quadruple_M4_sum[ df_quadruple_M4_sum > 0 ]
+
+    # Compute total counts for normalization per module
+    total_counts = [
+        len(df_single_M1_sum) + len(df_double_adj_M1_sum) + len(df_triple_adj_M1_sum) + len(df_quadruple_M1_sum),
+        len(df_single_M2_sum) + len(df_double_adj_M2_sum) + len(df_triple_adj_M2_sum) + len(df_quadruple_M2_sum),
+        len(df_single_M3_sum) + len(df_double_adj_M3_sum) + len(df_triple_adj_M3_sum) + len(df_quadruple_M3_sum),
+        len(df_single_M4_sum) + len(df_double_adj_M4_sum) + len(df_triple_adj_M4_sum) + len(df_quadruple_M4_sum)
+    ]
+
+    # Normalize counts relative to the total counts in each module
+    single_counts = [
+        len(df_single_M1_sum) / total_counts[0],
+        len(df_single_M2_sum) / total_counts[1],
+        len(df_single_M3_sum) / total_counts[2],
+        len(df_single_M4_sum) / total_counts[3]
+    ]
+    double_adjacent_counts = [
+        len(df_double_adj_M1_sum) / total_counts[0],
+        len(df_double_adj_M2_sum) / total_counts[1],
+        len(df_double_adj_M3_sum) / total_counts[2],
+        len(df_double_adj_M4_sum) / total_counts[3]
+    ]
+    triple_adjacent_counts = [
+        len(df_triple_adj_M1_sum) / total_counts[0],
+        len(df_triple_adj_M2_sum) / total_counts[1],
+        len(df_triple_adj_M3_sum) / total_counts[2],
+        len(df_triple_adj_M4_sum) / total_counts[3]
+    ]
+    quadruple_counts = [
+        len(df_quadruple_M1_sum) / total_counts[0],
+        len(df_quadruple_M2_sum) / total_counts[1],
+        len(df_quadruple_M3_sum) / total_counts[2],
+        len(df_quadruple_M4_sum) / total_counts[3]
+    ]
+    
+    induction_section_table = {
+    "plane": ["M1", "M2", "M3", "M4"],
+    "cluster_size_1": [single_counts[0], single_counts[1], single_counts[2], single_counts[3]],
+    "cluster_size_2": [double_adjacent_counts[0], double_adjacent_counts[1], double_adjacent_counts[2], double_adjacent_counts[3]],
+    "cluster_size_3": [triple_adjacent_counts[0], triple_adjacent_counts[1], triple_adjacent_counts[2], triple_adjacent_counts[3]],
+    "cluster_size_4": [quadruple_counts[0], quadruple_counts[1], quadruple_counts[2], quadruple_counts[3]],
+    }
+
+    # Create the DataFrame
+    induction_section_df = pd.DataFrame(induction_section_table)
+
+    # Print the DataFrame
+    print(induction_section_df)
+    
+    # Load the LUT
+    lut_file = "/home/cayetano/DATAFLOW_v3/MASTER/ANCILLARY/lut.csv"
+    lut_df = pd.read_csv(lut_file)
+
+    # Initialize a list to store the best induction section values for each plane
+    best_induction_sections = []
+
+    # Loop through each plane in the induction_section_df
+    for _, plane_row in induction_section_df.iterrows():
+        # Extract the cluster size data for the current plane
+        plane_data = plane_row[["cluster_size_1", "cluster_size_2", "cluster_size_3", "cluster_size_4"]].values
+
+        # Calculate the difference between the plane data and each row in the LUT
+        differences = lut_df[["cluster_size_1", "cluster_size_2", "cluster_size_3", "cluster_size_4"]].values - plane_data
+
+        # Compute the squared error for each row in the LUT
+        squared_errors = np.sum(differences**2, axis=1)
+
+        # Find the index of the row with the smallest squared error
+        best_match_index = np.argmin(squared_errors)
+
+        # Get the corresponding avalanche_width (induction section) from the LUT
+        best_induction_section = lut_df.loc[best_match_index, "avalanche_width"]
+
+        # Append the result to the list
+        best_induction_sections.append(best_induction_section)
+
+    # Create a new DataFrame to store the results
+    best_induction_section_df = pd.DataFrame({
+        "plane": induction_section_df["plane"],
+        "best_induction_section": best_induction_sections
+    })
+
+    # Print the resulting DataFrame
+    print(best_induction_section_df)
+    
+    # Create new columns called PX_induction_section with th e best induction section value
+    for i in range(1, 5):
+        df[f"P{i}_induction_section"] = best_induction_sections[i - 1]
 
 
 print("----------------------------------------------------------------------")
@@ -2669,16 +3276,6 @@ if georgys:
 
 print("\n\n\n")
 print(df.columns.to_list())
-
-
-print("----------------------------------------------------------------------")
-print("-------------------- Efficiency respect the angle --------------------")
-print("----------------------------------------------------------------------")
-
-eff_vs_angle = True
-if eff_vs_angle:
-    print("WIP")
-    
     
 
 print("----------------------------------------------------------------------")
@@ -3162,6 +3759,25 @@ agg_dict = {
     "P2-P3": custom_mean,
     "P3-P4": custom_mean,
     "phi_north": custom_mean,
+    
+    "P1_induction_section": custom_mean,
+    "P2_induction_section": custom_mean,
+    "P3_induction_section": custom_mean,
+    "P4_induction_section": custom_mean,
+    
+    # Efficiency fitting
+    "P2_3fold_a": custom_mean,
+    "P2_3fold_eps0": custom_mean,
+    "P2_3fold_n": custom_mean,
+    "P2_2fold_a": custom_mean,
+    "P2_2fold_eps0": custom_mean,
+    "P2_2fold_n": custom_mean,
+    "P3_3fold_a": custom_mean,
+    "P3_3fold_eps0": custom_mean,
+    "P3_3fold_n": custom_mean,
+    "P3_3fold_a": custom_mean,
+    "P3_3fold_eps0": custom_mean,
+    "P3_3fold_n": custom_mean,
 }
 
 # Dynamically add all sigmoid_width_XXX and background_slope_XXX columns
@@ -3496,7 +4112,16 @@ columns_to_keep = [
     'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4',
     
     # Configuration parameters
-    "over_P1", "P1-P2", "P2-P3", "P3-P4", "phi_north",   
+    "over_P1", "P1-P2", "P2-P3", "P3-P4", "phi_north",
+    
+    # Induction section
+    "P1_induction_section", "P2_induction_section", "P3_induction_section", "P4_induction_section",
+    
+    # Efficiency fittings
+    "P2_3fold_a", "P2_3fold_eps0", "P2_3fold_n",
+    "P2_2fold_a", "P2_2fold_eps0", "P2_2fold_n",
+    "P3_3fold_a", "P3_3fold_eps0", "P3_3fold_n",
+    "P3_3fold_a", "P3_3fold_eps0", "P3_3fold_n",
 ]
 
 sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]

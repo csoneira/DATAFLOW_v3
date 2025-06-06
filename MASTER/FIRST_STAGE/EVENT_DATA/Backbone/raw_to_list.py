@@ -38,7 +38,7 @@ print("----------------------------------------------------------------------")
 stratos_save = True
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-last_file_test = False
+last_file_test = True
 alternative_fitting = True
 
 # Standard library
@@ -2178,7 +2178,7 @@ if validate_charge_pedestal_calibration:
                 y_B = charge_test[col_B]
                 
                 Q_clip_min = pedestal_left * 2
-                Q_clip_max = pedestal_right * 8
+                Q_clip_max = pedestal_right * 12
                 
                 # Plot histograms with Q-specific clipping and bins
                 axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
@@ -2198,7 +2198,7 @@ if validate_charge_pedestal_calibration:
         plt.suptitle(f"Grand Figure for pedestal substracted values (zoom), mingo0{station}\n{start_time}", fontsize=16)
         
         if save_plots:
-            final_filename = f'{fig_idx}_grand_figure_Q_pedestal_zoom.png'
+            final_filename = f'{fig_idx}_grand_figure_Q_pedestal_less_zoom.png'
             fig_idx += 1
             
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -2403,8 +2403,8 @@ for key in ['T1', 'T2', 'T3', 'T4']:
         
         new_cols[f'{key}_T_sum_{i+1}'] = (T_B[:, i] + T_F[:, i]) / 2
         new_cols[f'{key}_T_diff_{i+1}'] = (T_B[:, i] - T_F[:, i]) / 2
-        new_cols[f'{key.replace("T", "Q")}_Q_sum_{i+1}'] = (Q_B[:, i] + Q_F[:, i]) / 2
-        new_cols[f'{key.replace("T", "Q")}_Q_diff_{i+1}'] = (Q_B[:, i] - Q_F[:, i]) / 2
+        new_cols[f'{key.replace("T", "Q")}_Q_sum_{i+1}'] = (Q_F[:, i] + Q_B[:, i]) / 2
+        new_cols[f'{key.replace("T", "Q")}_Q_diff_{i+1}'] = (Q_F[:, i] - Q_B[:, i]) / 2
 
     working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
 
@@ -4553,6 +4553,46 @@ if crosstalk_removal_and_recalibration:
 
     working_df = working_df.copy()
     
+    
+    if create_plots or create_essential_plots:
+    # if create_plots:
+        fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+        axes_Q = axes_Q.flatten()
+
+        for i, key in enumerate(['1', '2', '3', '4']):
+            for j in range(4):
+                col = f'Q{key}_Q_sum_{j+1}'
+                y = working_df[col]
+                
+                Q_clip_min = pedestal_left
+                Q_clip_max = pedestal_right
+                
+                num_bins = 80
+                data = y[(y != 0) & (y > Q_clip_min) & (y < Q_clip_max)]
+                
+                axes_Q[i*4 + j].hist(data, bins=num_bins, alpha=0.5, label=f'{col}')
+                axes_Q[i*4 + j].set_title(f'{col}')
+                axes_Q[i*4 + j].legend()
+                axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                axes_Q[i*4 + j].set_ylim([0, None])
+                axes_Q[i*4 + j].axvline(0, color='green', linestyle='--', alpha=0.5)
+                
+        # Display a vertical green dashed, alpha = 0.5 line at 0
+        for ax in axes_Q:
+            ax.axvline(0, color='green', linestyle='--', alpha=0.5)
+
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.9)
+        plt.suptitle(f"Cross-talk check for filtering (zoom), mingo0{station}\n{start_time}", fontsize=16)
+        if save_plots:
+            final_filename = f'{fig_idx}_cross_talk_filtering_zoom_check_no_subs_pedestal.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots: plt.show()
+        plt.close(fig_Q)
+        
     
     print("----------------------------------------------------------------------")
     print("------------------- Crosstalk pedestal recalibration -----------------")
@@ -6730,7 +6770,7 @@ if create_plots or create_essential_plots:
                         ax.set_yscale('log')
                     
                 else:
-                    # Upper triangle: hexbin plots
+                    # Upper triangle: hexbin
                     x_data = df[x_col]
                     y_data = df[y_col]
                     # Remove zeroes and nans
@@ -7284,6 +7324,41 @@ for i, module in enumerate(['1', '2', '3', '4']):
         strip = j + 1
         definitive_df[f'Q_P{module}s{strip}'] = definitive_df[f'Q{module}_Q_sum_{strip}']
         definitive_df[f'Q_P{module}s{strip}_with_crstlk'] = definitive_df[f'Q{module}_Q_sum_{strip}_with_crstlk']
+
+# Charge checking --------------------------------------------------------------------------------------------------------
+if create_plots or create_essential_plots:
+# if create_plots:
+    fig, axs = plt.subplots(4, 4, figsize=(12, 12))
+    for i in range(1, 5):
+        for j in range(1, 5):
+                # Get the column name
+                col_name = f"Q_P{i}s{j}"
+                col_name_2 = f"Q_P{i}s{j}_with_crstlk"
+                
+                # Plot the histogram
+                v = definitive_df[col_name]
+                v = v[v != 0]
+                w = definitive_df[col_name_2]
+                w = w[w != 0]
+                axs[i-1, j-1].hist(v, bins=100, range=(0, 120), alpha=0.5, label='filtered', color='blue')
+                axs[i-1, j-1].hist(w, bins=100, range=(0, 120), alpha=0.5, label='with crosstalk', color='orange')
+                axs[i-1, j-1].set_title(col_name)
+                axs[i-1, j-1].set_xlabel("Charge")
+                axs[i-1, j-1].set_ylabel("Frequency")
+                axs[i-1, j-1].grid(True)
+
+    plt.tight_layout()
+    figure_name = f"all_channels_charge_mingo0{station}"
+    if save_plots:
+        name_of_file = figure_name
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots: plt.show()
+    plt.close()
+# ------------------------------------------------------------------------------------------------------------------------
 
 sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
 background_cols = [col for col in df.columns if col.startswith('background_slope_')]
