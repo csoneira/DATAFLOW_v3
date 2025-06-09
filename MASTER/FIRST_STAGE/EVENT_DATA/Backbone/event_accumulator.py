@@ -3235,9 +3235,6 @@ if multiplicity_calculations:
         df[f"P{i}_induction_section"] = best_induction_sections[i - 1]
 
 
-a = 1/0
-
-
 print("----------------------------------------------------------------------")
 print("------------ Crosstalk probability respect the charge ----------------")
 print("----------------------------------------------------------------------")

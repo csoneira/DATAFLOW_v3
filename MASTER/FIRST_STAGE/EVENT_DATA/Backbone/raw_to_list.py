@@ -463,7 +463,7 @@ ext_res_tdif_filter = 1
 CRT_gaussian_fit_quantile = 0.03
 coincidence_window_og_ns = 15  # ns
 coincidence_window_precal_ns = 7  # ns
-coincidence_window_cal_ns = 4.0  # ns
+coincidence_window_cal_ns = 6.0  # ns
 
 # Pedestal charge calibration
 pedestal_left = -3

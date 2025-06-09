@@ -78,6 +78,7 @@ remove_outliers = True
 show_plots = False
 save_plots = True
 create_plots = False
+create_essential_plots = True
 show_errorbar = False
 
 recalculate_pressure_coeff = True
@@ -2829,6 +2830,60 @@ for region in og_regions:
             plt.savefig(new_figure_path, format='png', dpi=300)
 
         plt.close()
+
+
+for region in og_regions:
+    if create_plots or create_essential_plots:
+    # if create_plots:
+
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(17, 14), sharex=True)
+
+        # --- Atmospheric variables ---
+        ax1.plot(data_df['Time'], data_df['temp_100mbar'], color='C5')
+        ax1.set_ylabel('Temp @ 100 mbar')
+        ax1.set_title(f'Atmospheric variables and normalized rates – {region}')
+        ax1.grid(True)
+
+        ax2.plot(data_df['Time'], data_df['height_100mbar'], color='C6')
+        ax2.set_ylabel('Height @ 100 mbar')
+        ax2.grid(True)
+
+        ax3.plot(data_df['Time'], data_df['temp_ground'], color='C7')
+        ax3.set_ylabel('Ground Temp')
+        ax3.grid(True)
+
+        # --- Normalized rates ---
+        half_idx = len(data_df) // 2
+        norm_uncorrected = data_df[region].iloc[:half_idx].mean()
+        norm_eff_corr = data_df[f'{region}_eff_corr'].iloc[:half_idx].mean()
+        norm_pressure = data_df[f'{region}_eff_corr_pressure_corrected'].iloc[:half_idx].mean()
+        norm_high_order = data_df[f'{region}_eff_corr_high_order_corrected'].iloc[:half_idx].mean()
+
+        ax4.plot(data_df['Time'], data_df[region] / norm_uncorrected - 1, label='Uncorrected', color='C3')
+        ax4.plot(data_df['Time'], data_df[f'{region}_eff_corr'] / norm_eff_corr - 1, label='Eff. corr.', color='C8')
+        ax4.plot(data_df['Time'], data_df[f'{region}_eff_corr_pressure_corrected'] / norm_pressure - 1,
+                 label='Pressure corr.', color='C9')
+        ax4.plot(data_df['Time'], data_df[f'{region}_eff_corr_high_order_corrected'] / norm_high_order - 1,
+                 label='High-order corr.', color='C10')
+        ax4.axhline(y=0, color='blue', linestyle='--', label='Baseline (0%)', alpha=0.7)
+        ax4.axhline(y=-0.05, color='green', linestyle='--', label='5% decrease', alpha=0.7)
+
+        ax4.set_ylabel('Normalized rate')
+        ax4.set_xlabel('Time')
+        ax4.grid(True)
+        ax4.legend(loc='upper left')
+
+        plt.tight_layout()
+
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            fig_path = figure_path + f"{fig_idx}_{region}_4x1_atmospheric.png"
+            fig_idx += 1
+            print(f"Saving figure to {fig_path}")
+            fig.savefig(fig_path, format='png', dpi=300)
+
+        plt.close(fig)
 
 
 # trigger_types_corrected = ['detector_1234_eff_corr_high_order_corrected', 
