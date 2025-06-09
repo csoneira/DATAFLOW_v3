@@ -412,7 +412,7 @@ T_diff_cal_threshold = 1
 # Once calculated the RPC variables -------------------------------------------
 # -----------------------------------------------------------------------------
 # Tsum
-T_sum_RPC_left = -1
+T_sum_RPC_left = -5
 T_sum_RPC_right = 5 # -100
 # Tdiff
 T_diff_RPC_left = -0.8
@@ -4484,7 +4484,7 @@ if crosstalk_removal_and_recalibration:
                 crosstalk_linear[f'crstlk_mx_b_P{key}s{j+1}'] = [m, b]
                 
                 crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}'] = mu - 2 * sigma
-                crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = mu + 2 * sigma
+                crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = mu + 3 * sigma
                 
             except RuntimeError:
                 continue
@@ -5248,8 +5248,8 @@ print("----------------------------------------------------------------------")
 print("----------------- Some more tests (multi-strip data) -----------------")
 print("----------------------------------------------------------------------")
 
-if create_plots:
-# if create_plots or create_essential_plots:
+# if create_plots:
+if create_plots or create_essential_plots:
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
         print(f"\n--- Plane {i_plane} ---")
@@ -5294,8 +5294,8 @@ if create_plots:
                     ax.scatter(xi, yi, alpha=0.5, s=10)
                     
                     if var_label == "T_sum":
-                        lim_left = -125
-                        lim_right = -100
+                        lim_left = -2 # -125
+                        lim_right = 2 # -100
                     elif var_label == "T_diff":
                         lim_left = -1
                         lim_right = 1
@@ -5481,6 +5481,124 @@ print("Y position calculated.")
 
 
 print("----------------------------------------------------------------------")
+print("------------ Last comprobation to the per-strip variables ------------")
+print("----------------------------------------------------------------------")
+
+# Same for hexbin
+if create_plots or create_essential_plots:
+# if create_plots:
+    fig, axes = plt.subplots(16, 10, figsize=(40, 20))  # 10 combinations per plane
+    axes = axes.flatten()
+
+    for i_plane in range(1, 5):
+        for strip in range(1, 5):
+            # Column names
+            t_sum_col = f'P{i_plane}_T_sum_{strip}'
+            t_diff_col = f'P{i_plane}_T_diff_{strip}'
+            q_sum_col = f'P{i_plane}_Q_sum_{strip}'
+            q_diff_col = f'P{i_plane}_Q_diff_{strip}'
+
+            # Filter valid rows (non-zero)
+            valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col]].replace(0, np.nan).dropna()
+            
+            # Extract variables and filter low charge
+            cond = valid_rows[q_sum_col] < 10
+            t_sum  = valid_rows.loc[cond, t_sum_col]
+            t_diff = valid_rows.loc[cond, t_diff_col]
+            q_sum  = valid_rows.loc[cond, q_sum_col]
+            q_diff = valid_rows.loc[cond, q_diff_col]
+
+            base_idx = (i_plane - 1) * 6  # 6 plots per plane
+
+            combinations = [
+                (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+                (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
+                (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
+                (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
+                (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
+                (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+            ]
+
+            for offset, (x, yv, title) in enumerate(combinations):
+                ax = axes[base_idx + offset]
+                ax.hexbin(x, yv, gridsize=50, cmap='turbo')
+                ax.set_title(title)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
+    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, filtered', fontsize=18)
+
+    if save_plots:
+        name_of_file = 'strip_check_hexbin_combinations_filtered'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots: plt.show()
+    plt.close()
+
+
+# Same for hexbin
+if create_plots or create_essential_plots:
+# if create_plots:
+    fig, axes = plt.subplots(16, 10, figsize=(40, 20))  # 10 combinations per plane
+    axes = axes.flatten()
+
+    for i_plane in range(1, 5):
+        for strip in range(1, 5):
+            # Column names
+            t_sum_col = f'P{i_plane}_T_sum_{strip}'
+            t_diff_col = f'P{i_plane}_T_diff_{strip}'
+            q_sum_col = f'P{i_plane}_Q_sum_{strip}'
+            q_diff_col = f'P{i_plane}_Q_diff_{strip}'
+
+            # Filter valid rows (non-zero)
+            valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col]].replace(0, np.nan).dropna()
+            
+            # Extract variables and filter low charge
+            cond = valid_rows[q_sum_col] < 100
+            t_sum  = valid_rows.loc[cond, t_sum_col]
+            t_diff = valid_rows.loc[cond, t_diff_col]
+            q_sum  = valid_rows.loc[cond, q_sum_col]
+            q_diff = valid_rows.loc[cond, q_diff_col]
+
+            base_idx = (i_plane - 1) * 6  # 6 plots per plane
+
+            combinations = [
+                (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+                (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
+                (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
+                (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
+                (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
+                (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+            ]
+
+            for offset, (x, yv, title) in enumerate(combinations):
+                ax = axes[base_idx + offset]
+                ax.hexbin(x, yv, gridsize=50, cmap='turbo')
+                ax.set_title(title)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
+    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, filtered', fontsize=18)
+
+    if save_plots:
+        name_of_file = 'strip_check_hexbin_combinations_filtered'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots: plt.show()
+    plt.close()
+    
+
+print("----------------------------------------------------------------------")
 print("----------------- Setting the variables of each RPC ------------------")
 print("----------------------------------------------------------------------")
 
@@ -5548,7 +5666,7 @@ if create_plots:
         valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
         
         # Extract variables and filter low charge
-        cond = valid_rows[q_sum_col] < 50
+        cond = valid_rows[q_sum_col] < 150
         t_sum  = valid_rows.loc[cond, t_sum_col]
         t_diff = valid_rows.loc[cond, t_diff_col]
         q_sum  = valid_rows.loc[cond, q_sum_col]
@@ -5682,7 +5800,69 @@ if create_plots or create_essential_plots:
         valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
         
         # Extract variables and filter low charge
-        cond = valid_rows[q_sum_col] < 50
+        cond = valid_rows[q_sum_col] < 150
+        t_sum  = valid_rows.loc[cond, t_sum_col]
+        t_diff = valid_rows.loc[cond, t_diff_col]
+        q_sum  = valid_rows.loc[cond, q_sum_col]
+        q_diff = valid_rows.loc[cond, q_diff_col]
+        y      = valid_rows.loc[cond, y_col]
+
+        base_idx = (i_plane - 1) * 10  # 10 plots per plane
+
+        combinations = [
+            (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+            (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
+            (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
+            (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
+            (t_diff, y,      f'{t_diff_col} vs {y_col}'),
+            (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
+            (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
+            (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
+            (q_diff, y,      f'{q_diff_col} vs {y_col}'),
+            (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+        ]
+
+        for offset, (x, yv, title) in enumerate(combinations):
+            ax = axes[base_idx + offset]
+            ax.hexbin(x, yv, gridsize=50, cmap='turbo')
+            ax.set_title(title)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
+    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, filtered', fontsize=18)
+
+    if save_plots:
+        name_of_file = 'rpc_variables_hexbin_combinations_filtered'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots: plt.show()
+    plt.close()
+
+
+# Same for hexbin
+if create_plots or create_essential_plots:
+# if create_plots:
+    fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
+    axes = axes.flatten()
+
+    for i_plane in range(1, 5):
+        # Column names
+        t_sum_col = f'P{i_plane}_T_sum_final'
+        t_diff_col = f'P{i_plane}_T_diff_final'
+        q_sum_col = f'P{i_plane}_Q_sum_final'
+        q_diff_col = f'P{i_plane}_Q_diff_final'
+        y_col = f'Y_{i_plane}'
+
+        # Filter valid rows (non-zero)
+        valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
+        
+        # Extract variables and filter low charge
+        cond = valid_rows[q_sum_col] < 10
         t_sum  = valid_rows.loc[cond, t_sum_col]
         t_diff = valid_rows.loc[cond, t_diff_col]
         q_sum  = valid_rows.loc[cond, q_sum_col]
