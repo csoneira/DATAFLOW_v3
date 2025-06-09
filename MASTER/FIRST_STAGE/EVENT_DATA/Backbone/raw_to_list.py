@@ -1,3 +1,5 @@
+#%%
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -6,6 +8,8 @@ Created on Thu Jun 20 09:15:33 2024
 
 @author: csoneira@ucm.es
 """
+
+run_jupyter_notebook = False
 
 print("\n\n")
 print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀.⣄")
@@ -86,7 +90,11 @@ from tqdm import tqdm
 
 import warnings
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
-    
+
+import seaborn as sns
+from scipy.stats import norm
+from sklearn.metrics import r2_score
+
 # Store the current time at the start. To time the execution
 start_execution_time_counting = datetime.now()
 
@@ -94,14 +102,18 @@ start_execution_time_counting = datetime.now()
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
 
-# Check if the script has an argument
-if len(sys.argv) < 2:
-    print("Error: No station provided.")
-    print("Usage: python3 script.py <station>")
-    sys.exit(1)
+if run_jupyter_notebook:
+    station = "2"
+else:
+    # Check if the script has an argument
+    if len(sys.argv) < 2:
+        print("Error: No station provided.")
+        print("Usage: python3 script.py <station>")
+        sys.exit(1)
 
-# Get the station argument
-station = sys.argv[1]
+    # Get the station argument
+    station = sys.argv[1]
+
 if station not in ["1", "2", "3", "4"]:
     print("Error: Invalid station. Please provide a valid station (1, 2, 3, or 4).")
     sys.exit(1)
@@ -391,7 +403,8 @@ Q_sum_right_cal = 300
 Q_diff_cal_threshold = 10
 Q_diff_cal_threshold_FB = 5 # 1.25
 # Tsum
-# ...
+T_sum_left_cal = -5
+T_sum_right_cal = 5
 # Tdif
 T_diff_cal_threshold = 1
 
@@ -461,9 +474,9 @@ ext_res_tdif_filter = 1
 
 # Time sum
 CRT_gaussian_fit_quantile = 0.03
-coincidence_window_og_ns = 15  # ns
+coincidence_window_og_ns = 10  # ns
 coincidence_window_precal_ns = 7  # ns
-coincidence_window_cal_ns = 6.0  # ns
+coincidence_window_cal_ns = 4  # ns
 
 # Pedestal charge calibration
 pedestal_left = -3
@@ -3399,7 +3412,7 @@ if slewing_correction:
             
             b_semidiff = model.coef_[0]
             a_semisum = 0
-            r2_score = model.score(X, y)
+            r2_score_val = model.score(X, y)
         else:
             X = data[['Q_sum_semisum', 'Q_sum_semidiff']].values
             y = data['T_sum_corrected_diff'].values
@@ -3409,7 +3422,7 @@ if slewing_correction:
             
             a_semisum = model.coef_[0]
             b_semidiff = model.coef_[1]
-            r2_score = model.score(X, y)
+            r2_score_val = model.score(X, y)
 
         # Store results
         fit_results.append({
@@ -3419,7 +3432,7 @@ if slewing_correction:
             'b_semidiff': b_semidiff,
             'c_offset': model.intercept_,
             'n_points': len(data),
-            'r2_score': r2_score
+            'r2_score': r2_score_val
         })
 
     # Create dataframe with all model parameters
@@ -4678,6 +4691,494 @@ for plane in range(1, 5):
 
 
 print("----------------------------------------------------------------------")
+print("----------------------- Slewing correction 2/2 -----------------------")
+print("----------------------------------------------------------------------")
+
+if slewing_correction:
+    
+    # if create_essential_plots or create_plots:
+    if create_plots:
+        
+        plt.figure(figsize=(8, 5))
+        plt.hist(slewing_fit_df["r2_score"], bins=20, alpha=0.7)
+        plt.xlabel("R² Score")
+        plt.ylabel("Frequency")
+        plt.title("Histogram of R² Scores from Slewing Fits")
+        plt.grid(True, linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        if save_plots:
+            name_of_file = 'r2_scores'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+
+        if show_plots: plt.show()
+        plt.close()
+    
+    # Step 1: Select pairs with good fit quality
+    r2_threshold = 0.2
+    good_fits_df = slewing_fit_df[slewing_fit_df["r2_score"] > r2_threshold].copy()
+
+    # Store good fit keys
+    good_fit_keys = [
+        ((row["plane1"], row["strip1"]), (row["plane2"], row["strip2"]))
+        for _, row in good_fits_df.iterrows()
+    ]
+
+    # Step 2: Process event-by-event and apply correction collectively
+    tsum_cols = [col for col in working_df.columns if col.startswith('T') and 'T_sum' in col and '_final' not in col]
+    qsum_cols = [col for col in working_df.columns if col.startswith('Q') and 'Q_sum' in col and '_final' not in col]
+    ps_labels = [(int(col[1]), int(col[-1])) for col in tsum_cols]
+
+    # Backup original data for plotting comparison later
+    working_df_uncorrected = working_df[tsum_cols].copy()
+
+    # Create dictionary of valid fit parameters for fast lookup
+    fit_dict = {}
+
+    for _, row in slewing_fit_df.iterrows():
+        if row['r2_score'] > r2_threshold:
+            key = (int(row['plane1']), int(row['strip1']), int(row['plane2']), int(row['strip2']))
+            fit_dict[key] = (row['a_semisum'], row['b_semidiff'], row['c_offset'])
+
+
+    # Apply slewing correction event-by-event
+    for idx, row in working_df.iterrows():
+        # Identify strips with valid T and Q in this event
+        present_ps = [(p, s) for p, s in ps_labels if row.get(f"T{p}_T_sum_{s}", 0) != 0 and row.get(f"Q{p}_Q_sum_{s}", 0) != 0]
+        
+        if len(present_ps) < 2:
+            continue
+
+        # Find which of the good fit pairs are present in this event
+        valid_pairs_in_event = []
+        for (ps1, ps2) in good_fit_keys:
+            if ps1 in present_ps and ps2 in present_ps:
+                valid_pairs_in_event.append((ps1, ps2))
+
+        if not valid_pairs_in_event:
+            continue
+
+        # Store multiple corrected tsum estimates
+        corrected_deltas_by_ps = {ps: [] for ps in present_ps}
+
+        # Loop over all valid pairs and apply correction symmetrically
+        for (p1s, p2s) in valid_pairs_in_event:
+            p1, s1 = p1s
+            p2, s2 = p2s
+
+            t1 = row[f"T{int(p1)}_T_sum_{int(s1)}"]
+            t2 = row[f"T{int(p2)}_T_sum_{int(s2)}"]
+            q1 = row[f"Q{int(p1)}_Q_sum_{int(s1)}"]
+            q2 = row[f"Q{int(p2)}_Q_sum_{int(s2)}"]
+
+            key_forward = (p1, s1, p2, s2)
+            key_reverse = (p2, s2, p1, s1)
+
+            if key_forward in fit_dict:
+                a, b, c = fit_dict[key_forward]
+                delta_measured = t1 - t2
+                delta_q = 0.5 * (q1 - q2)
+                correction = a * 0.5 * (q1 + q2) + b * delta_q
+                corrected_diff = delta_measured - correction
+                # Reconstruct both
+                corrected_deltas_by_ps[(p1, s1)].append(corrected_diff / 2)
+                corrected_deltas_by_ps[(p2, s2)].append(-corrected_diff / 2)
+
+            elif key_reverse in fit_dict:
+                a, b, c = fit_dict[key_reverse]
+                delta_measured = t2 - t1
+                delta_q = 0.5 * (q2 - q1)
+                correction = a * 0.5 * (q2 + q1) + b * delta_q
+                corrected_diff = delta_measured - correction
+                corrected_deltas_by_ps[(p2, s2)].append(corrected_diff / 2)
+                corrected_deltas_by_ps[(p1, s1)].append(-corrected_diff / 2)
+
+        # Compute average corrected value for each T_sum and apply
+        mean_correction = np.mean([np.mean(v) for v in corrected_deltas_by_ps.values() if v])
+        for (p, s), values in corrected_deltas_by_ps.items():
+            if values:
+                corrected_value = mean_correction + np.mean(values)
+                working_df.at[idx, f"T{p}_T_sum_{s}"] = corrected_value
+
+
+print("----------------------------------------------------------------------")
+print("------------------------- Time sum filtering -------------------------")
+print("----------------------------------------------------------------------")
+
+for col in working_df.columns:
+    if '_T_sum_' in col:
+        working_df[col] = np.where((working_df[col] > T_sum_right_cal) | (working_df[col] < T_sum_left_cal), 0, working_df[col])
+
+
+print("----------------------------------------------------------------------")
+print("---------- Filter if any variable in the strip is 0 (3/3) ------------")
+print("----------------------------------------------------------------------")
+
+# Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
+# put the four variables in that plane, strip and event to 0
+
+total_events = len(working_df)
+
+for plane in range(1, 5):
+    for strip in range(1, 5):
+        q_sum  = f'Q{plane}_Q_sum_{strip}'
+        q_diff = f'Q{plane}_Q_diff_{strip}'
+        t_sum  = f'T{plane}_T_sum_{strip}'
+        t_diff = f'T{plane}_T_diff_{strip}'
+        
+        # Build mask
+        mask = (
+            (working_df[q_sum]  == 0) |
+            (working_df[q_diff] == 0) |
+            (working_df[t_sum]  == 0) |
+            (working_df[t_diff] == 0)
+        )
+        
+        # Count affected events
+        num_affected_events = mask.sum()
+        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
+
+        # Zero the affected values
+        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+
+
+print("----------------------------------------------------------------------")
+print("----------------- Filter the Tsum values in a gaussian ---------------")
+print("----------------------------------------------------------------------")
+
+for plane in range(1, 5):
+    for strip in range(1, 5):
+        col = f"T{plane}_T_sum_{strip}"
+        series = working_df[col]
+        nonzero = series[series != 0]
+
+        if len(nonzero) < 100:
+            print(f"Skipping {col}: too few entries ({len(nonzero)})")
+            continue
+
+        # Fit Gaussian
+        mu, std = norm.fit(nonzero)
+
+        # Histogram bins and observed density
+        hist_vals, bin_edges = np.histogram(nonzero, bins=200, density=True)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        # Gaussian fit evaluated at bin centers
+        gaussian_vals = norm.pdf(bin_centers, mu, std)
+
+        # R² computation
+        r2_val = r2_score(hist_vals, gaussian_vals)
+        print(f"{col}: μ = {mu:.2f}, σ = {std:.2f}, R² = {r2_val:.4f}")
+
+        # Filtering based on quantiles of the fitted Gaussian
+        q_low, q_high = norm.ppf([0.001, 0.999], loc=mu, scale=std)
+        mask = (series >= q_low) & (series <= q_high)
+        # Apply filter only to nonzero values
+        working_df.loc[~mask & (series != 0), col] = 0.0
+        
+        if create_essential_plots or create_plots:
+        # if create_plots:
+            # Plotting
+            plt.figure(figsize=(6, 4))
+            sns.histplot(nonzero, bins=200, stat="density", kde=False, color='skyblue', label='Data')
+            x = np.linspace(min(bin_centers), max(bin_centers), 500)
+            plt.plot(x, norm.pdf(x, mu, std), 'r--', lw=2, label=f'Gaussian fit\nμ = {mu:.2f}, σ = {std:.2f}')
+            plt.axvline(q_low, color='gray', linestyle='--', alpha=0.6)
+            plt.axvline(q_high, color='gray', linestyle='--', alpha=0.6)
+            plt.title(f"Timing distribution: {col}")
+            plt.xlabel("Time (ns)")
+            plt.ylabel("Density")
+            plt.legend()
+            plt.tight_layout()
+            if save_plots:
+                name_of_file = f'gaussian_timing_{plane}_{strip}'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+            if show_plots:
+                plt.show()
+            plt.close()
+
+
+print("----------------------------------------------------------------------")
+print("---------- Filter if any variable in the strip is 0 (4/3) ------------")
+print("----------------------------------------------------------------------")
+
+# Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
+# put the four variables in that plane, strip and event to 0
+
+total_events = len(working_df)
+
+for plane in range(1, 5):
+    for strip in range(1, 5):
+        q_sum  = f'Q{plane}_Q_sum_{strip}'
+        q_diff = f'Q{plane}_Q_diff_{strip}'
+        t_sum  = f'T{plane}_T_sum_{strip}'
+        t_diff = f'T{plane}_T_diff_{strip}'
+        
+        # Build mask
+        mask = (
+            (working_df[q_sum]  == 0) |
+            (working_df[q_diff] == 0) |
+            (working_df[t_sum]  == 0) |
+            (working_df[t_diff] == 0)
+        )
+        
+        # Count affected events
+        num_affected_events = mask.sum()
+        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
+
+        # Zero the affected values
+        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+
+
+print("----------------------------------------------------------------------")
+print("--------------------- Defining preprocessed_tt -----------------------")
+print("----------------------------------------------------------------------")
+
+def compute_preprocessed_tt(row):
+    name = ''
+    for plane in range(1, 5):
+        this_plane = False
+        for strip in range(1, 5):
+            q_sum_col  = f'Q{plane}_Q_sum_{strip}'
+            q_diff_col = f'Q{plane}_Q_diff_{strip}'
+            t_sum_col  = f'T{plane}_T_sum_{strip}'
+            t_diff_col = f'T{plane}_T_diff_{strip}'
+            
+            if (row[q_sum_col] != 0 and row[q_diff_col] != 0 and
+                row[t_sum_col] != 0 and row[t_diff_col] != 0):
+                this_plane = True
+                break  # One valid strip is enough to consider the plane valid
+        if this_plane:
+            name += str(plane)
+    return int(name) if name else 0  # Return 0 if no plane is valid
+
+# Apply to all rows
+working_df["preprocessed_tt"] = working_df.apply(compute_preprocessed_tt, axis=1)
+
+
+print("----------------------------------------------------------------------")
+print("-------------------- Time window filtering (3/3) ---------------------")
+print("----------------------------------------------------------------------")
+
+# Pre removal of outliers
+spread_results = []
+for preprocessed_tt in sorted(working_df["preprocessed_tt"].unique()):
+    filtered_df = working_df[working_df["preprocessed_tt"] == preprocessed_tt].copy()
+    T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
+    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
+    filtered_df["T_sum_spread"] = t_sum_spread_tt
+    spread_results.append(filtered_df)
+spread_df = pd.concat(spread_results, ignore_index=True)
+
+# if create_plots:
+if create_essential_plots or create_plots:
+    fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
+    axs = axs.flatten()
+    for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
+        subset = spread_df[spread_df["preprocessed_tt"] == tt]
+        v = subset["T_sum_spread"].dropna()
+        v = v[v < coincidence_window_cal_ns * 2]
+        axs[i].hist(v, bins=100, alpha=0.7)
+        axs[i].set_title(f"TT = {tt}")
+        axs[i].set_xlabel("ΔT (ns)")
+        axs[i].set_ylabel("Events")
+        axs[i].axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
+        # Logscale
+        axs[i].set_yscale('log')
+    fig.suptitle("Non filtered. Intra-Event T_sum Spread by preprocessed_tt")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        hist_filename = f'{fig_idx}_tsum_spread_histograms.png'
+        fig_idx += 1
+        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+        plot_list.append(hist_path)
+        fig.savefig(hist_path, format='png')
+    if show_plots: plt.show()
+    plt.close(fig)
+
+# Removal of outliers
+def zero_outlier_tsum(row, threshold=coincidence_window_cal_ns):
+    t_sum_cols = [col for col in row.index if '_T_sum_' in col]
+    t_sum_vals = row[t_sum_cols].copy()
+    nonzero_vals = t_sum_vals[t_sum_vals != 0]
+    if len(nonzero_vals) < 2: return row
+    center = np.mean(nonzero_vals)
+    deviations = np.abs(nonzero_vals - center)
+    outliers = deviations > threshold / 2
+    for col in outliers.index[outliers]: row[col] = 0.0
+    return row
+working_df = working_df.apply(zero_outlier_tsum, axis=1)
+
+# Post removal of outliers
+spread_results = []
+for preprocessed_tt in sorted(working_df["preprocessed_tt"].unique()):
+    filtered_df = working_df[working_df["preprocessed_tt"] == preprocessed_tt].copy()
+    T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
+    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
+    filtered_df["T_sum_spread"] = t_sum_spread_tt
+    spread_results.append(filtered_df)
+spread_df = pd.concat(spread_results, ignore_index=True)
+
+# if create_plots:
+if create_essential_plots or create_plots:
+    fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
+    axs = axs.flatten()
+    for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
+        subset = spread_df[spread_df["preprocessed_tt"] == tt]
+        v = subset["T_sum_spread"].dropna()
+        axs[i].hist(v, bins=100, alpha=0.7)
+        axs[i].set_title(f"TT = {tt}")
+        axs[i].set_xlabel("ΔT (ns)")
+        axs[i].set_ylabel("Events")
+        axs[i].axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
+        axs[i].set_yscale('log')
+    fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by preprocessed_tt")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered.png'
+        fig_idx += 1
+        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+        plot_list.append(hist_path)
+        fig.savefig(hist_path, format='png')
+    if show_plots: plt.show()
+    plt.close(fig)
+
+
+if create_plots:
+# if create_essential_plots or create_plots:
+    # Identify all _T_sum_ columns
+    T_sum_columns = working_df.filter(regex='_T_sum_').columns
+    replaced_count = 0  # Global counter
+
+    for preprocessed_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
+        mask = working_df['preprocessed_tt'] == preprocessed_tt
+        filtered_df = working_df[mask].copy()  # Work on a copy for fitting
+
+        if len(filtered_df) == 0:
+            continue
+
+        # Extract filtered T_sum data
+        t_sum_data = filtered_df[T_sum_columns].values
+        if not np.any(t_sum_data != 0):
+            print(f"[Warning] Skipping Preprocessed TT {preprocessed_tt}: all T_sum values filtered out.")
+            continue
+
+        widths = np.linspace(0, coincidence_window_cal_ns, 20)
+        counts_per_width = []
+        counts_per_width_dev = []
+
+        for w in widths:
+            count_in_window = []
+            for row in t_sum_data:
+                row_no_zeros = row[row != 0]
+                if len(row_no_zeros) == 0:
+                    count_in_window.append(0)
+                    continue
+                stat = np.median(row_no_zeros)  # Or mean
+                lower = stat - w / 2
+                upper = stat + w / 2
+                n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
+                count_in_window.append(n_in_window)
+            counts_per_width.append(np.mean(count_in_window))
+            counts_per_width_dev.append(np.std(count_in_window))
+
+        counts_per_width = np.array(counts_per_width)
+        counts_per_width_dev = np.array(counts_per_width_dev)
+        valid_mask = np.isfinite(counts_per_width) & (counts_per_width > 0)
+        if not np.any(valid_mask):
+            print(f"[Warning] Skipping Preprocessed TT {preprocessed_tt}: no valid window accumulation.")
+            continue
+        counts_per_width_norm = counts_per_width / np.max(counts_per_width)
+        # counts_per_width_norm = counts_per_width
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window', color='blue', s=30)
+        ax.axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
+        ax.set_xlabel("Window width (ns)")
+        ax.set_ylabel("Normalized average # of T_sum values in window")
+        ax.set_title(f"Fraction of hits within stat-centered window vs width (TT = {preprocessed_tt})")
+        ax.grid(True)
+        ax.legend()
+
+        if save_plots:
+            name_of_file = f'stat_window_accumulation_{preprocessed_tt}'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
+
+
+print("----------------------------------------------------------------------")
+print("---------- Filter if any variable in the strip is 0 (5/3) ------------")
+print("----------------------------------------------------------------------")
+
+# Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
+# put the four variables in that plane, strip and event to 0
+
+total_events = len(working_df)
+
+for plane in range(1, 5):
+    for strip in range(1, 5):
+        q_sum  = f'Q{plane}_Q_sum_{strip}'
+        q_diff = f'Q{plane}_Q_diff_{strip}'
+        t_sum  = f'T{plane}_T_sum_{strip}'
+        t_diff = f'T{plane}_T_diff_{strip}'
+        
+        # Build mask
+        mask = (
+            (working_df[q_sum]  == 0) |
+            (working_df[q_diff] == 0) |
+            (working_df[t_sum]  == 0) |
+            (working_df[t_diff] == 0)
+        )
+        
+        # Count affected events
+        num_affected_events = mask.sum()
+        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
+
+        # Zero the affected values
+        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+
+
+print("----------------------------------------------------------------------")
+print("--------------------- Defining posfiltered_tt -----------------------")
+print("----------------------------------------------------------------------")
+
+def compute_posfiltered_tt(row):
+    name = ''
+    for plane in range(1, 5):
+        this_plane = False
+        for strip in range(1, 5):
+            q_sum_col  = f'Q{plane}_Q_sum_{strip}'
+            q_diff_col = f'Q{plane}_Q_diff_{strip}'
+            t_sum_col  = f'T{plane}_T_sum_{strip}'
+            t_diff_col = f'T{plane}_T_diff_{strip}'
+            
+            if (row[q_sum_col] != 0 and row[q_diff_col] != 0 and
+                row[t_sum_col] != 0 and row[t_diff_col] != 0):
+                this_plane = True
+                break  # One valid strip is enough to consider the plane valid
+        if this_plane:
+            name += str(plane)
+    return int(name) if name else 0  # Return 0 if no plane is valid
+
+# Apply to all rows
+working_df["posfiltered_tt"] = working_df.apply(compute_posfiltered_tt, axis=1)
+
+
+print("----------------------------------------------------------------------")
 print("---------------- Binary topology of active strips --------------------")
 print("----------------------------------------------------------------------")
 
@@ -4848,336 +5349,7 @@ if create_plots:
                 if show_plots:
                     plt.show()
                 plt.close()
-
-
-print("----------------------------------------------------------------------")
-print("----------------------- Slewing correction 2/2 -----------------------")
-print("----------------------------------------------------------------------")
-
-if slewing_correction:
-    
-    # if create_essential_plots or create_plots:
-    if create_plots:
-        
-        plt.figure(figsize=(8, 5))
-        plt.hist(slewing_fit_df["r2_score"], bins=20, alpha=0.7)
-        plt.xlabel("R² Score")
-        plt.ylabel("Frequency")
-        plt.title("Histogram of R² Scores from Slewing Fits")
-        plt.grid(True, linestyle='--', alpha=0.5)
-        plt.tight_layout()
-        if save_plots:
-            name_of_file = 'r2_scores'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
-
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-
-        if show_plots: plt.show()
-        plt.close()
-    
-    # Step 1: Select pairs with good fit quality
-    r2_threshold = 0.2
-    good_fits_df = slewing_fit_df[slewing_fit_df["r2_score"] > r2_threshold].copy()
-
-    # Store good fit keys
-    good_fit_keys = [
-        ((row["plane1"], row["strip1"]), (row["plane2"], row["strip2"]))
-        for _, row in good_fits_df.iterrows()
-    ]
-
-    # Step 2: Process event-by-event and apply correction collectively
-    tsum_cols = [col for col in working_df.columns if col.startswith('T') and 'T_sum' in col and '_final' not in col]
-    qsum_cols = [col for col in working_df.columns if col.startswith('Q') and 'Q_sum' in col and '_final' not in col]
-    ps_labels = [(int(col[1]), int(col[-1])) for col in tsum_cols]
-
-    # Backup original data for plotting comparison later
-    working_df_uncorrected = working_df[tsum_cols].copy()
-
-    # Create dictionary of valid fit parameters for fast lookup
-    fit_dict = {}
-
-    for _, row in slewing_fit_df.iterrows():
-        if row['r2_score'] > r2_threshold:
-            key = (int(row['plane1']), int(row['strip1']), int(row['plane2']), int(row['strip2']))
-            fit_dict[key] = (row['a_semisum'], row['b_semidiff'], row['c_offset'])
-
-
-    # Apply slewing correction event-by-event
-    for idx, row in working_df.iterrows():
-        # Identify strips with valid T and Q in this event
-        present_ps = [(p, s) for p, s in ps_labels if row.get(f"T{p}_T_sum_{s}", 0) != 0 and row.get(f"Q{p}_Q_sum_{s}", 0) != 0]
-        
-        if len(present_ps) < 2:
-            continue
-
-        # Find which of the good fit pairs are present in this event
-        valid_pairs_in_event = []
-        for (ps1, ps2) in good_fit_keys:
-            if ps1 in present_ps and ps2 in present_ps:
-                valid_pairs_in_event.append((ps1, ps2))
-
-        if not valid_pairs_in_event:
-            continue
-
-        # Store multiple corrected tsum estimates
-        corrected_deltas_by_ps = {ps: [] for ps in present_ps}
-
-        # Loop over all valid pairs and apply correction symmetrically
-        for (p1s, p2s) in valid_pairs_in_event:
-            p1, s1 = p1s
-            p2, s2 = p2s
-
-            t1 = row[f"T{int(p1)}_T_sum_{int(s1)}"]
-            t2 = row[f"T{int(p2)}_T_sum_{int(s2)}"]
-            q1 = row[f"Q{int(p1)}_Q_sum_{int(s1)}"]
-            q2 = row[f"Q{int(p2)}_Q_sum_{int(s2)}"]
-
-            key_forward = (p1, s1, p2, s2)
-            key_reverse = (p2, s2, p1, s1)
-
-            if key_forward in fit_dict:
-                a, b, c = fit_dict[key_forward]
-                delta_measured = t1 - t2
-                delta_q = 0.5 * (q1 - q2)
-                correction = a * 0.5 * (q1 + q2) + b * delta_q
-                corrected_diff = delta_measured - correction
-                # Reconstruct both
-                corrected_deltas_by_ps[(p1, s1)].append(corrected_diff / 2)
-                corrected_deltas_by_ps[(p2, s2)].append(-corrected_diff / 2)
-
-            elif key_reverse in fit_dict:
-                a, b, c = fit_dict[key_reverse]
-                delta_measured = t2 - t1
-                delta_q = 0.5 * (q2 - q1)
-                correction = a * 0.5 * (q2 + q1) + b * delta_q
-                corrected_diff = delta_measured - correction
-                corrected_deltas_by_ps[(p2, s2)].append(corrected_diff / 2)
-                corrected_deltas_by_ps[(p1, s1)].append(-corrected_diff / 2)
-
-        # Compute average corrected value for each T_sum and apply
-        mean_correction = np.mean([np.mean(v) for v in corrected_deltas_by_ps.values() if v])
-        for (p, s), values in corrected_deltas_by_ps.items():
-            if values:
-                corrected_value = mean_correction + np.mean(values)
-                working_df.at[idx, f"T{p}_T_sum_{s}"] = corrected_value
-
-
-print("----------------------------------------------------------------------")
-print("--------------------- Defining preprocessed_tt -----------------------")
-print("----------------------------------------------------------------------")
-
-def compute_preprocessed_tt(row):
-    name = ''
-    for plane in range(1, 5):
-        this_plane = False
-        for strip in range(1, 5):
-            q_sum_col  = f'Q{plane}_Q_sum_{strip}'
-            q_diff_col = f'Q{plane}_Q_diff_{strip}'
-            t_sum_col  = f'T{plane}_T_sum_{strip}'
-            t_diff_col = f'T{plane}_T_diff_{strip}'
-            
-            if (row[q_sum_col] != 0 and row[q_diff_col] != 0 and
-                row[t_sum_col] != 0 and row[t_diff_col] != 0):
-                this_plane = True
-                break  # One valid strip is enough to consider the plane valid
-        if this_plane:
-            name += str(plane)
-    return int(name) if name else 0  # Return 0 if no plane is valid
-
-# Apply to all rows
-working_df["preprocessed_tt"] = working_df.apply(compute_preprocessed_tt, axis=1)
-
-
-print("----------------------------------------------------------------------")
-print("-------------------- Time window filtering (3/3) ---------------------")
-print("----------------------------------------------------------------------")
-
-# Pre removal of outliers
-spread_results = []
-for preprocessed_tt in sorted(working_df["preprocessed_tt"].unique()):
-    filtered_df = working_df[working_df["preprocessed_tt"] == preprocessed_tt].copy()
-    T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
-    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
-    filtered_df["T_sum_spread"] = t_sum_spread_tt
-    spread_results.append(filtered_df)
-spread_df = pd.concat(spread_results, ignore_index=True)
-
-# if create_plots:
-if create_essential_plots or create_plots:
-    fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
-    axs = axs.flatten()
-    for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
-        subset = spread_df[spread_df["preprocessed_tt"] == tt]
-        v = subset["T_sum_spread"].dropna()
-        v = v[v < coincidence_window_cal_ns * 2]
-        axs[i].hist(v, bins=100, alpha=0.7)
-        axs[i].set_title(f"TT = {tt}")
-        axs[i].set_xlabel("ΔT (ns)")
-        axs[i].set_ylabel("Events")
-        axs[i].axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
-        # Logscale
-        axs[i].set_yscale('log')
-    fig.suptitle("Non filtered. Intra-Event T_sum Spread by preprocessed_tt")
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
-    if save_plots:
-        hist_filename = f'{fig_idx}_tsum_spread_histograms.png'
-        fig_idx += 1
-        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
-        plot_list.append(hist_path)
-        fig.savefig(hist_path, format='png')
-    if show_plots: plt.show()
-    plt.close(fig)
-
-# Removal of outliers
-def zero_outlier_tsum(row, threshold=coincidence_window_cal_ns):
-    t_sum_cols = [col for col in row.index if '_T_sum_' in col]
-    t_sum_vals = row[t_sum_cols].copy()
-    nonzero_vals = t_sum_vals[t_sum_vals != 0]
-    if len(nonzero_vals) < 2: return row
-    center = np.median(nonzero_vals)
-    deviations = np.abs(nonzero_vals - center)
-    outliers = deviations > threshold / 2
-    for col in outliers.index[outliers]: row[col] = 0.0
-    return row
-working_df = working_df.apply(zero_outlier_tsum, axis=1)
-
-# Post removal of outliers
-spread_results = []
-for preprocessed_tt in sorted(working_df["preprocessed_tt"].unique()):
-    filtered_df = working_df[working_df["preprocessed_tt"] == preprocessed_tt].copy()
-    T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
-    t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
-    filtered_df["T_sum_spread"] = t_sum_spread_tt
-    spread_results.append(filtered_df)
-spread_df = pd.concat(spread_results, ignore_index=True)
-
-# if create_plots:
-if create_essential_plots or create_plots:
-    fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
-    axs = axs.flatten()
-    for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
-        subset = spread_df[spread_df["preprocessed_tt"] == tt]
-        v = subset["T_sum_spread"].dropna()
-        axs[i].hist(v, bins=100, alpha=0.7)
-        axs[i].set_title(f"TT = {tt}")
-        axs[i].set_xlabel("ΔT (ns)")
-        axs[i].set_ylabel("Events")
-        axs[i].axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
-        axs[i].set_yscale('log')
-    fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by preprocessed_tt")
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
-    if save_plots:
-        hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered.png'
-        fig_idx += 1
-        hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
-        plot_list.append(hist_path)
-        fig.savefig(hist_path, format='png')
-    if show_plots: plt.show()
-    plt.close(fig)
-
-
-if create_plots:
-# if create_essential_plots or create_plots:
-    # Identify all _T_sum_ columns
-    T_sum_columns = working_df.filter(regex='_T_sum_').columns
-    replaced_count = 0  # Global counter
-
-    for preprocessed_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
-        mask = working_df['preprocessed_tt'] == preprocessed_tt
-        filtered_df = working_df[mask].copy()  # Work on a copy for fitting
-
-        if len(filtered_df) == 0:
-            continue
-
-        # Extract filtered T_sum data
-        t_sum_data = filtered_df[T_sum_columns].values
-        if not np.any(t_sum_data != 0):
-            print(f"[Warning] Skipping Preprocessed TT {preprocessed_tt}: all T_sum values filtered out.")
-            continue
-
-        widths = np.linspace(0, coincidence_window_cal_ns, 20)
-        counts_per_width = []
-        counts_per_width_dev = []
-
-        for w in widths:
-            count_in_window = []
-            for row in t_sum_data:
-                row_no_zeros = row[row != 0]
-                if len(row_no_zeros) == 0:
-                    count_in_window.append(0)
-                    continue
-                stat = np.median(row_no_zeros)  # Or mean
-                lower = stat - w / 2
-                upper = stat + w / 2
-                n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
-                count_in_window.append(n_in_window)
-            counts_per_width.append(np.mean(count_in_window))
-            counts_per_width_dev.append(np.std(count_in_window))
-
-        counts_per_width = np.array(counts_per_width)
-        counts_per_width_dev = np.array(counts_per_width_dev)
-        valid_mask = np.isfinite(counts_per_width) & (counts_per_width > 0)
-        if not np.any(valid_mask):
-            print(f"[Warning] Skipping Preprocessed TT {preprocessed_tt}: no valid window accumulation.")
-            continue
-        counts_per_width_norm = counts_per_width / np.max(counts_per_width)
-        # counts_per_width_norm = counts_per_width
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window', color='blue', s=30)
-        ax.axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
-        ax.set_xlabel("Window width (ns)")
-        ax.set_ylabel("Normalized average # of T_sum values in window")
-        ax.set_title(f"Fraction of hits within stat-centered window vs width (TT = {preprocessed_tt})")
-        ax.grid(True)
-        ax.legend()
-
-        if save_plots:
-            name_of_file = f'stat_window_accumulation_{preprocessed_tt}'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-        if show_plots:
-            plt.show()
-        plt.close()
-
-
-print("----------------------------------------------------------------------")
-print("---------- Filter if any variable in the strip is 0 (3/3) ------------")
-print("----------------------------------------------------------------------")
-
-# Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
-# put the four variables in that plane, strip and event to 0
-
-total_events = len(working_df)
-
-for plane in range(1, 5):
-    for strip in range(1, 5):
-        q_sum  = f'Q{plane}_Q_sum_{strip}'
-        q_diff = f'Q{plane}_Q_diff_{strip}'
-        t_sum  = f'T{plane}_T_sum_{strip}'
-        t_diff = f'T{plane}_T_diff_{strip}'
-        
-        # Build mask
-        mask = (
-            (working_df[q_sum]  == 0) |
-            (working_df[q_diff] == 0) |
-            (working_df[t_sum]  == 0) |
-            (working_df[t_diff] == 0)
-        )
-        
-        # Count affected events
-        num_affected_events = mask.sum()
-        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
-
-        # Zero the affected values
-        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
-
+                
 
 print("----------------------------------------------------------------------")
 print("----------------------- Y position calculation -----------------------")
@@ -5276,8 +5448,8 @@ if y_new_method:
 
 if create_essential_plots or create_plots:
 # if create_plots:
-    for preprocessed_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
-        mask = working_df['preprocessed_tt'] == preprocessed_tt
+    for posfiltered_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
+        mask = working_df['posfiltered_tt'] == posfiltered_tt
         filtered_df = working_df[mask].copy()  # Work on a copy for fitting
     
         plt.figure(figsize=(12, 8))
@@ -5292,10 +5464,10 @@ if create_essential_plots or create_plots:
             plt.ylabel('Counts')
             plt.grid(True)
         
-        plt.suptitle(f'Y Position Distribution for preprocessed_tt = {preprocessed_tt}', fontsize=16)
+        plt.suptitle(f'Y Position Distribution for posfiltered_tt = {posfiltered_tt}', fontsize=16)
         plt.tight_layout()
         if save_plots:
-            name_of_file = f'Y_{preprocessed_tt}'
+            name_of_file = f'Y_{posfiltered_tt}'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -6396,7 +6568,7 @@ if time_window_fitting:
             print(f"\n[Warning] Skipping definitive_tt {definitive_tt}: no non-zero T_sum data.")
             continue
         
-        widths = np.linspace(0, coincidence_window_cal_ns, 60)  # Scan range of window widths in ns
+        widths = np.linspace(0, 2 * coincidence_window_cal_ns, 60)  # Scan range of window widths in ns
         
         counts_per_width = []
         counts_per_width_dev = []
@@ -6423,12 +6595,12 @@ if time_window_fitting:
         counts_per_width_norm = counts_per_width / np.max(counts_per_width)
 
         # Define model function: signal (logistic) + linear background
-        # def signal_plus_background(w, S, w0, tau, B):
-        #     return S / (1 + np.exp(-(w - w0) / tau)) + B * w
+        def signal_plus_background(w, S, w0, tau, B):
+            return S / (1 + np.exp(-(w - w0) / tau)) + B * w
         
-        from scipy.special import erf
-        def signal_plus_background(w, S, w0, sigma, B):
-            return 0.5 * S * (1 + erf((w - w0) / (np.sqrt(2) * sigma))) + B * w
+        # from scipy.special import erf
+        # def signal_plus_background(w, S, w0, sigma, B):
+        #     return 0.5 * S * (1 + erf((w - w0) / (np.sqrt(2) * sigma))) + B * w
 
         p0 = [1.0, 1.0, 0.5, 0.02]
         
