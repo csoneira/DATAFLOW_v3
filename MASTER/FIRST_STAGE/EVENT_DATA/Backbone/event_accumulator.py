@@ -1,3 +1,5 @@
+#%%
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -7,32 +9,46 @@ Created on Thu Jun 20 09:15:33 2024
 @author: csoneira@ucm.es
 """
 
-print("\n\n")
-print("              _-o#&&*''''?d:>b\\_")
-print("          _o/\"`''  '',, dMF9MMMMMHo_")
-print("       .o&#'        `\"MbHMMMMMMMMMMMHo.")
-print("     .o\"\" '         vodM*$&&HMMMMMMMMMM?.")
-print("    ,'              $M&ood,~'`(&##MMMMMMH\\")
-print("   /               ,MMMMMMM#b?#bobMMMMHMMML")
-print("  &              ?MMMMMMMMMMMMMMMMM7MMM$R*Hk")
-print(" ?$.            :MMMMMMMMMMMMMMMMMMM/HMMM|`*L")
-print("|               |MMMMMMMMMMMMMMMMMMMMbMH'   T,")
-print("$H#:            `*MMMMMMMMMMMMMMMMMMMMb#}'  `?")
-print("]MMH#             \"\"*\"\"\"\"*#MMMMMMMMMMMMM'    -")
-print("MMMMMb_                   |MMMMMMMMMMMP'     :")
-print("HMMMMMMMHo                 `MMMMMMMMMT       .")
-print("?MMMMMMMMP                  9MMMMMMMM}       -")
-print("-?MMMMMMM                  |MMMMMMMMM?,d-    '")
-print(" :|MMMMMM-                 `MMMMMMMT .M|.   :")
-print("  .9MMM[                    &MMMMM*' `'    .")
-print("   :9MMk                    `MMM#\"        -")
-print("     &M}                     `          .-")
-print("      `&.                             .")
-print("        `~,   .                     ./")
-print("            . _                  .-")
-print("              '`--._,dd###pp=\"\"'")
-print("\n\n")
+# print("\n\n")
+# print("              _-o#&&*''''?d:>b\\_")
+# print("          _o/\"`''  '',, dMF9MMMMMHo_")
+# print("       .o&#'        `\"MbHMMMMMMMMMMMHo.")
+# print("     .o\"\" '         vodM*$&&HMMMMMMMMMM?.")
+# print("    ,'              $M&ood,~'`(&##MMMMMMH\\")
+# print("   /               ,MMMMMMM#b?#bobMMMMHMMML")
+# print("  &              ?MMMMMMMMMMMMMMMMM7MMM$R*Hk")
+# print(" ?$.            :MMMMMMMMMMMMMMMMMMM/HMMM|`*L")
+# print("|               |MMMMMMMMMMMMMMMMMMMMbMH'   T,")
+# print("$H#:            `*MMMMMMMMMMMMMMMMMMMMb#}'  `?")
+# print("]MMH#             \"\"*\"\"\"\"*#MMMMMMMMMMMMM'    -")
+# print("MMMMMb_                   |MMMMMMMMMMMP'     :")
+# print("HMMMMMMMHo                 `MMMMMMMMMT       .")
+# print("?MMMMMMMMP                  9MMMMMMMM}       -")
+# print("-?MMMMMMM                  |MMMMMMMMM?,d-    '")
+# print(" :|MMMMMM-                 `MMMMMMMT .M|.   :")
+# print("  .9MMM[                    &MMMMM*' `'    .")
+# print("   :9MMk                    `MMM#\"        -")
+# print("     &M}                     `          .-")
+# print("      `&.                             .")
+# print("        `~,   .                     ./")
+# print("            . _                  .-")
+# print("              '`--._,dd###pp=\"\"'")
+# print("\n\n")
 
+print("\n\n")
+print("__| |____________________________________________________________________________________________________| |__")
+print("__   ____________________________________________________________________________________________________   __")
+print("  | |                                                                                                    | |  ")
+print("  | |                      _                                           _       _                         | |  ")
+print("  | |  _____   _____ _ __ | |_     __ _  ___ ___ _   _ _ __ ___  _   _| | __ _| |_ ___  _ __ _ __  _   _ | |  ")
+print("  | | / _ \\ \\ / / _ \\ '_ \\| __|   / _` |/ __/ __| | | | '_ ` _ \\| | | | |/ _` | __/ _ \\| '__| '_ \\| | | || |  ")
+print("  | ||  __/\\ V /  __/ | | | |_   | (_| | (_| (__| |_| | | | | | | |_| | | (_| | || (_) | |_ | |_) | |_| || |  ")
+print("  | | \\___| \\_/ \\___|_| |_|\\__|___\\__,_|\\___\\___|\\__,_|_| |_| |_|\\__,_|_|\\__,_|\\__\\___/|_(_)| .__/ \\__, || |  ")
+print("  | |                        |_____|                                                        |_|    |___/ | |  ")
+print("__| |____________________________________________________________________________________________________| |__")
+print("__   ____________________________________________________________________________________________________   __")
+print("  | |                                                                                                    | |  ")
+print("\n\n")
 
 import numpy as np
 import pandas as pd
@@ -68,15 +84,27 @@ print("----------------------------------------------------------------------")
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
 
-# Check if the script has an argument
-if len(sys.argv) < 2:
-    print("Error: No station provided.")
-    print("Usage: python3 script.py <station>")
-    sys.exit(1)
+run_jupyter_notebook = True
+if run_jupyter_notebook:
+    station = "2"
+else:
+    # Check if the script has an argument
+    if len(sys.argv) < 2:
+        print("Error: No station provided.")
+        print("Usage: python3 script.py <station>")
+        sys.exit(1)
 
-# Get the station argument
-station = sys.argv[1]
+    # Get the station argument
+    station = sys.argv[1]
+
 print(f"Station: {station}")
+
+if len(sys.argv) == 3:
+    user_file_path = sys.argv[2]
+    user_file_selection = True
+    print("User provided file path:", user_file_path)
+else:
+    user_file_selection = False
 
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
@@ -86,7 +114,8 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 # -----------------------------------------------------------------------------
 
 remove_outliers = True
-create_plots = True
+create_plots = False
+create_essential_plots = True
 save_plots = True
 create_pdf = True
 force_replacement = True  # Creates a new datafile even if there is already one that looks complete
@@ -96,9 +125,9 @@ caye_high_mid_limit_angle = 15
 hans_high_mid_limit_angle = 10
 hans_low_mid_limit_angle = 40
 
-polya_fit = True
+polya_fit = False
 real_strip_case_study = False
-multiplicity_calculations = True
+multiplicity_calculations = False
 crosstalk_probability = True
 georgys = False
 
@@ -284,96 +313,100 @@ unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
 completed_files = os.listdir(base_directories["completed_directory"])
 
-if last_file_test:
-    if unprocessed_files:
-        unprocessed_files = sorted(unprocessed_files)
-        file_name = unprocessed_files[-1]
-        
-        unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        
-        print(f"Processing the last file in UNPROCESSED: {unprocessed_file_path}")
-        print(f"Moving '{file_name}' to PROCESSING...")
-        shutil.move(unprocessed_file_path, processing_file_path)
-        print(f"File moved to PROCESSING: {processing_file_path}")
-
-    elif processing_files:
-        processing_files = sorted(processing_files)
-        file_name = processing_files[-1]
-        
-        # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        
-        print(f"Processing the last file in PROCESSING: {processing_file_path}")
-        error_file_path = os.path.join(base_directories["error_directory"], file_name)
-        print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
-        shutil.move(processing_file_path, error_file_path)
-        processing_file_path = error_file_path
-        print(f"File moved to ERROR: {processing_file_path}")
-
-    elif completed_files:
-        completed_files = sorted(completed_files)
-        file_name = completed_files[-1]
-        
-        # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        
-        print(f"Reprocessing the last file in COMPLETED: {completed_file_path}")
-        print(f"Moving '{completed_file_path}' to PROCESSING...")
-        shutil.move(completed_file_path, processing_file_path)
-        print(f"File moved to PROCESSING: {processing_file_path}")
-
-    else:
-        sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
-
+if user_file_selection:
+    processing_file_path = user_file_path
+    file_name = os.path.basename(user_file_path)
 else:
-    if unprocessed_files:
-        print("Shuffling the files in UNPROCESSED...")
-        random.shuffle(unprocessed_files)
-        for file_name in unprocessed_files:
+    if last_file_test:
+        if unprocessed_files:
+            unprocessed_files = sorted(unprocessed_files)
+            file_name = unprocessed_files[-1]
+            
             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
+            
+            print(f"Processing the last file in UNPROCESSED: {unprocessed_file_path}")
             print(f"Moving '{file_name}' to PROCESSING...")
             shutil.move(unprocessed_file_path, processing_file_path)
             print(f"File moved to PROCESSING: {processing_file_path}")
-            break
 
-    elif processing_files:
-        print("Shuffling the files in PROCESSING...")
-        random.shuffle(processing_files)
-        for file_name in processing_files:
+        elif processing_files:
+            processing_files = sorted(processing_files)
+            file_name = processing_files[-1]
+            
             # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
-            print(f"Processing a file in PROCESSING: {processing_file_path}")
+            
+            print(f"Processing the last file in PROCESSING: {processing_file_path}")
             error_file_path = os.path.join(base_directories["error_directory"], file_name)
             print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
             shutil.move(processing_file_path, error_file_path)
             processing_file_path = error_file_path
             print(f"File moved to ERROR: {processing_file_path}")
-            break
 
-    elif completed_files:
-        print("Shuffling the files in COMPLETED...")
-        random.shuffle(completed_files)
-        for file_name in completed_files:
+        elif completed_files:
+            completed_files = sorted(completed_files)
+            file_name = completed_files[-1]
+            
             # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-
-            print(f"Moving '{file_name}' to PROCESSING...")
+            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+            
+            print(f"Reprocessing the last file in COMPLETED: {completed_file_path}")
+            print(f"Moving '{completed_file_path}' to PROCESSING...")
             shutil.move(completed_file_path, processing_file_path)
             print(f"File moved to PROCESSING: {processing_file_path}")
-            break
+
+        else:
+            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
 
     else:
-        sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+        if unprocessed_files:
+            print("Shuffling the files in UNPROCESSED...")
+            random.shuffle(unprocessed_files)
+            for file_name in unprocessed_files:
+                unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+                print(f"Moving '{file_name}' to PROCESSING...")
+                shutil.move(unprocessed_file_path, processing_file_path)
+                print(f"File moved to PROCESSING: {processing_file_path}")
+                break
+
+        elif processing_files:
+            print("Shuffling the files in PROCESSING...")
+            random.shuffle(processing_files)
+            for file_name in processing_files:
+                # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+                print(f"Processing a file in PROCESSING: {processing_file_path}")
+                error_file_path = os.path.join(base_directories["error_directory"], file_name)
+                print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
+                shutil.move(processing_file_path, error_file_path)
+                processing_file_path = error_file_path
+                print(f"File moved to ERROR: {processing_file_path}")
+                break
+
+        elif completed_files:
+            print("Shuffling the files in COMPLETED...")
+            random.shuffle(completed_files)
+            for file_name in completed_files:
+                # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+
+                print(f"Moving '{file_name}' to PROCESSING...")
+                shutil.move(completed_file_path, processing_file_path)
+                print(f"File moved to PROCESSING: {processing_file_path}")
+                break
+
+        else:
+            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
 
 # This is for all cases
 file_path = processing_file_path
@@ -528,6 +561,7 @@ for col in df.columns:
         new_col = col.replace("Q_M", "Q_P")
         df.rename(columns={col: new_col}, inplace=True)
 
+
 df['new_x'] = ( df['x'] + df['alt_x'] ) / 2
 df['new_y'] = ( df['y'] + df['alt_y'] ) / 2
 df['new_theta'] = ( df['theta'] + df['alt_theta'] ) / 2
@@ -535,228 +569,215 @@ df['new_phi'] = ( df['phi'] + df['alt_phi'] ) / 2
 df['new_s'] = ( df['s'] + df['alt_s'] ) / 2
 df['new_th_chi'] = ( df['th_chi'] + df['alt_th_chi'] ) / 2
 
+#%%
+
+show_plots = True
+
+def compute_definitive_tt(row):
+    name = ''
+    for plane in range(1, 5):
+        this_plane = False
+        for strip in range(1, 5):
+            q_sum_col  = f'Q_P{plane}s{strip}'
+            
+            if (row[q_sum_col] != 0):
+                this_plane = True
+        
+        if this_plane:
+            name += str(plane)
+            
+    return int(name) if name else 0  # Return 0 if no plane is valid
+
+# ----------------------------------------------------------------------------------------
+
+print("----------------------------------------------------------------------")
+print("------------------- Efficiency respect the charge --------------------")
+print("----------------------------------------------------------------------")
+
+def compute_angular_efficiencies(df_input, filter_value, bins, bin_centers, tt_combos, unique_tt_per_col, blurring_sigma=2):
+    df_filtered = df_input.copy()
+
+    # --- Apply filter to all Q_Pxsj (not Q_P1 etc.) ---
+    for col in df_filtered.columns:
+        if col.startswith("Q_P") and "s" in col:
+            df_filtered[col] = np.where(df_filtered[col] > filter_value, df_filtered[col], 0)
+
+    # --- Recompute Q_P1..4 after thresholding ---
+    for plane in range(1, 5):
+        q_sum = np.zeros(len(df_filtered), dtype=float)
+        for strip in range(1, 5):
+            col = f"Q_P{plane}s{strip}"
+            if col in df_filtered.columns:
+                q_sum += df_filtered[col].values
+        df_filtered[f"Q_P{plane}"] = q_sum
+
+    # --- Compute processed_tt again from filtered Q_Pxsj ---
+    df_filtered["processed_tt"] = df_filtered.apply(compute_definitive_tt, axis=1)
+
+    # --- Compute subdetector labels ---
+    df_filtered["subdetector_123_tt"] = df_filtered["processed_tt"].map(map_123)
+    df_filtered["subdetector_234_tt"] = df_filtered["processed_tt"].map(map_234)
+    df_filtered["subdetector_1234_tt"] = df_filtered["processed_tt"]
+
+    # --- Count θ entries ---
+    counts_per_tt = {}
+    for col, tt_set in unique_tt_per_col.items():
+        for tt in tt_set:
+            df_tt = df_filtered[df_filtered[col] == int(tt)]
+            theta_vals = df_tt['new_theta'].dropna()
+            print(f"[DEBUG] filter={filter_value:.1f}, col={col}, tt={tt}, entries={len(theta_vals)}")
+            if len(theta_vals) < 10:
+                continue
+            counts, _ = np.histogram(theta_vals, bins=bins)
+            counts = gaussian_filter1d(counts, sigma=blurring_sigma, mode='nearest')
+            counts_per_tt[(col, tt)] = counts
+
+    # --- Compute efficiencies ---
+    results = []
+    for num_tt, den_tt, col, label, color in tt_combos:
+        n_num = counts_per_tt.get((col, num_tt), np.zeros(len(bin_centers), dtype=float))
+        n_den = counts_per_tt.get((col, den_tt), np.zeros(len(bin_centers), dtype=float))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            eff = np.divide(n_num, n_num + n_den)
+            eff[np.isnan(eff)] = 0
+            err = np.sqrt(np.divide(
+                n_num * n_den,
+                (n_num + n_den)**3,
+                out=np.zeros_like(n_num, dtype=float),
+                where=(n_num + n_den) > 0
+            ))
+
+        results.append((eff, err, label, color))
+    return results
+
+
+# --- Setup parameters ---
+nbins = 20
+right = np.pi / 3
+bins = np.linspace(0, right, nbins)
+bin_centers = 0.5 * (bins[:-1] + bins[1:])
+
+# Subdetector mappings
+map_123 = {1234: 123, 123: 123, 234: 234, 124: 12, 134: 13, 12: 12, 23: 23, 34: 3, 13: 13, 24: 2, 14: 1}
+map_234 = {1234: 234, 123: 23, 234: 234, 124: 24, 134: 34, 12: 2, 23: 23, 34: 34, 13: 3, 24: 24, 14: 4}
+
+df['subdetector_123_tt'] = df['processed_tt'].map(map_123)
+df['subdetector_234_tt'] = df['processed_tt'].map(map_234)
+df['subdetector_1234_tt'] = df['processed_tt']
+
+# TT efficiency configurations
+tt_combos = [
+    ('1234', '134', 'subdetector_1234_tt', r'3-plane eff$_2$ $= \frac{1234}{134 + 1234}$', 'blue'),
+    ('123',  '13',  'subdetector_123_tt',  r'2-plane eff$_2$ $= \frac{123}{13 + 123}$',     'red'),
+    ('1234', '124', 'subdetector_1234_tt', r'3-plane eff$_3$ $= \frac{1234}{124 + 1234}$', 'green'),
+    ('234',  '24',  'subdetector_234_tt',  r'2-plane eff$_3$ $= \frac{234}{24 + 234}$',     'orange'),
+]
+
+# Required TT values
+unique_tt_per_col = {}
+for num, den, col, _, _ in tt_combos:
+    unique_tt_per_col.setdefault(col, set()).update([num, den])
+
+#%%
+
+# --- Compute and store efficiency curves ---
+eff_curves_by_combo = {label: [] for _, _, _, label, _ in tt_combos}
+filter_values = np.linspace(0, 8, 5)
+
+for fval in filter_values:
+    results = compute_angular_efficiencies(df.copy(), fval, bins, bin_centers, tt_combos, unique_tt_per_col)
+    for (eff, err, label, color) in results:
+        eff_curves_by_combo[label].append((fval, eff, err))
+
+#%%
+
+fig, axs = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
+axs = axs.flatten()
+
+for idx, (label, curves) in enumerate(eff_curves_by_combo.items()):
+    ax = axs[idx]
+    for fval, eff, err in curves:
+        ax.plot(bin_centers, eff, label=f'Thresh = {fval:.1f}')
+        ax.fill_between(bin_centers, eff - err, eff + err, alpha=0.2)
+
+    ax.set_xlim(0, right)
+    ax.set_ylim(0.8, 1)
+    ax.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+    ax.set_ylabel('Efficiency')
+    ax.set_title(label, fontsize=11)
+    ax.grid(True)
+    ax.legend(fontsize='x-small')
+
+# Hide unused axes if fewer than 4 curves
+for j in range(len(eff_curves_by_combo), 4):
+    fig.delaxes(axs[j])
+
+fig.suptitle('Angular Efficiency vs. Threshold', fontsize=14)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+if save_plots:
+    filename = f'{fig_idx}_eff_vs_theta_2x2_grid.png'
+    fig_idx += 1
+    path = os.path.join(base_directories["figure_directory"], filename)
+    plot_list.append(path)
+    plt.savefig(path)
+
+if show_plots:
+    plt.show()
+plt.close()
+
+# %%
+
+fig, axs = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
+axs = axs.flatten()
+
+theta0_idx = np.argmin(np.abs(bin_centers - 0))  # Closest bin center to θ = 0
+
+for idx, (label, curves) in enumerate(eff_curves_by_combo.items()):
+    ax = axs[idx]
+    x_vals = []
+    y_vals = []
+    y_errs = []
+
+    for fval, eff, err in curves:
+        x_vals.append(fval)
+        y_vals.append(eff[theta0_idx])
+        y_errs.append(err[theta0_idx])
+
+    ax.fill_between(x_vals, np.array(y_vals) - np.array(y_errs), np.array(y_vals) + np.array(y_errs), alpha=0.3)
+    ax.plot(x_vals, y_vals, 'o-', label=f'{label}')
+    ax.set_xlabel('Charge Threshold')
+    ax.set_ylabel(r'Efficiency at $\theta = 0$')
+    ax.set_title(label, fontsize=11)
+    ax.grid(True)
+    ax.set_ylim(0.8, 1)
+
+# Hide unused axes if fewer than 4 labels
+for j in range(len(eff_curves_by_combo), 4):
+    fig.delaxes(axs[j])
+
+fig.suptitle(r'Efficiency at $\theta = 0$ vs. Charge Threshold', fontsize=14)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+if save_plots:
+    filename = f'{fig_idx}_eff_theta0_vs_threshold.png'
+    fig_idx += 1
+    path = os.path.join(base_directories["figure_directory"], filename)
+    plot_list.append(path)
+    plt.savefig(path)
+
+if show_plots:
+    plt.show()
+plt.close()
+
+
+#%%
+
 # Print all the column names of df
 print("Columns in the dataframe:")
 for col in df.columns:
     print(f"- {col}")
-    
 
-print(df["processed_tt"])
-
-
-# print("----------------------------------------------------------------------")
-# print("-------------------- Efficiency respect the angle --------------------")
-# print("----------------------------------------------------------------------")
-
-# eff_vs_angle = True
-# if eff_vs_angle:
-    
-#     nbins = 20
-#     right = np.pi/3
-#     print("Calculating angular efficiencies...")
-    
-#     # Three plane cases ---------------------------------------------------------------------
-    
-#     df_filtered = df.copy()
-#     bins = np.linspace(0, right, nbins)
-#     bin_centers = 0.5 * (bins[:-1] + bins[1:])
-
-#     # Compute histograms for relevant TT types
-#     counts_per_tt = {}
-#     for tt_val in ['1234', '134', '124']:
-#         df_tt = df_filtered[df_filtered['processed_tt'] == int(tt_val)]
-#         theta_vals = df_tt['new_theta'].dropna()
-#         if len(theta_vals) < 10:
-#             continue
-#         counts, _ = np.histogram(theta_vals, bins=bins)
-#         counts_per_tt[tt_val] = counts
-
-#     # Extract counts and ensure zero arrays if missing
-#     n_1234 = counts_per_tt.get('1234', np.zeros(len(bin_centers)))
-#     n_134  = counts_per_tt.get('134',  np.zeros(len(bin_centers)))
-#     n_124  = counts_per_tt.get('124',  np.zeros(len(bin_centers)))
-
-#     # Compute efficiencies safely
-#     with np.errstate(divide='ignore', invalid='ignore'):
-#         eff2 = np.divide(n_1234, n_134 + n_1234)
-#         eff3 = np.divide(n_1234, n_124 + n_1234)
-#         eff2[np.isnan(eff2)] = 0
-#         eff3[np.isnan(eff3)] = 0
-
-#     print("Efficiency calculations complete.")
-
-#     # =======================
-#     # PLOTTING SECTION
-#     # =======================
-#     if create_plots or create_essential_plots:
-
-#         # Plot raw counts
-#         fig_counts, ax_counts = plt.subplots(figsize=(7, 5))
-#         colors = plt.cm.tab10.colors
-
-#         for i, tt_val in enumerate(['1234', '134', '124']):
-#             if tt_val in counts_per_tt:
-#                 ax_counts.hist(bin_centers, bins=bins, weights=counts_per_tt[tt_val],
-#                                histtype='step', linewidth=1,
-#                                color=colors[i % len(colors)], label=tt_val)
-
-#         ax_counts.set_xlim(0, right)
-#         ax_counts.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
-#         ax_counts.set_ylabel('Counts')
-#         ax_counts.set_title(r'Zoomed $\theta_{\mathrm{new}}$ Distributions')
-#         ax_counts.grid(True)
-#         ax_counts.legend(title='processed_tt', fontsize='small')
-#         plt.tight_layout()
-
-#         if save_plots:
-#             filename = f'{fig_idx}_new_theta_zoom_counts.png'
-#             fig_idx += 1
-#             path = os.path.join(base_directories["figure_directory"], filename)
-#             plot_list.append(path)
-#             plt.savefig(path)
-
-#         if show_plots:
-#             plt.show()
-#         plt.close()
-
-#         # Plot efficiencies
-#         fig_eff, ax_eff = plt.subplots(figsize=(7, 5))
-#         ax_eff.plot(bin_centers, eff2, label=r'$\varepsilon_2 = \frac{1234}{134 + 1234}$',
-#                     drawstyle='steps-mid', color='blue')
-#         ax_eff.plot(bin_centers, eff3, label=r'$\varepsilon_3 = \frac{1234}{124 + 1234}$',
-#                     drawstyle='steps-mid', color='green')
-
-#         ax_eff.set_xlim(0, right)
-#         ax_eff.set_ylim(0, 1)
-#         ax_eff.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
-#         ax_eff.set_ylabel('Efficiency')
-#         ax_eff.set_title('Angular Efficiency Estimates')
-#         ax_eff.grid(True)
-#         ax_eff.legend(fontsize='small')
-#         plt.tight_layout()
-
-#         if save_plots:
-#             filename = f'{fig_idx}_new_theta_eff2_eff3_three_planes.png'
-#             fig_idx += 1
-#             path = os.path.join(base_directories["figure_directory"], filename)
-#             plot_list.append(path)
-#             plt.savefig(path)
-
-#         if show_plots:
-#             plt.show()
-#         plt.close()
-    
-    
-#     # Two plane cases ----------------------------------------------------------------------
-
-#     # Compute histograms for relevant TT types
-#     counts_per_tt_2 = {}
-#     for tt_val in ['123', '13']:
-#         df_tt = df_filtered[df_filtered['processed_tt'] == int(tt_val)]
-#         theta_vals = df_tt['new_theta'].dropna()
-#         if len(theta_vals) < 10:
-#             continue
-#         counts, _ = np.histogram(theta_vals, bins=bins)
-#         counts_per_tt_2[tt_val] = counts
-
-#     # Extract counts and ensure zero arrays if missing
-#     n_123 = counts_per_tt_2.get('123', np.zeros(len(bin_centers)))
-#     n_13  = counts_per_tt_2.get('13',  np.zeros(len(bin_centers)))
-
-#     # Compute efficiencies safely
-#     with np.errstate(divide='ignore', invalid='ignore'):
-#         eff2 = np.divide(n_123, n_13 + n_123)
-#         eff2[np.isnan(eff2)] = 0
-
-#     df_filtered = df.copy()
-#     bins = np.linspace(0, right, nbins)
-#     bin_centers = 0.5 * (bins[:-1] + bins[1:])
-
-#     # Compute histograms for relevant TT types
-#     counts_per_tt = {}
-#     for tt_val in ['234', '24']:
-#         df_tt = df_filtered[df_filtered['processed_tt'] == int(tt_val)]
-#         theta_vals = df_tt['new_theta'].dropna()
-#         if len(theta_vals) < 10:
-#             continue
-#         counts, _ = np.histogram(theta_vals, bins=bins)
-#         counts_per_tt[tt_val] = counts
-
-#     # Extract counts and ensure zero arrays if missing
-#     n_234 = counts_per_tt.get('234', np.zeros(len(bin_centers)))
-#     n_24  = counts_per_tt.get('24',  np.zeros(len(bin_centers)))
-
-#     # Compute efficiencies safely
-#     with np.errstate(divide='ignore', invalid='ignore'):
-#         eff3 = np.divide(n_234, n_24 + n_234)
-#         eff3[np.isnan(eff3)] = 0
-
-#     print("Efficiency calculations complete.")
-
-#     # =======================
-#     # PLOTTING SECTION
-#     # =======================
-#     if create_plots or create_essential_plots:
-
-#         # Plot raw counts
-#         fig_counts, ax_counts = plt.subplots(figsize=(7, 5))
-#         colors = plt.cm.tab10.colors
-
-#         for i, tt_val in enumerate(['123', '13']):
-#             if tt_val in counts_per_tt_2:
-#                 ax_counts.hist(bin_centers, bins=bins, weights=counts_per_tt_2[tt_val],
-#                                histtype='step', linewidth=1,
-#                                color=colors[i % len(colors)], label=tt_val)
-#         for i, tt_val in enumerate(['234', '24']):
-#             if tt_val in counts_per_tt:
-#                 ax_counts.hist(bin_centers, bins=bins, weights=counts_per_tt[tt_val],
-#                                histtype='step', linewidth=1,
-#                                color=colors[(i + 2) % len(colors)], label=tt_val)
-#         ax_counts.set_xlim(0, right)
-#         ax_counts.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
-#         ax_counts.set_ylabel('Counts')
-#         ax_counts.set_title(r'Zoomed $\theta_{\mathrm{new}}$ Distributions')
-#         ax_counts.grid(True)
-#         ax_counts.legend(title='processed_tt', fontsize='small')
-#         plt.tight_layout()
-
-#         if save_plots:
-#             filename = f'{fig_idx}_new_theta_zoom_counts.png'
-#             fig_idx += 1
-#             path = os.path.join(base_directories["figure_directory"], filename)
-#             plot_list.append(path)
-#             plt.savefig(path)
-
-#         if show_plots:
-#             plt.show()
-#         plt.close()
-
-#         # Plot efficiencies
-#         fig_eff, ax_eff = plt.subplots(figsize=(7, 5))
-#         ax_eff.plot(bin_centers, eff2, label=r'$\varepsilon_2 = \frac{123}{13 + 123}$',
-#                     drawstyle='steps-mid', color='blue', alpha = 0.7)
-#         ax_eff.plot(bin_centers, eff3, label=r'$\varepsilon_3 = \frac{234}{24 + 234}$',
-#                     drawstyle='steps-mid', color='orange', alpha = 0.7)
-
-#         ax_eff.set_xlim(0, right)
-#         ax_eff.set_ylim(0, 1)
-#         ax_eff.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
-#         ax_eff.set_ylabel('Efficiency')
-#         ax_eff.set_title('Angular Efficiency Estimates')
-#         ax_eff.grid(True)
-#         ax_eff.legend(fontsize='small')
-#         plt.tight_layout()
-
-#         if save_plots:
-#             filename = f'{fig_idx}_new_theta_eff2_eff3_two_planes.png'
-#             fig_idx += 1
-#             path = os.path.join(base_directories["figure_directory"], filename)
-#             plot_list.append(path)
-#             plt.savefig(path)
-
-#         if show_plots:
-#             plt.show()
-#         plt.close()
 
 print("----------------------------------------------------------------------")
 print("-------------------- Efficiency respect the angle --------------------")
@@ -830,8 +851,6 @@ df['subdetector_234_tt'] = df['processed_tt'].map(map_234)
 df['subdetector_1234_tt'] = df['processed_tt']
 
 from scipy.ndimage import gaussian_filter1d
-
-create_essential_plots = True
 
 eff_vs_angle = True
 if eff_vs_angle:
@@ -1193,16 +1212,21 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
     if show_plots:
         plt.show()
     plt.close()
-    
-columns = ['x', 'theta', 's', 'y', 'phi', 'th_chi']
-plot_histograms_and_gaussian(df, columns, "TimTrack Results", figure_number=1)
 
-columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
-plot_histograms_and_gaussian(df, columns, "Alternative Results", figure_number=1)
+#%%
 
-columns = ['new_x', 'new_theta', 'new_s', 'new_y', 'new_phi', 'new_th_chi']
-plot_histograms_and_gaussian(df, columns, "Averaged Results", figure_number=1)
+create_plots = True
+if create_plots:
+    columns = ['x', 'theta', 's', 'y', 'phi', 'th_chi']
+    plot_histograms_and_gaussian(df, columns, "TimTrack Results", figure_number=1)
 
+    columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
+    plot_histograms_and_gaussian(df, columns, "Alternative Results", figure_number=1)
+
+    columns = ['new_x', 'new_theta', 'new_s', 'new_y', 'new_phi', 'new_th_chi']
+    plot_histograms_and_gaussian(df, columns, "Averaged Results", figure_number=1)
+
+#%%
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -1210,13 +1234,11 @@ print("----------------------- Starting the analysis ------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
-
 print("----------------------------------------------------------------------")
 print("-------------------- Charge respect zenith angle ---------------------")
 print("----------------------------------------------------------------------")
 
-# Charge checking --------------------------------------------------------------------------------------------------------
-charge_vs_angle = True
+charge_vs_angle = False
 if charge_vs_angle:
     
     for i in range(1, 5):
@@ -1268,7 +1290,6 @@ if charge_vs_angle:
         if show_plots:
             plt.show()
         plt.close()
-# ------------------------------------------------------------------------------------------------------------------------
 
 
 print("----------------------------------------------------------------------")
@@ -1848,6 +1869,8 @@ print("----------------------------------------------------------------------")
 print("-------------------- Real adjacent and single cases ------------------")
 print("----------------------------------------------------------------------")
 
+real_strip_case_study = True
+
 if real_strip_case_study:
     print("Real strip case study. WIP.")
 
@@ -1906,17 +1929,16 @@ if real_strip_case_study:
     merged_df = merged_df.drop(columns=columns_to_drop)
 
     # For all the columns apply the calibration and not change the name of the columns
-    for col in merged_df.columns:
-        merged_df[col] = interpolate_fast_charge(merged_df[col])
-
+    # for col in merged_df.columns:
+    #     merged_df[col] = interpolate_fast_charge(merged_df[col])
 
     # Initialize dictionaries to store charge distributions
-    singles = {f'single_P{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
-    double_adj = {f'double_P{i}_s{j}{j+1}': [] for i in range(1, 5) for j in range(1, 4)}
-    double_non_adj = {f'double_P{i}_s{pair[0]}{pair[1]}': [] for i in range(1, 5) for pair in [(1,3), (2,4), (1,4)]}
-    triple_adj = {f'triple_P{i}_s{j}{j+1}{j+2}': [] for i in range(1, 5) for j in range(1, 3)}
-    triple_non_adj = {f'triple_P{i}_s{triplet[0]}{triplet[1]}{triplet[2]}': [] for i in range(1, 5) for triplet in [(1,2,4), (1,3,4)]}
-    quadruples = {f'quadruple_P{i}_s1234': [] for i in range(1, 5)}
+    singles = {f'single_M{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
+    double_adj = {f'double_M{i}_s{j}{j+1}': [] for i in range(1, 5) for j in range(1, 4)}
+    double_non_adj = {f'double_M{i}_s{pair[0]}{pair[1]}': [] for i in range(1, 5) for pair in [(1,3), (2,4), (1,4)]}
+    triple_adj = {f'triple_M{i}_s{j}{j+1}{j+2}': [] for i in range(1, 5) for j in range(1, 3)}
+    triple_non_adj = {f'triple_M{i}_s{triplet[0]}{triplet[1]}{triplet[2]}': [] for i in range(1, 5) for triplet in [(1,2,4), (1,3,4)]}
+    quadruples = {f'quadruple_M{i}_s1234': [] for i in range(1, 5)}
 
     # Loop over modules
     for i in range(1, 5):
@@ -1936,34 +1958,34 @@ if real_strip_case_study:
 
             # Single detection
             if count == 1:
-                key = f'single_P{i}_s{nonzero_strips[0]}'
+                key = f'single_M{i}_s{nonzero_strips[0]}'
                 singles[key].append((charges[0],))
 
             # Double adjacent
             elif count == 2 and nonzero_strips[1] - nonzero_strips[0] == 1:
-                key = f'double_P{i}_s{nonzero_strips[0]}{nonzero_strips[1]}'
+                key = f'double_M{i}_s{nonzero_strips[0]}{nonzero_strips[1]}'
                 double_adj[key].append(tuple(charges))
 
             # Double non-adjacent
             elif count == 2 and nonzero_strips[1] - nonzero_strips[0] > 1:
-                key = f'double_P{i}_s{nonzero_strips[0]}{nonzero_strips[1]}'
+                key = f'double_M{i}_s{nonzero_strips[0]}{nonzero_strips[1]}'
                 if key in double_non_adj:
                     double_non_adj[key].append(tuple(charges))
 
             # Triple adjacent
             elif count == 3 and (nonzero_strips[2] - nonzero_strips[0] == 2):
-                key = f'triple_P{i}_s{nonzero_strips[0]}{nonzero_strips[1]}{nonzero_strips[2]}'
+                key = f'triple_M{i}_s{nonzero_strips[0]}{nonzero_strips[1]}{nonzero_strips[2]}'
                 triple_adj[key].append(tuple(charges))
 
             # Triple non-adjacent
             elif count == 3 and (nonzero_strips[2] - nonzero_strips[0] > 2):
-                key = f'triple_P{i}_s{nonzero_strips[0]}{nonzero_strips[1]}{nonzero_strips[2]}'
+                key = f'triple_M{i}_s{nonzero_strips[0]}{nonzero_strips[1]}{nonzero_strips[2]}'
                 if key in triple_non_adj:
                     triple_non_adj[key].append(tuple(charges))
 
             # Quadruple detection
             elif count == 4:
-                key = f'quadruple_P{i}_s1234'
+                key = f'quadruple_M{i}_s1234'
                 quadruples[key].append(tuple(charges))
 
     # Convert results to DataFrames
@@ -2139,7 +2161,20 @@ if real_strip_case_study:
                 all_combined_dfs.append(None)
                 continue
 
-            combined_df = pd.concat([real_multiplicities[key] for key in matching_keys], axis=1)
+            # combined_df = pd.concat([real_multiplicities[key] for key in matching_keys], axis=1)
+            
+            seen_columns = set()
+            dfs_unique = []
+
+            for key in matching_keys:
+                df = real_multiplicities[key]
+                df_unique = df[[col for col in df.columns if col not in seen_columns]]
+                seen_columns.update(df_unique.columns)
+                dfs_unique.append(df_unique)
+
+            combined_df = pd.concat(dfs_unique, axis=1)
+
+            
             all_combined_dfs.append(combined_df)
 
             if combined_df.shape[1] > max_columns:
@@ -2159,7 +2194,8 @@ if real_strip_case_study:
                 continue  # Skip missing data
 
             for i, column in enumerate(combined_df.columns):
-                axs[a][i].hist(combined_df[column], bins=70, range=(0, 1500), histtype="step", linewidth=1.5, density=False)
+                # axs[a][i].hist(combined_df[column], bins=70, range=(0, 1500), histtype="step", linewidth=1.5, density=False)
+                axs[a][i].hist(combined_df[column], bins=70, range=(0, 100), alpha = 0.6, linewidth=1.5, density=False)
                 axs[a][i].set_title(f"{module} - {column}")
                 axs[a][i].set_xlabel("Charge")
                 axs[a][i].set_ylabel("Frequency")
@@ -2180,6 +2216,7 @@ if real_strip_case_study:
             plt.savefig(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close()
+
 
 
     modules = ["M1", "M2", "M3", "M4"]
@@ -2259,7 +2296,21 @@ if real_strip_case_study:
                 continue
 
             # Concatenate all DataFrames for this module into one big DF (columns side by side)
-            combined_df = pd.concat([combined_multiplicities[k] for k in matching_keys], axis=1)
+            # combined_df = pd.concat([combined_multiplicities[k] for k in matching_keys], axis=1)
+            
+            seen_columns = set()
+            dfs_unique = []
+
+            for key in matching_keys:
+                df = combined_multiplicities[key]
+                unique_cols = [col for col in df.columns if col not in seen_columns]
+                if unique_cols:
+                    df_unique = df[unique_cols]
+                    dfs_unique.append(df_unique)
+                    seen_columns.update(unique_cols)
+
+            combined_df = pd.concat(dfs_unique, axis=1)
+            
             all_combined_dfs.append(combined_df)
 
             # Track largest number of columns (for consistent subplot layout)
@@ -2282,14 +2333,8 @@ if real_strip_case_study:
                 continue
 
             for col_idx, column_name in enumerate(combined_df.columns):
-                axs[row_idx][col_idx].hist(
-                    combined_df[column_name],
-                    bins=70,
-                    range=(0, 2000),
-                    histtype="step",
-                    linewidth=1.5,
-                    density=False
-                )
+                # axs[row_idx][col_idx].hist( combined_df[column_name], bins=70, range=(0, 2000), histtype="step", linewidth=1.5, density=False )
+                axs[row_idx][col_idx].hist( combined_df[column_name], bins=70, range=(0, 100), alpha = 0.6, linewidth=1.5, density=False )
                 axs[row_idx][col_idx].set_title(f"{module} - {column_name}")
                 axs[row_idx][col_idx].set_xlabel("Charge")
                 axs[row_idx][col_idx].set_ylabel("Frequency")
@@ -2300,14 +2345,37 @@ if real_strip_case_study:
                 axs[row_idx][hidden_col_idx].axis("off")
 
         plt.tight_layout()
-        figure_name = f"/{case}_sum.png"
-        plt.savefig(figure_save_path + figure_name, dpi=150)
-        plt.show()  # If you want interactive displays instead
+        figure_name = f"sum_{case}_{station}"
+        if save_plots:
+            name_of_file = figure_name
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots: plt.show()
         plt.close()
 
 else:
     print("Real strip case study not available yet. WIP.")
 
+
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+
+a = 1/0
 
 print("----------------------------------------------------------------------")
 print("----------------------- Multiplicity calculations --------------------")

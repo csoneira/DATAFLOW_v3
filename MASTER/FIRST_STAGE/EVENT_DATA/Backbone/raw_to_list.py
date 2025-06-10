@@ -11,27 +11,43 @@ Created on Thu Jun 20 09:15:33 2024
 
 run_jupyter_notebook = False
 
+# print("\n\n")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀.⣄")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣀⣤⠤⢤⣀⠀")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⠴⠒⢋⣉⣀⣠⣄⣀⣈⡇")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣾⣯⠴⠚⠉⠉⠀⠀⠀⠀⣤⠏⣿")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡿⡇⠁⠀⠀⠀⠀⡄⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⡿⠿⢛⠁⠁⣸⠀⠀⠀⠀⠀⣤⣾⠵⠚⠁")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⢦⡀⠀⣠⠀⡇⢧⠀⠀⢀⣠⡾⡇⠀⠀⠀⠀⠀⣠⣴⠿⠋⠁⠀⠀⠀⠀⠘⣿⠀⣀⡠⠞⠛⠁⠂⠁⠀⠀")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡈⣻⡦⣞⡿⣷⠸⣄⣡⢾⡿⠁⠀⠀⠀⣀⣴⠟⠋⠁⠀⠀⠀⠀⠐⠠⡤⣾⣙⣶⡶⠃⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣂⡷⠰⣔⣾⣖⣾⡷⢿⣐⣀⣀⣤⢾⣋⠁⠀⠀⠀⣀⢀⣀⣀⣀⣀⠀⢀⢿⠑⠃⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⠀⠀⠀⠀⠠⡦⠴⠴⠤⠦⠤⠤⠤⠤⠤⠴⠶⢾⣽⣙⠒⢺⣿⣿⣿⣿⢾⠶⣧⡼⢏⠑⠚⠋⠉⠉⡉⡉⠉⠉⠹⠈⠁⠉⠀⠨⢾⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⠀⠀⠀⠂⠐⠀⠀⠀⠈⣇⡿⢯⢻⣟⣇⣷⣞⡛⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣠⣆⠀⠀⠀⠀⢠⡷⡛⣛⣼⣿⠟⠙⣧⠅⡄⠀⠀⠀⠀⠀⠀⠰⡆⠀⠀⠀⠀⢠⣾⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣴⢶⠏⠉⠀⠀⠀⠀⠀⠿⢠⣴⡟⡗⡾⡒⠖⠉⠏⠁⠀⠀⠀⠀⣀⢀⣠⣧⣀⣀⠀⠀⠀⠚⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⠀⠀⠀⠀⠀⠀⣠⢴⣿⠟⠁⠀⠀⠀⠀⠀⠀⠀⣠⣷⢿⠋⠁⣿⡏⠅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⣿⢭⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⠀⠀⠀⢀⡴⢏⡵⠛⠀⠀⠀⠀⠀⠀⠀⣀⣴⠞⠛⠀⠀⠀⠀⢿⠀⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⢿⠘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⠀⣀⣼⠛⣲⡏⠁⠀⠀⠀⠀⠀⢀⣠⡾⠋⠉⠀⠀⠀⠀⠀⠀⢾⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠀⡴⠟⠀⢰⡯⠄⠀⠀⠀⠀⣠⢴⠟⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⣹⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⡾⠁⠁⠀⠘⠧⠤⢤⣤⠶⠏⠙⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢾⡃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠘⣇⠂⢀⣀⣀⠤⠞⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("⠀⠈⠉⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  ⠈⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+# print("\n\n")
+
+
 print("\n\n")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀.⣄")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣀⣤⠤⢤⣀⠀")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⠴⠒⢋⣉⣀⣠⣄⣀⣈⡇")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣾⣯⠴⠚⠉⠉⠀⠀⠀⠀⣤⠏⣿")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡿⡇⠁⠀⠀⠀⠀⡄⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⡿⠿⢛⠁⠁⣸⠀⠀⠀⠀⠀⣤⣾⠵⠚⠁")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⢦⡀⠀⣠⠀⡇⢧⠀⠀⢀⣠⡾⡇⠀⠀⠀⠀⠀⣠⣴⠿⠋⠁⠀⠀⠀⠀⠘⣿⠀⣀⡠⠞⠛⠁⠂⠁⠀⠀")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡈⣻⡦⣞⡿⣷⠸⣄⣡⢾⡿⠁⠀⠀⠀⣀⣴⠟⠋⠁⠀⠀⠀⠀⠐⠠⡤⣾⣙⣶⡶⠃⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣂⡷⠰⣔⣾⣖⣾⡷⢿⣐⣀⣀⣤⢾⣋⠁⠀⠀⠀⣀⢀⣀⣀⣀⣀⠀⢀⢿⠑⠃⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⠀⠀⠀⠀⠠⡦⠴⠴⠤⠦⠤⠤⠤⠤⠤⠴⠶⢾⣽⣙⠒⢺⣿⣿⣿⣿⢾⠶⣧⡼⢏⠑⠚⠋⠉⠉⡉⡉⠉⠉⠹⠈⠁⠉⠀⠨⢾⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⠀⠀⠀⠂⠐⠀⠀⠀⠈⣇⡿⢯⢻⣟⣇⣷⣞⡛⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣠⣆⠀⠀⠀⠀⢠⡷⡛⣛⣼⣿⠟⠙⣧⠅⡄⠀⠀⠀⠀⠀⠀⠰⡆⠀⠀⠀⠀⢠⣾⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣴⢶⠏⠉⠀⠀⠀⠀⠀⠿⢠⣴⡟⡗⡾⡒⠖⠉⠏⠁⠀⠀⠀⠀⣀⢀⣠⣧⣀⣀⠀⠀⠀⠚⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⠀⠀⠀⠀⠀⠀⣠⢴⣿⠟⠁⠀⠀⠀⠀⠀⠀⠀⣠⣷⢿⠋⠁⣿⡏⠅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⣿⢭⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⠀⠀⠀⢀⡴⢏⡵⠛⠀⠀⠀⠀⠀⠀⠀⣀⣴⠞⠛⠀⠀⠀⠀⢿⠀⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠂⢿⠘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⠀⣀⣼⠛⣲⡏⠁⠀⠀⠀⠀⠀⢀⣠⡾⠋⠉⠀⠀⠀⠀⠀⠀⢾⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠀⡴⠟⠀⢰⡯⠄⠀⠀⠀⠀⣠⢴⠟⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⣹⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⡾⠁⠁⠀⠘⠧⠤⢤⣤⠶⠏⠙⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢾⡃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠘⣇⠂⢀⣀⣀⠤⠞⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
-print("⠀⠈⠉⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  ⠈⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀")
+print("__| |___________________________________________________________| |__")
+print("__   ___________________________________________________________   __")
+print("  | |                                                           | |  ")
+print("  | |                     _           _ _     _                 | |  ")
+print("  | | _ __ __ ___      __| |_ ___    | (_)___| |_   _ __  _   _ | |  ")
+print("  | || '__/ _` \\ \\ /\\ / /| __/ _ \\   | | / __| __| | '_ \\| | | || |  ")
+print("  | || | | (_| |\\ V  V / | || (_) |  | | \\__ \\ |_ _| |_) | |_| || |  ")
+print("  | ||_|  \\__,_| \\_/\\_/___\\__\\___/___|_|_|___/\\__(_) .__/ \\__, || |  ")
+print("  | |                |_____|    |_____|            |_|    |___/ | |  ")
+print("__| |___________________________________________________________| |__")
+print("__   ___________________________________________________________   __")
+print("  | |                                                           | |  ")
 print("\n\n")
 
 
@@ -118,6 +134,13 @@ if station not in ["1", "2", "3", "4"]:
     print("Error: Invalid station. Please provide a valid station (1, 2, 3, or 4).")
     sys.exit(1)
 # print(f"Station: {station}")
+
+if len(sys.argv) == 3:
+    user_file_path = sys.argv[2]
+    user_file_selection = True
+    print("User provided file path:", user_file_path)
+else:
+    user_file_selection = False
 
 # -----------------------------------------------------------------------------
 
@@ -335,6 +358,7 @@ if debug_mode:
     # save_full_data = False
     limit = True
     limit_number = 10000
+
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -603,12 +627,12 @@ global_variables = {
 # Modify discarded_by_time_window entry
 global_variables['discarded_by_time_window'] = 1
 
+
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Function definition ---------------------------------------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
-
 
 def calibrate_strip_T_diff(T_F, T_B):
     """
@@ -1223,7 +1247,6 @@ def process_file(source_path, dest_path):
 def get_file_path(directory, file_name):
     return os.path.join(directory, file_name)
 
-
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
@@ -1232,97 +1255,101 @@ unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
 completed_files = os.listdir(base_directories["completed_directory"])
 
-if last_file_test:
-    if unprocessed_files:
-        unprocessed_files = sorted(unprocessed_files)
-        # file_name = unprocessed_files[-1]
-        file_name = unprocessed_files[0]
-        
-        unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        
-        print(f"Processing the last file in UNPROCESSED: {unprocessed_file_path}")
-        print(f"Moving '{file_name}' to PROCESSING...")
-        shutil.move(unprocessed_file_path, processing_file_path)
-        print(f"File moved to PROCESSING: {processing_file_path}")
-
-    elif processing_files:
-        processing_files = sorted(processing_files)
-        file_name = processing_files[-1]
-        
-        # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        
-        print(f"Processing the last file in PROCESSING: {processing_file_path}")
-        error_file_path = os.path.join(base_directories["error_directory"], file_name)
-        print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
-        shutil.move(processing_file_path, error_file_path)
-        processing_file_path = error_file_path
-        print(f"File moved to ERROR: {processing_file_path}")
-
-    elif completed_files:
-        completed_files = sorted(completed_files)
-        file_name = completed_files[-1]
-        
-        # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-        
-        print(f"Reprocessing the last file in COMPLETED: {completed_file_path}")
-        print(f"Moving '{completed_file_path}' to PROCESSING...")
-        shutil.move(completed_file_path, processing_file_path)
-        print(f"File moved to PROCESSING: {processing_file_path}")
-
-    else:
-        sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
-
+if user_file_selection:
+    processing_file_path = user_file_path
+    file_name = os.path.basename(user_file_path)
 else:
-    if unprocessed_files:
-        print("Shuffling the files in UNPROCESSED...")
-        random.shuffle(unprocessed_files)
-        for file_name in unprocessed_files:
+    if last_file_test:
+        if unprocessed_files:
+            unprocessed_files = sorted(unprocessed_files)
+            # file_name = unprocessed_files[-1]
+            file_name = unprocessed_files[0]
+            
             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
+            
+            print(f"Processing the last file in UNPROCESSED: {unprocessed_file_path}")
             print(f"Moving '{file_name}' to PROCESSING...")
             shutil.move(unprocessed_file_path, processing_file_path)
             print(f"File moved to PROCESSING: {processing_file_path}")
-            break
 
-    elif processing_files:
-        print("Shuffling the files in PROCESSING...")
-        random.shuffle(processing_files)
-        for file_name in processing_files:
+        elif processing_files:
+            processing_files = sorted(processing_files)
+            file_name = processing_files[-1]
+            
             # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
+            
             print(f"Processing the last file in PROCESSING: {processing_file_path}")
             error_file_path = os.path.join(base_directories["error_directory"], file_name)
             print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
             shutil.move(processing_file_path, error_file_path)
             processing_file_path = error_file_path
             print(f"File moved to ERROR: {processing_file_path}")
-            break
 
-    elif completed_files:
-        print("Shuffling the files in COMPLETED...")
-        random.shuffle(completed_files)
-        for file_name in completed_files:
+        elif completed_files:
+            completed_files = sorted(completed_files)
+            file_name = completed_files[-1]
+            
             # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-
-            print(f"Moving '{file_name}' to PROCESSING...")
+            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+            
+            print(f"Reprocessing the last file in COMPLETED: {completed_file_path}")
+            print(f"Moving '{completed_file_path}' to PROCESSING...")
             shutil.move(completed_file_path, processing_file_path)
             print(f"File moved to PROCESSING: {processing_file_path}")
-            break
+
+        else:
+            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
 
     else:
-        sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+        if unprocessed_files:
+            print("Shuffling the files in UNPROCESSED...")
+            random.shuffle(unprocessed_files)
+            for file_name in unprocessed_files:
+                unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+                print(f"Moving '{file_name}' to PROCESSING...")
+                shutil.move(unprocessed_file_path, processing_file_path)
+                print(f"File moved to PROCESSING: {processing_file_path}")
+                break
+
+        elif processing_files:
+            print("Shuffling the files in PROCESSING...")
+            random.shuffle(processing_files)
+            for file_name in processing_files:
+                # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+                print(f"Processing the last file in PROCESSING: {processing_file_path}")
+                error_file_path = os.path.join(base_directories["error_directory"], file_name)
+                print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
+                shutil.move(processing_file_path, error_file_path)
+                processing_file_path = error_file_path
+                print(f"File moved to ERROR: {processing_file_path}")
+                break
+
+        elif completed_files:
+            print("Shuffling the files in COMPLETED...")
+            random.shuffle(completed_files)
+            for file_name in completed_files:
+                # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+
+                print(f"Moving '{file_name}' to PROCESSING...")
+                shutil.move(completed_file_path, processing_file_path)
+                print(f"File moved to PROCESSING: {processing_file_path}")
+                break
+
+        else:
+            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
 
 # This is for all cases
 file_path = processing_file_path
@@ -1430,10 +1457,11 @@ if not isinstance(selected_df.set_index('datetime').index, pd.DatetimeIndex):
 # Print the count frequency of the values in column_6
 print(selected_df['column_6'].value_counts())
 # Take only the rows in which column_6 is equal to 1
+
+self_trigger_df = selected_df[selected_df['column_6'] == 2]
 selected_df = selected_df[selected_df['column_6'] == 1]
 
 raw_data_len = len(selected_df)
-
 if raw_data_len == 0:
     print(selected_df['column_6'].head())
     print("No coincidence events.")
@@ -1523,6 +1551,15 @@ working_df["datetime"] = selected_df['datetime']
 
 print(working_df.columns.to_list())
 
+# --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
+if station == "2":
+    print("Swapping channels that give problems in plane 4.")
+    plane4_keys = ['T4_F', 'T4_B', 'Q4_F', 'Q4_B']
+    for key in plane4_keys:
+        col2 = f'{key}_1'
+        col4 = f'{key}_3'
+        working_df[[col2, col4]] = working_df[[col4, col2]].values  # swap columns
+        
 
 # ----------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------
@@ -4504,7 +4541,10 @@ if crosstalk_removal_and_recalibration:
                 col = f'Q{key}_Q_sum_{j+1}'
                 y = working_df[col]
                 
-                data = y[(y != 0) & (y > Q_clip_min) & (y < Q_clip_max)]
+                Q_plot_min = 0.8 * Q_clip_min
+                Q_plot_max = 1.4 * Q_clip_max
+                
+                data = y[(y != 0) & (y > Q_plot_min) & (y < Q_plot_max)]
                 
                 hist_vals, bin_edges = np.histogram(data, bins=num_bins)
                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
@@ -4519,14 +4559,14 @@ if crosstalk_removal_and_recalibration:
                 
                 popt = a, mu, sigma, m, b
                 
-                x_fit = np.linspace(Q_clip_min, Q_clip_max, 500)
+                x_fit = np.linspace(Q_plot_min, Q_plot_max, 500)
                 y_fit = gaussian_linear(x_fit, *popt)
                 axes_Q[i*4 + j].plot(x_fit, y_fit, 'r--', label='Gauss + Linear Fit')
                 
                 axes_Q[i*4 + j].hist(data, bins=num_bins, alpha=0.5, label=f'{col}')
                 axes_Q[i*4 + j].set_title(f'{col}')
                 axes_Q[i*4 + j].legend()
-                axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                axes_Q[i*4 + j].set_xlim([Q_plot_min, Q_plot_max])
                 axes_Q[i*4 + j].set_ylim([0, None])
                 axes_Q[i*4 + j].axvline(0, color='green', linestyle='--', alpha=0.5)
                 
@@ -5458,7 +5498,7 @@ if create_essential_plots or create_plots:
             column_name = f'Y_{plane_id}'
             data = filtered_df[column_name]
             
-            plt.hist(data[data != 0], bins='auto', histtype='stepfilled', alpha=0.7)
+            plt.hist(data[data != 0], bins=100, histtype='stepfilled', alpha=0.6)
             plt.title(f'Y Position Distribution - Plane {plane_id}')
             plt.xlabel('Y Position (a.u.)')
             plt.ylabel('Counts')
@@ -5487,73 +5527,18 @@ print("----------------------------------------------------------------------")
 # Same for hexbin
 if create_plots or create_essential_plots:
 # if create_plots:
-    fig, axes = plt.subplots(16, 10, figsize=(40, 20))  # 10 combinations per plane
-    axes = axes.flatten()
 
     for i_plane in range(1, 5):
+        
+        fig, axes = plt.subplots(4, 6, figsize=(30, 20))
+        axes = axes.flatten()
+        
         for strip in range(1, 5):
             # Column names
-            t_sum_col = f'P{i_plane}_T_sum_{strip}'
-            t_diff_col = f'P{i_plane}_T_diff_{strip}'
-            q_sum_col = f'P{i_plane}_Q_sum_{strip}'
-            q_diff_col = f'P{i_plane}_Q_diff_{strip}'
-
-            # Filter valid rows (non-zero)
-            valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col]].replace(0, np.nan).dropna()
-            
-            # Extract variables and filter low charge
-            cond = valid_rows[q_sum_col] < 10
-            t_sum  = valid_rows.loc[cond, t_sum_col]
-            t_diff = valid_rows.loc[cond, t_diff_col]
-            q_sum  = valid_rows.loc[cond, q_sum_col]
-            q_diff = valid_rows.loc[cond, q_diff_col]
-
-            base_idx = (i_plane - 1) * 6  # 6 plots per plane
-
-            combinations = [
-                (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
-                (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
-                (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
-                (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
-                (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
-                (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
-            ]
-
-            for offset, (x, yv, title) in enumerate(combinations):
-                ax = axes[base_idx + offset]
-                ax.hexbin(x, yv, gridsize=50, cmap='turbo')
-                ax.set_title(title)
-
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.92)
-    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, filtered', fontsize=18)
-
-    if save_plots:
-        name_of_file = 'strip_check_hexbin_combinations_filtered'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-
-    if show_plots: plt.show()
-    plt.close()
-
-
-# Same for hexbin
-if create_plots or create_essential_plots:
-# if create_plots:
-    fig, axes = plt.subplots(16, 10, figsize=(40, 20))  # 10 combinations per plane
-    axes = axes.flatten()
-
-    for i_plane in range(1, 5):
-        for strip in range(1, 5):
-            # Column names
-            t_sum_col = f'P{i_plane}_T_sum_{strip}'
-            t_diff_col = f'P{i_plane}_T_diff_{strip}'
-            q_sum_col = f'P{i_plane}_Q_sum_{strip}'
-            q_diff_col = f'P{i_plane}_Q_diff_{strip}'
+            t_sum_col = f'T{i_plane}_T_sum_{strip}'
+            t_diff_col = f'T{i_plane}_T_diff_{strip}'
+            q_sum_col = f'Q{i_plane}_Q_sum_{strip}'
+            q_diff_col = f'Q{i_plane}_Q_diff_{strip}'
 
             # Filter valid rows (non-zero)
             valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col]].replace(0, np.nan).dropna()
@@ -5565,7 +5550,7 @@ if create_plots or create_essential_plots:
             q_sum  = valid_rows.loc[cond, q_sum_col]
             q_diff = valid_rows.loc[cond, q_diff_col]
 
-            base_idx = (i_plane - 1) * 6  # 6 plots per plane
+            base_idx = (strip - 1) * 6
 
             combinations = [
                 (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
@@ -5579,23 +5564,24 @@ if create_plots or create_essential_plots:
             for offset, (x, yv, title) in enumerate(combinations):
                 ax = axes[base_idx + offset]
                 ax.hexbin(x, yv, gridsize=50, cmap='turbo')
+                # ax.scatter(x, yv)
                 ax.set_title(title)
 
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.92)
-    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, filtered', fontsize=18)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.92)
+        plt.suptitle(f'Hexbin Plots for All Variable Combinations by strip for plane {i_plane}', fontsize=18)
 
-    if save_plots:
-        name_of_file = 'strip_check_hexbin_combinations_filtered'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
+        if save_plots:
+            name_of_file = f'strip_check_hexbin_combinations_filtered_{i_plane}'
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
 
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
 
-    if show_plots: plt.show()
-    plt.close()
+        if show_plots: plt.show()
+        plt.close()
     
 
 print("----------------------------------------------------------------------")
