@@ -292,7 +292,7 @@ else:
 # Plots and savings -------------------------
 crontab_execution = True
 create_plots = False
-create_essential_plots = True
+create_essential_plots = False
 save_plots = True
 show_plots = False
 create_pdf = True
@@ -335,7 +335,7 @@ number_of_alt_executions = 2
 
 # TimTrack -----------------------------------------
 fixed_speed = False
-res_ana_removing_planes = False
+res_ana_removing_planes = True
 timtrack_iteration = False
 number_of_TT_executions = 2
 residual_plots = False
@@ -471,9 +471,9 @@ alt_phi_right_filter = np.pi
 alt_slowness_filter_left = -0.02
 alt_slowness_filter_right = 0.03 # 0.025
 
-alt_res_ystr_filter = 100
-alt_res_tsum_filter = 1
-alt_res_tdif_filter = 0.3
+alt_res_ystr_filter = 300
+alt_res_tsum_filter = 2
+alt_res_tdif_filter = 0.7
 
 # -----------------------------------------------------------------------------
 # TimTrack filter -------------------------------------------------------------
@@ -490,13 +490,13 @@ theta_right_filter = np.pi/2
 phi_left_filter = -1*np.pi
 phi_right_filter = np.pi
 
-res_ystr_filter = 100
+res_ystr_filter = 300
 res_tsum_filter = 2
-res_tdif_filter = 0.3
+res_tdif_filter = 0.7
 
-ext_res_ystr_filter = 120
+ext_res_ystr_filter = 300
 ext_res_tsum_filter = 2
-ext_res_tdif_filter = 1
+ext_res_tdif_filter = 0.7
 
 
 # -----------------------------------------------------------------------------
@@ -1144,7 +1144,7 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             left, right = phi_left_filter, phi_right_filter
             selected_col = color_map["phi"]
 
-        elif "x" in col or col in ["y", "alt_y"]:
+        elif col in ["x", "alt_x", "y", "alt_y"]:
             left, right = -pos_filter, pos_filter
             selected_col = color_map["x"]
 
@@ -1173,7 +1173,8 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             selected_col = color_map["t0"]
 
         # Plot histogram
-        hist_data, bin_edges, _ = axs[i].hist(data, bins='auto', alpha=0.7, label='Data', color=selected_col)
+        cond = (data > left) & (data < right)
+        hist_data, bin_edges, _ = axs[i].hist(data, bins=50, alpha=0.7, label='Data', color=selected_col)
 
         axs[i].set_title(col)
         axs[i].set_xlabel('Value')
@@ -1458,7 +1459,6 @@ print(f"--> A {written_lines/read_lines*100:.2f}% of the lines were valid.\n")
 # Assign name to the columns
 read_df.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, 71)]
 read_df['datetime'] = pd.to_datetime(read_df[['year', 'month', 'day', 'hour', 'minute', 'second']])
-# data = data.drop(columns=['year', 'month', 'day', 'hour', 'minute', 'second'])
 
 
 print("----------------------------------------------------------------------")
@@ -1509,6 +1509,7 @@ if exists_input_file:
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
     input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
     matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
+    print(matching_confs)
     if not matching_confs.empty:
         if len(matching_confs) > 1:
             print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
@@ -1574,7 +1575,7 @@ working_df["datetime"] = selected_df['datetime']
 print(selected_conf['conf'])
 
 # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-if selected_conf['conf'] < 2:
+if selected_conf['conf'] < 3:
     if station == "2":
         print("Configuration of the detector is less than 2.")
         print("Swapping channels that give problems in plane 4.")
@@ -1597,7 +1598,7 @@ if self_trigger:
     working_st_df["datetime"] = self_trigger_df['datetime']
 
     # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-    if selected_conf['conf'] < 2:
+    if selected_conf['conf'] < 3:
         if station == "2":
             print("Configuration of the detector is less than 2.")
             print("Swapping channels that give problems in plane 4.")
@@ -2201,24 +2202,25 @@ if low_value_cols:
     sys.exit(1)
 
 
-print("----------------------------------------------------------------------")
-print("-------------------- Time window filtering (1/3) ---------------------")
-print("----------------------------------------------------------------------")
-
-for key in ['T1', 'T2', 'T3', 'T4']:
-    T_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
-    T_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
-
-    T_F = working_df[T_F_cols].values
-    T_B = working_df[T_B_cols].values
-
-    new_cols = {}
-    for i in range(4):
-        new_cols[f'{key}_time_OG_sum_{i+1}'] = (T_F[:, i] + T_B[:, i]) / 2
-
-    working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
-
 if time_window_filtering:
+    
+    print("----------------------------------------------------------------------")
+    print("-------------------- Time window filtering (1/3) ---------------------")
+    print("----------------------------------------------------------------------")
+    
+    for key in ['T1', 'T2', 'T3', 'T4']:
+        T_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
+        T_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
+
+        T_F = working_df[T_F_cols].values
+        T_B = working_df[T_B_cols].values
+
+        new_cols = {}
+        for i in range(4):
+            new_cols[f'{key}_time_OG_sum_{i+1}'] = (T_F[:, i] + T_B[:, i]) / 2
+
+        working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
+        
     # Pre removal of outliers
     spread_results = []
     for original_tt in sorted(working_df["original_tt"].unique()):
@@ -3028,11 +3030,12 @@ if create_plots:
     plt.close()
 
 
-print("----------------------------------------------------------------------")
-print("-------------------- Time window filtering (2/3) ---------------------")
-print("----------------------------------------------------------------------")
-
 if time_window_filtering:
+    
+    print("----------------------------------------------------------------------")
+    print("-------------------- Time window filtering (2/3) ---------------------")
+    print("----------------------------------------------------------------------")
+    
     # Pre removal of outliers
     spread_results = []
     for original_tt in sorted(working_df["original_tt"].unique()):
@@ -5874,12 +5877,12 @@ working_df["preprocessed_tt"] = working_df.apply(compute_preprocessed_tt, axis=1
 if self_trigger:
     working_st_df["preprocessed_tt"] = working_st_df.apply(compute_preprocessed_tt, axis=1)
 
-
-print("----------------------------------------------------------------------")
-print("-------------------- Time window filtering (3/3) ---------------------")
-print("----------------------------------------------------------------------")
-
 if time_window_filtering:
+    
+    print("----------------------------------------------------------------------")
+    print("-------------------- Time window filtering (3/3) ---------------------")
+    print("----------------------------------------------------------------------")
+    
     # Pre removal of outliers
     spread_results = []
     for preprocessed_tt in sorted(working_df["preprocessed_tt"].unique()):
@@ -6268,10 +6271,11 @@ if create_plots:
                 if show_plots:
                     plt.show()
                 plt.close()
-                
+
 
 # if create_plots:
 if create_plots or create_essential_plots:
+# if create_plots or create_very_essential_plots or create_essential_plots:
     from itertools import combinations
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
@@ -6324,8 +6328,11 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
+create_very_essential_plots = True
+
 # if create_plots:
-if create_plots or create_essential_plots:
+# if create_plots or create_essential_plots:
+if create_plots or create_very_essential_plots or create_essential_plots:
     from itertools import combinations
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
@@ -6571,7 +6578,6 @@ if create_plots or create_essential_plots:
         plt.close()
 
 
-
 if create_plots or create_essential_plots:
 # if create_plots:
 
@@ -6792,7 +6798,7 @@ for i_plane in range(1, 5):
 
 
 # ----------------------------------------------------------------------------------------------------------------
-if stratos_save and station == 1:
+if stratos_save and station == 2:
     print("Saving X and Y for stratos.")
     
     stratos_df = working_df.copy()
@@ -6993,8 +6999,7 @@ def fit_3d_line(
 
     chi2 = np.einsum('ij,ij->', res, res) / (sx**2 + sy**2 + sz**2)
 
-    return (xz0, yz0, float(theta), float(phi), float(chi2),
-            dict(zip(plane_ids, res_td)), dict(zip(plane_ids, res_y)))
+    return (xz0, yz0, float(theta), float(phi), float(chi2), dict(zip(plane_ids, res_td)), dict(zip(plane_ids, res_y)))
 
 
 # ---------------------------------------------------------------------------
@@ -7107,8 +7112,11 @@ for alt_iteration in range(repeat + 1):
     alt_iteration += 1
 
 
-if (create_plots and residual_plots):
+create_very_essential_plots = False
+
+# if (create_plots and residual_plots):
 # if create_essential_plots or (create_plots and residual_plots):
+if create_very_essential_plots or (create_plots and residual_plots):
     timtrack_columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
     residual_columns = [
         'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
@@ -7117,12 +7125,12 @@ if (create_plots and residual_plots):
     ]
     
     # Combined plot for all types
-    plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined Alternative method Results", figure_number=1)
+    # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined Alternative method Results", figure_number=1)
     
-    unique_types = working_df['original_tt'].unique()
+    unique_types = working_df['posfiltered_tt'].unique()
     for t in unique_types:
-        subset_data = working_df[working_df['original_tt'] == t]
-        plot_histograms_and_gaussian(subset_data, timtrack_columns, f"Alternative fitting Results for Original Type {t}", figure_number=1)
+        subset_data = working_df[working_df['posfiltered_tt'] == t]
+        # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"Alternative fitting Results for Original Type {t}", figure_number=1)
         plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative fitting Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
 
 
@@ -7325,6 +7333,12 @@ def fres(vs, vdat, lenx, ss, zi):  # Residuals array
     vres = [yr, tsr, tdr]
     return vres
 
+def extract_plane_data(track, iplane):
+    zi  = z_positions[iplane - 1]
+    yst = getattr(track, f'Y_{iplane}')
+    ts  = getattr(track, f'P{iplane}_T_sum_final')
+    td  = getattr(track, f'P{iplane}_T_diff_final')
+    return [yst, ts, td], [anc_sy, anc_sts, anc_std], zi
 
 nvar = 3
 i = 0
@@ -7333,21 +7347,14 @@ if limit and limit_number < ntrk: ntrk = limit_number
 print("-----------------------------")
 print(f"{ntrk} events to be fitted")
 
-if res_ana_removing_planes:
-    timtrack_results = ['x', 'xp', 'y', 'yp', 't0', 's',
-                    'th_chi', 'res_y', 'res_ts', 'res_td', 'processed_tt',
-                    'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
-                    'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
-                    'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4',
-                    'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
-                    'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
-                    'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4']
-else:
-    timtrack_results = ['x', 'xp', 'y', 'yp', 't0', 's', 'processed_tt', 'th_chi',
-                    'charge_1', 'charge_2', 'charge_3', 'charge_4', 'charge_event',
-                    'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
-                    'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
-                    'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4']
+timtrack_results = ['x', 'xp', 'y', 'yp', 't0', 's',
+                'th_chi', 'res_y', 'res_ts', 'res_td', 'processed_tt',
+                'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
+                'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
+                'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4',
+                'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
+                'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
+                'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4']
 
 new_columns_df = pd.DataFrame(0., index=working_df.index, columns=timtrack_results)
 working_df = pd.concat([working_df, new_columns_df], axis=1)
@@ -7391,44 +7398,36 @@ for iteration in range(repeat + 1):
         planes_to_iterate = np.array(planes_to_iterate)
         
         # FITTING -----------------------------------------------------------------------
-        if len(planes_to_iterate) > 1:
-            if fixed_speed:
-                vs  = np.asarray([0,0,0,0,0])
-            else:
-                vs  = np.asarray([0,0,0,0,0,sc])
-            mk  = np.zeros([npar, npar])
-            va  = np.zeros(npar)
-            istp = 0   # nb. of fitting steps
-            dist = d0
-            while dist>cocut:
-                for iplane in planes_to_iterate:
-                    
-                    # Data --------------------------------------------------------
-                    zi  = z_positions[iplane - 1]                              # z pos
-                    yst = getattr(track, f'Y_{iplane}')                        # y position
-                    sy  = anc_sy                                               # uncertainty in y               
-                    ts  = getattr(track, f'P{iplane}_T_sum_final')             # t sum
-                    sts = anc_sts                                              # uncertainty in t sum
-                    td  = getattr(track, f'P{iplane}_T_diff_final')            # t dif
-                    std = anc_std                                              # uncertainty in tdif
-                    # -------------------------------------------------------------
-                    
-                    vdat = [yst, ts, td]
-                    vsig = [sy, sts, std]
-                    mk = mk + fmkx(nvar, npar, vs, vsig, ss, zi)
-                    va = va + fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
-                istp = istp + 1
-                merr = linalg.inv(mk)     # Error matrix
-                vs0 = vs
-                vs  = merr @ va          # sEa equation
-                dist = fmahd(npar, vs, vs0, merr)
-                if istp > 5:
-                    continue
-            dist = 10
-            vsf = vs       # final saeta
-            fitted += 1
-        else:
+        if len(planes_to_iterate) <= 1:
             continue
+        
+        if fixed_speed:
+            vs  = np.asarray([0,0,0,0,0])
+        else:
+            vs  = np.asarray([0,0,0,0,0,sc])
+        mk  = np.zeros([npar, npar])
+        va  = np.zeros(npar)
+        istp = 0   # nb. of fitting steps
+        dist = d0
+        while dist>cocut:
+            for iplane in planes_to_iterate:
+                
+                # Data --------------------------------------------------------
+                vdat, vsig, zi = extract_plane_data(track, iplane)
+                # -------------------------------------------------------------
+                
+                mk = mk + fmkx(nvar, npar, vs, vsig, ss, zi)
+                va = va + fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
+            istp = istp + 1
+            vs0 = vs
+            vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
+            merr = np.linalg.inv(mk)      # Only compute if needed for fmahd()
+            dist = fmahd(npar, vs, vs0, merr)
+            if istp > 5:
+                continue
+        dist = 10
+        vsf = vs       # final saeta
+        fitted += 1
         
         
         # RESIDUAL ANALYSIS ----------------------------------------------------------------------------
@@ -7441,31 +7440,23 @@ for iteration in range(repeat + 1):
                 
                 ndat = ndat + nvar
                 
-                # Data --------------------------------------------------------
-                zi  = z_positions[iplane - 1]                                  # z pos
-                yst = getattr(track, f'Y_{iplane}')                            # y position
-                sy  = anc_sy                                                   # uncertainty in y               
-                ts  = getattr(track, f'P{iplane}_T_sum_final')                 # t sum
-                sts = anc_sts                                                  # uncertainty in t sum
-                td  = getattr(track, f'P{iplane}_T_diff_final')                # t dif
-                std = anc_std                                                  # uncertainty in tdif
-                # -------------------------------------------------------------
+                # Data --------------------------------------------------------------------------------
+                vdat, vsig, zi = extract_plane_data(track, iplane)
+                # -------------------------------------------------------------------------------------
                 
-                vdat = [yst, ts, td]
-                vsig = [sy, sts, std]
                 vres = fres(vsf, vdat, lenx, ss, zi)
                 
                 res_ystr  = res_ystr  + vres[0]
                 res_tsum  = res_tsum + vres[1]
                 res_tdif  = res_tdif + vres[2]
                 
-            ndf  = ndat - npar    # number of degrees of freedom; was ndat - npar
-            
-            working_df.at[idx, f'res_ystr_{iplane}'] = res_ystr
-            working_df.at[idx, f'res_tsum_{iplane}'] = res_tsum
-            working_df.at[idx, f'res_tdif_{iplane}'] = res_tdif
+                working_df.at[idx, f'res_ystr_{iplane}'] = vres[0]
+                working_df.at[idx, f'res_tsum_{iplane}'] = vres[1]
+                working_df.at[idx, f'res_tdif_{iplane}'] = vres[2]
             
             working_df.at[idx, 'processed_tt'] = name_type
+            
+            ndf  = ndat - npar    # number of degrees of freedom; was ndat - npar
             
             chi2 = ( res_ystr / anc_sy )**2 + ( res_tsum / anc_sts )**2 + ( res_tdif / anc_std )**2
             working_df.at[idx, 'th_chi'] = chi2
@@ -7482,25 +7473,19 @@ for iteration in range(repeat + 1):
             else:
                 working_df.at[idx, 's'] = vsf[5]
         
+        
         # ---------------------------------------------------------------------------------------------
         # Residual analysis with 4-plane tracks (hide a plane and make a fit in the 3 remaining planes)
         # ---------------------------------------------------------------------------------------------
-        if len(planes_to_iterate) == 4 and res_ana_removing_planes:
+        if len(planes_to_iterate) >= 3 and res_ana_removing_planes:
             
             # for iplane_ref, istrip_ref in zip(planes_to_iterate, istrip_list):
             for iplane_ref in planes_to_iterate:
                 
-                # Data --------------------------------------------------------
-                z_ref  = z_positions[iplane_ref - 1]                               # z pos
-                y_strip_ref = getattr(track, f'Y_{iplane_ref}')                    # y position
-                sy  = anc_sy                                                       # uncertainty in y
-                t_sum_ref  = getattr(track, f'P{iplane_ref}_T_sum_final')          # t sum
-                sts = anc_sts                                                      # uncertainty in t sum
-                t_dif_ref  = getattr(track, f'P{iplane_ref}_T_diff_final')         # t dif
-                std = anc_std                                                      # uncertainty in tdif
+                # Data ------------------------------------------------------------
+                vdat_ref, _, z_ref = extract_plane_data(track, iplane_ref)
                 # -----------------------------------------------------------------
                 
-                vdat_ref = [ y_strip_ref, t_sum_ref, t_dif_ref]
                 planes_to_iterate_short = planes_to_iterate[planes_to_iterate != iplane_ref]
                 
                 vs     = vsf  # We start with the previous 4-planes fit
@@ -7512,26 +7497,18 @@ for iteration in range(repeat + 1):
                     for iplane in planes_to_iterate_short:
                     
                         # Data --------------------------------------------------------
-                        zi  = z_positions[iplane - 1] - z_ref                           # z pos
-                        yst = getattr(track, f'Y_{iplane}')                             # y position
-                        sy  = anc_sy                                                    # uncertainty in y
-                        ts  = getattr(track, f'P{iplane}_T_sum_final')                  # t sum
-                        sts = anc_sts                                                   # uncertainty in t sum
-                        td  = getattr(track, f'P{iplane}_T_diff_final')                 # t dif
-                        std = anc_std                                                   # uncertainty in tdif
+                        vdat, vsig, zi = extract_plane_data(track, iplane)
+                        zi  = zi - z_ref    
                         # -------------------------------------------------------------
                         
-                        vdat = [yst, ts, td]
-                        vsig = [sy, sts, std]
                         mk = mk + fmkx(nvar, npar, vs, vsig, ss, zi)
                         va = va + fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
                     isP3 = isP3 + 1
-                    merr = linalg.inv(mk)    # Error matrix
                     vs0 = vs
-                    vs  = merr @ va          # sEa equation
+                    vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
+                    merr = np.linalg.inv(mk)      # Only compute if needed for fmahd()
                     dist = fmahd(npar, vs, vs0, merr)
                     
-                vsig = [sy, sts, std]
                 v_res = fres(vs, vdat_ref, lenx, ss, 0)
                 
                 working_df.at[idx, f'ext_res_ystr_{iplane_ref}'] = v_res[0]
@@ -7586,7 +7563,10 @@ for iteration in range(repeat + 1):
         for i in range(1, 5):
             if abs(row[f'res_tsum_{i}']) > res_tsum_filter or \
                 abs(row[f'res_tdif_{i}']) > res_tdif_filter or \
-                abs(row[f'res_ystr_{i}']) > res_ystr_filter:
+                abs(row[f'res_ystr_{i}']) > res_ystr_filter or \
+                abs(row[f'res_tsum_{i}']) > ext_res_tsum_filter or \
+                abs(row[f'res_tdif_{i}']) > ext_res_tdif_filter or \
+                abs(row[f'res_ystr_{i}']) > ext_res_ystr_filter:
                 
                 changed = True
                 working_df.at[index, f'Y_{i}'] = 0
@@ -7634,23 +7614,71 @@ working_df = pd.concat([working_df, new_columns_df], axis=1)
 
 # Plot the residuals -----------------------------------------------------------------
 
-if (create_plots and residual_plots):
-# if create_essential_plots or (create_plots and residual_plots):
-    timtrack_columns = ['x', 'theta', 's', 'y', 'phi', 't0']
-    residual_columns = [
-        'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
-        'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
-        'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4'
-    ]
+# create_very_essential_plots = True
+
+# # if (create_plots and residual_plots):
+# # if create_essential_plots or (create_plots and residual_plots):
+# if create_very_essential_plots or (create_plots and residual_plots):
+#     timtrack_columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
+#     residual_columns = [
+#         'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
+#         'alt_res_tsum_1', 'alt_res_tsum_2', 'alt_res_tsum_3', 'alt_res_tsum_4',
+#         'alt_res_tdif_1', 'alt_res_tdif_2', 'alt_res_tdif_3', 'alt_res_tdif_4'
+#     ]
     
-    # Combined plot for all types
-    plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
+#     # Combined plot for all types
+#     # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined Alternative method Results", figure_number=1)
     
-    unique_types = working_df['processed_tt'].unique()
-    for t in unique_types:
-        subset_data = working_df[working_df['processed_tt'] == t]
-        plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
-        plot_histograms_and_gaussian(subset_data, residual_columns, f"Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+#     unique_types = working_df['processed_tt'].unique()
+#     for t in unique_types:
+#         if t < 100:
+#             continue
+#         subset_data = working_df[working_df['processed_tt'] == t]
+#         # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"Alternative fitting Results for Original Type {t}", figure_number=1)
+#         plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative fitting Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+
+
+# # if (create_plots and residual_plots):
+# # if create_essential_plots or (create_plots and residual_plots):
+# if create_very_essential_plots or (create_plots and residual_plots):
+#     timtrack_columns = ['x', 'theta', 's', 'y', 'phi', 't0']
+#     residual_columns = [
+#         'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
+#         'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
+#         'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4'
+#     ]
+    
+#     # Combined plot for all types
+#     # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
+    
+#     unique_types = working_df['processed_tt'].unique()
+#     for t in unique_types:
+#         if t < 100:
+#             continue
+#         subset_data = working_df[working_df['processed_tt'] == t]
+#         # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
+#         plot_histograms_and_gaussian(subset_data, residual_columns, f"TimTrack Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+
+
+# # if (create_plots and residual_plots):
+#     # if create_essential_plots or (create_plots and residual_plots):
+#     if create_very_essential_plots or (create_plots and residual_plots):
+#         residual_columns = [
+#             'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
+#             'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
+#             'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4'
+#         ]
+    
+#         # Combined plot for all types
+#         # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
+    
+#         unique_types = working_df['processed_tt'].unique()
+#         for t in unique_types:
+#             if t < 100:
+#                 continue
+#             subset_data = working_df[working_df['processed_tt'] == t]
+#             # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
+#             plot_histograms_and_gaussian(subset_data, residual_columns, f"External Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
 
 
 print("----------------------------------------------------------------------")
@@ -7693,10 +7721,10 @@ width_half  = total_width / 2.0          # y acceptance  : [-width_half , +width
 z_planes    = np.asarray(z_positions)    # shape (nplan,)
 
 # Precompute averages of the two independent fits --------------------------
-x0_avg   = (working_df['x']    + working_df['alt_x'])    * 0.5
-y0_avg   = (working_df['y']    + working_df['alt_y'])    * 0.5
-theta_av = (working_df['theta']+ working_df['alt_theta'])* 0.5
-phi_av   = (working_df['phi']  + working_df['alt_phi'])  * 0.5
+x0_avg   = (working_df['x']     + working_df['alt_x'])     * 0.5
+y0_avg   = (working_df['y']     + working_df['alt_y'])     * 0.5
+theta_av = (working_df['theta'] + working_df['alt_theta']) * 0.5
+phi_av   = (working_df['phi']   + working_df['alt_phi'])   * 0.5
 
 vx = np.sin(theta_av) * np.cos(phi_av)                   # direction cosines
 vy = np.sin(theta_av) * np.sin(phi_av)
@@ -7807,13 +7835,13 @@ if time_window_fitting:
         counts_per_width_dev = np.array(counts_per_width_dev)
         counts_per_width_norm = counts_per_width / np.max(counts_per_width)
 
-        # Define model function: signal (logistic) + linear background
-        def signal_plus_background(w, S, w0, tau, B):
-            return S / (1 + np.exp(-(w - w0) / tau)) + B * w
+        # # Define model function: signal (logistic) + linear background
+        # def signal_plus_background(w, S, w0, tau, B):
+        #     return S / (1 + np.exp(-(w - w0) / tau)) + B * w
         
-        # from scipy.special import erf
-        # def signal_plus_background(w, S, w0, sigma, B):
-        #     return 0.5 * S * (1 + erf((w - w0) / (np.sqrt(2) * sigma))) + B * w
+        from scipy.special import erf
+        def signal_plus_background(w, S, w0, sigma, B):
+            return 0.5 * S * (1 + erf((w - w0) / (np.sqrt(2) * sigma))) + B * w
 
         p0 = [1.0, 1.0, 0.5, 0.02]
         
@@ -7912,8 +7940,7 @@ for index, row in working_df.iterrows():
 # -------------- Correlate trigger types in different stages ------------------
 # -----------------------------------------------------------------------------
 
-def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_idx, base_dir,
-                        show_plots=False, save_plots=False, plot_list=None):
+def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_idx, base_dir, show_plots=False, save_plots=False, plot_list=None):
 
     analysis_data = df[[row_label, col_label]]
     counts = analysis_data.groupby([row_label, col_label]).size().unstack(fill_value=0)
@@ -8031,7 +8058,6 @@ definitive_df = definitive_df.mask(mask, 0)
 pct = 100 * n_small / n_total if n_total > 0 else 0
 print(f"\nIn definitive_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
 
-
 # Remove rows with zeros in key places ----------------------------------------
 cols_to_check = ['x', 'xp', 'y', 'yp', 's', 't0', 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s']
 
@@ -8053,6 +8079,7 @@ print("----------------------------------------------------------------------")
 print("Unique tracking_tt values:", sorted(definitive_df['tracking_tt'].unique()))
 print("Unique original_tt values:", sorted(definitive_df['original_tt'].unique()))
 print("Unique processed_tt values:", sorted(definitive_df['processed_tt'].unique()))
+print("Unique definitive_tt values:", sorted(definitive_df['definitive_tt'].unique()))
 
 
 print("----------------------------------------------------------------------")
@@ -8061,20 +8088,88 @@ print("----------------------------------------------------------------------")
 
 df_plot_ancillary = definitive_df.copy()
 
-cond = ( df_plot_ancillary['charge_1'] < 100 ) &\
-    ( df_plot_ancillary['charge_2'] < 100 ) &\
-    ( df_plot_ancillary['charge_3'] < 100 ) &\
-    ( df_plot_ancillary['charge_4'] < 100 ) &\
-    ( df_plot_ancillary['charge_event'] > 0 ) &\
-    ( df_plot_ancillary['s'] > slowness_filter_left ) &\
-    ( df_plot_ancillary['s'] < slowness_filter_right ) &\
-    ( df_plot_ancillary['alt_s'] > alt_slowness_filter_left ) &\
-    ( df_plot_ancillary['alt_s'] < alt_slowness_filter_right )
+# cond = ( df_plot_ancillary['charge_1'] < 100 ) &\
+#     ( df_plot_ancillary['charge_2'] < 100 ) &\
+#     ( df_plot_ancillary['charge_3'] < 100 ) &\
+#     ( df_plot_ancillary['charge_4'] < 100 ) &\
+#     ( df_plot_ancillary['charge_event'] > 0 ) &\
+#     ( df_plot_ancillary['s'] > slowness_filter_left ) &\
+#     ( df_plot_ancillary['s'] < slowness_filter_right ) &\
+#     ( df_plot_ancillary['alt_s'] > alt_slowness_filter_left ) &\
+#     ( df_plot_ancillary['alt_s'] < alt_slowness_filter_right )
 
-df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
+# df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
+
+
+# -----------------------------------------------------------------------------------------------------------------------------
+create_very_essential_plots = True
+
+# if (create_plots and residual_plots):
+# if create_essential_plots or (create_plots and residual_plots):
+if create_very_essential_plots or (create_plots and residual_plots):
+    timtrack_columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
+    residual_columns = [
+        'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
+        'alt_res_tsum_1', 'alt_res_tsum_2', 'alt_res_tsum_3', 'alt_res_tsum_4',
+        'alt_res_tdif_1', 'alt_res_tdif_2', 'alt_res_tdif_3', 'alt_res_tdif_4'
+    ]
+    
+    unique_types = df_plot_ancillary['definitive_tt'].unique()
+    for t in unique_types:
+        if t < 100:
+            continue
+        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
+        plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative fitting Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+
+
+# if (create_plots and residual_plots):
+# if create_essential_plots or (create_plots and residual_plots):
+if create_very_essential_plots or (create_plots and residual_plots):
+    timtrack_columns = ['x', 'theta', 's', 'y', 'phi', 't0']
+    residual_columns = [
+        'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
+        'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
+        'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4'
+    ]
+    
+    # Combined plot for all types
+    # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
+    
+    unique_types = df_plot_ancillary['definitive_tt'].unique()
+    for t in unique_types:
+        if t < 100:
+            continue
+        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
+        # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
+        plot_histograms_and_gaussian(subset_data, residual_columns, f"TimTrack Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+
+
+# if (create_plots and residual_plots):
+    # if create_essential_plots or (create_plots and residual_plots):
+    if create_very_essential_plots or (create_plots and residual_plots):
+        residual_columns = [
+            'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
+            'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
+            'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4'
+        ]
+    
+        # Combined plot for all types
+        # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
+    
+        unique_types = df_plot_ancillary['definitive_tt'].unique()
+        for t in unique_types:
+            if t < 100:
+                continue
+            subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
+            # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
+            plot_histograms_and_gaussian(subset_data, residual_columns, f"External Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+
+# -----------------------------------------------------------------------------------------------------------------------------
+
 
 # if create_plots:
-if create_plots or create_essential_plots:
+# if create_plots or create_essential_plots:
+if create_plots or create_very_essential_plots or create_essential_plots:
 
     def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=40):
         
@@ -8088,8 +8183,8 @@ if create_plots or create_essential_plots:
             'phi': [-np.pi, np.pi],
             'alt_theta': [0, np.pi/2],
             'alt_phi': [-np.pi, np.pi],
-            'xp': [-1*proj_filter, proj_filter],
-            'yp': [-1*proj_filter, proj_filter],
+            'xp': [-1 * proj_filter, proj_filter],
+            'yp': [-1 * proj_filter, proj_filter],
             's': [slowness_filter_left, slowness_filter_right],
             'alt_s': [alt_slowness_filter_left, alt_slowness_filter_right],
             # 'th_chi': [0, 0.03],
@@ -8107,6 +8202,9 @@ if create_plots or create_essential_plots:
             'alt_res_ystr_1': [-alt_res_ystr_filter, alt_res_ystr_filter], 'alt_res_ystr_2': [-alt_res_ystr_filter, alt_res_ystr_filter], 'alt_res_ystr_3': [-alt_res_ystr_filter, alt_res_ystr_filter], 'alt_res_ystr_4': [-alt_res_ystr_filter, alt_res_ystr_filter],
             'alt_res_tsum_1': [-alt_res_tsum_filter, alt_res_tsum_filter], 'alt_res_tsum_2': [-alt_res_tsum_filter, alt_res_tsum_filter], 'alt_res_tsum_3': [-alt_res_tsum_filter, alt_res_tsum_filter], 'alt_res_tsum_4': [-alt_res_tsum_filter, alt_res_tsum_filter],
             'alt_res_tdif_1': [-alt_res_tdif_filter, alt_res_tdif_filter], 'alt_res_tdif_2': [-alt_res_tdif_filter, alt_res_tdif_filter], 'alt_res_tdif_3': [-alt_res_tdif_filter, alt_res_tdif_filter], 'alt_res_tdif_4': [-alt_res_tdif_filter, alt_res_tdif_filter],
+            'ext_res_ystr_1': [-ext_res_ystr_filter, ext_res_ystr_filter], 'ext_res_ystr_2': [-ext_res_ystr_filter, ext_res_ystr_filter], 'ext_res_ystr_3': [-ext_res_ystr_filter, ext_res_ystr_filter], 'ext_res_ystr_4': [-ext_res_ystr_filter, ext_res_ystr_filter],
+            'ext_res_tsum_1': [-ext_res_tsum_filter, ext_res_tsum_filter], 'ext_res_tsum_2': [-ext_res_tsum_filter, ext_res_tsum_filter], 'ext_res_tsum_3': [-ext_res_tsum_filter, ext_res_tsum_filter], 'ext_res_tsum_4': [-ext_res_tsum_filter, ext_res_tsum_filter],
+            'ext_res_tdif_1': [-ext_res_tdif_filter, ext_res_tdif_filter], 'ext_res_tdif_2': [-ext_res_tdif_filter, ext_res_tdif_filter], 'ext_res_tdif_3': [-ext_res_tdif_filter, ext_res_tdif_filter], 'ext_res_tdif_4': [-ext_res_tdif_filter, ext_res_tdif_filter],
         }
         
         # Apply filters
@@ -8227,7 +8325,7 @@ if create_plots or create_essential_plots:
     #     ([("tracking_tt", 1234, 1234)], "1-2-3-4 cases"),
     # ]
     
-    df_cases_2 = [
+    df_cases_1 = [
         ([("definitive_tt", 12, 12)], "1-2 cases"),
         ([("definitive_tt", 23, 23)], "2-3 cases"),
         ([("definitive_tt", 34, 34)], "3-4 cases"),
@@ -8236,6 +8334,14 @@ if create_plots or create_essential_plots:
         ([("definitive_tt", 1234, 1234)], "1-2-3-4 cases"),
         ([("definitive_tt", 13, 13)], "1-3 cases"),
         ([("definitive_tt", 14, 14)], "1-4 cases"),
+        ([("definitive_tt", 124, 124)], "1-2-4 cases"),
+        ([("definitive_tt", 134, 134)], "1-3-4 cases"),
+    ]
+    
+    df_cases_2 = [
+        ([("definitive_tt", 1234, 1234)], "1-2-3-4 cases"),
+        ([("definitive_tt", 123, 123)], "1-2-3 cases"),
+        ([("definitive_tt", 234, 234)], "2-3-4 cases"),
         ([("definitive_tt", 124, 124)], "1-2-4 cases"),
         ([("definitive_tt", 134, 134)], "1-3-4 cases"),
     ]
@@ -8292,27 +8398,27 @@ if create_plots or create_essential_plots:
     # ]
 
 
-    # Charge of each plane -------------------------------------------------------------------
-    for filters, title in df_cases_2:
-        # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
-        relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
+    # # Charge of each plane -------------------------------------------------------------------
+    # for filters, title in df_cases_2:
+    #     # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
+    #     relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
 
-        # Define the columns - interest dynamically
-        # columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp'] + relevant_charges
-        columns_of_interest = relevant_charges
+    #     # Define the columns - interest dynamically
+    #     # columns_of_interest = ['x', 'y', 'theta', 'phi', 'xp', 'yp'] + relevant_charges
+    #     columns_of_interest = relevant_charges
 
-        # Keep the original filters (if needed) and apply them
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            columns_of_interest,  # Dynamically set the columns to include relevant charges
-            filters,  # Keep original filters
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
+    #     # Keep the original filters (if needed) and apply them
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         columns_of_interest,  # Dynamically set the columns to include relevant charges
+    #         filters,  # Keep original filters
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
 
 
     # # Residues --------------------------------------------------------------------------------------
@@ -8335,59 +8441,62 @@ if create_plots or create_essential_plots:
     #         plot_list
     #     )
     
-    # for filters, title in df_cases_2:
-    #     relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-    #     relevant_residues_alt_tsum = [f"alt_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+    for filters, title in df_cases_2:
+        relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_alt_tsum = [f"alt_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_ext_tsum = [f"ext_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
         
-    #     columns_of_interest = relevant_residues_tsum + relevant_residues_alt_tsum
+        columns_of_interest = relevant_residues_tsum + relevant_residues_alt_tsum + relevant_residues_ext_tsum
         
-    #     fig_idx = plot_hexbin_matrix(
-    #         df_plot_ancillary,
-    #         columns_of_interest,
-    #         filters,
-    #         title,
-    #         save_plots,
-    #         show_plots,
-    #         base_directories,
-    #         fig_idx,
-    #         plot_list
-    #     )
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            columns_of_interest,
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
     
-    # for filters, title in df_cases_2:
-    #     relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-    #     relevant_residues_alt_tdif = [f"alt_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+    for filters, title in df_cases_2:
+        relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_alt_tdif = [f"alt_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_ext_tdif = [f"ext_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
         
-    #     columns_of_interest = relevant_residues_tdif + relevant_residues_alt_tdif
+        columns_of_interest = relevant_residues_tdif + relevant_residues_alt_tdif + relevant_residues_ext_tdif
         
-    #     fig_idx = plot_hexbin_matrix(
-    #         df_plot_ancillary,
-    #         columns_of_interest,
-    #         filters,
-    #         title,
-    #         save_plots,
-    #         show_plots,
-    #         base_directories,
-    #         fig_idx,
-    #         plot_list
-    #     )
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            columns_of_interest,
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
     
-    # for filters, title in df_cases_2:
-    #     relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-    #     relevant_residues_alt_ystr = [f"alt_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+    for filters, title in df_cases_2:
+        relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_alt_ystr = [f"alt_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_ext_ystr = [f"ext_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
         
-    #     columns_of_interest = relevant_residues_ystr + relevant_residues_alt_ystr
+        columns_of_interest = relevant_residues_ystr + relevant_residues_alt_ystr + relevant_residues_ext_ystr
         
-    #     fig_idx = plot_hexbin_matrix(
-    #         df_plot_ancillary,
-    #         columns_of_interest,
-    #         filters,
-    #         title,
-    #         save_plots,
-    #         show_plots,
-    #         base_directories,
-    #         fig_idx,
-    #         plot_list
-    #     )
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            columns_of_interest,
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
     
     # plot_col = ['alt_th_chi', 'alt_s', 's', 'th_chi']
     # plot_col = ['alt_x', 'alt_y', 'y', 'x']
@@ -8396,10 +8505,10 @@ if create_plots or create_essential_plots:
     # plt_col = ['alt_th_chi', 'alt_s', 's', 'th_chi']
     # plot_col = ['alt_phi', 'alt_theta', 'theta', 'phi']
     
-    plot_col = ['x', 'y', 'theta', 'phi', 'th_chi', 'alt_th_chi', 's', 'alt_s']
+    plot_col = ['x', 'y', 'theta', 'phi', 's', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
 
     # Comparison with alternative fitting -------------------------------------------------------------------
-    for filters, title in df_cases_2:
+    for filters, title in df_cases_1:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
             plot_col,
@@ -8411,7 +8520,23 @@ if create_plots or create_essential_plots:
             fig_idx,
             plot_list
         )
+    
+    
+    plot_col = ['x', 'y', 'theta', 'phi', 's']
 
+    # Comparison with alternative fitting -------------------------------------------------------------------
+    for filters, title in df_cases_1:
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            plot_col,
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
 
 
 if create_plots or create_essential_plots:
