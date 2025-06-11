@@ -97,6 +97,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 from mpl_toolkits.mplot3d import Axes3D  # for 3D plotting
+import matplotlib as mpl
 
 # Image processing
 from PIL import Image
@@ -465,11 +466,11 @@ Y_RPC_right = 170 # 150
 # -----------------------------------------------------------------------------
 alt_pos_filter = 600
 alt_theta_left_filter = 0
-alt_theta_right_filter = np.pi/2
+alt_theta_right_filter = np.pi/3
 alt_phi_left_filter = -1*np.pi
 alt_phi_right_filter = np.pi
-alt_slowness_filter_left = -0.02
-alt_slowness_filter_right = 0.03 # 0.025
+alt_slowness_filter_left = -0.01
+alt_slowness_filter_right = 0.02 # 0.025
 
 alt_res_ystr_filter = 300
 alt_res_tsum_filter = 2
@@ -482,13 +483,13 @@ pos_filter = 600
 proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = -0.02 # -0.01
-slowness_filter_right = 0.03 # 0.025
+slowness_filter_left = -0.01 # -0.01
+slowness_filter_right = 0.02 # 0.025
 
-theta_left_filter = 0
-theta_right_filter = np.pi/2
-phi_left_filter = -1*np.pi
-phi_right_filter = np.pi
+theta_left_filter = alt_theta_left_filter
+theta_right_filter = alt_theta_right_filter
+phi_left_filter = alt_phi_left_filter
+phi_right_filter = alt_phi_right_filter
 
 res_ystr_filter = 300
 res_tsum_filter = 2
@@ -6375,7 +6376,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     fig.suptitle("Histograms of T_diff Differences for Different Patterns", fontsize=16)
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
     if save_plots:
-        name_of_file = 'tdiff_differences_hist_4x3.png'
+        name_of_file = 'tdiff_differences_hist_4x3_only_adj.png'
         final_filename = f'{fig_idx}_{name_of_file}'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -6385,6 +6386,106 @@ if create_plots or create_very_essential_plots or create_essential_plots:
         plt.show()
     plt.close()
                     
+
+# if create_plots:
+    # if create_plots or create_essential_plots:
+    if create_plots or create_very_essential_plots or create_essential_plots:
+        from itertools import combinations
+
+        patterns_of_interest = ['1100', '0110', '0011']
+        fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(24, 10), sharex=True, sharey=False)
+
+        for i_plane in range(1, 5):
+            active_col = f'active_strips_P{i_plane}'
+            T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
+
+            for j_pattern, pattern in enumerate(patterns_of_interest):
+                ax = axs[i_plane - 1, j_pattern]
+
+                active_strips = [i for i, c in enumerate(pattern) if c == '1']
+                if len(active_strips) != 2:
+                    ax.set_visible(False)
+                    continue
+
+                i, j = active_strips
+                mask = working_df[active_col] == pattern
+                if mask.sum() == 0:
+                    ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+                    continue
+
+                xi = working_df.loc[mask, T_diff_cols[i]].values
+                yi = working_df.loc[mask, T_diff_cols[j]].values
+            
+                cond = (xi != 0) & (yi != 0) & (abs(xi) < 1) & (abs(yi) < 1)
+                xi = xi[cond]
+                yi = yi[cond]
+                diff = ( yi - xi ) * tdiff_to_x
+                
+                cond_new = abs(diff) < 150
+                diff = diff[cond_new]
+                
+                # Histogram
+                counts, bin_edges = np.histogram(diff, bins=50, range=(-150, 150))
+                bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+                # Double Gaussian model
+                def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
+                    g1 = A1 * np.exp(-0.5 * ((x - mu1) / sigma1)**2)
+                    g2 = A2 * np.exp(-0.5 * ((x - mu2) / sigma2)**2)
+                    return g1 + g2
+
+                # Constraint bounds
+                tolerance_in_pct = 100  # percent
+                
+                anc_std_in_mm = anc_std * tdiff_to_x
+                
+                sigma_small_left = anc_std_in_mm * (1 - tolerance_in_pct/100)
+                sigma_small_right = anc_std_in_mm * (1 + tolerance_in_pct/100)
+                
+                print(f"Left and right limits in sigma: {sigma_small_left:.3f}, {sigma_small_right:.3f} mm")
+                
+                lower_bound = [0,     -100, sigma_small_left,  0,     -100, 0]
+                upper_bound = [np.inf, 100, sigma_small_right, np.inf, 100, 1000]
+
+                # Initial guesses
+                p0 = [50, 0, anc_std_in_mm, 50, 0, 20]
+
+                # Fit
+                popt, _ = curve_fit(double_gaussian, bin_centers, counts, p0=p0, bounds=(lower_bound, upper_bound))
+
+                # Extract fitted components
+                A1, mu1, sigma1, A2, mu2, sigma2 = popt
+                fit_x = np.linspace(-150, 150, 500)
+                g1 = A1 * np.exp(-0.5 * ((fit_x - mu1) / sigma1)**2)
+                g2 = A2 * np.exp(-0.5 * ((fit_x - mu2) / sigma2)**2)
+                fit_total = g1 + g2
+
+                ax.hist(diff, bins=50, range=(-150, 150), color='blue', alpha=0.4, label='Data')
+                ax.plot(fit_x, g1, '--', label=f'σ={sigma1:.1f}')
+                ax.plot(fit_x, g2, '--', label=f'σ={sigma2:.1f}')
+
+                ax.plot(fit_x, fit_total, '-', color='red', label='Total fit')
+                
+                ax.set_xlim(-150, 150)
+                ax.set_title(f'Plane {i_plane}, Pattern {pattern}')
+                ax.set_xlabel(f'X difference (mm)')
+                ax.set_ylabel('Counts')
+                ax.grid(True)
+                ax.legend()
+
+        fig.suptitle("Fit to the Histograms of T_diff Differences for Different Patterns", fontsize=16)
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+        if save_plots:
+            name_of_file = 'tdiff_differences_hist_4x3_fit.png'
+            final_filename = f'{fig_idx}_{name_of_file}'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
+
 
 print("----------------------------------------------------------------------")
 print("----------------------- Y position calculation -----------------------")
@@ -7064,9 +7165,15 @@ for alt_iteration in range(repeat + 1):
         θ, φ = fit_res['alt_theta'][i], fit_res['alt_phi'][i]      # values just fitted
         v    = np.array([np.sin(θ)*np.cos(φ), np.sin(θ)*np.sin(φ), np.cos(θ)])
 
-        # distance along the fitted line for each plane (projection)
-        proj_dist = z * v[2]                                       # x=y=0  →  r·v = z·cosθ
-        s_rel     = proj_dist - proj_dist[0]
+        # distance along the fitted line for each plane (real vector projection)
+        x = np.array([strip_speed * getattr(trk, f'P{p}_T_diff_final') for p in planes])
+        y = np.array([getattr(trk, f'Y_{p}')                           for p in planes])
+        z = z_positions[np.array(planes) - 1]
+        positions = np.stack((x, y, z), axis=1)          # shape (n_planes, 3)
+
+        v = v / np.linalg.norm(v)                        # ensure unit vector
+        real_dist = positions @ v                        # scalar projection: r_i · v
+        s_rel = real_dist - real_dist[0]
         t_rel     = tsum - tsum[0]
 
         k, b = np.polyfit(s_rel, t_rel, 1)
@@ -7586,9 +7693,15 @@ for iteration in range(repeat + 1):
     print(f"Events that are 134: {planes134}")
     planes124 = len(working_df[working_df.processed_tt == 124])
     print(f"Events that are 124: {planes124}")
+    
     eff_2 = 1 - (planes134) / (four_planes + planes134)
+    print(f"First estimate of eff_2 ={eff_2:.2f} (complementary)")
+    eff_2 = (four_planes) / (four_planes + planes134)
     print(f"First estimate of eff_2 ={eff_2:.2f}")
+    
     eff_3 = 1 - (planes124) / (four_planes + planes124)
+    print(f"First estimate of eff_3 ={eff_3:.2f} (complementary)")
+    eff_3 = (four_planes) / (four_planes + planes124)
     print(f"First estimate of eff_3 ={eff_3:.2f}")
     
     iteration += 1
@@ -7610,75 +7723,6 @@ def calculate_angles(xproj, yproj):
 theta, phi = calculate_angles(working_df['xp'], working_df['yp'])
 new_columns_df = pd.DataFrame({'theta': theta, 'phi': phi}, index=working_df.index)
 working_df = pd.concat([working_df, new_columns_df], axis=1)
-
-
-# Plot the residuals -----------------------------------------------------------------
-
-# create_very_essential_plots = True
-
-# # if (create_plots and residual_plots):
-# # if create_essential_plots or (create_plots and residual_plots):
-# if create_very_essential_plots or (create_plots and residual_plots):
-#     timtrack_columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
-#     residual_columns = [
-#         'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
-#         'alt_res_tsum_1', 'alt_res_tsum_2', 'alt_res_tsum_3', 'alt_res_tsum_4',
-#         'alt_res_tdif_1', 'alt_res_tdif_2', 'alt_res_tdif_3', 'alt_res_tdif_4'
-#     ]
-    
-#     # Combined plot for all types
-#     # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined Alternative method Results", figure_number=1)
-    
-#     unique_types = working_df['processed_tt'].unique()
-#     for t in unique_types:
-#         if t < 100:
-#             continue
-#         subset_data = working_df[working_df['processed_tt'] == t]
-#         # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"Alternative fitting Results for Original Type {t}", figure_number=1)
-#         plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative fitting Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
-
-
-# # if (create_plots and residual_plots):
-# # if create_essential_plots or (create_plots and residual_plots):
-# if create_very_essential_plots or (create_plots and residual_plots):
-#     timtrack_columns = ['x', 'theta', 's', 'y', 'phi', 't0']
-#     residual_columns = [
-#         'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
-#         'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
-#         'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4'
-#     ]
-    
-#     # Combined plot for all types
-#     # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
-    
-#     unique_types = working_df['processed_tt'].unique()
-#     for t in unique_types:
-#         if t < 100:
-#             continue
-#         subset_data = working_df[working_df['processed_tt'] == t]
-#         # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
-#         plot_histograms_and_gaussian(subset_data, residual_columns, f"TimTrack Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
-
-
-# # if (create_plots and residual_plots):
-#     # if create_essential_plots or (create_plots and residual_plots):
-#     if create_very_essential_plots or (create_plots and residual_plots):
-#         residual_columns = [
-#             'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
-#             'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
-#             'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4'
-#         ]
-    
-#         # Combined plot for all types
-#         # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
-    
-#         unique_types = working_df['processed_tt'].unique()
-#         for t in unique_types:
-#             if t < 100:
-#                 continue
-#             subset_data = working_df[working_df['processed_tt'] == t]
-#             # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
-#             plot_histograms_and_gaussian(subset_data, residual_columns, f"External Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
 
 
 print("----------------------------------------------------------------------")
@@ -7790,7 +7834,7 @@ if time_window_fitting:
     
     print("---------------------------- Fitting loop ----------------------------")
     
-    for definitive_tt in [ 234 , 123 ,  34, 1234 ,  23   ,12  ,124  ,  134   ,  24 , 13  , 14]:
+    for definitive_tt in [ 234, 123, 34, 1234, 23, 12, 124, 134, 24, 13, 14 ]:
         # Create a mask for the current definitive_tt
         mask = working_df['definitive_tt'] == definitive_tt
 
@@ -8092,11 +8136,7 @@ df_plot_ancillary = definitive_df.copy()
 #     ( df_plot_ancillary['charge_2'] < 100 ) &\
 #     ( df_plot_ancillary['charge_3'] < 100 ) &\
 #     ( df_plot_ancillary['charge_4'] < 100 ) &\
-#     ( df_plot_ancillary['charge_event'] > 0 ) &\
-#     ( df_plot_ancillary['s'] > slowness_filter_left ) &\
-#     ( df_plot_ancillary['s'] < slowness_filter_right ) &\
-#     ( df_plot_ancillary['alt_s'] > alt_slowness_filter_left ) &\
-#     ( df_plot_ancillary['alt_s'] < alt_slowness_filter_right )
+#     ( df_plot_ancillary['charge_event'] > 0 )
 
 # df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 
@@ -8105,9 +8145,10 @@ df_plot_ancillary = definitive_df.copy()
 create_very_essential_plots = True
 
 # if (create_plots and residual_plots):
-# if create_essential_plots or (create_plots and residual_plots):
-if create_very_essential_plots or (create_plots and residual_plots):
-    timtrack_columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
+if create_essential_plots or (create_plots and residual_plots):
+# if create_very_essential_plots or create_essential_plots or (create_plots and residual_plots):
+    
+    # Alternative method --------------------------------------------------------------------------------------------
     residual_columns = [
         'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
         'alt_res_tsum_1', 'alt_res_tsum_2', 'alt_res_tsum_3', 'alt_res_tsum_4',
@@ -8120,49 +8161,174 @@ if create_very_essential_plots or (create_plots and residual_plots):
             continue
         subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
         plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative fitting Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
-
-
-# if (create_plots and residual_plots):
-# if create_essential_plots or (create_plots and residual_plots):
-if create_very_essential_plots or (create_plots and residual_plots):
-    timtrack_columns = ['x', 'theta', 's', 'y', 'phi', 't0']
+        
+    
+    # TimTrack method --------------------------------------------------------------------------------------------
     residual_columns = [
         'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
         'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
         'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4'
     ]
     
-    # Combined plot for all types
-    # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
-    
     unique_types = df_plot_ancillary['definitive_tt'].unique()
     for t in unique_types:
         if t < 100:
             continue
         subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
-        # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
         plot_histograms_and_gaussian(subset_data, residual_columns, f"TimTrack Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+    
+    
+    # TimTrack method - External residues -------------------------------------------------------------------------
+    residual_columns = [
+        'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
+        'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
+        'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4'
+    ]
+
+    unique_types = df_plot_ancillary['definitive_tt'].unique()
+    for t in unique_types:
+        if t < 100:
+            continue
+        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
+        plot_histograms_and_gaussian(subset_data, residual_columns, f"External Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+
+# -----------------------------------------------------------------------------------------------------------------------------
+
+# if (create_plots and residual_plots):
+# if create_essential_plots or (create_plots and residual_plots):
+if create_very_essential_plots or create_essential_plots or (create_plots and residual_plots):
+    
+    df_filtered = df_plot_ancillary.copy()
+    # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
+    
+    tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
+    
+    n_tt = len(tt_values)
+    ncols = 3
+    nrows = (n_tt + 1) // ncols
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
+    nbins = 32
+    theta_bins = np.linspace(theta_left_filter, theta_right_filter, int(round(nbins / 2) + 1) )
+    phi_bins = np.linspace(phi_left_filter, phi_right_filter, nbins)
+    colors = plt.cm.viridis
+
+    # Select theta/phi range (optional filtering)
+    theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
+    phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
+
+    for idx, tt_val in enumerate(tt_values):
+        row_idx, col_idx = divmod(idx, ncols)
+        ax = axes[row_idx][col_idx]
+
+        df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
+        theta_vals = df_tt['theta'].dropna()
+        phi_vals = df_tt['phi'].dropna()
+
+        # Apply range filtering
+        mask = (theta_vals >= theta_min) & (theta_vals <= theta_max) & \
+               (phi_vals >= phi_min) & (phi_vals <= phi_max)
+        theta_vals = theta_vals[mask]
+        phi_vals   = phi_vals[mask]
+
+        if len(theta_vals) < 10 or len(phi_vals) < 10:
+            ax.set_visible(False)
+            continue
+
+        # Polar plot settings
+        ax = plt.subplot(nrows, ncols, idx + 1, polar=True)
+        ax.set_facecolor(colors(0.0))  # darkest background in colormap
+
+        # 2D histogram: use phi as angle, theta as radius
+        h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
+        r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
+        phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+        R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
+        # c = ax.pcolormesh(PHI, R, h, cmap='viridis', norm=mpl.colors.LogNorm())
+        c = ax.pcolormesh(PHI, R, h, cmap='viridis')
+        ax.set_title(f'definitive_tt = {tt_val}', va='bottom')
+        fig.colorbar(c, ax=ax, pad=0.1, label='Counts')
+
+    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        final_filename = f'{fig_idx}_polar_theta_phi_definitive_tt_2D.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+
 
 
 # if (create_plots and residual_plots):
-    # if create_essential_plots or (create_plots and residual_plots):
-    if create_very_essential_plots or (create_plots and residual_plots):
-        residual_columns = [
-            'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
-            'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
-            'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4'
-        ]
+# if create_essential_plots or (create_plots and residual_plots):
+if create_very_essential_plots or create_essential_plots or (create_plots and residual_plots):
     
-        # Combined plot for all types
-        # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined TimTrack Results", figure_number=1)
+    df_filtered = df_plot_ancillary.copy()
+    # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
     
-        unique_types = df_plot_ancillary['definitive_tt'].unique()
-        for t in unique_types:
-            if t < 100:
-                continue
-            subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
-            # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"TimTrack Results for Processed Type {t}", figure_number=1)
-            plot_histograms_and_gaussian(subset_data, residual_columns, f"External Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
+    tt_values = [12, 23, 34, 123, 234, 1234]
+    
+    n_tt = len(tt_values)
+    ncols = 3
+    nrows = (n_tt + 1) // ncols
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
+    nbins = 32
+    theta_bins = np.linspace(theta_left_filter, theta_right_filter, int(round(nbins / 2) + 1) )
+    phi_bins = np.linspace(phi_left_filter, phi_right_filter, nbins)
+    colors = plt.cm.viridis
+
+    # Select theta/phi range (optional filtering)
+    theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
+    phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
+
+    for idx, tt_val in enumerate(tt_values):
+        row_idx, col_idx = divmod(idx, ncols)
+        ax = axes[row_idx][col_idx]
+
+        df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
+        theta_vals = df_tt['theta'].dropna()
+        phi_vals = df_tt['phi'].dropna()
+
+        # Apply range filtering
+        mask = (theta_vals >= theta_min) & (theta_vals <= theta_max) & \
+               (phi_vals >= phi_min) & (phi_vals <= phi_max)
+        theta_vals = theta_vals[mask]
+        phi_vals   = phi_vals[mask]
+
+        if len(theta_vals) < 10 or len(phi_vals) < 10:
+            ax.set_visible(False)
+            continue
+
+        # Polar plot settings
+        ax = plt.subplot(nrows, ncols, idx + 1, polar=True)
+        ax.set_facecolor(colors(0.0))  # darkest background in colormap
+
+        # 2D histogram: use phi as angle, theta as radius
+        h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
+        r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
+        phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+        R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
+        # c = ax.pcolormesh(PHI, R, h, cmap='viridis', norm=mpl.colors.LogNorm())
+        c = ax.pcolormesh(PHI, R, h, cmap='viridis')
+        ax.set_title(f'definitive_tt = {tt_val}', va='bottom')
+        fig.colorbar(c, ax=ax, pad=0.1, label='Counts')
+
+    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each tracking_tt Type', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        final_filename = f'{fig_idx}_polar_theta_phi_tracking_tt_2D.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
@@ -8179,10 +8345,10 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             'y': [-pos_filter, pos_filter],
             'alt_x': [-pos_filter, pos_filter],
             'alt_y': [-pos_filter, pos_filter],
-            'theta': [0, np.pi/2],
-            'phi': [-np.pi, np.pi],
-            'alt_theta': [0, np.pi/2],
-            'alt_phi': [-np.pi, np.pi],
+            'theta': [theta_left_filter, theta_right_filter],
+            'phi': [phi_left_filter, phi_right_filter],
+            'alt_theta': [alt_theta_left_filter, alt_theta_right_filter],
+            'alt_phi': [alt_phi_left_filter, alt_phi_right_filter],
             'xp': [-1 * proj_filter, proj_filter],
             'yp': [-1 * proj_filter, proj_filter],
             's': [slowness_filter_left, slowness_filter_right],
@@ -8441,6 +8607,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     #         plot_list
     #     )
     
+    
     for filters, title in df_cases_2:
         relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
         relevant_residues_alt_tsum = [f"alt_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
@@ -8497,17 +8664,10 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             fig_idx,
             plot_list
         )
+        
     
-    # plot_col = ['alt_th_chi', 'alt_s', 's', 'th_chi']
-    # plot_col = ['alt_x', 'alt_y', 'y', 'x']
-    # plot_col = ['alt_s', 'charge_event', 's']
-    # plot_col = ['alt_s', 'alt_theta', 'theta', 's']
-    # plt_col = ['alt_th_chi', 'alt_s', 's', 'th_chi']
-    # plot_col = ['alt_phi', 'alt_theta', 'theta', 'phi']
-    
-    plot_col = ['x', 'y', 'theta', 'phi', 's', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
-
     # Comparison with alternative fitting -------------------------------------------------------------------
+    plot_col = ['x', 'y', 'theta', 'phi', 's', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
     for filters, title in df_cases_1:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
@@ -8523,8 +8683,6 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     
     
     plot_col = ['x', 'y', 'theta', 'phi', 's']
-
-    # Comparison with alternative fitting -------------------------------------------------------------------
     for filters, title in df_cases_1:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
@@ -8541,13 +8699,10 @@ if create_plots or create_very_essential_plots or create_essential_plots:
 
 if create_plots or create_essential_plots:
 # if create_plots:
-
     df_filtered = df_plot_ancillary.copy()
-
     fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=False)
     colors = plt.cm.tab10.colors
     bins = np.linspace(0, np.pi, 150)
-
     tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
 
     for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('alt_theta', r'$\theta_{\mathrm{alt}}$')]):
@@ -8558,11 +8713,9 @@ if create_plots or create_essential_plots:
                 theta_vals = df_tt[theta_col].dropna()
                 if len(theta_vals) < 10:
                     continue
-
                 label = f'{tt_val}'
                 ax.hist(theta_vals, bins=bins, histtype='step', linewidth=1,
                         color=colors[i % len(colors)], label=label)
-
             ax.set_xlim(0, xlim_val)
             ax.set_xlabel(row_label + r' [rad]')
             if col_idx == 0:
@@ -8574,14 +8727,12 @@ if create_plots or create_essential_plots:
 
     plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ Distributions by Processed TT Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-
     if save_plots:
         final_filename = f'{fig_idx}_theta_alt_theta_definitive_tt_2x2.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-
     if show_plots:
         plt.show()
     plt.close()
@@ -8589,15 +8740,11 @@ if create_plots or create_essential_plots:
 
 if create_plots or create_essential_plots:
 # if create_plots:
-
     df_filtered = df_plot_ancillary.copy()
-
     fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=False)
     colors = plt.cm.tab10.colors
     bins = np.linspace(0, np.pi, 150)
-
     tt_values = sorted(df_filtered['tracking_tt'].dropna().unique(), key=lambda x: int(x))
-
     for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('alt_theta', r'$\theta_{\mathrm{alt}}$')]):
         for col_idx, (xlim_val, col_label) in enumerate([(np.pi, 'Full range'), (1.2, 'Zoom-in')]):
             ax = axes[row_idx, col_idx]
@@ -8610,7 +8757,6 @@ if create_plots or create_essential_plots:
                 label = f'{tt_val}'
                 ax.hist(theta_vals, bins=bins, histtype='step', linewidth=1,
                         color=colors[i % len(colors)], label=label)
-
             ax.set_xlim(0, xlim_val)
             ax.set_xlabel(row_label + r' [rad]')
             if col_idx == 0:
@@ -8622,14 +8768,12 @@ if create_plots or create_essential_plots:
 
     plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ Distributions by Tracking TT Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-
     if save_plots:
         final_filename = f'{fig_idx}_theta_alt_theta_tracking_tt_2x2.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-
     if show_plots:
         plt.show()
     plt.close()

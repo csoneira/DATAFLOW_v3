@@ -588,7 +588,7 @@ def compute_definitive_tt(row):
             
     return int(name) if name else 0  # Return 0 if no plane is valid
 
-# ----------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 print("----------------------------------------------------------------------")
 print("------------------- Efficiency respect the charge --------------------")
@@ -769,7 +769,6 @@ if save_plots:
 if show_plots:
     plt.show()
 plt.close()
-
 
 #%%
 
@@ -1440,7 +1439,6 @@ if polya_fit:
                     if theta_fit > 1 else 0,
         }
 
-        
         if 'polya_fit_list' not in locals():
             polya_fit_list = []
         polya_fit_list.append(polya_results)
@@ -1510,8 +1508,6 @@ if polya_fit:
     print("Polya fit results:")
     with pd.option_context('display.precision', 1):
         print(df_polya_fit)
-
-
 
 
 if polya_fit:
@@ -1687,7 +1683,6 @@ if polya_fit:
     print("Polya fit results:")
     with pd.option_context('display.precision', 1):
         print(df_polya_fit)
-
 
 
 if polya_fit:
