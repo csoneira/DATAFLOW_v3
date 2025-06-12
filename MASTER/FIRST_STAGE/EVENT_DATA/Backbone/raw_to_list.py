@@ -9,7 +9,7 @@ Created on Thu Jun 20 09:15:33 2024
 @author: csoneira@ucm.es
 """
 
-run_jupyter_notebook = False
+run_jupyter_notebook = True
 
 # print("\n\n")
 # print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀.⣄")
@@ -293,7 +293,7 @@ else:
 # Plots and savings -------------------------
 crontab_execution = True
 create_plots = False
-create_essential_plots = False
+create_essential_plots = True
 save_plots = True
 show_plots = False
 create_pdf = True
@@ -317,7 +317,7 @@ charge_front_back = True
 slewing_correction = True
 
 # Time filtering -----------------------------------
-time_window_filtering = False
+time_window_filtering = True
 
 # Time calibration ---------------------------------
 time_calibration = True
@@ -328,7 +328,8 @@ uniform_y_method = True
 uniform_weighted_method = False
 
 # RPC variables ------------------------------------
-weighted = False
+y_new_method = True
+blur_y = True
 
 # Alternative --------------------------------------
 alternative_iteration = True
@@ -458,19 +459,19 @@ Q_RPC_right = 500
 Q_dif_RPC_left = -4
 Q_dif_RPC_right = 4
 # Y pos
-Y_RPC_left = -170 # -150
-Y_RPC_right = 170 # 150
+Y_RPC_left = -200 # -150
+Y_RPC_right = 200 # 150
 
 # -----------------------------------------------------------------------------
 # Alternative fitter filter ---------------------------------------------------
 # -----------------------------------------------------------------------------
 alt_pos_filter = 600
 alt_theta_left_filter = 0
-alt_theta_right_filter = np.pi/3
+alt_theta_right_filter = np.pi/2
 alt_phi_left_filter = -1*np.pi
 alt_phi_right_filter = np.pi
 alt_slowness_filter_left = -0.01
-alt_slowness_filter_right = 0.02 # 0.025
+alt_slowness_filter_right = 0.015 # 0.025
 
 alt_res_ystr_filter = 300
 alt_res_tsum_filter = 2
@@ -604,7 +605,7 @@ strip_speed = 2/3 * c_mm_ns # 200 mm/ns
 tdiff_to_x = strip_speed # Factor to transform t_diff to X
 
 # Timtrack parameters --------------------
-vc    = beta * c_mm_ns #mm/ns
+vc    = beta * c_mm_ns # mm/ns
 sc    = 1/vc
 ss    = 1/strip_speed # slowness of the signal in the strip
 cocut = 1  # convergence cut
@@ -2822,8 +2823,8 @@ if validate_pos_cal:
                 col_F = f'{key}_diff_{j+1}'
                 y_F = pos_test[col_F]
                 
-                Q_clip_min = -5
-                Q_clip_max = 5
+                Q_clip_min = -2
+                Q_clip_max = 2
                 
                 # Plot histograms with Q-specific clipping and bins
                 axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
@@ -2898,8 +2899,8 @@ if self_trigger:
                     col_F = f'{key}_diff_{j+1}'
                     y_F = pos_test[col_F]
                 
-                    Q_clip_min = -5
-                    Q_clip_max = 5
+                    Q_clip_min = -2
+                    Q_clip_max = 2
                 
                     # Plot histograms with Q-specific clipping and bins
                     axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
@@ -5658,6 +5659,44 @@ def find_true_max(A1, mu1, sigma1, A2, mu2, sigma2):
         x_max = (mu1 + mu2) / 2
         return x_max, double_gaussian(x_max, A1, mu1, sigma1, A2, mu2, sigma2)
 
+from scipy.optimize import brentq
+
+def find_threshold_crossings(f, popt, max_val, rel_th=0.01, x_range=(-10, 10), tol=1e-2):
+    """
+    Finds the x values where the double Gaussian drops below rel_th * max_val.
+    
+    Returns:
+        q_low: lower bound crossing point
+        q_high: upper bound crossing point
+    """
+    threshold = rel_th * max_val
+
+    # Define shifted function for root finding
+    def shifted_func(x):
+        return f(x, *popt) - threshold
+
+    # Sample the function to find intervals where the threshold is crossed
+    x_vals = np.linspace(*x_range, 1000)
+    y_vals = [shifted_func(x) for x in x_vals]
+
+    # Find sign changes: threshold crossings
+    crossings = []
+    for i in range(len(x_vals) - 1):
+        if y_vals[i] * y_vals[i + 1] < 0:  # Sign change implies root in interval
+            try:
+                root = brentq(shifted_func, x_vals[i], x_vals[i + 1], xtol=tol)
+                crossings.append(root)
+            except ValueError:
+                continue
+
+    # Return first and last crossing as bounds
+    if len(crossings) >= 2:
+        return crossings[0], crossings[-1]
+    else:
+        return None, None  # or raise Exception("Could not determine bounds")
+
+t_sum_gaussian_rel_th = 0.05
+
 fit_results = {}  # store results if needed
 
 copied_working_df = working_df.copy()
@@ -5706,35 +5745,9 @@ for plane in range(1, 5):
 
         # q_low, q_high = ( mu1 + mu2 ) / 2 - 3 * ( sigma1 + sigma2 ) / 2, ( mu1 + mu2 ) / 2 + 3 * ( sigma1 + sigma2 ) / 2
         
-        # Find the maximum value of the fitted function
-        x_max, max_val = find_true_max(*popt)
+        max_x, max_val = find_true_max(*popt)
+        q_low, q_high = find_threshold_crossings(double_gaussian, popt, max_val, rel_th=t_sum_gaussian_rel_th)
 
-        # Target threshold (1% of maximum)
-        double_gaussian_rel_th = 0.01
-        threshold = double_gaussian_rel_th * max_val
-
-        # Find left bound (where function first crosses threshold)
-        x_left = mu1 - 5 * sigma1  # Start search well left of first peak
-        x_right = mu1  # Search between x_left and mu1
-        while x_right - x_left > 0.1:  # 0.1 is precision for the bound
-            x_mid = (x_left + x_right) / 2
-            if double_gaussian(x_mid, *popt) > threshold:
-                x_right = x_mid
-            else:
-                x_left = x_mid
-        q_low = x_left
-
-        # Find right bound (where function first crosses threshold)
-        x_left = mu2  # Search between mu2 and x_right
-        x_right = mu2 + 5 * sigma2  # Start search well right of second peak
-        while x_right - x_left > 0.1:
-            x_mid = (x_left + x_right) / 2
-            if double_gaussian(x_mid, *popt) > threshold:
-                x_left = x_mid
-            else:
-                x_right = x_mid
-        q_high = x_right
-        
         mask = (series >= q_low) & (series <= q_high)
         working_df.loc[~mask & (series != 0), col] = 0.0
 
@@ -5768,31 +5781,9 @@ if create_essential_plots or create_plots:
             # Find the maximum value of the fitted function
             x_max, max_val = find_true_max(*popt)
             print(f"True maximum at x = {x_max:.2f}, value = {max_val:.2f}")
-
-            # Target threshold (0.05% of maximum)
-            threshold = double_gaussian_rel_th * max_val
-
-            # Find left bound (where function first crosses threshold)
-            x_left = mu1 - 5 * sigma1  # Start search well left of first peak
-            x_right = mu1  # Search between x_left and mu1
-            while x_right - x_left > 0.1:  # 0.1 is precision for the bound
-                x_mid = (x_left + x_right) / 2
-                if double_gaussian(x_mid, *popt) > threshold:
-                    x_right = x_mid
-                else:
-                    x_left = x_mid
-            q_low = x_left
-
-            # Find right bound (where function first crosses threshold)
-            x_left = mu2  # Search between mu2 and x_right
-            x_right = mu2 + 5 * sigma2  # Start search well right of second peak
-            while x_right - x_left > 0.1:
-                x_mid = (x_left + x_right) / 2
-                if double_gaussian(x_mid, *popt) > threshold:
-                    x_left = x_mid
-                else:
-                    x_right = x_mid
-            q_high = x_right
+            
+            max_x, max_val = find_true_max(*popt)
+            q_low, q_high = find_threshold_crossings(double_gaussian, popt, max_val, rel_th=t_sum_gaussian_rel_th)
             
             x_fit = np.linspace(bin_centers.min(), bin_centers.max(), 1000)
             y_fit = double_gaussian(x_fit, *popt)
@@ -6329,11 +6320,9 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
-create_very_essential_plots = True
-
 # if create_plots:
-# if create_plots or create_essential_plots:
-if create_plots or create_very_essential_plots or create_essential_plots:
+if create_plots or create_essential_plots:
+# if create_plots or create_very_essential_plots or create_essential_plots:
     from itertools import combinations
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
@@ -6388,111 +6377,110 @@ if create_plots or create_very_essential_plots or create_essential_plots:
                     
 
 # if create_plots:
-    # if create_plots or create_essential_plots:
-    if create_plots or create_very_essential_plots or create_essential_plots:
-        from itertools import combinations
+# if create_plots or create_essential_plots:
+# if create_plots or create_very_essential_plots or create_essential_plots:
+    from itertools import combinations
 
-        patterns_of_interest = ['1100', '0110', '0011']
-        fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(24, 10), sharex=True, sharey=False)
+    patterns_of_interest = ['1100', '0110', '0011']
+    fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(24, 18), sharex=True, sharey=False)
+    
+    # Double Gaussian model
+    def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
+        g1 = A1 * np.exp(-0.5 * ((x - mu1) / sigma1)**2)
+        g2 = A2 * np.exp(-0.5 * ((x - mu2) / sigma2)**2)
+        return g1 + g2
+    
+    for i_plane in range(1, 5):
+        active_col = f'active_strips_P{i_plane}'
+        T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
 
-        for i_plane in range(1, 5):
-            active_col = f'active_strips_P{i_plane}'
-            T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
+        for j_pattern, pattern in enumerate(patterns_of_interest):
+            ax = axs[i_plane - 1, j_pattern]
 
-            for j_pattern, pattern in enumerate(patterns_of_interest):
-                ax = axs[i_plane - 1, j_pattern]
+            active_strips = [i for i, c in enumerate(pattern) if c == '1']
+            if len(active_strips) != 2:
+                ax.set_visible(False)
+                continue
 
-                active_strips = [i for i, c in enumerate(pattern) if c == '1']
-                if len(active_strips) != 2:
-                    ax.set_visible(False)
-                    continue
+            i, j = active_strips
+            mask = working_df[active_col] == pattern
+            if mask.sum() == 0:
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+                continue
 
-                i, j = active_strips
-                mask = working_df[active_col] == pattern
-                if mask.sum() == 0:
-                    ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
-                    continue
-
-                xi = working_df.loc[mask, T_diff_cols[i]].values
-                yi = working_df.loc[mask, T_diff_cols[j]].values
+            xi = working_df.loc[mask, T_diff_cols[i]].values
+            yi = working_df.loc[mask, T_diff_cols[j]].values
+        
+            cond = (xi != 0) & (yi != 0) & (abs(xi) < 1) & (abs(yi) < 1)
+            xi = xi[cond]
+            yi = yi[cond]
+            diff = ( yi - xi ) * tdiff_to_x
             
-                cond = (xi != 0) & (yi != 0) & (abs(xi) < 1) & (abs(yi) < 1)
-                xi = xi[cond]
-                yi = yi[cond]
-                diff = ( yi - xi ) * tdiff_to_x
-                
-                cond_new = abs(diff) < 150
-                diff = diff[cond_new]
-                
-                # Histogram
-                counts, bin_edges = np.histogram(diff, bins=50, range=(-150, 150))
-                bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+            cond_new = abs(diff) < 150
+            diff = diff[cond_new]
+            
+            adjacent_nbins = 100
+            
+            # Histogram
+            counts, bin_edges = np.histogram(diff, bins=adjacent_nbins, range=(-150, 150))
+            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
-                # Double Gaussian model
-                def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
-                    g1 = A1 * np.exp(-0.5 * ((x - mu1) / sigma1)**2)
-                    g2 = A2 * np.exp(-0.5 * ((x - mu2) / sigma2)**2)
-                    return g1 + g2
+            # Constraint bounds
+            tolerance_in_pct = 100  # percent
+            
+            anc_std_in_mm = anc_std * tdiff_to_x
+            
+            sigma_small_left = anc_std_in_mm * (1 - tolerance_in_pct/100)
+            sigma_small_right = anc_std_in_mm * (1 + tolerance_in_pct/100)
+            
+            print(f"Left and right limits in sigma: {sigma_small_left:.3f}, {sigma_small_right:.3f} mm")
+            
+            lower_bound = [0,     -100, sigma_small_left,  0,     -100, 0]
+            upper_bound = [np.inf, 100, sigma_small_right, np.inf, 100, 1000]
 
-                # Constraint bounds
-                tolerance_in_pct = 100  # percent
-                
-                anc_std_in_mm = anc_std * tdiff_to_x
-                
-                sigma_small_left = anc_std_in_mm * (1 - tolerance_in_pct/100)
-                sigma_small_right = anc_std_in_mm * (1 + tolerance_in_pct/100)
-                
-                print(f"Left and right limits in sigma: {sigma_small_left:.3f}, {sigma_small_right:.3f} mm")
-                
-                lower_bound = [0,     -100, sigma_small_left,  0,     -100, 0]
-                upper_bound = [np.inf, 100, sigma_small_right, np.inf, 100, 1000]
+            # Initial guesses
+            p0 = [50, 0, anc_std_in_mm, 50, 0, 20]
 
-                # Initial guesses
-                p0 = [50, 0, anc_std_in_mm, 50, 0, 20]
+            # Fit
+            popt, _ = curve_fit(double_gaussian, bin_centers, counts, p0=p0, bounds=(lower_bound, upper_bound))
 
-                # Fit
-                popt, _ = curve_fit(double_gaussian, bin_centers, counts, p0=p0, bounds=(lower_bound, upper_bound))
+            # Extract fitted components
+            A1, mu1, sigma1, A2, mu2, sigma2 = popt
+            fit_x = np.linspace(-150, 150, 500)
+            g1 = A1 * np.exp(-0.5 * ((fit_x - mu1) / sigma1)**2)
+            g2 = A2 * np.exp(-0.5 * ((fit_x - mu2) / sigma2)**2)
+            fit_total = g1 + g2
 
-                # Extract fitted components
-                A1, mu1, sigma1, A2, mu2, sigma2 = popt
-                fit_x = np.linspace(-150, 150, 500)
-                g1 = A1 * np.exp(-0.5 * ((fit_x - mu1) / sigma1)**2)
-                g2 = A2 * np.exp(-0.5 * ((fit_x - mu2) / sigma2)**2)
-                fit_total = g1 + g2
+            ax.hist(diff, bins=adjacent_nbins, range=(-150, 150), color='blue', alpha=0.4, label='Data')
+            ax.plot(fit_x, g1, '--', label=f'σ={sigma1:.1f}')
+            ax.plot(fit_x, g2, '--', label=f'σ={sigma2:.1f}')
 
-                ax.hist(diff, bins=50, range=(-150, 150), color='blue', alpha=0.4, label='Data')
-                ax.plot(fit_x, g1, '--', label=f'σ={sigma1:.1f}')
-                ax.plot(fit_x, g2, '--', label=f'σ={sigma2:.1f}')
+            ax.plot(fit_x, fit_total, '-', color='red', label='Total fit')
+            
+            ax.set_xlim(-150, 150)
+            ax.set_title(f'Plane {i_plane}, Pattern {pattern}')
+            ax.set_xlabel(f'X difference (mm)')
+            ax.set_ylabel('Counts')
+            ax.grid(True)
+            ax.legend()
 
-                ax.plot(fit_x, fit_total, '-', color='red', label='Total fit')
-                
-                ax.set_xlim(-150, 150)
-                ax.set_title(f'Plane {i_plane}, Pattern {pattern}')
-                ax.set_xlabel(f'X difference (mm)')
-                ax.set_ylabel('Counts')
-                ax.grid(True)
-                ax.legend()
-
-        fig.suptitle("Fit to the Histograms of T_diff Differences for Different Patterns", fontsize=16)
-        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-        if save_plots:
-            name_of_file = 'tdiff_differences_hist_4x3_fit.png'
-            final_filename = f'{fig_idx}_{name_of_file}'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-        if show_plots:
-            plt.show()
-        plt.close()
+    fig.suptitle("Fit to the Histograms of T_diff Differences for Different Patterns", fontsize=16)
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    if save_plots:
+        name_of_file = 'tdiff_differences_hist_4x3_fit.png'
+        final_filename = f'{fig_idx}_{name_of_file}'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
 
 
 print("----------------------------------------------------------------------")
 print("----------------------- Y position calculation -----------------------")
 print("----------------------------------------------------------------------")
-
-y_new_method = True
-blur_y = True
 
 strip_limits = [
     [ [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2], [-98/2, 98/2] ],  
@@ -6501,36 +6489,6 @@ strip_limits = [
     [ [-98/2, 98/2], [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2] ],
 ]
 
-# if y_new_method:
-#     y_columns = {}
-
-#     for plane_id in range(1, 5):
-#         # Retrieve and convert stored binary string to numeric array
-#         topo_binary = np.array([
-#             list(map(int, s)) for s in working_df[f'active_strips_P{plane_id}']
-#         ])  # shape (N, 4)
-
-#         # Select the corresponding Y position vector
-#         y_vec = y_pos_P1_and_P3 if plane_id in [1, 3] else y_pos_P2_and_P4
-        
-#         # Compute weighted average
-#         weighted_y = topo_binary * y_vec
-#         active_counts = topo_binary.sum(axis=1)
-#         active_counts_safe = np.where(active_counts == 0, 1, active_counts)
-
-#         y_position = weighted_y.sum(axis=1) / active_counts_safe
-#         y_position[active_counts == 0] = 0  # enforce zero when no strips are active
-
-#         if blur_y:
-#             y_position_blurred = y_position.copy()
-#             nonzero_mask = y_position != 0
-#             y_position_blurred[nonzero_mask] = np.random.normal(
-#                 loc=y_position[nonzero_mask],
-#                 scale=anc_sy
-#             )
-#             y_columns[f'Y_{plane_id}'] = y_position_blurred
-#         else:
-#             y_columns[f'Y_{plane_id}'] = y_position
 
 if y_new_method:
     y_columns = {}
@@ -6571,8 +6529,8 @@ if y_new_method:
         if blur_y:
             gaussian_blur_mask = (y_position != 0) & (~one_strip_mask)
             y_position[gaussian_blur_mask] = np.random.normal(
-                loc=y_position[gaussian_blur_mask],
-                scale=anc_sy / np.sqrt(2)
+                loc = y_position[gaussian_blur_mask],
+                scale = anc_sy / np.sqrt(2)
             )
 
         # Store result
@@ -6582,7 +6540,10 @@ if y_new_method:
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
 
 
+create_very_essential_plots = True
+
 if create_essential_plots or create_plots:
+# if create_very_essential_plots or create_essential_plots or create_plots:
 # if create_plots:
     for posfiltered_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
         mask = working_df['posfiltered_tt'] == posfiltered_tt
@@ -7454,14 +7415,15 @@ if limit and limit_number < ntrk: ntrk = limit_number
 print("-----------------------------")
 print(f"{ntrk} events to be fitted")
 
-timtrack_results = ['x', 'xp', 'y', 'yp', 't0', 's',
+timtrack_results = [ 'x', 'xp', 'y', 'yp', 't0', 's',
                 'th_chi', 'res_y', 'res_ts', 'res_td', 'processed_tt',
                 'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
                 'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
                 'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4',
                 'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
                 'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
-                'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4']
+                'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4',
+                'charge_1', 'charge_2', 'charge_3', 'charge_4', 'charge_event' ]
 
 new_columns_df = pd.DataFrame(0., index=working_df.index, columns=timtrack_results)
 working_df = pd.concat([working_df, new_columns_df], axis=1)
@@ -7694,13 +7656,8 @@ for iteration in range(repeat + 1):
     planes124 = len(working_df[working_df.processed_tt == 124])
     print(f"Events that are 124: {planes124}")
     
-    eff_2 = 1 - (planes134) / (four_planes + planes134)
-    print(f"First estimate of eff_2 ={eff_2:.2f} (complementary)")
     eff_2 = (four_planes) / (four_planes + planes134)
     print(f"First estimate of eff_2 ={eff_2:.2f}")
-    
-    eff_3 = 1 - (planes124) / (four_planes + planes124)
-    print(f"First estimate of eff_3 ={eff_3:.2f} (complementary)")
     eff_3 = (four_planes) / (four_planes + planes124)
     print(f"First estimate of eff_3 ={eff_3:.2f}")
     
@@ -7726,7 +7683,7 @@ working_df = pd.concat([working_df, new_columns_df], axis=1)
 
 
 print("----------------------------------------------------------------------")
-print("---------------- Filter 8?. Timtrack results filter ------------------")
+print("----------------------- Timtrack results filter ----------------------")
 print("----------------------------------------------------------------------")
 
 for col in working_df.columns:
@@ -7754,6 +7711,83 @@ for col in working_df.columns:
         cond_zero = (working_df[col] == 0)
         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
 
+
+print("----------------------------------------------------------------------")
+print("------------------ Slowness residual comprobation ---------------------")
+print("----------------------------------------------------------------------")
+#%%
+# if create_plots
+# if create_plots or create_essential_plots:
+if create_plots or create_essential_plots or create_very_essential_plots:
+    print("Plotting residuals of alt_s - s for each original_tt to definitive_tt case...")
+
+    # Filter the DataFrame
+    df_filtered = working_df.copy()
+
+    # Define bins and colors
+    # bins = np.linspace(slowness_filter_left, slowness_filter_right, 100)  # Adjust range and bin size as needed
+    bins = np.linspace(-0.001, 0.001, 100)  # Adjust range and bin size as needed
+    colors = plt.cm.tab10.colors
+
+    # Get unique definitive_tt values
+    # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
+
+    tt_values = [12, 23, 34, 13, 124, 134, 123, 234, 1234]
+    
+    # Layout configuration
+    n_plots = len(tt_values)
+    ncols = 3
+    nrows = 3
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), sharex=True, sharey=True)
+    axes = axes.flatten()  # Flatten for easier indexing
+    
+    for i, tt_val in enumerate(tt_values):
+        ax = axes[i]
+
+        df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
+        # residuals = ( df_tt['alt_s'] - df_tt['s'] ) / df_tt['s']  # Calculate the residuals
+        residuals = 2 * ( df_tt['alt_s'] - df_tt['s'] ) / ( df_tt['alt_s'] + df_tt['s'] )  # Calculate the residuals
+        rel_sum = ( df_tt['alt_s'] + df_tt['s'] ) / 2
+        
+        if len(residuals) < 10:
+            ax.set_visible(False)
+            continue
+
+        # ax.scatter(df_tt['s'], residuals, s=1, color='C0', alpha=0.5)
+        ax.scatter(rel_sum, residuals, s=0.1, color='C0', alpha=0.5)
+        ax.axvline(x=sc, color='r', linestyle='--', linewidth=0.5, label = "$beta = 1")  # Vertical line at x=0
+        ax.set_title(f'TT {tt_val}', fontsize=10)
+        ax.set_xlim(slowness_filter_left, slowness_filter_right)
+        # ax.set_ylim(-0.001, 0.001)
+        # ax.set_xlim(-1, 5)
+        ax.set_ylim(-0.15, 0.15)
+        ax.grid(True)
+
+        if i % ncols == 0:
+            ax.set_ylabel(r'$alt_s - s$')
+        if i // ncols == nrows - 1:
+            ax.set_xlabel(r'$s$')
+
+    # Hide any unused subplots
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+
+    plt.suptitle(r'Residuals: $alt_s - s$ per definitive_tt case', fontsize=14)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    # Save or show the plot
+    plt.tight_layout()
+    if save_plots:
+        filename = f'{fig_idx}_residuals_alt_s_minus_s_definitive_tt.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+#%%
 
 print("----------------------------------------------------------------------")
 print("-------------------- Real tracking trigger type ----------------------")
@@ -8132,13 +8166,13 @@ print("----------------------------------------------------------------------")
 
 df_plot_ancillary = definitive_df.copy()
 
-# cond = ( df_plot_ancillary['charge_1'] < 100 ) &\
-#     ( df_plot_ancillary['charge_2'] < 100 ) &\
-#     ( df_plot_ancillary['charge_3'] < 100 ) &\
-#     ( df_plot_ancillary['charge_4'] < 100 ) &\
-#     ( df_plot_ancillary['charge_event'] > 0 )
+cond = ( df_plot_ancillary['charge_1'] < 100 ) &\
+    ( df_plot_ancillary['charge_2'] < 100 ) &\
+    ( df_plot_ancillary['charge_3'] < 100 ) &\
+    ( df_plot_ancillary['charge_4'] < 100 ) &\
+    ( df_plot_ancillary['charge_event'] > 0 )
 
-# df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
+df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 
 
 # -----------------------------------------------------------------------------------------------------------------------------
@@ -8208,15 +8242,19 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
     nrows = (n_tt + 1) // ncols
 
     fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
-    nbins = 32
-    theta_bins = np.linspace(theta_left_filter, theta_right_filter, int(round(nbins / 2) + 1) )
-    phi_bins = np.linspace(phi_left_filter, phi_right_filter, nbins)
-    colors = plt.cm.viridis
+    phi_nbins = 28
+    # theta_nbins = int(round(phi_nbins / 2) + 1)
+    theta_nbins = 40
+    theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
+    phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
+    colors = plt.cm.turbo
 
     # Select theta/phi range (optional filtering)
     theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
     phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
-
+    
+    vmax_global = df_filtered.groupby('definitive_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
+    
     for idx, tt_val in enumerate(tt_values):
         row_idx, col_idx = divmod(idx, ncols)
         ax = axes[row_idx][col_idx]
@@ -8236,7 +8274,10 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
             continue
 
         # Polar plot settings
-        ax = plt.subplot(nrows, ncols, idx + 1, polar=True)
+        fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
+        ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
+        axes[row_idx][col_idx] = ax  # update reference for consistency
+
         ax.set_facecolor(colors(0.0))  # darkest background in colormap
 
         # 2D histogram: use phi as angle, theta as radius
@@ -8244,10 +8285,10 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
         r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
         phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
         R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
-        # c = ax.pcolormesh(PHI, R, h, cmap='viridis', norm=mpl.colors.LogNorm())
-        c = ax.pcolormesh(PHI, R, h, cmap='viridis')
-        ax.set_title(f'definitive_tt = {tt_val}', va='bottom')
-        fig.colorbar(c, ax=ax, pad=0.1, label='Counts')
+        c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
+        local_max = h.max()
+        cb = fig.colorbar(c, ax=ax, pad=0.1)
+        cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
 
     plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
@@ -8260,7 +8301,6 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
     if show_plots:
         plt.show()
     plt.close()
-
 
 
 # if (create_plots and residual_plots):
@@ -8277,15 +8317,19 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
     nrows = (n_tt + 1) // ncols
 
     fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
-    nbins = 32
-    theta_bins = np.linspace(theta_left_filter, theta_right_filter, int(round(nbins / 2) + 1) )
-    phi_bins = np.linspace(phi_left_filter, phi_right_filter, nbins)
-    colors = plt.cm.viridis
+    phi_nbins = 40
+    # theta_nbins = int(round(phi_nbins / 2) + 1)
+    theta_nbins = 40
+    theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
+    phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
+    colors = plt.cm.turbo
 
     # Select theta/phi range (optional filtering)
     theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
     phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
-
+    
+    vmax_global = df_filtered.groupby('definitive_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
+    
     for idx, tt_val in enumerate(tt_values):
         row_idx, col_idx = divmod(idx, ncols)
         ax = axes[row_idx][col_idx]
@@ -8305,7 +8349,10 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
             continue
 
         # Polar plot settings
-        ax = plt.subplot(nrows, ncols, idx + 1, polar=True)
+        fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
+        ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
+        axes[row_idx][col_idx] = ax  # update reference for consistency
+
         ax.set_facecolor(colors(0.0))  # darkest background in colormap
 
         # 2D histogram: use phi as angle, theta as radius
@@ -8313,10 +8360,10 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
         r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
         phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
         R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
-        # c = ax.pcolormesh(PHI, R, h, cmap='viridis', norm=mpl.colors.LogNorm())
-        c = ax.pcolormesh(PHI, R, h, cmap='viridis')
-        ax.set_title(f'definitive_tt = {tt_val}', va='bottom')
-        fig.colorbar(c, ax=ax, pad=0.1, label='Counts')
+        c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
+        local_max = h.max()
+        cb = fig.colorbar(c, ax=ax, pad=0.1)
+        cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
 
     plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each tracking_tt Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
@@ -8512,55 +8559,55 @@ if create_plots or create_very_essential_plots or create_essential_plots:
         ([("definitive_tt", 134, 134)], "1-3-4 cases"),
     ]
     
-    # df_cases_2 = [
+    # df_cases_1 = [
     #     # From original_tt = 1234
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 123, 123)], "original=1234, processed=123"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 124, 124)], "original=1234, processed=124"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 134, 134)], "original=1234, processed=134"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 234, 234)], "original=1234, processed=234"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 12, 12)],   "original=1234, processed=12"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 13, 13)],   "original=1234, processed=13"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 14, 14)],   "original=1234, processed=14"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 23, 23)],   "original=1234, processed=23"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 24, 24)],   "original=1234, processed=24"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 34, 34)],   "original=1234, processed=34"),
-    #     ([("original_tt", 1234, 1234), ("processed_tt", 1234, 1234)], "original=1234, processed=1234"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 123, 123)], "original=1234, processed=123"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 124, 124)], "original=1234, processed=124"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 134, 134)], "original=1234, processed=134"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 234, 234)], "original=1234, processed=234"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 12, 12)],   "original=1234, processed=12"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 13, 13)],   "original=1234, processed=13"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 14, 14)],   "original=1234, processed=14"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 23, 23)],   "original=1234, processed=23"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 24, 24)],   "original=1234, processed=24"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 34, 34)],   "original=1234, processed=34"),
+    #     ([("original_tt", 1234, 1234), ("definitive_tt", 1234, 1234)], "original=1234, processed=1234"),
 
     #     # From original_tt = 124
-    #     ([("original_tt", 124, 124), ("processed_tt", 12, 12)], "original=124, processed=12"),
-    #     ([("original_tt", 124, 124), ("processed_tt", 14, 14)], "original=124, processed=14"),
-    #     ([("original_tt", 124, 124), ("processed_tt", 24, 24)], "original=124, processed=24"),
-    #     ([("original_tt", 124, 124), ("processed_tt", 124, 124)], "original=124, processed=124"),
+    #     ([("original_tt", 124, 124), ("definitive_tt", 12, 12)], "original=124, processed=12"),
+    #     ([("original_tt", 124, 124), ("definitive_tt", 14, 14)], "original=124, processed=14"),
+    #     ([("original_tt", 124, 124), ("definitive_tt", 24, 24)], "original=124, processed=24"),
+    #     ([("original_tt", 124, 124), ("definitive_tt", 124, 124)], "original=124, processed=124"),
 
     #     # From original_tt = 134
-    #     ([("original_tt", 134, 134), ("processed_tt", 13, 13)], "original=134, processed=13"),
-    #     ([("original_tt", 134, 134), ("processed_tt", 14, 14)], "original=134, processed=14"),
-    #     ([("original_tt", 134, 134), ("processed_tt", 34, 34)], "original=134, processed=34"),
-    #     ([("original_tt", 134, 134), ("processed_tt", 134, 134)], "original=134, processed=134"),
+    #     ([("original_tt", 134, 134), ("definitive_tt", 13, 13)], "original=134, processed=13"),
+    #     ([("original_tt", 134, 134), ("definitive_tt", 14, 14)], "original=134, processed=14"),
+    #     ([("original_tt", 134, 134), ("definitive_tt", 34, 34)], "original=134, processed=34"),
+    #     ([("original_tt", 134, 134), ("definitive_tt", 134, 134)], "original=134, processed=134"),
 
     #     # From original_tt = 123
-    #     ([("original_tt", 123, 123), ("processed_tt", 12, 12)], "original=123, processed=12"),
-    #     ([("original_tt", 123, 123), ("processed_tt", 13, 13)], "original=123, processed=13"),
-    #     ([("original_tt", 123, 123), ("processed_tt", 23, 23)], "original=123, processed=23"),
-    #     ([("original_tt", 123, 123), ("processed_tt", 123, 123)], "original=123, processed=123"),
+    #     ([("original_tt", 123, 123), ("definitive_tt", 12, 12)], "original=123, processed=12"),
+    #     ([("original_tt", 123, 123), ("definitive_tt", 13, 13)], "original=123, processed=13"),
+    #     ([("original_tt", 123, 123), ("definitive_tt", 23, 23)], "original=123, processed=23"),
+    #     ([("original_tt", 123, 123), ("definitive_tt", 123, 123)], "original=123, processed=123"),
 
     #     # From original_tt = 234
-    #     ([("original_tt", 234, 234), ("processed_tt", 23, 23)], "original=234, processed=23"),
-    #     ([("original_tt", 234, 234), ("processed_tt", 24, 24)], "original=234, processed=24"),
-    #     ([("original_tt", 234, 234), ("processed_tt", 34, 34)], "original=234, processed=34"),
-    #     ([("original_tt", 234, 234), ("processed_tt", 234, 234)], "original=234, processed=234"),
+    #     ([("original_tt", 234, 234), ("definitive_tt", 23, 23)], "original=234, processed=23"),
+    #     ([("original_tt", 234, 234), ("definitive_tt", 24, 24)], "original=234, processed=24"),
+    #     ([("original_tt", 234, 234), ("definitive_tt", 34, 34)], "original=234, processed=34"),
+    #     ([("original_tt", 234, 234), ("definitive_tt", 234, 234)], "original=234, processed=234"),
 
     #     # From original_tt = 12
-    #     ([("original_tt", 12, 12), ("processed_tt", 12, 12)], "original=12, processed=12"),
+    #     ([("original_tt", 12, 12), ("definitive_tt", 12, 12)], "original=12, processed=12"),
 
     #     # From original_tt = 23
-    #     ([("original_tt", 23, 23), ("processed_tt", 23, 23)], "original=23, processed=23"),
+    #     ([("original_tt", 23, 23), ("definitive_tt", 23, 23)], "original=23, processed=23"),
 
     #     # From original_tt = 34
-    #     ([("original_tt", 34, 34), ("processed_tt", 34, 34)], "original=34, processed=34"),
+    #     ([("original_tt", 34, 34), ("definitive_tt", 34, 34)], "original=34, processed=34"),
 
     #     # From original_tt = 13
-    #     ([("original_tt", 13, 13), ("processed_tt", 13, 13)], "original=13, processed=13"),
+    #     ([("original_tt", 13, 13), ("definitive_tt", 13, 13)], "original=13, processed=13"),
     # ]
 
 
@@ -8665,7 +8712,6 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             plot_list
         )
         
-    
     # Comparison with alternative fitting -------------------------------------------------------------------
     plot_col = ['x', 'y', 'theta', 'phi', 's', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
     for filters, title in df_cases_1:
@@ -8680,9 +8726,24 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             fig_idx,
             plot_list
         )
+
     
+    # plot_col = ['x', 'y', 'theta', 'phi', 's']
+    plot_col = ['x', 'xp', 'yp', 'y']
+    for filters, title in df_cases_1:
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            plot_col,
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
     
-    plot_col = ['x', 'y', 'theta', 'phi', 's']
+    plot_col = ['s', 'alt_s']
     for filters, title in df_cases_1:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
@@ -8696,6 +8757,8 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             plot_list
         )
 
+
+# ------------------------------------------------------------------------------------------------------
 
 if create_plots or create_essential_plots:
 # if create_plots:
@@ -9219,7 +9282,7 @@ if os.path.exists(figure_directory):
 # Move the original datafile to PROCESSED -------------------------------------
 print("Moving file to COMPLETED directory...")
 # shutil.move(file_path, completed_path)
-if user_file_path == False:
+if user_file_selection == False:
     shutil.move(file_path, completed_file_path)
     print("************************************************************")
     print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
