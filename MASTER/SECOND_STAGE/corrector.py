@@ -97,7 +97,7 @@ show_errorbar = False
 
 recalculate_pressure_coeff = True
 
-res_win_min = 30 # 180 Resampling window minutes
+res_win_min = 60 # 180 Resampling window minutes
 
 if int(station) == 4:
     res_win_min = 30
@@ -2303,7 +2303,6 @@ regions_to_correct = eff_corr_regions
 
 
 print(og_regions)
-
 print(regions_to_correct)
 
 log_delta_I_df = pd.DataFrame(columns=['Region', 'Log_I_over_I0', 'Delta_P', 'Unc_Log_I_over_I0', 'Unc_Delta_P', 'Eta_P', 'Unc_Eta_P'])
@@ -2924,6 +2923,7 @@ data_df['total_best_median'] = data_df[columns].fillna(0).median(axis=1).fillna(
 data_df['unc_total_best_sum'] = 1
 
 if create_plots:
+# if create_plots or create_essential_plots:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
 
     # Plot efficiencies
@@ -2939,8 +2939,14 @@ if create_plots:
     cond = y > 0.1
     x = data_df['Time'][cond]
     y_plot = y[cond]
-    ax2.plot(x, y_plot, label='Sum of the high order corrected rate', color='C1')
-    # ax2.plot(data_df['Time'], data_df[f'total_best_mean'], label=f'Mean of the high order corrected rate', color='C10')
+    ax2.plot(x, y_plot, label='Sum of the correction', color='C1')
+    
+    y = data_df[f'summed_eff_corr']
+    cond = y > 0.1
+    x = data_df['Time'][cond]
+    y_plot = y[cond]
+    ax2.plot(x, y_plot, label='Correction of the sum', color='C1')
+    
     # ax2.plot(data_df['Time'], data_df[f'total_best_median'], label=f'Median of the high order corrected rate', color='C11')
     ax2.set_xlabel('Time')
     ax2.set_ylabel('Rate')
@@ -2963,6 +2969,37 @@ if create_plots:
     plt.close()
 
 
+# if create_plots:
+if create_plots or create_essential_plots:
+    fig, ax2 = plt.subplots(figsize=(17, 5))  # Ajustar altura para un solo subplot
+
+    y = data_df[f'total_best_sum']
+    cond = y > 0.1
+    x = data_df['Time'][cond]
+    y_plot = y[cond]
+    ax2.plot(x, y_plot, label='Sum of the correction', color='C1')
+
+    y = data_df[f'summed_eff_corr']
+    cond = y > 0.1
+    x = data_df['Time'][cond]
+    y_plot = y[cond]
+    ax2.plot(x, y_plot, label='Correction of the sum', color='C2')
+
+    ax2.set_xlabel('Time')
+    ax2.set_ylabel('Rate')
+    ax2.grid(True)
+    ax2.set_title('Rates over Time')
+    ax2.legend(loc='upper left')
+
+    plt.tight_layout()
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        new_figure_path = figure_path + f"{fig_idx}" + f"_{region}_sum_corr_vs_corr_sum.png"
+        fig_idx += 1
+        print(f"Saving figure to {new_figure_path}")
+        plt.savefig(new_figure_path, format='png', dpi=300)
+    plt.close()
 
 
 if create_plots:

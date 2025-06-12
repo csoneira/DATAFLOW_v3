@@ -293,7 +293,8 @@ else:
 # Plots and savings -------------------------
 crontab_execution = True
 create_plots = False
-create_essential_plots = True
+create_essential_plots = False
+create_very_essential_plots = True
 save_plots = True
 show_plots = False
 create_pdf = True
@@ -317,10 +318,11 @@ charge_front_back = True
 slewing_correction = True
 
 # Time filtering -----------------------------------
-time_window_filtering = True
+time_window_filtering = False
 
 # Time calibration ---------------------------------
 time_calibration = True
+old_timing_method = False
 
 # Y position ---------------------------------------
 y_position_complex_method = False
@@ -465,13 +467,13 @@ Y_RPC_right = 200 # 150
 # -----------------------------------------------------------------------------
 # Alternative fitter filter ---------------------------------------------------
 # -----------------------------------------------------------------------------
-alt_pos_filter = 600
+alt_pos_filter = 650
 alt_theta_left_filter = 0
 alt_theta_right_filter = np.pi/2
 alt_phi_left_filter = -1*np.pi
 alt_phi_right_filter = np.pi
-alt_slowness_filter_left = -0.01
-alt_slowness_filter_right = 0.015 # 0.025
+alt_slowness_filter_left = -0.005
+alt_slowness_filter_right = 0.01 # 0.025
 
 alt_res_ystr_filter = 300
 alt_res_tsum_filter = 2
@@ -480,12 +482,12 @@ alt_res_tdif_filter = 0.7
 # -----------------------------------------------------------------------------
 # TimTrack filter -------------------------------------------------------------
 # -----------------------------------------------------------------------------
-pos_filter = 600
+pos_filter = alt_pos_filter
 proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = -0.01 # -0.01
-slowness_filter_right = 0.02 # 0.025
+slowness_filter_left = alt_slowness_filter_left # -0.01
+slowness_filter_right = alt_slowness_filter_right # 0.025
 
 theta_left_filter = alt_theta_left_filter
 theta_right_filter = alt_theta_right_filter
@@ -500,6 +502,12 @@ ext_res_ystr_filter = 300
 ext_res_tsum_filter = 2
 ext_res_tdif_filter = 0.7
 
+# -----------------------------------------------------------------------------
+# Fitting comparison ----------------------------------------------------------
+# -----------------------------------------------------------------------------
+delta_s_left = -0.0001
+delta_s_right = 0.0001
+
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -511,7 +519,7 @@ ext_res_tdif_filter = 0.7
 CRT_gaussian_fit_quantile = 0.03
 coincidence_window_og_ns = 10  # ns
 coincidence_window_precal_ns = 7  # ns
-coincidence_window_cal_ns = 4  # ns
+coincidence_window_cal_ns = 3  # ns
 
 # Pedestal charge calibration
 pedestal_left = -3
@@ -555,10 +563,10 @@ charge_dif_reference = np.array([
 # Time sum calibration (time_sum_reference)
 time_sum_distance = 30
 time_sum_reference = np.array([
-    [0.0, -0.3886208, -0.53020947, 0.33711737],
+    [0.0, -0.3886308, -0.53020947, 0.33711737],
     [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
     [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
-    [0.33586285, 1.08329847, 0.91410244, 0.58815813]
+    [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
 # -----------------------------------------------------------------------------
@@ -609,7 +617,8 @@ vc    = beta * c_mm_ns # mm/ns
 sc    = 1/vc
 ss    = 1/strip_speed # slowness of the signal in the strip
 cocut = 1  # convergence cut
-d0    = 10 # initial value of the convergence parameter 
+d0    = 10 # initial value of the convergence parameter
+iter_max = 5
 nplan = 4
 lenx  = strip_length
 
@@ -2509,11 +2518,11 @@ FEE_calibration = {
     ],
     "Fast Charge": [
         4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-        9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
+        9.3563E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
         1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
         1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
         2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-        2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
+        2.3939E+03, 2.4635E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
         2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
     ]
 }
@@ -4399,9 +4408,6 @@ print("----------------------- Time sum calibration -------------------------")
 print("----------------------------------------------------------------------")
 
 if time_calibration:
-    
-    old_timing_method = False
-    
     if old_timing_method:
         # Initialize an empty list to store the resulting matrices for each event
         event_matrices = []
@@ -6483,10 +6489,10 @@ print("----------------------- Y position calculation -----------------------")
 print("----------------------------------------------------------------------")
 
 strip_limits = [
-    [ [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2], [-98/2, 98/2] ],  
-    [ [-98/2, 98/2], [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2] ],
-    [ [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2], [-98/2, 98/2] ],
-    [ [-98/2, 98/2], [-62/2, 63/2], [-62/2, 63/2], [-62/2, 63/2] ],
+    [ [-63/2, 63/2], [-63/2, 63/2], [-63/2, 63/2], [-98/2, 98/2] ],  
+    [ [-98/2, 98/2], [-63/2, 63/2], [-63/2, 63/2], [-63/2, 63/2] ],
+    [ [-63/2, 63/2], [-63/2, 63/2], [-63/2, 63/2], [-98/2, 98/2] ],
+    [ [-98/2, 98/2], [-63/2, 63/2], [-63/2, 63/2], [-63/2, 63/2] ],
 ]
 
 
@@ -6539,8 +6545,6 @@ if y_new_method:
     # Insert all new Y_ columns at once
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
 
-
-create_very_essential_plots = True
 
 if create_essential_plots or create_plots:
 # if create_very_essential_plots or create_essential_plots or create_plots:
@@ -6640,63 +6644,64 @@ if create_plots or create_essential_plots:
         plt.close()
 
 
-if create_plots or create_essential_plots:
-# if create_plots:
+if self_trigger:
+    if create_plots or create_essential_plots:
+    # if create_plots:
 
-    for i_plane in range(1, 5):
-        
-        fig, axes = plt.subplots(4, 6, figsize=(30, 20))
-        axes = axes.flatten()
-        
-        for strip in range(1, 5):
-            # Column names
-            t_sum_col = f'T{i_plane}_T_sum_{strip}'
-            t_diff_col = f'T{i_plane}_T_diff_{strip}'
-            q_sum_col = f'Q{i_plane}_Q_sum_{strip}'
-            q_diff_col = f'Q{i_plane}_Q_diff_{strip}'
-
-            # Filter valid rows (non-zero)
-            valid_rows = working_st_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col]].replace(0, np.nan).dropna()
+        for i_plane in range(1, 5):
             
-            # Extract variables and filter low charge
-            cond = valid_rows[q_sum_col] < 40
-            t_sum  = valid_rows.loc[cond, t_sum_col]
-            t_diff = valid_rows.loc[cond, t_diff_col]
-            q_sum  = valid_rows.loc[cond, q_sum_col]
-            q_diff = valid_rows.loc[cond, q_diff_col]
+            fig, axes = plt.subplots(4, 6, figsize=(30, 20))
+            axes = axes.flatten()
+            
+            for strip in range(1, 5):
+                # Column names
+                t_sum_col = f'T{i_plane}_T_sum_{strip}'
+                t_diff_col = f'T{i_plane}_T_diff_{strip}'
+                q_sum_col = f'Q{i_plane}_Q_sum_{strip}'
+                q_diff_col = f'Q{i_plane}_Q_diff_{strip}'
 
-            base_idx = (strip - 1) * 6
+                # Filter valid rows (non-zero)
+                valid_rows = working_st_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col]].replace(0, np.nan).dropna()
+                
+                # Extract variables and filter low charge
+                cond = valid_rows[q_sum_col] < 40
+                t_sum  = valid_rows.loc[cond, t_sum_col]
+                t_diff = valid_rows.loc[cond, t_diff_col]
+                q_sum  = valid_rows.loc[cond, q_sum_col]
+                q_diff = valid_rows.loc[cond, q_diff_col]
 
-            combinations = [
-                (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
-                (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
-                (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
-                (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
-                (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
-                (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
-            ]
+                base_idx = (strip - 1) * 6
 
-            for offset, (x, yv, title) in enumerate(combinations):
-                ax = axes[base_idx + offset]
-                ax.hexbin(x, yv, gridsize=50, cmap='turbo')
-                # ax.scatter(x, yv)
-                ax.set_title(title)
+                combinations = [
+                    (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+                    (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
+                    (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
+                    (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
+                    (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
+                    (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+                ]
 
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.92)
-        plt.suptitle(f'SELF TRIGGER Hexbin Plots for All Variable Combinations by strip for plane {i_plane}', fontsize=18)
+                for offset, (x, yv, title) in enumerate(combinations):
+                    ax = axes[base_idx + offset]
+                    ax.hexbin(x, yv, gridsize=50, cmap='turbo')
+                    # ax.scatter(x, yv)
+                    ax.set_title(title)
 
-        if save_plots:
-            name_of_file = f'strip_check_hexbin_combinations_filtered_{i_plane}_ST'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
+            plt.tight_layout()
+            plt.subplots_adjust(top=0.92)
+            plt.suptitle(f'SELF TRIGGER Hexbin Plots for All Variable Combinations by strip for plane {i_plane}', fontsize=18)
 
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            if save_plots:
+                name_of_file = f'strip_check_hexbin_combinations_filtered_{i_plane}_ST'
+                final_filename = f'{fig_idx}_{name_of_file}.png'
+                fig_idx += 1
 
-        if show_plots: plt.show()
-        plt.close()
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+
+            if show_plots: plt.show()
+            plt.close()
 
 
 print("----------------------------------------------------------------------")
@@ -7090,52 +7095,44 @@ for alt_iteration in range(repeat + 1):
     fit_res = {c: np.zeros(n, dtype=float) for c in fit_cols}
     slow_res  = {c: np.zeros(n, dtype=float) for c in slow_cols}
     
-    # Angular part
     for i, trk in enumerate(working_df.itertuples(index=False)):
         planes = [p for p in range(1, nplan + 1)
-                if getattr(trk, f'P{p}_Q_sum_final') > 0.1]
+                if getattr(trk, f'P{p}_Q_sum_final') > 0]
         if len(planes) < 2:
             continue
-
-        x = np.array([strip_speed * getattr(trk, f'P{p}_T_diff_final') for p in planes])
+        
+        # Angular part -----------------------------------------------------------------
+        x = np.array([tdiff_to_x * getattr(trk, f'P{p}_T_diff_final') for p in planes])
         y = np.array([getattr(trk, f'Y_{p}')                           for p in planes])
         z = z_positions[np.array(planes) - 1]
 
-        (fit_res['alt_x'][i], fit_res['alt_y'][i],
-        fit_res['alt_theta'][i], fit_res['alt_phi'][i],
-        fit_res['alt_chi2'][i],
-        res_td, res_y) = fit_3d_line(x, y, z,
-                                    anc_sx, anc_sy, anc_sz,
-                                    planes, tdiff_to_x)
+        (fit_res['alt_x'][i], fit_res['alt_y'][i], fit_res['alt_theta'][i], fit_res['alt_phi'][i], fit_res['alt_chi2'][i], res_td, res_y) = fit_3d_line(x, y, z, anc_sx, anc_sy, anc_sz, planes, tdiff_to_x)
 
         for p in range(1, 5):
             fit_res[f'alt_res_tdif_{p}'][i] = res_td.get(p, 0.0)
             fit_res[f'alt_res_ystr_{p}'][i] = res_y .get(p, 0.0)
 
-
-    # Slowness part
-    for i, trk in enumerate(working_df.itertuples(index=False)):
-        planes = [p for p in range(1, nplan + 1)
-                if getattr(trk, f'P{p}_Q_sum_final') > 0.1]
-        if len(planes) < 2:
-            continue
-
-        z    = z_positions[np.array(planes) - 1]
+        # Slowness part ----------------------------------------------------------------
         tsum = np.array([getattr(trk, f'P{p}_T_sum_final') for p in planes])
 
-        θ, φ = fit_res['alt_theta'][i], fit_res['alt_phi'][i]      # values just fitted
-        v    = np.array([np.sin(θ)*np.cos(φ), np.sin(θ)*np.sin(φ), np.cos(θ)])
+        # Reconstruct fitted points using the fitted direction and z-positions
+        θ, φ = fit_res['alt_theta'][i], fit_res['alt_phi'][i]
+        x0, y0 = fit_res['alt_x'][i], fit_res['alt_y'][i]
 
-        # distance along the fitted line for each plane (real vector projection)
-        x = np.array([strip_speed * getattr(trk, f'P{p}_T_diff_final') for p in planes])
-        y = np.array([getattr(trk, f'Y_{p}')                           for p in planes])
-        z = z_positions[np.array(planes) - 1]
-        positions = np.stack((x, y, z), axis=1)          # shape (n_planes, 3)
+        v = np.array([np.sin(θ) * np.cos(φ),
+                      np.sin(θ) * np.sin(φ),
+                      np.cos(θ)])
+        v /= np.linalg.norm(v)
 
-        v = v / np.linalg.norm(v)                        # ensure unit vector
-        real_dist = positions @ v                        # scalar projection: r_i · v
+        # Compute fitted positions along z
+        x_fit = x0 + v[0] * z / v[2]
+        y_fit = y0 + v[1] * z / v[2]
+        positions = np.stack((x_fit, y_fit, z), axis=1)
+
+        # Distance along the fitted track (scalar projection)
+        real_dist = positions @ v
         s_rel = real_dist - real_dist[0]
-        t_rel     = tsum - tsum[0]
+        t_rel = tsum - tsum[0]
 
         k, b = np.polyfit(s_rel, t_rel, 1)
         res  = t_rel - (k * s_rel + b)
@@ -7178,28 +7175,6 @@ for alt_iteration in range(repeat + 1):
     print(f"--> {alt_changed_event_count} events were residual filtered.")
     
     alt_iteration += 1
-
-
-create_very_essential_plots = False
-
-# if (create_plots and residual_plots):
-# if create_essential_plots or (create_plots and residual_plots):
-if create_very_essential_plots or (create_plots and residual_plots):
-    timtrack_columns = ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi']
-    residual_columns = [
-        'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
-        'alt_res_tsum_1', 'alt_res_tsum_2', 'alt_res_tsum_3', 'alt_res_tsum_4',
-        'alt_res_tdif_1', 'alt_res_tdif_2', 'alt_res_tdif_3', 'alt_res_tdif_4'
-    ]
-    
-    # Combined plot for all types
-    # plot_histograms_and_gaussian(working_df, timtrack_columns, "Combined Alternative method Results", figure_number=1)
-    
-    unique_types = working_df['posfiltered_tt'].unique()
-    for t in unique_types:
-        subset_data = working_df[working_df['posfiltered_tt'] == t]
-        # plot_histograms_and_gaussian(subset_data, timtrack_columns, f"Alternative fitting Results for Original Type {t}", figure_number=1)
-        plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative fitting Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
 
 
 # ---------------------------------------------------------------------------
@@ -7351,22 +7326,6 @@ def fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi): # va vector
     va = mg.transpose() @ mw @ vdmg
     return va
 
-def fs2(nvar, npar, vs, vdat, vsig, lenx, ss, zi):
-    va = np.zeros(npar)
-    mk = fmkx(nvar, npar, vs, vsig, ss, zi)
-    va = fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
-    vm = fvmx(nvar, vs, lenx, ss, zi)
-    mg = fmgx(nvar, npar, vs, ss, zi)
-    mw = fmwx(nvar, vsig)
-    vg = vm - mg @ vs
-    vdmg = vdat - vg
-    mg = fmgx(nvar, npar, vs, ss, zi)
-    sk = vs.transpose() @ mk @ vs
-    sa = vs.transpose() @ va
-    s0 = vdmg.transpose() @ mw @ vdmg
-    s2 = sk - 2*sa + s0
-    return s2
-
 def fmahd(npar, vin1, vin2, merr): # Mahalanobis distance
     vdif  = np.subtract(vin1,vin2)
     vdsq  = np.power(vdif,2)
@@ -7423,7 +7382,8 @@ timtrack_results = [ 'x', 'xp', 'y', 'yp', 't0', 's',
                 'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
                 'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
                 'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4',
-                'charge_1', 'charge_2', 'charge_3', 'charge_4', 'charge_event' ]
+                'charge_1', 'charge_2', 'charge_3', 'charge_4', 'charge_event',
+                "iterations", "conv_distance" ]
 
 new_columns_df = pd.DataFrame(0., index=working_df.index, columns=timtrack_results)
 working_df = pd.concat([working_df, new_columns_df], axis=1)
@@ -7478,7 +7438,7 @@ for iteration in range(repeat + 1):
         va  = np.zeros(npar)
         istp = 0   # nb. of fitting steps
         dist = d0
-        while dist>cocut:
+        while dist > cocut and istp < iter_max:
             for iplane in planes_to_iterate:
                 
                 # Data --------------------------------------------------------
@@ -7492,9 +7452,21 @@ for iteration in range(repeat + 1):
             vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
             merr = np.linalg.inv(mk)      # Only compute if needed for fmahd()
             dist = fmahd(npar, vs, vs0, merr)
-            if istp > 5:
-                continue
-        dist = 10
+            
+        # if istp >= iter_max:
+        #     print("Did not converge")
+        #     print("Steps used: ", istp)
+        #     print("Mahalanobis distance: ", dist)
+        #     print("--------------------------------------------------------------")
+        # if dist >= cocut:
+        #     print("Did not converge")
+        #     print("Steps used: ", istp)
+        #     print("Mahalanobis distance: ", dist)
+        #     print("--------------------------------------------------------------")
+        
+        working_df.at[idx, 'iterations'] = istp
+        working_df.at[idx, 'conv_distance'] = dist
+        
         vsf = vs       # final saeta
         fitted += 1
         
@@ -7516,8 +7488,8 @@ for iteration in range(repeat + 1):
                 vres = fres(vsf, vdat, lenx, ss, zi)
                 
                 res_ystr  = res_ystr  + vres[0]
-                res_tsum  = res_tsum + vres[1]
-                res_tdif  = res_tdif + vres[2]
+                res_tsum  = res_tsum  + vres[1]
+                res_tdif  = res_tdif  + vres[2]
                 
                 working_df.at[idx, f'res_ystr_{iplane}'] = vres[0]
                 working_df.at[idx, f'res_tsum_{iplane}'] = vres[1]
@@ -7560,9 +7532,9 @@ for iteration in range(repeat + 1):
                 vs     = vsf  # We start with the previous 4-planes fit
                 mk     = np.zeros([npar, npar])
                 va     = np.zeros(npar)
-                isP3 = 0
+                istp = 0
                 dist = d0
-                while dist>cocut:
+                while dist > cocut and istp < iter_max:
                     for iplane in planes_to_iterate_short:
                     
                         # Data --------------------------------------------------------
@@ -7572,7 +7544,7 @@ for iteration in range(repeat + 1):
                         
                         mk = mk + fmkx(nvar, npar, vs, vsig, ss, zi)
                         va = va + fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
-                    isP3 = isP3 + 1
+                    istp = istp + 1
                     vs0 = vs
                     vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
                     merr = np.linalg.inv(mk)      # Only compute if needed for fmahd()
@@ -7624,6 +7596,7 @@ for iteration in range(repeat + 1):
     #             working_df.at[index, f'P{module_to_zero}_T_sum_final'] = 0
     #             working_df.at[index, f'P{module_to_zero}_T_diff_final'] = 0
     #             working_df.at[index, f'P{module_to_zero}_Q_sum_final'] = 0
+    
     
     # Filter according to residual ------------------------------------------------
     changed_event_count = 0
@@ -7716,21 +7689,17 @@ print("----------------------------------------------------------------------")
 print("------------------ Slowness residual comprobation ---------------------")
 print("----------------------------------------------------------------------")
 #%%
+
+working_df['delta_s'] = working_df['alt_s'] - working_df['s']  # Calculate the difference from the speed of light
+
 # if create_plots
 # if create_plots or create_essential_plots:
 if create_plots or create_essential_plots or create_very_essential_plots:
     print("Plotting residuals of alt_s - s for each original_tt to definitive_tt case...")
-
-    # Filter the DataFrame
+    
     df_filtered = working_df.copy()
-
-    # Define bins and colors
-    # bins = np.linspace(slowness_filter_left, slowness_filter_right, 100)  # Adjust range and bin size as needed
-    bins = np.linspace(-0.001, 0.001, 100)  # Adjust range and bin size as needed
+    bins = np.linspace(delta_s_left, delta_s_right, 100)  # Adjust range and bin size as needed
     colors = plt.cm.tab10.colors
-
-    # Get unique definitive_tt values
-    # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
 
     tt_values = [12, 23, 34, 13, 124, 134, 123, 234, 1234]
     
@@ -7746,23 +7715,27 @@ if create_plots or create_essential_plots or create_very_essential_plots:
         ax = axes[i]
 
         df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
-        # residuals = ( df_tt['alt_s'] - df_tt['s'] ) / df_tt['s']  # Calculate the residuals
-        residuals = 2 * ( df_tt['alt_s'] - df_tt['s'] ) / ( df_tt['alt_s'] + df_tt['s'] )  # Calculate the residuals
-        rel_sum = ( df_tt['alt_s'] + df_tt['s'] ) / 2
+        residuals = df_tt['delta_s']  # Calculate the residuals
+        # residuals = 2 * ( df_tt['alt_s'] - df_tt['s'] ) / ( df_tt['alt_s'] + df_tt['s'] )  # Calculate the residuals
+        # rel_sum = ( df_tt['alt_s'] + df_tt['s'] ) / 2
+        rel_sum = df_tt['s']
         
         if len(residuals) < 10:
             ax.set_visible(False)
             continue
 
         # ax.scatter(df_tt['s'], residuals, s=1, color='C0', alpha=0.5)
-        ax.scatter(rel_sum, residuals, s=0.1, color='C0', alpha=0.5)
+        ax.scatter(rel_sum, residuals, s=0.2, color='C0', alpha=0.1)
         ax.axvline(x=sc, color='r', linestyle='--', linewidth=0.5, label = "$beta = 1")  # Vertical line at x=0
+        ax.axvline(x=0, color='g', linestyle='--', linewidth=0.5, label = "Zero")  # Vertical line at x=0
         ax.set_title(f'TT {tt_val}', fontsize=10)
         ax.set_xlim(slowness_filter_left, slowness_filter_right)
         # ax.set_ylim(-0.001, 0.001)
         # ax.set_xlim(-1, 5)
-        ax.set_ylim(-0.15, 0.15)
+        # ax.set_ylim(-0.15, 0.15)
+        ax.set_ylim(slowness_filter_left / 10, slowness_filter_right / 20)
         ax.grid(True)
+        ax.legend()
 
         if i % ncols == 0:
             ax.set_ylabel(r'$alt_s - s$')
@@ -7773,7 +7746,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
 
-    plt.suptitle(r'Residuals: $alt_s - s$ per definitive_tt case', fontsize=14)
+    plt.suptitle(r'Residuals: $alt_s - s$ per processed_tt case', fontsize=14)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     # Save or show the plot
@@ -7787,6 +7760,17 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     if show_plots:
         plt.show()
     plt.close()
+
+
+print("----------------------------------------------------------------------")
+print("--------------------- Comparison results filter ----------------------")
+print("----------------------------------------------------------------------")
+
+for col in working_df.columns:
+    # TimTrack results
+    if 'delta_s' == col:
+        working_df.loc[:, col] = np.where((working_df[col] > delta_s_right) | (working_df[col] < delta_s_left), 0, working_df[col])
+
 #%%
 
 print("----------------------------------------------------------------------")
@@ -8176,7 +8160,6 @@ df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 
 
 # -----------------------------------------------------------------------------------------------------------------------------
-create_very_essential_plots = True
 
 # if (create_plots and residual_plots):
 if create_essential_plots or (create_plots and residual_plots):
@@ -8400,6 +8383,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             'yp': [-1 * proj_filter, proj_filter],
             's': [slowness_filter_left, slowness_filter_right],
             'alt_s': [alt_slowness_filter_left, alt_slowness_filter_right],
+            'delta_s': [delta_s_left, delta_s_right],
             # 'th_chi': [0, 0.03],
             # 'alt_th_chi': [0, 12],
             
@@ -8713,7 +8697,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
         )
         
     # Comparison with alternative fitting -------------------------------------------------------------------
-    plot_col = ['x', 'y', 'theta', 'phi', 's', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
+    plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
     for filters, title in df_cases_1:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
@@ -8729,7 +8713,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
 
     
     # plot_col = ['x', 'y', 'theta', 'phi', 's']
-    plot_col = ['x', 'xp', 'yp', 'y']
+    plot_col = ['x', 'xp', 'delta_s', 'yp', 'y']
     for filters, title in df_cases_1:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
@@ -8743,7 +8727,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             plot_list
         )
     
-    plot_col = ['s', 'alt_s']
+    plot_col = ['iterations', 'conv_distance']
     for filters, title in df_cases_1:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
