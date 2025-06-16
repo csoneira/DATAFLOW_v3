@@ -294,7 +294,7 @@ else:
 crontab_execution = True
 create_plots = False
 create_essential_plots = False
-create_very_essential_plots = True
+create_very_essential_plots = False
 save_plots = True
 show_plots = False
 create_pdf = True
@@ -505,8 +505,8 @@ ext_res_tdif_filter = 0.7
 # -----------------------------------------------------------------------------
 # Fitting comparison ----------------------------------------------------------
 # -----------------------------------------------------------------------------
-delta_s_left = -0.0001
-delta_s_right = 0.0001
+delta_s_left = -0.0003
+delta_s_right = 0.0003
 
 
 # -----------------------------------------------------------------------------
@@ -616,9 +616,9 @@ tdiff_to_x = strip_speed # Factor to transform t_diff to X
 vc    = beta * c_mm_ns # mm/ns
 sc    = 1/vc
 ss    = 1/strip_speed # slowness of the signal in the strip
-cocut = 1  # convergence cut
 d0    = 10 # initial value of the convergence parameter
-iter_max = 5
+cocut = 1  # convergence cut: 0.1
+iter_max = 20 # maximum number of iterations: 50
 nplan = 4
 lenx  = strip_length
 
@@ -1586,7 +1586,7 @@ working_df["datetime"] = selected_df['datetime']
 print(selected_conf['conf'])
 
 # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-if selected_conf['conf'] < 3:
+if selected_conf['conf'] < 2:
     if station == "2":
         print("Configuration of the detector is less than 2.")
         print("Swapping channels that give problems in plane 4.")
@@ -1609,7 +1609,7 @@ if self_trigger:
     working_st_df["datetime"] = self_trigger_df['datetime']
 
     # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-    if selected_conf['conf'] < 3:
+    if selected_conf['conf'] < 2:
         if station == "2":
             print("Configuration of the detector is less than 2.")
             print("Swapping channels that give problems in plane 4.")
@@ -1648,8 +1648,9 @@ if self_trigger:
     working_st_df = create_original_tt(working_st_df)
     working_st_df['original_tt'] = working_st_df['original_tt'].apply(builtins.int)
 
-# if create_essential_plots or create_plots:
-if create_plots:
+# if create_plots:
+# if create_plots or create_essential_plots:
+if create_plots or create_very_essential_plots or create_essential_plots:
     event_counts = working_df['original_tt'].value_counts()
 
     plt.figure(figsize=(10, 6))
@@ -1669,7 +1670,7 @@ if create_plots:
 
     if show_plots: plt.show()
     plt.close()
-
+    
 
 if self_trigger:
     if create_essential_plots or create_plots:
@@ -6089,6 +6090,7 @@ def compute_posfiltered_tt(row):
 
 # Apply to all rows
 working_df["posfiltered_tt"] = working_df.apply(compute_posfiltered_tt, axis=1)
+working_df = working_df.copy()
 
 
 print("----------------------------------------------------------------------")
@@ -6950,68 +6952,6 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
-# Same for hexbin
-if create_plots or create_essential_plots:
-# if create_plots:
-    fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
-    axes = axes.flatten()
-
-    for i_plane in range(1, 5):
-        # Column names
-        t_sum_col = f'P{i_plane}_T_sum_final'
-        t_diff_col = f'P{i_plane}_T_diff_final'
-        q_sum_col = f'P{i_plane}_Q_sum_final'
-        q_diff_col = f'P{i_plane}_Q_diff_final'
-        y_col = f'Y_{i_plane}'
-
-        # Filter valid rows (non-zero)
-        valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
-        
-        # Extract variables and filter low charge
-        cond = valid_rows[q_sum_col] < 10
-        t_sum  = valid_rows.loc[cond, t_sum_col]
-        t_diff = valid_rows.loc[cond, t_diff_col]
-        q_sum  = valid_rows.loc[cond, q_sum_col]
-        q_diff = valid_rows.loc[cond, q_diff_col]
-        y      = valid_rows.loc[cond, y_col]
-
-        base_idx = (i_plane - 1) * 10  # 10 plots per plane
-
-        combinations = [
-            (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
-            (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
-            (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
-            (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
-            (t_diff, y,      f'{t_diff_col} vs {y_col}'),
-            (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
-            (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
-            (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
-            (q_diff, y,      f'{q_diff_col} vs {y_col}'),
-            (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
-        ]
-
-        for offset, (x, yv, title) in enumerate(combinations):
-            ax = axes[base_idx + offset]
-            ax.hexbin(x, yv, gridsize=50, cmap='turbo')
-            ax.set_title(title)
-
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.92)
-    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, filtered', fontsize=18)
-
-    if save_plots:
-        name_of_file = 'rpc_variables_hexbin_combinations_filtered'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-
-    if show_plots: plt.show()
-    plt.close()
-
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("-------------- Alternative angle and slowness fitting ----------------")
@@ -7083,7 +7023,7 @@ fit_cols = (
 )
 
 # Slowness definitions
-slow_cols = ['alt_s', 'chi2_tsum_fit'] + [f'alt_res_tsum_{p}' for p in range(1, 5)]
+slow_cols = ['alt_s', 'alt_s_ordinate' , 'chi2_tsum_fit'] + [f'alt_res_tsum_{p}' for p in range(1, 5)]
 
 # Alternative analysis starts -----------------------------------------------
 repeat = number_of_alt_executions - 1 if alternative_iteration else 0
@@ -7138,8 +7078,9 @@ for alt_iteration in range(repeat + 1):
         res  = t_rel - (k * s_rel + b)
         chi2 = np.sum((res / anc_sts) ** 2)
 
-        slow_res['alt_s'][i]         = k
-        slow_res['chi2_tsum_fit'][i] = chi2
+        slow_res['alt_s'][i]          = k
+        slow_res['alt_s_ordinate'][i] = b
+        slow_res['chi2_tsum_fit'][i]  = chi2
         for p, r in zip(planes, res):
             slow_res[f'alt_res_tsum_{p}'][i] = r
 
@@ -7383,7 +7324,7 @@ timtrack_results = [ 'x', 'xp', 'y', 'yp', 't0', 's',
                 'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
                 'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4',
                 'charge_1', 'charge_2', 'charge_3', 'charge_4', 'charge_event',
-                "iterations", "conv_distance" ]
+                "iterations", "conv_distance", 'converged']
 
 new_columns_df = pd.DataFrame(0., index=working_df.index, columns=timtrack_results)
 working_df = pd.concat([working_df, new_columns_df], axis=1)
@@ -7453,17 +7394,8 @@ for iteration in range(repeat + 1):
             merr = np.linalg.inv(mk)      # Only compute if needed for fmahd()
             dist = fmahd(npar, vs, vs0, merr)
             
-        # if istp >= iter_max:
-        #     print("Did not converge")
-        #     print("Steps used: ", istp)
-        #     print("Mahalanobis distance: ", dist)
-        #     print("--------------------------------------------------------------")
-        # if dist >= cocut:
-        #     print("Did not converge")
-        #     print("Steps used: ", istp)
-        #     print("Mahalanobis distance: ", dist)
-        #     print("--------------------------------------------------------------")
-        
+        if istp >= iter_max or dist >= cocut:
+            working_df.at[idx, 'converged'] = 1
         working_df.at[idx, 'iterations'] = istp
         working_df.at[idx, 'conv_distance'] = dist
         
@@ -7620,6 +7552,9 @@ for iteration in range(repeat + 1):
             changed_event_count += 1
     print(f"--> {changed_event_count} events were residual filtered.")
     
+    print(f"{len(working_df[working_df.iterations == iter_max])} reached the maximum number of iterations ({iter_max}).")
+    print(f"Percentage of events that did not converge: {len(working_df[working_df.iterations == iter_max]) / len(working_df) * 100:.2f}%")
+    
     four_planes = len(working_df[working_df.processed_tt == 1234])
     print(f"Events that are 1234: {four_planes}")
     print(f"Events that are 123: {len(working_df[working_df.processed_tt == 123])}")
@@ -7634,9 +7569,168 @@ for iteration in range(repeat + 1):
     eff_3 = (four_planes) / (four_planes + planes124)
     print(f"First estimate of eff_3 ={eff_3:.2f}")
     
+    
+    # --------------------------------------------------------------------------
+    
+    print("-------------------------------------------------------------------")
+    print("DETECTOR 1234")
+    
+    count_1234 = len(working_df[working_df.original_tt == 1234])
+    count_14   = len(working_df[working_df.original_tt == 14])
+    
+    planes_1234 = len(working_df[working_df.processed_tt == 1234])
+    planes_14 = len(working_df[working_df.processed_tt == 14])
+    
+    print("\nOriginal 1234: ", count_1234)
+    print("Processed 1234: ", planes_1234)
+    
+    print("Original 14: ", count_14)
+    print("Processed 14: ", planes_14)
+    
+    comp_eff = ( 1 - eff_2 ) * ( 1 - eff_3 )
+    
+    estim_14_orig = count_1234 * comp_eff
+    estim_14_proc = planes_1234 * comp_eff
+    print("Estimated 14 (from original_tt): ", estim_14_orig)
+    print("Estimated 14 (from processed_tt): ", estim_14_proc)
+    print("Ratio of original_tt to processed_tt: ", estim_14_orig / estim_14_proc if estim_14_proc > 0 else np.nan)
+    
+    SNR_og = ( count_14 - estim_14_orig ) / count_14 * 100 if count_14 > 0 else 0
+    SNR_pr = ( planes_14 - estim_14_proc ) / planes_14 * 100 if planes_14 > 0 else 0
+    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
+    
+    
+    print("-------------------------------------------------------------------")
+    print("SUBDETECTOR 123 (excluding plane 4)")
+
+    # Counts for events with all planes and with plane 4 missing
+    count_123 = len(working_df[working_df.original_tt.isin([1234, 123])])
+    # count_13  = len(working_df[working_df.original_tt.isin([13, 134])])
+    count_13  = len(working_df[working_df.original_tt.isin([13])])
+
+    planes_123 = len(working_df[working_df.processed_tt.isin([1234, 123])])
+    # planes_13  = len(working_df[working_df.processed_tt.isin([13, 134])])
+    planes_13  = len(working_df[working_df.processed_tt.isin([13])])
+
+    print("\nOriginal 123 + 1234: ", count_123)
+    print("Processed 123 + 1234: ", planes_123)
+
+    print("Original 13: ", count_13)
+    print("Processed 13: ", planes_13)
+
+    # Efficiency loss due to missing plane 2
+    comp_eff = (1 - eff_2)
+
+    # Estimate how many 13-type events should have appeared
+    estim_13_orig = count_123 * comp_eff
+    estim_13_proc = planes_123 * comp_eff
+
+    print("Estimated 13 (from original_tt): ", estim_13_orig)
+    print("Estimated 13 (from processed_tt): ", estim_13_proc)
+    print("Ratio of original_tt to processed_tt: ", estim_13_orig / estim_13_proc if estim_13_proc > 0 else np.nan)
+
+    # Signal-to-noise ratio comparison
+    SNR_og = (count_13 - estim_13_orig) / count_13 * 100 if count_13 > 0 else 0
+    SNR_pr = (planes_13 - estim_13_proc) / planes_13 * 100 if planes_13 > 0 else 0
+    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
+    
+    
+    print("-------------------------------------------------------------------")
+    print("SUBDETECTOR 234 (excluding plane 1)")
+
+    count_234 = len(working_df[working_df.original_tt.isin([1234, 234])])
+    # count_24  = len(working_df[working_df.original_tt.isin([24, 124])])
+    count_24  = len(working_df[working_df.original_tt.isin([24])])
+
+    planes_234 = len(working_df[working_df.processed_tt.isin([1234, 234])])
+    # planes_24  = len(working_df[working_df.processed_tt.isin([24, 124])])
+    planes_24  = len(working_df[working_df.processed_tt.isin([24])])
+
+    print("\nOriginal 234 + 1234: ", count_234)
+    print("Processed 234 + 1234: ", planes_234)
+
+    print("Original 24: ", count_24)
+    print("Processed 24: ", planes_24)
+
+    comp_eff = (1 - eff_3)
+
+    estim_24_orig = count_234 * comp_eff
+    estim_24_proc = planes_234 * comp_eff
+
+    print("Estimated 24 (from original_tt): ", estim_24_orig)
+    print("Estimated 24 (from processed_tt): ", estim_24_proc)
+    print("Ratio of original_tt to processed_tt: ", estim_24_orig / estim_24_proc if estim_24_proc > 0 else np.nan)
+
+    SNR_og = (count_24 - estim_24_orig) / count_24 * 100 if count_24 > 0 else np.nan
+    SNR_pr = (planes_24 - estim_24_proc) / planes_24 * 100 if planes_24 > 0 else np.nan
+    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
+    
+    
+    print("-------------------------------------------------------------------")
+    print("SUBDETECTOR 124 (excluding plane 3)")
+
+    count_1234 = len(working_df[working_df.original_tt.isin([1234])])
+    count_124  = len(working_df[working_df.original_tt.isin([124])])
+
+    planes_1234 = len(working_df[working_df.processed_tt.isin([1234])])
+    planes_124  = len(working_df[working_df.processed_tt.isin([124])])
+
+    print("\nOriginal 1234: ", count_1234)
+    print("Processed 1234: ", planes_1234)
+
+    print("Original 124: ", count_124)
+    print("Processed 124: ", planes_124)
+
+    comp_eff = (1 - eff_3)
+
+    estim_124_orig = count_1234 * comp_eff
+    estim_124_proc = planes_1234 * comp_eff
+
+    print("Estimated 124 (from original_tt): ", estim_124_orig)
+    print("Estimated 124 (from processed_tt): ", estim_124_proc)
+    print("Ratio of original_tt to processed_tt: ", estim_124_orig / estim_124_proc if estim_124_proc > 0 else np.nan)
+
+    SNR_og = (count_124 - estim_124_orig) / count_124 * 100 if count_124 > 0 else np.nan
+    SNR_pr = (planes_124 - estim_124_proc) / planes_124 * 100 if planes_124 > 0 else np.nan
+    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
+    
+    
+    print("-------------------------------------------------------------------")
+    print("SUBDETECTOR 134 (excluding plane 2)")
+
+    count_1234 = len(working_df[working_df.original_tt.isin([1234])])
+    count_134  = len(working_df[working_df.original_tt.isin([134])])
+
+    planes_1234 = len(working_df[working_df.processed_tt.isin([1234])])
+    planes_134  = len(working_df[working_df.processed_tt.isin([134])])
+
+    print("\nOriginal 1234: ", count_1234)
+    print("Processed 1234: ", planes_1234)
+
+    print("Original 134: ", count_134)
+    print("Processed 134: ", planes_134)
+
+    comp_eff = (1 - eff_2)
+
+    estim_134_orig = count_1234 * comp_eff
+    estim_134_proc = planes_1234 * comp_eff
+
+    print("Estimated 134 (from original_tt): ", estim_134_orig)
+    print("Estimated 134 (from processed_tt): ", estim_134_proc)
+    print("Ratio of original_tt to processed_tt: ", estim_134_orig / estim_134_proc if estim_134_proc > 0 else np.nan)
+
+    SNR_og = (count_134 - estim_134_orig) / count_134 * 100 if count_134 > 0 else np.nan
+    SNR_pr = (planes_134 - estim_134_proc) / planes_134 * 100 if planes_124 > 0 else np.nan
+    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
+
     iteration += 1
-    
-    
+
+
 # ------------------------------------------------------------------------------------
 # End of TimTrack loop ---------------------------------------------------------------
 # ------------------------------------------------------------------------------------
@@ -7686,6 +7780,69 @@ for col in working_df.columns:
 
 
 print("----------------------------------------------------------------------")
+print("------------------ TimTrack convergence comprobation -----------------")
+print("----------------------------------------------------------------------")
+#%%
+
+# if create_plots
+# if create_plots or create_essential_plots:
+if create_plots or create_essential_plots or create_very_essential_plots:
+
+    df_filtered = working_df.copy()
+    colors = plt.cm.tab10.colors
+    tt_values = [12, 23, 34, 13, 124, 134, 123, 234, 1234]
+    n_plots = len(tt_values)
+    ncols = 3
+    nrows = 3
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), sharex=True, sharey=True)
+    axes = axes.flatten()  # Flatten for easier indexing
+    
+    for i, tt_val in enumerate(tt_values):
+        ax = axes[i]
+        
+        df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
+        x = df_tt['iterations']
+        y = df_tt['conv_distance']
+        # ax.scatter(df_tt['s'], residuals, s=1, color='C0', alpha=0.5)
+        ax.scatter(x, y, s=2, color='C0', alpha=0.5)
+        ax.axvline(x=iter_max, color='r', linestyle='--', linewidth=1.5, label = "Iteration limit set")
+        ax.axhline(y=cocut, color='g', linestyle='--', linewidth=1.5, label = "Convergence cut set")
+        ax.set_title(f'TT {tt_val}', fontsize=10)
+        # ax.set_xlim(slowness_filter_left, slowness_filter_right)
+        ax.set_ylim(0, cocut * 1.05)
+        # ax.set_xlim(-1, 5)
+        # ax.set_ylim(-0.15, 0.15)
+        # ax.set_ylim(slowness_filter_left / 10, slowness_filter_right / 20)
+        ax.grid(True)
+        ax.legend()
+
+        if i % ncols == 0:
+            ax.set_ylabel(r'Iterations vs cocut')
+        if i // ncols == nrows - 1:
+            ax.set_xlabel(r'$Iterations$')
+
+    # Hide any unused subplots
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+
+    plt.suptitle(r'Iteration vs distance cut in convergence per processed_tt case', fontsize=14)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    # Save or show the plot
+    plt.tight_layout()
+    if save_plots:
+        filename = f'{fig_idx}_iterations_vs_cocut.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+
+
+print("----------------------------------------------------------------------")
 print("------------------ Slowness residual comprobation ---------------------")
 print("----------------------------------------------------------------------")
 #%%
@@ -7725,15 +7882,15 @@ if create_plots or create_essential_plots or create_very_essential_plots:
             continue
 
         # ax.scatter(df_tt['s'], residuals, s=1, color='C0', alpha=0.5)
-        ax.scatter(rel_sum, residuals, s=0.2, color='C0', alpha=0.1)
-        ax.axvline(x=sc, color='r', linestyle='--', linewidth=0.5, label = "$beta = 1")  # Vertical line at x=0
-        ax.axvline(x=0, color='g', linestyle='--', linewidth=0.5, label = "Zero")  # Vertical line at x=0
+        ax.scatter(rel_sum, residuals, s=0.8, color='C0', alpha=0.1)
+        ax.axvline(x=sc, color='r', linestyle='--', linewidth=1.5, label = "$\\beta = 1$")  # Vertical line at x=0
+        ax.axvline(x=0, color='g', linestyle='--', linewidth=1.5, label = "Zero")  # Vertical line at x=0
         ax.set_title(f'TT {tt_val}', fontsize=10)
         ax.set_xlim(slowness_filter_left, slowness_filter_right)
         # ax.set_ylim(-0.001, 0.001)
         # ax.set_xlim(-1, 5)
         # ax.set_ylim(-0.15, 0.15)
-        ax.set_ylim(slowness_filter_left / 10, slowness_filter_right / 20)
+        ax.set_ylim(delta_s_left, delta_s_right)
         ax.grid(True)
         ax.legend()
 
@@ -8543,6 +8700,44 @@ if create_plots or create_very_essential_plots or create_essential_plots:
         ([("definitive_tt", 134, 134)], "1-3-4 cases"),
     ]
     
+    df_cases_3 = [
+        ([("definitive_tt", 12, 12), ("iterations", 2, 2)], "1-2 cases, iterations = 2"),
+        ([("definitive_tt", 12, 12), ("iterations", 3, 3)], "1-2 cases, iterations = 3"),
+        ([("definitive_tt", 12, 12), ("iterations", 4, 4)], "1-2 cases, iterations = 4"),
+        ([("definitive_tt", 12, 12), ("iterations", 5, 5)], "1-2 cases, iterations = 5"),
+        ([("definitive_tt", 12, 12), ("iterations", 6, iter_max)], f"1-2 cases, iterations = 6 to {iter_max}"),
+        
+        ([("definitive_tt", 23, 23), ("iterations", 2, 2)], "2-3 cases, iterations = 2"),
+        ([("definitive_tt", 23, 23), ("iterations", 3, 3)], "2-3 cases, iterations = 3"),
+        ([("definitive_tt", 23, 23), ("iterations", 4, 4)], "2-3 cases, iterations = 4"),
+        ([("definitive_tt", 23, 23), ("iterations", 5, 5)], "2-3 cases, iterations = 5"),
+        ([("definitive_tt", 23, 23), ("iterations", 6, iter_max)], f"2-3 cases, iterations = 6 to {iter_max}"),
+        
+        ([("definitive_tt", 34, 34), ("iterations", 2, 2)], "3-4 cases, iterations = 2"),
+        ([("definitive_tt", 34, 34), ("iterations", 3, 3)], "3-4 cases, iterations = 3"),
+        ([("definitive_tt", 34, 34), ("iterations", 4, 4)], "3-4 cases, iterations = 4"),
+        ([("definitive_tt", 34, 34), ("iterations", 5, 5)], "3-4 cases, iterations = 5"),
+        ([("definitive_tt", 34, 34), ("iterations", 6, iter_max)], f"3-4 cases, iterations = 6 to {iter_max}"),
+        
+        ([("definitive_tt", 123, 123), ("iterations", 2, 2)], "1-2-3 cases, iterations = 2"),
+        ([("definitive_tt", 123, 123), ("iterations", 3, 3)], "1-2-3 cases, iterations = 3"),
+        ([("definitive_tt", 123, 123), ("iterations", 4, 4)], "1-2-3 cases, iterations = 4"),
+        ([("definitive_tt", 123, 123), ("iterations", 5, 5)], "1-2-3 cases, iterations = 5"),
+        ([("definitive_tt", 123, 123), ("iterations", 6, iter_max)], f"1-2-3 cases, iterations = 6 to {iter_max}"),
+        
+        ([("definitive_tt", 234, 234), ("iterations", 2, 2)], "2-3-4 cases, iterations = 2"),
+        ([("definitive_tt", 234, 234), ("iterations", 3, 3)], "2-3-4 cases, iterations = 3"),
+        ([("definitive_tt", 234, 234), ("iterations", 4, 4)], "2-3-4 cases, iterations = 4"),
+        ([("definitive_tt", 234, 234), ("iterations", 5, 5)], "2-3-4 cases, iterations = 5"),
+        ([("definitive_tt", 234, 234), ("iterations", 6, iter_max)], f"2-3-4 cases, iterations = 6 to {iter_max}"),
+        
+        ([("definitive_tt", 1234, 1234), ("iterations", 2, 2)], "1-2-3-4 cases, iterations = 2"),
+        ([("definitive_tt", 1234, 1234), ("iterations", 3, 3)], "1-2-3-4 cases, iterations = 3"),
+        ([("definitive_tt", 1234, 1234), ("iterations", 4, 4)], "1-2-3-4 cases, iterations = 4"),
+        ([("definitive_tt", 1234, 1234), ("iterations", 5, 5)], "1-2-3-4 cases, iterations = 5"),
+        ([("definitive_tt", 1234, 1234), ("iterations", 6, iter_max)], f"1-2-3-4 cases, iterations = 6 to {iter_max}"),
+    ]
+    
     # df_cases_1 = [
     #     # From original_tt = 1234
     #     ([("original_tt", 1234, 1234), ("definitive_tt", 123, 123)], "original=1234, processed=123"),
@@ -8638,83 +8833,115 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     #         plot_list
     #     )
     
+    residue_plots = False
+    if residue_plots:
+        for filters, title in df_cases_2:
+            relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+            relevant_residues_alt_tsum = [f"alt_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+            relevant_residues_ext_tsum = [f"ext_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+            
+            columns_of_interest = relevant_residues_tsum + relevant_residues_alt_tsum + relevant_residues_ext_tsum
+            
+            fig_idx = plot_hexbin_matrix(
+                df_plot_ancillary,
+                columns_of_interest,
+                filters,
+                title,
+                save_plots,
+                show_plots,
+                base_directories,
+                fig_idx,
+                plot_list
+            )
+        
+        for filters, title in df_cases_2:
+            relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+            relevant_residues_alt_tdif = [f"alt_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+            relevant_residues_ext_tdif = [f"ext_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+            
+            columns_of_interest = relevant_residues_tdif + relevant_residues_alt_tdif + relevant_residues_ext_tdif
+            
+            fig_idx = plot_hexbin_matrix(
+                df_plot_ancillary,
+                columns_of_interest,
+                filters,
+                title,
+                save_plots,
+                show_plots,
+                base_directories,
+                fig_idx,
+                plot_list
+            )
+        
+        for filters, title in df_cases_2:
+            relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+            relevant_residues_alt_ystr = [f"alt_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+            relevant_residues_ext_ystr = [f"ext_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+            
+            columns_of_interest = relevant_residues_ystr + relevant_residues_alt_ystr + relevant_residues_ext_ystr
+            
+            fig_idx = plot_hexbin_matrix(
+                df_plot_ancillary,
+                columns_of_interest,
+                filters,
+                title,
+                save_plots,
+                show_plots,
+                base_directories,
+                fig_idx,
+                plot_list
+            )
     
-    for filters, title in df_cases_2:
-        relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_alt_tsum = [f"alt_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_ext_tsum = [f"ext_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-        
-        columns_of_interest = relevant_residues_tsum + relevant_residues_alt_tsum + relevant_residues_ext_tsum
-        
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            columns_of_interest,
-            filters,
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
     
-    for filters, title in df_cases_2:
-        relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_alt_tdif = [f"alt_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_ext_tdif = [f"ext_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-        
-        columns_of_interest = relevant_residues_tdif + relevant_residues_alt_tdif + relevant_residues_ext_tdif
-        
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            columns_of_interest,
-            filters,
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
-    
-    for filters, title in df_cases_2:
-        relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_alt_ystr = [f"alt_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_ext_ystr = [f"ext_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-        
-        columns_of_interest = relevant_residues_ystr + relevant_residues_alt_ystr + relevant_residues_ext_ystr
-        
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            columns_of_interest,
-            filters,
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
-        
     # Comparison with alternative fitting -------------------------------------------------------------------
-    plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
-    for filters, title in df_cases_1:
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            plot_col,
-            filters,
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
-
+    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
+    # for filters, title in df_cases_1:
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         plot_col,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
     
     # plot_col = ['x', 'y', 'theta', 'phi', 's']
-    plot_col = ['x', 'xp', 'delta_s', 'yp', 'y']
-    for filters, title in df_cases_1:
+    # plot_col = ['x', 'xp', 'delta_s', 'yp', 'y']
+    # for filters, title in df_cases_1:
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         plot_col,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
+    
+    # Comparison with alternative fitting -------------------------------------------------------------------
+    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
+    # for filters, title in df_cases_3:
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         plot_col,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
+    
+    
+    # Comparison with alternative fitting -------------------------------------------------------------------
+    plot_col = ['t0', 's', 'delta_s', 'alt_s', 'alt_s_ordinate']
+    for filters, title in df_cases_3:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
             plot_col,
@@ -8727,8 +8954,10 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             plot_list
         )
     
-    plot_col = ['iterations', 'conv_distance']
-    for filters, title in df_cases_1:
+    
+    # Comparison with alternative fitting -------------------------------------------------------------------
+    plot_col = ['theta', 'alt_theta']
+    for filters, title in df_cases_2:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
             plot_col,
@@ -8740,42 +8969,74 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             fig_idx,
             plot_list
         )
-
+    
+    
+    # df_plot_ancillary_conv = df_plot_ancillary[df_plot_ancillary['converged'] == 1].copy()
+    # # Comparison with alternative fitting -------------------------------------------------------------------
+    # plot_col = ['x', 'y', 'theta', 'phi', 'delta_s']
+    # for filters, title in df_cases_1:
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         plot_col,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
+    
+    # df_plot_ancillary_conv = df_plot_ancillary[df_plot_ancillary['converged'] == 0].copy()
+    # # Comparison with alternative fitting -------------------------------------------------------------------
+    # plot_col = ['x', 'y', 'theta', 'phi', 'delta_s']
+    # for filters, title in df_cases_1:
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         plot_col,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
 
 # ------------------------------------------------------------------------------------------------------
 
-if create_plots or create_essential_plots:
+
+# if create_plots or create_essential_plots:
 # if create_plots:
+if create_plots or create_essential_plots or create_very_essential_plots:
     df_filtered = df_plot_ancillary.copy()
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=False)
+    fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
     colors = plt.cm.tab10.colors
-    bins = np.linspace(0, np.pi, 150)
+    bins = np.linspace(theta_left_filter, theta_right_filter, 150)
     tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
 
     for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('alt_theta', r'$\theta_{\mathrm{alt}}$')]):
-        for col_idx, (xlim_val, col_label) in enumerate([(np.pi, 'Full range'), (1.2, 'Zoom-in')]):
-            ax = axes[row_idx, col_idx]
-            for i, tt_val in enumerate(tt_values):
-                df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
-                theta_vals = df_tt[theta_col].dropna()
-                if len(theta_vals) < 10:
-                    continue
-                label = f'{tt_val}'
-                ax.hist(theta_vals, bins=bins, histtype='step', linewidth=1,
-                        color=colors[i % len(colors)], label=label)
-            ax.set_xlim(0, xlim_val)
-            ax.set_xlabel(row_label + r' [rad]')
-            if col_idx == 0:
-                ax.set_ylabel('Counts')
-            ax.set_title(f'{row_label} — {col_label}')
-            ax.grid(True)
-            if row_idx == 0 and col_idx == 1:
-                ax.legend(title='definitive_tt', fontsize='small')
+        ax = axes[row_idx]
+        for i, tt_val in enumerate(tt_values):
+            df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
+            theta_vals = df_tt[theta_col].dropna()
+            if len(theta_vals) < 10:
+                continue
+            label = f'{tt_val}'
+            ax.hist(theta_vals, bins=bins, histtype='step', linewidth=1,
+                    color=colors[i % len(colors)], label=label)
+        ax.set_xlim(theta_left_filter, theta_right_filter)
+        ax.set_xlabel(row_label + r' [rad]')
+        ax.set_ylabel('Counts')
+        ax.set_title(f'{row_label} — Zoom-in')
+        ax.grid(True)
+        if row_idx == 0:
+            ax.legend(title='definitive_tt', fontsize='small')
 
-    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ Distributions by Processed TT Type', fontsize=16)
+    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Processed TT Type', fontsize=15)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_theta_alt_theta_definitive_tt_2x2.png'
+        final_filename = f'{fig_idx}_theta_alt_theta_zoom_definitive_tt.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -8785,38 +9046,37 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
-if create_plots or create_essential_plots:
+# if create_plots or create_essential_plots:
 # if create_plots:
+if create_plots or create_essential_plots or create_very_essential_plots:
     df_filtered = df_plot_ancillary.copy()
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=False)
+    fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
     colors = plt.cm.tab10.colors
-    bins = np.linspace(0, np.pi, 150)
+    bins = np.linspace(theta_left_filter, theta_right_filter, 150)
     tt_values = sorted(df_filtered['tracking_tt'].dropna().unique(), key=lambda x: int(x))
+
     for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('alt_theta', r'$\theta_{\mathrm{alt}}$')]):
-        for col_idx, (xlim_val, col_label) in enumerate([(np.pi, 'Full range'), (1.2, 'Zoom-in')]):
-            ax = axes[row_idx, col_idx]
-            for i, tt_val in enumerate(tt_values):
-                df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
-                theta_vals = df_tt[theta_col].dropna()
-                if len(theta_vals) < 10:
-                    continue
+        ax = axes[row_idx]
+        for i, tt_val in enumerate(tt_values):
+            df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
+            theta_vals = df_tt[theta_col].dropna()
+            if len(theta_vals) < 10:
+                continue
+            label = f'{tt_val}'
+            ax.hist(theta_vals, bins=bins, histtype='step', linewidth=1,
+                    color=colors[i % len(colors)], label=label)
+        ax.set_xlim(theta_left_filter, theta_right_filter)
+        ax.set_xlabel(row_label + r' [rad]')
+        ax.set_ylabel('Counts')
+        ax.set_title(f'{row_label} — Zoom-in')
+        ax.grid(True)
+        if row_idx == 0:
+            ax.legend(title='tracking_tt', fontsize='small')
 
-                label = f'{tt_val}'
-                ax.hist(theta_vals, bins=bins, histtype='step', linewidth=1,
-                        color=colors[i % len(colors)], label=label)
-            ax.set_xlim(0, xlim_val)
-            ax.set_xlabel(row_label + r' [rad]')
-            if col_idx == 0:
-                ax.set_ylabel('Counts')
-            ax.set_title(f'{row_label} — {col_label}')
-            ax.grid(True)
-            if row_idx == 0 and col_idx == 1:
-                ax.legend(title='tracking_tt', fontsize='small')
-
-    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ Distributions by Tracking TT Type', fontsize=16)
+    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Processed TT Type', fontsize=15)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_theta_alt_theta_tracking_tt_2x2.png'
+        final_filename = f'{fig_idx}_theta_alt_theta_zoom_tracking_tt.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
