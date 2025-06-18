@@ -63,6 +63,7 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+from scipy.ndimage import gaussian_filter1d
 from scipy.stats import poisson
 from scipy.optimize import minimize
 
@@ -120,14 +121,18 @@ save_plots = True
 create_pdf = True
 force_replacement = True  # Creates a new datafile even if there is already one that looks complete
 show_plots = False
-caye_high_mid_limit_angle = 15
+caye_high_mid_limit_angle = 10
 
 hans_high_mid_limit_angle = 10
 hans_low_mid_limit_angle = 40
 
+
+theta_boundaries = [5, 10, 30, 45]
+region_layout = [1, 4, 4, 8, 8]
+
 polya_fit = False
 real_strip_case_study = False
-multiplicity_calculations = False
+multiplicity_calculations = True
 crosstalk_probability = True
 georgys = False
 
@@ -244,47 +249,6 @@ for file_name in files_to_copy:
 # -----------------------------------------------------------------------------
 # Functions -------------------------------------------------------------------
 # -----------------------------------------------------------------------------
-
-# Hans' angular map division
-high_regions_hans = ['V']
-mid_regions_hans = ['N.M', 'NE.M', 'E.M', 'SE.M', 'S.M', 'SW.M', 'W.M', 'NW.M']
-low_regions_hans = ['N.H', 'E.H', 'S.H', 'W.H']
-
-def classify_region_hans(row):
-    phi = row['phi'] * 180/np.pi
-    theta = row['theta'] * 180/np.pi
-    
-    # if int(row['type']) <= 100:
-    #     return 'None'
-    
-    if 0 <= theta < hans_high_mid_limit_angle:
-        return 'V'
-    elif hans_high_mid_limit_angle <= theta <= hans_low_mid_limit_angle:
-        if -22.5 <= phi < 22.5:
-            return 'N.M'
-        elif 22.5 <= phi < 67.5:
-            return 'NE.M'
-        elif 67.5 <= phi < 112.5:
-            return 'E.M'
-        elif 112.5 <= phi < 157.5:
-            return 'SE.M'
-        elif -180 <= phi < -157.5 or 157.5 <= phi <= 180:
-            return 'S.M'
-        elif -157.5 <= phi < -112.5:
-            return 'SW.M'
-        elif -112.5 <= phi < -67.5:
-            return 'W.M'
-        else:  # -67.5 <= phi < -22.5
-            return 'NW.M'
-    elif 40 < theta <= 90:
-        if -45 <= phi < 45:
-            return 'N.H'
-        elif 45 <= phi < 135:
-            return 'E.H'
-        elif -135 <= phi < -45:
-            return 'W.H'
-        else:  # phi >= 135 or phi < -135
-            return 'S.H'
 
 def custom_mean(x):
     return x[x != 0].mean() if len(x[x != 0]) > 0 else 0
@@ -418,19 +382,102 @@ min_time_original = df['Time'].min()
 max_time_original = df['Time'].max()
 valid_times = df['Time'].dropna()
 
+# ------------------------------------------------------------------------------------------
+
+multiple_files = True
+
+# --- MULTIPLE FILES HANDLING ---
+if multiple_files:
+    from datetime import datetime, timedelta
+
+    # Configuration
+    cluster_of_files = 7  # Adjust as needed
+    time_window = timedelta(hours=10)
+    time_tolerance = timedelta(minutes=10)
+
+    # Extract timestamp from filename
+    def extract_datetime_from_filename(name):
+        try:
+            parts = name.split('_')
+            dt_str = parts[2] + '_' + parts[3].replace('.txt', '')
+            return datetime.strptime(dt_str, "%Y.%m.%d_%H.%M.%S")
+        except Exception:
+            return None
+
+    reference_filename = os.path.basename(file_path)
+    reference_datetime = extract_datetime_from_filename(reference_filename)
+    if reference_datetime is None:
+        raise ValueError(f"Could not parse datetime from filename: {reference_filename}")
+
+    # Directory of the file
+    file_dir = os.path.dirname(file_path)
+    all_files = sorted(os.listdir(file_dir))
+    
+    print("Files in the directory of the datafile:")
+    for fname in all_files:
+        print(fname)
+    
+    # Filter files within ±2h of reference time
+    time_candidates = []
+    for fname in all_files:
+        dt = extract_datetime_from_filename(fname)
+        if dt and abs(dt - reference_datetime) <= time_window:
+            time_candidates.append((dt, fname))
+    time_candidates.sort()
+    
+    print(f"Found {len(time_candidates)} files within the time window of {time_window} around {reference_datetime}.")
+    print("Time candidates:")
+    for dt, fname in time_candidates:
+        print(f"{dt} - {fname}")
+    
+    # Load the closest files by timestamp
+    merged_df = df.copy()
+    used = 1  # already using one
+    for dt, fname in time_candidates:
+        if fname == reference_filename:
+            continue
+        if used >= cluster_of_files:
+            break
+
+        fpath = os.path.join(file_dir, fname)
+        try:
+            temp_df = pd.read_csv(fpath, sep=',')
+            temp_df['Time'] = pd.to_datetime(temp_df['Time'], errors='coerce')
+            min_t, max_t = temp_df['Time'].min(), temp_df['Time'].max()
+            print(f"Processing file: {fname} with min time {min_t} and max time {max_t}")
+            if not (max_t < min_time_original - time_tolerance or min_t > max_time_original + time_tolerance):
+                print(f"Merging file: {fname}")
+                merged_df = pd.concat([merged_df, temp_df], ignore_index=True)
+                # Update time range for rolling inclusion
+                min_time_original = min(min_time_original, min_t)
+                max_time_original = max(max_time_original, max_t)
+                used += 1
+        except Exception as e:
+            print(f"Skipping file {fname}: {e}")
+
+    df = merged_df
+    print(f"Total events after merging: {len(df)}")
+
+# ------------------------------------------------------------------------------------------
+
+# Ensure valid time entries
+valid_times = df['Time'].dropna()
+
 if not valid_times.empty:
     min_time_valid = valid_times.min()
+    max_time_valid = valid_times.max()
     
-    # Check if the min value with NaT differs from the valid min value
+    # Check if the overall min time (possibly NaT) differs from the valid min time
     if min_time_original != min_time_valid:
         print("Notice: The minimum value from 'Time' column differs from the smallest valid datetime.")
         print("Original min value (including NaT):", min_time_original)
         print("Valid min value (ignoring NaT):", min_time_valid)
     
+    print(f"Time range of dataset: {min_time_valid} to {max_time_valid}")
+
     first_datetime = min_time_valid
     filename_save_suffix = first_datetime.strftime('%y-%m-%d_%H.%M.%S')
 else:
-    # first_datetime = None
     sys.exit("No valid datetime values found in the 'Time' column. Exiting...")
 
 print("Filename save suffix:", filename_save_suffix)
@@ -590,10 +637,6 @@ def compute_definitive_tt(row):
 
 # -----------------------------------------------------------------------------
 
-print("----------------------------------------------------------------------")
-print("------------------- Efficiency respect the charge --------------------")
-print("----------------------------------------------------------------------")
-
 def compute_angular_efficiencies(df_input, filter_value, bins, bin_centers, tt_combos, unique_tt_per_col, blurring_sigma=2):
     df_filtered = df_input.copy()
 
@@ -650,132 +693,135 @@ def compute_angular_efficiencies(df_input, filter_value, bins, bin_centers, tt_c
         results.append((eff, err, label, color))
     return results
 
+eff_vs_charge = False
+if eff_vs_charge:
+    print("----------------------------------------------------------------------")
+    print("------------------- Efficiency respect the charge --------------------")
+    print("----------------------------------------------------------------------")
 
-# --- Setup parameters ---
-nbins = 20
-right = np.pi / 3
-bins = np.linspace(0, right, nbins)
-bin_centers = 0.5 * (bins[:-1] + bins[1:])
+    # --- Setup parameters ---
+    nbins = 6
+    right = np.pi / 3
+    bins = np.linspace(0, right, nbins)
+    bin_centers = 0.5 * (bins[:-1] + bins[1:])
 
-# Subdetector mappings
-map_123 = {1234: 123, 123: 123, 234: 234, 124: 12, 134: 13, 12: 12, 23: 23, 34: 3, 13: 13, 24: 2, 14: 1}
-map_234 = {1234: 234, 123: 23, 234: 234, 124: 24, 134: 34, 12: 2, 23: 23, 34: 34, 13: 3, 24: 24, 14: 4}
+    # Subdetector mappings
+    map_123 = {1234: 123, 123: 123, 234: 234, 124: 12, 134: 13, 12: 12, 23: 23, 34: 3, 13: 13, 24: 2, 14: 1}
+    map_234 = {1234: 234, 123: 23, 234: 234, 124: 24, 134: 34, 12: 2, 23: 23, 34: 34, 13: 3, 24: 24, 14: 4}
 
-df['subdetector_123_tt'] = df['processed_tt'].map(map_123)
-df['subdetector_234_tt'] = df['processed_tt'].map(map_234)
-df['subdetector_1234_tt'] = df['processed_tt']
+    df['subdetector_123_tt'] = df['processed_tt'].map(map_123)
+    df['subdetector_234_tt'] = df['processed_tt'].map(map_234)
+    df['subdetector_1234_tt'] = df['processed_tt']
 
-# TT efficiency configurations
-tt_combos = [
-    ('1234', '134', 'subdetector_1234_tt', r'3-plane eff$_2$ $= \frac{1234}{134 + 1234}$', 'blue'),
-    ('123',  '13',  'subdetector_123_tt',  r'2-plane eff$_2$ $= \frac{123}{13 + 123}$',     'red'),
-    ('1234', '124', 'subdetector_1234_tt', r'3-plane eff$_3$ $= \frac{1234}{124 + 1234}$', 'green'),
-    ('234',  '24',  'subdetector_234_tt',  r'2-plane eff$_3$ $= \frac{234}{24 + 234}$',     'orange'),
-]
+    # TT efficiency configurations
+    tt_combos = [
+        ('1234', '134', 'subdetector_1234_tt', r'3-plane eff$_2$ $= \frac{1234}{134 + 1234}$', 'blue'),
+        ('123',  '13',  'subdetector_123_tt',  r'2-plane eff$_2$ $= \frac{123}{13 + 123}$',     'red'),
+        ('1234', '124', 'subdetector_1234_tt', r'3-plane eff$_3$ $= \frac{1234}{124 + 1234}$', 'green'),
+        ('234',  '24',  'subdetector_234_tt',  r'2-plane eff$_3$ $= \frac{234}{24 + 234}$',     'orange'),
+    ]
 
-# Required TT values
-unique_tt_per_col = {}
-for num, den, col, _, _ in tt_combos:
-    unique_tt_per_col.setdefault(col, set()).update([num, den])
+    # Required TT values
+    unique_tt_per_col = {}
+    for num, den, col, _, _ in tt_combos:
+        unique_tt_per_col.setdefault(col, set()).update([num, den])
 
-#%%
+    #%%
 
-# --- Compute and store efficiency curves ---
-eff_curves_by_combo = {label: [] for _, _, _, label, _ in tt_combos}
-filter_values = np.linspace(0, 8, 5)
+    # --- Compute and store efficiency curves ---
+    eff_curves_by_combo = {label: [] for _, _, _, label, _ in tt_combos}
+    filter_values = np.linspace(0, 8, 5)
 
-for fval in filter_values:
-    results = compute_angular_efficiencies(df.copy(), fval, bins, bin_centers, tt_combos, unique_tt_per_col)
-    for (eff, err, label, color) in results:
-        eff_curves_by_combo[label].append((fval, eff, err))
+    for fval in filter_values:
+        results = compute_angular_efficiencies(df.copy(), fval, bins, bin_centers, tt_combos, unique_tt_per_col)
+        for (eff, err, label, color) in results:
+            eff_curves_by_combo[label].append((fval, eff, err))
 
-#%%
+    #%%
 
-fig, axs = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
-axs = axs.flatten()
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
+    axs = axs.flatten()
 
-for idx, (label, curves) in enumerate(eff_curves_by_combo.items()):
-    ax = axs[idx]
-    for fval, eff, err in curves:
-        ax.plot(bin_centers, eff, label=f'Thresh = {fval:.1f}')
-        ax.fill_between(bin_centers, eff - err, eff + err, alpha=0.2)
+    for idx, (label, curves) in enumerate(eff_curves_by_combo.items()):
+        ax = axs[idx]
+        for fval, eff, err in curves:
+            ax.plot(bin_centers, eff, label=f'Thresh = {fval:.1f}')
+            ax.fill_between(bin_centers, eff - err, eff + err, alpha=0.2)
 
-    ax.set_xlim(0, right)
-    ax.set_ylim(0.8, 1)
-    ax.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
-    ax.set_ylabel('Efficiency')
-    ax.set_title(label, fontsize=11)
-    ax.grid(True)
-    ax.legend(fontsize='x-small')
+        ax.set_xlim(0, right)
+        ax.set_ylim(0.8, 1)
+        ax.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+        ax.set_ylabel('Efficiency')
+        ax.set_title(label, fontsize=11)
+        ax.grid(True)
+        ax.legend(fontsize='x-small')
 
-# Hide unused axes if fewer than 4 curves
-for j in range(len(eff_curves_by_combo), 4):
-    fig.delaxes(axs[j])
+    # Hide unused axes if fewer than 4 curves
+    for j in range(len(eff_curves_by_combo), 4):
+        fig.delaxes(axs[j])
 
-fig.suptitle('Angular Efficiency vs. Threshold', fontsize=14)
-plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig.suptitle('Angular Efficiency vs. Threshold', fontsize=14)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-if save_plots:
-    filename = f'{fig_idx}_eff_vs_theta_2x2_grid.png'
-    fig_idx += 1
-    path = os.path.join(base_directories["figure_directory"], filename)
-    plot_list.append(path)
-    plt.savefig(path)
+    if save_plots:
+        filename = f'{fig_idx}_eff_vs_theta_2x2_grid.png'
+        fig_idx += 1
+        path = os.path.join(base_directories["figure_directory"], filename)
+        plot_list.append(path)
+        plt.savefig(path)
 
-if show_plots:
-    plt.show()
-plt.close()
+    if show_plots:
+        plt.show()
+    plt.close()
 
-# %%
+    # %%
 
-fig, axs = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
-axs = axs.flatten()
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
+    axs = axs.flatten()
 
-theta0_idx = np.argmin(np.abs(bin_centers - 0))  # Closest bin center to θ = 0
+    theta0_idx = np.argmin(np.abs(bin_centers - 0))  # Closest bin center to θ = 0
 
-for idx, (label, curves) in enumerate(eff_curves_by_combo.items()):
-    ax = axs[idx]
-    x_vals = []
-    y_vals = []
-    y_errs = []
+    for idx, (label, curves) in enumerate(eff_curves_by_combo.items()):
+        ax = axs[idx]
+        x_vals = []
+        y_vals = []
+        y_errs = []
 
-    for fval, eff, err in curves:
-        x_vals.append(fval)
-        y_vals.append(eff[theta0_idx])
-        y_errs.append(err[theta0_idx])
+        for fval, eff, err in curves:
+            x_vals.append(fval)
+            y_vals.append(eff[theta0_idx])
+            y_errs.append(err[theta0_idx])
 
-    ax.fill_between(x_vals, np.array(y_vals) - np.array(y_errs), np.array(y_vals) + np.array(y_errs), alpha=0.3)
-    ax.plot(x_vals, y_vals, 'o-', label=f'{label}')
-    ax.set_xlabel('Charge Threshold')
-    ax.set_ylabel(r'Efficiency at $\theta = 0$')
-    ax.set_title(label, fontsize=11)
-    ax.grid(True)
-    ax.set_ylim(0.8, 1)
+        ax.fill_between(x_vals, np.array(y_vals) - np.array(y_errs), np.array(y_vals) + np.array(y_errs), alpha=0.3)
+        ax.plot(x_vals, y_vals, 'o-', label=f'{label}')
+        ax.set_xlabel('Charge Threshold')
+        ax.set_ylabel(r'Efficiency at $\theta = 0$')
+        ax.set_title(label, fontsize=11)
+        ax.grid(True)
+        ax.set_ylim(0.8, 1)
 
-# Hide unused axes if fewer than 4 labels
-for j in range(len(eff_curves_by_combo), 4):
-    fig.delaxes(axs[j])
+    # Hide unused axes if fewer than 4 labels
+    for j in range(len(eff_curves_by_combo), 4):
+        fig.delaxes(axs[j])
 
-fig.suptitle(r'Efficiency at $\theta = 0$ vs. Charge Threshold', fontsize=14)
-plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig.suptitle(r'Efficiency at $\theta = 0$ vs. Charge Threshold', fontsize=14)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-if save_plots:
-    filename = f'{fig_idx}_eff_theta0_vs_threshold.png'
-    fig_idx += 1
-    path = os.path.join(base_directories["figure_directory"], filename)
-    plot_list.append(path)
-    plt.savefig(path)
+    if save_plots:
+        filename = f'{fig_idx}_eff_theta0_vs_threshold.png'
+        fig_idx += 1
+        path = os.path.join(base_directories["figure_directory"], filename)
+        plot_list.append(path)
+        plt.savefig(path)
 
-if show_plots:
-    plt.show()
-plt.close()
+    if show_plots:
+        plt.show()
+    plt.close()
 
-#%%
-
-# Print all the column names of df
-print("Columns in the dataframe:")
-for col in df.columns:
-    print(f"- {col}")
+    # Print all the column names of df
+    print("Columns in the dataframe:")
+    for col in df.columns:
+        print(f"- {col}")
 
 
 print("----------------------------------------------------------------------")
@@ -853,8 +899,8 @@ from scipy.ndimage import gaussian_filter1d
 
 eff_vs_angle = True
 if eff_vs_angle:
-
-    nbins = 20
+    
+    nbins = 12
     right = np.pi / 3
     blurring = True
     blurring_sigma = 2
@@ -903,7 +949,13 @@ if eff_vs_angle:
                                     out=np.zeros_like(n_num, dtype=float),
                                     where=(n_num + n_den) > 0))
         eff_results.append((eff, err, label, color))
-
+        
+        if "2-plane eff_2" in label:
+            eff_2_sd = eff
+        elif "2-plane eff_3" in label:
+            eff_3_sd = eff
+    
+    
     print("Efficiency calculations complete.")
 
     # Plot raw angular distributions
@@ -1060,23 +1112,1073 @@ if eff_vs_angle:
                 df["P4_2fold_eps0"] = row["eps0"]
         
 
-def classify_region(row):
-    phi = row['new_phi'] * 180 / np.pi  + row['phi_north'] # Convert phi to degrees
-    theta = row['new_theta'] * 180 / np.pi
+#%%
+
+nbins_x = 10
+nbins_y = 10
+len_range = (-150, 150)
+blurring_sigma = 0.05  # Smaller for 2D smoothing
+
+blurring = False
+
+bins_theta = np.linspace(*len_range, nbins_x + 1)
+bins_phi = np.linspace(*len_range, nbins_y + 1)
+theta_centers = 0.5 * (bins_theta[:-1] + bins_theta[1:])
+phi_centers = 0.5 * (bins_phi[:-1] + bins_phi[1:])
+
+# Replace 1D histograms with 2D
+counts_per_tt = {}
+for col, tt_set in unique_tt_per_col.items():
+    for tt in tt_set:
+        df_tt = df_filtered[df_filtered[col] == int(tt)]
+        theta_vals = df_tt['new_x'].dropna()
+        phi_vals = df_tt['new_y'].dropna()
+        if len(theta_vals) < 10:
+            continue
+        counts, _, _ = np.histogram2d(theta_vals, phi_vals, bins=[bins_theta, bins_phi])
+        if blurring:
+            counts = gaussian_filter1d(counts, sigma=blurring_sigma, axis=0, mode='nearest')
+            counts = gaussian_filter1d(counts, sigma=blurring_sigma, axis=1, mode='nearest')
+        counts_per_tt[(col, tt)] = counts
+
+# Compute 2D efficiency maps
+eff_results = []
+for num_tt, den_tt, col, label, color in tt_combos:
+    n_num = counts_per_tt.get((col, num_tt), np.zeros((nbins_x, nbins_y)))
+    n_den = counts_per_tt.get((col, den_tt), np.zeros((nbins_x, nbins_y)))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        eff = np.divide(n_num, n_num + n_den)
+        eff[np.isnan(eff)] = 0
+        err = np.sqrt(np.divide(n_num * n_den, (n_num + n_den)**3,
+                                out=np.zeros_like(n_num, dtype=float),
+                                where=(n_num + n_den) > 0))
+    eff_results.append((eff, err, label, color))
+
+# Plot 2D efficiency maps
+if create_plots or create_essential_plots:
+    for i, (eff, err, label, color) in enumerate(eff_results):
+        fig, ax = plt.subplots(figsize=(8, 6))
+        im = ax.imshow(eff.T, origin='lower', aspect='auto',
+                       extent=[bins_theta[0], bins_theta[-1], bins_phi[0], bins_phi[-1]],
+                       interpolation='nearest', cmap='viridis', vmin=0, vmax=1.0)
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label('Efficiency')
+        ax.set_xlabel(r'X [mm]')
+        ax.set_ylabel(r'Y [mm]')
+        ax.set_title(label)
+        plt.tight_layout()
+
+        if save_plots:
+            filename = f"{fig_idx}_2D_eff_pos_{label.replace(' ', '_')}.png"
+            fig_idx += 1
+            path = os.path.join(base_directories["figure_directory"], filename)
+            plot_list.append(path)
+            plt.savefig(path)
+
+        if show_plots:
+            plt.show()
+        plt.close()
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # Required for 3D plotting
+
+if create_plots or create_essential_plots:
+    for i, (eff, err, label, color) in enumerate(eff_results):
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+
+        # Compute bin centers from edges
+        x_centers = 0.5 * (bins_theta[:-1] + bins_theta[1:])  # X axis
+        y_centers = 0.5 * (bins_phi[:-1] + bins_phi[1:])      # Y axis
+
+        # Create meshgrid
+        X, Y = np.meshgrid(x_centers, y_centers, indexing='ij')  # shape (Nx, Ny)
+
+        # Transpose eff to match meshgrid (X, Y) indexing
+        Z = eff.T  # Now Z[i, j] corresponds to X[i, j], Y[i, j]
+
+        # Plot 3D surface
+        surf = ax.plot_surface(X, Y, Z, cmap='viridis', vmin=0.6, vmax=1.0,
+                               edgecolor='none', antialiased=True)
+
+        # Add colorbar
+        mappable = plt.cm.ScalarMappable(cmap='viridis')
+        mappable.set_array(Z)
+        cbar = fig.colorbar(mappable, ax=ax, shrink=0.6, pad=0.1)
+        cbar.set_label('Efficiency')
+
+        # Labels and view
+        ax.set_xlabel('X [mm]')
+        ax.set_ylabel('Y [mm]')
+        ax.set_zlabel('Efficiency')
+        ax.set_zlim(0, 1)
+        ax.set_title(label)
+        ax.view_init(elev=30, azim=135)  # Change angles if needed
+
+        plt.tight_layout()
+
+        if save_plots:
+            filename = f"{fig_idx}_3D_eff_pos_{label.replace(' ', '_')}.png"
+            fig_idx += 1
+            path = os.path.join(base_directories["figure_directory"], filename)
+            plot_list.append(path)
+            plt.savefig(path)
+
+        if show_plots:
+            plt.show()
+        plt.close()
+
+
+#%%
+
+nbins_theta = 9
+nbins_phi = 8
+right_theta = np.pi / 3
+phi_range = (-np.pi, np.pi)
+blurring_sigma = 0.05  # Smaller for 2D smoothing
+
+blurring = False
+
+bins_theta = np.linspace(0, right_theta, nbins_theta + 1)
+bins_phi = np.linspace(*phi_range, nbins_phi + 1)
+theta_centers = 0.5 * (bins_theta[:-1] + bins_theta[1:])
+phi_centers = 0.5 * (bins_phi[:-1] + bins_phi[1:])
+
+# Replace 1D histograms with 2D
+counts_per_tt = {}
+for col, tt_set in unique_tt_per_col.items():
+    for tt in tt_set:
+        df_tt = df_filtered[df_filtered[col] == int(tt)]
+        theta_vals = df_tt['new_theta'].dropna()
+        phi_vals = df_tt['new_phi'].dropna()
+        if len(theta_vals) < 10:
+            continue
+        counts, _, _ = np.histogram2d(theta_vals, phi_vals, bins=[bins_theta, bins_phi])
+        if blurring:
+            counts = gaussian_filter1d(counts, sigma=blurring_sigma, axis=0, mode='nearest')
+            counts = gaussian_filter1d(counts, sigma=blurring_sigma, axis=1, mode='nearest')
+        counts_per_tt[(col, tt)] = counts
+
+# Compute 2D efficiency maps
+eff_results = []
+for num_tt, den_tt, col, label, color in tt_combos:
+    n_num = counts_per_tt.get((col, num_tt), np.zeros((nbins_theta, nbins_phi)))
+    n_den = counts_per_tt.get((col, den_tt), np.zeros((nbins_theta, nbins_phi)))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        eff = np.divide(n_num, n_num + n_den)
+        eff[np.isnan(eff)] = 0
+        err = np.sqrt(np.divide(n_num * n_den, (n_num + n_den)**3,
+                                out=np.zeros_like(n_num, dtype=float),
+                                where=(n_num + n_den) > 0))
+    eff_results.append((eff, err, label, color))
+
+# Plot 2D efficiency maps
+if create_plots or create_essential_plots:
+    for i, (eff, err, label, color) in enumerate(eff_results):
+        fig, ax = plt.subplots(figsize=(8, 6))
+        im = ax.imshow(eff.T, origin='lower', aspect='auto',
+                       extent=[bins_theta[0], bins_theta[-1], bins_phi[0], bins_phi[-1]],
+                       interpolation='nearest', cmap='viridis', vmin=0.5, vmax=1.0)
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label('Efficiency')
+        ax.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+        ax.set_ylabel(r'$\phi_{\mathrm{new}}$ [rad]')
+        ax.set_title(label)
+        plt.tight_layout()
+
+        if save_plots:
+            filename = f"{fig_idx}_2D_eff_{label.replace(' ', '_')}.png"
+            fig_idx += 1
+            path = os.path.join(base_directories["figure_directory"], filename)
+            plot_list.append(path)
+            plt.savefig(path)
+
+        if show_plots:
+            plt.show()
+        plt.close()
+
+
+if create_plots or create_essential_plots:
+    for i, (eff, err, label, color) in enumerate(eff_results):
+        fig, ax = plt.subplots(subplot_kw=dict(projection='polar'), figsize=(8, 6))
+
+        # Convert bin edges to centers
+        theta_centers = 0.5 * (bins_theta[:-1] + bins_theta[1:])  # radial (zenith)
+        phi_centers = 0.5 * (bins_phi[:-1] + bins_phi[1:])        # angular (azimuth)
+
+        # Meshgrid for polar plotting
+        PHI, THETA = np.meshgrid(phi_centers, theta_centers, indexing='ij')
+
+        # Flatten for pcolormesh
+        r = THETA.ravel()
+        theta = PHI.ravel()
+        z = eff.T.ravel()  # transpose to match phi-theta order
+
+        # Convert edges for correct binning
+        theta_edges = bins_phi
+        r_edges = bins_theta
+        THETA_E, R_E = np.meshgrid(theta_edges, r_edges, indexing='ij')
+
+        # Plot polar colormesh
+        pcm = ax.pcolormesh(THETA_E, R_E, eff.T, shading='auto', cmap='viridis', vmin=0.5, vmax=1.0)
+        cbar = fig.colorbar(pcm, ax=ax, pad=0.1)
+        cbar.set_label('Efficiency')
+
+        ax.set_title(label, va='bottom')
+        ax.set_theta_zero_location('N')
+        ax.set_theta_direction(-1)
+        ax.set_xlabel(r'$\phi_{\mathrm{new}}$ [rad]')
+        ax.set_ylabel(r'$\theta_{\mathrm{new}}$ [rad]')
+
+        if save_plots:
+            filename = f"{fig_idx}_polar_eff_{label.replace(' ', '_')}.png"
+            fig_idx += 1
+            path = os.path.join(base_directories["figure_directory"], filename)
+            plot_list.append(path)
+            plt.savefig(path)
+
+        if show_plots:
+            plt.show()
+        plt.close()
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # Needed for 3D plotting
+
+if create_plots or create_essential_plots:
+    for i, (eff, err, label, color) in enumerate(eff_results):
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+
+        # Bin centers
+        theta_centers = 0.5 * (bins_theta[:-1] + bins_theta[1:])  # radial angle
+        phi_centers = 0.5 * (bins_phi[:-1] + bins_phi[1:])        # azimuthal angle
+
+        # Meshgrid in spherical coordinates
+        PHI, THETA = np.meshgrid(phi_centers, theta_centers, indexing='ij')  # shape: (n_phi, n_theta)
+
+        # Convert to Cartesian coordinates for 3D plotting
+        R = eff.T  # Transpose to match PHI and THETA layout
+        X = R * np.sin(THETA) * np.cos(PHI)
+        Y = R * np.sin(THETA) * np.sin(PHI)
+        Z = R * np.cos(THETA)
+
+        # Surface plot
+        surf = ax.plot_surface(X, Y, Z, facecolors=plt.cm.viridis(R), rstride=1, cstride=1, linewidth=0, antialiased=False, shade=False)
+        mappable = plt.cm.ScalarMappable(cmap='viridis')
+        mappable.set_array(R)
+        cbar = fig.colorbar(mappable, ax=ax, shrink=0.7, pad=0.1)
+        cbar.set_label('Efficiency')
+
+        ax.set_title(f"Efficiency 3D Surface: {label}")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+        ax.view_init(elev=30, azim=45)  # Adjust view angle
+
+        if save_plots:
+            filename = f"{fig_idx}_3D_eff_{label.replace(' ', '_')}.png"
+            fig_idx += 1
+            path = os.path.join(base_directories["figure_directory"], filename)
+            plot_list.append(path)
+            plt.savefig(path)
+
+        if show_plots:
+            plt.show()
+        plt.close()
+
+
+#%%
+
+print("----------------------------------------------------------------------")
+print("----------------------- Noise respect the angle ----------------------")
+print("----------------------------------------------------------------------")
+
+# Mapping definitions
+map_123 = {
+    1234: 123,
+    123: 123,
+    234: 234,
+    124: 12,
+    134: 13,
+    12: 12,
+    23: 23,
+    34: 3,
+    13: 13,
+    24: 2,
+    14: 1
+}
+
+map_234 = {
+    1234: 234,
+    123: 23,
+    234: 234,
+    124: 24,
+    134: 34,
+    12: 2,
+    23: 23,
+    34: 34,
+    13: 3,
+    24: 24,
+    14: 4
+}
+
+
+# Apply mappings to new columns
+df['subdetector_123_tt'] = df['processed_tt'].map(map_123)
+df['subdetector_234_tt'] = df['processed_tt'].map(map_234)
+df['subdetector_1234_tt'] = df['processed_tt']
+
+from scipy.ndimage import gaussian_filter1d
+
+noise_vs_angle = True
+if noise_vs_angle:
     
-    phi = ((phi + 180) % 360) - 180
+    # Explained / noise percentage
+    def compute_noise_percentages(est, measured):
+        with np.errstate(divide='ignore', invalid='ignore'):
+            explained = 100 * est / measured
+            noise = 100 - explained
+        for arr in (explained, noise):
+            arr[np.isnan(arr) | np.isinf(arr)] = 0
+        explained = np.clip(explained, 0, 100)
+        noise = np.clip(noise, 0, 100)
+        return explained, noise
     
-    if 0 < theta < caye_high_mid_limit_angle:
-        return 'High'
-    elif caye_high_mid_limit_angle <= theta <= 90:
-        if -45 <= phi < 45:
-            return 'N'
-        elif 45 <= phi < 135:
-            return 'E'
-        elif -135 <= phi < -45:
-            return 'W'
+    right = np.pi / 3
+    blurring = False
+    blurring_sigma = 2
+
+    bins = np.linspace(0, right, nbins)
+    bin_centers = 0.5 * (bins[:-1] + bins[1:])
+    df_filtered = df.copy()
+    
+    # Topologies definition
+    all_topologies = ['12', '23', '34', '123', '234', '1234', '24', '13', '134', '124', '14']
+    # measured_topologies = ['24', '13', '24_sd', '13_sd', '134', '124', '14']
+    measured_topologies = ['24', '13', '134', '124', '14']
+    measured_topologies = list(set(measured_topologies) & set(df_filtered['original_tt'].unique().astype(str)))
+    inferred_topologies = ['12', '23', '34', '123', '234', '1234']
+    
+    print(f"Measured topologies: {measured_topologies}")
+    print(f"Inferred topologies: {inferred_topologies}")
+    
+    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    
+    # ---------------------- THETA DEFINITIONS ----------------------
+    theta_12   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 12, 'new_theta']
+    theta_23   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 23, 'new_theta']
+    theta_34   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 34, 'new_theta']
+    theta_123  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 123, 'new_theta']
+    theta_234  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 234, 'new_theta']
+    theta_1234 = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 1234, 'new_theta']
+    theta_14   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 14, 'new_theta']
+    theta_124  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 124, 'new_theta']
+    theta_134  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 134, 'new_theta']
+
+    theta_12_sd_123   = df_filtered.loc[df_filtered['subdetector_123_tt'] == 12, 'new_theta']
+    theta_23_sd_123   = df_filtered.loc[df_filtered['subdetector_123_tt'] == 23, 'new_theta']
+    theta_123_sd_123  = df_filtered.loc[df_filtered['subdetector_123_tt'] == 123, 'new_theta']
+    theta_13_sd_123   = df_filtered.loc[df_filtered['subdetector_123_tt'] == 13, 'new_theta']
+
+    theta_23_sd_234   = df_filtered.loc[df_filtered['subdetector_234_tt'] == 23, 'new_theta']
+    theta_34_sd_234   = df_filtered.loc[df_filtered['subdetector_234_tt'] == 34, 'new_theta']
+    theta_234_sd_234  = df_filtered.loc[df_filtered['subdetector_234_tt'] == 234, 'new_theta']
+    theta_24_sd_234   = df_filtered.loc[df_filtered['subdetector_234_tt'] == 24, 'new_theta']
+
+    theta_13  = df_filtered.loc[df_filtered['processed_tt'] == 13,  'new_theta']
+    theta_24  = df_filtered.loc[df_filtered['processed_tt'] == 24,  'new_theta']
+
+    # ---------------------- COUNTS COMPUTATION ----------------------
+    counts_12, _   = np.histogram(theta_12, bins=bins)
+    counts_23, _   = np.histogram(theta_23, bins=bins)
+    counts_34, _   = np.histogram(theta_34, bins=bins)
+    counts_123, _  = np.histogram(theta_123, bins=bins)
+    counts_234, _  = np.histogram(theta_234, bins=bins)
+    counts_1234, _ = np.histogram(theta_1234, bins=bins)
+    counts_14, _   = np.histogram(theta_14, bins=bins)
+    counts_124, _  = np.histogram(theta_124, bins=bins)
+    counts_134, _  = np.histogram(theta_134, bins=bins)
+
+    counts_13, _   = np.histogram(theta_13, bins=bins)
+
+    counts_12_sd_123, _   = np.histogram(theta_12_sd_123, bins=bins)
+    counts_23_sd_123, _   = np.histogram(theta_23_sd_123, bins=bins)
+    counts_123_sd_123, _  = np.histogram(theta_123_sd_123, bins=bins)
+    counts_123_sd_123, _  = np.histogram(theta_123_sd_123, bins=bins)  # DUPLICATE
+    counts_13_sd_123, _   = np.histogram(theta_13_sd_123, bins=bins)
+
+    counts_23_sd_234, _   = np.histogram(theta_23_sd_234, bins=bins)
+    counts_34_sd_234, _   = np.histogram(theta_34_sd_234, bins=bins)
+    counts_234_sd_234, _  = np.histogram(theta_234_sd_234, bins=bins)
+    counts_234_sd_234, _  = np.histogram(theta_234_sd_234, bins=bins)  # DUPLICATE
+    counts_24_sd_234, _   = np.histogram(theta_24_sd_234, bins=bins)
+
+    counts_24, _  = np.histogram(theta_24, bins=bins)
+
+    # ---------------------- GAUSSIAN BLURRING ----------------------
+    if blurring:
+        counts_12 = gaussian_filter1d(counts_12, sigma=blurring_sigma, mode='nearest')
+        counts_23 = gaussian_filter1d(counts_23, sigma=blurring_sigma, mode='nearest')
+        counts_34 = gaussian_filter1d(counts_34, sigma=blurring_sigma, mode='nearest')
+        counts_123 = gaussian_filter1d(counts_123, sigma=blurring_sigma, mode='nearest')
+        counts_234 = gaussian_filter1d(counts_234, sigma=blurring_sigma, mode='nearest')
+        counts_1234 = gaussian_filter1d(counts_1234, sigma=blurring_sigma, mode='nearest')
+        counts_14 = gaussian_filter1d(counts_14, sigma=blurring_sigma, mode='nearest')
+        counts_124 = gaussian_filter1d(counts_124, sigma=blurring_sigma, mode='nearest')
+        counts_134 = gaussian_filter1d(counts_134, sigma=blurring_sigma, mode='nearest')
+
+        counts_13 = gaussian_filter1d(counts_13, sigma=blurring_sigma, mode='nearest')
+
+        counts_12_sd_123 = gaussian_filter1d(counts_12_sd_123, sigma=blurring_sigma, mode='nearest')
+        counts_23_sd_123 = gaussian_filter1d(counts_23_sd_123, sigma=blurring_sigma, mode='nearest')
+        counts_123_sd_123 = gaussian_filter1d(counts_123_sd_123, sigma=blurring_sigma, mode='nearest')
+        counts_13_sd_123 = gaussian_filter1d(counts_13_sd_123, sigma=blurring_sigma, mode='nearest')
+
+        counts_23_sd_234 = gaussian_filter1d(counts_23_sd_234, sigma=blurring_sigma, mode='nearest')
+        counts_34_sd_234 = gaussian_filter1d(counts_34_sd_234, sigma=blurring_sigma, mode='nearest')
+        counts_234_sd_234 = gaussian_filter1d(counts_234_sd_234, sigma=blurring_sigma, mode='nearest')
+        counts_24_sd_234 = gaussian_filter1d(counts_24_sd_234, sigma=blurring_sigma, mode='nearest')
+
+        counts_24 = gaussian_filter1d(counts_24, sigma=blurring_sigma, mode='nearest')
+
+    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    
+    # --- Compute per-bin efficiencies for plane 2 and 3 -------------------------
+    three_plane_eff = False
+    if three_plane_eff:
+        eff_2 = 1 - counts_134 / np.where(counts_1234 == 0, 1, counts_1234)
+        eff_3 = 1 - counts_124 / np.where(counts_1234 == 0, 1, counts_1234)
+    else:
+        eff_2 = eff_2_sd
+        eff_3 = eff_3_sd
+    
+    comp_eff_2  = (1 - eff_2)
+    comp_eff_3  = (1 - eff_3)
+    comp_eff_23 = comp_eff_2 * comp_eff_3
+    
+    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    
+    # --- CASE: 124 (miss plane 3) ------------------------------------------------
+    est_124    = counts_1234 * comp_eff_3
+    explained_124, noise_124 = compute_noise_percentages(est_124, counts_124)
+    
+    # --- CASE: 134 (miss plane 2) ------------------------------------------------
+    est_134    = counts_1234 * comp_eff_2
+    explained_134, noise_134 = compute_noise_percentages(est_134, counts_134)
+
+    # --- CASE: 14 (miss both planes 2 & 3) ---------------------------------------
+    est_14    = counts_1234 * comp_eff_23
+    explained_14, noise_14 = compute_noise_percentages(est_14, counts_14)
+
+    # subdetector_123_tt ----------------------------------------------------------------
+    est_13_sd_123 = counts_123_sd_123 * comp_eff_2
+    explained_13_sd_123, noise_13_sd_123 = compute_noise_percentages(est_13_sd_123, counts_13_sd_123)
+    
+    # subdetector_234_tt ----------------------------------------------------------------
+    est_24_sd_234 = counts_234_sd_234 * comp_eff_3
+    explained_24_sd_234, noise_24_sd_234 = compute_noise_percentages(est_24_sd_234, counts_24_sd_234)
+    
+    # three plane-two plane 123 ---------------------------------------------------------
+    est_13 = counts_123 * comp_eff_2
+    explained_13, noise_13 = compute_noise_percentages(est_13, counts_13)
+
+    # three plane-two plane 234 ---------------------------------------------------------
+    est_24 = counts_234 * comp_eff_3
+    explained_24, noise_24 = compute_noise_percentages(est_24, counts_24)
+    
+    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    
+    # --- PLOTS: Efficiency and residual noise summary ----------------------------
+    plt.figure(figsize=(8, 5))
+    plt.plot(bin_centers, eff_2, 'o-', label='Eff. 2')
+    plt.plot(bin_centers, eff_3, 's-', label='Eff. 3')
+    plt.plot(bin_centers, 1 - comp_eff_23, color='purple', label='Miss 2 & 3 (complementary eff)')
+    plt.xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+    plt.ylabel('Efficiency')
+    plt.title('Efficiencies of planes 2 and 3')
+    plt.grid(True)
+    plt.ylim(0.8, 1.01)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    
+    from matplotlib.cm import get_cmap
+    cmap = get_cmap('tab10')
+    colors = {}  # ensure this is a dict
+
+    for i, topo in enumerate(measured_topologies):
+        if topo not in colors:
+            colors[topo] = cmap(i % 10)
+
+    # Initialize figure and axes
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(9, 15), sharex=True)
+
+    # Panel 1: Residual noise
+    for topo in measured_topologies:
+        ax1.plot(bin_centers, globals()[f'noise_{topo}'], color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax1.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax1.set_ylabel('Residual noise [%]')
+    ax1.set_title('Residual Noise per Topology')
+    ax1.grid(True)
+    ax1.legend(loc='upper right')
+    ax1.set_ylim(0, 100)
+
+    # Panel 2: Measured counts
+    for topo in measured_topologies:
+        ax2.plot(bin_centers, globals()[f'counts_{topo}'], color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax2.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax2.set_ylabel('Measured counts')
+    ax2.set_title('Measured Counts per Topology')
+    ax2.grid(True)
+    ax2.legend(loc='upper right')
+
+    # Panel 3: Noisy counts (noise % × counts)
+    for topo in measured_topologies:
+        noise = globals()[f'noise_{topo}']
+        counts = globals()[f'counts_{topo}']
+        ax3.plot(bin_centers, (noise / 100) * counts, color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax3.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax3.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+    ax3.set_ylabel('Noisy counts')
+    ax3.set_title('Noisy Counts per Topology')
+    ax3.grid(True)
+    ax3.legend(loc='upper right')
+
+    # Panel 4: Corrected counts ((1 - noise%) × counts)
+    for topo in measured_topologies:
+        noise = globals()[f'noise_{topo}']
+        counts = globals()[f'counts_{topo}']
+        ax4.plot(bin_centers, (1 - noise / 100) * counts, color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax4.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax4.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+    ax4.set_ylabel('Corrected counts')
+    ax4.set_title('Noise-Corrected Counts per Topology')
+    ax4.grid(True)
+    ax4.legend(loc='upper right')
+
+    plt.tight_layout()
+    figure_name = f"residual_noise_measured_TTs"
+    if save_plots:
+        name_of_file = figure_name
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots: plt.show()
+    plt.close()
+    
+    # ----------------------------------------------------------------------------------------------------
+    # ----------------------------------------------------------------------------------------------------
+    # ----------------------------------------------------------------------------------------------------
+
+    # Step 1: Compute raw noise counts from measured two-plane noise %
+    k13  = (noise_13  / 100) * counts_13   # ~ λ1·λ3
+    k14  = (noise_14  / 100) * counts_14   # ~ λ1·λ4
+    k24  = (noise_24  / 100) * counts_24   # ~ λ2·λ4
+
+    # Step 2: Infer missing pairwise noise products (Poisson model)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        λ1_squared = np.where(k24 > 0, (k14 * k13) / k24, 0.0)
+        λ1 = np.sqrt(np.clip(λ1_squared, a_min=0, a_max=None))
+        λ2 = np.where(λ1 > 0, k24 / (λ1 * (k14 / λ1)), 0.0)  # from λ4 = k14 / λ1
+        λ3 = np.where(λ1 > 0, k13 / λ1, 0.0)
+        λ4 = np.where(λ1 > 0, k14 / λ1, 0.0)
+    
+    norm_factor = 1/10
+    
+    # Step 3: Estimate new noise contributions
+    with np.errstate(divide='ignore', invalid='ignore'):
+        noise_counts_12   = λ1 * λ2
+        noise_counts_23   = λ2 * λ3
+        noise_counts_34   = λ3 * λ4
+        noise_counts_123  = norm_factor * λ1 * λ2 * λ3
+        noise_counts_234  = norm_factor * λ2 * λ3 * λ4
+        noise_counts_1234 = norm_factor**2 * λ1 * λ2 * λ3 * λ4
+
+    # Step 4: Convert to relative noise [%]
+    def safe_percent(numerator, denominator):
+        return 100 * np.where(denominator > 0, numerator / denominator, 0.0)
+
+    noise_12   = safe_percent(noise_counts_12,   counts_12)
+    noise_23   = safe_percent(noise_counts_23,   counts_23)
+    noise_34   = safe_percent(noise_counts_34,   counts_34)
+    noise_123  = safe_percent(noise_counts_123,  counts_123)
+    noise_234  = safe_percent(noise_counts_234,  counts_234)
+    noise_1234 = safe_percent(noise_counts_1234, counts_1234)
+    
+    # ----------------------------------------------------------------------------------------------------
+    # ----------------------------------------------------------------------------------------------------
+    # ----------------------------------------------------------------------------------------------------
+    
+    from matplotlib.cm import get_cmap
+    cmap = get_cmap('tab10')
+
+    for i, topo in enumerate(inferred_topologies):
+        if topo not in colors:
+            colors[topo] = cmap(i % 10)
+    
+    # Define placeholder variables
+    for topo in inferred_topologies:
+        try:
+            globals()[f'noise_{topo}']
+        except KeyError:
+            globals()[f'noise_{topo}'] = np.zeros_like(bin_centers)
+            colors[topo] = 'gray'  # Or assign a distinct color per topology if desired
+    
+    # Initialize figure and axes
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(9, 15), sharex=True)
+
+    # Panel 1: Residual noise
+    for topo in inferred_topologies:
+        ax1.plot(bin_centers, globals()[f'noise_{topo}'], color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax1.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax1.set_ylabel('Residual noise [%]')
+    ax1.set_title('Residual Noise per Topology')
+    ax1.grid(True)
+    ax1.legend(loc='upper right')
+    ax1.set_ylim(0, 100)
+
+    # Panel 2: Measured counts
+    for topo in inferred_topologies:
+        ax2.plot(bin_centers, globals()[f'counts_{topo}'], color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax2.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax2.set_ylabel('Measured counts')
+    ax2.set_title('Measured Counts per Topology')
+    ax2.grid(True)
+    ax2.legend(loc='upper right')
+
+    # Panel 3: Noisy counts (noise % × counts)
+    for topo in inferred_topologies:
+        noise = globals()[f'noise_{topo}']
+        counts = globals()[f'counts_{topo}']
+        ax3.plot(bin_centers, (noise / 100) * counts, color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax3.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax3.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+    ax3.set_ylabel('Noisy counts')
+    ax3.set_title('Noisy Counts per Topology')
+    ax3.grid(True)
+    ax3.legend(loc='upper right')
+
+    # Panel 4: Corrected counts ((1 - noise%) × counts)
+    for topo in inferred_topologies:
+        noise = globals()[f'noise_{topo}']
+        counts = globals()[f'counts_{topo}']
+        ax4.plot(bin_centers, (1 - noise / 100) * counts, color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax4.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax4.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+    ax4.set_ylabel('Corrected counts')
+    ax4.set_title('Noise-Corrected Counts per Topology')
+    ax4.grid(True)
+    ax4.legend(loc='upper right')
+
+    plt.tight_layout()
+    figure_name = f"residual_noise_inferred_TTs"
+    if save_plots:
+        name_of_file = figure_name
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots: plt.show()
+    plt.close()
+    
+    # ----------------------------------------------------------------------------------------------------
+    # ----------------------------------------------------------------------------------------------------
+    # ----------------------------------------------------------------------------------------------------
+    
+    for i, topo in enumerate(all_topologies):
+        if topo not in colors:
+            colors[topo] = cmap(i % 10)
+    
+    # Initialize figure and axes
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(9, 15), sharex=True)
+
+    # Panel 1: Residual noise
+    for topo in all_topologies:
+        ax1.plot(bin_centers, globals()[f'noise_{topo}'], color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax1.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax1.set_ylabel('Residual noise [%]')
+    ax1.set_title('Residual Noise per Topology')
+    ax1.grid(True)
+    ax1.legend(loc='upper right')
+    ax1.set_ylim(0, 100)
+
+    # Panel 2: Measured counts
+    for topo in all_topologies:
+        ax2.plot(bin_centers, globals()[f'counts_{topo}'], color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax2.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax2.set_ylabel('Measured counts')
+    ax2.set_title('Measured Counts per Topology')
+    ax2.grid(True)
+    ax2.legend(loc='upper right')
+
+    # Panel 3: Noisy counts (noise % × counts)
+    for topo in all_topologies:
+        noise = globals()[f'noise_{topo}']
+        counts = globals()[f'counts_{topo}']
+        ax3.plot(bin_centers, (noise / 100) * counts, color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax3.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax3.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+    ax3.set_ylabel('Noisy counts')
+    ax3.set_title('Noisy Counts per Topology')
+    ax3.grid(True)
+    ax3.legend(loc='upper right')
+
+    # Panel 4: Corrected counts ((1 - noise%) × counts)
+    for topo in all_topologies:
+        noise = globals()[f'noise_{topo}']
+        counts = globals()[f'counts_{topo}']
+        ax4.plot(bin_centers, (1 - noise / 100) * counts, color=colors[topo], label=f'{topo.replace("_sd", " (subdetector)")}')
+    ax4.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    ax4.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+    ax4.set_ylabel('Corrected counts')
+    ax4.set_title('Noise-Corrected Counts per Topology')
+    ax4.grid(True)
+    ax4.legend(loc='upper right')
+
+    plt.tight_layout()
+    figure_name = f"residual_noise_all_TTs"
+    if save_plots:
+        name_of_file = figure_name
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots: plt.show()
+    plt.close()
+    
+#%%
+
+
+noise_2d = True
+
+if noise_2d:
+    import numpy as np
+
+    # Reuse user-defined binning
+    nbins_theta = 6
+    nbins_phi = 6
+    right_theta = np.pi / 3
+    phi_range = (-np.pi, np.pi)
+
+    bins_theta = np.linspace(0, right_theta, nbins_theta + 1)
+    bins_phi = np.linspace(*phi_range, nbins_phi + 1)
+    theta_centers = 0.5 * (bins_theta[:-1] + bins_theta[1:])
+    phi_centers = 0.5 * (bins_phi[:-1] + bins_phi[1:])
+
+    # Get theta, phi from df_filtered for each topology
+    def get_2d_counts(df, topo_col, topo_val):
+        df_topo = df[df[topo_col] == topo_val]
+        theta_vals = df_topo["new_theta"].dropna()
+        phi_vals = df_topo["new_phi"].dropna()
+        counts, _, _ = np.histogram2d(theta_vals, phi_vals, bins=[bins_theta, bins_phi])
+        return counts
+
+    # Populate counts from real data
+    counts_1234 = get_2d_counts(df_filtered, 'subdetector_1234_tt', 1234)
+    counts_124 = get_2d_counts(df_filtered, 'subdetector_1234_tt', 124)
+    counts_134 = get_2d_counts(df_filtered, 'subdetector_1234_tt', 134)
+    counts_14 = get_2d_counts(df_filtered, 'subdetector_1234_tt', 14)
+
+    # Estimate efficiencies eff_2, eff_3 from subdetector_234_tt and subdetector_123_tt
+    counts_234 = get_2d_counts(df_filtered, 'subdetector_234_tt', 234)
+    counts_24_sd_234 = get_2d_counts(df_filtered, 'subdetector_234_tt', 24)
+    eff_3 = 1 - np.divide(counts_24_sd_234, counts_234, out=np.zeros_like(counts_234, dtype=float), where=counts_234 > 0)
+
+    counts_123 = get_2d_counts(df_filtered, 'subdetector_123_tt', 123)
+    counts_13_sd_123 = get_2d_counts(df_filtered, 'subdetector_123_tt', 13)
+    eff_2 = 1 - np.divide(counts_13_sd_123, counts_123, out=np.zeros_like(counts_123, dtype=float), where=counts_123 > 0)
+
+    # Compute complementary efficiencies
+    comp_eff_2 = 1.0 - eff_2
+    comp_eff_3 = 1.0 - eff_3
+    comp_eff_23 = comp_eff_2 * comp_eff_3
+
+    # Estimate counts due to inefficiency
+    est_124 = counts_1234 * comp_eff_3
+    est_134 = counts_1234 * comp_eff_2
+    est_14 = counts_1234 * comp_eff_23
+
+    # Compute noise percentage
+    def compute_noise_percentages(est, measured):
+        with np.errstate(divide='ignore', invalid='ignore'):
+            explained = 100 * est / measured
+            noise = 100 - explained
+        for arr in (explained, noise):
+            arr[np.isnan(arr) | np.isinf(arr)] = 0
+        explained = np.clip(explained, 0, 100)
+        noise = np.clip(noise, 0, 100)
+        return explained, noise
+
+    explained_124, noise_124 = compute_noise_percentages(est_124, counts_124)
+    explained_134, noise_134 = compute_noise_percentages(est_134, counts_134)
+    explained_14, noise_14 = compute_noise_percentages(est_14, counts_14)
+
+    df_result = pd.DataFrame({
+        "theta_center": np.repeat(theta_centers, nbins_phi),
+        "phi_center": np.tile(phi_centers, nbins_theta),
+        "eff_2": eff_2.flatten(),
+        "eff_3": eff_3.flatten(),
+        "noise_124": noise_124.flatten(),
+        "noise_134": noise_134.flatten(),
+        "noise_14": noise_14.flatten(),
+    })
+    
+    import matplotlib.pyplot as plt
+
+    # Function to plot 2D efficiency or noise maps
+    def plot_2d_map(data, title, vmin=0, vmax=100, cmap='viridis'):
+        global fig_idx, plot_list
+        fig, ax = plt.subplots(figsize=(8, 6))
+        im = ax.imshow(data.T, origin='lower', aspect='auto',
+                       extent=[bins_theta[0], bins_theta[-1], bins_phi[0], bins_phi[-1]],
+                       interpolation='nearest', cmap=cmap, vmin=vmin, vmax=vmax)
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label(title)
+        ax.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+        ax.set_ylabel(r'$\phi_{\mathrm{new}}$ [rad]')
+        ax.set_title(title)
+        plt.tight_layout()
+        figure_name = f"{title}"
+        if save_plots:
+            name_of_file = figure_name
+            final_filename = f'{fig_idx}_{name_of_file}.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots: plt.show()
+        plt.close()
+        return fig, ax
+
+    # Generate plots
+    fig1, _ = plot_2d_map(eff_2, 'Efficiency of Plane 2', vmin=0.8, vmax=1.0)
+    fig2, _ = plot_2d_map(eff_3, 'Efficiency of Plane 3', vmin=0.8, vmax=1.0)
+    
+    fig3, _ = plot_2d_map(noise_124, 'Residual Noise (Missing Plane 3)', vmin=0, vmax=100)
+    fig4, _ = plot_2d_map(noise_134, 'Residual Noise (Missing Plane 2)', vmin=0, vmax=100)
+    fig5, _ = plot_2d_map(noise_14, 'Residual Noise (Missing Planes 2 & 3)', vmin=0, vmax=100)
+    
+    v = noise_124 / 100 * counts_124
+    fig6, _ = plot_2d_map(v, 'Residual Absolute Noise (Missing Plane 3)', vmin=0, vmax=np.max(v))
+    
+    v = noise_134 / 100 * counts_134
+    fig7, _ = plot_2d_map(v, 'Residual Absolute Noise (Missing Plane 2)', vmin=0, vmax=np.max(v))
+    
+    v = noise_14 / 100 * counts_14
+    fig8, _ = plot_2d_map(v, 'Residual Absolute Noise (Missing Planes 2 & 3)', vmin=0, vmax=np.max(v))
+    
+
+
+# ----------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------
+
+def plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout, theta_right_limit=np.pi / 2.5):
+
+    # Only use boundaries below or equal to theta_right_limit
+    max_deg = np.degrees(theta_right_filter)
+    valid_boundaries = [b for b in theta_boundaries if b <= max_deg]
+    all_bounds = [0] + valid_boundaries + [max_deg]
+    radii = [np.radians(b) for b in all_bounds]
+
+    # Draw concentric circles (excluding outermost edge)
+    for r in radii[1:-1]:
+        ax.plot(np.linspace(0, 2 * np.pi, 1000), [r] * 1000, color='white', linestyle='--', linewidth=3)
+
+    # Draw radial lines within each ring
+    for i, (r0, r1, n_phi) in enumerate(zip(radii[:-1], radii[1:], region_layout[:len(radii)-1])):
+        if n_phi <= 1:
+            continue
+        delta_phi = 2 * np.pi / n_phi
+        for j in range(n_phi):
+            phi = j * delta_phi
+            ax.plot([phi, phi], [r0, r1], color='white', linestyle='--', linewidth=3)
+
+
+def generate_flexible_region_labels(region_layout):
+    labels = []
+    for i, n_phi in enumerate(region_layout):
+        if n_phi == 1:
+            labels.append(f'B{i}')
         else:
-            return 'S'
+            labels.extend([f'B{i}.{j}' for j in range(n_phi)])
+    return labels
+
+
+def classify_region_flexible(row, theta_boundaries, region_layout):
+    theta = row['theta'] * 180 / np.pi
+    phi = (row['phi'] * 180 / np.pi + row.get('phi_north', 0)) % 360
+    phi = ((phi + 180) % 360) - 180  # map to [-180, 180)
+
+    # Build region bins: [0, t1), [t1, t2), ..., [tn, 90]
+    all_bounds = [0] + theta_boundaries + [90]
+    for i, (tmin, tmax) in enumerate(zip(all_bounds[:-1], all_bounds[1:])):
+        if tmin <= theta < tmax or (i == len(region_layout) - 1 and theta == 90):
+            n_phi = region_layout[i]
+            if n_phi == 1:
+                return f'B{i}'
+            else:
+                bin_width = 360 / n_phi
+                idx = int((phi + 180) // bin_width) % n_phi
+                return f'B{i}.{idx}'
+    
+    return 'None'
+
+#%%
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Input parameters
+theta_right_limit = np.pi / 2.5
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Compute angular boundaries
+max_deg = np.degrees(theta_right_limit)
+valid_boundaries = [b for b in theta_boundaries if b <= max_deg]
+all_bounds_deg = [0] + valid_boundaries + [max_deg]
+radii = np.radians(all_bounds_deg)
+
+# Initialize plot
+fig, ax = plt.subplots(subplot_kw={'polar': True}, figsize=(8, 8))
+ax.set_facecolor(plt.cm.viridis(0.0))
+ax.set_title("Region Labels for Specified Angular Segmentation", color='white')
+
+# Draw concentric θ boundaries (including outermost)
+for r in radii[1:]:
+    ax.plot(np.linspace(0, 2 * np.pi, 1000), [r] * 1000,
+            color='white', linestyle='--', linewidth=3)
+
+# Draw radial (φ) separators for each region layout
+for i, (r0, r1, n_phi) in enumerate(zip(radii[:-1], radii[1:], region_layout[:len(radii) - 1])):
+    if n_phi > 1:
+        delta_phi = 2 * np.pi / n_phi
+        for j in range(n_phi):
+            phi = j * delta_phi
+            ax.plot([phi, phi], [r0, r1], color='white', linestyle='--', linewidth=1.5)
+    elif n_phi == 1:
+        # Single region: add faint central axis for clarity
+        ax.plot([0, 0], [r0, r1], color='white', linestyle='--', linewidth=1.5)
+
+# Annotate region labels
+for i, (r0, r1, n_phi) in enumerate(zip(radii[:-1], radii[1:], region_layout[:len(radii) - 1])):
+    r_label = (r0 + r1) / 2
+    if n_phi == 1:
+        ax.text(0, r_label, f'B{i}', ha='center', va='center',
+                color='white', fontsize=12, weight='bold')
+    else:
+        dphi = 2 * np.pi / n_phi
+        for j in range(n_phi):
+            phi_label = (j + 0.5) * dphi
+            ax.text(phi_label, r_label, f'B{i}.{j}', ha='center', va='center',
+                    rotation=0, rotation_mode='anchor',
+                    color='white', fontsize=12, weight='bold')
+
+# Add radius labels
+for r_deg in all_bounds_deg[1:]:
+    r_rad = np.radians(r_deg)
+    ax.text(np.pi, r_rad, f'{int(round(r_deg))}°', ha='center', va='center',
+            color='white', fontsize=10, alpha=0.7)
+
+# Faint base polar grid
+ax.tick_params(colors='white', labelsize=8, pad=5)
+ax.grid(color='white', linestyle=':', linewidth=0.5, alpha=0.2)
+ax.set_xticks(np.linspace(0, 2 * np.pi, 8, endpoint=False))
+ax.set_yticklabels([])
+
+# Final layout
+title = "Region Labels for Specified Angular Segmentation"
+ax.set_ylim(0, theta_right_limit)
+plt.suptitle(title, fontsize=16, color='white')
+plt.tight_layout()
+if save_plots:
+    final_filename = f'{fig_idx}_{title.replace(" ", "_")}.png'
+    fig_idx += 1
+    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    plot_list.append(save_fig_path)
+    plt.savefig(save_fig_path, format='png')
+if show_plots:
+    plt.show()
+plt.close()
+
+#%%
+
+
+# def classify_region(row):
+#     phi = row['new_phi'] * 180 / np.pi  + row['phi_north'] # Convert phi to degrees
+#     theta = row['new_theta'] * 180 / np.pi
+    
+#     phi = ((phi + 180) % 360) - 180
+    
+#     if 0 < theta < caye_high_mid_limit_angle:
+#         return 'High'
+#     elif caye_high_mid_limit_angle <= theta <= 90:
+#         if -45 <= phi < 45:
+#             return 'N'
+#         elif 45 <= phi < 135:
+#             return 'E'
+#         elif -135 <= phi < -45:
+#             return 'W'
+#         else:
+#             return 'S'
+
+# # Hans' angular map division
+# high_regions_hans = ['V']
+# mid_regions_hans = ['N.M', 'NE.M', 'E.M', 'SE.M', 'S.M', 'SW.M', 'W.M', 'NW.M']
+# low_regions_hans = ['N.H', 'E.H', 'S.H', 'W.H']
+
+# def classify_region_hans(row):
+#     phi = row['phi'] * 180/np.pi
+#     theta = row['theta'] * 180/np.pi
+    
+#     # if int(row['type']) <= 100:
+#     #     return 'None'
+    
+#     if 0 <= theta < hans_high_mid_limit_angle:
+#         return 'V'
+#     elif hans_high_mid_limit_angle <= theta <= hans_low_mid_limit_angle:
+#         if -22.5 <= phi < 22.5:
+#             return 'N.M'
+#         elif 22.5 <= phi < 67.5:
+#             return 'NE.M'
+#         elif 67.5 <= phi < 112.5:
+#             return 'E.M'
+#         elif 112.5 <= phi < 157.5:
+#             return 'SE.M'
+#         elif -180 <= phi < -157.5 or 157.5 <= phi <= 180:
+#             return 'S.M'
+#         elif -157.5 <= phi < -112.5:
+#             return 'SW.M'
+#         elif -112.5 <= phi < -67.5:
+#             return 'W.M'
+#         else:  # -67.5 <= phi < -22.5
+#             return 'NW.M'
+#     elif 40 < theta <= 90:
+#         if -45 <= phi < 45:
+#             return 'N.H'
+#         elif 45 <= phi < 135:
+#             return 'E.H'
+#         elif -135 <= phi < -45:
+#             return 'W.H'
+#         else:  # phi >= 135 or phi < -135
+#             return 'S.H'
 
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
@@ -1165,7 +2267,7 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             selected_col = color_map["t0"]
 
         # Plot histogram
-        hist_data, bin_edges, _ = axs[i].hist(data, bins='auto', alpha=0.7, label='Data', color=selected_col)
+        hist_data, bin_edges, _ = axs[i].hist(data, bins=200, alpha=0.7, label='Data', color=selected_col)
 
         axs[i].set_title(col)
         axs[i].set_xlabel('Value')
@@ -1237,7 +2339,7 @@ print("----------------------------------------------------------------------")
 print("-------------------- Charge respect zenith angle ---------------------")
 print("----------------------------------------------------------------------")
 
-charge_vs_angle = False
+charge_vs_angle = True
 if charge_vs_angle:
     
     for i in range(1, 5):
@@ -1864,7 +2966,7 @@ print("----------------------------------------------------------------------")
 print("-------------------- Real adjacent and single cases ------------------")
 print("----------------------------------------------------------------------")
 
-real_strip_case_study = True
+real_strip_case_study = False
 
 if real_strip_case_study:
     print("Real strip case study. WIP.")
@@ -2370,7 +3472,6 @@ else:
 # --------------------------------------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------------------------------------
 
-a = 1/0
 
 print("----------------------------------------------------------------------")
 print("----------------------- Multiplicity calculations --------------------")
@@ -3302,6 +4403,8 @@ print("----------------------------------------------------------------------")
 print("------------ Crosstalk probability respect the charge ----------------")
 print("----------------------------------------------------------------------")
 
+print(df.columns.tolist())
+
 if crosstalk_probability:
     n_bins = 100
     right_lim = 1400 # 1250
@@ -3809,7 +4912,290 @@ if georgys:
     if show_plots:
         plt.show()
     plt.close()
+    
+    
+    # ------------------------------------------------------------------------------------------------------------
+    
+    #%%
 
+    create_essential_plots = True
+    
+    if create_essential_plots:
+        
+        theta_left_filter = 0
+        theta_right_filter = np.pi / 2.5
+        
+        phi_left_filter = -np.pi
+        phi_right_filter = np.pi
+        
+        df_filtered = df.copy()
+        # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
+    
+        tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
+    
+        n_tt = len(tt_values)
+        ncols = 3
+        nrows = (n_tt + 1) // ncols
+
+        fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
+        phi_nbins = 28
+        # theta_nbins = int(round(phi_nbins / 2) + 1)
+        theta_nbins = 40
+        theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
+        phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
+        colors = plt.cm.turbo
+
+        # Select theta/phi range (optional filtering)
+        theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
+        phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
+    
+        vmax_global = df_filtered.groupby('definitive_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
+    
+        for idx, tt_val in enumerate(tt_values):
+            row_idx, col_idx = divmod(idx, ncols)
+            ax = axes[row_idx][col_idx]
+
+            df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
+            theta_vals = df_tt['theta'].dropna()
+            phi_vals = df_tt['phi'].dropna()
+
+            # Apply range filtering
+            df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val].copy()
+            mask = (
+                (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
+                (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
+            )
+            df_tt = df_tt[mask]
+
+            theta_vals = df_tt['theta']
+            phi_vals   = df_tt['phi']
+
+            if len(theta_vals) < 10 or len(phi_vals) < 10:
+                ax.set_visible(False)
+                continue
+
+            # Polar plot settings
+            fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
+            ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
+            axes[row_idx][col_idx] = ax  # update reference for consistency
+
+            ax.set_facecolor(colors(0.0))  # darkest background in colormap
+
+            # 2D histogram: use phi as angle, theta as radius
+            r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
+            h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
+            phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+            # R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
+            R, PHI = np.meshgrid(r_edges, phi_edges, indexing='ij')
+            c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
+            local_max = h.max()
+            cb = fig.colorbar(c, ax=ax, pad=0.1)
+            cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
+
+        plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        if save_plots:
+            final_filename = f'{fig_idx}_polar_theta_phi_definitive_tt_2D.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
+    
+    
+    #%%
+    
+    if create_essential_plots:
+        
+        show_plots = True
+        
+        theta_left_filter = 0
+        theta_right_filter = np.pi / 2.5
+        
+        phi_left_filter = -np.pi
+        phi_right_filter = np.pi
+        
+        df_filtered = df.copy()
+        # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
+    
+        tt_values = [23, 123, 234, 1234]
+    
+        n_tt = len(tt_values)
+        ncols = 2
+        nrows = (n_tt + 1) // ncols
+        
+        fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
+        phi_nbins = 70
+        # theta_nbins = int(round(phi_nbins / 2) + 1)
+        theta_nbins = 40
+        theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
+        phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
+        colors = plt.cm.turbo
+
+        # Select theta/phi range (optional filtering)
+        theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
+        phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
+    
+        vmax_global = df_filtered.groupby('definitive_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
+    
+        for idx, tt_val in enumerate(tt_values):
+            row_idx, col_idx = divmod(idx, ncols)
+            ax = axes[row_idx][col_idx]
+
+            df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
+            theta_vals = df_tt['theta'].dropna()
+            phi_vals = df_tt['phi'].dropna()
+
+            # Apply range filtering
+            # Apply range filtering
+            df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val].copy()
+            mask = (
+                (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
+                (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
+            )
+            df_tt = df_tt[mask]
+
+            theta_vals = df_tt['theta']
+            phi_vals   = df_tt['phi']
+
+            if len(theta_vals) < 10 or len(phi_vals) < 10:
+                ax.set_visible(False)
+                continue
+
+            # Polar plot settings
+            fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
+            ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
+            axes[row_idx][col_idx] = ax  # update reference for consistency
+
+            ax.set_facecolor(colors(0.0))  # darkest background in colormap
+            ax.set_title(f'definitive_tt = {tt_val}', fontsize=14)
+            
+            plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout)
+            
+            # Limit in radius in theta_right_filter
+            ax.set_ylim(0, theta_right_filter)
+            
+            # 2D histogram: use phi as angle, theta as radius
+            r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
+            h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
+            phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+            # R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
+            R, PHI = np.meshgrid(r_edges, phi_edges, indexing='ij')
+            c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
+            local_max = h.max()
+            cb = fig.colorbar(c, ax=ax, pad=0.1)
+            cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
+
+        plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        if save_plots:
+            final_filename = f'{fig_idx}_polar_theta_phi_definitive_tt_2D_detail.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
+    
+    #%%
+    
+    if create_essential_plots:
+        
+        show_plots = True
+        
+        theta_left_filter = 0
+        theta_right_filter = np.pi / 2.5
+        
+        phi_left_filter = -np.pi
+        phi_right_filter = np.pi
+        
+        df_filtered = df.copy()
+        # tt_values = sorted(df_filtered['tracking_tt'].dropna().unique(), key=lambda x: int(x))
+    
+        tt_values = [23, 123, 234, 1234]
+    
+        n_tt = len(tt_values)
+        ncols = 2
+        nrows = (n_tt + 1) // ncols
+        
+        fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
+        phi_nbins = 70
+        # theta_nbins = int(round(phi_nbins / 2) + 1)
+        theta_nbins = 40
+        theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
+        phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
+        colors = plt.cm.turbo
+
+        # Select theta/phi range (optional filtering)
+        theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
+        phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
+    
+        vmax_global = df_filtered.groupby('tracking_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
+    
+        for idx, tt_val in enumerate(tt_values):
+            row_idx, col_idx = divmod(idx, ncols)
+            ax = axes[row_idx][col_idx]
+
+            df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
+            theta_vals = df_tt['theta'].dropna()
+            phi_vals = df_tt['phi'].dropna()
+
+            # Apply range filtering
+            # Apply range filtering
+            df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val].copy()
+            mask = (
+                (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
+                (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
+            )
+            df_tt = df_tt[mask]
+
+            theta_vals = df_tt['theta']
+            phi_vals   = df_tt['phi']
+
+            if len(theta_vals) < 10 or len(phi_vals) < 10:
+                ax.set_visible(False)
+                continue
+
+            # Polar plot settings
+            fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
+            ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
+            axes[row_idx][col_idx] = ax  # update reference for consistency
+
+            ax.set_facecolor(colors(0.0))  # darkest background in colormap
+            ax.set_title(f'tracking_tt = {tt_val}', fontsize=14)
+            
+            plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout)
+            
+            # Limit in radius in theta_right_filter
+            ax.set_ylim(0, theta_right_filter)
+            
+            # 2D histogram: use phi as angle, theta as radius
+            r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
+            h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
+            phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+            # R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
+            R, PHI = np.meshgrid(r_edges, phi_edges, indexing='ij')
+            c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
+            local_max = h.max()
+            cb = fig.colorbar(c, ax=ax, pad=0.1)
+            cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
+
+        plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each tracking_tt Type', fontsize=16)
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        if save_plots:
+            final_filename = f'{fig_idx}_polar_theta_phi_tracking_tt_2D_detail.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
+
+#%%
 
 print("\n\n\n")
 print(df.columns.to_list())
@@ -3823,7 +5209,7 @@ print("----------------------------------------------------------------------")
 # plot_histograms_and_gaussian(df, columns, "TimTrack Results pre-classification", figure_number=1)
 
 print("Original Region assigning...")
-df['region'] = df.apply(classify_region, axis=1)
+df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundaries, region_layout), axis=1)
 print(df['region'].value_counts())
 
 # print("Hans' region assigning...")
@@ -3876,6 +5262,585 @@ if new_region_assigning:
     region_df = pd.DataFrame(region_matrix, index=df.index)
     df = pd.concat([df, region_df], axis=1)
 
+#%%
+
+print("----------------------------------------------------------------------")
+print("------------------------ The n study fit -----------------------------")
+print("----------------------------------------------------------------------")
+
+# Fit the histogram of df["new_theta"] values per each definitive_tt to the a function which is:
+# F_ij(theta, phi) = A_ij * cos(theta)^n_ij * R_ij(theta, phi)
+# where R_ij is the response function of a telescope made of square planes of 300 mm
+# length and at a distance of abs(z_position[i] - z_positions[j]). First simulate the R_ij for
+# the cases 13, 24, 14, 23. Note that definitive_tt = 123 has the same response as definitive_tt
+# = 13, because what count are the top and bottom planes in each case. Simulate and plot the
+# R_ij for those cases, then fit the new_theta to F_ij, and plot it. Obtain an A_ij and n_ij
+# per each case. Then sum all to obtain a realistic total flux crossing the detector. Go!
+
+use_only_theta = True
+
+if use_only_theta:
+    # STEP 1: response function calculation
+
+    # Simulation parameters
+    N = 3000000  # number of events per configuration
+    PLANE_SIZE = 300  # mm, square plane side
+    HALF_SIZE = PLANE_SIZE / 2
+
+    pairs = {
+        '13': (1, 3),
+        '24': (2, 4),
+        '14': (1, 4),
+        '23': (2, 3),
+        
+        '123': (1, 3),
+        '234': (2, 4),
+        '1234': (1, 4),
+    }
+
+    def simulate_telescope_response(z1, z2, N=N):
+        """Simulate direction distribution of tracks crossing square planes at z1 and z2."""
+        # Random (x, y) points on both planes
+        x1 = np.random.uniform(-HALF_SIZE, HALF_SIZE, N)
+        y1 = np.random.uniform(-HALF_SIZE, HALF_SIZE, N)
+        x2 = np.random.uniform(-HALF_SIZE, HALF_SIZE, N)
+        y2 = np.random.uniform(-HALF_SIZE, HALF_SIZE, N)
+
+        dx = x2 - x1
+        dy = y2 - y1
+        dz = z2 - z1
+
+        r = np.sqrt(dx**2 + dy**2 + dz**2)
+        theta = np.arccos(np.abs(dz) / r)
+        phi = np.arctan2(dy, dx)
+
+        return theta, phi
+
+    # Simulate and histogram theta density
+    theta_bins = np.linspace(0, np.pi / 2, 100)
+    theta_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+    response_histograms = {}
+
+    for label, (i, j) in pairs.items():
+        z1, z2 = z_positions[i-1], z_positions[j-1]
+        theta, phi = simulate_telescope_response(z1, z2)
+        hist, _ = np.histogram(theta, bins=theta_bins, density=True)
+        response_histograms[label] = hist
+
+    # Plot simulated response densities
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for label in response_histograms:
+        ax.plot(theta_centers * 180 / np.pi, response_histograms[label], label=f'{label}')
+    ax.set_xlabel(r'$\theta$ [deg]')
+    ax.set_ylabel(r'Normalized density')
+    ax.set_title('Simulated Angular Response $R_{ij}(\\theta)$ from Geometry')
+    ax.legend()
+    ax.grid(True)
+    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        final_filename = f'{fig_idx}_simulated_response_function.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+
+
+    # STEP 2: fit the new_theta to F_ij, and plot it
+
+    # Assuming df is available and contains 'new_theta' and 'definitive_tt'
+
+    from scipy.interpolate import interp1d
+    from scipy.optimize import curve_fit
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    # Reuse the existing response_histograms from earlier simulation
+    fit_results_real = {}
+
+    # Loop over response functions and fit real data per definitive_tt
+    for label, response in response_histograms.items():
+        if label not in df['definitive_tt'].astype(str).unique():
+            continue
+
+        # Extract real theta data for this topology
+        df_tt = df[df['definitive_tt'].astype(str) == label]
+        theta_data = df_tt['new_theta'].dropna().values
+        if len(theta_data) < 20:
+            continue
+
+        # Histogram real data
+        data_hist, _ = np.histogram(theta_data, bins=theta_bins, density=False)
+
+        # Create interpolated response function
+        R_interp = interp1d(theta_centers, response, kind='linear', bounds_error=False, fill_value=0)
+
+        # Fit function: F(theta) = A * cos(theta)^n * R_ij(theta)
+        def fit_func(theta, A, n, B, C):
+            return (A * np.cos(theta) ** 2 + B * np.cos(theta) ** n + C) * R_interp(theta)
+
+        try:
+            popt, _ = curve_fit(fit_func, theta_centers, data_hist,\
+                p0=[1.0, 2.0, 1.0, 1.0], bounds=([0, 0, 0, 0], [np.inf, 100, np.inf, np.inf]))
+            A_fit, n_fit, B_fit, C_fit = popt
+            fit_results_real[label] = (A_fit, n_fit, B_fit, C_fit)
+
+            # Plot
+            fig, ax = plt.subplots(figsize=(7, 5))
+            ax.plot(theta_centers * 180 / np.pi, data_hist, label='Data', color='black')
+            ax.plot(theta_centers * 180 / np.pi, fit_func(theta_centers, *popt), '--', \
+                label=f'Fit: A={A_fit:.2f}, n={n_fit:.2f}, B={B_fit:.2f}, C={C_fit:.2f}', color='red')
+            ax.set_xlabel(r'$\theta$ [deg]')
+            ax.set_ylabel('Normalized density')
+            ax.set_title(f'Fit of $F_{{{label}}}(\\theta)$ to Real Data')
+            ax.legend()
+            ax.grid(True)
+            plt.tight_layout()
+            plt.show()
+        except RuntimeError:
+            print(f"Fit failed for {label}")
+
+    fit_results_real
+
+else:
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy.interpolate import RegularGridInterpolator
+    from scipy.optimize import curve_fit
+
+    # Define the simulation again for theta and phi
+    N = 1000000
+    PLANE_SIZE = 300  # mm
+    HALF_SIZE = PLANE_SIZE / 2
+
+    pairs = {
+        '13': (1, 3),
+        '24': (2, 4),
+        '14': (1, 4),
+        '23': (2, 3),
+        
+        '123': (1, 3),
+        '234': (2, 4),
+        '1234': (1, 4),
+    }
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy.interpolate import RegularGridInterpolator
+    from scipy.optimize import curve_fit
+
+    # Set z_positions for the 4 planes (in mm)
+    
+    # Reuse definitions
+    PLANE_SIZE = 300  # mm
+    HALF_SIZE = PLANE_SIZE / 2
+    N = 2000000
+
+    # Define angular binning
+    theta_bins = np.linspace(0, np.pi / 2.5, 20)
+    phi_bins = np.linspace(-np.pi, np.pi, 20)
+    theta_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+    phi_centers = 0.5 * (phi_bins[:-1] + phi_bins[1:])
+    THETA_MESH, PHI_MESH = np.meshgrid(theta_centers, phi_centers, indexing='ij')
+
+
+    # Simulate response in 2D (theta, phi)
+    def simulate_theta_phi(z1, z2, N=N):
+        x1 = np.random.uniform(-HALF_SIZE, HALF_SIZE, N)
+        y1 = np.random.uniform(-HALF_SIZE, HALF_SIZE, N)
+        x2 = np.random.uniform(-HALF_SIZE, HALF_SIZE, N)
+        y2 = np.random.uniform(-HALF_SIZE, HALF_SIZE, N)
+    
+        dx = x2 - x1
+        dy = y2 - y1
+        dz = z2 - z1
+        r = np.sqrt(dx**2 + dy**2 + dz**2)
+        theta = np.arccos(np.abs(dz) / r)
+        phi = np.arctan2(dy, dx)
+        return theta, phi
+
+    # Simulate and construct 2D histograms
+    response_2d = {}
+    response_functions_2d = {}
+    for label, (i, j) in pairs.items():
+        z1, z2 = z_positions[i-1], z_positions[j-1]
+        theta_sim, phi_sim = simulate_theta_phi(z1, z2)
+        H, _, _ = np.histogram2d(theta_sim, phi_sim, bins=[theta_bins, phi_bins], density=True)
+        response_2d[label] = H
+        response_functions_2d[label] = H
+
+    # Plot simulated 2D response R_ij(theta, phi)
+    fig, axes = plt.subplots(2, 4, subplot_kw={'projection': 'polar'}, figsize=(18, 10))
+    axes = axes.flatten()
+    for idx, (label, R) in enumerate(response_2d.items()):
+        ax = axes[idx]
+        pcm = ax.pcolormesh(PHI_MESH, THETA_MESH, R, shading='auto', cmap='viridis')
+        ax.set_title(f'Response R_{{{label}}}($\\theta$, $\\phi$)')
+        fig.colorbar(pcm, ax=ax, orientation='vertical', pad=0.1)
+
+    for ax in axes[len(response_2d):]:
+        ax.axis('off')
+
+    plt.suptitle('Simulated 2D Response Functions $R_{ij}(\\theta, \\phi)$', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
+
+
+    # Now proceed to fitting with updated response_functions_2d
+    fit_results = {}
+
+    for label, interp_R in {
+        l: RegularGridInterpolator((theta_centers, phi_centers), response_functions_2d[l], bounds_error=False, fill_value=0)
+        for l in response_functions_2d
+    }.items():
+        if label not in df['definitive_tt'].astype(str).unique():
+            continue
+
+        df_tt = df[df['definitive_tt'].astype(str) == label]
+        theta_data = df_tt['new_theta'].dropna().values
+        phi_data = df_tt['new_phi'].dropna().values
+
+        if len(theta_data) < 50:
+            continue
+
+        data_hist, _, _ = np.histogram2d(theta_data, phi_data, bins=[theta_bins, phi_bins], density=False)
+        theta_phi_coords = np.array(np.meshgrid(theta_centers, phi_centers, indexing='ij'))
+        theta_phi_flat = np.vstack([theta_phi_coords[0].ravel(), theta_phi_coords[1].ravel()]).T
+        R_vals = interp_R(theta_phi_flat).reshape(len(theta_centers), len(phi_centers))
+
+        def fit_func(grid_flat, A, n, B):
+            theta_flat = grid_flat[:, 0]
+            phi_flat = grid_flat[:, 1]
+            R_eval = interp_R(np.vstack([theta_flat, phi_flat]).T)
+            return (A * np.cos(theta_flat) ** n + B) * R_eval
+
+        data_flat = data_hist.ravel()
+        coords_flat = theta_phi_flat
+        mask = data_flat > 0
+
+        try:
+            popt, _ = curve_fit(fit_func, coords_flat[mask], data_flat[mask], p0=[1.0, 2.0, 1.0], bounds=([0, 0, 0], [np.inf, 100, np.inf]))
+            fit_results[label] = popt
+
+            fit_vals = fit_func(coords_flat, *popt).reshape(data_hist.shape)
+
+            # Plotting
+            fig, axes = plt.subplots(1, 2, subplot_kw={'projection': 'polar'}, figsize=(14, 6))
+            PHI_MESH, THETA_MESH = np.meshgrid(phi_centers, theta_centers, indexing='ij')
+
+            pcm1 = axes[0].pcolormesh(PHI_MESH, THETA_MESH, data_hist.T, shading='auto', cmap='viridis')
+            axes[0].set_title(f'Data: {label}')
+            fig.colorbar(pcm1, ax=axes[0])
+
+            pcm2 = axes[1].pcolormesh(PHI_MESH, THETA_MESH, fit_vals.T, shading='auto', cmap='viridis')
+            axes[1].set_title(f'Fit: A={popt[0]:.2f}, n={popt[1]:.2f}, B={popt[2]:.2f}')
+            fig.colorbar(pcm2, ax=axes[1])
+
+            plt.tight_layout()
+            plt.show()
+
+        except RuntimeError:
+            fit_results[label] = None
+
+#%%
+
+
+# Okey, so look out: i want you to change this to take a slightly different approach: instead of 
+# calculating the response functions just considerng two planes and thats all, you are going to 
+# do the following: generate tracks in a uniform distribution in zenith and azimuth and in a plane 
+# above the first plane of the detector (z_positions[0]) but from -1000 to 1000, then you are going 
+# to check which planes the track crosses, according to its theta, phi, x, y and the z_positions of 
+# the planes, which are in x and y between -150 and 150. Then you are going to apply a efficiency, 
+# which will be 0.95 * theta**0.001, to determine if the plane is detected or not for a certain plane.
+# So in the end each track will have a crossing_tt and a measured_tt (when applying the efficiency 
+# over crossing_tt), you calculate, from the total tracks in a bin of theta, how many where detected 
+# in each combination of planes, so you get a response function but taking account efficiencies. So 
+# in this case, 123 is not the same as 13, because for an event to be 13 then it must NOT be detected in plane 2,
+
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import defaultdict
+
+# Simulation parameters
+N = 50_000_000
+PLANE_SIZE = 300  # mm, square plane side
+HALF_SIZE = PLANE_SIZE / 2
+EFFICIENCY_FUNC = lambda theta: 0.93 + 0.02 * theta ** 0.9  # simplified efficiency
+
+# Detector configuration
+n_planes = len(z_positions)
+
+# Define angular and spatial domain of generation
+z_gen = 0  # generation plane
+x_gen = np.random.uniform(-HALF_SIZE * 5, HALF_SIZE * 5, N)
+y_gen = np.random.uniform(-HALF_SIZE * 5, HALF_SIZE * 5, N)
+
+n = 2
+u = np.random.uniform(0, 1, N)
+theta_gen = np.arccos((1 - u) ** (1 / (n + 1)))
+# theta_gen = np.arccos(np.random.uniform(0, 1, N))  # uniform in cosθ
+
+phi_gen = np.random.uniform(-np.pi, np.pi, N)
+
+# Compute direction vector components
+dx = np.sin(theta_gen) * np.cos(phi_gen)
+dy = np.sin(theta_gen) * np.sin(phi_gen)
+dz = np.cos(theta_gen)
+
+# Track intersection with each plane
+crossing_tt = []
+measured_tt = []
+
+for i_plane, z_det in enumerate(z_positions):
+    t = (z_det - z_gen) / dz
+    x_det = x_gen + t * dx
+    y_det = y_gen + t * dy
+    inside = (np.abs(x_det) <= HALF_SIZE) & (np.abs(y_det) <= HALF_SIZE)
+    if i_plane == 0:
+        crossing_mask = inside.astype(int)
+    else:
+        crossing_mask = np.vstack([crossing_mask, inside.astype(int)])
+
+# Transpose to get shape (N, n_planes)
+crossing_mask = crossing_mask.T
+
+for i in range(N):
+    # print a message each 100000 events
+    if i % 100000 == 0:
+        print(f"Processing event {i} of {N}... {i/N*100:.1f} % complete")
+    
+    crossing_planes = [str(j + 1) for j in range(n_planes) if crossing_mask[i, j]]
+    measured_planes = []
+    for j in range(n_planes):
+        if crossing_mask[i, j] and np.random.rand() < EFFICIENCY_FUNC(theta_gen[i]):
+            measured_planes.append(str(j + 1))
+    if crossing_planes:
+        crossing_tt.append(''.join(crossing_planes))
+    else:
+        crossing_tt.append('0')
+    if measured_planes:
+        measured_tt.append(''.join(measured_planes))
+    else:
+        measured_tt.append('0')
+
+# Store by configuration
+theta_bins = np.linspace(0, np.pi / 2, 50)
+theta_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+response_histograms = defaultdict(lambda: np.zeros(len(theta_centers)))
+
+# Build histograms for each measured_tt
+for i in range(N):
+    label = measured_tt[i]
+    if label != '0':
+        bin_idx = np.digitize(theta_gen[i], theta_bins) - 1
+        if 0 <= bin_idx < len(theta_centers):
+            response_histograms[label][bin_idx] += 1
+
+# Normalize each histogram
+for label in response_histograms:
+    total = np.sum(response_histograms[label])
+    if total > 0:
+        response_histograms[label] /= total
+
+
+# Convert response_histograms to a DataFrame for saving as CSV
+response_df = pd.DataFrame.from_dict(response_histograms, orient='index', columns=theta_centers)
+response_df.to_csv(os.path.join(base_directories["figure_directory"], 'response_histograms.csv'))
+
+
+#%%
+
+read_response = True
+if read_response:
+    # Load response_histograms from the csv file
+    response_df = pd.read_csv(os.path.join(base_directories["figure_directory"], 'response_histograms.csv'), index_col=0)
+
+
+#%%
+
+
+# Plot simulated response densities
+import matplotlib.cm as cm
+
+#%%
+
+fig, ax = plt.subplots(figsize=(8, 6))
+colors = cm.viridis(np.linspace(0, 1, len(response_histograms)))
+for idx, label in enumerate(sorted(response_histograms.keys())):
+    if label in ['0', '', '1', '2', '3', '4', '14']:
+        continue
+    ax.plot(theta_centers * 180 / np.pi, response_histograms[label], label=label, color=colors[idx])
+
+ax.set_xlabel(r'$\theta$ [deg]')
+ax.set_ylabel(r'Normalized density')
+ax.set_title('Simulated Angular Response $R_{tt}(\\theta)$ with Efficiency and Plane Logic')
+ax.legend()
+ax.grid(True)
+plt.tight_layout()
+plt.tight_layout()
+if save_plots:
+    final_filename = f'{fig_idx}_sim_ang_fit_response_{label}.png'
+    fig_idx += 1
+    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    plot_list.append(save_fig_path)
+    plt.savefig(save_fig_path, format='png')
+if show_plots:
+    plt.show()
+plt.close()
+
+
+#%%
+
+# STEP 2: Fit the new_theta distribution to F_ij(theta) model using the simulated R_ij
+
+from scipy.interpolate import interp1d
+from scipy.optimize import curve_fit
+
+# # Reuse the response_histograms from the simulation
+# fit_results_real = {}
+
+# for label, response in response_histograms.items():
+#     if label not in df['definitive_tt'].astype(str).unique():
+#         continue
+
+#     # Extract real theta data
+#     df_tt = df[df['definitive_tt'].astype(str) == label]
+#     theta_data = df_tt['new_theta'].dropna().values
+#     if len(theta_data) < 30:
+#         continue
+
+#     # Histogram the real data with same binning as used for response
+#     data_hist, _ = np.histogram(theta_data, bins=theta_bins, density=False)
+
+#     # Interpolator for the response function
+#     R_interp = interp1d(theta_centers, response, kind='linear', bounds_error=False, fill_value=0)
+
+#     # Fit model: (A * cos² + B * cos^n + C) * R(θ)
+#     def fit_func(theta, A, n, B, C):
+#         cos_t = np.cos(theta)
+#         sin_t = np.sin(theta)
+#         # return (A * cos_t**2 + B * cos_t**n + C) * R_interp(theta)
+#         # return (A * cos_t**n + B) * R_interp(theta) * sin_t
+#         # return (A * cos_t**n) * R_interp(theta) * sin_t
+#         return (A * cos_t**n) * R_interp(theta)
+
+#     # Fit and store results
+#     try:
+#         popt, _ = curve_fit(fit_func, theta_centers, data_hist,
+#                             p0=[1.0, 2.0, 1.0, 1.0],
+#                             bounds=([0, 0, 0, 0], [np.inf, 100, np.inf, np.inf]))
+#         A_fit, n_fit, B_fit, C_fit = popt
+#         fit_results_real[label] = (A_fit, n_fit, B_fit, C_fit)
+
+#         # Plotting
+#         fig, ax = plt.subplots(figsize=(7, 5))
+#         ax.plot(theta_centers * 180 / np.pi, data_hist, label='Data', color='black')
+#         ax.plot(theta_centers * 180 / np.pi, fit_func(theta_centers, *popt), '--', color='red',
+#                 label=fr'Fit: $A$={A_fit:.2f}, $n$={n_fit:.2f}, $B$={B_fit:.2f}, $C$={C_fit:.2f}')
+#         ax.set_xlabel(r'$\theta$ [deg]')
+#         ax.set_ylabel('Counts per bin')
+#         ax.set_title(f'Fit of $F_{{{label}}}(\\theta)$ to Real Data')
+#         ax.legend()
+#         ax.grid(True)
+#         plt.tight_layout()
+#         if save_plots:
+#             final_filename = f'{fig_idx}_fit_response_{label}.png'
+#             fig_idx += 1
+#             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#             plot_list.append(save_fig_path)
+#             plt.savefig(save_fig_path, format='png')
+#         if show_plots:
+#             plt.show()
+#         plt.close()
+
+#     except RuntimeError:
+#         print(f"Fit failed for {label}")
+
+# fit_results_real
+
+# Store fit results
+fit_results_real = {}
+
+# Perform fitting
+for label, response in response_histograms.items():
+    if label not in df['definitive_tt'].astype(str).unique():
+        continue
+
+    df_tt = df[df['definitive_tt'].astype(str) == label]
+    theta_data = df_tt['new_theta'].dropna().values
+    if len(theta_data) < 30:
+        continue
+
+    data_hist, _ = np.histogram(theta_data, bins=theta_bins, density=False)
+    R_interp = interp1d(theta_centers, response, kind='linear', bounds_error=False, fill_value=0)
+    
+    # Fit model: (A * cos² + B * cos^n + C) * R(θ)
+    def fit_func(theta, A, n, B, C):
+        cos_t = np.cos(theta)
+        sin_t = np.sin(theta)
+        # return (A * cos_t**2 + B * cos_t**n + C) * R_interp(theta)
+        # return (A * cos_t**n + B) * R_interp(theta) * sin_t
+        # return (A * cos_t**n) * R_interp(theta) * sin_t
+        return (A * cos_t**n) * R_interp(theta)
+
+    try:
+        popt, _ = curve_fit(fit_func, theta_centers, data_hist, p0=[1.0, 2.0, 1.0, 1.0],
+                            bounds=([0, 0, 0, 0], [np.inf, 100, np.inf, np.inf]))
+        fit_results_real[label] = (popt, data_hist, response)
+    except RuntimeError:
+        fit_results_real[label] = None
+
+# Plotting results in subplots
+n = len(fit_results_real)
+ncols = 3
+nrows = (n + ncols - 1) // ncols
+fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows), squeeze=False)
+
+for idx, (label, result) in enumerate(fit_results_real.items()):
+    row, col = divmod(idx, ncols)
+    ax = axes[row][col]
+    if result is None:
+        ax.set_visible(False)
+        continue
+
+    popt, data_hist, response = result
+    R_interp = interp1d(theta_centers, response, kind='linear', bounds_error=False, fill_value=0)
+
+    def fit_func(theta, A, n, B, C):
+        cos_t = np.cos(theta)
+        return (A * cos_t**n) * R_interp(theta)
+
+    ax.plot(theta_centers * 180 / np.pi, data_hist, label='Data', color='black')
+    ax.plot(theta_centers * 180 / np.pi, fit_func(theta_centers, *popt), '--', color='red',
+            label=fr'Fit: $A$={popt[0]:.2f}, $n$={popt[1]:.2f}')
+    ax.set_xlabel(r'$\theta$ [deg]')
+    ax.set_ylabel('Counts per bin')
+    ax.set_title(f'Topology {label}')
+    ax.legend()
+    ax.grid(True)
+
+# Hide unused axes
+for i in range(n, nrows * ncols):
+    row, col = divmod(i, ncols)
+    axes[row][col].set_visible(False)
+
+plt.tight_layout()
+if save_plots:
+    final_filename = f'{fig_idx}_fit_response_all.png'
+    fig_idx += 1
+    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    plot_list.append(save_fig_path)
+    plt.savefig(save_fig_path, format='png')
+if show_plots:
+    plt.show()
+plt.close()
+
+
+
+#%%
 
 print("----------------------------------------------------------------------")
 print("----------------- Derived metrics pre-aggregation --------------------")
@@ -4533,38 +6498,40 @@ print("----------------------------------------------------------------------")
 resampled_df.reset_index(inplace=True)
 
 
-with pd.option_context('display.precision', 1):
-    print(df_polya_fit)
+if polya_fit:
 
-print("\n\n")
-# Flatten df_polya_fit into wide format
-df_single_row = df_polya_fit.set_index('module').stack().rename('value').reset_index()
-df_single_row['column'] = 'polya_' + df_single_row['level_1'] + '_' + df_single_row['module'].astype(str)
+    print("\n\n")
+    # Flatten df_polya_fit into wide format
+    df_single_row = df_polya_fit.set_index('module').stack().rename('value').reset_index()
+    df_single_row['column'] = 'polya_' + df_single_row['level_1'] + '_' + df_single_row['module'].astype(str)
 
-# Fix: pivot without setting index=None
-df_wide = df_single_row.pivot(columns='column', values='value')
-df_wide.columns.name = None  # remove column index name
-df_wide = df_wide.reset_index(drop=True)
+    # Fix: pivot without setting index=None
+    df_wide = df_single_row.pivot(columns='column', values='value')
+    df_wide.columns.name = None  # remove column index name
+    df_wide = df_wide.reset_index(drop=True)
 
-# Check available columns
-print(df_wide.columns.to_list())
+    # Check available columns
+    print(df_wide.columns.to_list())
 
-# Optional: restrict to specific subset of columns
-df_wide = df_wide[[
-    'polya_A_1', 'polya_A_2', 'polya_A_3', 'polya_A_4',
-    'polya_theta_1', 'polya_theta_2', 'polya_theta_3', 'polya_theta_4',
-    'polya_nbar/alpha_1', 'polya_nbar/alpha_2', 'polya_nbar/alpha_3', 'polya_nbar/alpha_4',
-]]
+    # Optional: restrict to specific subset of columns
+    df_wide = df_wide[[
+        'polya_A_1', 'polya_A_2', 'polya_A_3', 'polya_A_4',
+        'polya_theta_1', 'polya_theta_2', 'polya_theta_3', 'polya_theta_4',
+        'polya_nbar/alpha_1', 'polya_nbar/alpha_2', 'polya_nbar/alpha_3', 'polya_nbar/alpha_4',
+    ]]
 
-# Repeat values to match number of rows in resampled_df
-df_polya_expanded = pd.concat([df_wide] * len(resampled_df), ignore_index=True)
+    # Repeat values to match number of rows in resampled_df
+    df_polya_expanded = pd.concat([df_wide] * len(resampled_df), ignore_index=True)
 
-# Merge with original DataFrame
-resampled_df = pd.concat([resampled_df, df_polya_expanded], axis=1)
-
-# Optional print
-with pd.option_context('display.precision', 3):
-    print(resampled_df[df_wide.columns])
+    # Merge with original DataFrame
+    resampled_df = pd.concat([resampled_df, df_polya_expanded], axis=1)
+    
+    with pd.option_context('display.precision', 1):
+        print(df_polya_fit)
+    
+    # Optional print
+    with pd.option_context('display.precision', 3):
+        print(resampled_df[df_wide.columns])
 
 
 
