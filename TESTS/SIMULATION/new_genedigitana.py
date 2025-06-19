@@ -33,10 +33,10 @@ EFFS = [0.92, 0.95, 0.94, 0.93]
 # EFFS = [0.2, 0.1, 0.4, 0.3]
 
 # Iterants
-n = 5  # Change this value to select 1 out of every n values
-minutes_list = np.arange(1, 181, n)
+n = 1  # Change this value to select 1 out of every n values
+# minutes_list = np.arange(1, 181, n)
+minutes_list = np.arange(1, 2, n)
 TIME_WINDOWS = sorted(set(f'{num}min' for num in minutes_list if num > 0), key=lambda x: int(x[:-3]))
-print(TIME_WINDOWS)
 
 CROSS_EVS_LOW = 5 # 7 and 5 show a 33% of difference, which is more than the CRs will suffer
 CROSS_EVS_UPP = 7
@@ -50,9 +50,12 @@ FLUX = 1/12/60 # cts/s/cm^2/sr
 area = 2 * xlim * 2 * ylim / 100  # cm^2
 cts_sr = FLUX * area
 cts = cts_sr * 2 * np.pi
-print("Counts per second:", cts_sr)
+# print("Counts per second:", cts_sr)
 
-AVG_CROSSING_EVS_PER_SEC_ARRAY = np.linspace(CROSS_EVS_LOW, CROSS_EVS_UPP, number_of_rates)
+if number_of_rates == 1:
+     AVG_CROSSING_EVS_PER_SEC_ARRAY = [ (CROSS_EVS_LOW + CROSS_EVS_UPP) / 2 ]
+else:
+     AVG_CROSSING_EVS_PER_SEC_ARRAY = np.linspace(CROSS_EVS_LOW, CROSS_EVS_UPP, number_of_rates)
 
 # AVG_CROSSING_EVS_PER_SEC = 5.8
 
@@ -63,10 +66,12 @@ BASE_TIME = datetime(2024, 1, 1, 12, 0, 0)
 VALID_CROSSING_TYPES = ['1234', '123', '234', '12',  '23', '34']
 VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '23', '24', '34']
 
-read_file = False
+read_file = True
+use_binary = False  # If True, will use a binary file instead of CSV
+bin_filename = f"/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.pkl"
 csv_filename = f"/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.csv"
 
-if read_file == True:
+if read_file == False:
 
       # ------------------------------------------------------------------------------
       # Function definitions ---------------------------------------------------------
@@ -99,17 +104,17 @@ if read_file == True:
 
           df[['X_gen', 'Y_gen', 'Z_gen', 'Phi_gen', 'Theta_gen']] = random_numbers
 
-          time_column = []
-          current_time = base_time
-          while len(time_column) < len(df):
-              n_events = poisson.rvs(cts)
-              for _ in range(n_events):
-                  time_column.append(current_time)
-                  if len(time_column) >= len(df):
-                      break
-              current_time += timedelta(seconds=1)
+      #     time_column = []
+      #     current_time = base_time
+      #     while len(time_column) < len(df):
+      #         n_events = poisson.rvs(cts)
+      #         for _ in range(n_events):
+      #             time_column.append(current_time)
+      #             if len(time_column) >= len(df):
+      #                 break
+      #         current_time += timedelta(seconds=1)
 
-          df['time'] = time_column[:len(df)]
+      #     df['time'] = time_column[:len(df)]
 
       def calculate_intersections(df, z_positions):
           df['crossing_type'] = [''] * builtins.len(df)
@@ -126,36 +131,38 @@ if read_file == True:
               df.loc[in_bounds_indices, 'crossing_type'] += builtins.str(i)
 
       def generate_time_dependent_efficiencies(df):
-          df['time_seconds'] = (df['time'] - BASE_TIME).dt.total_seconds()
+      #     df['time_seconds'] = (df['time'] - BASE_TIME).dt.total_seconds()
           df['eff_theoretical_1'] = EFFS[0]
           df['eff_theoretical_2'] = EFFS[1]
           df['eff_theoretical_3'] = EFFS[2]
           df['eff_theoretical_4'] = EFFS[3]
 
-      def simulate_measured_points(df, y_widths, x_noise=5, uniform_choice=True):
-          df['measured_type'] = [''] * builtins.len(df)
-          for i in range(1, 5):
-              for idx in df.index:
-                  eff = df.loc[idx, f'eff_theoretical_{i}']
-                  if np.random.rand() > eff:
-                      df.at[idx, f'X_mea_{i}'] = np.nan
-                      df.at[idx, f'Y_mea_{i}'] = np.nan
-                  else:
-                      df.at[idx, f'X_mea_{i}'] = df.at[idx, f'X_gen_{i}'] + np.random.normal(0, x_noise)
-                      y_gen = df.at[idx, f'Y_gen_{i}']
-                      if not np.isnan(y_gen):
-                          y_width = y_widths[0] if i in [1, 3] else y_widths[1]
-                          y_positions = np.cumsum(y_width) - (np.sum(y_width) + y_width) / 2
-                          strip_index = np.argmin(np.abs(y_positions - y_gen))
-                          strip_center = y_positions[strip_index]
-                          if uniform_choice:
-                              df.at[idx, f'Y_mea_{i}'] = np.random.uniform(
-                                  strip_center - y_width[strip_index] / 2,
-                                  strip_center + y_width[strip_index] / 2
-                              )
-                          else:
-                              df.at[idx, f'Y_mea_{i}'] = strip_center
-                          df.at[idx, 'measured_type'] += builtins.str(i)
+      # def simulate_measured_points(df, y_widths, x_noise=5, uniform_choice=True):
+      #     df['measured_type'] = [''] * builtins.len(df)
+      #     for i in range(1, 5):
+      #         for idx in df.index:
+      #             eff = df.loc[idx, f'eff_theoretical_{i}']
+      #             if np.random.rand() > eff:
+      #                 df.at[idx, f'X_mea_{i}'] = np.nan
+      #                 df.at[idx, f'Y_mea_{i}'] = np.nan
+      #             else:
+      #                 df.at[idx, f'X_mea_{i}'] = df.at[idx, f'X_gen_{i}'] + np.random.normal(0, x_noise)
+      #                 y_gen = df.at[idx, f'Y_gen_{i}']
+      #                 if not np.isnan(y_gen):
+      #                     y_width = y_widths[0] if i in [1, 3] else y_widths[1]
+      #                     y_positions = np.cumsum(y_width) - (np.sum(y_width) + y_width) / 2
+      #                     strip_index = np.argmin(np.abs(y_positions - y_gen))
+      #                     strip_center = y_positions[strip_index]
+      #                     if uniform_choice:
+      #                         df.at[idx, f'Y_mea_{i}'] = np.random.uniform(
+      #                             strip_center - y_width[strip_index] / 2,
+      #                             strip_center + y_width[strip_index] / 2
+      #                         )
+      #                     else:
+      #                         df.at[idx, f'Y_mea_{i}'] = strip_center
+      #                     df.at[idx, 'measured_type'] += builtins.str(i)
+      
+      
 
       def fill_measured_type(df):
           df['filled_type'] = df['measured_type']
@@ -231,18 +238,18 @@ if read_file == True:
       # ----------------------------------------------------------------------------
       # Remaining part of the code (simulation loop and CSV saving) ----------------
       # ----------------------------------------------------------------------------
-
+      
       # Create a dictionary to store DataFrames with two indices: AVG_CROSSING_EVS_PER_SEC and TIME_WINDOW
       results = {}
 
-      for avg_crossing in AVG_CROSSING_EVS_PER_SEC_ARRAY:
-          results[avg_crossing] = {}
+      for AVG_CROSSING_EVS_PER_SEC in AVG_CROSSING_EVS_PER_SEC_ARRAY:
+          results[AVG_CROSSING_EVS_PER_SEC] = {}
+
           for time_window in TIME_WINDOWS:
-              results[avg_crossing][time_window] = pd.DataFrame()
-
-          for AVG_CROSSING_EVS_PER_SEC in AVG_CROSSING_EVS_PER_SEC_ARRAY:
-              print(AVG_CROSSING_EVS_PER_SEC)
-
+              results[AVG_CROSSING_EVS_PER_SEC][time_window] = pd.DataFrame()
+              
+              print("Calculating tracks...")
+              
               columns = ['X_gen', 'Y_gen', 'Theta_gen', 'Phi_gen', 'Z_gen'] + \
                         [f'X_gen_{i}' for i in range(1, 5)] + [f'Y_gen_{i}' for i in range(1, 5)] + \
                         ['crossing_type', 'measured_type', 'fitted_type', 'time']
@@ -251,14 +258,24 @@ if read_file == True:
               rng = np.random.default_rng()
               generate_tracks_with_timestamps(df_generated, N_TRACKS, xlim, ylim, z_plane, BASE_TIME, cts, cos_n=2)
               real_df = df_generated.copy()
-
+              
+              print("Tracks generated. Calculating intersections...")
+              
               calculate_intersections(df_generated, Z_POSITIONS)
               df = df_generated[df_generated['crossing_type'].isin(VALID_CROSSING_TYPES)].copy()
               crossing_df = df.copy()
+              
+              print("Intersections calculated. Generating measured points...")
 
               generate_time_dependent_efficiencies(df)
               simulate_measured_points(df, Y_WIDTHS)
+              
+              print("Measured points generated. Filling measured type...")
+              
               fill_measured_type(df)
+              
+              print("Measured type filled. Fitting tracks...")
+              
               fit_tracks(df, Z_POSITIONS)
 
               columns_to_keep = ['time'] + [col for col in df.columns if 'eff_' in col] + \
@@ -275,13 +292,20 @@ if read_file == True:
               df['Theta_cros'] = crossing_df['Theta_gen']
               df['Phi_cros'] = crossing_df['Phi_gen']
 
-              csv_filename = f"/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.csv"
-              df.to_csv(csv_filename, index=False)
-              print(f"DataFrame saved to {csv_filename}")
+              if use_binary:
+                  df.to_pickle(bin_filename)
+                  print(f"DataFrame saved to {bin_filename}")
+              else:
+                  df.to_csv(csv_filename, index=False)
+                  print(f"DataFrame saved to {csv_filename}")
 
-
-else:
-      df = pd.read_csv(csv_filename)
+else:      
+      if use_binary:
+            df = pd.read_pickle(bin_filename)
+            print(f"DataFrame read from {bin_filename}")
+      else:
+            df = pd.read_csv(csv_filename)
+            print(f"DataFrame read from {csv_filename}")
       
       for col in df.columns:
             if '_type' in col:
@@ -291,7 +315,9 @@ else:
                   df[col] = df[col].replace('nan', np.nan)
 
 
+
 #%%
+
 
 print("Unique crossing_type values:", df['crossing_type'].dropna().unique())
 print("Unique measured_type values:", df['measured_type'].dropna().unique())
@@ -302,7 +328,7 @@ import matplotlib.pyplot as plt
 # Define binning
 theta_bins = np.linspace(0, np.pi / 2, 200)
 phi_bins = np.linspace(-np.pi, np.pi, 200)
-tt_lists = [ VALID_MEASURED_TYPES]
+tt_lists = [ VALID_MEASURED_TYPES ]
 
 for tt_list in tt_lists:
       
@@ -376,12 +402,9 @@ for tt_list in tt_lists:
 # %%
 
 
-import matplotlib.pyplot as plt
-
 # Define binning
-theta_bins = np.linspace(0, np.pi / 2, 150)
-phi_bins = np.linspace(-np.pi, np.pi, 150)
-
+theta_bins = np.linspace(0, np.pi / 2, 300)
+phi_bins = np.linspace(-np.pi, np.pi, 300)
 
 tt_lists = [ VALID_MEASURED_TYPES]
 
@@ -415,7 +438,6 @@ for tt_list in tt_lists:
             )
             axes[i, 1].set_title("Crossing θ–ϕ")
 
-
             # Third column: Measured (generated angles)
             meas_sel = df['measured_type'] == tt
             h = axes[i, 2].hist2d(
@@ -446,8 +468,7 @@ for tt_list in tt_lists:
 
 #%%
 
-import matplotlib.pyplot as plt
-import numpy as np
+
 
 # Define topologies to evaluate
 tt_list = ['1234', '123', '234', '12', '23', '34']  # or VALID_MEASURED_TYPES
@@ -457,7 +478,7 @@ n_tt = len(tt_list)
 fig, axes = plt.subplots(n_tt, 2, figsize=(7, 3 * n_tt), sharex=False, sharey=False)
 
 size_of_point = 0.1
-alpha_of_point = 0.1
+alpha_of_point = 0.015
 
 for i, tt in enumerate(tt_list):
       sel = df['measured_type'] == tt
@@ -498,350 +519,345 @@ plt.suptitle('Theta and Phi: Generated vs Fitted', fontsize=16, y=1.002)
 plt.tight_layout()
 plt.show()
 
+
 # %%
+
 
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
+from matplotlib import cm
+from mpl_toolkits.mplot3d import Axes3D  # noqa
 
-# Coarse binning to reduce visual clutter
-theta_bins = np.linspace(0, np.pi / 2, 20)
-phi_bins = np.linspace(-np.pi, np.pi, 20)
-theta_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
-phi_centers = 0.5 * (phi_bins[:-1] + phi_bins[1:])
-Phi, Theta = np.meshgrid(phi_centers, theta_centers)
+# --- helper --------------------------------------------------------------
+def to_xyz(theta, phi):
+    """Map (theta, phi) → (x = sinθ·sinφ, y = sinθ·cosφ, z = cosθ)."""
+    return np.sin(theta) * np.sin(phi), np.sin(theta) * np.cos(phi), np.cos(theta)
 
-# Plot for each measured_type
+# --- coarse binning ------------------------------------------------------
+nbins = 20
+x_bins = np.linspace(-1.0, 1.0, nbins + 1)
+y_bins = np.linspace(-1.0, 1.0, nbins + 1)
+z_bins = np.linspace(0, 1.0, nbins + 1)
+
+x_cent = 0.5 * (x_bins[:-1] + x_bins[1:])
+y_cent = 0.5 * (y_bins[:-1] + y_bins[1:])
+z_cent = 0.5 * (z_bins[:-1] + z_bins[1:])
+
+Xc, Yc, Zc = np.meshgrid(x_cent, y_cent, z_cent, indexing='ij')
+
+# --- figures with subplots ------------------------------------------------
 tt_list = ['1234', '123', '234', '12', '23', '34']
+ncols = 3
+nrows = 2
 
-for tt in tt_list:
-      subdf = df[df['measured_type'] == tt]
-      
-      dtheta_avg = np.zeros_like(Phi)
-      dphi_avg = np.zeros_like(Phi)
-      counts = np.zeros_like(Phi)
+fig3d, axs3d = plt.subplots(nrows, ncols, figsize=(16, 10), subplot_kw={'projection': '3d'})
+fig2d, axs2d = plt.subplots(nrows, ncols, figsize=(12, 7))
 
-      for i in range(len(theta_bins) - 1):
-            for j in range(len(phi_bins) - 1):
-                  mask = (
-                  (subdf['Theta_fit'] >= theta_bins[i]) & (subdf['Theta_fit'] < theta_bins[i+1]) &
-                  (subdf['Phi_fit'] >= phi_bins[j]) & (subdf['Phi_fit'] < phi_bins[j+1])
-                  )
-                  if np.any(mask):
-                        delta_theta = subdf.loc[mask, 'Theta_gen'] - subdf.loc[mask, 'Theta_fit']
-                        delta_phi = subdf.loc[mask, 'Phi_gen'] - subdf.loc[mask, 'Phi_fit']
-                        dtheta_avg[i, j] = np.nanmean(delta_theta)
-                        dphi_avg[i, j] = np.nanmean(delta_phi)
-                        counts[i, j] = np.sum(mask)
+min_counts = 1
+clip_quantile = 0.90
 
-      min_counts = 1
-      valid = counts >= min_counts
-      magnitude = np.sqrt(dtheta_avg**2 + dphi_avg**2)
-      # Do the max deformation clipping with a quantile
-      try:
-            max_deformation = np.quantile(magnitude[valid], 0.9)  # Use 95th percentile for clipping
-      except IndexError:
-            max_deformation = 0.1
-      dtheta_avg = np.clip(dtheta_avg, -max_deformation, max_deformation)
-      dphi_avg = np.clip(dphi_avg, -max_deformation, max_deformation)
+for idx, tt in enumerate(tt_list):
+    sub = df[df['measured_type'] == tt]
+    x_fit, y_fit, z_fit = to_xyz(sub['Theta_fit'].to_numpy(), sub['Phi_fit'].to_numpy())
+    x_gen, y_gen, z_gen = to_xyz(sub['Theta_gen'].to_numpy(), sub['Phi_gen'].to_numpy())
 
-      U = dphi_avg[valid]
-      V = dtheta_avg[valid]
-      
-      norm = np.sqrt(U**2 + V**2)
-      long_arrows = False
-      if long_arrows:
-            norm = np.sqrt(U**2 + V**2) * 0 + 1
-      U_plot = U / (norm + 1e-6)
-      V_plot = V / (norm + 1e-6)
-      norm = np.sqrt(U**2 + V**2)
-      
-      fig, ax = plt.subplots(figsize=(9, 5))
-      q = ax.quiver(
-            Phi[valid], Theta[valid], U_plot, V_plot, norm,
-            cmap='viridis', scale=20, width=0.004, headwidth=3, headlength=3
-      )
-      cb = fig.colorbar(q, ax=ax, label='|Δ angle| [rad]')
-      ax.set_title(rf'$\vec{{\Delta}}$ for {tt}: $(\phi_\mathrm{{fit}} - \phi_\mathrm{{gen}}, \theta_\mathrm{{fit}} - \theta_\mathrm{{gen}})$')
-      ax.set_xlabel(r'$\phi_{\mathrm{fit}}$ [rad]')
-      ax.set_ylabel(r'$\theta_{\mathrm{fit}}$ [rad]')
-      ax.set_xlim(-np.pi, np.pi)
-      ax.set_ylim(0, np.pi / 2)
-      ax.grid(True)
-      
-      # Facecolor: the first value of viridis
-      ax.set_facecolor(cm.viridis(0))
-      
-      plt.tight_layout()
-      plt.show()
+    ix = np.digitize(x_fit, x_bins) - 1
+    iy = np.digitize(y_fit, y_bins) - 1
+    iz = np.digitize(z_fit, z_bins) - 1
 
+    shape = (nbins, nbins, nbins)
+    dx_sum = np.zeros(shape); dy_sum = np.zeros(shape); dz_sum = np.zeros(shape)
+    counts = np.zeros(shape, dtype=int)
 
-# %%
+    np.add.at(dx_sum, (ix, iy, iz), x_gen - x_fit)
+    np.add.at(dy_sum, (ix, iy, iz), y_gen - y_fit)
+    np.add.at(dz_sum, (ix, iy, iz), z_gen - z_fit)
+    np.add.at(counts, (ix, iy, iz), 1)
 
+    valid = counts >= min_counts
+    with np.errstate(invalid='ignore', divide='ignore'):
+        dx_avg = np.where(valid, dx_sum / counts, 0.0)
+        dy_avg = np.where(valid, dy_sum / counts, 0.0)
+        dz_avg = np.where(valid, dz_sum / counts, 0.0)
 
-import pandas as pd
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error
+    mag = np.sqrt(dx_avg**2 + dy_avg**2 + dz_avg**2)
+    clip = np.quantile(mag[valid], clip_quantile) if np.any(valid) else 0.1
+    dx_avg = np.clip(dx_avg, -clip, clip)
+    dy_avg = np.clip(dy_avg, -clip, clip)
+    dz_avg = np.clip(dz_avg, -clip, clip)
+    mag = np.sqrt(dx_avg**2 + dy_avg**2 + dz_avg**2)
 
-# ============================================
-# Data filtering
-# ============================================
+    xs = Xc[valid]; ys = Yc[valid]; zs = Zc[valid]
+    us = dx_avg[valid]; vs = dy_avg[valid]; ws = dz_avg[valid]
+    colours = mag[valid]
 
-df_ml = df.dropna(subset=["Theta_fit", "Phi_fit", "Theta_gen", "Phi_gen", "measured_type"]).copy()
-measured_types = ['1234', '123', '234', '12', '23', '34']
+    norm = np.linalg.norm(np.vstack([us, vs, ws]), axis=0)
+    norm[norm == 0] = 1
 
-# ============================================
-# Preprocessing functions
-# ============================================
+    ax3d = axs3d[idx // ncols, idx % ncols]
+    ax3d.quiver(xs, ys, zs, us / norm, vs / norm, ws / norm,
+                length=0.05, linewidth=0.5, cmap='viridis',
+                normalize=True, array=colours)
 
-def transform_input(df):
-    theta = df["Theta_fit"].values.astype(np.float32)
-    phi = df["Phi_fit"].values.astype(np.float32)
-    return np.stack([theta, np.sin(phi), np.cos(phi)], axis=1)
+    ax3d.set_title(f'Type: {tt}')
+    ax3d.set_xlabel(r'$x = \sin\theta\sin\varphi$')
+    ax3d.set_ylabel(r'$y = \sin\theta\cos\varphi$')
+    ax3d.set_zlabel(r'$z = \cos\theta$')
+    ax3d.set_box_aspect([1, 1, 0.6])
 
-def transform_output(df):
-    theta = df["Theta_gen"].values.astype(np.float32)
-    phi = df["Phi_gen"].values.astype(np.float32)
-    return np.stack([theta, np.sin(phi), np.cos(phi)], axis=1)
+    # --- 2D plot ------------------------------------------------------
+    mag2d = np.hypot(dx_avg, dy_avg)
+    clip2d = np.quantile(mag2d[valid], clip_quantile) if np.any(valid) else 0.1
+    dx_avg = np.clip(dx_avg, -clip2d, clip2d)
+    dy_avg = np.clip(dy_avg, -clip2d, clip2d)
+    mag2d = np.hypot(dx_avg, dy_avg)
 
-def inverse_transform_output(y_pred):
-    theta = y_pred[:, 0]
-    phi = np.arctan2(y_pred[:, 1], y_pred[:, 2])
-    return np.stack([theta, phi], axis=1)
+    norm2d = np.where(mag2d == 0, 1.0, mag2d)
+    U = dx_avg / norm2d
+    V = dy_avg / norm2d
 
-# ============================================
-# Improved Neural Network Model
-# ============================================
+    ax2d = axs2d[idx // ncols, idx % ncols]
+    q = ax2d.quiver(Xc[valid], Yc[valid], U[valid], V[valid], mag2d[valid],
+                    cmap='viridis', scale=30, width=0.004,
+                    headwidth=3, headlength=3)
+    ax2d.set_title(f'Type: {tt}')
+    ax2d.set_xlabel(r'$x = \sin\theta\sin\varphi$')
+    ax2d.set_ylabel(r'$y = \sin\theta$')
+    ax2d.set_xlim(-1.1, 1.1)
+    ax2d.set_ylim(-1.1, 1.1)
+    ax2d.set_aspect('equal')
+    ax2d.grid(True, lw=0.3)
+    ax2d.set_facecolor(cm.viridis(0))
 
-class AngleCorrectionModel(nn.Module):
-      def __init__(self):
-          super().__init__()
-          self.net = nn.Sequential(
-              nn.Linear(3, 512),
-              nn.ReLU(),
-              nn.Dropout(0.2),
+# Adjust layout and colorbar
+fig3d.tight_layout()
+fig2d.tight_layout()
+fig2d.subplots_adjust(right=0.9)
+cbar_ax = fig2d.add_axes([0.92, 0.15, 0.015, 0.7])
+fig2d.colorbar(q, cax=cbar_ax, label=r'$|\Delta \vec{r}|$')
 
-              nn.Linear(512, 512),
-              nn.ReLU(),
-              nn.Dropout(0.2),
-
-              nn.Linear(512, 256),
-              nn.ReLU(),
-              nn.Dropout(0.2),
-
-              nn.Linear(256, 128),
-              nn.ReLU(),
-
-              nn.Linear(128, 64),
-              nn.ReLU(),
-
-              nn.Linear(64, 3)  # Salida: theta, sin(phi), cos(phi)
-          )
-
-      def forward(self, x):
-          return self.net(x)
-
-
-# ============================================
-# Training per measured_type
-# ============================================
-
-models = {}
-
-for tt in measured_types:
-    subdf = df_ml[df_ml["measured_type"] == tt]
-
-    X = transform_input(subdf)
-    y = transform_output(subdf)
-
-    if len(X) < 100:
-        continue
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    scaler_X = StandardScaler().fit(X_train)
-    scaler_y = StandardScaler().fit(y_train)
-
-    X_train_scaled = scaler_X.transform(X_train)
-    X_test_scaled = scaler_X.transform(X_test)
-    y_train_scaled = scaler_y.transform(y_train)
-    y_test_scaled = scaler_y.transform(y_test)
-
-    # Convert to tensors
-    X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32)
-    y_train_tensor = torch.tensor(y_train_scaled, dtype=torch.float32)
-    X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32)
-    y_test_tensor = torch.tensor(y_test_scaled, dtype=torch.float32)
-
-    model = AngleCorrectionModel()
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-5)
-
-    # Training loop with validation
-    for epoch in range(500):
-        model.train()
-        optimizer.zero_grad()
-        outputs = model(X_train_tensor)
-        loss = criterion(outputs, y_train_tensor)
-        loss.backward()
-        optimizer.step()
-
-    # Evaluation
-    model.eval()
-    with torch.no_grad():
-        pred_scaled = model(X_test_tensor).numpy()
-        pred = scaler_y.inverse_transform(pred_scaled)
-        pred_angles = inverse_transform_output(pred)
-        true_angles = inverse_transform_output(scaler_y.inverse_transform(y_test_scaled))
-
-    # Save everything
-    models[tt] = {
-        "model": model,
-        "scaler_X": scaler_X,
-        "scaler_y": scaler_y,
-        "X_test": scaler_X.inverse_transform(X_test_scaled),
-        "predictions": pred_angles,
-        "true_y": true_angles,
-    }
-
-    # Optional evaluation
-    mse_theta = mean_squared_error(true_angles[:, 0], pred_angles[:, 0])
-    mse_phi = mean_squared_error(true_angles[:, 1], pred_angles[:, 1])
-    print(f"{tt}: MSE_theta = {mse_theta:.4e}, MSE_phi = {mse_phi:.4e}")
-
-
-
-#%%
-
-# Apply trained models to all data and write predictions to df
-df['Theta_pred'] = np.nan
-df['Phi_pred'] = np.nan
-
-for tt in models:
-    sel = df['measured_type'] == tt
-    if not np.any(sel):
-        continue
-
-    # Correct: transform to (theta, sin(phi), cos(phi))
-    theta = df.loc[sel, "Theta_fit"].values.astype(np.float32)
-    phi = df.loc[sel, "Phi_fit"].values.astype(np.float32)
-    X_all = np.stack([theta, np.sin(phi), np.cos(phi)], axis=1)
-
-    # Transform and predict
-    X_scaled = models[tt]["scaler_X"].transform(X_all)
-    X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
-
-    model = models[tt]["model"]
-    model.eval()
-    with torch.no_grad():
-        pred_scaled = model(X_tensor).numpy()
-        pred_cartesian = models[tt]["scaler_y"].inverse_transform(pred_scaled)
-        pred = np.stack([
-            pred_cartesian[:, 0],
-            np.arctan2(pred_cartesian[:, 1], pred_cartesian[:, 2])
-        ], axis=1)
-
-    # Store predictions
-    df.loc[sel, 'Theta_pred'] = pred[:, 0]
-    df.loc[sel, 'Phi_pred'] = pred[:, 1]
-
-
-#%%
-
-# Define topologies to evaluate
-tt_list = ['1234', '123', '234', '12', '23', '34']
-
-# Create figure
-n_tt = len(tt_list)
-
-# Create a figure with 4 columns: θ_gen vs θ_fit, φ_gen vs φ_fit, θ_gen vs θ_pred, φ_gen vs φ_pred
-fig, axes = plt.subplots(n_tt, 6, figsize=(20, 3.5 * n_tt), sharex=False, sharey=False)
-
-for i, tt in enumerate(tt_list):
-    sel = df['measured_type'] == tt
-
-    theta_gen = df.loc[sel, 'Theta_gen']
-    phi_gen = df.loc[sel, 'Phi_gen']
-    theta_fit = df.loc[sel, 'Theta_fit']
-    phi_fit = df.loc[sel, 'Phi_fit']
-    theta_pred = df.loc[sel, 'Theta_pred']
-    phi_pred = df.loc[sel, 'Phi_pred']
-
-    # θ_gen vs θ_fit
-    ax = axes[i, 0]
-    ax.scatter(theta_gen, theta_fit, s=0.5, alpha=0.3)
-    ax.plot([0, np.pi/2], [0, np.pi/2], 'k--', lw=1)
-    ax.set_xlabel(r'$\theta_{\mathrm{gen}}$ [rad]')
-    ax.set_ylabel(r'$\theta_{\mathrm{fit}}$ [rad]')
-    ax.set_xlim(0, np.pi/2)
-    ax.set_ylim(0, np.pi/2)
-    ax.grid(True)
-    ax.set_aspect('equal', adjustable='box')
-
-    # φ_gen vs φ_fit
-    ax = axes[i, 1]
-    ax.scatter(phi_gen, phi_fit, s=0.5, alpha=0.3)
-    ax.plot([-np.pi, np.pi], [-np.pi, np.pi], 'k--', lw=1)
-    ax.set_xlabel(r'$\phi_{\mathrm{gen}}$ [rad]')
-    ax.set_ylabel(r'$\phi_{\mathrm{fit}}$ [rad]')
-    ax.set_xlim(-np.pi, np.pi)
-    ax.set_ylim(-np.pi, np.pi)
-    ax.grid(True)
-    ax.set_aspect('equal', adjustable='box')
-
-    # θ_gen vs θ_pred
-    ax = axes[i, 2]
-    ax.scatter(theta_gen, theta_pred, s=0.5, alpha=0.3)
-    ax.plot([0, np.pi/2], [0, np.pi/2], 'k--', lw=1)
-    ax.set_xlabel(r'$\theta_{\mathrm{gen}}$ [rad]')
-    ax.set_ylabel(r'$\theta_{\mathrm{pred}}$ [rad]')
-    ax.set_xlim(0, np.pi/2)
-    ax.set_ylim(0, np.pi/2)
-    ax.grid(True)
-    ax.set_aspect('equal', adjustable='box')
-
-    # φ_gen vs φ_pred
-    ax = axes[i, 3]
-    ax.scatter(phi_gen, phi_pred, s=0.5, alpha=0.3)
-    ax.plot([-np.pi, np.pi], [-np.pi, np.pi], 'k--', lw=1)
-    ax.set_xlabel(r'$\phi_{\mathrm{gen}}$ [rad]')
-    ax.set_ylabel(r'$\phi_{\mathrm{pred}}$ [rad]')
-    ax.set_xlim(-np.pi, np.pi)
-    ax.set_ylim(-np.pi, np.pi)
-    ax.grid(True)
-    ax.set_aspect('equal', adjustable='box')
-    
-    # θ_fit vs θ_pred
-    ax = axes[i, 4]
-    ax.scatter(theta_fit, theta_pred, s=0.5, alpha=0.3)
-    ax.plot([0, np.pi/2], [0, np.pi/2], 'k--', lw=1)
-    ax.set_xlabel(r'$\theta_{\mathrm{fit}}$ [rad]')
-    ax.set_ylabel(r'$\theta_{\mathrm{pred}}$ [rad]')
-    ax.set_xlim(0, np.pi/2)
-    ax.set_ylim(0, np.pi/2)
-    ax.grid(True)
-    ax.set_aspect('equal', adjustable='box')
-
-    # φ_fit vs φ_pred
-    ax = axes[i, 5]
-    ax.scatter(phi_fit, phi_pred, s=0.5, alpha=0.3)
-    ax.plot([-np.pi, np.pi], [-np.pi, np.pi], 'k--', lw=1)
-    ax.set_xlabel(r'$\phi_{\mathrm{fit}}$ [rad]')
-    ax.set_ylabel(r'$\phi_{\mathrm{pred}}$ [rad]')
-    ax.set_xlim(-np.pi, np.pi)
-    ax.set_ylim(-np.pi, np.pi)
-    ax.grid(True)
-    ax.set_aspect('equal', adjustable='box')
-    
-plt.suptitle('Angular Reconstruction: Fitted vs Predicted (per Topology)', fontsize=16, y=1.005)
-plt.tight_layout()
 plt.show()
 
-# %%
+#%%
 
+
+
+# ----------------------------------------------------------------------
+# 2-D histograms (θ, φ) comparison
+# ----------------------------------------------------------------------
+
+import os
+
+x_bins = np.linspace(-1, 1, 50)
+y_bins   = np.linspace(-1, 1, 50)
+
+tt_list = ['1234', '123', '234', '12', '23', '34']  # or VALID_MEASURED_TYPES
+
+PLOT_DIR = "/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION"
+
+groups = [tt_list]                             # list of topology lists
+for tt_group in groups:
+      n_tt = len(tt_group)
+      fig, ax = plt.subplots(n_tt, 2, figsize=(9, 4*n_tt), sharex=True, sharey=True)
+
+      for i, tt in enumerate(tt_group):
+            sel = df["measured_type"] == tt
+            
+            # Take only the columns where Theta_fit, Phi_fit are in an interval
+            # around theta_center, phi_center, which i can select, as well as the
+            # radius of the interval r0
+            df_plot = df.loc[sel].copy()
+            
+            theta_center = np.pi / 5
+            phi_center = 1
+            theta_radius = 0.05
+            phi_radius = 0.1
+            case = 'gen'  # or 'fit', 'gen'
+            
+            theta_mask = (df_plot[f"Theta_{case}"] > theta_center - theta_radius) & \
+                         (df_plot[f"Theta_{case}"] < theta_center + theta_radius)
+            phi_mask = (df_plot[f"Phi_{case}"] > phi_center - phi_radius) & \
+                       (df_plot[f"Phi_{case}"] < phi_center + phi_radius)
+            df_plot = df_plot[theta_mask & phi_mask].copy()
+
+            # Measured (gen)
+            t = df_plot["Theta_gen"]
+            p = df_plot["Phi_gen"]
+            ax[i,0].hist2d(np.sin(t) * np.sin(p), np.sin(t) * np.cos(p),
+                           bins=[x_bins, y_bins], cmap="viridis")
+            # ax[i,0].hist2d(df_plot["Theta_gen"], df_plot["Phi_gen"],
+            #             bins=[theta_bins, phi_bins], cmap="viridis")
+            ax[i,0].set_title("meas (gen)")
+
+            # Measured (fit)
+            t = df_plot["Theta_fit"]
+            p = df_plot["Phi_fit"]
+            ax[i,1].hist2d(np.sin(t) * np.sin(p), np.sin(t) * np.cos(p),
+                           bins=[x_bins, y_bins], cmap="viridis")
+            # ax[i,1].hist2d(df_plot["Theta_fit"], df_plot["Phi_fit"],
+            #             bins=[theta_bins, phi_bins], cmap="viridis")
+            ax[i,1].set_title("meas (fit)")
+            
+            # Put the tt for that case as a title
+            ax[i,0].set_title(f"{tt} – gen")
+            ax[i,1].set_title(f"{tt} – fit")
+            
+            # For both cases, axes equal
+            ax[i,0].set_aspect('equal', adjustable='box')
+            ax[i,1].set_aspect('equal', adjustable='box')
+
+      for a in ax[:,0]: a.set_ylabel(r"$\phi$ [rad]")
+      for a in ax[-1,:]: a.set_xlabel(r"$\theta$ [rad]")
+      fig.tight_layout()
+      plt.savefig(f"{PLOT_DIR}/hist2d_{'_'.join(tt_group)}.png", dpi=150)
+      plt.show()
+      plt.close()
+
+#%%
+
+
+# METHOD OF LIKELYHOOD
+
+# ---------------------------------------------------------------------
+# Coordinate transform: (u, v) = (sin θ sin φ, sin θ cos φ)
+# ---------------------------------------------------------------------
+df["u_fit"] = np.sin(df["Theta_fit"]) * np.sin(df["Phi_fit"])
+df["v_fit"] = np.sin(df["Theta_fit"]) * np.cos(df["Phi_fit"])
+
+df["u_gen"] = np.sin(df["Theta_gen"]) * np.sin(df["Phi_gen"])
+df["v_gen"] = np.sin(df["Theta_gen"]) * np.cos(df["Phi_gen"])
+
+# ---------------------------------------------------------------------
+# 1. Build empirical conditional distributions P(θ_gen, φ_gen | bin(u_fit, v_fit))
+# ---------------------------------------------------------------------
+n_bins = 500
+u_edges = np.linspace(-1.0, 1.0, n_bins + 1)
+v_edges = np.linspace(-1.0, 1.0, n_bins + 1)
+
+u_idx = np.digitize(df["u_fit"], u_edges) - 1
+v_idx = np.digitize(df["v_fit"], v_edges) - 1
+df["bin"] = list(zip(u_idx, v_idx))
+
+# Map each bin to the list of (θ_gen, φ_gen) pairs observed there
+mapping = {}
+for idx, grp in df.groupby("bin"):
+    mapping[idx] = grp[["Theta_gen", "Phi_gen"]].values
+
+# ---------------------------------------------------------------------
+# 2. For each event, draw a (θ_pred, φ_pred) from the empirical distribution of its bin
+# ---------------------------------------------------------------------
+def draw_pred(row):
+    idx = row["bin"]
+    candidates = mapping.get(idx, None)
+    if candidates is None or len(candidates) == 0:
+        # Fallback: keep the measured angles
+        return pd.Series({"Theta_pred": row["Theta_fit"], "Phi_pred": row["Phi_fit"]})
+    th, ph = candidates[np.random.randint(len(candidates))]
+    return pd.Series({"Theta_pred": th, "Phi_pred": ph})
+
+tqdm.pandas()
+
+# Apply the function with progress tracking
+df_pred = df.join(df.progress_apply(draw_pred, axis=1))
+
+
+#%%
+
+
+
+# ----------------------------------------------------------------------
+# 2-D histograms (θ, φ) comparison
+# ----------------------------------------------------------------------
+theta_bins = np.linspace(0, np.pi/2, 150)
+phi_bins   = np.linspace(-np.pi, np.pi, 150)
+
+groups = [tt_list]
+for tt_group in groups:
+    n_tt = len(tt_group)
+    fig, ax = plt.subplots(n_tt, 3, figsize=(12, 4*n_tt), sharex=True, sharey=True)
+
+    for i, tt in enumerate(tt_group):
+        sel = df_pred["measured_type"] == tt
+
+        # Measured (gen)
+        ax[i,0].hist2d(df_pred.loc[sel,"Theta_gen"], df_pred.loc[sel,"Phi_gen"],
+                       bins=[theta_bins, phi_bins], cmap="viridis")
+        ax[i,0].set_title("meas (gen)")
+
+        # Measured (fit)
+        ax[i,1].hist2d(df_pred.loc[sel,"Theta_fit"], df_pred.loc[sel,"Phi_fit"],
+                       bins=[theta_bins, phi_bins], cmap="viridis")
+        ax[i,1].set_title("meas (fit)")
+
+        # Predicted
+        ax[i,2].hist2d(df_pred.loc[sel,"Theta_pred"], df_pred.loc[sel,"Phi_pred"],
+                       bins=[theta_bins, phi_bins], cmap="viridis")
+        ax[i,2].set_title("pred")
+        
+        # Put the tt for that case as a title
+        ax[i,0].set_title(f"{tt} – gen")
+        ax[i,1].set_title(f"{tt} – fit")
+
+    for a in ax[:,0]: a.set_ylabel(r"$\phi$ [rad]")
+    for a in ax[-1,:]: a.set_xlabel(r"$\theta$ [rad]")
+    fig.tight_layout()
+    plt.savefig(f"{PLOT_DIR}/hist2d_{'_'.join(tt_group)}.png", dpi=150)
+    plt.show()
+    plt.close()
+
+
+#%%
+
+
+# ----------------------------------------------------------------------
+# 5 · Scatter-matrix 6 columnas  (gen, fit, map)
+# ----------------------------------------------------------------------
+
+n_tt = len(tt_list)
+fig, axes = plt.subplots(n_tt, 6, figsize=(20, 3.5*n_tt), sharex=False, sharey=False)
+
+def diag(ax, xlim, ylim):
+    ax.plot(xlim, ylim, "k--", lw=1)
+    ax.set_aspect("equal")
+#     ax.grid(True)
+
+for i, tt in enumerate(tt_list):
+      mask = df_pred["measured_type"] == tt
+      th_g, ph_g = df_pred.loc[mask,"Theta_gen"], df_pred.loc[mask,"Phi_gen"]
+      th_f, ph_f = df_pred.loc[mask,"Theta_fit"], df_pred.loc[mask,"Phi_fit"]
+      th_m, ph_m = df_pred.loc[mask,"Theta_pred"], df_pred.loc[mask,"Phi_pred"]
+    
+      # Parameters for scatter plot
+      scatter_size = 0.1
+      scatter_alpha = 0.015
+
+      # θ_gen vs θ_fit
+      a=axes[i,0]; a.scatter(th_g,th_f,s=scatter_size,alpha=scatter_alpha); diag(a,[0,np.pi/2],[0,np.pi/2])
+      a.set_xlabel(r"$\theta_{\rm gen}$"); a.set_ylabel(r"$\theta_{\rm fit}$")
+
+      # φ_gen vs φ_fit
+      a=axes[i,1]; a.scatter(ph_g,ph_f,s=scatter_size,alpha=scatter_alpha); diag(a,[-np.pi,np.pi],[-np.pi,np.pi])
+      a.set_xlabel(r"$\phi_{\rm gen}$");  a.set_ylabel(r"$\phi_{\rm fit}$")
+
+      # θ_gen vs θ_map
+      a=axes[i,2]; a.scatter(th_g,th_m,s=scatter_size,alpha=scatter_alpha); diag(a,[0,np.pi/2],[0,np.pi/2])
+      a.set_xlabel(r"$\theta_{\rm gen}$"); a.set_ylabel(r"$\theta_{\rm map}$")
+
+      # φ_gen vs φ_map
+      a=axes[i,3]; a.scatter(ph_g,ph_m,s=scatter_size,alpha=scatter_alpha); diag(a,[-np.pi,np.pi],[-np.pi,np.pi])
+      a.set_xlabel(r"$\phi_{\rm gen}$");  a.set_ylabel(r"$\phi_{\rm map}$")
+
+      # θ_fit vs θ_map
+      a=axes[i,4]; a.scatter(th_f,th_m,s=scatter_size,alpha=scatter_alpha); diag(a,[0,np.pi/2],[0,np.pi/2])
+      a.set_xlabel(r"$\theta_{\rm fit}$"); a.set_ylabel(r"$\theta_{\rm map}$")
+
+      # φ_fit vs φ_map
+      a=axes[i,5]; a.scatter(ph_f,ph_m,s=scatter_size,alpha=scatter_alpha); diag(a,[-np.pi,np.pi],[-np.pi,np.pi])
+      a.set_xlabel(r"$\phi_{\rm fit}$");  a.set_ylabel(r"$\phi_{\rm map}$")
+
+plt.suptitle("Angular reconstruction – likelihood map", y=1.02, fontsize=15)
+plt.tight_layout(); plt.show()
+
+
+# %%
 
