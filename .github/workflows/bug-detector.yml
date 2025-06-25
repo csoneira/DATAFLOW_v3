@@ -3,7 +3,7 @@ name: LLM-Based Bug Scan
 on:
   push:
     branches:
-      - main
+      - master
 jobs:
   scan:
     runs-on: ubuntu-latest
