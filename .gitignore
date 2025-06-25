@@ -1,3 +1,7 @@
+*.pkl
+*.npz
+*.bin
+
 # Copernicus data
 *.nc
 *.nc4
