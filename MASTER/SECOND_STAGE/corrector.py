@@ -1910,8 +1910,6 @@ for case in processing_regions:
                 x_fit = np.linspace(x.min(), x.max(), 200)
                 y_fit = np.linspace(y.min(), y.max(), 200)
                 
-                .´ñ´ñ.,
-                
                 # --- Efficiency vs Pressure ---
                 ax1 = axes[i]
                 z_fit_x = fit_func(x_fit, np.full_like(x_fit, np.mean(y)))
