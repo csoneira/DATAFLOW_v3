@@ -1873,7 +1873,87 @@ for case in processing_regions:
                 fit_col = f'eff_fit_{i}'
                 filtered_df, fit_func, _ = assign_efficiency_fit( data_df, eff_col, fit_col, model_type='linear' )
                 plot_combined_efficiency_views(filtered_df, eff_col, fit_func, i)
+        
+        
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+        from sklearn.linear_model import LinearRegression
+        import numpy as np
 
+        def plot_side_views_all_planes(data_df, planes, model_type='linear'):
+            global create_plots, create_essential_plots, fig_idx, show_plots, save_plots, figure_path
+
+            if not (create_plots or create_essential_plots):
+                print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+                return
+
+            fig, axes = plt.subplots(2, 4, figsize=(18, 9))
+            axes = axes.flatten()
+
+            for i, plane in enumerate(planes):
+                eff_col = f'definitive_eff_{plane}'
+                fit_col = f'eff_fit_{plane}'
+
+                # Fit model
+                filtered = data_df.dropna(subset=[eff_col, 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+                x = filtered['sensors_ext_Pressure_ext'].values
+                y = filtered['sensors_ext_Temperature_ext'].values
+                z = filtered[eff_col].values
+
+                # Fit linear model
+                X = np.column_stack((x, y))
+                model = LinearRegression().fit(X, z)
+                coeffs = model.coef_, model.intercept_
+                fit_func = lambda P, T: coeffs[0][0] * P + coeffs[0][1] * T + coeffs[1]
+
+                # Create fit lines
+                x_fit = np.linspace(x.min(), x.max(), 200)
+                y_fit = np.linspace(y.min(), y.max(), 200)
+                
+                .´ñ´ñ.,
+                
+                # --- Efficiency vs Pressure ---
+                ax1 = axes[i]
+                z_fit_x = fit_func(x_fit, np.full_like(x_fit, np.mean(y)))
+                ax1.scatter(x, z, alpha=0.4, label='Measured')
+                ax1.plot(x_fit, z_fit_x, 'r-', label=(
+                    f'Fit: η(P,⟨T⟩)\n'
+                    f'a={coeffs[0][0]:.3e}, b={coeffs[0][1]:.3e}, c={coeffs[1]:.3f}'
+                ))
+                ax1.set_xlabel('Pressure')
+                ax1.set_ylabel('Efficiency')
+                ax1.set_ylim(0.8, 1)
+                ax1.set_title(f'Plane {plane} – η vs P')
+                ax1.legend(fontsize=8)
+
+                # --- Efficiency vs Temperature ---
+                ax2 = axes[i + 4]
+                z_fit_y = fit_func(np.full_like(y_fit, np.mean(x)), y_fit)
+                ax2.scatter(y, z, alpha=0.4, label='Measured')
+                ax2.plot(y_fit, z_fit_y, 'r-', label=(
+                    f'Fit: η(⟨P⟩,T)\n'
+                    f'a={coeffs[0][0]:.3e}, b={coeffs[0][1]:.3e}, c={coeffs[1]:.3f}'
+                ))
+                ax2.set_xlabel('Temperature')
+                ax2.set_ylabel('Efficiency')
+                ax2.set_ylim(0.8, 1)
+                ax2.set_title(f'Plane {plane} – η vs T')
+                ax2.legend(fontsize=8)
+
+            plt.suptitle('Side Projections of Efficiency Fits per Plane (Linear Model)', fontsize=14)
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+            if show_plots:
+                plt.show()
+            elif save_plots:
+                new_figure_path = f"{figure_path}{fig_idx}_side_views_planes.png"
+                fig_idx += 1
+                print(f"Saving figure to {new_figure_path}")
+                fig.savefig(new_figure_path, format='png', dpi=300)
+
+            plt.close(fig)
+
+        
 
         if create_plots:
             print("Creating efficiency comparison scatter plot...")
