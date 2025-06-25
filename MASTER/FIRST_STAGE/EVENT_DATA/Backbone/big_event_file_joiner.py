@@ -280,13 +280,6 @@ if work_big_event_file:
         print("Warning: big_event_df is not a DataFrame. Converting it...")
         big_event_df = big_event_df.to_frame()  # Convert Series to DataFrame if needed
     
-    # Print type of the dataframe
-    print(type(big_event_df))  # Should be <class 'pandas.DataFrame'>
-    
-    # Print head of the dataframe
-    print(big_event_df.head())
-    print(big_event_df.tail())
-    
     big_event_df = big_event_df.sort_values(by="Time")  # Now sorting should work fine
     
     # -----------------------------------------------------------------------------
@@ -303,6 +296,8 @@ if work_big_event_file:
     # Print head of the dataframe
     print(big_event_df.head())
     print(big_event_df.tail())
+    
+    print(big_event_df.columns.to_list())
     
     print(f"Saved big_event_data.csv with {len(big_event_df)} rows.")
 
