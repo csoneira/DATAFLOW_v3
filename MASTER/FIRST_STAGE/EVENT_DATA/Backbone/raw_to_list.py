@@ -187,7 +187,7 @@ base_directories = {
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(base_directory, "calibrations.csv")
+csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
 
 # Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
@@ -631,12 +631,10 @@ anc_sz = 10 # 5 cm
 
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
-# 'discarded_by_time_window', 'one_side_events', 'purity_of_data'
+# 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
 global_variables = {
     'CRT_avg': 0,
-    'sigmoid_width': 0,
-    'background_slope': 0,
     'one_side_events': 0,
     'purity_of_data_percentage': 0,
     'unc_y': anc_sy,
@@ -644,8 +642,6 @@ global_variables = {
     'unc_tdif': anc_std
 }
 
-# Modify discarded_by_time_window entry
-global_variables['discarded_by_time_window'] = 1
 
 
 # -----------------------------------------------------------------------------
@@ -1618,6 +1614,22 @@ if self_trigger:
                 col2 = f'{key}_3'
                 col4 = f'{key}_4'
                 working_st_df[[col2, col4]] = working_st_df[[col4, col2]].values  # swap columns
+
+
+# ----------------------------------------------------------------------------------
+# Count the number of non-zero entries per channel in the whole dataframe ----------
+# ----------------------------------------------------------------------------------
+
+# Count per each column the number of non-zero entries and save it in a column of
+# global_variables called TX_F_Y_entries or TX_B_Y_entries
+
+# Count for main dataframe (non-self-trigger)
+for key, idx_range in column_indices.items():
+    for i in range(1, len(idx_range) + 1):
+        colname = f"{key}_{i}"
+        count = (working_df[colname] != 0).sum()
+        global_var_name = f"{key}_{i}_entries"
+        global_variables[global_var_name] = count
 
 
 # ----------------------------------------------------------------------------------
@@ -9248,15 +9260,6 @@ print("-------------------------- Save and finish ---------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
-# Put the global_variables as columns in the final data dataframe -------------
-for key, value in global_variables.items():
-    if key not in definitive_df.columns:
-        print(f"Adding {key} to the dataframe.")
-        definitive_df[key] = value
-    else:
-        print(f"Warning: Column '{key}' already exists in the DataFrame. Skipping addition.")
-        
-
 # Round to 4 significant digits -----------------------------------------------
 def round_to_4_significant_digits(x):
     try:
@@ -9408,16 +9411,9 @@ if self_trigger:
         plt.close()
 # ------------------------------------------------------------------------------------------------------------------------
 
-sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
-background_cols = [col for col in df.columns if col.startswith('background_slope_')]
-
 columns_to_keep = [
     # Timestamp and identifiers
     'Time', 'original_tt', 'processed_tt', 'tracking_tt', 'definitive_tt',
-
-    # Summary metrics and quality flags
-    'CRT_avg', 'one_side_events', 'purity_of_data_percentage',
-    'unc_y', 'unc_tsum', 'unc_tdif',
 
     # Alternative reconstruction outputs
     'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s', 'alt_th_chi',
@@ -9432,25 +9428,36 @@ columns_to_keep = [
     *[f'Q_P{p}s{s}_with_crstlk' for p in range(1, 5) for s in range(1, 5)]
 ]
 
+reduced_df = definitive_df[columns_to_keep]
+reduced_df.to_csv(save_list_path, index=False, sep=',', float_format='%.5g')
+print(f"Datafile saved in {save_filename}. Path is {save_list_path}")
+
+
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Save the metadata, calibrations and monitoring stuff ------------------------
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
 sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
 background_cols = [col for col in df.columns if col.startswith('background_slope_')]
 
 columns_to_keep.extend(sigmoid_cols + background_cols)
 
-reduced_df = definitive_df[columns_to_keep]
-reduced_df.to_csv(save_list_path, index=False, sep=',', float_format='%.5g')
-print(f"Datafile saved in {save_filename}. Path is {save_list_path}")
-
 # Print global variables
 print("Global variables:")
 print(global_variables)
 
+# Put the global_variables as columns in the final data dataframe -------------
+for key, value in global_variables.items():
+    if key not in definitive_df.columns:
+        print(f"Adding {key} to the dataframe.")
+        definitive_df[key] = value
+    else:
+        print(f"Warning: Column '{key}' already exists in the DataFrame. Skipping addition.")
 
-# -----------------------------------------------------------------------------
-# Save the calibrations -------------------------------------------------------
-# -----------------------------------------------------------------------------
 
-new_row = {'Time': start_time}
+new_row = {'Start_Time': start_time, 'End_Time': end_time}
 
 for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
     for j in range(4):
@@ -9465,33 +9472,37 @@ for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
 
 if os.path.exists(csv_path):
     # Load the existing DataFrame
-    calibrations_df = pd.read_csv(csv_path, parse_dates=['Time'])
+    metadata_df = pd.read_csv(csv_path, parse_dates=['Start_Time'])
 else:
-    columns = ['Time'] + [
+    columns = ['Start_Time'] + [
         f'{module}_s{strip}_{var}'
         for module in ['P1', 'P2', 'P3', 'P4']
         for strip in range(1, 5)
         for var in ['Q_sum', 'T_sum', 'Q_dif', 'T_dif']
     ]
-    calibrations_df = pd.DataFrame(columns=columns)
+    metadata_df = pd.DataFrame(columns=columns)
 
 # Check if the current time already exists
-existing_row_index = calibrations_df[calibrations_df['Time'] == start_time].index
+existing_row_index = metadata_df[metadata_df['Start_Time'] == start_time].index
 
 if not existing_row_index.empty:
     # Update the existing row
-    calibrations_df.loc[existing_row_index[0]] = new_row
+    metadata_df.loc[existing_row_index[0]] = new_row
     print(f"Updated existing calibration for date: {start_time}")
 else:
     # Append the new row
-    calibrations_df = pd.concat([calibrations_df, pd.DataFrame([new_row])], ignore_index=True)
+    metadata_df = pd.concat([metadata_df, pd.DataFrame([new_row])], ignore_index=True)
     print(f"Added new calibration for date: {start_time}")
 
-calibrations_df.sort_values(by='Time', inplace=True)
-calibrations_df.to_csv(csv_path, index=False, float_format='%.5g')
-print(f'{csv_path} updated with the calibrations for this folder.')     
+metadata_df.sort_values(by='Start_Time', inplace=True)
+metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
+print(f'{csv_path} updated with the calibrations for this folder.')
 
+
+# -----------------------------------------------------------------------------
 # Create and save the PDF -----------------------------------------------------
+# -----------------------------------------------------------------------------
+
 if create_pdf:
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:

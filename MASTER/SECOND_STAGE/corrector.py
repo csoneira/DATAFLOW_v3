@@ -96,11 +96,12 @@ show_plots = False
 save_plots = True
 create_plots = False
 create_essential_plots = True
+create_very_essential_plots = True
 show_errorbar = False
 
 recalculate_pressure_coeff = True
 
-res_win_min = 10 # 180 Resampling window minutes
+res_win_min = 15 # 180 Resampling window minutes
 
 if int(station) == 4:
     res_win_min = 30
@@ -112,7 +113,7 @@ MAF_ker = 0 # Moving Average Filter
 
 outlier_filter = 4 #3
 
-high_order_correction = True
+high_order_correction = False
 date_selection = True  # Set to True if you want to filter by date
 
 # This should come from an input file
@@ -392,13 +393,25 @@ if remove_outliers:
     x = np.linspace(series_clean.min(), series_clean.max(), 1000)
     pdf = norm.pdf(x, loc=mu, scale=sigma)
     
-    if create_plots:
-        # Step 6: Plot
+    # FIX THIS PART
+    lower_bound = norm.ppf(0.001, loc=mu, scale=sigma)
+    upper_bound = norm.ppf(0.999, loc=mu, scale=sigma)
+
+    # Ensure rows_to_remove exists (all-False to start with)
+    rows_to_remove = pd.Series(False, index=data_df.index)   # or keep the one you already have
+    
+    col = 'events'  # Column to check for outliers
+    
+    # Flag any row whose value lies outside [lower_bound, upper_bound]
+    rows_to_remove |= ( (data_df[col] < lower_bound) | (data_df[col] > upper_bound) )
+    # --------------------------------------------------------------
+
+    if create_plots or create_very_essential_plots:
         plt.figure()
         plt.errorbar(bin_centers, density, yerr=density_err, fmt='o', alpha=0.6, label='Data with $\sqrt{N}$ error')
         plt.plot(x, pdf, 'r--', label=f'Normal Fit\n$\mu$={mu:.2f}, $\sigma$={sigma:.2f},\nRelative error={sigma/mu*100:.2f}%')
-        plt.axvline(norm.ppf(0.001, mu, sigma), color='k', linestyle='--', label='0.1% cutoff')
-        plt.axvline(norm.ppf(0.999, mu, sigma), color='k', linestyle='--', label='99.9% cutoff')
+        plt.axvline(lower_bound, color='k', linestyle='--', label='0.1% cutoff')
+        plt.axvline(upper_bound, color='k', linestyle='--', label='99.9% cutoff')
 
         plt.title('Normal Fit with Z-score Filtering')
         plt.xlabel('Value')
@@ -415,66 +428,74 @@ if remove_outliers:
         plt.close()
     else:
         print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-
-
-if remove_outliers:
-    print('Removing outliers and zero values...')
-    def remove_outliers_and_zeroes(series_og):
-        global create_plots, fig_idx
-        
-        series = series_og.copy()
-        median = series.mean()
-        # median = series.median()
-        std = series.std()
-        z_scores = abs((series - median) / std)
-        # z_scores = (series - median) / std
-        
-        # Remove zeroes for fitting
-        filtered = z_scores[z_scores > 0]
-        filtered = filtered[filtered < np.quantile(filtered, 0.99)]
-
-        loc = 0
-        scale = halfnorm.fit(filtered, floc=loc)[1]  # only fit the scale
-        cutoff = halfnorm.ppf(0.999, loc=loc, scale=scale)
-        
-        if create_plots:
-            # Plot
-            x = np.linspace(filtered.min(), filtered.max(), 1000)
-            pdf = halfnorm.pdf(x, loc=loc, scale=scale)
-
-            plt.hist(filtered, bins=100, density=True, alpha=0.6, label='Data')
-            plt.plot(x, pdf, 'r--', label=f'Half-Normal Fit\nσ={scale:.2f}')
-            plt.axvline(cutoff, color='k', linestyle='--', label=f'99.9% cutoff = {cutoff:.2f}')
-            plt.title('Half-Normal Fit and 99.9% Cutoff')
-            plt.xlabel('Value')
-            plt.ylabel('Density')
-            plt.legend()
-
-            if show_plots:
-                plt.show()
-            elif save_plots:
-                new_figure_path = figure_path + f"{fig_idx}" + "_half_normal_fit.png"
-                fig_idx += 1
-                print(f"Saving figure to {new_figure_path}")
-                plt.savefig(new_figure_path, format='png', dpi=300)
-            plt.close()
-
-        # Mask: outliers above cutoff or zero entries
-        mask = (z_scores > cutoff) | (z_scores == 0)
-        return mask
-
-    # Initialize a mask of all False, meaning no rows are removed initially
-    rows_to_remove = pd.Series(False, index=data_df.index)
-    columns = ['events']
-    for col in columns:
-        rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[col])
     
-    # rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df['events'])
-    data_df_cleaned = data_df[~rows_to_remove].copy()
-    # Now, `data_df_cleaned` contains only rows that pass the conditions.
+    data_df_cleaned = data_df.loc[~rows_to_remove].copy()
     print(f"Original DataFrame shape: {data_df.shape}")
     print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
     data_df = data_df_cleaned.copy()
+    
+    
+# if remove_outliers:
+    
+#     print('Removing outliers and zero values...')
+    
+#     def remove_outliers_and_zeroes(series_og):
+#         global create_plots, fig_idx
+        
+#         series = series_og.copy()
+#         series = series[series != 0]
+#         median = series.mean()
+#         # median = series.median()
+#         std = series.std()
+#         z_scores = abs((series - median) / std)
+#         # z_scores = (series - median) / std
+        
+#         # Remove zeroes for fitting
+#         filtered = z_scores[z_scores > 0]
+#         filtered = filtered[filtered < np.quantile(filtered, 0.99)]
+
+#         loc = 0
+#         scale = halfnorm.fit(filtered, floc=loc)[1]  # only fit the scale
+#         cutoff = halfnorm.ppf(0.999, loc=loc, scale=scale)
+        
+#         if create_plots or create:
+#             # Plot
+#             x = np.linspace(filtered.min(), filtered.max(), 1000)
+#             pdf = halfnorm.pdf(x, loc=loc, scale=scale)
+
+#             plt.hist(filtered, bins=100, density=True, alpha=0.6, label='Data')
+#             plt.plot(x, pdf, 'r--', label=f'Half-Normal Fit\nσ={scale:.2f}')
+#             plt.axvline(cutoff, color='k', linestyle='--', label=f'99.9% cutoff = {cutoff:.2f}')
+#             plt.title('Half-Normal Fit and 99.9% Cutoff')
+#             plt.xlabel('Value')
+#             plt.ylabel('Density')
+#             plt.legend()
+
+#             if show_plots:
+#                 plt.show()
+#             elif save_plots:
+#                 new_figure_path = figure_path + f"{fig_idx}" + "_half_normal_fit.png"
+#                 fig_idx += 1
+#                 print(f"Saving figure to {new_figure_path}")
+#                 plt.savefig(new_figure_path, format='png', dpi=300)
+#             plt.close()
+
+#         # Mask: outliers above cutoff or zero entries
+#         mask = (z_scores > cutoff) | (z_scores == 0)
+#         return mask
+
+#     # Initialize a mask of all False, meaning no rows are removed initially
+#     rows_to_remove = pd.Series(False, index=data_df.index)
+#     columns = ['events']
+#     for col in columns:
+#         rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[col])
+    
+#     # rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df['events'])
+#     data_df_cleaned = data_df[~rows_to_remove].copy()
+#     # Now, `data_df_cleaned` contains only rows that pass the conditions.
+#     print(f"Original DataFrame shape: {data_df.shape}")
+#     print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
+#     data_df = data_df_cleaned.copy()
 
 
 # -----------------------------------------------------------------------------
@@ -495,8 +516,6 @@ data_df = data_df.resample(resampling_window).agg({
 data_df.reset_index(inplace=True)
 
 
-create_esential_plots = True
-
 # -----------------------------------------------------------------------------
 # ------------------------------ Plotting stuff -------------------------------
 # -----------------------------------------------------------------------------
@@ -515,7 +534,7 @@ def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', 
     """
     global create_plots, fig_idx
     
-    if create_esential_plots:
+    if create_essential_plots:
         
         fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=figsize, gridspec_kw={'height_ratios': [1, 1]})
 
@@ -552,7 +571,7 @@ def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', 
 
 import matplotlib.ticker as mtick
 
-def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize=(14, 4), save_path=None):
+def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize=(14, 4), save_path=None, plot_after_all = False):
     """
     Plot time series for multiple groups of columns. Each sublist in `group_cols` is plotted in a separate subplot.
     
@@ -566,7 +585,7 @@ def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize
     """
     global create_plots, fig_idx
     
-    if create_plots or create_esential_plots:
+    if create_plots or create_essential_plots or plot_after_all:
     
         n_plots = len(group_cols)
         fig, axes = plt.subplots(n_plots, 1, sharex=True, figsize=(figsize[0], figsize[1] * n_plots))
@@ -628,10 +647,7 @@ data_df['current_mean'] = ( data_df['hv_CurrentNeg'] + data_df['hv_CurrentPos'] 
 # total count case. This means that I should loop on it for each region case, including the total
 
 df_original = data_df.copy()
-
-
 print(df_original)
-
 
 for case in processing_regions:
     print(f'Processing case: {case}')
@@ -1387,7 +1403,9 @@ for case in processing_regions:
         bounds_list = [bounds] * len(eff)
         res = minimize(objective, eff, method='SLSQP', bounds=bounds_list, constraints=cons)
         return res.x, res
-
+    
+    ancillary_data_df = data_df.copy()
+    data_df = ancillary_data_df.copy()
 
     for label in detector_labels:
         eff_col = f'detector_{label}_eff'
@@ -1401,7 +1419,9 @@ for case in processing_regions:
         r_new = (rate_corr * eff) / eff_new  # back-compute N_i / eff'_i
         cov_post = np.cov(r_new, eff_new)[0, 1]
         print(f"[{label}] Final covariance after correction: {cov_post:.6e}")
-
+    
+    ancillary_data_df = data_df.copy()
+    data_df = ancillary_data_df.copy()
 
     # for label in detector_labels:
     #     eff_prime_col = f'detector_{label}_eff_decorrelated'
@@ -1604,7 +1624,7 @@ for case in processing_regions:
     # def plot_eff_vs_rate(data_df, eff_col, rate_col, corrected_col, label_suffix=''):
     #     global create_plots, fig_idx, show_plots, save_plots, figure_path, case
         
-    #     if create_plots or create_esential_plots:
+    #     if create_plots or create_essential_plots:
     #         valid = data_df[[eff_col, rate_col, corrected_col]].dropna()
     #         x = valid[eff_col].values
     #         y_orig = valid[rate_col].values
@@ -1661,9 +1681,9 @@ for case in processing_regions:
     from scipy.stats import pearsonr
 
     def plot_eff_vs_rate_grid(data_df, detector_labels):
-        global create_plots, fig_idx, show_plots, save_plots, figure_path, case, create_esential_plots
+        global create_plots, fig_idx, show_plots, save_plots, figure_path, case, create_essential_plots
 
-        if not (create_plots or create_esential_plots):
+        if not (create_plots or create_essential_plots):
             print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
             return
 
@@ -1872,7 +1892,7 @@ for case in processing_regions:
                 eff_col = f'definitive_eff_{i}'
                 fit_col = f'eff_fit_{i}'
                 filtered_df, fit_func, _ = assign_efficiency_fit( data_df, eff_col, fit_col, model_type='linear' )
-                plot_combined_efficiency_views(filtered_df, eff_col, fit_func, i)
+                # plot_combined_efficiency_views(filtered_df, eff_col, fit_func, i)
         
         
         import matplotlib.pyplot as plt
@@ -1916,7 +1936,7 @@ for case in processing_regions:
                 ax1.scatter(x, z, alpha=0.4, label='Measured')
                 ax1.plot(x_fit, z_fit_x, 'r-', label=(
                     f'Fit: η(P,⟨T⟩)\n'
-                    f'a={coeffs[0][0]:.3e}, b={coeffs[0][1]:.3e}, c={coeffs[1]:.3f}'
+                    f'a={coeffs[0][0]:.2g}, b={coeffs[0][1]:.2g}, c={coeffs[1]:.2g}'
                 ))
                 ax1.set_xlabel('Pressure')
                 ax1.set_ylabel('Efficiency')
@@ -1930,7 +1950,7 @@ for case in processing_regions:
                 ax2.scatter(y, z, alpha=0.4, label='Measured')
                 ax2.plot(y_fit, z_fit_y, 'r-', label=(
                     f'Fit: η(⟨P⟩,T)\n'
-                    f'a={coeffs[0][0]:.3e}, b={coeffs[0][1]:.3e}, c={coeffs[1]:.3f}'
+                    f'a={coeffs[0][0]:.2g}, b={coeffs[0][1]:.2g}, c={coeffs[1]:.2g}'
                 ))
                 ax2.set_xlabel('Temperature')
                 ax2.set_ylabel('Efficiency')
@@ -1944,14 +1964,14 @@ for case in processing_regions:
             if show_plots:
                 plt.show()
             elif save_plots:
-                new_figure_path = f"{figure_path}{fig_idx}_side_views_planes.png"
+                new_figure_path = f"{figure_path}{fig_idx}_side_views_planes_{case}.png"
                 fig_idx += 1
                 print(f"Saving figure to {new_figure_path}")
                 fig.savefig(new_figure_path, format='png', dpi=300)
 
             plt.close(fig)
 
-        
+        plot_side_views_all_planes(data_df, planes=[1, 2, 3, 4], model_type='linear')
 
         if create_plots:
             print("Creating efficiency comparison scatter plot...")
@@ -1986,8 +2006,9 @@ for case in processing_regions:
                 print(f"Saving figure to {new_figure_path}")
                 plt.savefig(new_figure_path, format='png', dpi=300)
             plt.close()
-
-
+        
+        data_df = data_df.copy()
+        
         data_df[f'unc_definitive_eff_1'] = 1
         data_df[f'unc_definitive_eff_2'] = 1
         data_df[f'unc_definitive_eff_3'] = 1
@@ -2036,10 +2057,6 @@ for case in processing_regions:
 
 
 
-
-
-
-
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Atmospheric corrections -----------------------------------------------------
@@ -2079,11 +2096,9 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = Non
         'unc_delta_P': unc_delta_P
     }).dropna()
     
-    print(len(df))
-    
     if not df.empty:
         # Fit the exponential model using uncertainties in Y as weights
-        print("Fitting exponential model...")
+        print("Fitting pressure exponential model...")
         
         # ------------------------------------------------------------------------------------------------
         # Filter outliers before fitting -----------------------------------------------------------------
@@ -2107,8 +2122,8 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = Non
                 print(f"Saving figure to {new_figure_path}")
                 plt.savefig(new_figure_path, format = 'png', dpi = 300)
             plt.close()
-        else:
-            print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+        # else:
+        #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
         
         df = df[z_scores < z_score_th_pres_corr]
         
@@ -2316,7 +2331,7 @@ for region in regions_to_correct:
 # Convert the list of dictionaries into a DataFrame after the loop
 log_delta_I_df = pd.DataFrame(results)
 
-if create_plots:
+if create_plots or create_essential_plots or create_very_essential_plots:
     # --- Plotting the vectors ---
     plt.figure(figsize=(12, 8))
 
@@ -2350,9 +2365,9 @@ if create_plots:
 
     plt.xlabel('Delta P')
     plt.ylabel('Log (I / I0)')
-    plt.ylim(-0.6, 0.5)
+    # plt.ylim(-0.6, 0.5)
     plt.title('Efficiency Fits for Different Regions')
-    plt.legend()
+    # plt.legend()
     plt.grid(True)
     if show_plots:
         plt.show()
@@ -2433,7 +2448,6 @@ else:
 # Add a new outlier filter to the pressure correction
 after_press_z_score_th = 10
 
-remove_outliers = True
 if remove_outliers:
     print('Removing outliers and zero values...')
     def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
@@ -2463,8 +2477,8 @@ if remove_outliers:
                 print(f"Saving figure to {new_figure_path}")
                 plt.savefig(new_figure_path, format = 'png', dpi = 300)
             plt.close()
-        else:
-            print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+        # else:
+        #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
         
         # print(z_scores)
         # Create a mask for rows where z_scores > z_thresh or values are zero
@@ -2477,6 +2491,7 @@ if remove_outliers:
 
     data_df_cleaned = data_df[~rows_to_remove].copy()
     data_df = data_df_cleaned.copy()
+
 
 
 print('----------------------------------------------------------------------')
@@ -2500,6 +2515,9 @@ if high_order_correction:
             'delta_Th_over_Th0': data_df['delta_Th_over_Th0'],
             'delta_H_over_H0': data_df['delta_H_over_H0']
         }).dropna()
+        
+        # Print the length of the non-NaN DataFrame
+        print(f"Length of DataFrame for {region}: {len(df)}")
 
         if not df.empty:
             X = df[['delta_Tg_over_Tg0', 'delta_Th_over_Th0', 'delta_H_over_H0']]
@@ -2508,7 +2526,7 @@ if high_order_correction:
             A, B, C = model.coef_
             D = model.intercept_
             
-            if create_plots:
+            if create_plots or create_essential_plots or create_very_essential_plots:
                 fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
 
                 scatter_kwargs = {'alpha': 0.5, 's': 10}
@@ -2559,13 +2577,11 @@ if high_order_correction:
                 ax.grid(True)
                 ax.legend(fontsize=10)
 
-                # Supertitle
                 plt.suptitle(
                     fr'Normalized Correction Coefficients for {region}: '
                     fr'$A$ = {A:.5f}, $B$ = {B:.3f}, $C$ = {C:.3f}, $D$ = {D:.3f}',
                     fontsize=15,
-                    y=1.05
-                )
+                    y=1.05 )
 
                 plt.tight_layout()
                 if show_plots:
@@ -2580,13 +2596,22 @@ if high_order_correction:
                 print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
                 
         else:
-            A, B, C, D = np.nan, np.nan, np.nan  # Handle case where there are no valid data points
+            print("Fit not done, data empty. Returning NaN.")
+            A, B, C, D = np.nan, np.nan, np.nan, np.nan  # Handle case where there are no valid data points
+            print("----------------------------------------------------------------------")
         return A, B, C, D
     
     
+    print(data_df['pressure_lab'].unique())
     for region in regions_to_correct:
-    
+        
+        print(region)
+        # print(data_df[f'pres_{region}'])
+        
         data_df[f'{region}_pressure_corrected'] = data_df[f'pres_{region}']
+        
+        ancillary_data_df = data_df.copy()
+        data_df = ancillary_data_df.copy()
         
         # Use the pressure-corrected values directly
         # Calculate means for pressure and counts
@@ -2628,6 +2653,103 @@ else:
 
 
 print("Creating rate final plots...")
+
+print(data_df.columns.to_list())
+print("\n\n\n")
+
+import re
+from collections import defaultdict
+
+import re
+from collections import defaultdict
+
+def build_eff_corr_groups(df):
+    """
+    Construct `group_cols` for plot_grouped_series() from a DataFrame whose
+    column names follow the pattern
+
+        <anything>_eff_corr_<suffix>_high_order_corrected
+
+    where <suffix> is e.g.  R0.0, R1.2, all …
+
+    Only columns that
+        • end with "_high_order_corrected",
+        • do **not** contain "_unc_",
+    are considered.  The resulting list-of-lists is ordered numerically by the
+    R-value (R0.0, R1.0, …), followed by any non-numeric suffixes (e.g. "all").
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+
+    Returns
+    -------
+    list[list[str]]
+        Suitable for the `group_cols` argument of plot_grouped_series().
+    """
+    groups = defaultdict(list)
+
+    # capture the part after `_eff_corr_` and before `_high_order_corrected`
+    pat = re.compile(r'_eff_corr_(.+?)_high_order_corrected$', flags=re.IGNORECASE)
+
+    for col in df.columns:
+        if '_high_order_corrected' not in col.lower():   # must end with this tag
+            continue
+        if '_unc_' in col.lower():                       # skip uncertainty cols
+            continue
+
+        m = pat.search(col)
+        if m:
+            suffix = m.group(1)                          # e.g. R1.2  or  all
+            groups[suffix].append(col)
+
+    # sort suffixes: numeric R-values first, others alphabetically
+    def _sort_key(s):
+        if s.startswith('R'):
+            try:
+                return (0, float(s[1:]))                 # R1.2 → (0, 1.2)
+            except ValueError:
+                pass
+        return (1, s.lower())                            # non-numeric last
+
+    ordered_suffixes = sorted(groups, key=_sort_key)
+
+    # assemble list-of-lists
+    group_cols = [groups[suf] for suf in ordered_suffixes]
+    return group_cols
+
+
+
+
+group_cols = build_eff_corr_groups(data_df)
+
+print(group_cols)
+
+print("\n\n\n")
+
+# Interpolate the Nans in the data_df
+# data_df = data_df.interpolate(method='linear', limit_direction='both')
+
+plot_grouped_series(data_df,
+                    group_cols,
+                    time_col='Time',
+                    title='High-order corrected rates',
+                    plot_after_all = True)
+
+group_cols = [
+    ['pressure_lab'],
+    ['processed_tt_1234_R1.2'],
+    ['detector_1234_eff_corr_R0.0_high_order_corrected']
+]
+
+plot_grouped_series(data_df,
+                    group_cols,
+                    time_col='Time',
+                    title='High-order corrected rates',
+                    plot_after_all = True)
+
+sys.exit("Finished because I can.")
+
     
 # for region in og_regions:
 #     if create_plots:
