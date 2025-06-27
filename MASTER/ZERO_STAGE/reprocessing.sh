@@ -10,7 +10,7 @@
 
 # Check if the station is provided
 if [ -z "$1" ]; then
-    echo "Error: No station provided. Usage: ./reprocessing.sh <station> <start_date> <end_date>"
+    echo "Error: No station provided. Usage: ./reprocessing.sh <station> <start_date> <end_date>, dates in YYMMDD."
     exit 1
 fi
 
