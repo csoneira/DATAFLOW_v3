@@ -1,3 +1,4 @@
+from __future__ import annotations
 #%%
 
 #!/usr/bin/env python3
@@ -9,7 +10,7 @@ Created on Thu Jun 20 09:15:33 2024
 @author: csoneira@ucm.es
 """
 
-run_jupyter_notebook = True
+run_jupyter_notebook = False
 
 # print("\n\n")
 # print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀.⣄")
@@ -69,6 +70,7 @@ import csv
 import math
 import random
 import shutil
+from scipy.optimize import brentq
 import builtins
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -231,7 +233,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
 # Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
 files_to_move = raw_files - unprocessed_files - processing_files - completed_files
 
-# Copy files to UNPROCESSED
+# Copy files to UNPROCESSED ---------------------------------------------------------------
 for file_name in files_to_move:
     src_path = os.path.join(raw_directory, file_name)
     dest_path = os.path.join(unprocessed_directory, file_name)
@@ -241,8 +243,7 @@ for file_name in files_to_move:
     except Exception as e:
         print(f"Failed to copy {file_name}: {e}")
 
-
-# Erase all files in the figure_directory
+# Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
 files = os.listdir(figure_directory)
 
@@ -251,8 +252,7 @@ if files:  # Check if the directory contains any files
     for file in files:
         os.remove(os.path.join(figure_directory, file))
 
-
-# Define input file path -----------------------------------------------------
+# Define input file path ------------------------------------------------------------------
 input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
@@ -302,14 +302,14 @@ limit = False
 limit_number = 10000
 number_of_time_cal_figures = 3
 save_calibrations = True
-save_full_data = True
+save_full_data = False
 presentation = False
 presentation_plots = False
 force_replacement = True # Creates a new datafile even if there is already one that looks complete
 article_format = False
 
 # Charge calibration to fC -------------------------
-calibrate_charge = True
+calibrate_charge_ns_to_fc = True
 
 # Charge front-back --------------------------------
 charge_front_back = True
@@ -322,7 +322,8 @@ time_window_filtering = False
 
 # Time calibration ---------------------------------
 time_calibration = True
-old_timing_method = False
+old_timing_method = True
+brute_force_analysis_time_calibration_path_finding = False
 
 # Y position ---------------------------------------
 y_position_complex_method = False
@@ -334,14 +335,14 @@ y_new_method = True
 blur_y = True
 
 # Alternative --------------------------------------
-alternative_iteration = True
+alternative_iteration = False
 number_of_alt_executions = 2
 
 # TimTrack -----------------------------------------
 fixed_speed = False
 res_ana_removing_planes = True
 timtrack_iteration = False
-number_of_TT_executions = 2
+number_of_TT_executions = 1
 residual_plots = False
 
 if fast_mode:
@@ -439,6 +440,7 @@ Q_sum_right_cal = 300
 # Qdif
 Q_diff_cal_threshold = 10
 Q_diff_cal_threshold_FB = 2 # 1.25
+Q_diff_cal_threshold_FB_wide = 10 # In case the fitting fails
 # Tsum
 T_sum_left_cal = -5
 T_sum_right_cal = 5
@@ -486,8 +488,8 @@ pos_filter = alt_pos_filter
 proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = alt_slowness_filter_left # -0.01
-slowness_filter_right = alt_slowness_filter_right # 0.025
+slowness_filter_left = alt_slowness_filter_left
+slowness_filter_right = alt_slowness_filter_right
 
 theta_left_filter = alt_theta_left_filter
 theta_right_filter = alt_theta_right_filter
@@ -572,13 +574,11 @@ time_sum_reference = np.array([
 # -----------------------------------------------------------------------------
 # Variables to modify ---------------------------------------------------------
 # -----------------------------------------------------------------------------
-
 beta = 1
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
-
 Q_sum_color = 'orange'
 Q_diff_color = 'red'
 T_sum_color = 'blue'
@@ -591,10 +591,10 @@ plot_list = []
 output_order = 0
 degree_of_polynomial = 4
 
-# X ----------------------------
+# X ---------------------------------------------------------------------------
 strip_length = 300
 
-# Y ----------------------------
+# Y ---------------------------------------------------------------------------
 def y_pos(y_width):
     return np.cumsum(y_width) - (np.sum(y_width) + y_width) / 2
 
@@ -613,20 +613,47 @@ strip_speed = 2/3 * c_mm_ns # 200 mm/ns
 tdiff_to_x = strip_speed # Factor to transform t_diff to X
 
 # Timtrack parameters --------------------
-vc    = beta * c_mm_ns # mm/ns
-sc    = 1/vc
-ss    = 1/strip_speed # slowness of the signal in the strip
+# Hardcoded
 d0    = 10 # initial value of the convergence parameter
 cocut = 1  # convergence cut: 0.1
-iter_max = 20 # maximum number of iterations: 50
-nplan = 4
-lenx  = strip_length
-
+iter_max = 10 # maximum number of iterations: 50
 anc_sy = 25 # 2.5 cm
 anc_sts = 0.35 # 400 ps
 anc_std = 0.075
-anc_sx = tdiff_to_x * anc_std # 2 cm
 anc_sz = 10 # 5 cm
+
+# Not-Hardcoded
+vc    = beta * c_mm_ns # mm/ns
+sc    = 1/vc
+ss    = 1/strip_speed # slowness of the signal in the strip
+nplan = 4
+lenx  = strip_length
+anc_sx = tdiff_to_x * anc_std # 2 cm
+
+
+# -----------------------------------------------------------------------------
+# Plotting options ------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+# New channel-wise plot -------------------------------------------------------
+log_scale = True
+if debug_mode:
+    T_clip_min = -500
+    T_clip_max = 500
+    Q_clip_min = -500
+    Q_clip_max = 500
+    num_bins = 100  # Parameter for the number of bins
+else:
+    T_clip_min = -300
+    T_clip_max = 100
+    Q_clip_min = 0
+    Q_clip_max = 500
+    num_bins = 100  # Parameter for the number of bins
+
+T_clip_min_ST = -300
+T_clip_max_ST = 100
+Q_clip_min_ST = 0
+Q_clip_max_ST = 500
 
 
 # -----------------------------------------------------------------------------
@@ -643,7 +670,6 @@ global_variables = {
 }
 
 
-
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Function definition ---------------------------------------------------------
@@ -651,16 +677,6 @@ global_variables = {
 # -----------------------------------------------------------------------------
 
 def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
-    """
-    Calibrates a given column of T values by filtering and determining an offset.
-
-    Parameters:
-        column (numpy.ndarray): Input array of T values.
-        num_bins (int): Number of bins to use in the histogram.
-
-    Returns:
-        float: Calculated offset.
-    """
     
     if self_trigger_mode:
         T_left_side = T_F_left_pre_cal_ST
@@ -717,9 +733,6 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
     # T_diff = ( T_F - T_B ) / 2
     T_diff = ( T_B - T_F ) / 2
     
-    # print("Zeroes:")
-    # print(len(T_diff[T_diff == 0]))
-    
     # ------------------------------------------------------------------------------
     
     T_rel_th = 0.1
@@ -765,9 +778,6 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
     plateau_left = bin_edges[start_index]
     plateau_right = bin_edges[end_index + 1]
     
-    # print(plateau_left)
-    # print(plateau_right)
-    
     # Calculate the offset using the mean of the filtered values
     offset = ( plateau_left + plateau_right ) / 2
     
@@ -775,17 +785,6 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
 
 
 def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
-    """
-    Calibrate the pedestal offset for the charge distribution (Q_ch) by finding
-    the first bin of the longest subset of bins with at least one count.
-
-    Parameters:
-        Q_ch (numpy.ndarray): Array of charge values for the channel.
-        num_bins (int): Number of bins to use for the histogram.
-
-    Returns:
-        float: Offset value to bring the distribution to zero.
-    """
     
     # First let's tale good values of Time, we want to avoid outliers that might confuse the charge pedestal calibration
     
@@ -821,8 +820,6 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     if indices_above_threshold.size > 0:
         min_bin_edge = bin_edges[indices_above_threshold[0]]
         max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
-        # print(f"Minimum bin edge: {min_bin_edge}")
-        # print(f"Maximum bin edge: {max_bin_edge}")
     else:
         print("No bins have counts above the threshold; Q pedestal calibration.")
         threshold = (min_counts + max_counts) / 1.5
@@ -961,10 +958,8 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     if create_plots:
         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
         y_fit = polynomial(x_fit, *coeffs)
-        
         x_final = xdat_plot
         y_final = ydat_plot - polynomial(xdat_plot, *coeffs)
-        
         plt.close()
         
         if article_format:
@@ -998,23 +993,6 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     return coeffs
 
 
-def summary_skew(vdat):
-    # Calculate the 5th and 95th percentiles
-    try:
-        percentile_left = np.percentile(vdat, 20)
-        percentile_right = np.percentile(vdat, 80)
-    except IndexError:
-        print("Problem with indices")
-        # print(vector)
-        
-    # Filter values inside the 5th and 95th percentiles
-    vdat = [x for x in vdat if percentile_left <= x <= percentile_right]
-    mean = np.mean(vdat)
-    std = np.std(vdat)
-    skewness = skew(vdat)
-    return f"mean = {mean:.2g}, std = {std:.2g}, skewness = {skewness:.2g}"
-
-
 def summary(vector):
     global coincidence_window_cal_ns
     quantile_left = CRT_gaussian_fit_quantile * 100
@@ -1042,54 +1020,35 @@ def summary(vector):
 
 def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     global fig_idx, coincidence_window_cal_ns
-
     fig = plt.figure(figsize=(8, 5))
     ax = fig.add_subplot(1, 1, 1)
-    
-    # Create histogram without plotting it
-    # counts, bins, _ = ax.hist(vdat, bins=bin_number, alpha=0.5, color="red",
-    #                           label=f"All hits, {len(vdat)} events, {summary_skew(vdat)}", density=False)
-    
     vdat = np.array(vdat)  # Convert list to NumPy array
     cond = (vdat > -coincidence_window_cal_ns) & (vdat < coincidence_window_cal_ns)  # This should result in a boolean array
     vdat = vdat[cond]
-    
     counts, bins, _ = ax.hist(vdat, bins=bin_number, alpha=0.5, color="red",
                               label=f"All hits, {len(vdat)} events", density=False)
-    
-    # Calculate bin centers for fitting the Gaussian
     bin_centers = (bins[:-1] + bins[1:]) / 2
-
-    # Fit a Gaussian
     h1_q = CRT_gaussian_fit_quantile
     lower_bound = np.quantile(vdat, h1_q)
     upper_bound = np.quantile(vdat, 1 - h1_q)
-    
     cond = (vdat > lower_bound) & (vdat < upper_bound)  # This should result in a boolean array
     vdat = vdat[cond]
-    
     mu, std = norm.fit(vdat)
-
-    # Plot the Gaussian fit
     p = norm.pdf(bin_centers, mu, std) * len(vdat) * (bins[1] - bins[0])  # Scale to match histogram
     label_plot = f'Gaussian fit:\n    $\\mu={mu:.2g}$,\n    $\\sigma={std:.2g}$\n    CRT$={std/np.sqrt(2)*1000:.3g}$ ps'
     ax.plot(bin_centers, p, 'k', linewidth=2, label=label_plot)
-
     ax.legend()
     ax.set_title(title)
     plt.xlabel(axis_label)
     plt.ylabel("Counts")
     plt.tight_layout()
-
     if save_plots:
         name_of_file = 'timing'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-        
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-        
     if show_plots: plt.show()
     plt.close()
 
@@ -1097,11 +1056,8 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
     global fig_idx
     nrows, ncols = (2, 3) if figure_number == 1 else (3, 4)
-    
     fig, axs = plt.subplots(nrows, ncols, figsize=(20, 5 * nrows), constrained_layout=True)
     axs = axs.flatten()
-
-    # Define Gaussian function
     def gaussian(x, mu, sigma, amplitude):
         return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
 
@@ -1229,19 +1185,11 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
     plt.close()
 
 
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Body ------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------- Data reading and preprocessing ---------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
-
-# Determine the file path input
 
 # Get lists of files in the directories
 unprocessed_files = sorted(os.listdir(base_directories["unprocessed_directory"]))
@@ -1305,7 +1253,7 @@ else:
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
             
-            print(f"Processing the last file in PROCESSING: {processing_file_path}")
+            print(f"Processing the last file in PROCESSING:\n    {processing_file_path}")
             error_file_path = os.path.join(base_directories["error_directory"], file_name)
             print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
             shutil.move(processing_file_path, error_file_path)
@@ -1461,7 +1409,10 @@ read_df = read_df.apply(pd.to_numeric, errors='coerce')
 # Print the number of rows in input
 print(f"\nOriginal file has {read_lines} lines.")
 print(f"Processed file has {written_lines} lines.")
-print(f"--> A {written_lines/read_lines*100:.2f}% of the lines were valid.\n")
+valid_lines_in_dat_file = written_lines/read_lines
+print(f"--> A {valid_lines_in_dat_file*100:.2f}% of the lines were valid.\n")
+
+global_variables['valid_lines_in_dat_file'] =  valid_lines_in_dat_file
 
 # Assign name to the columns
 read_df.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, 71)]
@@ -1533,6 +1484,12 @@ else:
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
+
+# Save the z_positions in the metadata file
+global_variables['z_P1'] =  z_positions[0]
+global_variables['z_P2'] =  z_positions[1]
+global_variables['z_P3'] =  z_positions[2]
+global_variables['z_P4'] =  z_positions[3]
 
 
 print("----------------------------------------------------------------------")
@@ -1708,25 +1665,9 @@ if self_trigger:
         plt.close()
 
 
+# -----------------------------------------------------------------------------
 # New channel-wise plot -------------------------------------------------------
-log_scale = True
-if debug_mode:
-    T_clip_min = -500
-    T_clip_max = 500
-    Q_clip_min = -500
-    Q_clip_max = 500
-    num_bins = 100  # Parameter for the number of bins
-else:
-    T_clip_min = -300
-    T_clip_max = 100
-    Q_clip_min = 0
-    Q_clip_max = 500
-    num_bins = 100  # Parameter for the number of bins
-
-T_clip_min_ST = -300
-T_clip_max_ST = 100
-Q_clip_min_ST = 0
-Q_clip_max_ST = 500
+# -----------------------------------------------------------------------------
 
 # if create_plots or create_essential_plots:
 if create_plots:
@@ -1951,6 +1892,7 @@ if create_plots:
 print("----------------------------------------------------------------------")
 print("------------------ Filter 1.1.1: uncalibrated data -------------------")
 print("----------------------------------------------------------------------")
+
 # FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out --------------
 
 for col in working_df.columns:
@@ -2000,21 +1942,9 @@ if self_trigger:
                     working_st_df[col] = np.where((working_st_df[col] > Q_B_right_pre_cal_ST) | (working_st_df[col] < Q_B_left_pre_cal_ST), 0, working_st_df[col])
 
 
-# New channel-wise plot ----------------------------------------------------------
-log_scale = True
-if debug_mode:
-    T_clip_min = -500
-    T_clip_max = 500
-    Q_clip_min = -500
-    Q_clip_max = 500
-    num_bins = 100  # Parameter for the number of bins
-else:
-    T_clip_min = -300
-    T_clip_max = 100
-    Q_clip_min = 0
-    Q_clip_max = 500
-    num_bins = 100  # Parameter for the number of bins
-
+# -----------------------------------------------------------------------------
+# New channel-wise plot -------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 # if create_plots or create_essential_plots:
 if create_plots:
@@ -2522,93 +2452,94 @@ if validate_charge_pedestal_calibration:
 # ----------------------- Charge calibration from ns to fC -------------------------
 # ----------------------------------------------------------------------------------
 
-# --- Define FEE Calibration ---
-FEE_calibration = {
-    "Width": [
-        0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-        160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
-        300, 310, 320, 330, 340, 350, 360, 370, 380, 390
-    ],
-    "Fast Charge": [
-        4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-        9.3563E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
-        1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
-        1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
-        2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-        2.3939E+03, 2.4635E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
-        2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
-    ]
-}
-FEE_calibration = pd.DataFrame(FEE_calibration)
-cs = CubicSpline(FEE_calibration['Width'].to_numpy(),
-                 FEE_calibration['Fast Charge'].to_numpy(),
-                 bc_type='natural')
+if calibrate_charge_ns_to_fc:
 
-def interpolate_fast_charge(width_array):
-    """ Interpolates fast charge for array-like width values using cubic spline. """
-    width_array = np.asarray(width_array)
-    return np.where(width_array == 0, 0, cs(width_array))
+    # --- Define FEE Calibration ---
+    FEE_calibration = {
+        "Width": [
+            0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+            160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
+            300, 310, 320, 330, 340, 350, 360, 370, 380, 390
+        ],
+        "Fast Charge": [
+            4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
+            9.3563E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
+            1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
+            1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
+            2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
+            2.3939E+03, 2.4635E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
+            2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
+        ]
+    }
+    FEE_calibration = pd.DataFrame(FEE_calibration)
+    cs = CubicSpline(FEE_calibration['Width'].to_numpy(),
+                    FEE_calibration['Fast Charge'].to_numpy(),
+                    bc_type='natural')
 
-# --- Calibrate and store new columns in working_df ---
-for key in ['Q1', 'Q2', 'Q3', 'Q4']:
-    for j in range(1, 5):
-        for suffix in ['F', 'B']:
-            col = f"{key}_{suffix}_{j}"
-            if col in charge_test.columns:
-                col_fC = f"{col}_fC"
-                raw = charge_test[col]
-                mask = (raw != 0) & np.isfinite(raw)
-                charge_test[col_fC] = 0.0  # initialize
-                charge_test.loc[mask, col_fC] = interpolate_fast_charge(raw[mask])
+    def interpolate_fast_charge(width_array):
+        """ Interpolates fast charge for array-like width values using cubic spline. """
+        width_array = np.asarray(width_array)
+        return np.where(width_array == 0, 0, cs(width_array))
+
+    # --- Calibrate and store new columns in working_df ---
+    for key in ['Q1', 'Q2', 'Q3', 'Q4']:
+        for j in range(1, 5):
+            for suffix in ['F', 'B']:
+                col = f"{key}_{suffix}_{j}"
+                if col in charge_test.columns:
+                    col_fC = f"{col}_fC"
+                    raw = charge_test[col]
+                    mask = (raw != 0) & np.isfinite(raw)
+                    charge_test[col_fC] = 0.0  # initialize
+                    charge_test.loc[mask, col_fC] = interpolate_fast_charge(raw[mask])
 
 
-if create_plots:
-    Q_clip_min = 0
-    Q_clip_max = 1750
-    num_bins = 100
-    log_scale = True
-    
-    fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))
-    axes_Q = axes_Q.flatten()
+    if create_plots:
+        Q_clip_min = 0
+        Q_clip_max = 1750
+        num_bins = 100
+        log_scale = True
+        
+        fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))
+        axes_Q = axes_Q.flatten()
 
-    for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-        for j in range(4):
-            col_F = f'{key}_F_{j+1}_fC'
-            col_B = f'{key}_B_{j+1}_fC'
-            ax = axes_Q[i*4 + j]
+        for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+            for j in range(4):
+                col_F = f'{key}_F_{j+1}_fC'
+                col_B = f'{key}_B_{j+1}_fC'
+                ax = axes_Q[i*4 + j]
 
-            if col_F in charge_test.columns:
-                y_F = charge_test[col_F]
-                y_F = y_F[(y_F > Q_clip_min) & (y_F < Q_clip_max) & np.isfinite(y_F)]
-                ax.hist(y_F, bins=num_bins, alpha=0.5, label=f'{col_F}')
+                if col_F in charge_test.columns:
+                    y_F = charge_test[col_F]
+                    y_F = y_F[(y_F > Q_clip_min) & (y_F < Q_clip_max) & np.isfinite(y_F)]
+                    ax.hist(y_F, bins=num_bins, alpha=0.5, label=f'{col_F}')
 
-            if col_B in charge_test.columns:
-                y_B = charge_test[col_B]
-                y_B = y_B[(y_B > Q_clip_min) & (y_B < Q_clip_max) & np.isfinite(y_B)]
-                ax.hist(y_B, bins=num_bins, alpha=0.5, label=f'{col_B}')
+                if col_B in charge_test.columns:
+                    y_B = charge_test[col_B]
+                    y_B = y_B[(y_B > Q_clip_min) & (y_B < Q_clip_max) & np.isfinite(y_B)]
+                    ax.hist(y_B, bins=num_bins, alpha=0.5, label=f'{col_B}')
 
-            ax.set_title(f"{col_F} vs {col_B}")
-            ax.set_xlabel('Charge [fC]')
-            ax.legend()
+                ax.set_title(f"{col_F} vs {col_B}")
+                ax.set_xlabel('Charge [fC]')
+                ax.legend()
 
-            if log_scale:
-                ax.set_yscale('log')
+                if log_scale:
+                    ax.set_yscale('log')
 
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    plt.suptitle(f"Grand Figure for calibrated charge (fC), mingo0{station}\n{start_time}", fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.9)
+        plt.suptitle(f"Grand Figure for calibrated charge (fC), mingo0{station}\n{start_time}", fontsize=16)
 
-    if save_plots:
-        final_filename = f'{fig_idx}_grand_figure_Q_fC.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        if save_plots:
+            final_filename = f'{fig_idx}_grand_figure_Q_fC.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
 
-    if show_plots:
-        plt.show()
-    plt.close(fig_Q)
-
+        if show_plots:
+            plt.show()
+        plt.close(fig_Q)
 
 
 if self_trigger:
@@ -3420,6 +3351,7 @@ if charge_front_back:
             y_label = "Charge diff"
             name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
             coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
+            print([f"{coeff:.3g}" for coeff in coeffs])
             working_df.loc[cond, f'Q{key}_Q_diff_{i+1}'] = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
     
     if self_trigger:
@@ -3451,7 +3383,7 @@ if charge_front_back:
     
 else:
     print('Charge front-back correction was selected to not be performed.')
-    Q_diff_cal_threshold_FB = 10
+    Q_diff_cal_threshold_FB = Q_diff_cal_threshold_FB_wide
 
 
 print("----------------------------------------------------------------------")
@@ -4828,6 +4760,11 @@ if time_calibration:
                 var_name = [name for name, val in globals().items() if val is vector][0]
                 if i >= number_of_time_cal_figures: break
                 hist_1d(vector, 100, var_name, "T / ns", var_name)
+        
+        
+        print("----------------------------------------------------------------------")
+        print("--------------------- Time resolution calculation --------------------")
+        print("----------------------------------------------------------------------")
 
         # Dictionary to store CRT values
         crt_values = {}
@@ -4845,18 +4782,19 @@ if time_calibration:
             # print(f"CRT for {var_name} is {CRT:.4g}")
             crt_values[f'CRT_{var_name}'] = CRT
         
-        crt_df = pd.DataFrame(crt_values, index=working_df.index)
-        working_df = pd.concat([working_df, crt_df], axis=1)
-        crt_values = working_df.filter(like='CRT_').iloc[0].values
+        # Turn crt_values into a vector
+        print("CRT values:", crt_values)
+        crt_values = np.array(list(crt_values.values()))
+        # print("CRT values:", crt_values)
         Q1, Q3 = np.percentile(crt_values, [25, 75])
         crt_values = crt_values[crt_values <= 1]
         filtered_crt_values = crt_values[(crt_values >= Q1 - 1.5 * (Q3 - Q1)) & (crt_values <= Q3 + 1.5 * (Q3 - Q1))]
-        
-        global_variables['CRT_avg'] = np.mean(filtered_crt_values)*1000
+        global_variables['CRT_avg'] = np.mean(filtered_crt_values)*1000 # To ps
         
         print("---------------------------")
         print(f"CRT Avg: {global_variables['CRT_avg']:.4g} ps")
         print("---------------------------")
+        
         
         # Create row and column indices
         rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
@@ -4872,7 +4810,7 @@ if time_calibration:
             # Key part: create the antisymmetric matrix
             df.loc[current_prefix, current_suffix] = summary(vector)
             df.loc[current_suffix, current_prefix] = -df.loc[current_prefix, current_suffix]
-        
+            
     else:
         # Create row and column indices
         rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
@@ -4893,10 +4831,10 @@ if time_calibration:
 
     
     # -----------------------------------------------------------------------------
-    # Brute force method
+    # Brute force method ----------------------------------------------------------
     # -----------------------------------------------------------------------------
-    brute_force_analysis = False
-    if brute_force_analysis:
+    
+    if brute_force_analysis_time_calibration_path_finding:
         # Main itinerary
         itinerary = ["P1s1", "P3s1", "P1s2", "P3s2", "P1s3", "P3s3", "P1s4", "P3s4","P4s4", "P2s4", "P4s3", "P2s3", "P4s2", "P2s2", "P4s1", "P2s1"]
         k = 0
@@ -5096,7 +5034,7 @@ if time_calibration:
         selected_path_list.append(selected_path_df.values)
         
     # Calculate the mean of all the paths
-    # calibrated_times_sp = np.nanmean(selected_path_list, axis=0)
+    # calibration_times = np.nanmean(selected_path_list, axis=0)
     
     # selected_path_list: shape (N_paths, N_points)
     selected_path_array = np.array(selected_path_list)
@@ -5106,11 +5044,10 @@ if time_calibration:
     weights = 1.0 / (abs_dev + epsilon)
     weighted_sum = np.nansum(selected_path_array * weights, axis=0)
     sum_of_weights = np.nansum(weights, axis=0)
-    calibrated_times_sp = weighted_sum / sum_of_weights
-    
-    calibration_times = calibrated_times_sp
+    calibration_times = weighted_sum / sum_of_weights
     
     # Time calibration matrix calculated --------------------------------------
+    
     print("------------------------")
     print("Calibration in times is:\n", calibration_times)
     
@@ -5678,7 +5615,6 @@ def find_true_max(A1, mu1, sigma1, A2, mu2, sigma2):
         x_max = (mu1 + mu2) / 2
         return x_max, double_gaussian(x_max, A1, mu1, sigma1, A2, mu2, sigma2)
 
-from scipy.optimize import brentq
 
 def find_threshold_crossings(f, popt, max_val, rel_th=0.01, x_range=(-10, 10), tol=1e-2):
     """
@@ -5715,9 +5651,7 @@ def find_threshold_crossings(f, popt, max_val, rel_th=0.01, x_range=(-10, 10), t
         return None, None  # or raise Exception("Could not determine bounds")
 
 t_sum_gaussian_rel_th = 0.05
-
 fit_results = {}  # store results if needed
-
 copied_working_df = working_df.copy()
 
 for plane in range(1, 5):
@@ -5888,8 +5822,8 @@ working_df["preprocessed_tt"] = working_df.apply(compute_preprocessed_tt, axis=1
 if self_trigger:
     working_st_df["preprocessed_tt"] = working_st_df.apply(compute_preprocessed_tt, axis=1)
 
-if time_window_filtering:
-    
+
+if time_window_filtering:    
     print("----------------------------------------------------------------------")
     print("-------------------- Time window filtering (3/3) ---------------------")
     print("----------------------------------------------------------------------")
@@ -6394,11 +6328,8 @@ if create_plots or create_essential_plots:
     if show_plots:
         plt.show()
     plt.close()
-                    
-
-# if create_plots:
-# if create_plots or create_essential_plots:
-# if create_plots or create_very_essential_plots or create_essential_plots:
+    
+    
     from itertools import combinations
 
     patterns_of_interest = ['1100', '0110', '0011']
@@ -6508,7 +6439,6 @@ strip_limits = [
     [ [-63/2, 63/2], [-63/2, 63/2], [-63/2, 63/2], [-98/2, 98/2] ],
     [ [-98/2, 98/2], [-63/2, 63/2], [-63/2, 63/2], [-63/2, 63/2] ],
 ]
-
 
 if y_new_method:
     y_columns = {}
@@ -6950,16 +6880,13 @@ if create_plots or create_essential_plots:
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
     plt.suptitle('Hexbin Plots for All Variable Combinations by Plane, filtered', fontsize=18)
-
     if save_plots:
         name_of_file = 'rpc_variables_hexbin_combinations_filtered'
         final_filename = f'{fig_idx}_{name_of_file}.png'
         fig_idx += 1
-
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-
     if show_plots: plt.show()
     plt.close()
 
@@ -6971,7 +6898,7 @@ print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 # ---------------------------------------------------------------------------
-# 1.  Geometrical line fit (orthogonal-distance regression)
+# 1. Geometrical line fit (orthogonal-distance regression) ------------------
 # ---------------------------------------------------------------------------
 
 def fit_3d_line(
@@ -7017,7 +6944,6 @@ def fit_3d_line(
     res_y  = res[:, 1]
 
     chi2 = np.einsum('ij,ij->', res, res) / (sx**2 + sy**2 + sz**2)
-
     return (xz0, yz0, float(theta), float(phi), float(chi2), dict(zip(plane_ids, res_td)), dict(zip(plane_ids, res_y)))
 
 
@@ -7500,48 +7426,6 @@ for iteration in range(repeat + 1):
                 working_df.at[idx, f'ext_res_tsum_{iplane_ref}'] = v_res[1]
                 working_df.at[idx, f'ext_res_tdif_{iplane_ref}'] = v_res[2]
     
-    
-    # FILTER 6: TSUM, TDIF, QSUM, QDIF TIMTRACK X, Y, etc. FILTER --> IF THE
-    # RESULT IS OUT OF RANGE, REMOVE THE MODULE WITH LARGEST RESIDUE
-    # for index, row in working_df.iterrows():
-    #     # Check if x, y, or t0 is outside the desired range
-    #     if (row['t0'] > t0_right_filter or row['t0'] < t0_left_filter) or \
-    #         (row['x'] > pos_filter or row['x'] < -pos_filter or row['x'] == 0) or \
-    #         (row['y'] > pos_filter or row['y'] < -pos_filter or row['y'] == 0) or \
-    #         (row['xp'] > proj_filter or row['xp'] < -proj_filter or row['xp'] == 0) or \
-    #         (row['yp'] > proj_filter or row['yp'] < -proj_filter or row['yp'] == 0) or \
-    #         (row['s'] > slowness_filter_right or row['s'] < slowness_filter_left or row['s'] == 0) or\
-    #         (row['charge_event'] > charge_event_right_filter or row['charge_event'] < charge_event_left_filter or row['charge_event'] == 0):
-
-    #         # Find the module with the largest absolute residue value
-    #         max_residue = 0
-    #         module_to_zero = None
-            
-    #         for i in range(1, 5):
-    #             if res_ana_removing_planes:
-    #                 res_tsum = abs(row[f'ext_res_tsum_{i}'])
-    #                 res_tdif = abs(row[f'ext_res_tdif_{i}'])
-    #                 res_ystr = abs(row[f'ext_res_ystr_{i}'])
-    #             else:
-    #                 res_tsum = abs(row[f'res_tsum_{i}'])
-    #                 res_tdif = abs(row[f'res_tdif_{i}'])
-    #                 res_ystr = abs(row[f'res_ystr_{i}'])
-                
-    #             # Calculate the maximum residue for the module
-    #             max_module_residue = max(res_tsum, res_tdif, res_ystr)
-                
-    #             if max_module_residue > max_residue:
-    #                 max_residue = max_module_residue
-    #                 module_to_zero = i
-    
-    #         # If a module is identified, set related values to 0
-    #         if module_to_zero:
-    #             working_df.at[index, f'Y_{module_to_zero}'] = 0
-    #             working_df.at[index, f'P{module_to_zero}_T_sum_final'] = 0
-    #             working_df.at[index, f'P{module_to_zero}_T_diff_final'] = 0
-    #             working_df.at[index, f'P{module_to_zero}_Q_sum_final'] = 0
-    
-    
     # Filter according to residual ------------------------------------------------
     changed_event_count = 0
     for index, row in working_df.iterrows():
@@ -7567,179 +7451,175 @@ for iteration in range(repeat + 1):
     print(f"{len(working_df[working_df.iterations == iter_max])} reached the maximum number of iterations ({iter_max}).")
     print(f"Percentage of events that did not converge: {len(working_df[working_df.iterations == iter_max]) / len(working_df) * 100:.2f}%")
     
-    four_planes = len(working_df[working_df.processed_tt == 1234])
-    print(f"Events that are 1234: {four_planes}")
-    print(f"Events that are 123: {len(working_df[working_df.processed_tt == 123])}")
-    print(f"Events that are 234: {len(working_df[working_df.processed_tt == 234])}")
-    planes134 = len(working_df[working_df.processed_tt == 134])
-    print(f"Events that are 134: {planes134}")
-    planes124 = len(working_df[working_df.processed_tt == 124])
-    print(f"Events that are 124: {planes124}")
+    # four_planes = len(working_df[working_df.processed_tt == 1234])
+    # print(f"Events that are 1234: {four_planes}")
+    # print(f"Events that are 123: {len(working_df[working_df.processed_tt == 123])}")
+    # print(f"Events that are 234: {len(working_df[working_df.processed_tt == 234])}")
+    # planes134 = len(working_df[working_df.processed_tt == 134])
+    # print(f"Events that are 134: {planes134}")
+    # planes124 = len(working_df[working_df.processed_tt == 124])
+    # print(f"Events that are 124: {planes124}")
     
-    eff_2 = (four_planes) / (four_planes + planes134)
-    print(f"First estimate of eff_2 ={eff_2:.2f}")
-    eff_3 = (four_planes) / (four_planes + planes124)
-    print(f"First estimate of eff_3 ={eff_3:.2f}")
+    # eff_2 = (four_planes) / (four_planes + planes134)
+    # print(f"First estimate of eff_2 ={eff_2:.2f}")
+    # eff_3 = (four_planes) / (four_planes + planes124)
+    # print(f"First estimate of eff_3 ={eff_3:.2f}")
     
+    # # --------------------------------------------------------------------------
     
-    # --------------------------------------------------------------------------
+    # print("-------------------------------------------------------------------")
+    # print("DETECTOR 1234")
     
-    print("-------------------------------------------------------------------")
-    print("DETECTOR 1234")
+    # count_1234 = len(working_df[working_df.original_tt == 1234])
+    # count_14   = len(working_df[working_df.original_tt == 14])
     
-    count_1234 = len(working_df[working_df.original_tt == 1234])
-    count_14   = len(working_df[working_df.original_tt == 14])
+    # planes_1234 = len(working_df[working_df.processed_tt == 1234])
+    # planes_14 = len(working_df[working_df.processed_tt == 14])
     
-    planes_1234 = len(working_df[working_df.processed_tt == 1234])
-    planes_14 = len(working_df[working_df.processed_tt == 14])
+    # print("\nOriginal 1234: ", count_1234)
+    # print("Processed 1234: ", planes_1234)
     
-    print("\nOriginal 1234: ", count_1234)
-    print("Processed 1234: ", planes_1234)
+    # print("Original 14: ", count_14)
+    # print("Processed 14: ", planes_14)
     
-    print("Original 14: ", count_14)
-    print("Processed 14: ", planes_14)
+    # comp_eff = ( 1 - eff_2 ) * ( 1 - eff_3 )
     
-    comp_eff = ( 1 - eff_2 ) * ( 1 - eff_3 )
+    # estim_14_orig = count_1234 * comp_eff
+    # estim_14_proc = planes_1234 * comp_eff
+    # print("Estimated 14 (from original_tt): ", estim_14_orig)
+    # print("Estimated 14 (from processed_tt): ", estim_14_proc)
+    # print("Ratio of original_tt to processed_tt: ", estim_14_orig / estim_14_proc if estim_14_proc > 0 else np.nan)
     
-    estim_14_orig = count_1234 * comp_eff
-    estim_14_proc = planes_1234 * comp_eff
-    print("Estimated 14 (from original_tt): ", estim_14_orig)
-    print("Estimated 14 (from processed_tt): ", estim_14_proc)
-    print("Ratio of original_tt to processed_tt: ", estim_14_orig / estim_14_proc if estim_14_proc > 0 else np.nan)
+    # SNR_og = ( count_14 - estim_14_orig ) / count_14 * 100 if count_14 > 0 else 0
+    # SNR_pr = ( planes_14 - estim_14_proc ) / planes_14 * 100 if planes_14 > 0 else 0
+    # print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    # print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
     
-    SNR_og = ( count_14 - estim_14_orig ) / count_14 * 100 if count_14 > 0 else 0
-    SNR_pr = ( planes_14 - estim_14_proc ) / planes_14 * 100 if planes_14 > 0 else 0
-    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
-    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
+    # print("-------------------------------------------------------------------")
+    # print("SUBDETECTOR 123 (excluding plane 4)")
+
+    # # Counts for events with all planes and with plane 4 missing
+    # count_123 = len(working_df[working_df.original_tt.isin([1234, 123])])
+    # # count_13  = len(working_df[working_df.original_tt.isin([13, 134])])
+    # count_13  = len(working_df[working_df.original_tt.isin([13])])
+
+    # planes_123 = len(working_df[working_df.processed_tt.isin([1234, 123])])
+    # # planes_13  = len(working_df[working_df.processed_tt.isin([13, 134])])
+    # planes_13  = len(working_df[working_df.processed_tt.isin([13])])
+
+    # print("\nOriginal 123 + 1234: ", count_123)
+    # print("Processed 123 + 1234: ", planes_123)
+
+    # print("Original 13: ", count_13)
+    # print("Processed 13: ", planes_13)
+
+    # # Efficiency loss due to missing plane 2
+    # comp_eff = (1 - eff_2)
+
+    # # Estimate how many 13-type events should have appeared
+    # estim_13_orig = count_123 * comp_eff
+    # estim_13_proc = planes_123 * comp_eff
+
+    # print("Estimated 13 (from original_tt): ", estim_13_orig)
+    # print("Estimated 13 (from processed_tt): ", estim_13_proc)
+    # print("Ratio of original_tt to processed_tt: ", estim_13_orig / estim_13_proc if estim_13_proc > 0 else np.nan)
+
+    # # Signal-to-noise ratio comparison
+    # SNR_og = (count_13 - estim_13_orig) / count_13 * 100 if count_13 > 0 else 0
+    # SNR_pr = (planes_13 - estim_13_proc) / planes_13 * 100 if planes_13 > 0 else 0
+    # print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    # print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
     
+    # print("-------------------------------------------------------------------")
+    # print("SUBDETECTOR 234 (excluding plane 1)")
+
+    # count_234 = len(working_df[working_df.original_tt.isin([1234, 234])])
+    # # count_24  = len(working_df[working_df.original_tt.isin([24, 124])])
+    # count_24  = len(working_df[working_df.original_tt.isin([24])])
+
+    # planes_234 = len(working_df[working_df.processed_tt.isin([1234, 234])])
+    # # planes_24  = len(working_df[working_df.processed_tt.isin([24, 124])])
+    # planes_24  = len(working_df[working_df.processed_tt.isin([24])])
+
+    # print("\nOriginal 234 + 1234: ", count_234)
+    # print("Processed 234 + 1234: ", planes_234)
+
+    # print("Original 24: ", count_24)
+    # print("Processed 24: ", planes_24)
+
+    # comp_eff = (1 - eff_3)
+
+    # estim_24_orig = count_234 * comp_eff
+    # estim_24_proc = planes_234 * comp_eff
+
+    # print("Estimated 24 (from original_tt): ", estim_24_orig)
+    # print("Estimated 24 (from processed_tt): ", estim_24_proc)
+    # print("Ratio of original_tt to processed_tt: ", estim_24_orig / estim_24_proc if estim_24_proc > 0 else np.nan)
+
+    # SNR_og = (count_24 - estim_24_orig) / count_24 * 100 if count_24 > 0 else np.nan
+    # SNR_pr = (planes_24 - estim_24_proc) / planes_24 * 100 if planes_24 > 0 else np.nan
+    # print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    # print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
     
-    print("-------------------------------------------------------------------")
-    print("SUBDETECTOR 123 (excluding plane 4)")
+    # print("-------------------------------------------------------------------")
+    # print("SUBDETECTOR 124 (excluding plane 3)")
 
-    # Counts for events with all planes and with plane 4 missing
-    count_123 = len(working_df[working_df.original_tt.isin([1234, 123])])
-    # count_13  = len(working_df[working_df.original_tt.isin([13, 134])])
-    count_13  = len(working_df[working_df.original_tt.isin([13])])
+    # count_1234 = len(working_df[working_df.original_tt.isin([1234])])
+    # count_124  = len(working_df[working_df.original_tt.isin([124])])
 
-    planes_123 = len(working_df[working_df.processed_tt.isin([1234, 123])])
-    # planes_13  = len(working_df[working_df.processed_tt.isin([13, 134])])
-    planes_13  = len(working_df[working_df.processed_tt.isin([13])])
+    # planes_1234 = len(working_df[working_df.processed_tt.isin([1234])])
+    # planes_124  = len(working_df[working_df.processed_tt.isin([124])])
 
-    print("\nOriginal 123 + 1234: ", count_123)
-    print("Processed 123 + 1234: ", planes_123)
+    # print("\nOriginal 1234: ", count_1234)
+    # print("Processed 1234: ", planes_1234)
 
-    print("Original 13: ", count_13)
-    print("Processed 13: ", planes_13)
+    # print("Original 124: ", count_124)
+    # print("Processed 124: ", planes_124)
 
-    # Efficiency loss due to missing plane 2
-    comp_eff = (1 - eff_2)
+    # comp_eff = (1 - eff_3)
 
-    # Estimate how many 13-type events should have appeared
-    estim_13_orig = count_123 * comp_eff
-    estim_13_proc = planes_123 * comp_eff
+    # estim_124_orig = count_1234 * comp_eff
+    # estim_124_proc = planes_1234 * comp_eff
 
-    print("Estimated 13 (from original_tt): ", estim_13_orig)
-    print("Estimated 13 (from processed_tt): ", estim_13_proc)
-    print("Ratio of original_tt to processed_tt: ", estim_13_orig / estim_13_proc if estim_13_proc > 0 else np.nan)
+    # print("Estimated 124 (from original_tt): ", estim_124_orig)
+    # print("Estimated 124 (from processed_tt): ", estim_124_proc)
+    # print("Ratio of original_tt to processed_tt: ", estim_124_orig / estim_124_proc if estim_124_proc > 0 else np.nan)
 
-    # Signal-to-noise ratio comparison
-    SNR_og = (count_13 - estim_13_orig) / count_13 * 100 if count_13 > 0 else 0
-    SNR_pr = (planes_13 - estim_13_proc) / planes_13 * 100 if planes_13 > 0 else 0
-    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
-    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
+    # SNR_og = (count_124 - estim_124_orig) / count_124 * 100 if count_124 > 0 else np.nan
+    # SNR_pr = (planes_124 - estim_124_proc) / planes_124 * 100 if planes_124 > 0 else np.nan
+    # print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    # print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
     
+    # print("-------------------------------------------------------------------")
+    # print("SUBDETECTOR 134 (excluding plane 2)")
+
+    # count_1234 = len(working_df[working_df.original_tt.isin([1234])])
+    # count_134  = len(working_df[working_df.original_tt.isin([134])])
+
+    # planes_1234 = len(working_df[working_df.processed_tt.isin([1234])])
+    # planes_134  = len(working_df[working_df.processed_tt.isin([134])])
+
+    # print("\nOriginal 1234: ", count_1234)
+    # print("Processed 1234: ", planes_1234)
+
+    # print("Original 134: ", count_134)
+    # print("Processed 134: ", planes_134)
+
+    # comp_eff = (1 - eff_2)
+
+    # estim_134_orig = count_1234 * comp_eff
+    # estim_134_proc = planes_1234 * comp_eff
+
+    # print("Estimated 134 (from original_tt): ", estim_134_orig)
+    # print("Estimated 134 (from processed_tt): ", estim_134_proc)
+    # print("Ratio of original_tt to processed_tt: ", estim_134_orig / estim_134_proc if estim_134_proc > 0 else np.nan)
+
+    # SNR_og = (count_134 - estim_134_orig) / count_134 * 100 if count_134 > 0 else np.nan
+    # SNR_pr = (planes_134 - estim_134_proc) / planes_134 * 100 if planes_124 > 0 else np.nan
+    # print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
+    # print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
     
-    print("-------------------------------------------------------------------")
-    print("SUBDETECTOR 234 (excluding plane 1)")
-
-    count_234 = len(working_df[working_df.original_tt.isin([1234, 234])])
-    # count_24  = len(working_df[working_df.original_tt.isin([24, 124])])
-    count_24  = len(working_df[working_df.original_tt.isin([24])])
-
-    planes_234 = len(working_df[working_df.processed_tt.isin([1234, 234])])
-    # planes_24  = len(working_df[working_df.processed_tt.isin([24, 124])])
-    planes_24  = len(working_df[working_df.processed_tt.isin([24])])
-
-    print("\nOriginal 234 + 1234: ", count_234)
-    print("Processed 234 + 1234: ", planes_234)
-
-    print("Original 24: ", count_24)
-    print("Processed 24: ", planes_24)
-
-    comp_eff = (1 - eff_3)
-
-    estim_24_orig = count_234 * comp_eff
-    estim_24_proc = planes_234 * comp_eff
-
-    print("Estimated 24 (from original_tt): ", estim_24_orig)
-    print("Estimated 24 (from processed_tt): ", estim_24_proc)
-    print("Ratio of original_tt to processed_tt: ", estim_24_orig / estim_24_proc if estim_24_proc > 0 else np.nan)
-
-    SNR_og = (count_24 - estim_24_orig) / count_24 * 100 if count_24 > 0 else np.nan
-    SNR_pr = (planes_24 - estim_24_proc) / planes_24 * 100 if planes_24 > 0 else np.nan
-    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
-    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
-    
-    
-    print("-------------------------------------------------------------------")
-    print("SUBDETECTOR 124 (excluding plane 3)")
-
-    count_1234 = len(working_df[working_df.original_tt.isin([1234])])
-    count_124  = len(working_df[working_df.original_tt.isin([124])])
-
-    planes_1234 = len(working_df[working_df.processed_tt.isin([1234])])
-    planes_124  = len(working_df[working_df.processed_tt.isin([124])])
-
-    print("\nOriginal 1234: ", count_1234)
-    print("Processed 1234: ", planes_1234)
-
-    print("Original 124: ", count_124)
-    print("Processed 124: ", planes_124)
-
-    comp_eff = (1 - eff_3)
-
-    estim_124_orig = count_1234 * comp_eff
-    estim_124_proc = planes_1234 * comp_eff
-
-    print("Estimated 124 (from original_tt): ", estim_124_orig)
-    print("Estimated 124 (from processed_tt): ", estim_124_proc)
-    print("Ratio of original_tt to processed_tt: ", estim_124_orig / estim_124_proc if estim_124_proc > 0 else np.nan)
-
-    SNR_og = (count_124 - estim_124_orig) / count_124 * 100 if count_124 > 0 else np.nan
-    SNR_pr = (planes_124 - estim_124_proc) / planes_124 * 100 if planes_124 > 0 else np.nan
-    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
-    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
-    
-    
-    print("-------------------------------------------------------------------")
-    print("SUBDETECTOR 134 (excluding plane 2)")
-
-    count_1234 = len(working_df[working_df.original_tt.isin([1234])])
-    count_134  = len(working_df[working_df.original_tt.isin([134])])
-
-    planes_1234 = len(working_df[working_df.processed_tt.isin([1234])])
-    planes_134  = len(working_df[working_df.processed_tt.isin([134])])
-
-    print("\nOriginal 1234: ", count_1234)
-    print("Processed 1234: ", planes_1234)
-
-    print("Original 134: ", count_134)
-    print("Processed 134: ", planes_134)
-
-    comp_eff = (1 - eff_2)
-
-    estim_134_orig = count_1234 * comp_eff
-    estim_134_proc = planes_1234 * comp_eff
-
-    print("Estimated 134 (from original_tt): ", estim_134_orig)
-    print("Estimated 134 (from processed_tt): ", estim_134_proc)
-    print("Ratio of original_tt to processed_tt: ", estim_134_orig / estim_134_proc if estim_134_proc > 0 else np.nan)
-
-    SNR_og = (count_134 - estim_134_orig) / count_134 * 100 if count_134 > 0 else np.nan
-    SNR_pr = (planes_134 - estim_134_proc) / planes_134 * 100 if planes_124 > 0 else np.nan
-    print(f"SNR original_tt: {SNR_og:.1f} % of the measured is noise")
-    print(f"SNR processed_tt: {SNR_pr:.1f} % of the measured is noise")
-
+    # --------------------------------------------------------------------------------
     iteration += 1
 
 
@@ -7794,7 +7674,6 @@ for col in working_df.columns:
 print("----------------------------------------------------------------------")
 print("------------------ TimTrack convergence comprobation -----------------")
 print("----------------------------------------------------------------------")
-#%%
 
 # if create_plots
 # if create_plots or create_essential_plots:
@@ -7833,15 +7712,10 @@ if create_plots or create_essential_plots or create_very_essential_plots:
             ax.set_ylabel(r'Iterations vs cocut')
         if i // ncols == nrows - 1:
             ax.set_xlabel(r'$Iterations$')
-
-    # Hide any unused subplots
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
-
     plt.suptitle(r'Iteration vs distance cut in convergence per processed_tt case', fontsize=14)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
-
-    # Save or show the plot
     plt.tight_layout()
     if save_plots:
         filename = f'{fig_idx}_iterations_vs_cocut.png'
@@ -7857,14 +7731,13 @@ if create_plots or create_essential_plots or create_very_essential_plots:
 print("----------------------------------------------------------------------")
 print("------------------ Slowness residual comprobation ---------------------")
 print("----------------------------------------------------------------------")
-#%%
 
 working_df['delta_s'] = working_df['alt_s'] - working_df['s']  # Calculate the difference from the speed of light
 
 # if create_plots
 # if create_plots or create_essential_plots:
 if create_plots or create_essential_plots or create_very_essential_plots:
-    print("Plotting residuals of alt_s - s for each original_tt to definitive_tt case...")
+    print("Plotting residuals of alt_s - s for each original_tt to processed_tt case...")
     
     df_filtered = working_df.copy()
     bins = np.linspace(delta_s_left, delta_s_right, 100)  # Adjust range and bin size as needed
@@ -7921,7 +7794,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     # Save or show the plot
     plt.tight_layout()
     if save_plots:
-        filename = f'{fig_idx}_residuals_alt_s_minus_s_definitive_tt.png'
+        filename = f'{fig_idx}_residuals_alt_s_minus_s_processed_tt.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], filename)
         plot_list.append(save_fig_path)
@@ -7940,7 +7813,25 @@ for col in working_df.columns:
     if 'delta_s' == col:
         working_df.loc[:, col] = np.where((working_df[col] > delta_s_right) | (working_df[col] < delta_s_left), 0, working_df[col])
 
-#%%
+print("----------------------------------------------------------------------")
+print("-------------------------- New definitions ---------------------------")
+print("----------------------------------------------------------------------")
+
+working_df['x'] = ( working_df['x'] + working_df['alt_x'] ) / 2
+working_df['y'] = ( working_df['y'] + working_df['alt_y'] ) / 2
+working_df['theta'] = ( working_df['theta'] + working_df['alt_theta'] ) / 2
+working_df['phi'] = ( working_df['phi'] + working_df['alt_phi'] ) / 2
+working_df['s'] = ( working_df['s'] + working_df['alt_s'] ) / 2
+
+working_df['x_err'] = ( working_df['x'] - working_df['alt_x'] ) / 2
+working_df['y_err'] = ( working_df['y'] - working_df['alt_y'] ) / 2
+working_df['theta_err'] = ( working_df['theta'] - working_df['alt_theta'] ) / 2
+working_df['phi_err'] = ( working_df['phi'] - working_df['alt_phi'] ) / 2
+working_df['s_err'] = ( working_df['s'] - working_df['alt_s'] ) / 2
+
+working_df['chi_timtrack'] = working_df['th_chi']
+working_df['chi_alternative'] = working_df['alt_th_chi']
+
 
 print("----------------------------------------------------------------------")
 print("-------------------- Real tracking trigger type ----------------------")
@@ -7952,10 +7843,11 @@ width_half  = total_width / 2.0          # y acceptance  : [-width_half , +width
 z_planes    = np.asarray(z_positions)    # shape (nplan,)
 
 # Precompute averages of the two independent fits --------------------------
-x0_avg   = (working_df['x']     + working_df['alt_x'])     * 0.5
-y0_avg   = (working_df['y']     + working_df['alt_y'])     * 0.5
-theta_av = (working_df['theta'] + working_df['alt_theta']) * 0.5
-phi_av   = (working_df['phi']   + working_df['alt_phi'])   * 0.5
+# New fitting track columns combining timtrack and the alternative method
+x0_avg   = working_df['x']
+y0_avg   = working_df['y']
+theta_av = working_df['theta']
+phi_av   = working_df['phi']
 
 vx = np.sin(theta_av) * np.cos(phi_av)                   # direction cosines
 vy = np.sin(theta_av) * np.sin(phi_av)
@@ -8307,9 +8199,10 @@ print(f"Rows after: {n_after}")
 print(f"Retained: {percentage_retained:.2f}%")
 
 print("----------------------------------------------------------------------")
-print("Unique tracking_tt values:", sorted(definitive_df['tracking_tt'].unique()))
 print("Unique original_tt values:", sorted(definitive_df['original_tt'].unique()))
+print("Unique preprocessed_tt values:", sorted(definitive_df['preprocessed_tt'].unique()))
 print("Unique processed_tt values:", sorted(definitive_df['processed_tt'].unique()))
+print("Unique tracking_tt values:", sorted(definitive_df['tracking_tt'].unique()))
 print("Unique definitive_tt values:", sorted(definitive_df['definitive_tt'].unique()))
 
 
@@ -9168,14 +9061,12 @@ if create_plots or create_essential_plots:
     plt.subplots_adjust(top=0.88)
     plt.suptitle('Event Rate Histograms by Original_tt Cardinality with Poisson Fits', fontsize=16)
 
-    # Save and show
     if save_plots:
         final_filename = f'{fig_idx}_events_per_second_by_plane_cardinality_definitive_tt.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         plt.savefig(save_fig_path, format='png')
-
     if show_plots:
         plt.show()
     plt.close()
@@ -9415,11 +9306,11 @@ columns_to_keep = [
     # Timestamp and identifiers
     'Time', 'original_tt', 'processed_tt', 'tracking_tt', 'definitive_tt',
 
-    # Alternative reconstruction outputs
-    'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s', 'alt_th_chi',
-
-    # TimTrack reconstruction outputs
-    'x', 'y', 'theta', 'phi', 's', 'th_chi',
+    # New definitions
+    'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
+    
+    # Chisqs
+    'chi_timtrack', 'chi_alternative',
 
     # Strip-level time and charge info (ordered by plane and strip)
     *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)],
@@ -9439,64 +9330,55 @@ print(f"Datafile saved in {save_filename}. Path is {save_list_path}")
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
-background_cols = [col for col in df.columns if col.startswith('background_slope_')]
-
-columns_to_keep.extend(sigmoid_cols + background_cols)
-
-# Print global variables
-print("Global variables:")
-print(global_variables)
-
-# Put the global_variables as columns in the final data dataframe -------------
-for key, value in global_variables.items():
-    if key not in definitive_df.columns:
-        print(f"Adding {key} to the dataframe.")
-        definitive_df[key] = value
-    else:
-        print(f"Warning: Column '{key}' already exists in the DataFrame. Skipping addition.")
-
-
+# Construct the new calibration row
 new_row = {'Start_Time': start_time, 'End_Time': end_time}
 
+# Include pedestal and calibration parameters
 for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
     for j in range(4):
         strip = j + 1
         if crosstalk_fitting:
-            new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2 - crosstalk_pedestal[f'crstlk_pedestal_{module}s{strip}']
+            q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2 - crosstalk_pedestal[f'crstlk_pedestal_{module}s{strip}']
         else:
-            new_row[f'{module}_s{strip}_Q_sum'] = ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
+            q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2
+        new_row[f'{module}_s{strip}_Q_sum'] = q_sum
+        new_row[f'{module}_s{strip}_Q_F'] = QF_pedestal[i][j]
+        new_row[f'{module}_s{strip}_Q_B'] = QB_pedestal[i][j]
         new_row[f'{module}_s{strip}_T_sum'] = calibration_times[i, j]
-        new_row[f'{module}_s{strip}_Q_dif'] = ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
         new_row[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j]
 
-if os.path.exists(csv_path):
-    # Load the existing DataFrame
-    metadata_df = pd.read_csv(csv_path, parse_dates=['Start_Time'])
-else:
-    columns = ['Start_Time'] + [
-        f'{module}_s{strip}_{var}'
-        for module in ['P1', 'P2', 'P3', 'P4']
-        for strip in range(1, 5)
-        for var in ['Q_sum', 'T_sum', 'Q_dif', 'T_dif']
-    ]
-    metadata_df = pd.DataFrame(columns=columns)
+# Add global variables (e.g., counts, sigmoid widths, slopes)
+for key, value in global_variables.items():
+    new_row[key] = value
 
-# Check if the current time already exists
-existing_row_index = metadata_df[metadata_df['Start_Time'] == start_time].index
+# Load or initialize metadata DataFrame
+if os.path.exists(csv_path):
+    metadata_df = pd.read_csv(csv_path, parse_dates=['Start_Time', 'End_Time'])
+else:
+    metadata_df = pd.DataFrame(columns=new_row.keys())
+
+# Find full match in both Start_Time and End_Time
+match = (
+    (metadata_df['Start_Time'] == start_time) &
+    (metadata_df['End_Time'] == end_time)
+)
+existing_row_index = metadata_df[match].index
 
 if not existing_row_index.empty:
-    # Update the existing row
     metadata_df.loc[existing_row_index[0]] = new_row
-    print(f"Updated existing calibration for date: {start_time}")
+    print(f"Updated existing calibration for time range: {start_time} to {end_time}")
 else:
-    # Append the new row
     metadata_df = pd.concat([metadata_df, pd.DataFrame([new_row])], ignore_index=True)
-    print(f"Added new calibration for date: {start_time}")
+    print(f"Added new calibration for time range: {start_time} to {end_time}")
 
+# Sort and save
 metadata_df.sort_values(by='Start_Time', inplace=True)
+
+# Put Start_Time and End_Time as first columns
+metadata_df = metadata_df[['Start_Time', 'End_Time'] + [col for col in metadata_df.columns if col not in ['Start_Time', 'End_Time']]]
+
 metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
-print(f'{csv_path} updated with the calibrations for this folder.')
+print(f'{csv_path} updated with the calibration summary.')
 
 
 # -----------------------------------------------------------------------------
@@ -9555,3 +9437,4 @@ print(f"Time taken for the whole execution: {time_taken:.2f} minutes")
 print("----------------------------------------------------------------------")
 print("------------------- Finished list_events creation --------------------")
 print("----------------------------------------------------------------------\n\n\n")
+# %%

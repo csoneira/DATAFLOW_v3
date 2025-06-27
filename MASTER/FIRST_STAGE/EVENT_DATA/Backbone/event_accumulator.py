@@ -1,4 +1,6 @@
 #%%
+from __future__ import annotations
+#%%
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -30,6 +32,17 @@ import sys
 import os
 import builtins
 import shutil
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy.stats import poisson
+from scipy.optimize import minimize
+from scipy.optimize import curve_fit
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+from typing import List, Tuple, Dict
 import random
 from datetime import datetime
 from matplotlib.backends.backend_pdf import PdfPages
@@ -40,6 +53,59 @@ import matplotlib as mpl
 from scipy.ndimage import gaussian_filter1d
 from scipy.stats import poisson
 from scipy.optimize import minimize
+
+from pathlib import Path
+from typing import Union
+import numpy as np
+import pandas as pd
+import math
+from scipy.sparse import load_npz, csc_matrix
+from pathlib import Path
+from typing  import Union
+import numpy as np
+import pandas as pd
+import math
+from scipy.sparse import load_npz, csc_matrix
+
+import numpy as np
+import pandas as pd
+import math
+from typing import Optional, Dict
+from pathlib import Path
+from tqdm import tqdm
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from tqdm import tqdm
+from scipy.optimize import curve_fit
+from scipy.stats import poisson
+from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import builtins
+
+from typing import Dict, Optional
+import numpy as np
+import pandas as pd
+import math
+from typing import Dict, Optional
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import math
+from typing import Dict, Optional
+try:
+    from tqdm.auto import tqdm
+except ModuleNotFoundError:
+    tqdm = None
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib import cm
+
+import matplotlib as mpl
 
 last_file_test = True
 reanalyze_completed = True
@@ -58,6 +124,8 @@ print("----------------------------------------------------------------------")
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
+
+multiple_files = True
 
 run_jupyter_notebook = True
 if run_jupyter_notebook:
@@ -90,34 +158,33 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
 remove_outliers = True
 create_plots = False
-create_essential_plots = True
+create_essential_plots = False
 save_plots = True
 create_pdf = True
 force_replacement = True  # Creates a new datafile even if there is already one that looks complete
 show_plots = False
-caye_high_mid_limit_angle = 10
 
-hans_high_mid_limit_angle = 10
-hans_low_mid_limit_angle = 40
+# Angular region selection
+theta_boundaries = [5, 15, 25]
+region_layout = [1, 8, 8, 8]
 
+# Particular analysis -----------------
 
-theta_boundaries = [16]
-region_layout = [1, 4]
+side_calculations = False # !!!!!!!!!!!!
 
-polya_fit = False
+eff_vs_charge = False
+eff_vs_angle_and_pos = True
+noise_vs_angle = False
+charge_vs_angle = False
+polya_fit = True
 real_strip_case_study = False
 multiplicity_calculations = True
 crosstalk_probability = True
-georgys = False
+n_study_fit = False
+topology_plots = False
 
-event_acc_global_variables = {
-    "poisson_rejected": 0,
-    "hans_reg_high_to_mid": hans_high_mid_limit_angle,
-    "hans_reg_mid_to_low": hans_low_mid_limit_angle,
-    "caye_reg_high_to_mid": caye_high_mid_limit_angle,
-}
-
-event_acc_global_variables["poisson_rejected"] = 0
+global_variables = {}
+global_variables["poisson_rejected"] = 0
 
 
 print("----------------------------------------------------------------------")
@@ -127,9 +194,12 @@ print("----------------------------------------------------------------------")
 fig_idx = 0
 plot_list = []
 
+config_files_directory = os.path.expanduser(f"~/DATAFLOW_v3/CONFIG_FILES/")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 working_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/EVENT_DATA")
 acc_working_directory = os.path.join(working_directory, "LIST_TO_ACC")
+
+csv_path = os.path.join(working_directory, "event_accumulator_metadata.csv")
 
 # Define subdirectories relative to the working directory
 base_directories = {
@@ -358,8 +428,6 @@ valid_times = df['Time'].dropna()
 
 # ------------------------------------------------------------------------------------------
 
-multiple_files = True
-
 # --- MULTIPLE FILES HANDLING ---
 if multiple_files:
     from datetime import datetime, timedelta
@@ -441,6 +509,9 @@ if not valid_times.empty:
     min_time_valid = valid_times.min()
     max_time_valid = valid_times.max()
     
+    start_time = min_time_original
+    end_time = max_time_original
+    
     # Check if the overall min time (possibly NaT) differs from the valid min time
     if min_time_original != min_time_valid:
         print("Notice: The minimum value from 'Time' column differs from the smallest valid datetime.")
@@ -483,8 +554,6 @@ else:
     print("Input configuration file does not exist.")
 
 if exists_input_file:
-    start_time = min_time_original
-    end_time = max_time_original
     
     # Read and preprocess the input file only once
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
@@ -582,15 +651,6 @@ for col in df.columns:
         new_col = col.replace("Q_M", "Q_P")
         df.rename(columns={col: new_col}, inplace=True)
 
-# New fitting track columns combining timtrack and the alternative method
-df['new_x'] = ( df['x'] + df['alt_x'] ) / 2
-df['new_y'] = ( df['y'] + df['alt_y'] ) / 2
-df['new_theta'] = ( df['theta'] + df['alt_theta'] ) / 2
-df['new_phi'] = ( df['phi'] + df['alt_phi'] ) / 2
-df['new_s'] = ( df['s'] + df['alt_s'] ) / 2
-df['new_th_chi'] = ( df['th_chi'] + df['alt_th_chi'] ) / 2
-
-
 show_plots = True
 
 def compute_definitive_tt(row):
@@ -611,6 +671,7 @@ def compute_definitive_tt(row):
 df["definitive_tt"] = df.apply(compute_definitive_tt, axis=1)
 original_df = df.copy()
 
+
 # ---------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------
@@ -621,7 +682,7 @@ original_df = df.copy()
 # ---------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------
 
-side_calculations = False
+
 if side_calculations:
     print("----------------------------------------------------------------------")
     print("----------------------------------------------------------------------")
@@ -633,7 +694,6 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
 
-    eff_vs_charge = True
     if eff_vs_charge:
         print("----------------------------------------------------------------------")
         print("------------------- Efficiency respect the charge --------------------")
@@ -669,7 +729,7 @@ if side_calculations:
             for col, tt_set in unique_tt_per_col.items():
                 for tt in tt_set:
                     df_tt = df_filtered[df_filtered[col] == int(tt)]
-                    theta_vals = df_tt['new_theta'].dropna()
+                    theta_vals = df_tt['theta'].dropna()
                     print(f"[DEBUG] filter={filter_value:.1f}, col={col}, tt={tt}, entries={len(theta_vals)}")
                     if len(theta_vals) < 10:
                         continue
@@ -819,8 +879,6 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
 
-
-    eff_vs_angle_and_pos = True
     if eff_vs_angle_and_pos:
         
         print("----------------------------------------------------------------------")
@@ -877,10 +935,10 @@ if side_calculations:
 
         # TT combinations: (numerator, denominator, column_name, label, color)
         tt_combos = [
-            ('1234', '134', 'subdetector_1234_tt', r'3-plane eff_2 $= \frac{1234}{134 + 1234}$', 'blue'),
-            ('123',  '13',  'subdetector_123_tt',  r'2-plane eff_2 $= \frac{123}{13 + 123}$',     'red'),
-            ('1234', '124', 'subdetector_1234_tt', r'3-plane eff_3 $= \frac{1234}{124 + 1234}$', 'green'),
-            ('234',  '24',  'subdetector_234_tt',  r'2-plane eff_3 $= \frac{234}{24 + 234}$',     'orange'),
+            ('1234', '134', 'subdetector_1234_tt', r'3-plane-eff_2', 'blue'),
+            ('123',  '13',  'subdetector_123_tt',  r'2-plane-eff_2', 'red'),
+            ('1234', '124', 'subdetector_1234_tt', r'3-plane-eff_3', 'green'),
+            ('234',  '24',  'subdetector_234_tt',  r'2-plane-eff_3', 'orange'),
         ]
 
         # Build unified set of all TT values needed, grouped by column
@@ -893,7 +951,7 @@ if side_calculations:
         for col, tt_set in unique_tt_per_col.items():
             for tt in tt_set:
                 df_tt = df_filtered[df_filtered[col] == int(tt)]
-                theta_vals = df_tt['new_theta'].dropna()
+                theta_vals = df_tt['theta'].dropna()
                 if len(theta_vals) < 10:
                     continue
                 counts, _ = np.histogram(theta_vals, bins=bins)
@@ -914,9 +972,9 @@ if side_calculations:
                                         where=(n_num + n_den) > 0))
             eff_results.append((eff, err, label, color))
             
-            if "2-plane eff_2" in label:
+            if "2-plane-eff_2" in label:
                 eff_2_sd = eff
-            elif "2-plane eff_3" in label:
+            elif "2-plane-eff_3" in label:
                 eff_3_sd = eff
         
         
@@ -946,7 +1004,7 @@ if side_calculations:
             plt.tight_layout()
 
             if save_plots:
-                filename = f'{fig_idx}_new_theta_zoom_counts_all.png'
+                filename = f'{fig_idx}_theta_zoom_counts_all.png'
                 fig_idx += 1
                 path = os.path.join(base_directories["figure_directory"], filename)
                 plot_list.append(path)
@@ -974,7 +1032,7 @@ if side_calculations:
             plt.tight_layout()
 
             if save_plots:
-                filename = f'{fig_idx}_new_theta_efficiencies_all.png'
+                filename = f'{fig_idx}_theta_efficiencies_all.png'
                 fig_idx += 1
                 path = os.path.join(base_directories["figure_directory"], filename)
                 plot_list.append(path)
@@ -993,87 +1051,135 @@ if side_calculations:
         def power_law(theta, a, n, eps0):
             return a * theta**n + eps0
 
-        # Plot efficiencies and fits
-        if create_plots or create_essential_plots:
-            fig_eff, ax_eff = plt.subplots(figsize=(7, 5))
+        # ──────────────────────────────────────────────────────────────────
+        # Model
+        # ──────────────────────────────────────────────────────────────────
+        def power_law(theta: np.ndarray, a: float, n: float, eps0: float) -> np.ndarray:
+            return eps0 * (1.0 - a * np.abs(theta) ** n)
+
+
+        # ──────────────────────────────────────────────────────────────────
+        # 1. Fitting only
+        # ──────────────────────────────────────────────────────────────────
+        def fit_efficiencies(
+            eff_results:  List[Tuple[np.ndarray, np.ndarray, str, str]],
+            bin_centers:  np.ndarray,
+        ) -> Tuple[pd.DataFrame, List[np.ndarray]]:
+            """
+            Returns
+            -------
+            df_fits      : DataFrame with columns [label, color, a, n, eps0]
+            fit_curves   : list evaluated on *bin_centers*, aligned with eff_results
+            """
+            fit_params_list: List[Dict[str, object]] = []
+            fit_curves:      List[np.ndarray]        = []
 
             for eff, err, label, color in eff_results:
-                # Plot measured efficiency
-                ax_eff.plot(bin_centers, eff, label=label, color=color)
-                ax_eff.fill_between(bin_centers, eff - err, eff + err, alpha=0.3, color=color)
+                # mask out extreme/invalid efficiency points
+                mask = (eff >= 0.5) & (eff <= 1.01)
+                theta_fit      = bin_centers[mask]
+                eff_fit_data   = eff[mask]
 
-                # Fit and overlay convex power-law model
                 try:
-                    # Mask: only keep reasonable efficiency values
-                    mask = (eff >= 0.5) & (eff <= 1.01)
-                    theta_fit = bin_centers[mask]
-                    eff_fit_data = eff[mask]
-
                     popt, _ = curve_fit(
                         power_law,
                         theta_fit,
                         eff_fit_data,
                         p0=[1.0, 2.0, 0.7],
-                        maxfev=10000
+                        maxfev=10000,
                     )
-                    
-                    fit_params_list.append({
-                        'label': label,
-                        'color': color,
-                        'a': popt[0],
-                        'n': popt[1],
-                        'eps0': popt[2]
-                    })
-                    
-                    eff_fit = power_law(bin_centers, *popt)  # Evaluate on full domain for plotting
-                    ax_eff.plot(bin_centers, eff_fit, '--', color=color, linewidth=1.2)
+                    fit_params_list.append(
+                        dict(label=label, color=color, a=popt[0], n=popt[1], eps0=popt[2])
+                    )
+                    fit_curves.append(power_law(bin_centers, *popt))
                 except RuntimeError:
                     print(f"[WARN] Fit failed for: {label}")
+                    # keep placeholders so indexing stays aligned
+                    fit_params_list.append(dict(label=label, color=color, a=np.nan, n=np.nan, eps0=np.nan))
+                    fit_curves.append(np.full_like(bin_centers, np.nan))
 
-            ax_eff.set_xlim(0, right)
-            ax_eff.set_ylim(0.5, 1.05)
-            ax_eff.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
-            ax_eff.set_ylabel('Efficiency')
-            ax_eff.set_title('Angular Efficiency Estimates with Convex Fits')
-            ax_eff.grid(True)
-            ax_eff.legend(fontsize='small')
+            df_fits = pd.DataFrame(fit_params_list)
+            return df_fits, fit_curves
+
+
+        # ──────────────────────────────────────────────────────────────────
+        # 2. Optional plotting
+        # ──────────────────────────────────────────────────────────────────
+        def plot_efficiencies_with_fits(
+            eff_results:       List[Tuple[np.ndarray, np.ndarray, str, str]],
+            bin_centers:       np.ndarray,
+            fit_curves:        List[np.ndarray],
+            right:             float,
+            base_directories:  Dict[str, str],
+            fig_idx:           int,
+            save_plots:        bool,
+            show_plots:        bool,
+        ) -> int:
+            fig, ax = plt.subplots(figsize=(7, 5))
+
+            for (eff, err, label, color), fit in zip(eff_results, fit_curves):
+                ax.plot(bin_centers, eff, label=label, color=color)
+                ax.fill_between(bin_centers, eff - err, eff + err, alpha=0.3, color=color)
+
+                if not np.isnan(fit).all():
+                    ax.plot(bin_centers, fit, '--', color=color, linewidth=1.2)
+
+            ax.set_xlim(0, right)
+            ax.set_ylim(0.85, 1.05)
+            ax.set_xlabel(r'$\theta_{\mathrm{new}}$ [rad]')
+            ax.set_ylabel('Efficiency')
+            ax.set_title('Angular Efficiency Estimates with Convex Fits')
+            ax.grid(True)
+            ax.legend(fontsize='small')
             plt.tight_layout()
 
             if save_plots:
-                filename = f'{fig_idx}_new_theta_efficiencies_all_with_fit.png'
-                fig_idx += 1
+                filename = f'{fig_idx}_theta_efficiencies_all_with_fit.png'
                 path = os.path.join(base_directories["figure_directory"], filename)
-                plot_list.append(path)
                 plt.savefig(path)
-
+                fig_idx += 1
             if show_plots:
                 plt.show()
-            plt.close()
-            
-            import pandas as pd
+            plt.close(fig)
+            return fig_idx
 
-            df_fits = pd.DataFrame(fit_params_list)
-            print("Fitted parameters for convex power-law models:")
-            print(df_fits)
-            
-            # Save in new columns the fitted parameters
-            for _, row in df_fits.iterrows():
-                if "eff_2" in row["label"] and "3-plane" in row["label"]:
-                    df["P2_3fold_a"] = row["a"]
-                    df["P2_3fold_n"] = row["n"]
-                    df["P2_3fold_eps0"] = row["eps0"]
-                elif "eff_2" in row["label"] and "2-plane" in row["label"]:
-                    df["P2_2fold_a"] = row["a"]
-                    df["P2_2fold_n"] = row["n"]
-                    df["P2_2fold_eps0"] = row["eps0"]
-                elif "eff_3" in row["label"] and "3-plane" in row["label"]:
-                    df["P3_3fold_a"] = row["a"]
-                    df["P3_3fold_n"] = row["n"]
-                    df["P3_3fold_eps0"] = row["eps0"]
-                elif "eff_3" in row["label"] and "2-plane" in row["label"]:
-                    df["P4_2fold_a"] = row["a"]
-                    df["P4_2fold_n"] = row["n"]
-                    df["P4_2fold_eps0"] = row["eps0"]
+
+        # ──────────────────────────────────────────────────────────────────
+        # 3. Driver (replace flags with your existing variables)
+        # ──────────────────────────────────────────────────────────────────
+        df_fits, fit_curves = fit_efficiencies(eff_results, bin_centers)
+        print(df_fits)                        # always available
+
+        # store fitted parameters back into df as before
+        for _, row in df_fits.iterrows():
+            if "eff_2" in row["label"] and "3-plane" in row["label"]:
+                df["P2_3fold_a"]   = row["a"]
+                df["P2_3fold_n"]   = row["n"]
+                df["P2_3fold_eps0"] = row["eps0"]
+            elif "eff_2" in row["label"] and "2-plane" in row["label"]:
+                df["P2_2fold_a"]   = row["a"]
+                df["P2_2fold_n"]   = row["n"]
+                df["P2_2fold_eps0"] = row["eps0"]
+            elif "eff_3" in row["label"] and "3-plane" in row["label"]:
+                df["P3_3fold_a"]   = row["a"]
+                df["P3_3fold_n"]   = row["n"]
+                df["P3_3fold_eps0"] = row["eps0"]
+            elif "eff_3" in row["label"] and "2-plane" in row["label"]:
+                df["P4_2fold_a"]   = row["a"]
+                df["P4_2fold_n"]   = row["n"]
+                df["P4_2fold_eps0"] = row["eps0"]
+
+        # plotting only if requested
+        if create_plots or create_essential_plots:
+            fig_idx = plot_efficiencies_with_fits(
+                eff_results, bin_centers, fit_curves,
+                right,
+                base_directories,
+                fig_idx,
+                save_plots,
+                show_plots,
+            )
+
             
             
             print("----------------------------------------------------------------------")
@@ -1097,8 +1203,8 @@ if side_calculations:
             for col, tt_set in unique_tt_per_col.items():
                 for tt in tt_set:
                     df_tt = df_filtered[df_filtered[col] == int(tt)]
-                    theta_vals = df_tt['new_x'].dropna()
-                    phi_vals = df_tt['new_y'].dropna()
+                    theta_vals = df_tt['x'].dropna()
+                    phi_vals = df_tt['y'].dropna()
                     if len(theta_vals) < 10:
                         continue
                     counts, _, _ = np.histogram2d(theta_vals, phi_vals, bins=[bins_theta, bins_phi])
@@ -1168,8 +1274,8 @@ if side_calculations:
             for col, tt_set in unique_tt_per_col.items():
                 for tt in tt_set:
                     df_tt = df_filtered[df_filtered[col] == int(tt)]
-                    theta_vals = df_tt['new_theta'].dropna()
-                    phi_vals = df_tt['new_phi'].dropna()
+                    theta_vals = df_tt['theta'].dropna()
+                    phi_vals = df_tt['phi'].dropna()
                     if len(theta_vals) < 10:
                         continue
                     counts, _, _ = np.histogram2d(theta_vals, phi_vals, bins=[bins_theta, bins_phi])
@@ -1220,9 +1326,8 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
-
-
-    noise_vs_angle = True
+    
+    
     if noise_vs_angle:
         
         print("----------------------------------------------------------------------")
@@ -1300,28 +1405,28 @@ if side_calculations:
         # -----------------------------------------------------------------------------
         
         # ---------------------- THETA DEFINITIONS ----------------------
-        theta_12   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 12, 'new_theta']
-        theta_23   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 23, 'new_theta']
-        theta_34   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 34, 'new_theta']
-        theta_123  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 123, 'new_theta']
-        theta_234  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 234, 'new_theta']
-        theta_1234 = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 1234, 'new_theta']
-        theta_14   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 14, 'new_theta']
-        theta_124  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 124, 'new_theta']
-        theta_134  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 134, 'new_theta']
+        theta_12   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 12, 'theta']
+        theta_23   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 23, 'theta']
+        theta_34   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 34, 'theta']
+        theta_123  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 123, 'theta']
+        theta_234  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 234, 'theta']
+        theta_1234 = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 1234, 'theta']
+        theta_14   = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 14, 'theta']
+        theta_124  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 124, 'theta']
+        theta_134  = df_filtered.loc[df_filtered['subdetector_1234_tt'] == 134, 'theta']
 
-        theta_12_sd_123   = df_filtered.loc[df_filtered['subdetector_123_tt'] == 12, 'new_theta']
-        theta_23_sd_123   = df_filtered.loc[df_filtered['subdetector_123_tt'] == 23, 'new_theta']
-        theta_123_sd_123  = df_filtered.loc[df_filtered['subdetector_123_tt'] == 123, 'new_theta']
-        theta_13_sd_123   = df_filtered.loc[df_filtered['subdetector_123_tt'] == 13, 'new_theta']
+        theta_12_sd_123   = df_filtered.loc[df_filtered['subdetector_123_tt'] == 12, 'theta']
+        theta_23_sd_123   = df_filtered.loc[df_filtered['subdetector_123_tt'] == 23, 'theta']
+        theta_123_sd_123  = df_filtered.loc[df_filtered['subdetector_123_tt'] == 123, 'theta']
+        theta_13_sd_123   = df_filtered.loc[df_filtered['subdetector_123_tt'] == 13, 'theta']
 
-        theta_23_sd_234   = df_filtered.loc[df_filtered['subdetector_234_tt'] == 23, 'new_theta']
-        theta_34_sd_234   = df_filtered.loc[df_filtered['subdetector_234_tt'] == 34, 'new_theta']
-        theta_234_sd_234  = df_filtered.loc[df_filtered['subdetector_234_tt'] == 234, 'new_theta']
-        theta_24_sd_234   = df_filtered.loc[df_filtered['subdetector_234_tt'] == 24, 'new_theta']
+        theta_23_sd_234   = df_filtered.loc[df_filtered['subdetector_234_tt'] == 23, 'theta']
+        theta_34_sd_234   = df_filtered.loc[df_filtered['subdetector_234_tt'] == 34, 'theta']
+        theta_234_sd_234  = df_filtered.loc[df_filtered['subdetector_234_tt'] == 234, 'theta']
+        theta_24_sd_234   = df_filtered.loc[df_filtered['subdetector_234_tt'] == 24, 'theta']
 
-        theta_13  = df_filtered.loc[df_filtered['processed_tt'] == 13,  'new_theta']
-        theta_24  = df_filtered.loc[df_filtered['processed_tt'] == 24,  'new_theta']
+        theta_13  = df_filtered.loc[df_filtered['processed_tt'] == 13,  'theta']
+        theta_24  = df_filtered.loc[df_filtered['processed_tt'] == 24,  'theta']
 
         # ---------------------- COUNTS COMPUTATION ----------------------
         counts_12, _   = np.histogram(theta_12, bins=bins)
@@ -1714,8 +1819,8 @@ if side_calculations:
             # Get theta, phi from df_filtered for each topology
             def get_2d_counts(df, topo_col, topo_val):
                 df_topo = df[df[topo_col] == topo_val]
-                theta_vals = df_topo["new_theta"].dropna()
-                phi_vals = df_topo["new_phi"].dropna()
+                theta_vals = df_topo["theta"].dropna()
+                phi_vals = df_topo["phi"].dropna()
                 counts, _, _ = np.histogram2d(theta_vals, phi_vals, bins=[bins_theta, bins_phi])
                 return counts
 
@@ -1817,100 +1922,98 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
+    
+    
+    # histogram_results = True
+    # if histogram_results:
 
+    #     import numpy as np
+    #     import matplotlib.pyplot as plt
+    #     from scipy.optimize import curve_fit
 
-    histogram_results = True
-    if histogram_results:
+    #     def gaussian(x, mu, sigma, amplitude):
+    #         return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
 
-        import numpy as np
-        import matplotlib.pyplot as plt
-        from scipy.optimize import curve_fit
+    #     columns_all = [
+    #         ['x', 'theta', 's', 'y', 'phi', 'th_chi'],          # TimTrack
+    #         ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi'],  # Alternative
+    #         ['x', 'theta', 'new_s', 'y', 'phi', 'new_th_chi']   # Averaged
+    #     ]
 
-        def gaussian(x, mu, sigma, amplitude):
-            return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
+    #     titles = ['TimTrack Results', 'Alternative Results', 'Averaged Results']
+    #     color_map = {
+    #         "theta": "blue", "phi": "green", "x": "darkorange", "y": "darkorange",
+    #         "alt_y": "darkorange", "s": "purple", "alt_s": "purple", "th_chi": "red"
+    #     }
 
-        columns_all = [
-            ['x', 'theta', 's', 'y', 'phi', 'th_chi'],          # TimTrack
-            ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi'],  # Alternative
-            ['new_x', 'new_theta', 'new_s', 'new_y', 'new_phi', 'new_th_chi']   # Averaged
-        ]
+    #     ranges = {
+    #         "theta": (0, np.pi/2), "phi": (-np.pi, np.pi),
+    #         "x": (-500, 500), "y": (-500, 500), "alt_y": (-500, 500),
+    #         "s": (-0.01, 0.02), "alt_s": (-0.01, 0.02),
+    #         "th_chi": (0, 10)
+    #     }
 
-        titles = ['TimTrack Results', 'Alternative Results', 'Averaged Results']
-        color_map = {
-            "theta": "blue", "phi": "green", "x": "darkorange", "y": "darkorange",
-            "alt_y": "darkorange", "s": "purple", "alt_s": "purple", "th_chi": "red"
-        }
+    #     fig, axs = plt.subplots(3, 6, figsize=(24, 10), constrained_layout=True)
+    #     axs = axs.flatten()
+    #     idx = 0
+    #     quantile = 0.99
+    #     fit_gaussian = True
 
-        ranges = {
-            "theta": (0, np.pi/2), "phi": (-np.pi, np.pi),
-            "x": (-500, 500), "y": (-500, 500), "alt_y": (-500, 500),
-            "s": (-0.01, 0.02), "alt_s": (-0.01, 0.02),
-            "th_chi": (0, 10)
-        }
+    #     for row, (columns, row_title) in enumerate(zip(columns_all, titles)):
+    #         for col in columns:
+    #             data = df[col].to_numpy()
+    #             data = data[data != 0]
+    #             ax = axs[idx]
+    #             idx += 1
 
-        fig, axs = plt.subplots(3, 6, figsize=(24, 10), constrained_layout=True)
-        axs = axs.flatten()
-        idx = 0
-        quantile = 0.99
-        fit_gaussian = True
+    #             if len(data) == 0:
+    #                 ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha='center', va='center', color='gray')
+    #                 ax.set_title(col)
+    #                 continue
 
-        for row, (columns, row_title) in enumerate(zip(columns_all, titles)):
-            for col in columns:
-                data = df[col].to_numpy()
-                data = data[data != 0]
-                ax = axs[idx]
-                idx += 1
+    #             for key in ranges:
+    #                 if key in col:
+    #                     left, right = ranges[key]
+    #                     break
+    #             else:
+    #                 left, right = np.min(data), np.max(data)
 
-                if len(data) == 0:
-                    ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha='center', va='center', color='gray')
-                    ax.set_title(col)
-                    continue
+    #             color = next((v for k, v in color_map.items() if k in col), 'gray')
 
-                for key in ranges:
-                    if key in col:
-                        left, right = ranges[key]
-                        break
-                else:
-                    left, right = np.min(data), np.max(data)
+    #             hist_data, bin_edges, _ = ax.hist(data, bins=200, color=color, alpha=0.7)
 
-                color = next((v for k, v in color_map.items() if k in col), 'gray')
+    #             ax.set_xlim(left, right)
+    #             ax.set_title(col)
 
-                hist_data, bin_edges, _ = ax.hist(data, bins=200, color=color, alpha=0.7)
+    #             if fit_gaussian and len(data) > 10:
+    #                 try:
+    #                     qmin, qmax = np.quantile(data, [1 - quantile, quantile])
+    #                     filt_data = data[(data >= qmin) & (data <= qmax)]
 
-                ax.set_xlim(left, right)
-                ax.set_title(col)
+    #                     if len(filt_data) >= 2:
+    #                         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    #                         popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filt_data), np.std(filt_data), np.max(hist_data)])
+    #                         x = np.linspace(qmin, qmax, 1000)
+    #                         ax.plot(x, gaussian(x, *popt), 'r-', label=f'μ={popt[0]:.2g}, σ={popt[1]:.2g}')
+    #                         ax.legend()
+    #                     else:
+    #                         ax.text(0.5, 0.5, "Not enough data", transform=ax.transAxes, ha='center', va='center', color='gray')
+    #                 except (RuntimeError, ValueError):
+    #                     ax.text(0.5, 0.5, "Fit failed", transform=ax.transAxes, ha='center', va='center', color='red')
 
-                if fit_gaussian and len(data) > 10:
-                    try:
-                        qmin, qmax = np.quantile(data, [1 - quantile, quantile])
-                        filt_data = data[(data >= qmin) & (data <= qmax)]
+    #     for i in range(idx, len(axs)):
+    #         fig.delaxes(axs[i])
 
-                        if len(filt_data) >= 2:
-                            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-                            popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filt_data), np.std(filt_data), np.max(hist_data)])
-                            x = np.linspace(qmin, qmax, 1000)
-                            ax.plot(x, gaussian(x, *popt), 'r-', label=f'μ={popt[0]:.2g}, σ={popt[1]:.2g}')
-                            ax.legend()
-                        else:
-                            ax.text(0.5, 0.5, "Not enough data", transform=ax.transAxes, ha='center', va='center', color='gray')
-                    except (RuntimeError, ValueError):
-                        ax.text(0.5, 0.5, "Fit failed", transform=ax.transAxes, ha='center', va='center', color='red')
-
-        for i in range(idx, len(axs)):
-            fig.delaxes(axs[i])
-
-        fig.suptitle("Histograms with Optional Gaussian Fits", fontsize=18)
-        plt.show()
+    #     fig.suptitle("Histograms with Optional Gaussian Fits", fontsize=18)
+    #     plt.show()
 
 
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
-
-
-    charge_vs_angle = True
+    
+    
     if charge_vs_angle:
-        
         
         print("----------------------------------------------------------------------")
         print("-------------------- Charge respect zenith angle ---------------------")
@@ -1938,7 +2041,7 @@ if side_calculations:
 
                 col_name = f"Q_P{i}"
                 for k in range(n_divisions):
-                    mask = (df["new_theta"] >= theta_edges[k]) & (df["new_theta"] < theta_edges[k+1]) & (df["processed_tt"] > 10)
+                    mask = (df["theta"] >= theta_edges[k]) & (df["theta"] < theta_edges[k+1]) & (df["processed_tt"] > 10)
                     v = df.loc[mask, col_name]
                     v = v[v != 0]
                     label = f"{theta_edges[k]:.2f} ≤ θ < {theta_edges[k+1]:.2f}"
@@ -1970,8 +2073,8 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
-
-
+    
+    
     if polya_fit:
         
         print("----------------------------------------------------------------------")
@@ -2033,7 +2136,7 @@ if side_calculations:
         merged_df = pd.concat(df_list, ignore_index=True)
         merged_df.drop_duplicates(inplace=True)
         
-        print(merged_df.columns.to_list())
+        # print(merged_df.columns.to_list())
         
         merged_df = merged_df[ merged_df['processed_tt'] == 1234 ]
         
@@ -2045,7 +2148,7 @@ if side_calculations:
                     if "Q_" in col and "s" in col:
                         merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
 
-        columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
+        columns_to_drop = ['Time','x', 'y', 'theta', 'phi']
         merged_df = merged_df.drop(columns=columns_to_drop)
 
         # For all the columns apply the calibration and not change the name of the columns
@@ -2246,10 +2349,10 @@ if side_calculations:
         merged_df = pd.concat(df_list, ignore_index=True)
         merged_df.drop_duplicates(inplace=True)
         
-        print(merged_df.columns.to_list())
+        # print(merged_df.columns.to_list())
         
         merged_df = merged_df[ merged_df['processed_tt'] > 10 ]
-        merged_df = merged_df[ merged_df['new_theta'] < 0.5 ]
+        merged_df = merged_df[ merged_df['theta'] < 0.5 ]
 
         if remove_crosstalk or remove_streamer:    
             if remove_streamer:
@@ -2257,7 +2360,7 @@ if side_calculations:
                     if "Q_" in col and "s" in col:
                         merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
 
-        columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
+        columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
         merged_df = merged_df.drop(columns=columns_to_drop)
 
         # For all the columns apply the calibration and not change the name of the columns
@@ -2362,11 +2465,6 @@ if side_calculations:
         if show_plots: plt.show()
         plt.close()
 
-        df_polya_fit = pd.DataFrame(polya_fit_list)
-
-        print("Polya fit results:")
-        with pd.option_context('display.precision', 1):
-            print(df_polya_fit)
         
         # ---------------------------------------------------------------------------------
         # ---------------------------------------------------------------------------------
@@ -2374,59 +2472,15 @@ if side_calculations:
         
         print("Polya fit respect to the angle. WIP.")
 
-        remove_crosstalk = False
-        remove_streamer = True
-        crosstalk_limit = 1
-        streamer_limit = 100
-
-        FEE_calibration = {
-            "Width": [
-                0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-                160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
-                300, 310, 320, 330, 340, 350, 360, 370, 380, 390
-            ],
-            "Fast Charge": [
-                4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-                9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
-                1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
-                1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
-                2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-                2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
-                2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
-            ]
-        }
-
-        # Create the DataFrame
-        FEE_calibration = pd.DataFrame(FEE_calibration)
-        from scipy.interpolate import CubicSpline
-        # Convert to NumPy arrays for interpolation
-        width_table = FEE_calibration['Width'].to_numpy()
-        fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-        # Create a cubic spline interpolator
-        cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
-
-        def interpolate_fast_charge(width):
-            """
-            Interpolates the Fast Charge for given Width values using cubic spline interpolation.
-            Parameters:
-            - width (float or np.ndarray): The Width value(s) to interpolate in ns.
-            Returns:
-            - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-            """
-            width = np.asarray(width)  # Ensure input is a NumPy array
-            # Keep zero values unchanged
-            result = np.where(width == 0, 0, cs(width))
-            return result
-
         df_list_OG = [df]  # Adjust delimiter if needed
         df_list = df_list_OG.copy()
         merged_df = pd.concat(df_list, ignore_index=True)
         merged_df.drop_duplicates(inplace=True)
         
-        print(merged_df.columns.to_list())
+        # print(merged_df.columns.to_list())
         
         merged_df = merged_df[ merged_df['processed_tt'] > 10 ]
-        merged_df = merged_df[ merged_df['new_theta'] > 0.5 ]
+        merged_df = merged_df[ merged_df['theta'] > 0.5 ]
 
         if remove_crosstalk or remove_streamer:    
             if remove_streamer:
@@ -2434,7 +2488,7 @@ if side_calculations:
                     if "Q_" in col and "s" in col:
                         merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
 
-        columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
+        columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
         merged_df = merged_df.drop(columns=columns_to_drop)
 
         # For all the columns apply the calibration and not change the name of the columns
@@ -2539,19 +2593,12 @@ if side_calculations:
         if show_plots: plt.show()
         plt.close()
 
-        df_polya_fit = pd.DataFrame(polya_fit_list)
-
-        print("Polya fit results:")
-        with pd.option_context('display.precision', 1):
-            print(df_polya_fit)
-
 
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
-
-
-    real_strip_case_study = True
+    
+    
     if real_strip_case_study:
         
         print("----------------------------------------------------------------------")
@@ -2611,7 +2658,7 @@ if side_calculations:
 
             return result
 
-        columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
+        columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
         merged_df = merged_df.drop(columns=columns_to_drop)
 
         # For all the columns apply the calibration and not change the name of the columns
@@ -2825,7 +2872,6 @@ if side_calculations:
             # Quadruples
             real_multiplicities[f"real_quadruple_{module}_s1234"] = rename_columns(globals()[f"quadruple_{module}_s1234"], f"quadruple_{module}_s1234")
 
-
         # List the keys
         print(real_multiplicities.keys())
         cases = ["real_single", "real_double", "real_triple", "real_quadruple"]
@@ -2851,7 +2897,6 @@ if side_calculations:
                 
                 seen_columns = set()
                 dfs_unique = []
-
                 for key in matching_keys:
                     df = real_multiplicities[key]
                     df_unique = df[[col for col in df.columns if col not in seen_columns]]
@@ -2859,8 +2904,6 @@ if side_calculations:
                     dfs_unique.append(df_unique)
 
                 combined_df = pd.concat(dfs_unique, axis=1)
-
-                
                 all_combined_dfs.append(combined_df)
 
                 if combined_df.shape[1] > max_columns:
@@ -2902,8 +2945,6 @@ if side_calculations:
                 plt.savefig(save_fig_path, format='png')
             if show_plots: plt.show()
             plt.close()
-
-
 
         modules = ["M1", "M2", "M3", "M4"]
         sum_real_multiplicities = {}
@@ -2983,10 +3024,8 @@ if side_calculations:
 
                 # Concatenate all DataFrames for this module into one big DF (columns side by side)
                 # combined_df = pd.concat([combined_multiplicities[k] for k in matching_keys], axis=1)
-                
                 seen_columns = set()
                 dfs_unique = []
-
                 for key in matching_keys:
                     df = combined_multiplicities[key]
                     unique_cols = [col for col in df.columns if col not in seen_columns]
@@ -3049,8 +3088,8 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
-
-
+    
+    
     if multiplicity_calculations:
         
         print("----------------------------------------------------------------------")
@@ -3135,7 +3174,7 @@ if side_calculations:
                                 merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)     
 
 
-        columns_to_drop = ['Time', 'CRT_avg', 'x', 'y', 'theta', 'phi', 's']
+        columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
         merged_df = merged_df.drop(columns=columns_to_drop)
 
         # For all the columns apply the calibration and not change the name of the columns
@@ -3336,11 +3375,9 @@ if side_calculations:
         
         # Dictionaries to store charge values for single and quadruple detections
         single_sample_M1, single_sample_M2, single_sample_M3, single_sample_M4 = [], [], [], []
-        
         merged_sample_df = merged_df.copy()
         
-        print(merged_sample_df["processed_tt"])
-        
+        # print(merged_sample_df["processed_tt"])
         merged_sample_df = merged_sample_df[ merged_sample_df["processed_tt"] == 1234 ]
         
         # Loop over modules
@@ -3385,7 +3422,6 @@ if side_calculations:
         df_single_sample_M2_sum = df_single_sample_M2_sum[ df_single_sample_M2_sum > 0 ]
         df_single_sample_M3_sum = df_single_sample_M3_sum[ df_single_sample_M3_sum > 0 ]
         df_single_sample_M4_sum = df_single_sample_M4_sum[ df_single_sample_M4_sum > 0 ]
-        
         
         # Dictionaries to store charge values for single and quadruple detections
         single_M1, single_M2, single_M3, single_M4 = [], [], [], []
@@ -3670,15 +3706,15 @@ if side_calculations:
         import pandas as pd
 
         coeff_tables = {dt: pd.DataFrame(index=[f"S{n}" for n in range(1, number_of_particles_bound_up + 1)],
-                                        columns=["M1", "M2", "M3", "M4"])
+                                        columns=["P1", "P2", "P3", "P4"])
                         for dt in detection_types}
 
         # Accumulate event-weighted contributions per module
         component_counts = {
-            "M1": np.zeros(number_of_particles_bound_up),
-            "M2": np.zeros(number_of_particles_bound_up),
-            "M3": np.zeros(number_of_particles_bound_up),
-            "M4": np.zeros(number_of_particles_bound_up)
+            "P1": np.zeros(number_of_particles_bound_up),
+            "P2": np.zeros(number_of_particles_bound_up),
+            "P3": np.zeros(number_of_particles_bound_up),
+            "P4": np.zeros(number_of_particles_bound_up)
         }
 
 
@@ -3686,7 +3722,7 @@ if side_calculations:
             ax_hist = axes[i, 0]   # Left column: histograms and fit
             ax_scatter = axes[i, 1]  # Right column: scatter plot
 
-            for j, (df_in, color, module) in enumerate(zip(df_group, module_colors, ['M1', 'M2', 'M3', 'M4'])):
+            for j, (df_in, color, module) in enumerate(zip(df_group, module_colors, ['P1', 'P2', 'P3', 'P4'])):
                 # Real data histogram
                 
                 df_in = np.asarray(df_in)
@@ -3850,17 +3886,9 @@ if side_calculations:
         # Assume coeff_tables_normalized is your dictionary (as printed above)
 
         # Filter out 'Total' and stack the rest into one DataFrame
-        df_mult_fit = (
-            pd.concat(
-                {k: v for k, v in coeff_tables_normalized.items() if k != 'Total'},
-                names=["detection_type", "multiplicity"]
-            )
-            .reset_index()
-            .rename(columns={"level_1": "multiplicity"})
-        )
-
-        # Optional: display or save
-        # print(df_mult_fit)
+        df_mult_fit = ( pd.concat( {k: v for k, v in coeff_tables_normalized.items() if k != 'Total'},
+            names=["detection_type", "multiplicity"] ).reset_index().rename(columns={"level_1": "multiplicity"}) )
+        
         
         # ---------------------------------------------------------------------------------
         # ---------------------------------------------------------------------------------
@@ -3965,13 +3993,13 @@ if side_calculations:
             best_induction_sections.append(best_induction_section)
 
         # Create a new DataFrame to store the results
-        best_induction_section_df = pd.DataFrame({
+        df_best_induction_section = pd.DataFrame({
             "plane": induction_section_df["plane"],
             "best_induction_section": best_induction_sections
         })
 
         # Print the resulting DataFrame
-        print(best_induction_section_df)
+        print(df_best_induction_section)
         
         # Create new columns called PX_induction_section with th e best induction section value
         for i in range(1, 5):
@@ -3981,8 +4009,8 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
-
-
+    
+    
     if crosstalk_probability:
         
         print("----------------------------------------------------------------------")
@@ -3991,11 +4019,8 @@ if side_calculations:
         
         n_bins = 100
         right_lim = 1400 # 1250
-        crosstalk_limit = 2 #2.6
+        crosstalk_limit = 1 #2.6
         charge_vector = np.linspace(crosstalk_limit, right_lim, n_bins)
-
-        remove_streamer = False
-        streamer_limit = 90
 
         FEE_calibration = {
             "Width": [
@@ -4190,50 +4215,51 @@ if side_calculations:
         # ---------------------------------------------------------------------
         # Example usage to produce the 4x4 grid of plots:
         # ---------------------------------------------------------------------
-
-        # 1. Compute fraction + uncertainty
-        x_vals, fraction_hist, frac_err = compute_fraction_and_uncertainty(
-            charge_vector,  # bin edges from your snippet
-            histograms_no_crosstalk,
-            histograms_yes_crosstalk
-        )
+        
+        
+        # # 1. Compute fraction + uncertainty
+        # x_vals, fraction_hist, frac_err = compute_fraction_and_uncertainty(
+        #     charge_vector,  # bin edges from your snippet
+        #     histograms_no_crosstalk,
+        #     histograms_yes_crosstalk
+        # )
 
         # 2. Plot in 4x4
-        fig, axs = plt.subplots(4, 4, figsize=(16, 12), sharex=True, sharey=True)
-        fig.suptitle(f"Crosstalk probability with Poisson Error Bands, mingo0{station}", fontsize=14)
+        # fig, axs = plt.subplots(4, 4, figsize=(16, 12), sharex=True, sharey=True)
+        # fig.suptitle(f"Crosstalk probability with Poisson Error Bands, mingo0{station}", fontsize=14)
 
-        for m in range(1, 5):
-            for s in range(1, 5):
-                ax = axs[m-1, s-1]
-                key = f"P{m}_s{s}"
+        # for m in range(1, 5):
+        #     for s in range(1, 5):
+        #         ax = axs[m-1, s-1]
+        #         key = f"P{m}_s{s}"
 
-                y_vals = fraction_hist[key]
-                y_err  = frac_err[key]
+        #         y_vals = fraction_hist[key]
+        #         y_err  = frac_err[key]
 
-                ax.plot(x_vals, y_vals, label=key)
-                ax.fill_between(x_vals, y_vals - y_err, y_vals + y_err, alpha=0.3)
-                ax.set_ylim(0, 1)         # Because fraction can be negative if N_yes > N_no
-                ax.set_title(key)
-                ax.grid(True)
+        #         ax.plot(x_vals, y_vals, label=key)
+        #         ax.fill_between(x_vals, y_vals - y_err, y_vals + y_err, alpha=0.3)
+        #         ax.set_ylim(0, 1)         # Because fraction can be negative if N_yes > N_no
+        #         ax.set_title(key)
+        #         ax.grid(True)
 
-        # Better spacing
-        for ax in axs[-1, :]:
-            ax.set_xlabel("Charge")
-        for ax in axs[:, 0]:
-            ax.set_ylabel("Probability")
+        # # Better spacing
+        # for ax in axs[-1, :]:
+        #     ax.set_xlabel("Charge")
+        # for ax in axs[:, 0]:
+        #     ax.set_ylabel("Probability")
 
-        # plt.tight_layout(rect=[0, 0, 1, 0.95])
-        plt.tight_layout()
-        figure_name = f"crosstalk_probability_mingo0{station}"
-        if save_plots:
-            name_of_file = figure_name
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-        if show_plots: plt.show()
-        plt.close()
+        # # plt.tight_layout(rect=[0, 0, 1, 0.95])
+        # plt.tight_layout()
+        # figure_name = f"crosstalk_probability_mingo0{station}"
+        # if save_plots:
+        #     name_of_file = figure_name
+        #     final_filename = f'{fig_idx}_{name_of_file}.png'
+        #     fig_idx += 1
+        #     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        #     plot_list.append(save_fig_path)
+        #     plt.savefig(save_fig_path, format='png')
+        # if show_plots: plt.show()
+        # plt.close()
 
 
         # Fit a sigmoidal and store the fitting values to compare with temperature, etc.
@@ -4248,7 +4274,7 @@ if side_calculations:
         def sigmoid_3p(x, x0, k):
             exp_arg = np.clip(-k * (x - x0), -500, 500)
             return 1 / (1 + np.exp(exp_arg))
-
+        
         # --- 2. Compute fractions and uncertainties ---
         x_vals, fraction_hist, frac_err = compute_fraction_and_uncertainty(
             charge_vector,
@@ -4344,9 +4370,8 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
-
-
-    n_study_fit = True
+    
+    
     if n_study_fit:
         
         print("----------------------------------------------------------------------")
@@ -4356,13 +4381,13 @@ if side_calculations:
         first_approach = True
         
         if first_approach:
-            # Fit the histogram of df["new_theta"] values per each definitive_tt to the a function which is:
+            # Fit the histogram of df["theta"] values per each definitive_tt to the a function which is:
             # F_ij(theta, phi) = A_ij * cos(theta)^n_ij * R_ij(theta, phi)
             # where R_ij is the response function of a telescope made of square planes of 300 mm
             # length and at a distance of abs(z_position[i] - z_positions[j]). First simulate the R_ij for
             # the cases 13, 24, 14, 23. Note that definitive_tt = 123 has the same response as definitive_tt
             # = 13, because what count are the top and bottom planes in each case. Simulate and plot the
-            # R_ij for those cases, then fit the new_theta to F_ij, and plot it. Obtain an A_ij and n_ij
+            # R_ij for those cases, then fit the theta to F_ij, and plot it. Obtain an A_ij and n_ij
             # per each case. Then sum all to obtain a realistic total flux crossing the detector. Go!
             
             use_only_theta = True
@@ -4438,9 +4463,9 @@ if side_calculations:
                 plt.close()
 
 
-                # STEP 2: fit the new_theta to F_ij, and plot it
+                # STEP 2: fit the theta to F_ij, and plot it
 
-                # Assuming df is available and contains 'new_theta' and 'definitive_tt'
+                # Assuming df is available and contains 'theta' and 'definitive_tt'
 
                 from scipy.interpolate import interp1d
                 from scipy.optimize import curve_fit
@@ -4457,7 +4482,7 @@ if side_calculations:
 
                     # Extract real theta data for this topology
                     df_tt = df[df['definitive_tt'].astype(str) == label]
-                    theta_data = df_tt['new_theta'].dropna().values
+                    theta_data = df_tt['theta'].dropna().values
                     if len(theta_data) < 20:
                         continue
 
@@ -4589,8 +4614,8 @@ if side_calculations:
                         continue
 
                     df_tt = df[df['definitive_tt'].astype(str) == label]
-                    theta_data = df_tt['new_theta'].dropna().values
-                    phi_data = df_tt['new_phi'].dropna().values
+                    theta_data = df_tt['theta'].dropna().values
+                    phi_data = df_tt['phi'].dropna().values
 
                     if len(theta_data) < 50:
                         continue
@@ -4774,7 +4799,7 @@ if side_calculations:
             plt.close()
 
 
-            # STEP 2: Fit the new_theta distribution to F_ij(theta) model using the simulated R_ij
+            # STEP 2: Fit the theta distribution to F_ij(theta) model using the simulated R_ij
 
             from scipy.interpolate import interp1d
             from scipy.optimize import curve_fit
@@ -4788,7 +4813,7 @@ if side_calculations:
                     continue
 
                 df_tt = df[df['definitive_tt'].astype(str) == label]
-                theta_data = df_tt['new_theta'].dropna().values
+                theta_data = df_tt['theta'].dropna().values
                 if len(theta_data) < 30:
                     continue
 
@@ -4860,9 +4885,8 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
-
-
-    topology_plots = True
+    
+    
     if topology_plots:
 
         for i in range(1, 5):
@@ -5233,326 +5257,327 @@ if side_calculations:
     # This should be the definition of another table which contains all the metadata and metanalysis, and
     # in principle we are not joining them, I think.
     
-    print("----------------------------------------------------------------------")
-    print("----------------- Derived metrics pre-aggregation --------------------")
-    print("----------------------------------------------------------------------")
+    # print("----------------------------------------------------------------------")
+    # print("----------------- Derived metrics pre-aggregation --------------------")
+    # print("----------------------------------------------------------------------")
 
-    # Derived metrics
-    print("Derived metrics...")
-    for i in range(1, 5):
-        df[f'Q_{i}'] = df[[f'Q_P{i}s{j}' for j in range(1, 5)]].sum(axis=1)
-        df[f'count_in_{i}'] = (df[f'Q_{i}'] > 0).astype(int)
-        df[f'streamer_{i}'] = (df[f'Q_{i}'] > 100).astype(int)
+    # # Derived metrics
+    # print("Derived metrics...")
+    # for i in range(1, 5):
+    #     df[f'Q_{i}'] = df[[f'Q_P{i}s{j}' for j in range(1, 5)]].sum(axis=1)
+    #     df[f'count_in_{i}'] = (df[f'Q_{i}'] > 0).astype(int)
+    #     df[f'streamer_{i}'] = (df[f'Q_{i}'] > 100).astype(int)
 
-    df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
+    # df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
 
 
 
-    print("----------------------------------------------------------------------")
-    print("----------------- Aggregation and Poisson filtering ------------------")
-    print("----------------------------------------------------------------------")
+    # print("----------------------------------------------------------------------")
+    # print("----------------- Aggregation and Poisson filtering ------------------")
+    # print("----------------------------------------------------------------------")
 
-    df['events'] = 1
+    # df['events'] = 1
 
-    # Aggregation logic
-    # Start with your static aggregation dictionary
-    agg_dict = {
-        'events': 'sum',
-        'count_in_1': 'sum',
-        'count_in_2': 'sum',
-        'count_in_3': 'sum',
-        'count_in_4': 'sum',
-        'streamer_1': 'sum',
-        'streamer_2': 'sum',
-        'streamer_3': 'sum',
-        'streamer_4': 'sum',
+    # # Aggregation logic
+    # # Start with your static aggregation dictionary
+    # agg_dict = {
+    #     'events': 'sum',
+    #     'count_in_1': 'sum',
+    #     'count_in_2': 'sum',
+    #     'count_in_3': 'sum',
+    #     'count_in_4': 'sum',
+    #     'streamer_1': 'sum',
+    #     'streamer_2': 'sum',
+    #     'streamer_3': 'sum',
+    #     'streamer_4': 'sum',
     
-        'original_tt': lambda x: pd.Series(x).value_counts().to_dict(),
-        'processed_tt': lambda x: pd.Series(x).value_counts().to_dict(),
-        'tracking_tt': lambda x: pd.Series(x).value_counts().to_dict(),
+    #     'original_tt': lambda x: pd.Series(x).value_counts().to_dict(),
+    #     'processed_tt': lambda x: pd.Series(x).value_counts().to_dict(),
+    #     # 'tracking_tt': lambda x: pd.Series(x).value_counts().to_dict(),
     
-        'new_x': [custom_mean, custom_std],
-        'new_y': [custom_mean, custom_std],
-        'new_theta': [custom_mean, custom_std],
-        'new_phi': [custom_mean, custom_std],
-        'new_s': [custom_mean, custom_std],
-        'new_th_chi': [custom_mean, custom_std],
+    #     'x': [custom_mean, custom_std],
+    #     'y': [custom_mean, custom_std],
+    #     'theta': [custom_mean, custom_std],
+    #     'phi': [custom_mean, custom_std],
+    #     'new_s': [custom_mean, custom_std],
+    #     'new_th_chi': [custom_mean, custom_std],
     
-        'Q_event': [custom_mean, custom_std],
+    #     'Q_event': [custom_mean, custom_std],
     
-        'CRT_avg': custom_mean,
-        'one_side_events': custom_mean,
-        'purity_of_data_percentage': custom_mean,
-        'unc_y': custom_mean,
-        'unc_tsum': custom_mean,
-        'unc_tdif': custom_mean,
+    #     'CRT_avg': custom_mean,
+    #     'one_side_events': custom_mean,
+    #     'purity_of_data_percentage': custom_mean,
+    #     'unc_y': custom_mean,
+    #     'unc_tsum': custom_mean,
+    #     'unc_tdif': custom_mean,
     
-        "over_P1": custom_mean,
-        "P1-P2": custom_mean,
-        "P2-P3": custom_mean,
-        "P3-P4": custom_mean,
-        "phi_north": custom_mean,
+    #     "over_P1": custom_mean,
+    #     "P1-P2": custom_mean,
+    #     "P2-P3": custom_mean,
+    #     "P3-P4": custom_mean,
+    #     "phi_north": custom_mean,
     
-        "P1_induction_section": custom_mean,
-        "P2_induction_section": custom_mean,
-        "P3_induction_section": custom_mean,
-        "P4_induction_section": custom_mean,
+    #     "P1_induction_section": custom_mean,
+    #     "P2_induction_section": custom_mean,
+    #     "P3_induction_section": custom_mean,
+    #     "P4_induction_section": custom_mean,
     
-        # Efficiency fitting
-        "P2_3fold_a": custom_mean,
-        "P2_3fold_eps0": custom_mean,
-        "P2_3fold_n": custom_mean,
-        "P2_2fold_a": custom_mean,
-        "P2_2fold_eps0": custom_mean,
-        "P2_2fold_n": custom_mean,
-        "P3_3fold_a": custom_mean,
-        "P3_3fold_eps0": custom_mean,
-        "P3_3fold_n": custom_mean,
-        "P3_3fold_a": custom_mean,
-        "P3_3fold_eps0": custom_mean,
-        "P3_3fold_n": custom_mean,
-    }
+    #     # Efficiency fitting
+    #     "P2_3fold_a": custom_mean,
+    #     "P2_3fold_eps0": custom_mean,
+    #     "P2_3fold_n": custom_mean,
+    #     "P2_2fold_a": custom_mean,
+    #     "P2_2fold_eps0": custom_mean,
+    #     "P2_2fold_n": custom_mean,
+    #     "P3_3fold_a": custom_mean,
+    #     "P3_3fold_eps0": custom_mean,
+    #     "P3_3fold_n": custom_mean,
+    #     "P3_3fold_a": custom_mean,
+    #     "P3_3fold_eps0": custom_mean,
+    #     "P3_3fold_n": custom_mean,
+    # }
 
-    # Dynamically add all sigmoid_width_XXX and background_slope_XXX columns
-    sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
-    background_cols = [col for col in df.columns if col.startswith('background_slope_')]
+    # # Dynamically add all sigmoid_width_XXX and background_slope_XXX columns
+    # sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
+    # background_cols = [col for col in df.columns if col.startswith('background_slope_')]
 
-    for col in sigmoid_cols + background_cols:
-        agg_dict[col] = custom_mean
+    # for col in sigmoid_cols + background_cols:
+    #     agg_dict[col] = custom_mean
 
-    # Add all new region columns with sum aggregation
-    for col in df.columns:
-        if col.startswith("new_region_theta_"):
-            agg_dict[col] = 'sum'
+    # # Add all new region columns with sum aggregation
+    # for col in df.columns:
+    #     if col.startswith("new_region_theta_"):
+    #         agg_dict[col] = 'sum'
 
 
-    # Fit a Poisson distribution to the 1-second data and removed outliers based on the Poisson -------------------------
-    if remove_outliers:
-        print("Resampling for outlier removal...")
-        # Resampling
-        resampled_df_test = df.resample('1min', on='Time').agg(agg_dict)
-        # TEST 1s rates -------------------------------------------------------
-        resampled_second_df = df.resample('1s', on='Time').agg(agg_dict)
-        print("Resampled.")
-        # Plot the 1 min and 1 s rates ----------------------------------------
-        if create_plots:
-            fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-            ax[0].plot(resampled_df_test.index, resampled_df_test['events'], label='Q_event')
-            ax[0].set_ylabel('Q_event (mean)')
-            ax[0].legend()
+    # # Fit a Poisson distribution to the 1-second data and removed outliers based on the Poisson -------------------------
+    # if remove_outliers:
+    #     print("Resampling for outlier removal...")
+    #     # Resampling
+    #     resampled_df_test = df.resample('1min', on='Time').agg(agg_dict)
+    #     # TEST 1s rates -------------------------------------------------------
+    #     resampled_second_df = df.resample('1s', on='Time').agg(agg_dict)
+    #     print("Resampled.")
+    #     # Plot the 1 min and 1 s rates ----------------------------------------
+    #     if create_plots:
+    #         fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    #         ax[0].plot(resampled_df_test.index, resampled_df_test['events'], label='Q_event')
+    #         ax[0].set_ylabel('Q_event (mean)')
+    #         ax[0].legend()
 
-            ax[1].plot(resampled_second_df.index, resampled_second_df['events'], label='Q_event')
-            ax[1].set_ylabel('Q_event (mean)')
-            ax[1].legend()
+    #         ax[1].plot(resampled_second_df.index, resampled_second_df['events'], label='Q_event')
+    #         ax[1].set_ylabel('Q_event (mean)')
+    #         ax[1].legend()
 
-            plt.tight_layout()
-            # Show the plot
-            if save_plots:
-                name_of_file = 'original_rates'
-                final_filename = f'{fig_idx}_{name_of_file}.png'
-                fig_idx += 1
+    #         plt.tight_layout()
+    #         # Show the plot
+    #         if save_plots:
+    #             name_of_file = 'original_rates'
+    #             final_filename = f'{fig_idx}_{name_of_file}.png'
+    #             fig_idx += 1
             
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+    #             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    #             plot_list.append(save_fig_path)
+    #             plt.savefig(save_fig_path, format='png')
             
-            if show_plots: plt.show()
-            plt.close()
+    #         if show_plots: plt.show()
+    #         plt.close()
 
-        print("Removing outliers...")
-        # Data: Replace with your actual data
-        data = resampled_second_df['events']
+    #     print("Removing outliers...")
+    #     # Data: Replace with your actual data
+    #     data = resampled_second_df['events']
 
-        # Define the negative log-likelihood function for Poisson
-        def negative_log_likelihood(lambda_hat, data):
-            return -np.sum(poisson.logpmf(data, lambda_hat))
+    #     # Define the negative log-likelihood function for Poisson
+    #     def negative_log_likelihood(lambda_hat, data):
+    #         return -np.sum(poisson.logpmf(data, lambda_hat))
 
-        # Initial guess for λ (mean of data)
-        initial_guess = np.mean(data)
+    #     # Initial guess for λ (mean of data)
+    #     initial_guess = np.mean(data)
 
-        # Optimize λ to minimize the negative log-likelihood
-        result = minimize(negative_log_likelihood, x0=initial_guess, args=(data,), bounds=[(1e-5, None)])
-        lambda_fit = result.x[0]
+    #     # Optimize λ to minimize the negative log-likelihood
+    #     result = minimize(negative_log_likelihood, x0=initial_guess, args=(data,), bounds=[(1e-5, None)])
+    #     lambda_fit = result.x[0]
 
-        print(f"Best-fit λ: {lambda_fit:.2f}")
+    #     print(f"Best-fit λ: {lambda_fit:.2f}")
 
-        lower_bound = poisson.ppf(0.0005, lambda_fit)  # Lower 00.05% bound
-        upper_bound = poisson.ppf(0.9995, lambda_fit)  # Upper 99.95% bound
+    #     lower_bound = poisson.ppf(0.0005, lambda_fit)  # Lower 00.05% bound
+    #     upper_bound = poisson.ppf(0.9995, lambda_fit)  # Upper 99.95% bound
 
-        # Overlay the fitted Poisson distribution
-        if create_plots:
-            # Generate Poisson probabilities for the range of your data
-            x = np.arange(0, np.max(data) + 1)  # Range of event counts
-            poisson_probs = poisson.pmf(x, lambda_fit) * len(data)  # Scale by sample size
+    #     # Overlay the fitted Poisson distribution
+    #     if create_plots:
+    #         # Generate Poisson probabilities for the range of your data
+    #         x = np.arange(0, np.max(data) + 1)  # Range of event counts
+    #         poisson_probs = poisson.pmf(x, lambda_fit) * len(data)  # Scale by sample size
 
-            plt.hist(data, bins=100, alpha=0.7, label='Observed data', color='blue', density=False)
-            plt.plot(x, poisson_probs, 'r-', lw=2, label=f'Poisson Fit ($\lambda={lambda_fit:.2f}$)')
-            plt.axvline(lower_bound, color='r', linestyle='--', label='Poisson 0.1%')
-            plt.axvline(upper_bound, color='r', linestyle='--', label='Poisson 99.9%')
-            plt.xlabel('Number of events per second')
-            plt.ylabel('Frequency')
-            plt.title('Histogram of events per second with Poisson Fit')
-            plt.legend()
-            if save_plots:
-                name_of_file = 'poisson_fit'
-                final_filename = f'{fig_idx}_{name_of_file}.png'
-                fig_idx += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
-            if show_plots: plt.show()
-            plt.close()
+    #         plt.hist(data, bins=100, alpha=0.7, label='Observed data', color='blue', density=False)
+    #         plt.plot(x, poisson_probs, 'r-', lw=2, label=f'Poisson Fit ($\lambda={lambda_fit:.2f}$)')
+    #         plt.axvline(lower_bound, color='r', linestyle='--', label='Poisson 0.1%')
+    #         plt.axvline(upper_bound, color='r', linestyle='--', label='Poisson 99.9%')
+    #         plt.xlabel('Number of events per second')
+    #         plt.ylabel('Frequency')
+    #         plt.title('Histogram of events per second with Poisson Fit')
+    #         plt.legend()
+    #         if save_plots:
+    #             name_of_file = 'poisson_fit'
+    #             final_filename = f'{fig_idx}_{name_of_file}.png'
+    #             fig_idx += 1
+    #             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    #             plot_list.append(save_fig_path)
+    #             plt.savefig(save_fig_path, format='png')
+    #         if show_plots: plt.show()
+    #         plt.close()
         
-        # Now, if any value is outside of the tails of the poisson distribution, we can remove it
-        # so obtain the extremes, obtain the seconds in which the values are outside of the distribution
-        # and remove those seconds from a copy of the original df, so a new resampled_df can be created
-        # with the new data
+    #     # Now, if any value is outside of the tails of the poisson distribution, we can remove it
+    #     # so obtain the extremes, obtain the seconds in which the values are outside of the distribution
+    #     # and remove those seconds from a copy of the original df, so a new resampled_df can be created
+    #     # with the new data
     
-        # Ensure 'events' is a flat Series
-        events_series = resampled_second_df['events']
-        # Count how many values fall below or above the bounds
-        below_count = (events_series < lower_bound).sum()
-        above_count = (events_series > upper_bound).sum()
-        print("-------------------------------------------------------------")
-        print(f"Below bound: {below_count.sum()}")
-        print(f"Above bound: {above_count.sum()}")
-        print(f"Total outliers: {(below_count + above_count).sum()}")
-        print("-------------------------------------------------------------")
-        # Identify outlier indices correctly
-        outlier_mask = (events_series < lower_bound) | (events_series > upper_bound)
-        # Flatten outlier_mask to 1D
-        outlier_mask = outlier_mask.values.ravel()  # Turn into a 1D array
-        # Extract the indices of outliers
-        outlier_indices = events_series.index[outlier_mask]
-        # Create a temporary 'Time_sec' column floored to seconds for alignment
-        df['Time_sec'] = df['Time'].dt.floor('1s')
-        # Filter out rows corresponding to the outlier indices
-        filtered_df = df[~df['Time_sec'].isin(outlier_indices)].drop(columns=['Time_sec'])
-        # Resample the filtered data to 1-minute intervals
-        new_resampled_df = filtered_df.resample('1min', on='Time').agg(agg_dict)
+    #     # Ensure 'events' is a flat Series
+    #     events_series = resampled_second_df['events']
+    #     # Count how many values fall below or above the bounds
+    #     below_count = (events_series < lower_bound).sum()
+    #     above_count = (events_series > upper_bound).sum()
+    #     print("-------------------------------------------------------------")
+    #     print(f"Below bound: {below_count.sum()}")
+    #     print(f"Above bound: {above_count.sum()}")
+    #     print(f"Total outliers: {(below_count + above_count).sum()}")
+    #     print("-------------------------------------------------------------")
+    #     # Identify outlier indices correctly
+    #     outlier_mask = (events_series < lower_bound) | (events_series > upper_bound)
+    #     # Flatten outlier_mask to 1D
+    #     outlier_mask = outlier_mask.values.ravel()  # Turn into a 1D array
+    #     # Extract the indices of outliers
+    #     outlier_indices = events_series.index[outlier_mask]
+    #     # Create a temporary 'Time_sec' column floored to seconds for alignment
+    #     df['Time_sec'] = df['Time'].dt.floor('1s')
+    #     # Filter out rows corresponding to the outlier indices
+    #     filtered_df = df[~df['Time_sec'].isin(outlier_indices)].drop(columns=['Time_sec'])
+    #     # Resample the filtered data to 1-minute intervals
+    #     new_resampled_df = filtered_df.resample('1min', on='Time').agg(agg_dict)
 
-        # Plot the new resampled data
-        if create_plots:
-            fig, ax = plt.subplots(figsize=(12, 6))
-            ax.plot(new_resampled_df.index, new_resampled_df['events'], label='Q_event (filtered)')
-            ax.set_ylabel('Q_event (mean)')
-            ax.set_title('1-Minute Resampled Data After Outlier Removal')
-            ax.legend()
-            plt.tight_layout()
-            if save_plots:
-                name_of_file = 'filtered_rate'
-                final_filename = f'{fig_idx}_{name_of_file}.png'
-                fig_idx += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
-            if show_plots: plt.show()
-            plt.close()
+    #     # Plot the new resampled data
+    #     if create_plots:
+    #         fig, ax = plt.subplots(figsize=(12, 6))
+    #         ax.plot(new_resampled_df.index, new_resampled_df['events'], label='Q_event (filtered)')
+    #         ax.set_ylabel('Q_event (mean)')
+    #         ax.set_title('1-Minute Resampled Data After Outlier Removal')
+    #         ax.legend()
+    #         plt.tight_layout()
+    #         if save_plots:
+    #             name_of_file = 'filtered_rate'
+    #             final_filename = f'{fig_idx}_{name_of_file}.png'
+    #             fig_idx += 1
+    #             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    #             plot_list.append(save_fig_path)
+    #             plt.savefig(save_fig_path, format='png')
+    #         if show_plots: plt.show()
+    #         plt.close()
 
-        # Create a resampled_df with the new one
+    #     # Create a resampled_df with the new one
     
-        rejected_percentage = ((below_count + above_count) / len(df)) * 100
-        event_acc_global_variables["poisson_rejected"] = rejected_percentage
+    #     rejected_percentage = ((below_count + above_count) / len(df)) * 100
+    #     global_variables["poisson_rejected"] = rejected_percentage
     
-        resampled_df = new_resampled_df
-    else:
-        resampled_df = df.resample('1min', on='Time').agg(agg_dict)
+    #     resampled_df = new_resampled_df
+    # else:
+    #     resampled_df = df.resample('1min', on='Time').agg(agg_dict)
 
 
-    print("----------------------------------------------------------------------")
-    print("--------------------------- Some renaming ----------------------------")
-    print("----------------------------------------------------------------------")
+    # print("----------------------------------------------------------------------")
+    # print("--------------------------- Some renaming ----------------------------")
+    # print("----------------------------------------------------------------------")
 
-    resampled_df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in resampled_df.columns.values]
+    # resampled_df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in resampled_df.columns.values]
 
-    resampled_df.rename(columns=lambda x: x.replace('custom_mean', 'mean').replace('custom_std', 'std'), inplace=True)
-    resampled_df.rename(columns=lambda x: x.replace('_sum', ''), inplace=True)
-    resampled_df.rename(columns=lambda x: x.replace('_mean', ''), inplace=True)
-    resampled_df.rename(columns=lambda x: x.replace('new_', ''), inplace=True)
-
-
-    print("----------------------------------------------------------------------")
-    print("------------------------ Column aggregation --------------------------")
-    print("----------------------------------------------------------------------")
-
-    # Region-specific count aggregation -------------------------------------------
-    region_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region'])
-    resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
-
-    # Hans' region-specific count aggregation -------------------------------------
-    # region_hans_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region_hans'])
-    # resampled_df = resampled_df.join(region_hans_counts, how='left').fillna(0)
-
-    # New region-specific count aggregation ---------------------------------------
-    # Floor time to 1-minute bins
-    df['Time_floor'] = df['Time'].dt.floor('1min')
-    # Select only the binary region columns
-    region_cols = [col for col in df.columns if col.startswith('region_theta_')]
-    # Group by floored time and sum the binary indicators
-    region_counts = df.groupby('Time_floor')[region_cols].sum()
-    # Join to resampled_df (assuming resampled_df has time index compatible with Time_floor)
-    resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
+    # resampled_df.rename(columns=lambda x: x.replace('custom_mean', 'mean').replace('custom_std', 'std'), inplace=True)
+    # resampled_df.rename(columns=lambda x: x.replace('_sum', ''), inplace=True)
+    # resampled_df.rename(columns=lambda x: x.replace('_mean', ''), inplace=True)
+    # resampled_df.rename(columns=lambda x: x.replace('new_', ''), inplace=True)
 
 
-    print("----------------------------------------------------------------------")
-    print("-------------------------- Counting types ----------------------------")
-    print("----------------------------------------------------------------------")
+    # print("----------------------------------------------------------------------")
+    # print("------------------------ Column aggregation --------------------------")
+    # print("----------------------------------------------------------------------")
 
-    # Split 'type_<lambda>' dictionary into separate columns for each type
-    types = ["original_tt", "processed_tt", "tracking_tt"]
-    for type_key in types:
-        if f'{type_key}_<lambda>' in resampled_df.columns:
-            type_dict_col = resampled_df[f'{type_key}_<lambda>']
-            for type_key_unique in df[type_key].unique():
-                resampled_df[f'{type_key}_{type_key_unique}'] = type_dict_col.apply(lambda x: x.get(type_key_unique, 0) if isinstance(x, dict) else 0)
-            resampled_df.drop(columns=[f'{type_key}_<lambda>'], inplace=True)
+    # # Region-specific count aggregation -------------------------------------------
+    # region_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region'])
+    # resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
 
-    # Streamer percentage
-    for i in range(1, 5):
-        resampled_df[f"streamer_percent_{i}"] = ( (resampled_df[f"streamer_{i}"] / resampled_df[f"count_in_{i}"]).fillna(0) * 100 )
+    # # Hans' region-specific count aggregation -------------------------------------
+    # # region_hans_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region_hans'])
+    # # resampled_df = resampled_df.join(region_hans_counts, how='left').fillna(0)
 
-    print("----------------------------------------------------------------------")
-    print("----------------------------------------------------------------------")
-    print("----------------------- Saving and finishing -------------------------")
-    print("----------------------------------------------------------------------")
-    print("----------------------------------------------------------------------")
+    # # New region-specific count aggregation ---------------------------------------
+    # # Floor time to 1-minute bins
+    # df['Time_floor'] = df['Time'].dt.floor('1min')
+    # # Select only the binary region columns
+    # region_cols = [col for col in df.columns if col.startswith('region_theta_')]
+    # # Group by floored time and sum the binary indicators
+    # region_counts = df.groupby('Time_floor')[region_cols].sum()
+    # # Join to resampled_df (assuming resampled_df has time index compatible with Time_floor)
+    # resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
 
-    resampled_df.reset_index(inplace=True)
 
-    if polya_fit:
+    # print("----------------------------------------------------------------------")
+    # print("-------------------------- Counting types ----------------------------")
+    # print("----------------------------------------------------------------------")
 
-        print("\n\n")
-        # Flatten df_polya_fit into wide format
-        df_single_row = df_polya_fit.set_index('module').stack().rename('value').reset_index()
-        df_single_row['column'] = 'polya_' + df_single_row['level_1'] + '_' + df_single_row['module'].astype(str)
+    # # Split 'type_<lambda>' dictionary into separate columns for each type
+    # # types = ["original_tt", "processed_tt", "tracking_tt"]
+    # types = ["original_tt", "processed_tt"]
+    # for type_key in types:
+    #     if f'{type_key}_<lambda>' in resampled_df.columns:
+    #         type_dict_col = resampled_df[f'{type_key}_<lambda>']
+    #         for type_key_unique in df[type_key].unique():
+    #             resampled_df[f'{type_key}_{type_key_unique}'] = type_dict_col.apply(lambda x: x.get(type_key_unique, 0) if isinstance(x, dict) else 0)
+    #         resampled_df.drop(columns=[f'{type_key}_<lambda>'], inplace=True)
 
-        # Fix: pivot without setting index=None
-        df_wide = df_single_row.pivot(columns='column', values='value')
-        df_wide.columns.name = None  # remove column index name
-        df_wide = df_wide.reset_index(drop=True)
+    # # Streamer percentage
+    # for i in range(1, 5):
+    #     resampled_df[f"streamer_percent_{i}"] = ( (resampled_df[f"streamer_{i}"] / resampled_df[f"count_in_{i}"]).fillna(0) * 100 )
 
-        # Check available columns
-        print(df_wide.columns.to_list())
+    # print("----------------------------------------------------------------------")
+    # print("----------------------------------------------------------------------")
+    # print("----------------------- Saving and finishing -------------------------")
+    # print("----------------------------------------------------------------------")
+    # print("----------------------------------------------------------------------")
 
-        # Optional: restrict to specific subset of columns
-        df_wide = df_wide[[
-            'polya_A_1', 'polya_A_2', 'polya_A_3', 'polya_A_4',
-            'polya_theta_1', 'polya_theta_2', 'polya_theta_3', 'polya_theta_4',
-            'polya_nbar/alpha_1', 'polya_nbar/alpha_2', 'polya_nbar/alpha_3', 'polya_nbar/alpha_4',
-        ]]
+    # resampled_df.reset_index(inplace=True)
 
-        # Repeat values to match number of rows in resampled_df
-        df_polya_expanded = pd.concat([df_wide] * len(resampled_df), ignore_index=True)
+    # if polya_fit:
 
-        # Merge with original DataFrame
-        resampled_df = pd.concat([resampled_df, df_polya_expanded], axis=1)
+    #     print("\n\n")
+    #     # Flatten df_polya_fit into wide format
+    #     df_single_row = df_polya_fit.set_index('module').stack().rename('value').reset_index()
+    #     df_single_row['column'] = 'polya_' + df_single_row['level_1'] + '_' + df_single_row['module'].astype(str)
+
+    #     # Fix: pivot without setting index=None
+    #     df_wide = df_single_row.pivot(columns='column', values='value')
+    #     df_wide.columns.name = None  # remove column index name
+    #     df_wide = df_wide.reset_index(drop=True)
+
+    #     # Check available columns
+    #     print(df_wide.columns.to_list())
+
+    #     # Optional: restrict to specific subset of columns
+    #     df_wide = df_wide[[
+    #         'polya_A_1', 'polya_A_2', 'polya_A_3', 'polya_A_4',
+    #         'polya_theta_1', 'polya_theta_2', 'polya_theta_3', 'polya_theta_4',
+    #         'polya_nbar/alpha_1', 'polya_nbar/alpha_2', 'polya_nbar/alpha_3', 'polya_nbar/alpha_4',
+    #     ]]
+
+    #     # Repeat values to match number of rows in resampled_df
+    #     df_polya_expanded = pd.concat([df_wide] * len(resampled_df), ignore_index=True)
+
+    #     # Merge with original DataFrame
+    #     resampled_df = pd.concat([resampled_df, df_polya_expanded], axis=1)
     
-        with pd.option_context('display.precision', 1):
-            print(df_polya_fit)
+    #     with pd.option_context('display.precision', 1):
+    #         print(df_polya_fit)
     
-        # Optional print
-        with pd.option_context('display.precision', 3):
-            print(resampled_df[df_wide.columns])
+    #     # Optional print
+    #     with pd.option_context('display.precision', 3):
+    #         print(resampled_df[df_wide.columns])
 
 
     # print(df_polya_flat.columns)
@@ -5587,93 +5612,85 @@ if side_calculations:
     # resampled_df = pd.concat([resampled_df.reset_index(drop=True), flat_all_repeated], axis=1)
 
 
-    print("----------------------------------------------------------------------")
-    print("------------------------- Saving the data ----------------------------")
-    print("----------------------------------------------------------------------")
+    # print("----------------------------------------------------------------------")
+    # print("------------------------- Saving the data ----------------------------")
+    # print("----------------------------------------------------------------------")
 
-    # Print the columns of resampled_df
-    print("\n\n")
-    print(resampled_df.columns.to_list())
-    print("\n\n")
+    # # Print the columns of resampled_df
+    # print("\n\n")
+    # print(resampled_df.columns.to_list())
+    # print("\n\n")
 
-    resampled_df = resampled_df.applymap(round_to_significant_digits)
+    # resampled_df = resampled_df.applymap(round_to_significant_digits)
 
-    # Save the newly created file to ACC_EVENTS_DIRECTORY --------------------------
-    resampled_df.to_csv(full_save_path, sep=',', index=False)
-    print(f"Complete datafile saved in {full_save_filename}. Path is {full_save_path}")
+    # # Save the newly created file to ACC_EVENTS_DIRECTORY --------------------------
+    # resampled_df.to_csv(full_save_path, sep=',', index=False)
+    # print(f"Complete datafile saved in {full_save_filename}. Path is {full_save_path}")
 
-    sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
-    background_cols = [col for col in df.columns if col.startswith('background_slope_')]
+    # sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
+    # background_cols = [col for col in df.columns if col.startswith('background_slope_')]
 
-    columns_to_keep = [
-        # Introductory
-        'Time',
+    # columns_to_keep = [
+    #     # Introductory
+    #     'Time',
     
-        # Columns to sum -----------------------------------------------------------
+    #     # Columns to sum -----------------------------------------------------------
     
-        # Basic counts
-        'events', 'count_in_1', 'count_in_2', 'count_in_3', 'count_in_4',
+    #     # Basic counts
+    #     'events', 'count_in_1', 'count_in_2', 'count_in_3', 'count_in_4',
     
-        # Detection types
-        'original_tt_123', 'original_tt_12', 'original_tt_234', 'original_tt_34', 'original_tt_23', 'original_tt_1234', 'original_tt_134', 'original_tt_124', 'original_tt_13',
-        'processed_tt_123', 'processed_tt_12', 'processed_tt_234', 'processed_tt_34', 'processed_tt_23', 'processed_tt_1234', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14', 'processed_tt_124',
-        'tracking_tt_1234', 'tracking_tt_123', 'tracking_tt_12', 'tracking_tt_234', 'tracking_tt_34', 'tracking_tt_23',
+    #     # Detection types
+    #     'original_tt_123', 'original_tt_12', 'original_tt_234', 'original_tt_34', 'original_tt_23', 'original_tt_1234', 'original_tt_134', 'original_tt_124', 'original_tt_13',
+    #     'processed_tt_123', 'processed_tt_12', 'processed_tt_234', 'processed_tt_34', 'processed_tt_23', 'processed_tt_1234', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14', 'processed_tt_124',
+    #     # 'tracking_tt_1234', 'tracking_tt_123', 'tracking_tt_12', 'tracking_tt_234', 'tracking_tt_34', 'tracking_tt_23',
     
-        # Region-specific counts
-        'High', 'N', 'S', 'E', 'W',
+    #     # Region-specific counts
+    #     'High', 'N', 'S', 'E', 'W',
     
-        # Counts to average ---------------------------------------------------------
+    #     # Counts to average ---------------------------------------------------------
     
-        # Summary metrics and quality flags
-        'CRT_avg', 'one_side_events', 'purity_of_data_percentage',
-        'unc_y', 'unc_tsum', 'unc_tdif',
+    #     # Summary metrics and quality flags
+    #     'CRT_avg', 'one_side_events', 'purity_of_data_percentage',
+    #     'unc_y', 'unc_tsum', 'unc_tdif',
 
-        # Reconstruction outputs
-        'x', 'y', 'theta', 'phi', 's', 'th_chi',
-        'x_std', 'y_std', 'theta_std', 'phi_std', 's_std', 'th_chi_std',
+    #     # Reconstruction outputs
+    #     'x', 'y', 'theta', 'phi', 's', 'th_chi',
+    #     'x_std', 'y_std', 'theta_std', 'phi_std', 's_std', 'th_chi_std',
 
-        'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4',
+    #     'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4',
     
-        # Configuration parameters
-        "over_P1", "P1-P2", "P2-P3", "P3-P4", "phi_north",
+    #     # Configuration parameters
+    #     "over_P1", "P1-P2", "P2-P3", "P3-P4", "phi_north",
     
-        # Induction section
-        "P1_induction_section", "P2_induction_section", "P3_induction_section", "P4_induction_section",
+    #     # Induction section
+    #     "P1_induction_section", "P2_induction_section", "P3_induction_section", "P4_induction_section",
     
-        # Efficiency fittings
-        "P2_3fold_a", "P2_3fold_eps0", "P2_3fold_n",
-        "P2_2fold_a", "P2_2fold_eps0", "P2_2fold_n",
-        "P3_3fold_a", "P3_3fold_eps0", "P3_3fold_n",
-        "P3_3fold_a", "P3_3fold_eps0", "P3_3fold_n",
-    ]
+    #     # Efficiency fittings
+    #     "P2_3fold_a", "P2_3fold_eps0", "P2_3fold_n",
+    #     "P2_2fold_a", "P2_2fold_eps0", "P2_2fold_n",
+    #     "P3_3fold_a", "P3_3fold_eps0", "P3_3fold_n",
+    #     "P3_3fold_a", "P3_3fold_eps0", "P3_3fold_n",
+    # ]
 
-    sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
-    background_cols = [col for col in df.columns if col.startswith('background_slope_')]
+    # sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
+    # background_cols = [col for col in df.columns if col.startswith('background_slope_')]
 
-    columns_to_keep.extend(sigmoid_cols + background_cols)
+    # columns_to_keep.extend(sigmoid_cols + background_cols)
 
-    # Filter columns_to_keep to include only those present in resampled_df
-    valid_columns = [col for col in columns_to_keep if col in resampled_df.columns]
+    # # Filter columns_to_keep to include only those present in resampled_df
+    # valid_columns = [col for col in columns_to_keep if col in resampled_df.columns]
 
-    # Optionally, fill missing columns with NaN (or zeros) before subsetting
-    missing_columns = [col for col in columns_to_keep if col not in resampled_df.columns]
-    for col in missing_columns:
-        resampled_df[col] = np.nan  # or 0, depending on context
+    # # Optionally, fill missing columns with NaN (or zeros) before subsetting
+    # missing_columns = [col for col in columns_to_keep if col not in resampled_df.columns]
+    # for col in missing_columns:
+    #     resampled_df[col] = np.nan  # or 0, depending on context
 
-    # Now subset safely
-    reduced_df = resampled_df[columns_to_keep]
+    # # Now subset safely
+    # reduced_df = resampled_df[columns_to_keep]
 
-    reduced_df = resampled_df[columns_to_keep]
-    reduced_df.to_csv(save_path, index=False, sep=',', float_format='%.5g')
-    print(f"Reduced columns datafile saved in {save_filename}. Path is {save_path}")
-
-    
-
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
+    # reduced_df = resampled_df[columns_to_keep]
+    # reduced_df.to_csv(save_path, index=False, sep=',', float_format='%.5g')
+    # print(f"Reduced columns datafile saved in {save_filename}. Path is {save_path}")
 
 
 # ---------------------------------------------------------------------------------
@@ -5682,13 +5699,20 @@ if side_calculations:
 # ---------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------
 
+
 # ---------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------
 
+#%%
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -5702,9 +5726,126 @@ print("----------------------------------------------------------------------")
 print("-------- 1. Correction of the fitted angle --> predicted angle -------")
 print("----------------------------------------------------------------------")
 
+
+# ---------------------------------------------------------------
+# 1. Build absolute path and sanity-check
+# ---------------------------------------------------------------
+hdf_path = os.path.join(config_files_directory, "likelihood_matrices.h5")
+if not os.path.isfile(hdf_path):
+    raise FileNotFoundError(f"HDF5 file not found: {hdf_path}")
+
+# ---------------------------------------------------------------
+# 2. Load all matrices into memory
+# ---------------------------------------------------------------
+matrices = {}
+n_bins = None
+
+with pd.HDFStore(hdf_path, mode='r') as store:
+    keys = store.keys()
+    if not keys:
+        raise ValueError(f"{hdf_path} contains no datasets.")
+
+    for key in keys:                     # keys like '/P1', '/P2', …
+        ttype = key.strip('/')           # remove leading slash
+        df_M = store.get(key)
+        matrices[ttype] = df_M
+
+        # set n_bins once, based on the first matrix's shape
+        if n_bins is None:
+            size = df_M.shape[0]
+            n_bins = int(np.sqrt(size))
+            if n_bins * n_bins != size:
+                raise ValueError(f"Matrix size {size} is not a perfect square.")
+
+        print(f"Loaded matrix for {ttype}: shape {df_M.shape}")
+
+print(f"n_bins detected: {n_bins}")
+
+# Helpers
+def flat(u_idx, v_idx, n_bins):
+    return u_idx * n_bins + v_idx
+
+def wrap_to_pi(angle: float) -> float:
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+def sample_true_angles_nearest(
+      df_fit: pd.DataFrame,
+      matrices: Optional[Dict[str, pd.DataFrame]],
+      n_bins: int,
+      rng: Optional[np.random.Generator] = None,
+      show_progress: bool = True,
+      print_every: int = 10_000
+      ) -> pd.DataFrame:
+      
+    if rng is None:
+        rng = np.random.default_rng()
+
+    matrix_cache = {t: df_m.to_numpy() for t, df_m in matrices.items()}
+    
+    u_edges = np.linspace(-1.0, 1.0, n_bins + 1)
+    v_edges = np.linspace(-1.0, 1.0, n_bins + 1)
+
+    u_fit = np.sin(df_fit["Theta_fit"].values) * np.sin(df_fit["Phi_fit"].values)
+    v_fit = np.sin(df_fit["Theta_fit"].values) * np.cos(df_fit["Phi_fit"].values)
+
+    iu = np.clip(np.digitize(u_fit, u_edges) - 1, 0, n_bins - 2)
+    iv = np.clip(np.digitize(v_fit, v_edges) - 1, 0, n_bins - 2)
+
+    iu += (u_fit - u_edges[iu]) > (u_edges[iu + 1] - u_fit)
+    iv += (v_fit - v_edges[iv]) > (v_edges[iv + 1] - v_fit)
+
+    flat_idx = lambda u, v: u * n_bins + v
+    unflat = lambda k: divmod(k, n_bins)
+
+    N = len(df_fit)
+    theta_pred = np.empty(N, dtype=np.float32)
+    phi_pred = np.empty(N, dtype=np.float32)
+
+    iterator = tqdm(range(N), desc="Sampling true angles (nearest-bin)", unit="evt") if show_progress else range(N)
+
+    for n in iterator:
+        t_type = df_fit["measured_type"].iat[n]
+
+        if t_type not in matrix_cache:
+            raise ValueError(f"LUT not found for type: {t_type}")
+        M = matrix_cache[t_type]
+
+        col_idx = flat_idx(iu[n], iv[n])
+        p = M[:, col_idx]
+        s = p.sum()
+
+        if s == 0:
+            p = np.full_like(p, 1.0 / len(p))
+        else:
+            p /= s
+
+        gen_idx = rng.choice(len(p), p=p)
+        g_u_idx, g_v_idx = unflat(gen_idx)
+
+        u_pred = rng.uniform(u_edges[g_u_idx], u_edges[g_u_idx + 1])
+        v_pred = rng.uniform(v_edges[g_v_idx], v_edges[g_v_idx + 1])
+
+        sin_theta = min(np.hypot(u_pred, v_pred), 1.0)
+        theta_pred[n] = math.asin(sin_theta)
+        phi_pred[n] = wrap_to_pi(math.atan2(u_pred, v_pred))
+
+    df_out = df_fit.copy()
+    df_out["Theta_pred"] = theta_pred
+    df_out["Phi_pred"] = phi_pred
+    return df_out
+
+
+df_input = main_df
+df_pred = sample_true_angles_nearest(
+            df_fit=df_input,
+            matrices=matrices,
+            n_bins=n_bins,
+            rng=np.random.default_rng(2025),
+            show_progress=True )
+
 # Placeholder
-main_df["Theta_pred"] = main_df["new_theta"]
-main_df["Phi_pred"] = main_df["new_phi"]
+main_df["Theta_pred"] = df_pred["theta"]
+main_df["Phi_pred"] = df_pred["phi"]
 
 
 print("----------------------------------------------------------------------")
@@ -5713,14 +5854,11 @@ print("----------------------------------------------------------------------")
 
 #%%
 
-
-
 draw_angular_regions = True
 if draw_angular_regions:
     
     print("----------------------- Drawing angular regions ----------------------")
-
-
+    
     def plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout, theta_right_limit=np.pi / 2.5):
 
         # Only use boundaries below or equal to theta_right_limit
@@ -5836,12 +5974,9 @@ df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundari
 print(df['region'].value_counts())
 
 
-georgys = True
-if georgys:
-        
-    print("----------------------------------------------------------------------")
-    print("------------- cos^n and Georgy's efficiency calculations -------------")
-    print("----------------------------------------------------------------------")
+if create_essential_plots:
+    
+    print("-------------------------- Angular plots -----------------------------")
         
     df_filtered = df.copy()
     
@@ -5864,8 +5999,8 @@ if georgys:
         ax = axes[row_idx][col_idx]
             
         df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
-        theta_vals = df_tt['new_theta'].dropna()
-        phi_vals = df_tt['new_phi'].dropna()
+        theta_vals = df_tt['theta'].dropna()
+        phi_vals = df_tt['phi'].dropna()
 
         if len(theta_vals) < 10 or len(phi_vals) < 10:
             ax.set_visible(False)
@@ -5895,105 +6030,97 @@ if georgys:
         plt.show()
     plt.close()
     
-        
     # ---------------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------------
-
-    create_essential_plots = True
-    if create_essential_plots:
-            
-        show_plots = True
-            
-        theta_left_filter = 0
-        theta_right_filter = np.pi / 2.5
-            
-        phi_left_filter = -np.pi
-        phi_right_filter = np.pi
-            
-        df_filtered = df.copy()
-        # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
+    
+    theta_left_filter = 0
+    theta_right_filter = np.pi / 2.5
         
-        # tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
-        tt_values = [23, 123, 234, 1234]
+    phi_left_filter = -np.pi
+    phi_right_filter = np.pi
         
-        n_tt = len(tt_values)
-        ncols = 2
-        nrows = (n_tt + 1) // ncols
+    df_filtered = df.copy()
+    # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
+    
+    # tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
+    tt_values = [23, 123, 234, 1234]
+    
+    n_tt = len(tt_values)
+    ncols = 2
+    nrows = (n_tt + 1) // ncols
+        
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
+    phi_nbins = 70
+    # theta_nbins = int(round(phi_nbins / 2) + 1)
+    theta_nbins = 40
+    theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
+    phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
+    colors = plt.cm.turbo
+
+    # Select theta/phi range (optional filtering)
+    theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
+    phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
+    
+    vmax_global = df_filtered.groupby('definitive_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
+    
+    for idx, tt_val in enumerate(tt_values):
+        row_idx, col_idx = divmod(idx, ncols)
+        ax = axes[row_idx][col_idx]
+
+        df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
+        theta_vals = df_tt['theta'].dropna()
+        phi_vals = df_tt['phi'].dropna()
+
+        # Apply range filtering
+        # Apply range filtering
+        df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val].copy()
+        mask = (
+            (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
+            (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
+        )
+        df_tt = df_tt[mask]
+
+        theta_vals = df_tt['theta']
+        phi_vals   = df_tt['phi']
+
+        if len(theta_vals) < 10 or len(phi_vals) < 10:
+            ax.set_visible(False)
+            continue
+
+        # Polar plot settings
+        fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
+        ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
+        axes[row_idx][col_idx] = ax  # update reference for consistency
+
+        ax.set_facecolor(colors(0.0))  # darkest background in colormap
+        ax.set_title(f'definitive_tt = {tt_val}', fontsize=14)
             
-        fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
-        phi_nbins = 70
-        # theta_nbins = int(round(phi_nbins / 2) + 1)
-        theta_nbins = 40
-        theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
-        phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
-        colors = plt.cm.turbo
+        plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout)
+            
+        # Limit in radius in theta_right_filter
+        ax.set_ylim(0, theta_right_filter)
+            
+        # 2D histogram: use phi as angle, theta as radius
+        h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
+        r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
+        phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+        # R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
+        R, PHI = np.meshgrid(r_edges, phi_edges, indexing='ij')
+        c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
+        local_max = h.max()
+        cb = fig.colorbar(c, ax=ax, pad=0.1)
+        cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
 
-        # Select theta/phi range (optional filtering)
-        theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
-        phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
-        
-        vmax_global = df_filtered.groupby('definitive_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
-        
-        for idx, tt_val in enumerate(tt_values):
-            row_idx, col_idx = divmod(idx, ncols)
-            ax = axes[row_idx][col_idx]
-
-            df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
-            theta_vals = df_tt['theta'].dropna()
-            phi_vals = df_tt['phi'].dropna()
-
-            # Apply range filtering
-            # Apply range filtering
-            df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val].copy()
-            mask = (
-                (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
-                (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
-            )
-            df_tt = df_tt[mask]
-
-            theta_vals = df_tt['theta']
-            phi_vals   = df_tt['phi']
-
-            if len(theta_vals) < 10 or len(phi_vals) < 10:
-                ax.set_visible(False)
-                continue
-
-            # Polar plot settings
-            fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
-            ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
-            axes[row_idx][col_idx] = ax  # update reference for consistency
-
-            ax.set_facecolor(colors(0.0))  # darkest background in colormap
-            ax.set_title(f'definitive_tt = {tt_val}', fontsize=14)
-                
-            plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout)
-                
-            # Limit in radius in theta_right_filter
-            ax.set_ylim(0, theta_right_filter)
-                
-            # 2D histogram: use phi as angle, theta as radius
-            h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
-            r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
-            phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
-            # R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
-            R, PHI = np.meshgrid(r_edges, phi_edges, indexing='ij')
-            c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
-            local_max = h.max()
-            cb = fig.colorbar(c, ax=ax, pad=0.1)
-            cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
-
-        plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        if save_plots:
-            final_filename = f'{fig_idx}_polar_theta_phi_definitive_tt_2D_detail.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-        if show_plots:
-            plt.show()
-        plt.close()
+    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        final_filename = f'{fig_idx}_polar_theta_phi_definitive_tt_2D_detail.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
 
 
 #%%
@@ -6006,28 +6133,164 @@ print("----------------------------------------------------------------------")
 # counts in each group of (Time, definitive_tt, region) and plot the results. But before grouping. round the
 # the times to 1 minute
 
-# Round the Time column to the nearest minute
-df['Time'] = df['Time'].dt.floor('T')
+df_original = df.copy()
 
-# Create a new DataFrame to hold the binned data
-binned_data = df.groupby(['Time', 'definitive_tt', 'region']).size().reset_index(name='counts')
+#%%
 
-# Create a multi-index column from 'definitive_tt' and 'region'
-pivoted = binned_data.pivot_table(
-    index='Time',
-    columns=['definitive_tt', 'region'],
-    values='counts',
-    fill_value=0
+# Define time bin widths, from 1s to 360s with 5s steps
+time_bins = [ pd.Timedelta(seconds=i) for i in range(1, 601, 1) ]
+
+# Initialize containers
+discarded_percentages = []
+standard_deviations = []
+normalized_curves = []
+time_curves = []
+
+for bin_width in time_bins:
+    df = df_original.copy()
+    df['Time'] = df['Time'].dt.floor(bin_width)
+
+    # Group and count
+    binned = df.groupby(['Time', 'definitive_tt', 'region']).size().reset_index(name='counts')
+    pivoted = binned.pivot_table(index='Time', columns=['definitive_tt', 'region'], values='counts', fill_value=0)
+    pivoted.columns = [f"{tt}_{region}" for tt, region in pivoted.columns]
+    pivoted['events'] = pivoted.sum(axis=1)
+    pivoted = pivoted.reset_index()
+
+    # Remove borders
+    n = 1
+    if n > 0:
+        pivoted = pivoted.iloc[n:-n]
+    if pivoted.empty:
+        print(f"No data available for bin width {bin_width}. Skipping...")
+        continue
+
+    data = pivoted['events'].values
+
+    # Poisson fit
+    def nll(lmbda, data): return -np.sum(poisson.logpmf(data, lmbda))
+    res = minimize(nll, x0=[np.mean(data)], args=(data,), bounds=[(1e-5, None)])
+    lmbda_fit = res.x[0]
+
+    quantile = 0.5 / 100  # 1%
+    lower = poisson.ppf(quantile, lmbda_fit)
+    upper = poisson.ppf(1 - quantile, lmbda_fit)
+
+    # Mask
+    outlier_mask = (data < lower) | (data > upper)
+    num_discarded = outlier_mask.sum()
+    percent_kept = 100 - 100 * num_discarded / len(data)
+    discarded_percentages.append(percent_kept)
+
+    # Normalize
+    normalized = data / np.mean(data)
+    standard_deviations.append(np.std(data) / np.mean(data) * 100)
+
+    # Store for plotting
+    normalized_curves.append(normalized)
+    time_curves.append(pivoted['Time'].values)
+
+# Plotting stage
+plt.figure(figsize=(12, 6))
+
+for t, norm, label in zip(time_curves, normalized_curves, time_bins):
+    idx = time_bins.index(label)
+    plt.plot(t, norm, label=f'{label} ({discarded_percentages[idx]:.1f}%)', alpha=0.6)
+
+plt.xlabel("Time")
+plt.ylabel("Normalized Event Rate")
+plt.title("Normalized Rates over Different Time Bins")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+bin_seconds = [pd.to_timedelta(tb).total_seconds() for tb in time_bins]
+
+if create_essential_plots:
+    # Plot discarded percentage vs bin width
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(bin_seconds, discarded_percentages, marker='o')
+    plt.xlabel("Time Bin Width [s]")
+    plt.ylabel("Kept Events [%]")
+    plt.title("Kept Percentage vs. Accumulation Time")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+# These must match in length
+standard_deviations = np.array(standard_deviations)
+
+# Apply condition
+cond = standard_deviations < 100
+bin_seconds = np.array(bin_seconds)[cond]
+standard_deviations = standard_deviations[cond]
+
+
+# Power-law decay + offset model
+def power_law_model(t, A, beta, C):
+    return A * (t ** -beta) + C
+
+# Fit
+popt, _ = curve_fit(
+    power_law_model,
+    bin_seconds,
+    standard_deviations,
+    p0=[30, 0.5, 1],
+    bounds=([0, 0, 0], [100, 3, 10]),
+    maxfev=10000
 )
 
-# Optional: flatten the multi-index columns if desired
+# Print fit parameters
+print(f"Fit parameters: A={popt[0]:.2f}, β={popt[1]:.2f}, C={popt[2]:.2f}")
+
+global_variables['coeff_variation_model'] = "A * (t ** -beta) + C"
+global_variables['coeff_variation_A'] = float(popt[0])
+global_variables['coeff_variation_beta'] = float(popt[1])
+global_variables['coeff_variation_C'] = float(popt[2])
+
+if create_essential_plots:
+    # Generate curve
+    t_fit = np.linspace(min(bin_seconds), max(bin_seconds), 500)
+    y_fit = power_law_model(t_fit, *popt)
+
+    # Optional: convert to minutes for x-axis
+    time_to_min = False
+    if time_to_min:
+        bin_seconds = bin_seconds / 60
+        t_fit = t_fit / 60
+        unit = "min"
+    else:
+        unit = "s"
+    
+    plt.figure(figsize=(8, 5))
+    plt.scatter(bin_seconds, standard_deviations, s=1, label='Data')
+    plt.plot(t_fit, y_fit, 'r-', label=f'Fit: A={popt[0]:.2f}, β={popt[1]:.2f}, C={popt[2]:.2f}')
+    plt.axhline(y=5, color='green', linestyle='--', linewidth=1.5, label='5% Coefficient of Variation')
+    plt.axhline(y=1, color='red', linestyle='--', linewidth=1.5, label='1% Coefficient of Variation')
+    plt.xlabel(f"Time Bin Width [{unit}]")
+    plt.ylabel("Coefficient of variation [%]")
+    plt.title("Coeff. of variation vs. Accumulation Time")
+    plt.grid(True)
+    plt.ylim(0, 20)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+#%%
+
+df = df_original.copy()
+df['Time'] = df['Time'].dt.floor('1min')
+
+# Group and count
+binned = df.groupby(['Time', 'definitive_tt', 'region']).size().reset_index(name='counts')
+pivoted = binned.pivot_table(index='Time', columns=['definitive_tt', 'region'], values='counts', fill_value=0)
 pivoted.columns = [f"{tt}_{region}" for tt, region in pivoted.columns]
-
 pivoted['events'] = pivoted.sum(axis=1)
-pivoted = pivoted[['events'] + [col for col in pivoted.columns if col != 'events']]
 pivoted = pivoted.reset_index()
-
-# print(pivoted)
 
 pivoted.to_csv(save_path, index=False, sep=',', float_format='%.5g')
 print(f"Accumulated columns datafile saved in {save_filename}. Path is {save_path}")
@@ -6038,6 +6301,122 @@ print(f"Accumulated columns datafile saved in {save_filename}. Path is {save_pat
 print("Moving file to COMPLETED directory...")
 shutil.move(file_path, completed_file_path)
 print(f"File moved to: {completed_file_path}")
+
+
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Save the metadata, calibrations and monitoring stuff ------------------------
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+if eff_vs_angle_and_pos:
+    # print(df_fits)
+    # print("\n")
+    
+    for _, row in df_fits.iterrows():
+        if not row["label"].startswith("3-plane"):
+            continue                      # skip every 2-fold curve
+
+        if "eff_2" in row["label"]:
+            tag = "P2"                    # 3-plane efficiency for plane 2
+        elif "eff_3" in row["label"]:
+            tag = "P3"                    # 3-plane efficiency for plane 3
+        else:
+            continue
+
+        global_variables[f"eff_{tag}_a"]   = float(row["a"])
+        global_variables[f"eff_{tag}_n"]   = float(row["n"])
+        global_variables[f"eff_{tag}_0"]   = float(row["eps0"])   # ε₀
+    
+
+if polya_fit:
+    # print(df_polya_fit)
+    # print("\n")
+    
+    required = {
+        "nbar/alpha"   : "nbar_over_alpha",
+        "offset/nbar"  : "offset_over_nbar",
+        "alpha/nbar"   : "alpha_over_nbar",
+        "eta_curvature": "eta_curvature",
+        "width_proxy"  : "width_proxy",
+        "Q_mode"       : "Q_mode",
+    }
+
+    # df_polya_fit must contain a column named "plane" holding P1…P4
+    for plane, grp in df_polya_fit.groupby("module"):
+        assert len(grp) == 1, f"multiple rows for {plane}"
+        row = grp.iloc[0]
+        for col, key_suffix in required.items():
+            global_variables[f"{plane}_{key_suffix}"] = float(row[col])
+    
+    
+if multiplicity_calculations:
+    # print(df_mult_fit)
+    # print("\n")
+    
+    for plane, arr in component_counts.items():
+        for i, val in enumerate(arr, 1):  # M1, M2, ...
+            global_variables[f"{plane}_M{i}"] = float(val)
+    
+    
+if crosstalk_probability:
+    # print(df_cross_fit)
+    # print("\n")
+    
+    eps = 1e-9
+
+    df_cross_fit[["plane", "strip"]] = df_cross_fit["key"].str.split("_", expand=True)
+    for plane, grp in df_cross_fit.groupby("plane"):
+        # x0
+        mean_x0 = grp["x0"].mean()
+        w_x0    = 1.0 / (np.abs(grp["x0"] - mean_x0) + eps)
+        x0_avg  = np.average(grp["x0"], weights=w_x0)
+
+        # k
+        mean_k  = grp["k"].mean()
+        w_k     = 1.0 / (np.abs(grp["k"]  - mean_k)  + eps)
+        k_avg   = np.average(grp["k"],  weights=w_k)
+
+        # store
+        global_variables[f"{plane}_x0"] = float(x0_avg)
+        global_variables[f"{plane}_k"]  = float(k_avg)
+
+
+# Construct the new calibration row
+new_row = {'Start_Time': start_time, 'End_Time': end_time}
+
+# Add global variables (e.g., counts, sigmoid widths, slopes)
+for key, value in global_variables.items():
+    new_row[key] = value
+
+# Load or initialize metadata DataFrame
+if os.path.exists(csv_path):
+    metadata_df = pd.read_csv(csv_path, parse_dates=['Start_Time', 'End_Time'])
+else:
+    metadata_df = pd.DataFrame(columns=new_row.keys())
+
+# Find full match in both Start_Time and End_Time
+match = (
+    (metadata_df['Start_Time'] == start_time) &
+    (metadata_df['End_Time'] == end_time)
+)
+existing_row_index = metadata_df[match].index
+
+if not existing_row_index.empty:
+    metadata_df.loc[existing_row_index[0]] = new_row
+    print(f"Updated existing calibration for time range: {start_time} to {end_time}")
+else:
+    metadata_df = pd.concat([metadata_df, pd.DataFrame([new_row])], ignore_index=True)
+    print(f"Added new calibration for time range: {start_time} to {end_time}")
+
+# Sort and save
+metadata_df.sort_values(by='Start_Time', inplace=True)
+
+# Put Start_Time and End_Time as first columns
+metadata_df = metadata_df[['Start_Time', 'End_Time'] + [col for col in metadata_df.columns if col not in ['Start_Time', 'End_Time']]]
+
+metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
+print(f'{csv_path} updated with the calibration summary.')
 
 
 print("----------------------------------------------------------------------")

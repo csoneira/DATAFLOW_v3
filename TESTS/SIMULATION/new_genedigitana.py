@@ -37,6 +37,28 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import builtins
 
+from typing import Dict, Optional
+import numpy as np
+import pandas as pd
+import math
+from typing import Dict, Optional
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import math
+from typing import Dict, Optional
+try:
+    from tqdm.auto import tqdm
+except ModuleNotFoundError:
+    tqdm = None
+    
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib import cm
+
 # ------------------------------------------------------------------------------
 # Parameter definitions --------------------------------------------------------
 # ------------------------------------------------------------------------------
@@ -60,7 +82,7 @@ CROSS_EVS_LOW = 5 # 7 and 5 show a 33% of difference, which is more than the CRs
 CROSS_EVS_UPP = 7
 number_of_rates = 1
 
-# Flux, area and counts calculations
+# Flux, area and counts calculations, with z_plane = 6000 the x, y limits were on +-3000
 z_plane = 6000 # mm
 ylim = 6 * z_plane # mm
 xlim = ylim # mm
@@ -106,7 +128,7 @@ BASE_TIME = datetime(2024, 1, 1, 12, 0, 0)
 VALID_CROSSING_TYPES = ['1234', '123', '234', '12',  '23', '34']
 VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '23', '24', '34']
 
-read_file = False
+read_file = True
 use_binary = True  # If True, will use a binary file instead of CSV
 bin_filename = f"/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.pkl"
 csv_filename = f"/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.csv"
@@ -632,12 +654,11 @@ for tt_list in tt_lists:
 
 # %%
 
-
 # Define binning
 theta_bins = np.linspace(0, np.pi / 2, 100)
 phi_bins = np.linspace(-np.pi, np.pi, 100)
 
-tt_lists = [ VALID_MEASURED_TYPES]
+tt_lists = [ VALID_MEASURED_TYPES ]
 
 for tt_list in tt_lists:
       
@@ -758,8 +779,8 @@ tt_list = ['1234', '123', '234', '12', '23', '34']  # or VALID_MEASURED_TYPES
 n_tt = len(tt_list)
 fig, axes = plt.subplots(n_tt, 2, figsize=(7, 3 * n_tt), sharex=False, sharey=False)
 
-size_of_point = 0.5
-alpha_of_point = 0.15
+size_of_point = 0.05
+alpha_of_point = 0.01
 
 distance_limit = 6000
 
@@ -1002,8 +1023,8 @@ for tt_group in groups:
 
 import os
 
-x_bins = np.linspace(-distance_limit, distance_limit, 20)
-y_bins   = np.linspace(-distance_limit, distance_limit, 20)
+x_bins = np.linspace(-distance_limit, distance_limit, 200)
+y_bins   = np.linspace(-distance_limit, distance_limit, 200)
 
 tt_list = ['1234', '123', '234', '12', '23', '34']  # or VALID_MEASURED_TYPES
 
@@ -1127,801 +1148,824 @@ for tt_group in groups:
 #%%
 
 
-# # ---------------------------------------------------------------------
-# # ---------------------------------------------------------------------
-# # METHOD OF LIKELYHOOD ------------------------------------------------
-# # ---------------------------------------------------------------------
-# # ---------------------------------------------------------------------
-
-# # ---------------------------------------------------------------------
-# # Coordinate transform: (u, v) = (sin θ sin φ, sin θ cos φ)
-# # ---------------------------------------------------------------------
-# df["u_fit"] = np.sin(df["Theta_fit"]) * np.sin(df["Phi_fit"])
-# df["v_fit"] = np.sin(df["Theta_fit"]) * np.cos(df["Phi_fit"])
-
-# df["u_gen"] = np.sin(df["Theta_gen"]) * np.sin(df["Phi_gen"])
-# df["v_gen"] = np.sin(df["Theta_gen"]) * np.cos(df["Phi_gen"])
-
-# # ---------------------------------------------------------------
-# # (u, v) binning – keep n_bins as defined earlier
-# # ---------------------------------------------------------------
-# n_bins  = 50
-# u_edges = np.linspace(-1.0, 1.0, n_bins + 1)
-# v_edges = np.linspace(-1.0, 1.0, n_bins + 1)
-
-# df["fit_u_idx"] = np.digitize(df["u_fit"], u_edges) - 1
-# df["fit_v_idx"] = np.digitize(df["v_fit"], v_edges) - 1
-# df["gen_u_idx"] = np.digitize(df["u_gen"], u_edges) - 1
-# df["gen_v_idx"] = np.digitize(df["v_gen"], v_edges) - 1
-
-# # restrict to valid bins
-# inside = (
-#     df["fit_u_idx"].between(0, n_bins-1) &
-#     df["fit_v_idx"].between(0, n_bins-1) &
-#     df["gen_u_idx"].between(0, n_bins-1) &
-#     df["gen_v_idx"].between(0, n_bins-1)
-# )
-# df = df[inside]
-
-# # ---------------------------------------------------------------
-# # Build matrices per measured_type
-# # ---------------------------------------------------------------
-# # helper: flatten (u_idx, v_idx) to a single ordinal 0 … n_bins²-1
-# flat = lambda u, v: u * n_bins + v
-
-# matrices = {}  # {type: DataFrame}
-
-# for ttype, g in df.groupby("measured_type"):
-#     size = n_bins ** 2
-#     M = np.zeros((size, size), dtype=float)  # rows = GEN, cols = FIT
-
-#     # count events
-#     for _, row in g.iterrows():
-#         col = flat(row["fit_u_idx"], row["fit_v_idx"])
-#         row_ = flat(row["gen_u_idx"], row["gen_v_idx"])
-#         M[row_, col] += 1.0
-
-#     # normalise each column (FIT bin) to unity if non-empty
-#     col_sums = M.sum(axis=0)
-#     non_zero = col_sums > 0
-#     M[:, non_zero] /= col_sums[non_zero]
-
-#     # build labelled DataFrame for clarity and CSV output
-#     labels = [f"({u},{v})" for u in range(n_bins) for v in range(n_bins)]
-#     df_M = pd.DataFrame(M, index=labels, columns=labels)
-#     matrices[ttype] = df_M
-
-#     # write to CSV: likelihood_matrix_<type>.csv
-#     file_name = f"likelihood_matrix_{ttype}.csv"
-#     df_M.to_csv(file_name)
-#     print(f"{file_name} written ({size}×{size})")
-
-# # matrices["1234"]  # access the DataFrame in memory if needed
-
-
-# #%%
-
-# import numpy as np
-# import pandas as pd
-# import matplotlib.pyplot as plt
-# from mpl_toolkits.mplot3d import Axes3D
-# from matplotlib import cm
-
-# # ------------------------------------------------------------
-# # Helper to flatten / un-flatten bin indices
-# # ------------------------------------------------------------
-# def flat(u_idx, v_idx, n_bins):
-#     return u_idx * n_bins + v_idx
-
-# def plot_likelihood_matrix(matrices, measured_type, bin_uv,
-#                            u_edges, v_edges, z_log=False):
-#     """
-#     Visualise P(u_gen, v_gen | given FIT bin) stored in the likelihood matrix.
-#     -------------------------------------------------------------------------
-#     matrices       : dict[type] -> DataFrame (rows = GEN bins, cols = FIT bins)
-#     measured_type  : e.g. "1234"
-#     bin_uv         : tuple  (u_idx_fit, v_idx_fit)
-#     u_edges, v_edges : 1-D bin edges used to build the matrix
-#     z_log          : if True, plot log10(prob)  (useful for wide dynamic range)
-#     """
-
-#     df_M = matrices[measured_type]          # DataFrame  (N² × N²)
-#     n_bins = len(u_edges) - 1
-#     col_idx = flat(*bin_uv, n_bins)         # column corresponding to the FIT bin
-
-#     if col_idx >= df_M.shape[1]:
-#         raise ValueError("bin_uv out of range")
-
-#     # Probability vector → 2-D probability grid
-#     P_vec = df_M.iloc[:, col_idx].to_numpy()       # length N²
-#     P_grid = P_vec.reshape(n_bins, n_bins)         # shape (u_gen_idx , v_gen_idx)
-
-#     # Bin centres for u_gen, v_gen
-#     u_centres = 0.5 * (u_edges[:-1] + u_edges[1:])
-#     v_centres = 0.5 * (v_edges[:-1] + v_edges[1:])
-#     Uc, Vc    = np.meshgrid(u_centres, v_centres, indexing="ij")
-
-#     # Optional log-10 transform for Z-axis
-#     Z = np.log10(P_grid, where=P_grid > 0) if z_log else P_grid
-
-#     # --------------------------------------------------------
-#     # 3-D surface plot
-#     # --------------------------------------------------------
-#     fig = plt.figure(figsize=(8, 5.5))
-#     ax  = fig.add_subplot(111, projection='3d')
-
-#     surf = ax.plot_surface(Uc, Vc, Z,
-#                            cmap=cm.viridis,
-#                            edgecolor='none',
-#                            rstride=1, cstride=1,
-#                            antialiased=True)
-
-#     ax.set_xlabel(r'$u_{\rm gen}$')
-#     ax.set_ylabel(r'$v_{\rm gen}$')
-#     ax.set_zlabel(r'$\log_{10}P$' if z_log else r'$P$')
-#     ax.set_title(f'P(u_gen, v_gen | FIT bin {bin_uv}, type={measured_type})')
-#     fig.colorbar(surf, ax=ax, shrink=0.65,
-#                  label=r'$\log_{10}P$' if z_log else r'$P$')
-    
-#     # Remove grid lines for clarity
-#     ax.xaxis._axinfo['grid'].update(color='none')
-#     ax.yaxis._axinfo['grid'].update(color='none')
-#     ax.zaxis._axinfo['grid'].update(color='none')
-#     ax.set_box_aspect([1, 1, 0.3])  # aspect ratio for better visualisation
-    
-#     plt.tight_layout()
-#     plt.show()
-
-
-# # ------------------------------------------------------------------
-# # Example usage  (assuming matrices, u_edges, v_edges already exist)
-# # ------------------------------------------------------------------
-# plot_likelihood_matrix(
-#     matrices,
-#     measured_type="1234",
-#     bin_uv=(20, 12),           # FIT-bin of interest
-#     u_edges=u_edges,
-#     v_edges=v_edges,
-#     z_log=False              # or True for log-scale Z
-# )
-
-
-# #%%
-
-
-# from typing import Dict, Optional
-
-# import numpy as np
-# import pandas as pd
-import math
-from typing import Dict, Optional
-# import numpy as np
-# import pandas as pd
-# import math
-from pathlib import Path
-# from typing import Dict, Optional
-# try:
-#     from tqdm.auto import tqdm
-# except ModuleNotFoundError:
-#     tqdm = None
-
-
-# def load_lut(path_prefix: Path, t_type: str,
-#              n_bins: int, prefer_csv: bool = True) -> np.ndarray:
-#     """
-#     Carga la LUT de disco (CSV o binario) solo una vez por tipo.
-#     """
-#     if prefer_csv:
-#         file = path_prefix / f"likelihood_matrix_{t_type}.csv"
-#         return pd.read_csv(file, index_col=0).to_numpy()
-#     else:
-#         file = path_prefix / f"likelihood_matrix_{t_type}.bin"
-#         return np.fromfile(file, dtype=np.float64).reshape(n_bins ** 2, n_bins ** 2)
-
-
-# def wrap_to_pi(angle: float) -> float:
-#     """Devuelve el ángulo en (-π, π]."""
-#     return (angle + math.pi) % (2.0 * math.pi) - math.pi
-
-
-# def sample_true_angles_nearest(
-#     df_fit: pd.DataFrame,
-#     matrices: Optional[Dict[str, pd.DataFrame]],
-#     u_edges: np.ndarray,
-#     v_edges: np.ndarray,
-#     n_bins: int,
-#     rng: Optional[np.random.Generator] = None,
-#     lut_dir: Optional[str] = None,
-#     prefer_csv: bool = True,
-#     show_progress: bool = True,
-#     print_every: int = 50_000
-# ) -> pd.DataFrame:
-#     """
-#     Same interface as `sample_true_angles`, but the LUT is queried in nearest
-#     neighbour mode (no bilinear weights).  The LUT is assumed to be dense
-#     enough that interpolation is not worth the extra CPU cost.
-#     """
-#     if rng is None:
-#         rng = np.random.default_rng()
-
-#     # --------------------------------------------------------- LUT cache
-#     matrix_cache: Dict[str, np.ndarray] = {}
-#     if matrices is not None:
-#         for t, df_m in matrices.items():
-#             matrix_cache[t] = df_m.to_numpy()
-#     else:
-#         if lut_dir is None:
-#             raise ValueError("Provide either `matrices` or `lut_dir`.")
-#         lut_path = Path(lut_dir).expanduser()
-
-#     # --------------------------------------------------------- indices in the 2-D grid
-#     u_fit = np.sin(df_fit["Theta_fit"].values) * np.sin(df_fit["Phi_fit"].values)
-#     v_fit = np.sin(df_fit["Theta_fit"].values) * np.cos(df_fit["Phi_fit"].values)
-
-#     iu = np.clip(np.digitize(u_fit, u_edges) - 1, 0, n_bins - 2)  # lower edge
-#     iv = np.clip(np.digitize(v_fit, v_edges) - 1, 0, n_bins - 2)
-
-#     # decide whether the upper or lower neighbour is closer (nearest-neighbour)
-#     iu += (u_fit - u_edges[iu]) > (u_edges[iu + 1] - u_fit)
-#     iv += (v_fit - v_edges[iv]) > (v_edges[iv + 1] - v_fit)
-
-#     # flatten / unflatten helpers
-#     flat   = lambda u, v: u * n_bins + v
-#     unflat = lambda k: divmod(k, n_bins)
-
-#     # output buffers
-#     N = len(df_fit)
-#     theta_pred = np.empty(N, dtype=np.float32)
-#     phi_pred   = np.empty(N, dtype=np.float32)
-
-#     iterator = range(N)
-#     if show_progress and tqdm is not None:
-#         iterator = tqdm(iterator, desc="Sampling true angles (nearest-bin)", unit="evt")
-
-#     # --------------------------------------------------------- main loop
-#     for n in iterator:
-#         if tqdm is None and show_progress and (n % print_every == 0):
-#             print(f"[{n:>10}/{N}]")
-
-#         t_type = df_fit["measured_type"].iat[n]
-
-#         # fetch LUT (load once per type)
-#         if t_type not in matrix_cache:
-#             matrix_cache[t_type] = load_lut(lut_path, t_type, n_bins, prefer_csv)
-#         M = matrix_cache[t_type]
-
-#         # nearest bin in the 2-D grid
-#         col_idx = flat(iu[n], iv[n])
-#         p = M[:, col_idx]
-
-#         s = p.sum()
-#         if s == 0:                                     # empty column → uniform
-#             p = np.full_like(p, 1.0 / len(p))
-#         else:
-#             p = p / s
-
-#         gen_idx = rng.choice(len(p), p=p)
-#         g_u_idx, g_v_idx = unflat(gen_idx)
-
-#         # sample uniformly inside that generated-angle cell
-#         u_pred = rng.uniform(u_edges[g_u_idx], u_edges[g_u_idx + 1])
-#         v_pred = rng.uniform(v_edges[g_v_idx], v_edges[g_v_idx + 1])
-
-#         sin_theta = min(np.hypot(u_pred, v_pred), 1.0)
-#         theta_pred[n] = math.asin(sin_theta)
-#         phi_pred[n]   = wrap_to_pi(math.atan2(u_pred, v_pred))
-
-#     # --------------------------------------------------------- return
-#     df_out = df_fit.copy()
-#     df_out["Theta_pred"] = theta_pred
-#     df_out["Phi_pred"]   = phi_pred
-#     return df_out
-
-
-# # Take only 100000 events
-# df_input = df.sample(100_000, random_state=2024).reset_index(drop=True)
-
-# df_pred = sample_true_angles_nearest(
-#     df_fit=df_input,
-#     matrices=None,                        # o `matrices` si ya las tienes en RAM
-#     lut_dir="/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION",
-#     n_bins=n_bins,
-#     u_edges=u_edges,
-#     v_edges=v_edges,
-#     rng=np.random.default_rng(2025),
-#     show_progress=True
-# )
-
-
-#%%
-
-og_df = df.copy()  # Original DataFrame for reference
-# Add _pred columns full of zeroes to og_df
-
-#%%
-
-og_df["Theta_pred"] = 0.0
-og_df["Phi_pred"] = 0.0
-og_df["X_pred"] = 0.0
-og_df["y_pred"] = 0.0
-
-VALID_MEASURED_TYPES = ['1234', '123', '234', '12', '23', '34']
-og_df = og_df[og_df["measured_type"].isin(VALID_MEASURED_TYPES)].reset_index(drop=True)
-
-
-#%%
-
-
-df = og_df.copy()
-
-import math
-from typing import Dict, Optional
-from pathlib import Path
-
-# Drop the columns of df in which measured_type is not in VALID_MEASURED_TYPE
-VALID_MEASURED_TYPES = ['1234', '123', '234', '12', '23', '34']
-
-df = df[df["measured_type"].isin(VALID_MEASURED_TYPES)].reset_index(drop=True)
-
-
-print("-----------------------------------------------------")
-print("Creating LUTs...")
-print("-----------------------------------------------------")
-
-
 # ---------------------------------------------------------------------
-# Bin edges
 # ---------------------------------------------------------------------
-distance_limit_x   = 1200.0  # 500                  # e.g. mm – adjust to your system
-distance_limit_y   = 2000.0  # 1000                 # e.g. mm – adjust to your system
+# METHOD OF LIKELYHOOD ------------------------------------------------
+# ---------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
-# choose independently
-n_uv   = 150                 # bins in u  and v   (–1 … 1)
-n_xy   = 150                 # bins in X  and Y   (–d … +d)
+only_angles_input = True
+if only_angles_input:
+    # ---------------------------------------------------------------------
+    # Coordinate transform: (u, v) = (sin θ sin φ, sin θ cos φ)
+    # ---------------------------------------------------------------------
+    df["u_fit"] = np.sin(df["Theta_fit"]) * np.sin(df["Phi_fit"])
+    df["v_fit"] = np.sin(df["Theta_fit"]) * np.cos(df["Phi_fit"])
 
-edges_uv = np.linspace(-1.0,            1.0,            n_uv + 1)
-edges_x = np.linspace(-distance_limit_x, distance_limit_x, n_xy + 1)
-edges_y = np.linspace(-distance_limit_y, distance_limit_y, n_xy + 1)
+    df["u_gen"] = np.sin(df["Theta_gen"]) * np.sin(df["Phi_gen"])
+    df["v_gen"] = np.sin(df["Theta_gen"]) * np.cos(df["Phi_gen"])
+
+    # ---------------------------------------------------------------
+    # (u, v) binning – keep n_bins as defined earlier
+    # ---------------------------------------------------------------
+    n_bins  = 20
+    u_edges = np.linspace(-1.0, 1.0, n_bins + 1)
+    v_edges = np.linspace(-1.0, 1.0, n_bins + 1)
+
+    df["fit_u_idx"] = np.digitize(df["u_fit"], u_edges) - 1
+    df["fit_v_idx"] = np.digitize(df["v_fit"], v_edges) - 1
+    df["gen_u_idx"] = np.digitize(df["u_gen"], u_edges) - 1
+    df["gen_v_idx"] = np.digitize(df["v_gen"], v_edges) - 1
+
+    # restrict to valid bins
+    inside = (
+        df["fit_u_idx"].between(0, n_bins-1) &
+        df["fit_v_idx"].between(0, n_bins-1) &
+        df["gen_u_idx"].between(0, n_bins-1) &
+        df["gen_v_idx"].between(0, n_bins-1)
+    )
+    df = df[inside]
+    
+    print("Filtered df")
+    
+    # ---------------------------------------------------------------
+    # Build matrices per measured_type
+    # ---------------------------------------------------------------
+    # helper: flatten (u_idx, v_idx) to a single ordinal 0 … n_bins²-1
+    flat = lambda u, v: u * n_bins + v
+
+    # matrices = {}  # {type: DataFrame}
+
+    # for ttype, g in df.groupby("measured_type"):
+    #     size = n_bins ** 2
+    #     M = np.zeros((size, size), dtype=float)  # rows = GEN, cols = FIT
+
+    #     # count events
+    #     for _, row in g.iterrows():
+    #         col = flat(row["fit_u_idx"], row["fit_v_idx"])
+    #         row_ = flat(row["gen_u_idx"], row["gen_v_idx"])
+    #         M[row_, col] += 1.0
+
+    #     # normalise each column (FIT bin) to unity if non-empty
+    #     col_sums = M.sum(axis=0)
+    #     non_zero = col_sums > 0
+    #     M[:, non_zero] /= col_sums[non_zero]
+
+    #     # build labelled DataFrame for clarity and CSV output
+    #     labels = [f"({u},{v})" for u in range(n_bins) for v in range(n_bins)]
+    #     df_M = pd.DataFrame(M, index=labels, columns=labels)
+    #     matrices[ttype] = df_M
+
+    #     # write to CSV: likelihood_matrix_<type>.csv
+    #     file_name = f"likelihood_matrix_{ttype}.csv"
+    #     df_M.to_csv(file_name)
+    #     print(f"{file_name} written ({size}×{size})")
+    
+    labels = [f"({u},{v})" for u in range(n_bins) for v in range(n_bins)]
+
+    # open a single HDF5 file
+    hdf_path = "likelihood_matrices.h5"
+    with pd.HDFStore(hdf_path, mode='w') as store:
+        for ttype, g in df.groupby("measured_type"):
+            size = n_bins ** 2
+            M = np.zeros((size, size), dtype=float)
+
+            for _, row in g.iterrows():
+                col = flat(row["fit_u_idx"], row["fit_v_idx"])
+                row_ = flat(row["gen_u_idx"], row["gen_v_idx"])
+                M[row_, col] += 1.0
+
+            # normalize columns
+            col_sums = M.sum(axis=0)
+            non_zero = col_sums > 0
+            M[:, non_zero] /= col_sums[non_zero]
+
+            df_M = pd.DataFrame(M, index=labels, columns=labels)
+
+            # store under key for that measured type
+            store.put(f"{ttype}", df_M, format="fixed")
+            print(f"{ttype} written to {hdf_path} ({size}×{size})")
+    
+    matrices = {}
+    hdf_path = "likelihood_matrices.h5"
+
+    with pd.HDFStore(hdf_path, mode='r') as store:
+        for key in store.keys():  # keys are like '/P1', '/P2', etc.
+            ttype = key.strip("/")  # remove leading slash
+            df_M = store.get(key)
+            matrices[ttype] = df_M
+            print(f"Loaded matrix for: {ttype}, shape = {df_M.shape}")
+    
+    # matrices["1234"]  # access the DataFrame in memory if needed
 
 
-# ------------------------------------------------------------------
-# 4-D <--> 1-D ordinal  (lexicographic)
-# ------------------------------------------------------------------
-# ─────────────────────────── helpers ────────────────────────────
-def flat4(iu, iv, ix, iy, n_uv, n_xy):
-    return ((iu * n_uv + iv) * n_xy + ix) * n_xy + iy
+    # ------------------------------------------------------------
+    # Helper to flatten / un-flatten bin indices
+    # ------------------------------------------------------------
+    def flat(u_idx, v_idx, n_bins):
+        return u_idx * n_bins + v_idx
 
-def unflat4(k, n_uv, n_xy):
-    iu, rem = divmod(k, n_uv * n_xy * n_xy)
-    iv, rem = divmod(rem,       n_xy * n_xy)
-    ix, iy  = divmod(rem,       n_xy)
-    return iu, iv, ix, iy
+    
 
-def wrap_to_pi(angle: float) -> float:
+
+    def load_lut(path_prefix: Path, t_type: str,
+                n_bins: int, prefer_csv: bool = True) -> np.ndarray:
+        """
+        Carga la LUT de disco (CSV o binario) solo una vez por tipo.
+        """
+        if prefer_csv:
+            file = path_prefix / f"likelihood_matrix_{t_type}.csv"
+            return pd.read_csv(file, index_col=0).to_numpy()
+        else:
+            file = path_prefix / f"likelihood_matrix_{t_type}.bin"
+            return np.fromfile(file, dtype=np.float64).reshape(n_bins ** 2, n_bins ** 2)
+
+
+    def wrap_to_pi(angle: float) -> float:
         """Devuelve el ángulo en (-π, π]."""
         return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
-# ---------------------------------------------------------------------
-# Coordinate definitions  (unchanged)
-# ---------------------------------------------------------------------
-df["u_fit"] = np.sin(df["Theta_fit"]) * np.sin(df["Phi_fit"])
-df["v_fit"] = np.sin(df["Theta_fit"]) * np.cos(df["Phi_fit"])
-df["u_gen"] = np.sin(df["Theta_gen"]) * np.sin(df["Phi_gen"])
-df["v_gen"] = np.sin(df["Theta_gen"]) * np.cos(df["Phi_gen"])
+    def sample_true_angles_nearest(
+        df_fit: pd.DataFrame,
+        matrices: Optional[Dict[str, pd.DataFrame]],
+        u_edges: np.ndarray,
+        v_edges: np.ndarray,
+        n_bins: int,
+        rng: Optional[np.random.Generator] = None,
+        lut_dir: Optional[str] = None,
+        prefer_csv: bool = True,
+        show_progress: bool = True,
+        print_every: int = 50_000
+    ) -> pd.DataFrame:
+        """
+        Same interface as `sample_true_angles`, but the LUT is queried in nearest
+        neighbour mode (no bilinear weights).  The LUT is assumed to be dense
+        enough that interpolation is not worth the extra CPU cost.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
 
-# X_fit, Y_fit, X_gen, Y_gen are already present in the DataFrame
+        # --------------------------------------------------------- LUT cache
+        matrix_cache: Dict[str, np.ndarray] = {}
+        if matrices is not None:
+            for t, df_m in matrices.items():
+                matrix_cache[t] = df_m.to_numpy()
+        else:
+            if lut_dir is None:
+                raise ValueError("Provide either `matrices` or `lut_dir`.")
+            lut_path = Path(lut_dir).expanduser()
 
-# ------------------------------------------------------------
-# Generate the *_idx columns
-# ------------------------------------------------------------
-coord_names = ["u_fit", "v_fit", "X_fit", "Y_fit",
-               "u_gen", "v_gen", "X_gen", "Y_gen"]
+        # --------------------------------------------------------- indices in the 2-D grid
+        u_fit = np.sin(df_fit["Theta_fit"].values) * np.sin(df_fit["Phi_fit"].values)
+        v_fit = np.sin(df_fit["Theta_fit"].values) * np.cos(df_fit["Phi_fit"].values)
 
-# ------------------------------------------------------------------
-# Create *_idx columns  (u,v  use n_uv bins;   X,Y  use n_xy bins)
-# ------------------------------------------------------------------
-for c in ("u_fit", "v_fit", "u_gen", "v_gen"):
-    df[f"{c}_idx"] = np.digitize(df[c], edges_uv) - 1
-    print(f"{c:8s}:  min={df[c].min():8.3f}  max={df[c].max():8.3f}")
+        iu = np.clip(np.digitize(u_fit, u_edges) - 1, 0, n_bins - 2)  # lower edge
+        iv = np.clip(np.digitize(v_fit, v_edges) - 1, 0, n_bins - 2)
 
-for c in ("X_fit", "X_gen"):
-    df[f"{c}_idx"] = np.digitize(df[c], edges_x) - 1
-    print(f"{c:8s}:  min={df[c].min():8.3f}  max={df[c].max():8.3f}")
+        # decide whether the upper or lower neighbour is closer (nearest-neighbour)
+        iu += (u_fit - u_edges[iu]) > (u_edges[iu + 1] - u_fit)
+        iv += (v_fit - v_edges[iv]) > (v_edges[iv + 1] - v_fit)
 
-for c in ("Y_fit", "Y_gen"):
-    df[f"{c}_idx"] = np.digitize(df[c], edges_y) - 1
-    print(f"{c:8s}:  min={df[c].min():8.3f}  max={df[c].max():8.3f}")
+        # flatten / unflatten helpers
+        flat   = lambda u, v: u * n_bins + v
+        unflat = lambda k: divmod(k, n_bins)
 
-# ------------------------------------------------------------------
-# Keep only events fully inside the 4-D grid
-# ------------------------------------------------------------------
-inside_uv = np.logical_and.reduce([
-    df[f"{c}_idx"].between(0, n_uv - 1)          # u, v limits
-    for c in ("u_fit", "v_fit", "u_gen", "v_gen")
-])
+        # output buffers
+        N = len(df_fit)
+        theta_pred = np.empty(N, dtype=np.float32)
+        phi_pred   = np.empty(N, dtype=np.float32)
 
-inside_xy = np.logical_and.reduce([
-    df[f"{c}_idx"].between(0, n_xy - 1)          # X, Y limits
-    for c in ("X_fit", "Y_fit", "X_gen", "Y_gen")
-])
+        iterator = range(N)
+        if show_progress and tqdm is not None:
+            iterator = tqdm(iterator, desc="Sampling true angles (nearest-bin)", unit="evt")
 
-df = df[inside_uv & inside_xy].reset_index(drop=True)
+        # --------------------------------------------------------- main loop
+        for n in iterator:
+            if tqdm is None and show_progress and (n % print_every == 0):
+                print(f"[{n:>10}/{N}]")
 
-from scipy.sparse import coo_matrix, csr_matrix, save_npz
-import numpy as np
+            t_type = df_fit["measured_type"].iat[n]
 
-from pathlib import Path
-from typing import Union           # ← import Union
-from scipy.sparse import coo_matrix, csr_matrix, save_npz
-import numpy as np
+            # fetch LUT (load once per type)
+            if t_type not in matrix_cache:
+                matrix_cache[t_type] = load_lut(lut_path, t_type, n_bins, prefer_csv)
+            M = matrix_cache[t_type]
 
-from pathlib import Path
-from typing  import Union
-from scipy.sparse import coo_matrix, csc_matrix, save_npz
-import numpy as np
+            # nearest bin in the 2-D grid
+            col_idx = flat(iu[n], iv[n])
+            p = M[:, col_idx]
 
-# ------------------------------------------------------------------
-# def build_sparse_lut(
-#     df_type:  pd.DataFrame,
-#     n_uv:     int,                # ★ CHANGED
-#     n_xy:     int,                # ★ CHANGED
-#     t_type:   str,
-#     out_dir:  Union[str, Path],
-# ) -> None:
-#     """
-#     Build a (GEN × FIT) sparse LUT where
-#         GEN index  = (u_gen,v_gen,X_gen,Y_gen)  with n_uv² · n_xy² bins
-#         FIT index  = (u_fit,v_fit,X_fit,Y_fit)  same binning
-#     The matrix is column-normalised and saved as CSC in  .npz  format.
-#     """
-#     size = n_uv * n_uv * n_xy * n_xy          # ★ CHANGED
-#     rows, cols = [], []
+            s = p.sum()
+            if s == 0:                                     # empty column → uniform
+                p = np.full_like(p, 1.0 / len(p))
+            else:
+                p = p / s
 
-#     # -------- single pass over events
-#     for _, r in df_type.iterrows():
-#         col = flat4(                          # uses new signature below
-#             r.u_fit_idx, r.v_fit_idx, r.X_fit_idx, r.Y_fit_idx, n_uv, n_xy
-#         )
-#         row = flat4(
-#             r.u_gen_idx, r.v_gen_idx, r.X_gen_idx, r.Y_gen_idx, n_uv, n_xy
-#         )
-#         rows.append(row); cols.append(col)
+            gen_idx = rng.choice(len(p), p=p)
+            g_u_idx, g_v_idx = unflat(gen_idx)
 
-#     data = np.ones(len(rows), dtype=np.float32)
-#     M    = coo_matrix((data, (rows, cols)), shape=(size, size)).tocsc()
+            # sample uniformly inside that generated-angle cell
+            u_pred = rng.uniform(u_edges[g_u_idx], u_edges[g_u_idx + 1])
+            v_pred = rng.uniform(v_edges[g_v_idx], v_edges[g_v_idx + 1])
 
-#     # -------- column normalisation (in-place, no dense arrays)
-#     col_sums = np.asarray(M.sum(axis=0)).ravel()
-#     for j in np.flatnonzero(col_sums):
-#         start, end = M.indptr[j], M.indptr[j + 1]
-#         M.data[start:end] /= col_sums[j]
+            sin_theta = min(np.hypot(u_pred, v_pred), 1.0)
+            theta_pred[n] = math.asin(sin_theta)
+            phi_pred[n]   = wrap_to_pi(math.atan2(u_pred, v_pred))
 
-#     out_path = Path(out_dir).expanduser() / f"likelihood_matrix_{t_type}.npz"
-#     save_npz(out_path, M)
-#     print(f"{out_path}  written  (nnz = {M.nnz:,})")
-
-
-# from pathlib import Path
-# from scipy.sparse import save_npz   # only to show where it comes from
-
-# out_dir = Path("~/DATAFLOW_v3/TESTS/SIMULATION").expanduser()
-# out_dir.mkdir(parents=True, exist_ok=True)
-
-
-# for ttype, grp in df.groupby("measured_type"):
-#     build_sparse_lut(
-#         df_type = grp,
-#         n_uv    = n_uv,          # ➤ NEW
-#         n_xy    = n_xy,          # ➤ NEW
-#         t_type  = ttype,
-#         out_dir = out_dir,
-#     )
-
-import numpy as np
-import pandas as pd
-from pathlib import Path
-from typing import Union
-from scipy.sparse import coo_matrix, save_npz
-import inspect
-
-# ────────────────────────────────────────────────────────────────
-def build_sparse_lut_prob(
-    df_type:  pd.DataFrame,
-    n_uv:     int,
-    n_xy:     int,
-    t_type:   str,
-    out_dir:  Union[str, Path],
-    ndigits:  int = 3,
-) -> None:
-    """
-    Construct a GEN×FIT LUT whose columns are probability vectors,
-    rounded to *ndigits* decimals; entries that become exactly zero are dropped.
-    Compatible with SciPy versions both before and after index_dtype support.
-    """
-    size = n_uv * n_uv * n_xy * n_xy
-
-    # ---- vectorised flat indices ---------------------------------
-    ui_f = df_type["u_fit_idx"].to_numpy(np.int32)
-    vi_f = df_type["v_fit_idx"].to_numpy(np.int32)
-    xi_f = df_type["X_fit_idx"].to_numpy(np.int32)
-    yi_f = df_type["Y_fit_idx"].to_numpy(np.int32)
-    col  = ((ui_f * n_uv + vi_f) * n_xy + xi_f) * n_xy + yi_f
-
-    ui_g = df_type["u_gen_idx"].to_numpy(np.int32)
-    vi_g = df_type["v_gen_idx"].to_numpy(np.int32)
-    xi_g = df_type["X_gen_idx"].to_numpy(np.int32)
-    yi_g = df_type["Y_gen_idx"].to_numpy(np.int32)
-    row  = ((ui_g * n_uv + vi_g) * n_xy + xi_g) * n_xy + yi_g
-
-    data = np.ones_like(row, dtype=np.int32)
-
-    # ---- create COO  →  CSC  -------------------------------------
-    kwargs = dict(dtype=np.float32)
-    if "index_dtype" in inspect.signature(coo_matrix).parameters:
-        kwargs["index_dtype"] = np.int32
-
-    M = coo_matrix((data, (row, col)), shape=(size, size), **kwargs).tocsc(copy=False)
-
-    # ---- column normalisation ------------------------------------
-    col_sums = np.asarray(M.sum(axis=0)).ravel()
-    nz_cols  = np.flatnonzero(col_sums)
-    for j in nz_cols:
-        start, end = M.indptr[j], M.indptr[j + 1]
-        M.data[start:end] /= col_sums[j]
-
-    # ---- round, threshold, zero-prune -------------------------------
-    M.data = np.round(M.data, ndigits).astype(np.float32)
-
-    M.data[M.data < 1 / 10 ** ndigits] = 0.0          # ← discard tiny probabilities
-    M.eliminate_zeros()                   # remove the entries that became 0.0
-    M.sort_indices()
-
-    # ---- persist -------------------------------------------------
-    out_path = Path(out_dir).expanduser() / f"likelihood_matrix_{t_type}.npz"
-    save_npz(out_path, M, compressed=True)
-    print(f"{out_path} written  |  nnz = {M.nnz:,}")
-
-
-# ────────────────────────────────────────────────────────────────
-# Example driver
-# ────────────────────────────────────────────────────────────────
-def build_all_luts(df: pd.DataFrame,
-                   valid_types: list[str],
-                   n_uv: int, n_xy: int,
-                   out_dir: Union[str, Path],
-                   ndigits: int = 3) -> None:
-    out_dir = Path(out_dir).expanduser()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    df = df[df["measured_type"].isin(valid_types)]
-
-    for t_type, grp in df.groupby("measured_type", sort=True):
-        build_sparse_lut_prob(
-            df_type = grp,
-            n_uv    = n_uv,
-            n_xy    = n_xy,
-            t_type  = str(t_type),
-            out_dir = out_dir,
-            ndigits = ndigits,
-        )
-
-
-build_all_luts(
-    df,                       # the DataFrame that already holds your events
-    VALID_MEASURED_TYPES,     # list defined earlier
-    n_uv,                     # number of u / v bins
-    n_xy,                     # number of X / Y bins
-    out_dir="~/DATAFLOW_v3/TESTS/SIMULATION",  # target directory
-    ndigits=6                 # keep three decimal places (adjust as needed)
-)
-
-
-
-print("-----------------------------------------------------")
-print("LUTs created and saved.")
-print("-----------------------------------------------------")
-
-
-
-#%%
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Fast nearest-bin sampler  –  compatible with rounded sparse LUTs
-# ─────────────────────────────────────────────────────────────────────
-
-from pathlib import Path
-from functools import lru_cache
-from typing   import Union
-import math, numpy as np, pandas as pd
-from scipy.sparse import csc_matrix, load_npz
-
-try:
-    from tqdm.auto import tqdm               # nice progress bar if available
-except ModuleNotFoundError:
-    tqdm = None
-
-# ---------- helpers -------------------------------------------------
-def flat4(iu: int, iv: int, ix: int, iy: int,
-          n_uv: int, n_xy: int) -> int:
-    """(iu,iv,ix,iy) → ordinal in 0 … n_uv²·n_xy²-1"""
-    return ((iu * n_uv + iv) * n_xy + ix) * n_xy + iy
-
-def unflat4(k: int, n_uv: int, n_xy: int) -> tuple[int, int, int, int]:
-    iu, rem = divmod(k, n_uv * n_xy * n_xy)
-    iv, rem = divmod(rem,       n_xy * n_xy)
-    ix, iy  = divmod(rem,       n_xy)
-    return iu, iv, ix, iy
-
-
-from pathlib import Path
-from functools import lru_cache
-from typing   import Dict, Tuple, Union
-import numpy as np
-from scipy.sparse import csc_matrix, load_npz
-
-# ---------- matrix cache keyed by measured_type --------------------
-_matrix_cache: Dict[str, csc_matrix] = {}   # Python ≤3.8 compatible
-
-def load_sparse_lut(path_prefix: Path, t_type: str) -> csc_matrix:
-    """Return detector LUT (CSC) for one measured_type."""
-    return load_npz(path_prefix / f"likelihood_matrix_{t_type}.npz")
-
-# ---------- column extractor with bounded (type,col) cache ----------
-# put near the top once
-# ─── constants ──────────────────────────────────────────────────────
-N_CELLS = n_uv * n_uv * n_xy * n_xy          # 2_560_000 for 40×40 bins
-
-# ─── cached column lookup (unchanged, with sentinel) ───────────────
-@lru_cache(maxsize=8_192)
-def _rows_cdf_for(
-    t_type:   str,
-    col:      int,
-    lut_base: Path,
-    renorm:   bool
-) -> Tuple[np.ndarray, np.ndarray]:
-    if t_type not in _matrix_cache:
-        _matrix_cache[t_type] = load_npz(lut_base / f"likelihood_matrix_{t_type}.npz")
-    M = _matrix_cache[t_type]
-
-    start, end  = M.indptr[col], M.indptr[col + 1]
-    rows, probs = M.indices[start:end], M.data[start:end]
-
-    # sentinel for empty column  → (None, None)
-    if rows.size == 0:
-        return None, None
-
-    if renorm:
-        probs = probs / probs.sum(dtype=np.float32)
-
-    cdf = np.cumsum(probs, dtype=np.float32)
+        # --------------------------------------------------------- return
+        df_out = df_fit.copy()
+        df_out["Theta_pred"] = theta_pred
+        df_out["Phi_pred"]   = phi_pred
+        return df_out
     
-    # last = cdf[-1]
-    # if last < 1.0:                           # happens after rounding
-    #     cdf /= last                          # renormalise in-place
+    #%%
+    
+    # Take only 100000 events
+    # df_input = df.sample(100_000, random_state=2024).reset_index(drop=True)
+    df_input = df
 
-    return rows.astype(np.int32, copy=False), cdf
+    df_pred = sample_true_angles_nearest(
+        df_fit=df_input,
+        matrices=None,                        # o `matrices` si ya las tienes en RAM
+        lut_dir="/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION",
+        n_bins=n_bins,
+        u_edges=u_edges,
+        v_edges=v_edges,
+        rng=np.random.default_rng(2025),
+        show_progress=True
+    )
+    
+    distance_limit_x   = 3000.0  # 500                  # e.g. mm – adjust to your system
+    distance_limit_y   = 3000.0
+    
+    df_pred["X_pred"] = df['X_fit']
+    df_pred["Y_pred"] = df['Y_fit']
+    
+    #%%
+    
+    
+    
+    def plot_likelihood_matrix(matrices, measured_type, bin_uv,
+                            u_edges, v_edges, z_log=False):
+        """
+        Visualise P(u_gen, v_gen | given FIT bin) stored in the likelihood matrix.
+        -------------------------------------------------------------------------
+        matrices       : dict[type] -> DataFrame (rows = GEN bins, cols = FIT bins)
+        measured_type  : e.g. "1234"
+        bin_uv         : tuple  (u_idx_fit, v_idx_fit)
+        u_edges, v_edges : 1-D bin edges used to build the matrix
+        z_log          : if True, plot log10(prob)  (useful for wide dynamic range)
+        """
+
+        df_M = matrices[measured_type]          # DataFrame  (N² × N²)
+        n_bins = len(u_edges) - 1
+        col_idx = flat(*bin_uv, n_bins)         # column corresponding to the FIT bin
+
+        if col_idx >= df_M.shape[1]:
+            raise ValueError("bin_uv out of range")
+
+        # Probability vector → 2-D probability grid
+        P_vec = df_M.iloc[:, col_idx].to_numpy()       # length N²
+        P_grid = P_vec.reshape(n_bins, n_bins)         # shape (u_gen_idx , v_gen_idx)
+
+        # Bin centres for u_gen, v_gen
+        u_centres = 0.5 * (u_edges[:-1] + u_edges[1:])
+        v_centres = 0.5 * (v_edges[:-1] + v_edges[1:])
+        Uc, Vc    = np.meshgrid(u_centres, v_centres, indexing="ij")
+
+        # Optional log-10 transform for Z-axis
+        Z = np.log10(P_grid, where=P_grid > 0) if z_log else P_grid
+
+        # --------------------------------------------------------
+        # 3-D surface plot
+        # --------------------------------------------------------
+        fig = plt.figure(figsize=(8, 5.5))
+        ax  = fig.add_subplot(111, projection='3d')
+
+        surf = ax.plot_surface(Uc, Vc, Z,
+                            cmap=cm.viridis,
+                            edgecolor='none',
+                            rstride=1, cstride=1,
+                            antialiased=True)
+
+        ax.set_xlabel(r'$u_{\rm gen}$')
+        ax.set_ylabel(r'$v_{\rm gen}$')
+        ax.set_zlabel(r'$\log_{10}P$' if z_log else r'$P$')
+        ax.set_title(f'P(u_gen, v_gen | FIT bin {bin_uv}, type={measured_type})')
+        fig.colorbar(surf, ax=ax, shrink=0.65,
+                    label=r'$\log_{10}P$' if z_log else r'$P$')
+        
+        # Remove grid lines for clarity
+        ax.xaxis._axinfo['grid'].update(color='none')
+        ax.yaxis._axinfo['grid'].update(color='none')
+        ax.zaxis._axinfo['grid'].update(color='none')
+        ax.set_box_aspect([1, 1, 0.3])  # aspect ratio for better visualisation
+        
+        plt.tight_layout()
+        plt.show()
+    
+    
+    print("Plotting...")
+    
+    # ------------------------------------------------------------------
+    # Example usage  (assuming matrices, u_edges, v_edges already exist)
+    # ------------------------------------------------------------------
+    plot_likelihood_matrix(
+        matrices,
+        measured_type="1234",
+        bin_uv=(20, 12),           # FIT-bin of interest
+        u_edges=u_edges,
+        v_edges=v_edges,
+        z_log=False              # or True for log-scale Z
+    )
+    
+    
+else:
+
+    og_df = df.copy()  # Original DataFrame for reference
+    # Add _pred columns full of zeroes to og_df
+
+    og_df["Theta_pred"] = 0.0
+    og_df["Phi_pred"] = 0.0
+    og_df["X_pred"] = 0.0
+    og_df["y_pred"] = 0.0
+
+    VALID_MEASURED_TYPES = ['1234',
+    '123', '234', '134', '124',
+    '12', '23', '34', '13', '24', '14']
+    og_df = og_df[og_df["measured_type"].isin(VALID_MEASURED_TYPES)].reset_index(drop=True)
+
+    df = og_df.copy()
+
+    import math
+    from typing import Dict, Optional
+    from pathlib import Path
+
+    # Drop the columns of df in which measured_type is not in VALID_MEASURED_TYPE
+    df = df[df["measured_type"].isin(VALID_MEASURED_TYPES)].reset_index(drop=True)
 
 
+    # Histogram in a 2x2 the Theta_gen, Phi_gen, X_gen, Y_gen
+
+    # Create the 2x2 histogram figure
+    fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+
+    # Plot each histogram
+    axs[0, 0].hist(df["Theta_gen"], bins=50)
+    axs[0, 0].set_title("Theta_gen")
+    axs[0, 0].set_xlabel("Theta (rad)")
+    axs[0, 0].set_ylabel("Counts")
+
+    axs[0, 1].hist(df["Phi_gen"], bins=50)
+    axs[0, 1].set_title("Phi_gen")
+    axs[0, 1].set_xlabel("Phi (rad)")
+    axs[0, 1].set_ylabel("Counts")
+
+    axs[1, 0].hist(df["X_gen"], bins=50)
+    axs[1, 0].set_title("X_gen")
+    axs[1, 0].set_xlabel("X (mm)")
+    axs[1, 0].set_ylabel("Counts")
+
+    axs[1, 1].hist(df["Y_gen"], bins=50)
+    axs[1, 1].set_title("Y_gen")
+    axs[1, 1].set_xlabel("Y (mm)")
+    axs[1, 1].set_ylabel("Counts")
+
+    # Layout adjustment
+    plt.tight_layout()
+    plt.show()
+
+    print("-----------------------------------------------------")
+    print("Creating LUTs...")
+    print("-----------------------------------------------------")
+
+    # ---------------------------------------------------------------------
+    # Bin edges
+    # ---------------------------------------------------------------------
+    distance_limit_x   = 3000.0  # 500                  # e.g. mm – adjust to your system
+    distance_limit_y   = 3000.0  # 1000                 # e.g. mm – adjust to your system
+
+    # choose independently
+    n_uv   = 200                 # bins in u  and v   (–1 … 1)
+    n_xy   = 200                 # bins in X  and Y   (–d … +d)
+
+    edges_uv = np.linspace(-0.9, 0.9, n_uv + 1)
+    edges_x = np.linspace(-distance_limit_x, distance_limit_x, n_xy + 1)
+    edges_y = np.linspace(-distance_limit_y, distance_limit_y, n_xy + 1)
+
+    # def equal_count_edges(x: np.ndarray, n_bins: int) -> np.ndarray:
+    #     """
+    #     Returns edges so that each of the n_bins has the same number of events.
+    #     The outermost edges are ± max(|x|) to keep full range.
+    #     """
+    #     q      = np.linspace(0, 1, n_bins + 1)
+    #     edges  = np.quantile(x, q)
+    #     edges[0]  = -np.abs(x).max()
+    #     edges[-1] =  np.abs(x).max()
+    #     return edges
 
 
-# ---------- main sampler --------------------------------------------
-def sample_true_state_nearest(
-    df_fit:       pd.DataFrame,
-    n_uv:         int,
-    n_xy:         int,
-    edges_uv:     np.ndarray,
-    edges_x:      np.ndarray,
-    edges_y:      np.ndarray,
-    rng:          np.random.Generator,
-    lut_dir:      Union[str, Path],
-    show_progress: bool = True,
-    print_every:   int  = 50_000,
-    renorm:        bool = True,                # re-normalise column if rounding ≠1
-) -> pd.DataFrame:
-    """
-    Draw (u,v,X,Y) true state from nearest-bin 4-D LUTs.
-    LUTs must be those created by `build_sparse_lut_prob`.
-    """
+    # x_data     = df["X_fit"].to_numpy()
+    # edges_x    = equal_count_edges(x_data, n_bins= n_xy + 1 )   # ← choose any bin count
 
-    lut_base = Path(lut_dir).expanduser()
-    uniform_setting = True
+    # y_data     = df["Y_fit"].to_numpy()
+    # edges_y    = equal_count_edges(y_data, n_bins= n_xy + 1 )   # ← choose any bin count
 
-    # --- nearest FIT indices ---------------------------------------
-    u_fit, v_fit = df_fit["u_fit"].to_numpy(np.float32), df_fit["v_fit"].to_numpy(np.float32)
-    X_fit, Y_fit = df_fit["X_fit"].to_numpy(np.float32), df_fit["Y_fit"].to_numpy(np.float32)
+    # centres_x = 0.5 * (edges_x[:-1] + edges_x[1:])
+    # widths_x  = np.diff(edges_x)
 
-    iu = np.clip(np.digitize(u_fit, edges_uv) - 1, 0, n_uv - 2)
-    iv = np.clip(np.digitize(v_fit, edges_uv) - 1, 0, n_uv - 2)
-    ix = np.clip(np.digitize(X_fit, edges_x)  - 1, 0, n_xy - 2)
-    iy = np.clip(np.digitize(Y_fit, edges_y)  - 1, 0, n_xy - 2)
+    # centres_y = 0.5 * (edges_y[:-1] + edges_y[1:])
+    # widths_y  = np.diff(edges_y)
 
-    iu += (u_fit - edges_uv[iu]) > (edges_uv[iu + 1] - u_fit)
-    iv += (v_fit - edges_uv[iv]) > (edges_uv[iv + 1] - v_fit)
-    ix += (X_fit - edges_x[ix])  > (edges_x[ix + 1] - X_fit)
-    iy += (Y_fit - edges_y[iy])  > (edges_y[iy + 1] - Y_fit)
+    # # ------------------------------------------------------------------
+    # # Line plot – bin width vs. position (X axis)
+    # # ------------------------------------------------------------------
+    # plt.figure(figsize=(6, 3))
+    # plt.plot(centres_x, widths_x)
+    # plt.plot(centres_y, widths_y)
+    # plt.xlabel('x, y position (bin centre)')
+    # plt.ylabel('bin width')
+    # plt.title('Bin width along position')
+    # plt.tight_layout()
+    # plt.show()
+    
 
-    # --- output buffers --------------------------------------------
-    N       = len(df_fit)
-    u_pred  = np.empty(N, np.float32); v_pred  = np.empty_like(u_pred)
-    X_pred  = np.empty_like(u_pred);   Y_pred  = np.empty_like(u_pred)
-    th_pred = np.empty_like(u_pred);   ph_pred = np.empty_like(u_pred)
+    # ------------------------------------------------------------------
+    # 4-D <--> 1-D ordinal  (lexicographic)
+    # ------------------------------------------------------------------
+    # ─────────────────────────── helpers ────────────────────────────
+    def flat4(iu, iv, ix, iy, n_uv, n_xy):
+        return ((iu * n_uv + iv) * n_xy + ix) * n_xy + iy
 
-    iterator = tqdm(range(N), desc="Sampling 4-D state", unit="evt") \
-              if show_progress and tqdm else range(N)
+    def unflat4(k, n_uv, n_xy):
+        iu, rem = divmod(k, n_uv * n_xy * n_xy)
+        iv, rem = divmod(rem,       n_xy * n_xy)
+        ix, iy  = divmod(rem,       n_xy)
+        return iu, iv, ix, iy
 
-    # --- event loop -------------------------------------------------
-    for n in iterator:
-        if tqdm is None and show_progress and n % print_every == 0:
-            print(f"[{n:>10}/{N}]")
-
-        t   = str(df_fit["measured_type"].iat[n])
-        col = flat4(iu[n], iv[n], ix[n], iy[n], n_uv, n_xy)
-
-        rows, cdf = _rows_cdf_for(t, col, lut_base, renorm=False)  # ← renorm off
-
-        # -------- draw GEN cell ----------------------------------------
-        if rows is None:                         # uniform prior
-            g = rng.integers(N_CELLS, dtype=np.int32)
-        else:
-            r   = rng.random()
-            idx = np.searchsorted(cdf, r, side="right")
-            if idx == rows.size:                 # r > cdf[-1]  →  clamp
-                idx = rows.size - 1
-            g = rows[idx]
+    def wrap_to_pi(angle: float) -> float:
+            """Devuelve el ángulo en (-π, π]."""
+            return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
-        iu_g, iv_g, ix_g, iy_g = unflat4(g, n_uv, n_xy)
+    # ---------------------------------------------------------------------
+    # Coordinate definitions  (unchanged)
+    # ---------------------------------------------------------------------
+    df["u_fit"] = np.sin(df["Theta_fit"]) * np.sin(df["Phi_fit"])
+    df["v_fit"] = np.sin(df["Theta_fit"]) * np.cos(df["Phi_fit"])
+    df["u_gen"] = np.sin(df["Theta_gen"]) * np.sin(df["Phi_gen"])
+    df["v_gen"] = np.sin(df["Theta_gen"]) * np.cos(df["Phi_gen"])
 
-        # --- X,Y ----------------------------------------------------
-        if (ix_g == ix[n]) and (iy_g == iy[n]):
-            X_pred[n], Y_pred[n] = X_fit[n], Y_fit[n]
-        else:
-            if uniform_setting:
-                X_pred[n] = rng.uniform(edges_x[ix_g], edges_x[ix_g + 1])
-                Y_pred[n] = rng.uniform(edges_y[iy_g], edges_y[iy_g + 1])
-            else:
-                X_pred[n] = (edges_x[ix_g] + edges_x[ix_g + 1]) / 2
-                Y_pred[n] = (edges_y[iy_g] + edges_y[iy_g + 1]) / 2
+    # X_fit, Y_fit, X_gen, Y_gen are already present in the DataFrame
 
-        # --- u,v ----------------------------------------------------
-        if (iu_g == iu[n]) and (iv_g == iv[n]):
-            u_pred[n], v_pred[n] = u_fit[n], v_fit[n]
-        else:
-            if uniform_setting:
-                u_pred[n] = rng.uniform(edges_uv[iu_g], edges_uv[iu_g + 1])
-                v_pred[n] = rng.uniform(edges_uv[iv_g], edges_uv[iv_g + 1])
-            else:
-                u_pred[n] = (edges_uv[iu_g] + edges_uv[iu_g + 1]) / 2
-                v_pred[n] = (edges_uv[iv_g] + edges_uv[iv_g + 1]) / 2
+    # ------------------------------------------------------------
+    # Generate the *_idx columns
+    # ------------------------------------------------------------
+    coord_names = ["u_fit", "v_fit", "X_fit", "Y_fit",
+                "u_gen", "v_gen", "X_gen", "Y_gen"]
 
-        sin_th     = min(math.hypot(u_pred[n], v_pred[n]), 1.0)
-        th_pred[n] = math.asin(sin_th)
-        ph_pred[n] = math.atan2(u_pred[n], v_pred[n])
+    # ------------------------------------------------------------------
+    # Create *_idx columns  (u,v  use n_uv bins;   X,Y  use n_xy bins)
+    # ------------------------------------------------------------------
+    for c in ("u_fit", "v_fit", "u_gen", "v_gen"):
+        df[f"{c}_idx"] = np.digitize(df[c], edges_uv) - 1
+        print(f"{c:8s}:  min={df[c].min():8.3f}  max={df[c].max():8.3f}")
 
-    # --- assemble DataFrame ----------------------------------------
-    return df_fit.assign(
-        X_pred=X_pred, Y_pred=Y_pred,
-        Theta_pred=th_pred, Phi_pred=ph_pred
+    for c in ("X_fit", "X_gen"):
+        df[f"{c}_idx"] = np.digitize(df[c], edges_x) - 1
+        print(f"{c:8s}:  min={df[c].min():8.3f}  max={df[c].max():8.3f}")
+
+    for c in ("Y_fit", "Y_gen"):
+        df[f"{c}_idx"] = np.digitize(df[c], edges_y) - 1
+        print(f"{c:8s}:  min={df[c].min():8.3f}  max={df[c].max():8.3f}")
+
+    # ------------------------------------------------------------------
+    # Keep only events fully inside the 4-D grid
+    # ------------------------------------------------------------------
+    inside_uv = np.logical_and.reduce([
+        df[f"{c}_idx"].between(0, n_uv - 1)          # u, v limits
+        for c in ("u_fit", "v_fit", "u_gen", "v_gen")
+    ])
+
+    inside_xy = np.logical_and.reduce([
+        df[f"{c}_idx"].between(0, n_xy - 1)          # X, Y limits
+        for c in ("X_fit", "Y_fit", "X_gen", "Y_gen")
+    ])
+
+    og_og_df = df.copy()  # Original DataFrame for reference
+    df = df[inside_uv & inside_xy].reset_index(drop=True)
+
+
+    from scipy.sparse import coo_matrix, csr_matrix, save_npz
+    import numpy as np
+
+    from pathlib import Path
+    from typing import Union           # ← import Union
+    from scipy.sparse import coo_matrix, csr_matrix, save_npz
+    import numpy as np
+
+    from pathlib import Path
+    from typing  import Union
+    from scipy.sparse import coo_matrix, csc_matrix, save_npz
+    import numpy as np
+    
+
+    import numpy as np
+    import pandas as pd
+    from pathlib import Path
+    from typing import Union
+    from scipy.sparse import coo_matrix, save_npz
+    import inspect
+
+    # ────────────────────────────────────────────────────────────────
+    def build_sparse_lut_prob(
+        df_type:  pd.DataFrame,
+        n_uv:     int,
+        n_xy:     int,
+        t_type:   str,
+        out_dir:  Union[str, Path],
+        ndigits:  int = 3,
+    ) -> None:
+        """
+        Construct a GEN×FIT LUT whose columns are probability vectors,
+        rounded to *ndigits* decimals; entries that become exactly zero are dropped.
+        Compatible with SciPy versions both before and after index_dtype support.
+        """
+        size = n_uv * n_uv * n_xy * n_xy
+
+        # ---- vectorised flat indices ---------------------------------
+        ui_f = df_type["u_fit_idx"].to_numpy(np.int32)
+        vi_f = df_type["v_fit_idx"].to_numpy(np.int32)
+        xi_f = df_type["X_fit_idx"].to_numpy(np.int32)
+        yi_f = df_type["Y_fit_idx"].to_numpy(np.int32)
+        col  = ((ui_f * n_uv + vi_f) * n_xy + xi_f) * n_xy + yi_f
+
+        ui_g = df_type["u_gen_idx"].to_numpy(np.int32)
+        vi_g = df_type["v_gen_idx"].to_numpy(np.int32)
+        xi_g = df_type["X_gen_idx"].to_numpy(np.int32)
+        yi_g = df_type["Y_gen_idx"].to_numpy(np.int32)
+        row  = ((ui_g * n_uv + vi_g) * n_xy + xi_g) * n_xy + yi_g
+
+        data = np.ones_like(row, dtype=np.int32)
+
+        # ---- create COO  →  CSC  -------------------------------------
+        kwargs = dict(dtype=np.float32)
+        if "index_dtype" in inspect.signature(coo_matrix).parameters:
+            kwargs["index_dtype"] = np.int32
+
+        M = coo_matrix((data, (row, col)), shape=(size, size), **kwargs).tocsc(copy=False)
+
+        # ---- column normalisation ------------------------------------
+        col_sums = np.asarray(M.sum(axis=0)).ravel()
+        nz_cols  = np.flatnonzero(col_sums)
+        for j in nz_cols:
+            start, end = M.indptr[j], M.indptr[j + 1]
+            M.data[start:end] /= col_sums[j]
+
+        # ---- round, threshold, zero-prune -------------------------------
+        M.data = np.round(M.data, ndigits).astype(np.float32)
+
+        M.data[M.data < 1 / 10 ** ndigits] = 0.0          # ← discard tiny probabilities
+        M.eliminate_zeros()                   # remove the entries that became 0.0
+        M.sort_indices()
+
+        # ---- persist -------------------------------------------------
+        out_path = Path(out_dir).expanduser() / f"likelihood_matrix_{t_type}.npz"
+        save_npz(out_path, M, compressed=True)
+        print(f"{out_path} written  |  nnz = {M.nnz:,}")
+
+
+    # ────────────────────────────────────────────────────────────────
+    # Example driver
+    # ────────────────────────────────────────────────────────────────
+    def build_all_luts(df: pd.DataFrame,
+                    valid_types: list[str],
+                    n_uv: int, n_xy: int,
+                    out_dir: Union[str, Path],
+                    ndigits: int = 3) -> None:
+        out_dir = Path(out_dir).expanduser()
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        df = df[df["measured_type"].isin(valid_types)]
+
+        for t_type, grp in df.groupby("measured_type", sort=True):
+            build_sparse_lut_prob(
+                df_type = grp,
+                n_uv    = n_uv,
+                n_xy    = n_xy,
+                t_type  = str(t_type),
+                out_dir = out_dir,
+                ndigits = ndigits,
+            )
+
+
+    build_all_luts(
+        df,                       # the DataFrame that already holds your events
+        VALID_MEASURED_TYPES,     # list defined earlier
+        n_uv,                     # number of u / v bins
+        n_xy,                     # number of X / Y bins
+        out_dir="~/DATAFLOW_v3/TESTS/SIMULATION",  # target directory
+        ndigits=6                 # keep three decimal places (adjust as needed)
     )
 
 
+    print("-----------------------------------------------------")
+    print("LUTs created and saved.")
+    print("-----------------------------------------------------")
 
-df_input = df.sample(100_000, random_state=2024).reset_index(drop=True)
+    # ─────────────────────────────────────────────────────────────────────
+    # Fast nearest-bin sampler  –  compatible with rounded sparse LUTs
+    # ─────────────────────────────────────────────────────────────────────
 
-df_pred = sample_true_state_nearest(
-    df_fit   = df_input,
-    n_uv     = n_uv,
-    n_xy     = n_xy,
-    edges_uv = edges_uv,
-    edges_x  = edges_x,
-    edges_y  = edges_y,
-    rng      = np.random.default_rng(2025),
-    lut_dir  = "~/DATAFLOW_v3/TESTS/SIMULATION",
-    show_progress = True,
-    renorm   = False          # ← no second normalisation
-)
+    from pathlib import Path
+    from functools import lru_cache
+    from typing   import Union
+    import math, numpy as np, pandas as pd
+    from scipy.sparse import csc_matrix, load_npz
+
+    try:
+        from tqdm.auto import tqdm               # nice progress bar if available
+    except ModuleNotFoundError:
+        tqdm = None
+
+    # ---------- helpers -------------------------------------------------
+    def flat4(iu: int, iv: int, ix: int, iy: int,
+            n_uv: int, n_xy: int) -> int:
+        """(iu,iv,ix,iy) → ordinal in 0 … n_uv²·n_xy²-1"""
+        return ((iu * n_uv + iv) * n_xy + ix) * n_xy + iy
+
+    def unflat4(k: int, n_uv: int, n_xy: int) -> tuple[int, int, int, int]:
+        iu, rem = divmod(k, n_uv * n_xy * n_xy)
+        iv, rem = divmod(rem,       n_xy * n_xy)
+        ix, iy  = divmod(rem,       n_xy)
+        return iu, iv, ix, iy
+
+
+    from pathlib import Path
+    from functools import lru_cache
+    from typing   import Dict, Tuple, Union
+    import numpy as np
+    from scipy.sparse import csc_matrix, load_npz
+
+    # ---------- matrix cache keyed by measured_type --------------------
+    _matrix_cache: Dict[str, csc_matrix] = {}   # Python ≤3.8 compatible
+
+    def load_sparse_lut(path_prefix: Path, t_type: str) -> csc_matrix:
+        """Return detector LUT (CSC) for one measured_type."""
+        return load_npz(path_prefix / f"likelihood_matrix_{t_type}.npz")
+
+    # ---------- column extractor with bounded (type,col) cache ----------
+    # put near the top once
+    # ─── constants ──────────────────────────────────────────────────────
+    N_CELLS = n_uv * n_uv * n_xy * n_xy          # 2_560_000 for 40×40 bins
+
+    # ─── cached column lookup (unchanged, with sentinel) ───────────────
+    @lru_cache(maxsize=8_192)
+    def _rows_cdf_for(
+        t_type:   str,
+        col:      int,
+        lut_base: Path,
+        renorm:   bool
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if t_type not in _matrix_cache:
+            _matrix_cache[t_type] = load_npz(lut_base / f"likelihood_matrix_{t_type}.npz")
+        M = _matrix_cache[t_type]
+
+        start, end  = M.indptr[col], M.indptr[col + 1]
+        rows, probs = M.indices[start:end], M.data[start:end]
+
+        # sentinel for empty column  → (None, None)
+        if rows.size == 0:
+            return None, None
+
+        if renorm:
+            probs = probs / probs.sum(dtype=np.float32)
+
+        cdf = np.cumsum(probs, dtype=np.float32)
+        
+        # last = cdf[-1]
+        # if last < 1.0:                           # happens after rounding
+        #     cdf /= last                          # renormalise in-place
+
+        return rows.astype(np.int32, copy=False), cdf
+    
+    
+    # ---------- main sampler --------------------------------------------
+    def sample_true_state_nearest(
+        df_fit:       pd.DataFrame,
+        n_uv:         int,
+        n_xy:         int,
+        edges_uv:     np.ndarray,
+        edges_x:      np.ndarray,
+        edges_y:      np.ndarray,
+        rng:          np.random.Generator,
+        lut_dir:      Union[str, Path],
+        show_progress: bool = True,
+        print_every:   int  = 50_000,
+        renorm:        bool = True,                # re-normalise column if rounding ≠1
+    ) -> pd.DataFrame:
+        """
+        Draw (u,v,X,Y) true state from nearest-bin 4-D LUTs.
+        LUTs must be those created by `build_sparse_lut_prob`.
+        """
+
+        lut_base = Path(lut_dir).expanduser()
+        uniform_setting = True
+
+        # --- nearest FIT indices ---------------------------------------
+        u_fit, v_fit = df_fit["u_fit"].to_numpy(np.float32), df_fit["v_fit"].to_numpy(np.float32)
+        X_fit, Y_fit = df_fit["X_fit"].to_numpy(np.float32), df_fit["Y_fit"].to_numpy(np.float32)
+
+        iu = np.clip(np.digitize(u_fit, edges_uv) - 1, 0, n_uv - 2)
+        iv = np.clip(np.digitize(v_fit, edges_uv) - 1, 0, n_uv - 2)
+        ix = np.clip(np.digitize(X_fit, edges_x)  - 1, 0, n_xy - 2)
+        iy = np.clip(np.digitize(Y_fit, edges_y)  - 1, 0, n_xy - 2)
+
+        iu += (u_fit - edges_uv[iu]) > (edges_uv[iu + 1] - u_fit)
+        iv += (v_fit - edges_uv[iv]) > (edges_uv[iv + 1] - v_fit)
+        ix += (X_fit - edges_x[ix])  > (edges_x[ix + 1] - X_fit)
+        iy += (Y_fit - edges_y[iy])  > (edges_y[iy + 1] - Y_fit)
+
+        # --- output buffers --------------------------------------------
+        N       = len(df_fit)
+        u_pred  = np.empty(N, np.float32); v_pred  = np.empty_like(u_pred)
+        X_pred  = np.empty_like(u_pred);   Y_pred  = np.empty_like(u_pred)
+        th_pred = np.empty_like(u_pred);   ph_pred = np.empty_like(u_pred)
+
+        iterator = tqdm(range(N), desc="Sampling 4-D state", unit="evt") \
+                if show_progress and tqdm else range(N)
+
+        # --- event loop -------------------------------------------------
+        for n in iterator:
+            if tqdm is None and show_progress and n % print_every == 0:
+                print(f"[{n:>10}/{N}]")
+
+            t   = str(df_fit["measured_type"].iat[n])
+            col = flat4(iu[n], iv[n], ix[n], iy[n], n_uv, n_xy)
+
+            rows, cdf = _rows_cdf_for(t, col, lut_base, renorm=False)  # ← renorm off
+
+            # -------- draw GEN cell ----------------------------------------
+            if rows is None:                         # uniform prior
+                g = rng.integers(N_CELLS, dtype=np.int32)
+            else:
+                r   = rng.random()
+                idx = np.searchsorted(cdf, r, side="right")
+                if idx == rows.size:                 # r > cdf[-1]  →  clamp
+                    idx = rows.size - 1
+                g = rows[idx]
+
+
+            iu_g, iv_g, ix_g, iy_g = unflat4(g, n_uv, n_xy)
+
+            # --- X,Y ----------------------------------------------------
+            if (ix_g == ix[n]) and (iy_g == iy[n]):
+                X_pred[n], Y_pred[n] = X_fit[n], Y_fit[n]
+            else:
+                if uniform_setting:
+                    X_pred[n] = rng.uniform(edges_x[ix_g], edges_x[ix_g + 1])
+                    Y_pred[n] = rng.uniform(edges_y[iy_g], edges_y[iy_g + 1])
+                else:
+                    X_pred[n] = (edges_x[ix_g] + edges_x[ix_g + 1]) / 2
+                    Y_pred[n] = (edges_y[iy_g] + edges_y[iy_g + 1]) / 2
+
+            # --- u,v ----------------------------------------------------
+            if (iu_g == iu[n]) and (iv_g == iv[n]):
+                u_pred[n], v_pred[n] = u_fit[n], v_fit[n]
+            else:
+                if uniform_setting:
+                    u_pred[n] = rng.uniform(edges_uv[iu_g], edges_uv[iu_g + 1])
+                    v_pred[n] = rng.uniform(edges_uv[iv_g], edges_uv[iv_g + 1])
+                else:
+                    u_pred[n] = (edges_uv[iu_g] + edges_uv[iu_g + 1]) / 2
+                    v_pred[n] = (edges_uv[iv_g] + edges_uv[iv_g + 1]) / 2
+
+            sin_th     = min(math.hypot(u_pred[n], v_pred[n]), 1.0)
+            th_pred[n] = math.asin(sin_th)
+            ph_pred[n] = math.atan2(u_pred[n], v_pred[n])
+
+        # --- assemble DataFrame ----------------------------------------
+        return df_fit.assign(
+            X_pred=X_pred, Y_pred=Y_pred,
+            Theta_pred=th_pred, Phi_pred=ph_pred
+        )
+
+
+    df_input = og_og_df.sample(300_000).reset_index(drop=True)
+
+    df_pred = sample_true_state_nearest(
+        df_fit   = df_input,
+        n_uv     = n_uv,
+        n_xy     = n_xy,
+        edges_uv = edges_uv,
+        edges_x  = edges_x,
+        edges_y  = edges_y,
+        rng      = np.random.default_rng(),
+        lut_dir  = "~/DATAFLOW_v3/TESTS/SIMULATION",
+        show_progress = True,
+        renorm   = False          # ← no second normalisation
+    )
 
 
 
@@ -1933,9 +1977,7 @@ theta_bins = np.linspace(0, np.pi / 2, 200)
 phi_bins = np.linspace(-np.pi, np.pi, 200)
 tt_lists = [ VALID_MEASURED_TYPES ]
 
-df = df_pred.copy()  # Use the DataFrame with predictions
-
-df = df[ df["Theta_pred"] < 1.2 ]
+# df = df[ df["Theta_pred"] < 1.2 ]
 
 for tt_list in tt_lists:
       
@@ -1943,32 +1985,32 @@ for tt_list in tt_lists:
       fig, axes = plt.subplots(2, 3, figsize=(20, 10), sharex='row')
       
       # Third column: Measured (θ_gen, ϕ_gen)
-      axes[0, 0].hist(df['Theta_gen'], bins=theta_bins, histtype='step', color='black', label='All')
-      axes[1, 0].hist(df['Phi_gen'], bins=phi_bins, histtype='step', color='black', label='All')
+      axes[0, 0].hist(df_pred['Theta_gen'], bins=theta_bins, histtype='step', color='black', label='All')
+      axes[1, 0].hist(df_pred['Phi_gen'], bins=phi_bins, histtype='step', color='black', label='All')
       for tt in tt_list:
-            sel = (df['measured_type'] == tt)
-            axes[0, 0].hist(df.loc[sel, 'Theta_gen'], bins=theta_bins, histtype='step', label=tt)
-            axes[1, 0].hist(df.loc[sel, 'Phi_gen'], bins=phi_bins, histtype='step', label=tt)
+            sel = (df_pred['measured_type'] == tt)
+            axes[0, 0].hist(df_pred.loc[sel, 'Theta_gen'], bins=theta_bins, histtype='step', label=tt)
+            axes[1, 0].hist(df_pred.loc[sel, 'Phi_gen'], bins=phi_bins, histtype='step', label=tt)
             axes[0, 0].set_title("Measured tracks θ_gen")
             axes[1, 0].set_title("Measured tracks ϕ_gen")
 
       # Fourth column: Measured (θ_fit, ϕ_fit)
-      axes[0, 1].hist(df['Theta_fit'], bins=theta_bins, histtype='step', color='black', label='All')
-      axes[1, 1].hist(df['Phi_fit'], bins=phi_bins, histtype='step', color='black', label='All')
+      axes[0, 1].hist(df_pred['Theta_fit'], bins=theta_bins, histtype='step', color='black', label='All')
+      axes[1, 1].hist(df_pred['Phi_fit'], bins=phi_bins, histtype='step', color='black', label='All')
       for tt in tt_list:
-            sel = (df['measured_type'] == tt)
-            axes[0, 1].hist(df.loc[sel, 'Theta_fit'], bins=theta_bins, histtype='step', label=tt)
-            axes[1, 1].hist(df.loc[sel, 'Phi_fit'], bins=phi_bins, histtype='step', label=tt)
+            sel = (df_pred['measured_type'] == tt)
+            axes[0, 1].hist(df_pred.loc[sel, 'Theta_fit'], bins=theta_bins, histtype='step', label=tt)
+            axes[1, 1].hist(df_pred.loc[sel, 'Phi_fit'], bins=phi_bins, histtype='step', label=tt)
             axes[0, 1].set_title("Measured tracks θ_fit")
             axes[1, 1].set_title("Measured tracks ϕ_fit")
       
       # Fourth column: Measured (θ_fit, ϕ_fit)
-      axes[0, 2].hist(df['Theta_pred'], bins=theta_bins, histtype='step', color='black', label='All')
-      axes[1, 2].hist(df['Phi_pred'], bins=phi_bins, histtype='step', color='black', label='All')
+      axes[0, 2].hist(df_pred['Theta_pred'], bins=theta_bins, histtype='step', color='black', label='All')
+      axes[1, 2].hist(df_pred['Phi_pred'], bins=phi_bins, histtype='step', color='black', label='All')
       for tt in tt_list:
-            sel = (df['measured_type'] == tt)
-            axes[0, 2].hist(df.loc[sel, 'Theta_pred'], bins=theta_bins, histtype='step', label=tt)
-            axes[1, 2].hist(df.loc[sel, 'Phi_pred'], bins=phi_bins, histtype='step', label=tt)
+            sel = (df_pred['measured_type'] == tt)
+            axes[0, 2].hist(df_pred.loc[sel, 'Theta_pred'], bins=theta_bins, histtype='step', label=tt)
+            axes[1, 2].hist(df_pred.loc[sel, 'Phi_pred'], bins=phi_bins, histtype='step', label=tt)
             axes[0, 2].set_title("Corrected tracks θ_fit")
             axes[1, 2].set_title("Corrected tracks ϕ_fit")
 
@@ -1985,11 +2027,6 @@ for tt_list in tt_lists:
 
       fig.tight_layout()
       plt.show()
-
-
-
-
-
 
 
 #%%
@@ -2532,3 +2569,5 @@ mpl.colorbar.ColorbarBase(cax, cmap=cmap,
 fig.suptitle("Relative occupancy migration per bin",
              y=1.02, fontsize=16)
 plt.show()
+
+# %%
