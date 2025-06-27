@@ -105,7 +105,7 @@ def send_welcome(message):
 
 @bot.message_handler(commands=['send_voltage'])
 def send_voltage(message):
-    binary_path = '/home/rpcuser/bin/i2c/HV/hv -b 0'
+    binary_path = '/home/rpcuser/bin/HV -b 0'
     print(binary_path)
 
     try:

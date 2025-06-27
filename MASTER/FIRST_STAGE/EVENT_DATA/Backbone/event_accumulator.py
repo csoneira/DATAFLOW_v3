@@ -127,7 +127,7 @@ print("----------------------------------------------------------------------")
 
 multiple_files = True
 
-run_jupyter_notebook = True
+run_jupyter_notebook = False
 if run_jupyter_notebook:
     station = "2"
 else:
@@ -159,6 +159,7 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 remove_outliers = True
 create_plots = False
 create_essential_plots = False
+create_very_essential_plots = False
 save_plots = True
 create_pdf = True
 force_replacement = True  # Creates a new datafile even if there is already one that looks complete
@@ -170,7 +171,7 @@ region_layout = [1, 8, 8, 8]
 
 # Particular analysis -----------------
 
-side_calculations = False # !!!!!!!!!!!!
+side_calculations = True # !!!!!!!!!!!!
 
 eff_vs_charge = False
 eff_vs_angle_and_pos = True
@@ -184,7 +185,6 @@ n_study_fit = False
 topology_plots = False
 
 global_variables = {}
-global_variables["poisson_rejected"] = 0
 
 
 print("----------------------------------------------------------------------")
@@ -5720,12 +5720,11 @@ print("------------------------- Main structure -----------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
-main_df = original_df.copy()
+main_df = df.copy()
 
 print("----------------------------------------------------------------------")
 print("-------- 1. Correction of the fitted angle --> predicted angle -------")
 print("----------------------------------------------------------------------")
-
 
 # ---------------------------------------------------------------
 # 1. Build absolute path and sanity-check
@@ -5733,6 +5732,8 @@ print("----------------------------------------------------------------------")
 hdf_path = os.path.join(config_files_directory, "likelihood_matrices.h5")
 if not os.path.isfile(hdf_path):
     raise FileNotFoundError(f"HDF5 file not found: {hdf_path}")
+
+#%%
 
 # ---------------------------------------------------------------
 # 2. Load all matrices into memory
@@ -5767,6 +5768,11 @@ def flat(u_idx, v_idx, n_bins):
 
 def wrap_to_pi(angle: float) -> float:
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+#%%
+
+with pd.HDFStore(hdf_path, 'r') as store:
+    print("HDF5 keys:", store.keys())
 
 def sample_true_angles_nearest(
       df_fit: pd.DataFrame,
@@ -5804,7 +5810,7 @@ def sample_true_angles_nearest(
     iterator = tqdm(range(N), desc="Sampling true angles (nearest-bin)", unit="evt") if show_progress else range(N)
 
     for n in iterator:
-        t_type = df_fit["measured_type"].iat[n]
+        t_type = str(df_fit["definitive_tt"].iat[n])   # ensure string
 
         if t_type not in matrix_cache:
             raise ValueError(f"LUT not found for type: {t_type}")
@@ -5834,19 +5840,65 @@ def sample_true_angles_nearest(
     df_out["Phi_pred"] = phi_pred
     return df_out
 
+#%%
+
+print(main_df.columns.to_list())
+
+main_df['Theta_fit'] = main_df['theta']
+main_df['Phi_fit'] = main_df['phi']
+
+#%%
 
 df_input = main_df
 df_pred = sample_true_angles_nearest(
             df_fit=df_input,
             matrices=matrices,
             n_bins=n_bins,
-            rng=np.random.default_rng(2025),
+            rng=np.random.default_rng(),
             show_progress=True )
 
-# Placeholder
-main_df["Theta_pred"] = df_pred["theta"]
-main_df["Phi_pred"] = df_pred["phi"]
+df = df_pred.copy()
 
+if create_very_essential_plots:    
+    VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '23', '24', '34']
+    tt_lists = [ VALID_MEASURED_TYPES ]
+    
+    for tt_list in tt_lists:
+          fig, axes = plt.subplots(2, 2, figsize=(20, 10), sharex='row')
+
+          # Fourth column: Measured (θ_fit, ϕ_fit)
+          axes[0, 0].hist(df['Theta_fit'], bins=theta_bins, histtype='step', color='black', label='All')
+          axes[1, 0].hist(df['Phi_fit'], bins=phi_bins, histtype='step', color='black', label='All')
+          for tt in tt_list:
+                sel = (df['definitive_tt'] == int(tt))
+                axes[0, 0].hist(df.loc[sel, 'Theta_fit'], bins=theta_bins, histtype='step', label=tt)
+                axes[1, 0].hist(df.loc[sel, 'Phi_fit'], bins=phi_bins, histtype='step', label=tt)
+                axes[0, 0].set_title("Measured tracks θ_fit")
+                axes[1, 0].set_title("Measured tracks ϕ_fit")
+      
+          # Fourth column: Measured (θ_fit, ϕ_fit)
+          axes[0, 1].hist(df['Theta_pred'], bins=theta_bins, histtype='step', color='black', label='All')
+          axes[1, 1].hist(df['Phi_pred'], bins=phi_bins, histtype='step', color='black', label='All')
+          for tt in tt_list:
+                sel = (df['definitive_tt'] == int(tt))
+                axes[0, 1].hist(df.loc[sel, 'Theta_pred'], bins=theta_bins, histtype='step', label=tt)
+                axes[1, 1].hist(df.loc[sel, 'Phi_pred'], bins=phi_bins, histtype='step', label=tt)
+                axes[0, 1].set_title("Corrected tracks θ_fit")
+                axes[1, 1].set_title("Corrected tracks ϕ_fit")
+
+          # Common settings
+          for ax in axes.flat:
+                ax.legend(fontsize='x-small')
+                ax.grid(True)
+
+          axes[1, 0].set_xlabel(r'$\phi$ [rad]')
+          axes[0, 0].set_ylabel('Counts')
+          axes[1, 0].set_ylabel('Counts')
+          axes[0, 1].set_xlim(0, np.pi / 2)
+          axes[1, 1].set_xlim(-np.pi, np.pi)
+
+          fig.tight_layout()
+          plt.show()
 
 print("----------------------------------------------------------------------")
 print("------------- 2. Determination of the angular sector -----------------")
@@ -5899,7 +5951,6 @@ if draw_angular_regions:
                     return f'R{i}.{idx}'
             
         return 'None'
-
 
     # Input parameters
     theta_right_limit = np.pi / 2.5
@@ -5973,8 +6024,9 @@ if draw_angular_regions:
 df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundaries, region_layout), axis=1)
 print(df['region'].value_counts())
 
+#%%
 
-if create_essential_plots:
+if create_essential_plots or create_very_essential_plots:
     
     print("-------------------------- Angular plots -----------------------------")
         
@@ -6309,77 +6361,78 @@ print(f"File moved to: {completed_file_path}")
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-if eff_vs_angle_and_pos:
-    # print(df_fits)
-    # print("\n")
-    
-    for _, row in df_fits.iterrows():
-        if not row["label"].startswith("3-plane"):
-            continue                      # skip every 2-fold curve
+if side_calculations:
+    if eff_vs_angle_and_pos:
+        # print(df_fits)
+        # print("\n")
+        
+        for _, row in df_fits.iterrows():
+            if not row["label"].startswith("3-plane"):
+                continue                      # skip every 2-fold curve
 
-        if "eff_2" in row["label"]:
-            tag = "P2"                    # 3-plane efficiency for plane 2
-        elif "eff_3" in row["label"]:
-            tag = "P3"                    # 3-plane efficiency for plane 3
-        else:
-            continue
+            if "eff_2" in row["label"]:
+                tag = "P2"                    # 3-plane efficiency for plane 2
+            elif "eff_3" in row["label"]:
+                tag = "P3"                    # 3-plane efficiency for plane 3
+            else:
+                continue
 
-        global_variables[f"eff_{tag}_a"]   = float(row["a"])
-        global_variables[f"eff_{tag}_n"]   = float(row["n"])
-        global_variables[f"eff_{tag}_0"]   = float(row["eps0"])   # ε₀
-    
+            global_variables[f"eff_{tag}_a"]   = float(row["a"])
+            global_variables[f"eff_{tag}_n"]   = float(row["n"])
+            global_variables[f"eff_{tag}_0"]   = float(row["eps0"])   # ε₀
+        
 
-if polya_fit:
-    # print(df_polya_fit)
-    # print("\n")
-    
-    required = {
-        "nbar/alpha"   : "nbar_over_alpha",
-        "offset/nbar"  : "offset_over_nbar",
-        "alpha/nbar"   : "alpha_over_nbar",
-        "eta_curvature": "eta_curvature",
-        "width_proxy"  : "width_proxy",
-        "Q_mode"       : "Q_mode",
-    }
+    if polya_fit:
+        # print(df_polya_fit)
+        # print("\n")
+        
+        required = {
+            "nbar/alpha"   : "nbar_over_alpha",
+            "offset/nbar"  : "offset_over_nbar",
+            "alpha/nbar"   : "alpha_over_nbar",
+            "eta_curvature": "eta_curvature",
+            "width_proxy"  : "width_proxy",
+            "Q_mode"       : "Q_mode",
+        }
 
-    # df_polya_fit must contain a column named "plane" holding P1…P4
-    for plane, grp in df_polya_fit.groupby("module"):
-        assert len(grp) == 1, f"multiple rows for {plane}"
-        row = grp.iloc[0]
-        for col, key_suffix in required.items():
-            global_variables[f"{plane}_{key_suffix}"] = float(row[col])
-    
-    
-if multiplicity_calculations:
-    # print(df_mult_fit)
-    # print("\n")
-    
-    for plane, arr in component_counts.items():
-        for i, val in enumerate(arr, 1):  # M1, M2, ...
-            global_variables[f"{plane}_M{i}"] = float(val)
-    
-    
-if crosstalk_probability:
-    # print(df_cross_fit)
-    # print("\n")
-    
-    eps = 1e-9
+        # df_polya_fit must contain a column named "plane" holding P1…P4
+        for plane, grp in df_polya_fit.groupby("module"):
+            assert len(grp) == 1, f"multiple rows for {plane}"
+            row = grp.iloc[0]
+            for col, key_suffix in required.items():
+                global_variables[f"{plane}_{key_suffix}"] = float(row[col])
+        
+        
+    if multiplicity_calculations:
+        # print(df_mult_fit)
+        # print("\n")
+        
+        for plane, arr in component_counts.items():
+            for i, val in enumerate(arr, 1):  # M1, M2, ...
+                global_variables[f"{plane}_M{i}"] = float(val)
+        
+        
+    if crosstalk_probability:
+        # print(df_cross_fit)
+        # print("\n")
+        
+        eps = 1e-9
 
-    df_cross_fit[["plane", "strip"]] = df_cross_fit["key"].str.split("_", expand=True)
-    for plane, grp in df_cross_fit.groupby("plane"):
-        # x0
-        mean_x0 = grp["x0"].mean()
-        w_x0    = 1.0 / (np.abs(grp["x0"] - mean_x0) + eps)
-        x0_avg  = np.average(grp["x0"], weights=w_x0)
+        df_cross_fit[["plane", "strip"]] = df_cross_fit["key"].str.split("_", expand=True)
+        for plane, grp in df_cross_fit.groupby("plane"):
+            # x0
+            mean_x0 = grp["x0"].mean()
+            w_x0    = 1.0 / (np.abs(grp["x0"] - mean_x0) + eps)
+            x0_avg  = np.average(grp["x0"], weights=w_x0)
 
-        # k
-        mean_k  = grp["k"].mean()
-        w_k     = 1.0 / (np.abs(grp["k"]  - mean_k)  + eps)
-        k_avg   = np.average(grp["k"],  weights=w_k)
+            # k
+            mean_k  = grp["k"].mean()
+            w_k     = 1.0 / (np.abs(grp["k"]  - mean_k)  + eps)
+            k_avg   = np.average(grp["k"],  weights=w_k)
 
-        # store
-        global_variables[f"{plane}_x0"] = float(x0_avg)
-        global_variables[f"{plane}_k"]  = float(k_avg)
+            # store
+            global_variables[f"{plane}_x0"] = float(x0_avg)
+            global_variables[f"{plane}_k"]  = float(k_avg)
 
 
 # Construct the new calibration row

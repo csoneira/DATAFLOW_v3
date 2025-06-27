@@ -384,6 +384,7 @@ print(df_pred.columns.to_list())
 # Define binning
 theta_bins = np.linspace(0, np.pi / 2, 200)
 phi_bins = np.linspace(-np.pi, np.pi, 200)
+
 tt_lists = [ VALID_MEASURED_TYPES ]
 
 # df = df[ df["Theta_pred"] < 1.2 ]

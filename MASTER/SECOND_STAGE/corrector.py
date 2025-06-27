@@ -1,4 +1,6 @@
 #%%
+from __future__ import annotations
+#%%
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -26,6 +28,8 @@ print("\n\n")
 
 import numpy as np
 import pandas as pd
+import re
+import matplotlib.ticker as mtick
 import matplotlib
 from scipy.optimize import root
 matplotlib.use('Agg')  # Non-interactive backend
@@ -73,13 +77,19 @@ from scipy.stats import pearsonr
 # -----------------------------------------------------------------------------
 
 # Check if the script has an argument
-if len(sys.argv) < 2:
-    print("Error: No station provided.")
-    print("Usage: python3 script.py <station>")
-    sys.exit(1)
+run_jupyter_notebook = False
+if run_jupyter_notebook:
+    station = "2"
+else:
+    # Check if the script has an argument
+    if len(sys.argv) < 2:
+        print("Error: No station provided.")
+        print("Usage: python3 script.py <station>")
+        sys.exit(1)
 
-# Get the station argument
-station = sys.argv[1]
+    # Get the station argument
+    station = sys.argv[1]
+
 print(f"Station: {station}")
 
 
@@ -89,29 +99,27 @@ print(f"Station: {station}")
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-remove_outliers = True
-
-# Plotting configuration
+# Aesthetic -------------------------------------
 show_plots = False
 save_plots = True
 create_plots = False
-create_essential_plots = True
-create_very_essential_plots = True
+create_essential_plots = False
+create_very_essential_plots = False
 show_errorbar = False
 
+# Execution -------------------------------------
 recalculate_pressure_coeff = True
+remove_outliers = True
 
-res_win_min = 15 # 180 Resampling window minutes
+# Add a new outlier filter to the pressure correction
+after_press_z_score_th = 10
 
+res_win_min = 10 # 180 Resampling window minutes
 if int(station) == 4:
     res_win_min = 30
 
-print(f"Resampling window set to {res_win_min} minutes.")
-
 HMF_ker = 3 # It must be odd. Horizontal Median Filter
 MAF_ker = 0 # Moving Average Filter
-
-outlier_filter = 4 #3
 
 high_order_correction = False
 date_selection = True  # Set to True if you want to filter by date
@@ -123,10 +131,17 @@ set_a = -0.11357 # pressure_intercept_input
 mean_pressure_used_for_the_fit = 940
 
 systematic_unc = [0, 0, 0, 0] # From simulation
-# acceptance_factor = [0.7, 1, 1, 0.8] # From simulation
 
 systematic_unc_corr_to_real_rate = 0
 z_score_th_pres_corr = 5
+
+
+global_variables = {}
+global_variables['res_win_min'] = res_win_min
+global_variables['recalculate_pressure_coeff'] = recalculate_pressure_coeff
+# global_variables['outlier_filter'] = outlier_filter*remove_outliers
+
+print(f"Resampling window set to {res_win_min} minutes.")
 
 # -----------------------------------------------------------------------------
 
@@ -141,6 +156,8 @@ figure_path = f"{base_folder}/"
 fig_idx = 0
 os.makedirs(base_folder, exist_ok=True)
 os.makedirs(grafana_directory, exist_ok=True)
+
+csv_path = os.path.join(base_folder, "corrector_metadata.csv")
 
 
 # -----------------------------------------------------------------------------
@@ -163,9 +180,9 @@ resampling_window = f'{res_win_min}min'  # '10min' # '5min' stands for 5 minutes
 print('Reading the big CSV datafile...')
 data_df = pd.read_csv(filepath)
 
-print("\n\n")
-print(data_df.columns.to_list())
-print("\n\n")
+# print("\n\n")
+# print(data_df.columns.to_list())
+# print("\n\n")
 
 print("Putting zeroes to NaNs...")
 data_df = data_df.replace(0, np.nan)
@@ -173,12 +190,83 @@ data_df = data_df.replace(0, np.nan)
 print(filepath)
 print('File loaded successfully.')
 
-
-
 # Get TT regions
 detection_types = ['1234',
                    '123', '234', '124', '134',
                    '12', '23', '34', '13', '24', '14']
+
+# print(data_df.columns.to_list())
+
+# Get angular regions
+rx_columns = [col for col in data_df.columns if '_R' in col]
+rx_names = set()
+for col in rx_columns:
+    parts = col.split('_')
+    if len(parts) > 1 and parts[1].startswith('R'):
+        rx_names.add(parts[1])
+angular_regions = sorted(rx_names)
+print(f"\nFound RX columns: {angular_regions}")
+
+# Create some more a combining existing ones, for example I will ask you to create a map in
+# a dictionary that indicates how the combination will be done: then you just take those
+# columns and sum them up to create a new column, like 'processed_tt_1234_C1.0'
+
+# ------------------------------------------------------------------
+# 1.  Gather unique tt prefixes that appear before "_R"
+# ------------------------------------------------------------------
+rx_columns = [c for c in data_df.columns if "_R" in c]
+tt_prefixes = sorted(
+    {c.split('_')[0] for c in rx_columns if c.split('_')[0].isdigit()}
+)
+# print("Numeric tt prefixes:", tt_prefixes)
+
+# ------------------------------------------------------------------
+# 2.  Define how to combine R-regions
+#     keys  : new region label you want to create (e.g. "C1.0")
+#     values: list of *R* region suffixes **without the leading "_"**
+#             that should be summed together.
+# ------------------------------------------------------------------
+
+# "Vert": ['R0.0', 'R1.0', 'R1.1', 'R1.2', 'R1.3', 'R1.4', 'R1.5', 'R1.6', 'R1.7'] 
+# "North": ['R2.0', 'R2.7', 'R3.0', 'R3.7'] 
+# "West": ['R2.2', 'R2.1', 'R3.2', 'R3.1']
+# "South": ['R2.4', 'R2.3', 'R3.4', 'R3.3'] 
+# "East": ['R2.6', 'R2.5', 'R3.6', 'R3.5']
+
+combination_dict = {
+    # new label   -> R-region suffixes to add (without leading '_')
+    "Vert": ['R0.0', 'R1.0', 'R1.1', 'R1.2', 'R1.3', 'R1.4', 'R1.5', 'R1.6', 'R1.7'],
+    "North": ['R2.0', 'R2.7', 'R3.0', 'R3.7'],
+    "West": ['R2.2', 'R2.1', 'R3.2', 'R3.1'],
+    "South": ['R2.4', 'R2.3', 'R3.4', 'R3.3'], 
+    "East": ['R2.6', 'R2.5', 'R3.6', 'R3.5'],
+    "all": ['R0.0', 'R1.0', 'R1.1', 'R1.2', 'R1.3', 'R1.4', 'R1.5', 'R1.6', 'R1.7',
+            'R2.0', 'R2.7', 'R3.0', 'R3.7', 'R2.2', 'R2.1', 'R3.2', 'R3.1',
+            'R2.4', 'R2.3', 'R3.4', 'R3.3', 'R2.6', 'R2.5', 'R3.6', 'R3.5'],
+}
+
+# ------------------------------------------------------------------
+# 3.  Create combined columns for every tt prefix
+# ------------------------------------------------------------------
+for tt in tt_prefixes:
+    for new_label, r_list in combination_dict.items():
+        # build full column names to be summed
+        cols_to_sum = [f"{tt}_{r}" for r in r_list]
+        missing = [c for c in cols_to_sum if c not in data_df.columns]
+        if missing:
+            raise KeyError(f"{tt}: missing source columns {missing}")
+
+        data_df[f"processed_tt_{tt}_{new_label}"] = data_df[cols_to_sum].sum(axis=1)
+
+# print("New combined columns added:")
+combinations = []
+for new_label in combination_dict:
+    combinations.append(new_label)
+#     for tt in tt_prefixes:
+#         col_name = f"processed_tt_{tt}_{new_label}"
+#         if col_name in data_df.columns:
+#             print("  ", col_name)
+
 
 # Get angular regions
 rx_columns = [col for col in data_df.columns if '_R' in col]
@@ -191,19 +279,18 @@ angular_regions = sorted(rx_names)
 print(f"\nFound RX columns: {angular_regions}")
 
 
-
 # Define the processed_tt_ columns based on the detection_types and angular_regions
-for tt in detection_types:
-    data_df[f'{tt}_all'] = 0  # Initialize processed_tt_ columns
-    for rx in angular_regions:
-        col_name = f'{tt}_{rx}'
-        data_df[f'{tt}_all'] += data_df[col_name].fillna(0)  # Sum the angular regions
+# for tt in detection_types:
+#     data_df[f'{tt}_all'] = 0  # Initialize processed_tt_ columns
+#     for rx in angular_regions:
+#         col_name = f'{tt}_{rx}'
+#         data_df[f'{tt}_all'] += data_df[col_name].fillna(0)  # Sum the angular regions
 
 
-angular_regions = angular_regions + ['all']  # Add 'all' to the angular regions
-processing_regions = angular_regions
+# angular_regions = angular_regions + ['all']  # Add 'all' to the angular regions
+processing_regions = angular_regions + combinations
 
-print(f"\nFound angular regions: {angular_regions}")
+print(f"\nProcessing regions: {processing_regions}")
 
 # Get TT and angular combinations
 ang_tt_cols = []
@@ -216,7 +303,7 @@ for tt in detection_types:
 
 
 # Print the angular TT columns found
-print(f"\nFound angular-TT columns: {ang_tt_cols}")
+# print(f"\nFound angular-TT columns: {ang_tt_cols}")
 
 summing_columns = ang_tt_cols
 
@@ -237,7 +324,6 @@ data_df.rename(columns=rename_dict, inplace=True)
 # print(f"\nRenamed columns:\n{rename_dict}")
 
 
-
 # Preprocess the data to remove rows with invalid datetime format -------------------------------------------------------------------------------
 print('\nValidating datetime format in "Time" column...')
 try:
@@ -255,8 +341,6 @@ if invalid_rows > 0:
 else:
     print("No rows with invalid datetime format removed.")
 print('Datetime validation completed successfully.')
-
-
 
 
 # Check if the results file exists -------------------------------------------------------------------------------
@@ -279,19 +363,19 @@ end_date = datetime.now()
 
 
 
-
 # Date filtering -------------------------------------------------------------------------------
 if date_selection:
-    
     start_date = pd.to_datetime("2025-06-25")  # Use a string in 'YYYY-MM-DD' format
     end_date = pd.to_datetime("2025-06-30 10:15")
-    
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
 
 print(f"Filtered data contains {len(data_df)} rows.")
 
 
+# Define start_time and end_time with the minimum and maximum timestamps in the data_df
+start_time = data_df['Time'].min()
+end_time = data_df['Time'].max()
 
 
 remove_non_data_points = True
@@ -301,7 +385,6 @@ if remove_non_data_points:
     data_df = data_df.dropna(subset=['events'])
     data_df = data_df[data_df['events'] != 0]
     print(f"Filtered data contains {len(data_df)} rows after removing non-data points.")
-
 
 
 
@@ -356,9 +439,10 @@ else:
 
 
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Outlier removal -------------------------------------------------------------
 # -----------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------
 
 if remove_outliers:
     
@@ -434,69 +518,6 @@ if remove_outliers:
     print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
     data_df = data_df_cleaned.copy()
     
-    
-# if remove_outliers:
-    
-#     print('Removing outliers and zero values...')
-    
-#     def remove_outliers_and_zeroes(series_og):
-#         global create_plots, fig_idx
-        
-#         series = series_og.copy()
-#         series = series[series != 0]
-#         median = series.mean()
-#         # median = series.median()
-#         std = series.std()
-#         z_scores = abs((series - median) / std)
-#         # z_scores = (series - median) / std
-        
-#         # Remove zeroes for fitting
-#         filtered = z_scores[z_scores > 0]
-#         filtered = filtered[filtered < np.quantile(filtered, 0.99)]
-
-#         loc = 0
-#         scale = halfnorm.fit(filtered, floc=loc)[1]  # only fit the scale
-#         cutoff = halfnorm.ppf(0.999, loc=loc, scale=scale)
-        
-#         if create_plots or create:
-#             # Plot
-#             x = np.linspace(filtered.min(), filtered.max(), 1000)
-#             pdf = halfnorm.pdf(x, loc=loc, scale=scale)
-
-#             plt.hist(filtered, bins=100, density=True, alpha=0.6, label='Data')
-#             plt.plot(x, pdf, 'r--', label=f'Half-Normal Fit\nσ={scale:.2f}')
-#             plt.axvline(cutoff, color='k', linestyle='--', label=f'99.9% cutoff = {cutoff:.2f}')
-#             plt.title('Half-Normal Fit and 99.9% Cutoff')
-#             plt.xlabel('Value')
-#             plt.ylabel('Density')
-#             plt.legend()
-
-#             if show_plots:
-#                 plt.show()
-#             elif save_plots:
-#                 new_figure_path = figure_path + f"{fig_idx}" + "_half_normal_fit.png"
-#                 fig_idx += 1
-#                 print(f"Saving figure to {new_figure_path}")
-#                 plt.savefig(new_figure_path, format='png', dpi=300)
-#             plt.close()
-
-#         # Mask: outliers above cutoff or zero entries
-#         mask = (z_scores > cutoff) | (z_scores == 0)
-#         return mask
-
-#     # Initialize a mask of all False, meaning no rows are removed initially
-#     rows_to_remove = pd.Series(False, index=data_df.index)
-#     columns = ['events']
-#     for col in columns:
-#         rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[col])
-    
-#     # rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df['events'])
-#     data_df_cleaned = data_df[~rows_to_remove].copy()
-#     # Now, `data_df_cleaned` contains only rows that pass the conditions.
-#     print(f"Original DataFrame shape: {data_df.shape}")
-#     print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
-#     data_df = data_df_cleaned.copy()
-
 
 # -----------------------------------------------------------------------------
 # Resampling the data in a larger time window: some averaged, some summed -----
@@ -521,17 +542,7 @@ data_df.reset_index(inplace=True)
 # -----------------------------------------------------------------------------
 
 def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', title=None, figsize=(14, 6), save_path=None):
-    """
-    Plot sensors_ext_Pressure_ext and a group of columns vs. time on two subplots.
 
-    Parameters:
-        df (pd.DataFrame): DataFrame containing the data.
-        group_cols (list of str): List of column names to plot in lower panel.
-        time_col (str): Column name representing time (default: 'Time').
-        title (str): Optional title for the figure.
-        figsize (tuple): Size of the figure.
-        save_path (str): If provided, saves the figure to this path.
-    """
     global create_plots, fig_idx
     
     if create_essential_plots:
@@ -569,20 +580,8 @@ def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', 
         print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
-import matplotlib.ticker as mtick
-
 def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize=(14, 4), save_path=None, plot_after_all = False):
-    """
-    Plot time series for multiple groups of columns. Each sublist in `group_cols` is plotted in a separate subplot.
-    
-    Parameters:
-        df (pd.DataFrame): DataFrame with time series data.
-        group_cols (list of list of str): Each sublist contains column names to overlay in one subplot.
-        time_col (str): Name of the time column.
-        title (str): Title for the entire figure.
-        figsize (tuple): Size of each subplot.
-        save_path (str): If provided, save the figure to this path.
-    """
+
     global create_plots, fig_idx
     
     if create_plots or create_essential_plots or plot_after_all:
@@ -625,8 +624,6 @@ def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize
         plt.close()
     else:
         print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-
-
 
 
 # --------------------------------------------------------------------------------
@@ -1591,7 +1588,10 @@ for case in processing_regions:
 
     data_df['detector_34'] = data_df['detector_34'] / ( data_df["number_of_mins"] * 60 )
     data_df['detector_34_eff'] = e3 * e4
-
+    
+    ancillary_data_df = data_df.copy()
+    data_df = ancillary_data_df.copy()
+    
     # Now correcting by efficiency
     data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
     data_df['detector_123_eff_corr'] = data_df['detector_123'] / data_df['detector_123_eff']
@@ -1599,6 +1599,8 @@ for case in processing_regions:
     data_df['detector_12_eff_corr'] = data_df['detector_12'] / data_df['detector_12_eff']
     data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
     data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
+    
+    df_original = df_original.copy()
     
     # Assign to the original dataframe
     df_original[f'detector_1234_eff_corr_{case}'] = data_df['detector_1234_eff_corr']
@@ -1739,7 +1741,9 @@ for case in processing_regions:
         plt.close(fig)
 
     plot_eff_vs_rate_grid(data_df, detector_labels)
-
+    
+    ancillary_data_df = data_df.copy()
+    data_df = ancillary_data_df.copy()
     
     data_df[f'definitive_eff_1'] = data_df['final_eff_1_decorrelated']
     data_df[f'definitive_eff_2'] = data_df['final_eff_2_decorrelated']
@@ -1753,8 +1757,7 @@ for case in processing_regions:
     
     # ------------------------------------------------------------------------------------------------------------------------
 
-    # data_df['definitive_eff'] = ( data_df['definitive_eff_1'] + data_df['definitive_eff_2'] + data_df['definitive_eff_3'] + data_df['definitive_eff_4'] ) / 4
-    # data_df['unc_definitive_eff'] = 1
+    data_df['definitive_eff'] = ( data_df['definitive_eff_1'] + data_df['definitive_eff_2'] + data_df['definitive_eff_3'] + data_df['definitive_eff_4'] ) / 4
 
     # data_df['summed'] = data_df['detector_1234'] + data_df['detector_123'] + \
     #     data_df['detector_234'] + data_df['detector_12'] + \
@@ -2169,6 +2172,7 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = Non
         print("Fit not done, data empty. Returning NaN.")
         eta_P = np.nan
         eta_P_uncertainty = np.nan  # Handle case where there are no valid data points
+        eta_P_ordinate = np.nan
     return eta_P, eta_P_uncertainty, eta_P_ordinate
 
 
@@ -2445,12 +2449,10 @@ else:
 
 # ---------------------------------------------------------------------------------------------------
 
-# Add a new outlier filter to the pressure correction
-after_press_z_score_th = 10
 
 if remove_outliers:
     print('Removing outliers and zero values...')
-    def remove_outliers_and_zeroes(series, z_thresh=outlier_filter):
+    def remove_outliers_and_zeroes(series, z_thresh):
         global create_plots, fig_idx
         
         """
@@ -2648,421 +2650,173 @@ if high_order_correction:
 else:
     print("High order correction not applied.")
     for region in regions_to_correct:
+        data_df = data_df.copy()
         data_df[f'{region}_high_order_corrected'] = data_df[f'pres_{region}']
 
 
 
 print("Creating rate final plots...")
 
+# print(data_df.columns.to_list())
+# print("\n\n\n")
+
+# create_very_essential_plots = False
+
+# import re
+# from collections import defaultdict
+
+# def build_eff_corr_groups(df):
+#     """
+#     Construct `group_cols` for plot_grouped_series() from a DataFrame whose
+#     column names follow the pattern
+
+#         <anything>_eff_corr_<suffix>_high_order_corrected
+
+#     where <suffix> is e.g.  R0.0, R1.2, all …
+
+#     Only columns that
+#         • end with "_high_order_corrected",
+#         • do **not** contain "_unc_",
+#     are considered.  The resulting list-of-lists is ordered numerically by the
+#     R-value (R0.0, R1.0, …), followed by any non-numeric suffixes (e.g. "all").
+
+#     Parameters
+#     ----------
+#     df : pd.DataFrame
+
+#     Returns
+#     -------
+#     list[list[str]]
+#         Suitable for the `group_cols` argument of plot_grouped_series().
+#     """
+#     groups = defaultdict(list)
+
+#     # capture the part after `_eff_corr_` and before `_high_order_corrected`
+#     pat = re.compile(r'_eff_corr_(.+?)_high_order_corrected$', flags=re.IGNORECASE)
+
+#     for col in df.columns:
+#         if '_high_order_corrected' not in col.lower():   # must end with this tag
+#             continue
+#         if '_unc_' in col.lower():                       # skip uncertainty cols
+#             continue
+
+#         m = pat.search(col)
+#         if m:
+#             suffix = m.group(1)                          # e.g. R1.2  or  all
+#             groups[suffix].append(col)
+
+#     # sort suffixes: numeric R-values first, others alphabetically
+#     def _sort_key(s):
+#         if s.startswith('R'):
+#             try:
+#                 return (0, float(s[1:]))                 # R1.2 → (0, 1.2)
+#             except ValueError:
+#                 pass
+#         return (1, s.lower())                            # non-numeric last
+
+#     ordered_suffixes = sorted(groups, key=_sort_key)
+
+#     # assemble list-of-lists
+#     group_cols = [groups[suf] for suf in ordered_suffixes]
+#     return group_cols
+
+
+# group_cols = build_eff_corr_groups(data_df)
+
+# print(group_cols)
+
+# print("\n\n\n")
+
+# # Interpolate the Nans in the data_df
+# # data_df = data_df.interpolate(method='linear', limit_direction='both')
+
+# plot_grouped_series(data_df,
+#                     group_cols,
+#                     time_col='Time',
+#                     title='High-order corrected rates',
+#                     plot_after_all = True)
+
+# group_cols = [
+#     ['pressure_lab'],
+#     ['processed_tt_1234_R1.2'],
+#     ['detector_1234_eff_corr_R0.0_high_order_corrected']
+# ]
+
+# plot_grouped_series(data_df,
+#                     group_cols,
+#                     time_col='Time',
+#                     title='High-order corrected rates',
+#                     plot_after_all = True)
+
+
+#%%
+
+original_df = data_df.copy()
+
+#%%
+
+data_df = original_df.copy()
+
+drop_prefixes = ("pres_detector_", "processed_tt_", "definitive_", "unc_pres_detector_")
+cols_to_drop = [c for c in data_df.columns if c.startswith(drop_prefixes)]
+cols_to_drop = [c for c in data_df.columns if c.startswith(drop_prefixes) and not c.endswith(drop_suffixes)]
+data_df.drop(columns=cols_to_drop, inplace=True)
+
+drop_prefixes = ("detector_")
+drop_suffixes = ("_high_order_corrected")
+cols_to_drop = [c for c in data_df.columns if c.startswith(drop_prefixes) and not c.endswith(drop_suffixes)]
+data_df.drop(columns=cols_to_drop, inplace=True)
+
+
 print(data_df.columns.to_list())
-print("\n\n\n")
 
-import re
-from collections import defaultdict
+# Loop over regions and compute average efficiency across all detectors for that region
+for region in processing_regions:
+    # Find all columns corresponding to this region and detector types
+    region_cols = [
+        col for col in data_df.columns
+        if col.startswith("detector_") and col.endswith(f"_{region}_high_order_corrected")
+    ]
 
-import re
-from collections import defaultdict
+    if not region_cols:
+        print(f"Warning: No columns found for region {region}")
+        continue
 
-def build_eff_corr_groups(df):
-    """
-    Construct `group_cols` for plot_grouped_series() from a DataFrame whose
-    column names follow the pattern
-
-        <anything>_eff_corr_<suffix>_high_order_corrected
-
-    where <suffix> is e.g.  R0.0, R1.2, all …
-
-    Only columns that
-        • end with "_high_order_corrected",
-        • do **not** contain "_unc_",
-    are considered.  The resulting list-of-lists is ordered numerically by the
-    R-value (R0.0, R1.0, …), followed by any non-numeric suffixes (e.g. "all").
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-
-    Returns
-    -------
-    list[list[str]]
-        Suitable for the `group_cols` argument of plot_grouped_series().
-    """
-    groups = defaultdict(list)
-
-    # capture the part after `_eff_corr_` and before `_high_order_corrected`
-    pat = re.compile(r'_eff_corr_(.+?)_high_order_corrected$', flags=re.IGNORECASE)
-
-    for col in df.columns:
-        if '_high_order_corrected' not in col.lower():   # must end with this tag
-            continue
-        if '_unc_' in col.lower():                       # skip uncertainty cols
-            continue
-
-        m = pat.search(col)
-        if m:
-            suffix = m.group(1)                          # e.g. R1.2  or  all
-            groups[suffix].append(col)
-
-    # sort suffixes: numeric R-values first, others alphabetically
-    def _sort_key(s):
-        if s.startswith('R'):
-            try:
-                return (0, float(s[1:]))                 # R1.2 → (0, 1.2)
-            except ValueError:
-                pass
-        return (1, s.lower())                            # non-numeric last
-
-    ordered_suffixes = sorted(groups, key=_sort_key)
-
-    # assemble list-of-lists
-    group_cols = [groups[suf] for suf in ordered_suffixes]
-    return group_cols
+    # Compute row-wise average ignoring NaNs
+    data_df[f"final_{region}"] = data_df[region_cols].mean(axis=1, skipna=True)
+    data_df.drop(columns=region_cols, inplace=True)
+    print(f"Computed final_{region} from {len(region_cols)} columns.")
 
 
+print("Final DataFrame columns:")
+print(data_df.columns.to_list())
 
-
-group_cols = build_eff_corr_groups(data_df)
-
-print(group_cols)
-
-print("\n\n\n")
-
-# Interpolate the Nans in the data_df
-# data_df = data_df.interpolate(method='linear', limit_direction='both')
-
-plot_grouped_series(data_df,
-                    group_cols,
-                    time_col='Time',
-                    title='High-order corrected rates',
-                    plot_after_all = True)
+#%%
 
 group_cols = [
-    ['pressure_lab'],
-    ['processed_tt_1234_R1.2'],
-    ['detector_1234_eff_corr_R0.0_high_order_corrected']
+['final_R0.0'],
+['final_R1.0', 'final_R1.1', 'final_R1.2', 'final_R1.3', 'final_R1.4', 'final_R1.5', 'final_R1.6', 'final_R1.7'], 
+['final_R2.0', 'final_R2.1', 'final_R2.2', 'final_R2.3', 'final_R2.4', 'final_R2.5', 'final_R2.6', 'final_R2.7'],
+['final_R3.0', 'final_R3.1', 'final_R3.2', 'final_R3.3', 'final_R3.4', 'final_R3.5', 'final_R3.6', 'final_R3.7'], 
 ]
 
 plot_grouped_series(data_df,
                     group_cols,
                     time_col='Time',
-                    title='High-order corrected rates',
+                    title='Final corrected rates',
                     plot_after_all = True)
 
-sys.exit("Finished because I can.")
 
-    
-# for region in og_regions:
-#     if create_plots:
+group_cols = [
+    ['final_all'],
+    ['final_Vert', 'final_North', 'final_West', 'final_South', 'final_East'], 
+    ]
 
-#         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
-
-#         # Plot efficiencies
-#         ax1.plot(data_df['Time'], data_df['definitive_eff'], label='Final efficiency', color='C5')
-#         # ax1.plot(data_df['Time'], data_df['eff_new'], label='Original / Corrected with new system', color='C4')
-#         ax1.set_ylabel('Efficiency')
-#         ax1.set_ylim(0.8, 1)
-#         ax1.set_title('Efficiencies over Time')
-#         ax1.grid(True)
-#         ax1.legend(loc='upper left')
-
-#         ax2.plot(data_df['Time'], data_df[region], label='Uncorrected', color='C3')
-#         ax2.plot(data_df['Time'], data_df[f'{region}_eff_corr'], label='Eff. corr. rate', color='C8')
-#         ax2.plot(data_df['Time'], data_df[f'{region}_eff_corr_pressure_corrected'], label=f'Pressure corrected rate, {region}', color='C9')
-#         ax2.plot(data_df['Time'], data_df[f'{region}_eff_corr_high_order_corrected'], label=f'High order corrected rate, {region}', color='C10')
-#         ax2.set_xlabel('Time')
-#         ax2.set_ylabel('Rate')
-#         ax2.grid(True)
-#         # ax2.set_ylim(16, 18)
-#         ax2.set_title('Rates over Time')
-#         ax2.legend(loc='upper left')
-
-#         plt.tight_layout()
-
-#         # Save or show the plot
-#         if show_plots:
-#             plt.show()
-#         elif save_plots:
-#             new_figure_path = figure_path + f"{fig_idx}" + f"_{region}_effs_rates_pressure.png"
-#             fig_idx += 1
-#             print(f"Saving figure to {new_figure_path}")
-#             plt.savefig(new_figure_path, format='png', dpi=300)
-
-#         plt.close()
-
-
-
-# for region in og_regions:
-#     if create_plots:
-
-#         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
-
-#         # Plot efficiencies
-#         ax1.plot(data_df['Time'], data_df['definitive_eff'], label='Final efficiency', color='C5')
-#         # ax1.plot(data_df['Time'], data_df['eff_new'], label='Original / Corrected with new system', color='C4')
-#         ax1.set_ylabel('Efficiency')
-#         ax1.set_ylim(0.8, 1)
-#         ax1.set_title('Efficiencies over Time')
-#         ax1.grid(True)
-#         ax1.legend(loc='upper left')
-
-#         # Define the first half index
-#         half_idx = len(data_df) // 2
-
-#         # Compute normalization constants from the first half
-#         norm_uncorrected = data_df[region].iloc[:half_idx].mean()
-#         norm_eff_corr = data_df[f'{region}_eff_corr'].iloc[:half_idx].mean()
-#         norm_pressure = data_df[f'{region}_eff_corr_pressure_corrected'].iloc[:half_idx].mean()
-#         norm_high_order = data_df[f'{region}_eff_corr_high_order_corrected'].iloc[:half_idx].mean()
-
-#         # Plot normalized vectors
-#         ax2.plot(data_df['Time'], data_df[region] / norm_uncorrected - 1,
-#                 label='Uncorrected', color='C3')
-
-#         ax2.plot(data_df['Time'], data_df[f'{region}_eff_corr'] / norm_eff_corr - 1,
-#                 label='Eff. corr. norm. rate', color='C8')
-
-#         ax2.plot(data_df['Time'], data_df[f'{region}_eff_corr_pressure_corrected'] / norm_pressure - 1,
-#                 label=f'Pressure corrected norm. rate, {region}', color='C9')
-
-#         ax2.plot(data_df['Time'], data_df[f'{region}_eff_corr_high_order_corrected'] / norm_high_order - 1,
-#          label=f'High order corrected norm. rate, {region}', color='C10')
-        
-#         ax2.axhline(y=0, color='blue', linestyle='--', label='Baseline (0%)', alpha = 0.7)
-#         ax2.axhline(y=-0.05, color='green', linestyle='--', label='5% decrease', alpha = 0.7)
-#         ax2.set_xlabel('Time')
-#         ax2.set_ylabel('Normalized rate')
-#         ax2.grid(True)
-#         # ax2.set_ylim(16, 18)
-#         ax2.set_title('Normalized rate over Time')
-#         ax2.legend(loc='upper left')
-
-#         plt.tight_layout()
-
-#         # Save or show the plot
-#         if show_plots:
-#             plt.show()
-#         elif save_plots:
-#             new_figure_path = figure_path + f"{fig_idx}" + f"_{region}_effs_rates_pressure_normalized.png"
-#             fig_idx += 1
-#             print(f"Saving figure to {new_figure_path}")
-#             plt.savefig(new_figure_path, format='png', dpi=300)
-
-#         plt.close()
-
-
-# for region in og_regions:
-#     if create_plots or create_essential_plots:
-#     # if create_plots:
-
-#         fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(17, 14), sharex=True)
-
-#         # --- Atmospheric variables ---
-#         ax1.plot(data_df['Time'], data_df['temp_100mbar'], color='C5')
-#         ax1.set_ylabel('Temp @ 100 mbar')
-#         ax1.set_title(f'Atmospheric variables and normalized rates – {region}')
-#         ax1.grid(True)
-
-#         ax2.plot(data_df['Time'], data_df['height_100mbar'], color='C6')
-#         ax2.set_ylabel('Height @ 100 mbar')
-#         ax2.grid(True)
-
-#         ax3.plot(data_df['Time'], data_df['temp_ground'], color='C7')
-#         ax3.set_ylabel('Ground Temp')
-#         ax3.grid(True)
-
-#         # --- Normalized rates ---
-#         half_idx = len(data_df) // 2
-#         norm_uncorrected = data_df[region].iloc[:half_idx].mean()
-#         norm_eff_corr = data_df[f'{region}_eff_corr'].iloc[:half_idx].mean()
-#         norm_pressure = data_df[f'{region}_eff_corr_pressure_corrected'].iloc[:half_idx].mean()
-#         norm_high_order = data_df[f'{region}_eff_corr_high_order_corrected'].iloc[:half_idx].mean()
-
-#         ax4.plot(data_df['Time'], data_df[region] / norm_uncorrected - 1, label='Uncorrected', color='C3')
-#         ax4.plot(data_df['Time'], data_df[f'{region}_eff_corr'] / norm_eff_corr - 1, label='Eff. corr.', color='C8')
-#         ax4.plot(data_df['Time'], data_df[f'{region}_eff_corr_pressure_corrected'] / norm_pressure - 1,
-#                  label='Pressure corr.', color='C9')
-#         ax4.plot(data_df['Time'], data_df[f'{region}_eff_corr_high_order_corrected'] / norm_high_order - 1,
-#                  label='High-order corr.', color='C10')
-#         ax4.axhline(y=0, color='blue', linestyle='--', label='Baseline (0%)', alpha=0.7)
-#         ax4.axhline(y=-0.05, color='green', linestyle='--', label='5% decrease', alpha=0.7)
-
-#         ax4.set_ylabel('Normalized rate')
-#         ax4.set_xlabel('Time')
-#         ax4.grid(True)
-#         ax4.legend(loc='upper left')
-
-#         plt.tight_layout()
-
-#         if show_plots:
-#             plt.show()
-#         elif save_plots:
-#             fig_path = figure_path + f"{fig_idx}_{region}_4x1_atmospheric.png"
-#             fig_idx += 1
-#             print(f"Saving figure to {fig_path}")
-#             fig.savefig(fig_path, format='png', dpi=300)
-
-#         plt.close(fig)
-
-
-# trigger_types_corrected = ['detector_1234_eff_corr_high_order_corrected', 
-#                            'detector_123_eff_corr_high_order_corrected', 
-#                            'detector_234_eff_corr_high_order_corrected', 
-#                            'detector_12_eff_corr_high_order_corrected',
-#                            'detector_23_eff_corr_high_order_corrected',
-#                            'detector_34_eff_corr_high_order_corrected']
-
-# trigger_types_corrected = ['detector_1234_eff_corr_pressure_corrected', 
-#                            'detector_123_eff_corr_pressure_corrected', 
-#                            'detector_234_eff_corr_pressure_corrected', 
-#                            'detector_12_eff_corr_pressure_corrected',
-#                            'detector_23_eff_corr_pressure_corrected',
-#                            'detector_34_eff_corr_pressure_corrected']
-
-# # Create list of column references
-# columns = [f'{region}' for region in trigger_types_corrected]
-
-# # Compute sum, mean, and median across selected columns
-# data_df['total_best_sum'] = data_df[columns].fillna(0).sum(axis=1).fillna(0)
-# data_df['total_best_mean'] = data_df[columns].fillna(0).mean(axis=1).fillna(0)
-# data_df['total_best_median'] = data_df[columns].fillna(0).median(axis=1).fillna(0)
-# data_df['unc_total_best_sum'] = 1
-
-# if create_plots:
-# # if create_plots or create_essential_plots:
-#     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
-
-#     # Plot efficiencies
-#     ax1.plot(data_df['Time'], data_df['definitive_eff'], label='Final efficiency', color='C5')
-#     # ax1.plot(data_df['Time'], data_df['eff_new'], label='Original / Corrected with new system', color='C4')
-#     ax1.set_ylabel('Efficiency')
-#     ax1.set_ylim(0.8, 1)
-#     ax1.set_title('Efficiencies over Time')
-#     ax1.grid(True)
-#     ax1.legend(loc='upper left')
-    
-#     y = data_df[f'total_best_sum']
-#     cond = y > 0.1
-#     x = data_df['Time'][cond]
-#     y_plot = y[cond]
-#     ax2.plot(x, y_plot, label='Sum of the correction', color='C1')
-    
-#     y = data_df[f'summed_eff_corr']
-#     cond = y > 0.1
-#     x = data_df['Time'][cond]
-#     y_plot = y[cond]
-#     ax2.plot(x, y_plot, label='Correction of the sum', color='C1')
-    
-#     # ax2.plot(data_df['Time'], data_df[f'total_best_median'], label=f'Median of the high order corrected rate', color='C11')
-#     ax2.set_xlabel('Time')
-#     ax2.set_ylabel('Rate')
-#     ax2.grid(True)
-#     # ax2.set_ylim(16, 18)
-#     ax2.set_title('Rates over Time')
-#     ax2.legend(loc='upper left')
-
-#     plt.tight_layout()
-
-#     # Save or show the plot
-#     if show_plots:
-#         plt.show()
-#     elif save_plots:
-#         new_figure_path = figure_path + f"{fig_idx}" + f"_{region}_effs_combined.png"
-#         fig_idx += 1
-#         print(f"Saving figure to {new_figure_path}")
-#         plt.savefig(new_figure_path, format='png', dpi=300)
-
-#     plt.close()
-
-
-# # if create_plots:
-# if create_plots or create_essential_plots:
-#     fig, ax2 = plt.subplots(figsize=(17, 5))  # Ajustar altura para un solo subplot
-
-#     y = data_df[f'total_best_sum']
-#     cond = y > 0.1
-#     x = data_df['Time'][cond]
-#     y_plot = y[cond]
-#     ax2.plot(x, y_plot, label='Sum of the correction', color='C1')
-
-#     y = data_df[f'summed_eff_corr']
-#     cond = y > 0.1
-#     x = data_df['Time'][cond]
-#     y_plot = y[cond]
-#     ax2.plot(x, y_plot, label='Correction of the sum', color='C2')
-
-#     ax2.set_xlabel('Time')
-#     ax2.set_ylabel('Rate')
-#     ax2.grid(True)
-#     ax2.set_title('Rates over Time')
-#     ax2.legend(loc='upper left')
-
-#     plt.tight_layout()
-#     if show_plots:
-#         plt.show()
-#     elif save_plots:
-#         new_figure_path = figure_path + f"{fig_idx}" + f"_{region}_sum_corr_vs_corr_sum.png"
-#         fig_idx += 1
-#         print(f"Saving figure to {new_figure_path}")
-#         plt.savefig(new_figure_path, format='png', dpi=300)
-#     plt.close()
-
-
-# if create_plots:
-#     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(17, 10), sharex=True)
-
-#     # Plot efficiencies
-#     ax1.plot(data_df['Time'], data_df['definitive_eff'], label='Final efficiency', color='C5')
-#     # ax1.plot(data_df['Time'], data_df['eff_new'], label='Original / Corrected with new system', color='C4')
-#     ax1.set_ylabel('Efficiency')
-#     ax1.set_ylim(0.8, 1)
-#     ax1.set_title('Efficiencies over Time')
-#     ax1.grid(True)
-#     ax1.legend(loc='upper left')
-    
-#     # Define the first half index
-#     half_idx = len(data_df) // 2
-    
-#     y_1 = data_df[f'total_best_sum']
-#     y_2 = data_df[f'total_best_mean']
-#     y_3 = data_df[f'total_best_median']
-#     cond = ( y_1 > 0.1 ) & ( y_2 > 0.1 ) & ( y_3 > 0.1 )
-#     x = data_df['Time'][cond]
-#     y1_plot = y_1[cond]
-#     y2_plot = y_2[cond]
-#     y3_plot = y_3[cond]
-    
-#     # Compute normalization constants from the first half
-#     norm_total_best_sum = y1_plot.iloc[:half_idx].mean()
-#     ax2.plot(x, y1_plot / norm_total_best_sum - 1, label='total_best_sum', color='C3')
-    
-#     norm_total_best_mean = y2_plot.iloc[:half_idx].mean()
-#     ax2.plot(x, y2_plot / norm_total_best_mean - 1, label='total_best_mean', color='C4')
-    
-#     norm_total_best_median = y3_plot.iloc[:half_idx].mean()
-#     ax2.plot(x, y3_plot / norm_total_best_median - 1, label='total_best_median', color='C5')
-    
-#     ax2.axhline(y=0, color='blue', linestyle='--', label='Baseline (0%)', alpha = 0.7)
-#     ax2.axhline(y=-0.05, color='green', linestyle='--', label='5% decrease', alpha = 0.7)
-#     ax2.set_xlabel('Time')
-#     ax2.set_ylabel('Rate')
-#     ax2.grid(True)
-#     # ax2.set_ylim(16, 18)
-#     ax2.set_title('Rates over Time')
-#     ax2.legend(loc='upper left')
-
-#     plt.tight_layout()
-
-#     # Save or show the plot
-#     if show_plots:
-#         plt.show()
-#     elif save_plots:
-#         new_figure_path = figure_path + f"{fig_idx}" + f"_{region}_last_mean_median_sum.png"
-#         fig_idx += 1
-#         print(f"Saving figure to {new_figure_path}")
-#         plt.savefig(new_figure_path, format='png', dpi=300)
-
-#     plt.close()
-
+plot_grouped_series(data_df,
+                        group_cols,
+                        time_col='Time',
+                        title='Final corrected rates',
+                        plot_after_all = True)
 
 
 # -----------------------------------------------------------------------------
@@ -3100,12 +2854,6 @@ sys.exit("Finished because I can.")
 
 # data_df[f'unc_sys_pres_{region}'] = np.sqrt( data_df[f'unc_pres_{region}']**2 + systematic_unc_corr_to_real_rate**2 )
 
-# -----------------------------------------------------------------------------
-# The end. Defining the total finally corrected rate
-# -----------------------------------------------------------------------------
-# data_df[f'totally_corrected_rate'] = data_df[f'{region}_high_order_corrected']
-# data_df[f'unc_totally_corrected_rate'] = data_df[f'unc_sys_pres_{region}']
-
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -3115,19 +2863,59 @@ sys.exit("Finished because I can.")
 
 # If ANY value is 0, put it to NaN
 data_df = data_df.replace(0, np.nan)
-
 data_df.to_csv(save_filename, index=False)
 print('Efficiency and atmospheric corrections completed and saved to corrected_table.csv.')
+
+
+# -----------------------------------------------------------------------------
+# Saving metadata -------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+# Construct the new calibration row
+new_row = {'Start_Time': start_time, 'End_Time': end_time}
+
+# Add global variables (e.g., counts, sigmoid widths, slopes)
+for key, value in global_variables.items():
+    new_row[key] = value
+
+# Load or initialize metadata DataFrame
+if os.path.exists(csv_path):
+    metadata_df = pd.read_csv(csv_path, parse_dates=['Start_Time', 'End_Time'])
+else:
+    metadata_df = pd.DataFrame(columns=new_row.keys())
+
+# Find full match in both Start_Time and End_Time
+match = (
+    (metadata_df['Start_Time'] == start_time) &
+    (metadata_df['End_Time'] == end_time)
+)
+existing_row_index = metadata_df[match].index
+
+if not existing_row_index.empty:
+    metadata_df.loc[existing_row_index[0]] = new_row
+    print(f"Updated existing calibration for time range: {start_time} to {end_time}")
+else:
+    metadata_df = pd.concat([metadata_df, pd.DataFrame([new_row])], ignore_index=True)
+    print(f"Added new calibration for time range: {start_time} to {end_time}")
+
+# Sort and save
+metadata_df.sort_values(by='Start_Time', inplace=True)
+
+# Put Start_Time and End_Time as first columns
+metadata_df = metadata_df[['Start_Time', 'End_Time'] + [col for col in metadata_df.columns if col not in ['Start_Time', 'End_Time']]]
+
+metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
+print(f'{csv_path} updated with the calibration summary.')
 
 
 # -----------------------------------------------------------------------------
 # Saving short table ----------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-data_df['totally_corrected_rate'] = data_df[f'total_best_sum']
-data_df['unc_totally_corrected_rate'] = data_df['unc_total_best_sum']
+data_df['totally_corrected_rate'] = data_df[f'final_all']
+data_df['unc_totally_corrected_rate'] = data_df['final_all'] * 0 +1
 data_df['global_eff'] = data_df['definitive_eff']
-data_df['unc_global_eff'] = data_df['unc_definitive_eff']
+data_df['unc_global_eff'] = data_df['definitive_eff'] * 0 + 1
 
 # Create a new DataFrame for Grafana
 grafana_df = data_df[['Time', 'pressure_lab', 'totally_corrected_rate', 'unc_totally_corrected_rate', 'global_eff', 'unc_global_eff']].copy()
