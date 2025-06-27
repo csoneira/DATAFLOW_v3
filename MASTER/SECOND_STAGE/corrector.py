@@ -112,7 +112,7 @@ recalculate_pressure_coeff = True
 remove_outliers = True
 
 # Add a new outlier filter to the pressure correction
-after_press_z_score_th = 10
+after_press_z_score_th = 30
 
 res_win_min = 10 # 180 Resampling window minutes
 if int(station) == 4:
@@ -226,12 +226,6 @@ tt_prefixes = sorted(
 #     values: list of *R* region suffixes **without the leading "_"**
 #             that should be summed together.
 # ------------------------------------------------------------------
-
-# "Vert": ['R0.0', 'R1.0', 'R1.1', 'R1.2', 'R1.3', 'R1.4', 'R1.5', 'R1.6', 'R1.7'] 
-# "North": ['R2.0', 'R2.7', 'R3.0', 'R3.7'] 
-# "West": ['R2.2', 'R2.1', 'R3.2', 'R3.1']
-# "South": ['R2.4', 'R2.3', 'R3.4', 'R3.3'] 
-# "East": ['R2.6', 'R2.5', 'R3.6', 'R3.5']
 
 combination_dict = {
     # new label   -> R-region suffixes to add (without leading '_')
@@ -516,6 +510,9 @@ if remove_outliers:
     data_df_cleaned = data_df.loc[~rows_to_remove].copy()
     print(f"Original DataFrame shape: {data_df.shape}")
     print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
+    
+    # Add to global_variables the number of percentage of kept data
+    global_variables['percentage_kept'] = len(data_df_cleaned) / len(data_df) * 100
     data_df = data_df_cleaned.copy()
     
 
@@ -544,19 +541,16 @@ data_df.reset_index(inplace=True)
 def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', title=None, figsize=(14, 6), save_path=None):
 
     global create_plots, fig_idx
-    
     if create_essential_plots:
         
         fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=figsize, gridspec_kw={'height_ratios': [1, 1]})
 
-        # Plot pressure
         ax1.plot(df[time_col], df[x_column], label=x_label, color='tab:blue')
         ax1.set_ylabel(x_label)
         ax1.set_title(title if title else 'Group Signals')
         ax1.grid(True)
         ax1.legend()
 
-        # Plot group of columns
         for col in group_cols:
             if col in df.columns:
                 ax2.plot(df[time_col], df[col], label=col)
@@ -583,9 +577,7 @@ def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', 
 def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize=(14, 4), save_path=None, plot_after_all = False):
 
     global create_plots, fig_idx
-    
     if create_plots or create_essential_plots or plot_after_all:
-    
         n_plots = len(group_cols)
         fig, axes = plt.subplots(n_plots, 1, sharex=True, figsize=(figsize[0], figsize[1] * n_plots))
         
@@ -601,9 +593,7 @@ def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize
                     print(f"Warning: column '{col}' not found in DataFrame")
             ax.set_ylabel(' / '.join(cols))
             ax.grid(True)
-            
             ax.legend(loc='best')
-            
             ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
 
         axes[-1].set_xlabel('Time')
@@ -639,12 +629,11 @@ data_df['hv_mean'] = ( data_df['hv_HVneg'] + data_df['hv_HVpos'] ) / 2
 data_df['current_mean'] = ( data_df['hv_CurrentNeg'] + data_df['hv_CurrentPos'] ) / 2
 
 
-
 # The efficiencies work should be in a loop that at least should work the same for the
 # total count case. This means that I should loop on it for each region case, including the total
 
 df_original = data_df.copy()
-print(df_original)
+# print(df_original)
 
 for case in processing_regions:
     print(f'Processing case: {case}')
@@ -808,147 +797,148 @@ for case in processing_regions:
 
     # plot_grouped_series(data_df, group_cols, title=f'Four plane efficiencies')
     
-    
-    # -----------------------------------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------------------------
-    # Four plane cases ------------------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------------------------
+    check_efficiency_calculations = False
+    if check_efficiency_calculations:
+        # -----------------------------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
+        # Four plane cases ------------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
 
-    # -----------------------------------------------------------------------------------------------------------------------------------
-    # First equality case: corrected different trigger types separately -----------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
+        # First equality case: corrected different trigger types separately -----------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
 
-    data_df['eff_1234'] = data_df['eff_sys_1'] * data_df['eff_sys_2'] * data_df['eff_sys_3'] *  data_df['eff_sys_4']
-    data_df['eff_134'] = data_df['eff_sys_1'] * ( 1 - data_df['eff_sys_2']) * data_df['eff_sys_3'] *  data_df['eff_sys_4']
-    data_df['eff_124'] = data_df['eff_sys_1'] * data_df['eff_sys_2'] * ( 1 - data_df['eff_sys_3'] ) *  data_df['eff_sys_4']
+        data_df['eff_1234'] = data_df['eff_sys_1'] * data_df['eff_sys_2'] * data_df['eff_sys_3'] *  data_df['eff_sys_4']
+        data_df['eff_134'] = data_df['eff_sys_1'] * ( 1 - data_df['eff_sys_2']) * data_df['eff_sys_3'] *  data_df['eff_sys_4']
+        data_df['eff_124'] = data_df['eff_sys_1'] * data_df['eff_sys_2'] * ( 1 - data_df['eff_sys_3'] ) *  data_df['eff_sys_4']
 
-    data_df['corrected_tt_1234'] = data_df['processed_tt_1234'] / data_df['eff_1234']
-    data_df['corrected_tt_134'] = data_df['processed_tt_134'] / data_df['eff_134']
-    data_df['corrected_tt_124'] = data_df['processed_tt_124'] / data_df['eff_124']
+        data_df['corrected_tt_1234'] = data_df['processed_tt_1234'] / data_df['eff_1234']
+        data_df['corrected_tt_134'] = data_df['processed_tt_134'] / data_df['eff_134']
+        data_df['corrected_tt_124'] = data_df['processed_tt_124'] / data_df['eff_124']
 
-    # -----------------------------------------------------------------------------------------------------------------------------------
-    # Second equality case: the sum of cases should be the same as the corrected 1234 ---------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
+        # Second equality case: the sum of cases should be the same as the corrected 1234 ---------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
 
-    data_df['summed_tt_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_134'] + data_df['processed_tt_124']
-    data_df['comp_eff'] = data_df['eff_sys_1'] * data_df['eff_sys_2'] * data_df['eff_sys_3'] *  data_df['eff_sys_4'] + \
-                            data_df['eff_sys_1'] * ( 1 - data_df['eff_sys_2']) * data_df['eff_sys_3'] *  data_df['eff_sys_4'] + \
-                            data_df['eff_sys_1'] * data_df['eff_sys_2'] * ( 1 - data_df['eff_sys_3'] ) *  data_df['eff_sys_4']
-    data_df['corrected_tt_three_four'] = data_df['summed_tt_1234'] / data_df['comp_eff']
+        data_df['summed_tt_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_134'] + data_df['processed_tt_124']
+        data_df['comp_eff'] = data_df['eff_sys_1'] * data_df['eff_sys_2'] * data_df['eff_sys_3'] *  data_df['eff_sys_4'] + \
+                                data_df['eff_sys_1'] * ( 1 - data_df['eff_sys_2']) * data_df['eff_sys_3'] *  data_df['eff_sys_4'] + \
+                                data_df['eff_sys_1'] * data_df['eff_sys_2'] * ( 1 - data_df['eff_sys_3'] ) *  data_df['eff_sys_4']
+        data_df['corrected_tt_three_four'] = data_df['summed_tt_1234'] / data_df['comp_eff']
 
-    # These should be the same, if the efficiencies are alright --------------------------------------------------------------
-    group_cols = [ 'corrected_tt_three_four', 'corrected_tt_1234', 'corrected_tt_134', 'corrected_tt_124']
-    # plot_grouped_series(data_df, group_cols, title='Corrected rates comparison, 4-fold')
-
-
-    # -----------------------------------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------------------------
-    # Three plane cases, strictly -------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------------------------
-    # -----------------------------------------------------------------------------------------------------------------------------------
-
-    # 'processed_tt_234', 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
-    # 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-
-    # -------------------------------------------------------------------------------------------------------
-    # Subdetector 123 ---------------------------------------------------------------------------------------
-    # -------------------------------------------------------------------------------------------------------
-
-    data_df['subdetector_123_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123']
-    data_df['subdetector_123_12'] = data_df['processed_tt_12'] + data_df['processed_tt_124']
-    data_df['subdetector_123_23'] = data_df['processed_tt_23'] + data_df['processed_tt_234']
-    data_df['subdetector_123_13'] = data_df['processed_tt_13'] + data_df['processed_tt_134']
-
-    # Plane 2
-    A = data_df['subdetector_123_123']
-    B = data_df['subdetector_123_13']
-    data_df['eff_sys_123_2'] = A / ( A + B )
-
-    # Plane 1
-    A = data_df['subdetector_123_123']
-    B = data_df['subdetector_123_23']
-    data_df['eff_sys_123_1'] = A / ( A + B )
-
-    # Plane 3
-    A = data_df['subdetector_123_123']
-    B = data_df['subdetector_123_12']
-    data_df['eff_sys_123_3'] = A / ( A + B )
+        # These should be the same, if the efficiencies are alright --------------------------------------------------------------
+        group_cols = [ 'corrected_tt_three_four', 'corrected_tt_1234', 'corrected_tt_134', 'corrected_tt_124']
+        # plot_grouped_series(data_df, group_cols, title='Corrected rates comparison, 4-fold')
 
 
-    # Newly calculated eff --------------------------------------------------------------------------------------
-    data_df['subdetector_123_eff_123'] = data_df['eff_sys_1'] * data_df['eff_sys_123_2'] * data_df['eff_sys_3']
-    data_df['subdetector_123_123_corr'] = data_df['subdetector_123_123'] / data_df['subdetector_123_eff_123']
+        # -----------------------------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
+        # Three plane cases, strictly -------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------------------------------------
 
-    data_df['subdetector_123_eff_13'] = data_df['eff_sys_1'] * ( 1 - data_df['eff_sys_123_2'] ) * data_df['eff_sys_3']
-    data_df['subdetector_123_13_corr'] = data_df['subdetector_123_13'] / data_df['subdetector_123_eff_13']
+        # 'processed_tt_234', 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
+        # 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
 
-    data_df['subdetector_123_eff_summed'] = data_df['subdetector_123_eff_123'] + data_df['subdetector_123_eff_13']
-    data_df['subdetector_123_summed_corr'] = ( data_df['subdetector_123_123'] + data_df['subdetector_123_13'] ) / data_df['subdetector_123_eff_summed']
+        # -------------------------------------------------------------------------------------------------------
+        # Subdetector 123 ---------------------------------------------------------------------------------------
+        # -------------------------------------------------------------------------------------------------------
 
-    # group_cols = [ 'subdetector_123_summed_corr', 'subdetector_123_123_corr' , 'subdetector_123_13_corr']
-    # plot_grouped_series(data_df, group_cols, title='Corrected rates comparison, 3-fold, 123')
-    
-    group_cols = [ 'eff_sys_123_2', 'eff_sys_2' ]
-    # plot_grouped_series(data_df, group_cols, title='Corrected effs. comparison, 3-fold, 123')
+        data_df['subdetector_123_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123']
+        data_df['subdetector_123_12'] = data_df['processed_tt_12'] + data_df['processed_tt_124']
+        data_df['subdetector_123_23'] = data_df['processed_tt_23'] + data_df['processed_tt_234']
+        data_df['subdetector_123_13'] = data_df['processed_tt_13'] + data_df['processed_tt_134']
 
-    # -------------------------------------------------------------------------------------------------------
-    # Subdetector 234 ---------------------------------------------------------------------------------------
-    # -------------------------------------------------------------------------------------------------------
+        # Plane 2
+        A = data_df['subdetector_123_123']
+        B = data_df['subdetector_123_13']
+        data_df['eff_sys_123_2'] = A / ( A + B )
 
-    data_df['subdetector_234_234'] = data_df['processed_tt_1234'] + data_df['processed_tt_234']
-    data_df['subdetector_234_23'] = data_df['processed_tt_23']  + data_df['processed_tt_123']
-    data_df['subdetector_234_34'] = data_df['processed_tt_34'] + data_df['processed_tt_134']
-    data_df['subdetector_234_24'] = data_df['processed_tt_24'] + data_df['processed_tt_124']
+        # Plane 1
+        A = data_df['subdetector_123_123']
+        B = data_df['subdetector_123_23']
+        data_df['eff_sys_123_1'] = A / ( A + B )
 
-    # Plane 3
-    A = data_df['subdetector_234_234']
-    B = data_df['subdetector_234_24']
-    data_df['eff_sys_234_3'] = A / ( A + B )
-
-    # Plane 2
-    A = data_df['subdetector_234_234']
-    B = data_df['subdetector_234_34']
-    data_df['eff_sys_234_2'] = A / ( A + B )
-
-    # Plane 4
-    A = data_df['subdetector_234_234']
-    B = data_df['subdetector_234_23']
-    data_df['eff_sys_234_4'] = A / ( A + B )
+        # Plane 3
+        A = data_df['subdetector_123_123']
+        B = data_df['subdetector_123_12']
+        data_df['eff_sys_123_3'] = A / ( A + B )
 
 
-    # Newly calculated eff --------------------------------------------------------------------------------------
-    data_df['subdetector_234_eff_234'] = data_df['eff_sys_2'] * data_df['eff_sys_234_3'] * data_df['eff_sys_4']
-    data_df['subdetector_234_234_corr'] = data_df['subdetector_234_234'] / data_df['subdetector_234_eff_234']
+        # Newly calculated eff --------------------------------------------------------------------------------------
+        data_df['subdetector_123_eff_123'] = data_df['eff_sys_1'] * data_df['eff_sys_123_2'] * data_df['eff_sys_3']
+        data_df['subdetector_123_123_corr'] = data_df['subdetector_123_123'] / data_df['subdetector_123_eff_123']
 
-    data_df['subdetector_234_eff_24'] = data_df['eff_sys_2'] * ( 1 - data_df['eff_sys_234_3'] ) * data_df['eff_sys_4']
-    data_df['subdetector_234_24_corr'] = data_df['subdetector_234_24'] / data_df['subdetector_234_eff_24']
+        data_df['subdetector_123_eff_13'] = data_df['eff_sys_1'] * ( 1 - data_df['eff_sys_123_2'] ) * data_df['eff_sys_3']
+        data_df['subdetector_123_13_corr'] = data_df['subdetector_123_13'] / data_df['subdetector_123_eff_13']
 
-    data_df['subdetector_234_eff_summed'] = data_df['subdetector_234_eff_234'] + data_df['subdetector_234_eff_24']
-    data_df['subdetector_234_summed_corr'] = ( data_df['subdetector_234_234'] + data_df['subdetector_234_24'] ) / data_df['subdetector_234_eff_summed']
+        data_df['subdetector_123_eff_summed'] = data_df['subdetector_123_eff_123'] + data_df['subdetector_123_eff_13']
+        data_df['subdetector_123_summed_corr'] = ( data_df['subdetector_123_123'] + data_df['subdetector_123_13'] ) / data_df['subdetector_123_eff_summed']
 
-    # group_cols = [ 'subdetector_234_summed_corr', 'subdetector_234_234_corr' , 'subdetector_234_24_corr']
-    # plot_grouped_series(data_df, group_cols, title='Corrected rates comparison, 3-fold, 234')
-    
-    group_cols = [ 'eff_sys_234_3', 'eff_sys_3' ]
-    # plot_grouped_series(data_df, group_cols, title='Corrected effs. comparison, 3-fold, 234')
-    
-    
-    # Checking calculated efficiencies
+        # group_cols = [ 'subdetector_123_summed_corr', 'subdetector_123_123_corr' , 'subdetector_123_13_corr']
+        # plot_grouped_series(data_df, group_cols, title='Corrected rates comparison, 3-fold, 123')
+        
+        group_cols = [ 'eff_sys_123_2', 'eff_sys_2' ]
+        # plot_grouped_series(data_df, group_cols, title='Corrected effs. comparison, 3-fold, 123')
 
-    # group_cols = [
-    #     ['eff_sys_123_1', 'eff_sys_1'],
-    #     ['eff_sys_123_2', 'eff_sys_2', 'eff_sys_234_2', 'eff_sys_123_2'],
-    #     ['eff_sys_123_3', 'eff_sys_3', 'eff_sys_234_3', 'eff_sys_234_3'],
-    #     ['eff_sys_234_4', 'eff_sys_4']
-    # ]
-    
-    group_cols = [
-        ['eff_sys_123_1', 'eff_sys_1'],
-        ['eff_sys_123_2', 'eff_sys_2'],
-        ['eff_sys_3', 'eff_sys_234_3'],
-        ['eff_sys_234_4', 'eff_sys_4'] ]
-    # plot_grouped_series(data_df, group_cols, title='Corrected efficiencies')
+        # -------------------------------------------------------------------------------------------------------
+        # Subdetector 234 ---------------------------------------------------------------------------------------
+        # -------------------------------------------------------------------------------------------------------
+
+        data_df['subdetector_234_234'] = data_df['processed_tt_1234'] + data_df['processed_tt_234']
+        data_df['subdetector_234_23'] = data_df['processed_tt_23']  + data_df['processed_tt_123']
+        data_df['subdetector_234_34'] = data_df['processed_tt_34'] + data_df['processed_tt_134']
+        data_df['subdetector_234_24'] = data_df['processed_tt_24'] + data_df['processed_tt_124']
+
+        # Plane 3
+        A = data_df['subdetector_234_234']
+        B = data_df['subdetector_234_24']
+        data_df['eff_sys_234_3'] = A / ( A + B )
+
+        # Plane 2
+        A = data_df['subdetector_234_234']
+        B = data_df['subdetector_234_34']
+        data_df['eff_sys_234_2'] = A / ( A + B )
+
+        # Plane 4
+        A = data_df['subdetector_234_234']
+        B = data_df['subdetector_234_23']
+        data_df['eff_sys_234_4'] = A / ( A + B )
+
+
+        # Newly calculated eff --------------------------------------------------------------------------------------
+        data_df['subdetector_234_eff_234'] = data_df['eff_sys_2'] * data_df['eff_sys_234_3'] * data_df['eff_sys_4']
+        data_df['subdetector_234_234_corr'] = data_df['subdetector_234_234'] / data_df['subdetector_234_eff_234']
+
+        data_df['subdetector_234_eff_24'] = data_df['eff_sys_2'] * ( 1 - data_df['eff_sys_234_3'] ) * data_df['eff_sys_4']
+        data_df['subdetector_234_24_corr'] = data_df['subdetector_234_24'] / data_df['subdetector_234_eff_24']
+
+        data_df['subdetector_234_eff_summed'] = data_df['subdetector_234_eff_234'] + data_df['subdetector_234_eff_24']
+        data_df['subdetector_234_summed_corr'] = ( data_df['subdetector_234_234'] + data_df['subdetector_234_24'] ) / data_df['subdetector_234_eff_summed']
+
+        # group_cols = [ 'subdetector_234_summed_corr', 'subdetector_234_234_corr' , 'subdetector_234_24_corr']
+        # plot_grouped_series(data_df, group_cols, title='Corrected rates comparison, 3-fold, 234')
+        
+        group_cols = [ 'eff_sys_234_3', 'eff_sys_3' ]
+        # plot_grouped_series(data_df, group_cols, title='Corrected effs. comparison, 3-fold, 234')
+        
+        
+        # Checking calculated efficiencies
+
+        # group_cols = [
+        #     ['eff_sys_123_1', 'eff_sys_1'],
+        #     ['eff_sys_123_2', 'eff_sys_2', 'eff_sys_234_2', 'eff_sys_123_2'],
+        #     ['eff_sys_123_3', 'eff_sys_3', 'eff_sys_234_3', 'eff_sys_234_3'],
+        #     ['eff_sys_234_4', 'eff_sys_4']
+        # ]
+        
+        group_cols = [
+            ['eff_sys_123_1', 'eff_sys_1'],
+            ['eff_sys_123_2', 'eff_sys_2'],
+            ['eff_sys_3', 'eff_sys_234_3'],
+            ['eff_sys_234_4', 'eff_sys_4'] ]
+        # plot_grouped_series(data_df, group_cols, title='Corrected efficiencies')
     
     
     
@@ -957,6 +947,12 @@ for case in processing_regions:
     # NOISE STUDY -----------------------------------------------------------------------------------------
     # -----------------------------------------------------------------------------------------------------
     # -----------------------------------------------------------------------------------------------------
+    
+    data_df['subdetector_123_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123']
+    data_df['subdetector_123_13'] = data_df['processed_tt_13'] + data_df['processed_tt_134']
+    
+    data_df['subdetector_234_234'] = data_df['processed_tt_1234'] + data_df['processed_tt_234']
+    data_df['subdetector_234_24'] = data_df['processed_tt_24'] + data_df['processed_tt_124']
     
     def compute_noise_percentages(est, measured):
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -968,10 +964,6 @@ for case in processing_regions:
         noise = np.clip(noise, 0, 100)
         return noise
     
-    # comp_eff_2  = (1 - data_df['eff_sys_2'])
-    # comp_eff_3  = (1 - data_df['eff_sys_3'])
-    # comp_eff_2  = (1 - data_df['eff_sys_123_2'])
-    # comp_eff_3  = (1 - data_df['eff_sys_234_3'])
     comp_eff_2  = data_df['processed_tt_134'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_134'] )
     comp_eff_3  = data_df['processed_tt_124'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_124'] )
     comp_eff_23 = comp_eff_2 * comp_eff_3
@@ -1144,8 +1136,6 @@ for case in processing_regions:
     # -----------------------------------------------------------------------------------------------------
     # -----------------------------------------------------------------------------------------------------
     
-    # ---------------------------------------------------------------------------------------------------------
-    
     data_df['eff_1'] = ( data_df['eff_sys_1'] )
     data_df['eff_2'] = ( data_df['eff_sys_2'] )
     data_df['eff_3'] = ( data_df['eff_sys_3'] )
@@ -1167,13 +1157,12 @@ for case in processing_regions:
         data_df['final_eff_2'] = data_df['eff_2']
         data_df['final_eff_3'] = data_df['eff_3']
         data_df['final_eff_4'] = data_df['eff_4']
-
-    # a = 1/0
-
-    print("Rolling efficiencies...")
-
+    
+    # --------------------------------------------------------------------------
+    
     rolling_effs = False
     if rolling_effs:
+        print("Rolling efficiencies...")
         
         data_df['final_eff_pre_roll_1'] = data_df['final_eff_1']
         data_df['final_eff_pre_roll_2'] = data_df['final_eff_2']
@@ -1211,7 +1200,6 @@ for case in processing_regions:
     else:
         group_cols = [ ['final_eff_1', 'final_eff_2', 'final_eff_3', 'final_eff_4'] ]
         plot_grouped_series(data_df, group_cols, title='Final calculated efficiencies')
-
 
 
     print('----------------------------------------------------------------------')
@@ -1284,16 +1272,16 @@ for case in processing_regions:
     data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
     data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
 
-    group_cols = [
-        ['sensors_ext_Pressure_ext'],
-        ['sensors_ext_Temperature_ext'],
-        ['detector_1234', 'detector_1234_eff_corr'],
-        ['detector_123', 'detector_123_eff_corr'],
-        ['detector_234', 'detector_234_eff_corr'],
-        ['detector_12', 'detector_12_eff_corr'],
-        ['detector_23', 'detector_23_eff_corr'],
-        ['detector_34', 'detector_34_eff_corr'],
-    ]
+    # group_cols = [
+    #     ['sensors_ext_Pressure_ext'],
+    #     ['sensors_ext_Temperature_ext'],
+    #     ['detector_1234', 'detector_1234_eff_corr'],
+    #     ['detector_123', 'detector_123_eff_corr'],
+    #     ['detector_234', 'detector_234_eff_corr'],
+    #     ['detector_12', 'detector_12_eff_corr'],
+    #     ['detector_23', 'detector_23_eff_corr'],
+    #     ['detector_34', 'detector_34_eff_corr'],
+    # ]
     # plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
 
 
@@ -1385,25 +1373,48 @@ for case in processing_regions:
         # fit_and_plot_eff_vs_rate(data_df, eff_col, rate_col, label)
 
 
+    import numpy as np
+    from scipy.optimize import minimize
+    import warnings
+
     def decorrelate_efficiency_least_change(eff, rate_corr, bounds=(0.01, 1.5)):
         eff = np.asarray(eff)
         rate_corr = np.asarray(rate_corr)
-        counts = eff * rate_corr  # fixed
+
+        if len(eff) == 0 or len(rate_corr) == 0:
+            warnings.warn("Empty input array. Returning original efficiency.")
+            return eff, None
+
+        if len(eff) != len(rate_corr):
+            warnings.warn("eff and rate_corr must have the same length. Returning original efficiency.")
+            return eff, None
+
+        counts = eff * rate_corr  # fixed counts
+
         def objective(eff_prime):
             return np.sum((eff_prime - eff)**2)
+
         def constraint(eff_prime):
             rate_prime = counts / eff_prime
             r_mean = np.mean(rate_prime)
             e_mean = np.mean(eff_prime)
-            return np.sum((rate_prime - r_mean) * (eff_prime - e_mean))  # covariance
+            return np.sum((rate_prime - r_mean) * (eff_prime - e_mean))  # covariance ~ 0
+
         cons = {'type': 'eq', 'fun': constraint}
         bounds_list = [bounds] * len(eff)
-        res = minimize(objective, eff, method='SLSQP', bounds=bounds_list, constraints=cons)
+
+        try:
+            res = minimize(objective, eff, method='SLSQP', bounds=bounds_list, constraints=cons)
+        except Exception as e:
+            warnings.warn(f"Optimization failed: {e}")
+            return eff, None
+
         return res.x, res
     
     ancillary_data_df = data_df.copy()
     data_df = ancillary_data_df.copy()
-
+    
+    print(case)
     for label in detector_labels:
         eff_col = f'detector_{label}_eff'
         rate_col = f'detector_{label}_eff_corr'
@@ -1600,15 +1611,15 @@ for case in processing_regions:
     data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
     data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
     
-    df_original = df_original.copy()
+    data_df = data_df.copy()
     
     # Assign to the original dataframe
-    df_original[f'detector_1234_eff_corr_{case}'] = data_df['detector_1234_eff_corr']
-    df_original[f'detector_123_eff_corr_{case}'] = data_df['detector_123_eff_corr'] 
-    df_original[f'detector_234_eff_corr_{case}'] = data_df['detector_234_eff_corr'] 
-    df_original[f'detector_12_eff_corr_{case}'] = data_df['detector_12_eff_corr'] 
-    df_original[f'detector_23_eff_corr_{case}'] = data_df['detector_23_eff_corr'] 
-    df_original[f'detector_34_eff_corr_{case}'] = data_df['detector_34_eff_corr']
+    data_df[f'detector_1234_eff_corr_{case}'] = data_df['detector_1234_eff_corr']
+    data_df[f'detector_123_eff_corr_{case}'] = data_df['detector_123_eff_corr'] 
+    data_df[f'detector_234_eff_corr_{case}'] = data_df['detector_234_eff_corr'] 
+    data_df[f'detector_12_eff_corr_{case}'] = data_df['detector_12_eff_corr'] 
+    data_df[f'detector_23_eff_corr_{case}'] = data_df['detector_23_eff_corr'] 
+    data_df[f'detector_34_eff_corr_{case}'] = data_df['detector_34_eff_corr']
 
     # group_cols = [
     #     ['sensors_ext_Pressure_ext'],
@@ -1750,14 +1761,17 @@ for case in processing_regions:
     data_df[f'definitive_eff_3'] = data_df['final_eff_3_decorrelated']
     data_df[f'definitive_eff_4'] = data_df['final_eff_4_decorrelated']
 
-    df_original[f'definitive_eff_1_{case}'] = data_df[f'definitive_eff_1']
-    df_original[f'definitive_eff_2_{case}'] = data_df[f'definitive_eff_2']
-    df_original[f'definitive_eff_3_{case}'] = data_df[f'definitive_eff_3']
-    df_original[f'definitive_eff_4_{case}'] = data_df[f'definitive_eff_4']
+    data_df[f'definitive_eff_1_{case}'] = data_df[f'definitive_eff_1']
+    data_df[f'definitive_eff_2_{case}'] = data_df[f'definitive_eff_2']
+    data_df[f'definitive_eff_3_{case}'] = data_df[f'definitive_eff_3']
+    data_df[f'definitive_eff_4_{case}'] = data_df[f'definitive_eff_4']
+    
+    if case == 'all':
+        # Average the four to get a definitive value
+        data_df['global_eff'] = (data_df['definitive_eff_1'] + data_df['definitive_eff_2'] +
+                                    data_df['definitive_eff_3'] + data_df['definitive_eff_4']) / 4.0
     
     # ------------------------------------------------------------------------------------------------------------------------
-
-    data_df['definitive_eff'] = ( data_df['definitive_eff_1'] + data_df['definitive_eff_2'] + data_df['definitive_eff_3'] + data_df['definitive_eff_4'] ) / 4
 
     # data_df['summed'] = data_df['detector_1234'] + data_df['detector_123'] + \
     #     data_df['detector_234'] + data_df['detector_12'] + \
@@ -1784,32 +1798,79 @@ for case in processing_regions:
     fit_efficiencies = True
     if fit_efficiencies:
         
+        from sklearn.linear_model import LinearRegression
+        import numpy as np
+        import warnings
+
         def fit_efficiency_model(x, y, z, model_type='linear'):
+            if len(x) == 0 or len(y) == 0 or len(z) == 0:
+                warnings.warn("Empty arrays for fitting. Returning dummy fit.")
+                dummy_fit = lambda P, T: np.full_like(P, fill_value=np.nan, dtype=np.float64)
+                return dummy_fit, (np.nan, np.nan, np.nan)
+
             X = np.column_stack((x, y))
+
             if model_type == 'linear':
-                model = LinearRegression()
-                model.fit(X, z)
-                coeffs = model.coef_, model.intercept_
-                return lambda P, T: coeffs[0][0] * P + coeffs[0][1] * T + coeffs[1], coeffs
+                try:
+                    model = LinearRegression()
+                    model.fit(X, z)
+                    coeffs = model.coef_, model.intercept_
+                    return lambda P, T: coeffs[0][0] * P + coeffs[0][1] * T + coeffs[1], coeffs
+                except Exception as e:
+                    warnings.warn(f"Linear regression failed: {e}")
+                    dummy_fit = lambda P, T: np.full_like(P, fill_value=np.nan, dtype=np.float64)
+                    return dummy_fit, (np.nan, np.nan, np.nan)
+
             elif model_type == 'sigmoid':
                 def sigmoid(xy, a, b, c, d):
                     P, T = xy
                     return d / (1 + np.exp(-a * (P - b) - c * (T - b)))
-                popt, _ = curve_fit(sigmoid, (x, y), z, maxfev=10000)
-                return lambda P, T: sigmoid((P, T), *popt), popt
+                try:
+                    popt, _ = curve_fit(sigmoid, (x, y), z, maxfev=10000)
+                    return lambda P, T: sigmoid((P, T), *popt), popt
+                except Exception as e:
+                    warnings.warn(f"Sigmoid fit failed: {e}")
+                    dummy_fit = lambda P, T: np.full_like(P, fill_value=np.nan, dtype=np.float64)
+                    return dummy_fit, (np.nan,) * 4
+
             else:
                 raise NotImplementedError(f"Model {model_type} not implemented")
 
 
-        def assign_efficiency_fit(df, eff_col, fit_col, model_type='linear'):
+
+        def assign_efficiency_fit(df, eff_col, fit_col, case, plane_number, model_type='linear'):
             filtered = df.dropna(subset=[eff_col, 'sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']).copy()
+    
+            if filtered.empty:
+                warnings.warn(f"No valid data for {eff_col}. Skipping fit.")
+                df[fit_col] = np.nan
+                df[f'unc_{fit_col}'] = np.nan
+                return filtered, lambda P, T: np.full_like(P, np.nan), (np.nan, np.nan, np.nan)
+
             x = filtered['sensors_ext_Pressure_ext'].values
             y = filtered['sensors_ext_Temperature_ext'].values
             z = filtered[eff_col].values
+
             fit_func, coeffs = fit_efficiency_model(x, y, z, model_type=model_type)
+
+            # Store coefficients (even if NaN, to avoid KeyErrors later)
+            if isinstance(coeffs, tuple) and len(coeffs) == 2:
+                coef_array, intercept = coeffs
+                if isinstance(coef_array, (list, np.ndarray)) and len(coef_array) == 2:
+                    global_variables[f"eff_fit_P_{case}"] = coef_array[0] if np.isfinite(coef_array[0]) else None
+                    global_variables[f"eff_fit_T_{case}"] = coef_array[1] if np.isfinite(coef_array[1]) else None
+                    global_variables[f"eff_fit_intercept_{case}"] = intercept if np.isfinite(intercept) else None
+                else:
+                    warnings.warn(f"Invalid coefficient structure for {case}.")
+            else:
+                warnings.warn(f"Unexpected fit result structure for {case}.")
+
+
             df[fit_col] = fit_func(df['sensors_ext_Pressure_ext'], df['sensors_ext_Temperature_ext'])
-            df[f'unc_{fit_col}'] = 1
+            df[f'unc_{fit_col}'] = 1.0
+
             return filtered, fit_func, coeffs
+
 
 
         def plot_combined_efficiency_views(filtered_df, final_eff_col, fit_func, plane_number):
@@ -1894,7 +1955,7 @@ for case in processing_regions:
             for i in range(1, 5):
                 eff_col = f'definitive_eff_{i}'
                 fit_col = f'eff_fit_{i}'
-                filtered_df, fit_func, _ = assign_efficiency_fit( data_df, eff_col, fit_col, model_type='linear' )
+                filtered_df, fit_func, _ = assign_efficiency_fit( data_df, eff_col, fit_col, case, i, model_type='linear' )
                 # plot_combined_efficiency_views(filtered_df, eff_col, fit_func, i)
         
         
@@ -2054,17 +2115,7 @@ for case in processing_regions:
             print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
         print('Efficiency calculations performed.')
-        
-        data_df = df_original.copy()
 
-
-
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Atmospheric corrections -----------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
 
 print('----------------------------------------------------------------------')
 print('----------------------------------------------------------------------')
@@ -2072,9 +2123,6 @@ print('-------------------- Atmospheric corrections started -----------------')
 print('----------------------------------------------------------------------')
 print('----------------------------------------------------------------------')
 
-# -----------------------------------------------------------------------------
-# Pressure correction ---------------------------------------------------------
-# -----------------------------------------------------------------------------
 
 print('----------------------------------------------------------------------')
 print('---------------------- Pressure correction started -------------------')
@@ -2139,6 +2187,9 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = Non
         eta_P_ordinate = a
         eta_P_uncertainty = np.sqrt(np.diag(pcov))[0]
         
+        global_variables[f'eta_P_{region}'] = eta_P
+        global_variables[f'eta_P_ordinate_{region}'] = eta_P_ordinate
+        
         # Plot the fitting
         if create_plots:
             plt.figure()
@@ -2177,26 +2228,25 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = Non
 
 
 def quantile_mean(data_df, region, lower_quantile=0.1, upper_quantile=0.9):
-        """
-        Compute the mean of the data within the specified quantile range.
-        
-        :param data_df: DataFrame containing the data.
-        :param region: Column name to compute the small quantile mean for.
-        :param lower_quantile: Lower quantile threshold (default: 10%).
-        :param upper_quantile: Upper quantile threshold (default: 90%).
-        :return: Mean of the values within the quantile range.
-        """
-        values = data_df[region].dropna()  # Remove NaNs
-        q_low, q_high = np.quantile(values, [lower_quantile, upper_quantile])
-        filtered_values = values[(values >= q_low) & (values <= q_high)]
-        
-        return filtered_values.mean()
+    """
+    Compute the mean of the data within the specified quantile range.
+    
+    :param data_df: DataFrame containing the data.
+    :param region: Column name to compute the small quantile mean for.
+    :param lower_quantile: Lower quantile threshold (default: 10%).
+    :param upper_quantile: Upper quantile threshold (default: 90%).
+    :return: Mean of the values within the quantile range.
+    """
+    values = data_df[region].dropna()  # Remove NaNs
+    q_low, q_high = np.quantile(values, [lower_quantile, upper_quantile])
+    filtered_values = values[(values >= q_low) & (values <= q_high)]
+    
+    return filtered_values.mean()
 
 
 # -------------------------------------------------------------------------------
 # -------------------------- LOOPING THE DATA -----------------------------------
 # -------------------------------------------------------------------------------
-
 
 regions_to_correct = []
 for col in data_df.columns:
@@ -2204,9 +2254,7 @@ for col in data_df.columns:
     if '_eff_corr_' in col:
         regions_to_correct.append(col)
 
-
-print(regions_to_correct)
-
+# print(regions_to_correct)
 log_delta_I_df = pd.DataFrame(columns=['Region', 'Log_I_over_I0', 'Delta_P', 'Unc_Log_I_over_I0', 'Unc_Delta_P', 'Eta_P', 'Unc_Eta_P'])
 
 # List to store results
@@ -2267,15 +2315,11 @@ for region in regions_to_correct:
     # Convert the list of dictionaries into a DataFrame after the loop
     log_delta_I_df = pd.DataFrame(results)
 
-    # if recalculate_pressure_coeff:
-    #     eta_P, unc_eta_P = calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region)
-    #     print(eta_P)
-    #     pressure_results = pd.concat([pressure_results, pd.DataFrame({'Region': [region], 'Eta_P': [eta_P]})], ignore_index=True)
-        
     if (recalculate_pressure_coeff == False) or (eta_P == np.nan):
+        
         if recalculate_pressure_coeff == False:
             print("Not recalculating because of the options.")
-        
+            
         if eta_P == np.nan:
             print("Not recalculating because the fit failed.")
         
@@ -2641,115 +2685,31 @@ if high_order_correction:
         I0_region_corrected = data_df[f'{region}_pressure_corrected'].mean()
         data_df[f'delta_I_{region}_corrected'] = data_df[f'{region}_pressure_corrected'] - I0_region_corrected
         A, B, C, D = calculate_coefficients(region, I0_region_corrected, data_df[f'delta_I_{region}_corrected'])
+        
+        global_variables[f'high_order_coeff_Tground_{region}'] = A
+        global_variables[f'high_order_coeff_T100mbar_{region}'] = B
+        global_variables[f'high_order_coeff_H100mbar_{region}'] = C
+        global_variables[f'high_order_coeff_intercept_{region}'] = D
+        
         high_order_results = pd.concat([high_order_results, pd.DataFrame({'Region': [region], 'A': [A], 'B': [B], 'C': [C], 'D': [D]})], ignore_index=True)
         
         # Create corrected rate column for the region
-        data_df[f'{region}_high_order_corrected'] = data_df[f'{region}_pressure_corrected'] * (1 - (A * data_df['delta_Tg'] / Tg0 + B * data_df['delta_Th'] / Th0 + C * data_df['delta_H'] / H0 + D))
+        data_df[f'{region}_final_corrected'] = data_df[f'{region}_pressure_corrected'] * (1 - (A * data_df['delta_Tg'] / Tg0 + B * data_df['delta_Th'] / Th0 + C * data_df['delta_H'] / H0 + D))
     
     print("High order correction applied.")
 else:
     print("High order correction not applied.")
     for region in regions_to_correct:
         data_df = data_df.copy()
-        data_df[f'{region}_high_order_corrected'] = data_df[f'pres_{region}']
+        data_df[f'{region}_final_corrected'] = data_df[f'pres_{region}']
 
 
 
-print("Creating rate final plots...")
-
-# print(data_df.columns.to_list())
-# print("\n\n\n")
-
-# create_very_essential_plots = False
-
-# import re
-# from collections import defaultdict
-
-# def build_eff_corr_groups(df):
-#     """
-#     Construct `group_cols` for plot_grouped_series() from a DataFrame whose
-#     column names follow the pattern
-
-#         <anything>_eff_corr_<suffix>_high_order_corrected
-
-#     where <suffix> is e.g.  R0.0, R1.2, all …
-
-#     Only columns that
-#         • end with "_high_order_corrected",
-#         • do **not** contain "_unc_",
-#     are considered.  The resulting list-of-lists is ordered numerically by the
-#     R-value (R0.0, R1.0, …), followed by any non-numeric suffixes (e.g. "all").
-
-#     Parameters
-#     ----------
-#     df : pd.DataFrame
-
-#     Returns
-#     -------
-#     list[list[str]]
-#         Suitable for the `group_cols` argument of plot_grouped_series().
-#     """
-#     groups = defaultdict(list)
-
-#     # capture the part after `_eff_corr_` and before `_high_order_corrected`
-#     pat = re.compile(r'_eff_corr_(.+?)_high_order_corrected$', flags=re.IGNORECASE)
-
-#     for col in df.columns:
-#         if '_high_order_corrected' not in col.lower():   # must end with this tag
-#             continue
-#         if '_unc_' in col.lower():                       # skip uncertainty cols
-#             continue
-
-#         m = pat.search(col)
-#         if m:
-#             suffix = m.group(1)                          # e.g. R1.2  or  all
-#             groups[suffix].append(col)
-
-#     # sort suffixes: numeric R-values first, others alphabetically
-#     def _sort_key(s):
-#         if s.startswith('R'):
-#             try:
-#                 return (0, float(s[1:]))                 # R1.2 → (0, 1.2)
-#             except ValueError:
-#                 pass
-#         return (1, s.lower())                            # non-numeric last
-
-#     ordered_suffixes = sorted(groups, key=_sort_key)
-
-#     # assemble list-of-lists
-#     group_cols = [groups[suf] for suf in ordered_suffixes]
-#     return group_cols
-
-
-# group_cols = build_eff_corr_groups(data_df)
-
-# print(group_cols)
-
-# print("\n\n\n")
-
-# # Interpolate the Nans in the data_df
-# # data_df = data_df.interpolate(method='linear', limit_direction='both')
-
-# plot_grouped_series(data_df,
-#                     group_cols,
-#                     time_col='Time',
-#                     title='High-order corrected rates',
-#                     plot_after_all = True)
-
-# group_cols = [
-#     ['pressure_lab'],
-#     ['processed_tt_1234_R1.2'],
-#     ['detector_1234_eff_corr_R0.0_high_order_corrected']
-# ]
-
-# plot_grouped_series(data_df,
-#                     group_cols,
-#                     time_col='Time',
-#                     title='High-order corrected rates',
-#                     plot_after_all = True)
-
-
-#%%
+print('----------------------------------------------------------------------')
+print('----------------------------------------------------------------------')
+print('-------------------- Creating rate final plots -----------------------')
+print('----------------------------------------------------------------------')
+print('----------------------------------------------------------------------')
 
 original_df = data_df.copy()
 
@@ -2757,16 +2717,15 @@ original_df = data_df.copy()
 
 data_df = original_df.copy()
 
-drop_prefixes = ("pres_detector_", "processed_tt_", "definitive_", "unc_pres_detector_")
+# drop_prefixes = ("pres_detector_", "processed_tt_", "definitive_", "unc_pres_detector_")
+drop_prefixes = ("pres_detector_", "processed_tt_", "unc_pres_detector_") # Now it keeps efficiencies
 cols_to_drop = [c for c in data_df.columns if c.startswith(drop_prefixes)]
-cols_to_drop = [c for c in data_df.columns if c.startswith(drop_prefixes) and not c.endswith(drop_suffixes)]
 data_df.drop(columns=cols_to_drop, inplace=True)
 
 drop_prefixes = ("detector_")
-drop_suffixes = ("_high_order_corrected")
+drop_suffixes = ("_final_corrected")
 cols_to_drop = [c for c in data_df.columns if c.startswith(drop_prefixes) and not c.endswith(drop_suffixes)]
 data_df.drop(columns=cols_to_drop, inplace=True)
-
 
 print(data_df.columns.to_list())
 
@@ -2775,7 +2734,7 @@ for region in processing_regions:
     # Find all columns corresponding to this region and detector types
     region_cols = [
         col for col in data_df.columns
-        if col.startswith("detector_") and col.endswith(f"_{region}_high_order_corrected")
+        if col.startswith("detector_") and col.endswith(f"_{region}_final_corrected")
     ]
 
     if not region_cols:
@@ -2871,6 +2830,21 @@ print('Efficiency and atmospheric corrections completed and saved to corrected_t
 # Saving metadata -------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+# Round every value in global_variables that is not a date to 4 significant digits
+def round_sig(x, sig=4):
+    if x == 0:
+        return 0
+    return round(x, sig - int(np.floor(np.log10(abs(x)))) - 1)
+
+for key, value in global_variables.items():
+    if not isinstance(value, (datetime, pd.Timestamp)):
+        try:
+            global_variables[key] = round_sig(value, 4)
+        except Exception:
+            pass
+
+print(global_variables)
+
 # Construct the new calibration row
 new_row = {'Start_Time': start_time, 'End_Time': end_time}
 
@@ -2914,8 +2888,8 @@ print(f'{csv_path} updated with the calibration summary.')
 
 data_df['totally_corrected_rate'] = data_df[f'final_all']
 data_df['unc_totally_corrected_rate'] = data_df['final_all'] * 0 +1
-data_df['global_eff'] = data_df['definitive_eff']
-data_df['unc_global_eff'] = data_df['definitive_eff'] * 0 + 1
+# data_df['global_eff'] = data_df['global_eff']
+data_df['unc_global_eff'] = data_df['global_eff'] * 0 + 1
 
 # Create a new DataFrame for Grafana
 grafana_df = data_df[['Time', 'pressure_lab', 'totally_corrected_rate', 'unc_totally_corrected_rate', 'global_eff', 'unc_global_eff']].copy()

@@ -32,7 +32,7 @@ print("----------------------------------------------------------------------")
 print("-------------------- RAW TO LIST SCRIPT IS STARTING ------------------")
 print("----------------------------------------------------------------------")
 
-stratos_save = True
+stratos_save = False
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
 last_file_test = True
