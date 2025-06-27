@@ -583,8 +583,8 @@ for tt_list in tt_lists:
       # First column: Generated angles
       # if real_df exists:
       if 'real_df' in globals():
-                axes[0, 0].hist(real_df['Theta_gen'], bins=theta_bins, histtype='step', label='All', color='red', density = True)
-                axes[1, 0].hist(real_df['Phi_gen'], bins=phi_bins, histtype='step', label='All', color='red', density = True)
+                # axes[0, 0].hist(real_df['Theta_gen'], bins=theta_bins, histtype='step', label='All', color='red', density = True)
+                # axes[1, 0].hist(real_df['Phi_gen'], bins=phi_bins, histtype='step', label='All', color='red', density = True)
                 axes[0, 0].hist(df['Theta_gen'], bins=theta_bins, histtype='step', label='All', color='black', density = True)
                 axes[1, 0].hist(df['Phi_gen'], bins=phi_bins, histtype='step', label='All', color='black', density = True)
       else:
