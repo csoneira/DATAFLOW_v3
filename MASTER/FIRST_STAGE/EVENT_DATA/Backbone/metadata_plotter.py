@@ -323,6 +323,9 @@ def figure5(df: pd.DataFrame):
                 data = df[col]
                 label = col
             ax.plot(df.index, data, label=label, linewidth=1.0)
+            # Invert the y z-axis for the z case
+            if col.startswith("z_"):
+                ax.invert_yaxis()
         ax.set_title(title)
         ax.legend(frameon=False, fontsize="small")
         _apply_time_axis(ax)

@@ -5900,6 +5900,7 @@ if create_very_essential_plots:
           fig.tight_layout()
           plt.show()
 
+
 print("----------------------------------------------------------------------")
 print("------------- 2. Determination of the angular sector -----------------")
 print("----------------------------------------------------------------------")

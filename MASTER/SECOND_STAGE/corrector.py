@@ -103,8 +103,8 @@ print(f"Station: {station}")
 show_plots = False
 save_plots = True
 create_plots = False
-create_essential_plots = False
-create_very_essential_plots = False
+create_essential_plots = True
+create_very_essential_plots = True
 show_errorbar = False
 
 # Execution -------------------------------------
@@ -114,12 +114,16 @@ remove_outliers = True
 # Add a new outlier filter to the pressure correction
 after_press_z_score_th = 30
 
-res_win_min = 10 # 180 Resampling window minutes
-if int(station) == 4:
-    res_win_min = 30
+res_win_min = 60 # 180 Resampling window minutes
+# if int(station) == 4:
+#     res_win_min = 30
 
 HMF_ker = 3 # It must be odd. Horizontal Median Filter
 MAF_ker = 0 # Moving Average Filter
+
+acceptance_corr = False
+
+low_lim_eff_plot = 0
 
 high_order_correction = False
 date_selection = True  # Set to True if you want to filter by date
@@ -440,85 +444,137 @@ else:
 
 if remove_outliers:
     
-    # Step 1: Clean the data
-    series = data_df['events'].copy()
-    series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy.stats import poisson
+    import math
 
-    # Step 2: Z-score filter (±3σ)
-    mean = series_clean.mean()
-    std = series_clean.std()
-    z_scores = (series_clean - mean) / std
-    mask = np.abs(z_scores) <= 3
-    filtered = series_clean[mask]
+    for tt in detection_types:
+        
+        for iteration in [ [angular_regions, 5], [combinations, 3] ]:
+            regions_of_interest, cols = iteration
+        
+            num_rx = len(regions_of_interest)
+            rows = math.ceil(num_rx / cols)
 
-    # Remove outliers from original dataframe
-    data_df = data_df.loc[filtered.index].copy()
+            if create_plots or create_essential_plots:
+                fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 3.5 * rows), sharex=False, sharey=False)
+                axes = axes.flatten()
 
-    # Step 3: Fit normal distribution to filtered data
-    mu, sigma = norm.fit(filtered)
+            from scipy.stats import poisson
+            from scipy.optimize import minimize
 
-    # Step 4: Histogram with Poisson uncertainties (raw data before filtering)
-    bins = 200
-    counts, bin_edges = np.histogram(series_clean, bins=bins)
-    bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-    bin_width = bin_edges[1] - bin_edges[0]
+            from scipy.stats import poisson
+            import numpy as np
 
-    total_count = np.sum(counts)
-    density = counts / (total_count * bin_width)
-    density_err = np.sqrt(counts) / (total_count * bin_width)
+            for idx, rx in enumerate(regions_of_interest):
+                col_name = f'{tt}_{rx}'
+                comb = f'processed_tt_{tt}_{rx}'
 
-    # Step 5: PDF
-    x = np.linspace(series_clean.min(), series_clean.max(), 1000)
-    pdf = norm.pdf(x, loc=mu, scale=sigma)
-    
-    # FIX THIS PART
-    lower_bound = norm.ppf(0.001, loc=mu, scale=sigma)
-    upper_bound = norm.ppf(0.999, loc=mu, scale=sigma)
+                if comb not in data_df.columns:
+                    continue
 
-    # Ensure rows_to_remove exists (all-False to start with)
-    rows_to_remove = pd.Series(False, index=data_df.index)   # or keep the one you already have
-    
-    col = 'events'  # Column to check for outliers
-    
-    # Flag any row whose value lies outside [lower_bound, upper_bound]
-    rows_to_remove |= ( (data_df[col] < lower_bound) | (data_df[col] > upper_bound) )
-    # --------------------------------------------------------------
+                # Step 1: Clean column
+                series = data_df[comb].copy()
+                series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
 
-    if create_plots or create_very_essential_plots:
-        plt.figure()
-        plt.errorbar(bin_centers, density, yerr=density_err, fmt='o', alpha=0.6, label='Data with $\sqrt{N}$ error')
-        plt.plot(x, pdf, 'r--', label=f'Normal Fit\n$\mu$={mu:.2f}, $\sigma$={sigma:.2f},\nRelative error={sigma/mu*100:.2f}%')
-        plt.axvline(lower_bound, color='k', linestyle='--', label='0.1% cutoff')
-        plt.axvline(upper_bound, color='k', linestyle='--', label='99.9% cutoff')
+                if series_clean.empty:
+                    continue
 
-        plt.title('Normal Fit with Z-score Filtering')
-        plt.xlabel('Value')
-        plt.ylabel('Density')
-        plt.legend()
+                # Define histogram bins
+                max_val = int(series_clean.max())
+                bins = np.arange(0, max_val + 2)
+                counts, bin_edges = np.histogram(series_clean, bins=bins)
+                bin_centers = bin_edges[:-1]
+                x_vals = bin_centers
+                total_count = np.sum(counts)
 
-        if show_plots:
-            plt.show()
-        elif save_plots:
-            new_figure_path = f"{figure_path}{fig_idx}_histo.png"
-            fig_idx += 1
-            print(f"Saving figure to {new_figure_path}")
-            plt.savefig(new_figure_path, format='png', dpi=300)
-        plt.close()
-    else:
-        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-    
-    data_df_cleaned = data_df.loc[~rows_to_remove].copy()
-    print(f"Original DataFrame shape: {data_df.shape}")
-    print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
-    
-    # Add to global_variables the number of percentage of kept data
-    global_variables['percentage_kept'] = len(data_df_cleaned) / len(data_df) * 100
-    data_df = data_df_cleaned.copy()
+                if total_count == 0:
+                    continue
+
+                # Compute density
+                bin_width = 1
+                density = counts / (total_count * bin_width)
+                density_err = np.sqrt(counts) / (total_count * bin_width)
+
+                # Fit Poisson: use sample mean
+                mu_hat = series_clean.mean()
+                poisson_pdf = poisson.pmf(x_vals, mu_hat)
+
+                # Compute Poisson quantile bounds
+                lower_poiss = poisson.ppf(0.005, mu_hat)
+                upper_poiss = poisson.ppf(0.995, mu_hat)
+
+                # Compute empirical quantile bounds
+                lower_emp = np.quantile(series_clean, 0.005)
+                upper_emp = np.quantile(series_clean, 0.995)
+
+                # === Outlier rejection (column-wise) ===
+                cleaned_col = series.copy()
+                mask = (series < lower_emp) | (series > upper_emp)
+                cleaned_col[mask] = np.nan
+                data_df[comb] = cleaned_col
+                
+                # Count how many values were removed, in percentage
+                num_removed = mask.sum()
+                percentage_removed = (num_removed / len(series)) * 100
+                print(f"Removed {num_removed} outliers ({percentage_removed:.2f}%) from {comb} ({tt}, {rx})")
+                # Save the number and percentage of removed outliers to the global_variables
+                global_variables[f'{comb}_outlier_filtered'] = percentage_removed
+
+                # === Plot ===
+                if create_plots or create_essential_plots:
+                    ax = axes[idx]
+                    ax.errorbar(x_vals, density, yerr=density_err, fmt='.', label='Data')
+                    ax.plot(x_vals, poisson_pdf, drawstyle='steps-mid', color='orange',
+                            label=f'Poisson μ={mu_hat:.2f}')
+
+                    # Poisson quantile lines (red)
+                    ax.axvline(lower_poiss, color='red', linestyle='--', linewidth=1, label='0.1% Poisson')
+                    ax.axvline(upper_poiss, color='red', linestyle='--', linewidth=1, label='99.9% Poisson')
+
+                    # Empirical quantile lines (green)
+                    ax.axvline(lower_emp, color='green', linestyle='--', linewidth=1, label='0.1% Empirical')
+                    ax.axvline(upper_emp, color='green', linestyle='--', linewidth=1, label='99.9% Empirical')
+
+                    ax.set_title(f'{tt}, {rx}', fontsize=10)
+                    ax.set_xlabel('Value')
+                    ax.set_ylabel('Density')
+                    ax.legend(fontsize=8)
+                    ax.grid(True, alpha=0.3)
+            
+            
+            if create_plots or create_essential_plots:
+                # Remove unused subplots
+                for ax in axes[num_rx:]:
+                    fig.delaxes(ax)
+                plt.tight_layout()
+
+                if show_plots:
+                    plt.show()
+                elif save_plots:
+                    grouped_path = f"{figure_path}{fig_idx}_grouped_histo_{tt}_cols_{cols}.png"
+                    print(f"Saving grouped figure to {grouped_path}")
+                    plt.savefig(grouped_path, format='png', dpi=300)
+                plt.close()
+                fig_idx += 1
+
+
+            
+# data_df_cleaned = data_df.loc[~rows_to_remove].copy()
+# print(f"Original DataFrame shape: {data_df.shape}")
+# print(f"Cleaned DataFrame shape: {data_df_cleaned.shape}")
+
+# # Add to global_variables the number of percentage of kept data
+# global_variables['percentage_kept'] = len(data_df_cleaned) / len(data_df) * 100
+# data_df = data_df_cleaned.copy()
     
 
 # -----------------------------------------------------------------------------
 # Resampling the data in a larger time window: some averaged, some summed -----
 # -----------------------------------------------------------------------------
+
+data_df = data_df.copy()
 
 data_df.set_index('Time', inplace=True)
 data_df["number_of_mins"] = 1
@@ -570,8 +626,9 @@ def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', 
             print(f"Saving figure to {new_figure_path}")
             plt.savefig(new_figure_path, format='png', dpi=300)
         plt.close()
-    else:
-        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+    # else:
+        # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+        # print("\n")
 
 
 def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize=(14, 4), save_path=None, plot_after_all = False):
@@ -612,8 +669,9 @@ def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize
             print(f"Saving figure to {new_figure_path}")
             plt.savefig(new_figure_path, format='png', dpi=300)
         plt.close()
-    else:
-        print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+    # else:
+        # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+    #     print("\n")
 
 
 # --------------------------------------------------------------------------------
@@ -632,29 +690,29 @@ data_df['current_mean'] = ( data_df['hv_CurrentNeg'] + data_df['hv_CurrentPos'] 
 # The efficiencies work should be in a loop that at least should work the same for the
 # total count case. This means that I should loop on it for each region case, including the total
 
-df_original = data_df.copy()
-# print(df_original)
-
 for case in processing_regions:
+    print("\n")
+    print("-" * 10)
     print(f'Processing case: {case}')
     
     # if case != 'all':
     #     continue
     
-    # Always start from the original data
-    data_df = df_original.copy()
+    # rename_dict = {f'processed_tt_{tt}_{case}': f'procssed_tt_{tt}'
+    #                for tt in detection_types
+    #                if f'processed_tt_{tt}_{case}' in data_df.columns}
     
-    rename_dict = {f'processed_tt_{tt}_{case}': f'processed_tt_{tt}'
-                   for tt in detection_types
-                   if f'processed_tt_{tt}_{case}' in df_original.columns}
+    # data_df.rename(columns=rename_dict, inplace=True)e
     
-    data_df.rename(columns=rename_dict, inplace=True)
+    for tt in detection_types:
+        original_col = f'processed_tt_{tt}_{case}'
+        new_col = f'processed_tt_{tt}'
+        if original_col in data_df.columns:
+            data_df[new_col] = data_df[original_col]
     
     
-    print('----------------------------------------------------------------------')
     print('----------------------------------------------------------------------')
     print('-------------------- Calculating efficiencies ------------------------')
-    print('----------------------------------------------------------------------')
     print('----------------------------------------------------------------------')
 
     def solve_efficiencies(row):
@@ -1146,7 +1204,6 @@ for case in processing_regions:
     # data_df['eff_3'] = ( data_df['eff_sys_3'] + data_df['eff_sys_234_3'] ) / 2
     # data_df['eff_4'] = ( data_df['eff_sys_4'] + data_df['eff_sys_234_4'] ) / 2
 
-    acceptance_corr = True
     if acceptance_corr:
         data_df['final_eff_1'] = data_df['eff_1'] / data_df['acc_1']
         data_df['final_eff_2'] = data_df['eff_2'] / data_df['acc_2']
@@ -1195,11 +1252,11 @@ for case in processing_regions:
 
         group_cols = [ ['final_eff_pre_roll_1', 'final_eff_pre_roll_2', 'final_eff_pre_roll_3', 'final_eff_pre_roll_4'],
                     ['final_eff_1', 'final_eff_2', 'final_eff_3', 'final_eff_4'] ]
-        plot_grouped_series(data_df, group_cols, title='Final calculated efficiencies, rolling')
+        # plot_grouped_series(data_df, group_cols, title='Final calculated efficiencies, rolling')
 
     else:
         group_cols = [ ['final_eff_1', 'final_eff_2', 'final_eff_3', 'final_eff_4'] ]
-        plot_grouped_series(data_df, group_cols, title='Final calculated efficiencies')
+        # plot_grouped_series(data_df, group_cols, title='Final calculated efficiencies')
 
 
     print('----------------------------------------------------------------------')
@@ -1697,7 +1754,8 @@ for case in processing_regions:
         global create_plots, fig_idx, show_plots, save_plots, figure_path, case, create_essential_plots
 
         if not (create_plots or create_essential_plots):
-            print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+            # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+            # print("\n")
             return
 
         fig, axes = plt.subplots(2, 3, figsize=(15, 8))
@@ -1946,8 +2004,9 @@ for case in processing_regions:
                     print(f"Saving figure to {new_figure_path}")
                     plt.savefig(new_figure_path, format='png', dpi=300)
                 plt.close()
-            else:
-                print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+            # else:
+            #     # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+            #     print("\n")
         
         
         eff_fitting = True
@@ -1965,10 +2024,11 @@ for case in processing_regions:
         import numpy as np
 
         def plot_side_views_all_planes(data_df, planes, model_type='linear'):
-            global create_plots, create_essential_plots, fig_idx, show_plots, save_plots, figure_path
-
+            global create_plots, create_essential_plots, fig_idx, show_plots, save_plots, figure_path, low_lim_eff_plot
+            
             if not (create_plots or create_essential_plots):
-                print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+                # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+                # print("\n")
                 return
 
             fig, axes = plt.subplots(2, 4, figsize=(18, 9))
@@ -2004,7 +2064,7 @@ for case in processing_regions:
                 ))
                 ax1.set_xlabel('Pressure')
                 ax1.set_ylabel('Efficiency')
-                ax1.set_ylim(0.8, 1)
+                ax1.set_ylim(low_lim_eff_plot, 1)
                 ax1.set_title(f'Plane {plane} – η vs P')
                 ax1.legend(fontsize=8)
 
@@ -2018,7 +2078,7 @@ for case in processing_regions:
                 ))
                 ax2.set_xlabel('Temperature')
                 ax2.set_ylabel('Efficiency')
-                ax2.set_ylim(0.8, 1)
+                ax2.set_ylim(low_lim_eff_plot, 1)
                 ax2.set_title(f'Plane {plane} – η vs T')
                 ax2.legend(fontsize=8)
 
@@ -2049,14 +2109,13 @@ for case in processing_regions:
                     label=f'Module {i}',
                     color=f'C{i}'
                 )
-            low_lim = 0.5
             # Plot y = x reference line
-            ax.plot([low_lim, 1.0], [low_lim, 1.0], 'k--', linewidth=1, label='Ideal (y = x)')
+            ax.plot([low_lim_eff_plot, 1.0], [low_lim_eff_plot, 1.0], 'k--', linewidth=1, label='Ideal (y = x)')
             ax.set_xlabel('Fitted Efficiency')
             ax.set_ylabel('Measured Efficiency')
             ax.set_title('Measured vs Fitted Efficiency for All Modules')
-            ax.set_xlim(low_lim, 1.0)
-            ax.set_ylim(low_lim, 1.0)
+            ax.set_xlim(low_lim_eff_plot, 1.0)
+            ax.set_ylim(low_lim_eff_plot, 1.0)
             ax.grid(True)
             # Set equal axes
             ax.set_aspect('equal', adjustable='box')
@@ -2081,6 +2140,7 @@ for case in processing_regions:
         if create_plots or create_essential_plots:
             fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(17, 14), sharex=True)
             for i in range(1, 5):  # Loop from 1 to 4
+                
                 ax = axes[i-1]  # pick the appropriate subplot
                 
                 ax.plot(data_df['Time'], data_df[f'definitive_eff_{i}'], 
@@ -2095,9 +2155,9 @@ for case in processing_regions:
                 
                 # Labeling and titles
                 ax.set_ylabel('Efficiency')
-                ax.set_ylim(0.8, 1.0)
+                ax.set_ylim(low_lim_eff_plot, 1.0)
                 ax.grid(True)
-                ax.set_title(f'Detected and passed')
+                ax.set_title(f'Plane {i}')
                 ax.legend(loc='upper left')
                 
             # Label the common x-axis at the bottom
@@ -2106,13 +2166,75 @@ for case in processing_regions:
             if show_plots:
                 plt.show()
             elif save_plots:
-                new_figure_path = figure_path + f"{fig_idx}" + "_eff_all.png"
+                new_figure_path = figure_path + f"{fig_idx}" + f"_eff_{case}.png"
                 fig_idx += 1
                 print(f"Saving figure to {new_figure_path}")
                 plt.savefig(new_figure_path, format='png', dpi=300)
             plt.close()
-        else:
-            print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+        # else:
+            # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+            # print("\n")
+        
+        # Calculate relative error in efficiencies
+        for i in range(1, 5):
+            num = data_df[f'eff_fit_{i}']
+            denom = data_df[f'definitive_eff_{i}']
+            mask = np.isfinite(num) & np.isfinite(denom) & (denom != 0)
+
+            data_df[f'relative_residual_unfiltered{i}'] = np.where(mask, (num - denom) / denom, np.nan)
+            
+            mask = abs( data_df[f'relative_residual_unfiltered{i}'] ) < 0.2
+            data_df[f'relative_residual_{i}'] = np.where(mask, data_df[f'relative_residual_unfiltered{i}'], np.nan)
+            
+            rel_col = f'relative_residual_{i}'
+            eff_col = f'definitive_eff_{i}'
+            
+            # Create a mask for the nan values in relative_residuals and interpolate
+            # Mask: rows where relative residual is NaN
+            nan_mask = data_df[rel_col].isna()
+
+            # Interpolate both columns
+            data_df.loc[nan_mask, rel_col] = data_df[rel_col].interpolate(limit_direction='both')[nan_mask]
+            data_df.loc[nan_mask, eff_col] = data_df[eff_col].interpolate(limit_direction='both')[nan_mask]
+            
+        
+        if create_plots or create_essential_plots or create_very_essential_plots:
+            fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(17, 14), sharex=True)
+            for i in range(1, 5):  # Loop from 1 to 4
+                
+                ax = axes[i-1]  # pick the appropriate subplot
+                
+                ax.plot(data_df['Time'], data_df[f'relative_residual_unfiltered{i}'], 
+                        label=f'Fit relative error, unfiltered - P{i}', color=f'C{i + 8}', alpha=1)
+                
+                
+                ax.plot(data_df['Time'], data_df[f'relative_residual_{i}'], 
+                        label=f'Fit relative error, filtered - P{i}', color=f'C{i}', alpha=1)
+                
+                # Labeling and titles
+                ax.set_ylabel('Efficiency residual')
+                
+                lim = 0.3
+                
+                ax.set_ylim(-lim, lim)
+                ax.grid(True)
+                ax.set_title(f'Plane {i}')
+                ax.legend(loc='upper left')
+                
+            # Label the common x-axis at the bottom
+            axes[-1].set_xlabel('Time')
+            plt.tight_layout()
+            if show_plots:
+                plt.show()
+            elif save_plots:
+                new_figure_path = figure_path + f"{fig_idx}" + f"_eff_fit_residual_{case}.png"
+                fig_idx += 1
+                print(f"Saving figure to {new_figure_path}")
+                plt.savefig(new_figure_path, format='png', dpi=300)
+            plt.close()
+        # else:
+            # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+            # print("\n")
 
         print('Efficiency calculations performed.')
 
@@ -2333,7 +2455,7 @@ for region in regions_to_correct:
             'unc_log_I_over_I0': unc_I_over_I0 / I_over_I0
         })
         
-        if create_plots:
+        if create_plots or create_very_essential_plots:
             plt.figure()
             if show_errorbar:
                 plt.errorbar(df['delta_P'], df['log_I_over_I0'], xerr=abs(df['unc_delta_P']), yerr=abs(df['unc_log_I_over_I0']), fmt='o', label='Data with Uncertainty')
@@ -2357,8 +2479,8 @@ for region in regions_to_correct:
                 print(f"Saving figure to {new_figure_path}")
                 plt.savefig(new_figure_path, format = 'png', dpi = 300)
             plt.close()
-        else:
-            print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+        # else:
+        #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
     # Create corrected rate column for the region
@@ -2374,6 +2496,8 @@ for region in regions_to_correct:
     term_3_DP = I * eta_P / 100 * np.exp(-1 * eta_P / 100 * delta_P) * unc_DP
     final_unc_combined = np.sqrt(term_1_rate**2 + term_2_beta**2 + term_3_DP**2)
     data_df[f'unc_pres_{region}'] = final_unc_combined
+    
+    data_df = data_df.copy()
 
 
 # Convert the list of dictionaries into a DataFrame after the loop
@@ -2425,8 +2549,8 @@ if create_plots or create_essential_plots or create_very_essential_plots:
         print(f"Saving figure to {new_figure_path}")
         plt.savefig(new_figure_path, format = 'png', dpi = 300)
     plt.close()
-else:
-    print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+# else:
+#     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -2488,8 +2612,8 @@ if create_plots:
         print(f"Saving figure to {new_figure_path}")
         plt.savefig(new_figure_path, format='png', dpi=300)
     plt.close()
-else:
-    print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+# else:
+#     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 # ---------------------------------------------------------------------------------------------------
 
@@ -2638,8 +2762,8 @@ if high_order_correction:
                     print(f"Saving figure to {new_figure_path}")
                     plt.savefig(new_figure_path, format='png', dpi=300)
                 plt.close()
-            else:
-                print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+            # else:
+            #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
                 
         else:
             print("Fit not done, data empty. Returning NaN.")
@@ -2717,16 +2841,24 @@ original_df = data_df.copy()
 
 data_df = original_df.copy()
 
+print("\nBefore dropping:")
+print(data_df.columns.to_list())
+
 # drop_prefixes = ("pres_detector_", "processed_tt_", "definitive_", "unc_pres_detector_")
-drop_prefixes = ("pres_detector_", "processed_tt_", "unc_pres_detector_") # Now it keeps efficiencies
-cols_to_drop = [c for c in data_df.columns if c.startswith(drop_prefixes)]
+drop_prefixes = ("subdetector_", "pres_detector_", "processed_tt_", "unc_pres_detector_") # Now it keeps efficiencies
+drop_suffixes = ("_final_corrected")
+cols_to_drop = [c for c in data_df.columns if c.startswith(drop_prefixes) and not c.endswith(drop_suffixes)]
 data_df.drop(columns=cols_to_drop, inplace=True)
+
+print("\nMid dropping:")
+print(data_df.columns.to_list())
 
 drop_prefixes = ("detector_")
 drop_suffixes = ("_final_corrected")
 cols_to_drop = [c for c in data_df.columns if c.startswith(drop_prefixes) and not c.endswith(drop_suffixes)]
 data_df.drop(columns=cols_to_drop, inplace=True)
 
+print("\nAfter dropping:")
 print(data_df.columns.to_list())
 
 # Loop over regions and compute average efficiency across all detectors for that region
