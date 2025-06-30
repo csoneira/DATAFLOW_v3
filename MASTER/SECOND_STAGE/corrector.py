@@ -103,8 +103,8 @@ print(f"Station: {station}")
 show_plots = False
 save_plots = True
 create_plots = False
-create_essential_plots = True
-create_very_essential_plots = True
+create_essential_plots = False
+create_very_essential_plots = False
 show_errorbar = False
 
 # Execution -------------------------------------
@@ -156,9 +156,10 @@ base_folder = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/SECOND
 filepath = f"{base_folder}/total_data_table.csv"
 save_filename = f"{base_folder}/large_corrected_table.csv"
 grafana_save_filename = f"{grafana_directory}/data_for_grafana_{station}.csv"
-figure_path = f"{base_folder}/"
+figure_path = f"{base_folder}/FIGURES/"
 fig_idx = 0
 os.makedirs(base_folder, exist_ok=True)
+os.makedirs(figure_path, exist_ok=True)
 os.makedirs(grafana_directory, exist_ok=True)
 
 csv_path = os.path.join(base_folder, "corrector_metadata.csv")
@@ -198,6 +199,8 @@ print('File loaded successfully.')
 detection_types = ['1234',
                    '123', '234', '124', '134',
                    '12', '23', '34', '13', '24', '14']
+
+detector_labels = ['1234', '123', '234', '12', '23', '34']
 
 # print(data_df.columns.to_list())
 
@@ -631,12 +634,12 @@ def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', 
         # print("\n")
 
 
-def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize=(14, 4), save_path=None, plot_after_all = False):
+def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize=(14, 4), save_path=None, plot_after_all = False, sharey_axes =False):
 
     global create_plots, fig_idx
     if create_plots or create_essential_plots or plot_after_all:
         n_plots = len(group_cols)
-        fig, axes = plt.subplots(n_plots, 1, sharex=True, figsize=(figsize[0], figsize[1] * n_plots))
+        fig, axes = plt.subplots(n_plots, 1, sharex=True, sharey=sharey_axes, figsize=(figsize[0], figsize[1] * n_plots))
         
         if n_plots == 1:
             axes = [axes]  # Make iterable
@@ -698,7 +701,7 @@ for case in processing_regions:
     # if case != 'all':
     #     continue
     
-    # rename_dict = {f'processed_tt_{tt}_{case}': f'procssed_tt_{tt}'
+    # rename_dict = {f'processed_tt_{tt}_{case}': f'processed_tt_{tt}'
     #                for tt in detection_types
     #                if f'processed_tt_{tt}_{case}' in data_df.columns}
     
@@ -710,6 +713,122 @@ for case in processing_regions:
         if original_col in data_df.columns:
             data_df[new_col] = data_df[original_col]
     
+    
+    print('----------------------------------------------------------------------')
+    print('----------------- Filtering outliers in the counts -------------------')
+    print('----------------------------------------------------------------------')
+    
+    # if "R" in case:
+    #     continue
+    
+    # if case != "Vert":
+    #     continue
+    
+    group_cols = [
+        ['processed_tt_1234'],
+        ['processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134'],
+        ['processed_tt_12', 'processed_tt_23', 'processed_tt_34'],
+        ['processed_tt_13', 'processed_tt_24', 'processed_tt_14'],
+    ]
+
+    plot_grouped_series(data_df, group_cols, title=f'Counts pre-filtering per TT', plot_after_all=False, sharey_axes = True)
+    
+    from scipy.interpolate import UnivariateSpline
+    
+    # Spline fit and residual computation
+    for group in group_cols:
+        for col in group:
+            x_full = np.arange(len(data_df))
+            y_full = data_df[col].values
+
+            # Remove NaNs for spline fitting
+            mask_valid = np.isfinite(y_full)
+            x = x_full[mask_valid]
+            y = y_full[mask_valid]
+            
+            # Apply an horizontal median filter to the y
+            y = medfilt(y, kernel_size=5)
+            
+            std_y = np.nanstd(y)
+            if not np.isfinite(std_y) or std_y <= 0:
+                std_y = 1.0  # fallback to a small positive number
+            # s = len(x) * std_y / 2
+            s = len(x) * std_y
+            
+            print(f"Fitting spline for {col} | std={std_y:.4f} | nan count={np.isnan(y).sum()}")
+            
+            spline = UnivariateSpline(x, y, s=s)
+            spline_values = spline(x)
+
+            spline_col = f'spline_{col}'
+            residual_col = f'rel_residual_{col}'
+
+            spline = UnivariateSpline(x, y, s=s)
+            spline_values = spline(x_full)  # evaluate spline on full x range
+
+            data_df[spline_col] = spline_values
+
+            # Compute relative residual safely
+            epsilon = 1e-12
+            denominator = spline_values.copy()
+            denominator[np.abs(denominator) < epsilon] = np.nan
+
+            rel_resid = (y_full - spline_values) / denominator
+
+            # Optional: remove high-residual outliers
+            mask_outlier = np.abs(rel_resid) > 0.9
+            rel_resid[mask_outlier] = np.nan
+            spline_values[mask_outlier] = np.nan
+            y_full[mask_outlier] = np.nan
+            
+            # Interpolate in the mask_outlier mask
+            rel_resid = pd.Series(rel_resid).interpolate(method='linear').fillna(0).values
+            spline_values = pd.Series(spline_values).interpolate(method='linear').fillna(0).values
+            y_full = pd.Series(y_full).interpolate(method='linear').fillna(0).values
+            
+            data_df[spline_col] = spline_values
+            data_df[residual_col] = rel_resid
+            data_df[col] = y_full
+    
+    
+    spline_group_cols = [
+        [f'spline_{col}' for col in group]
+        for group in group_cols
+    ]
+
+    # Call the user's plotting function with the new group structure
+    plot_grouped_series(
+        data_df,
+        spline_group_cols,
+        time_col='Time',
+        title='Spline approximations of processed_tt_* time series',
+        plot_after_all=False, sharey_axes = True
+    )
+    
+    
+    rel_residual_group_cols = [
+        [f'rel_residual_{col}' for col in group]
+        for group in group_cols
+    ]
+
+    # Plot the relative residuals
+    plot_grouped_series(
+        data_df,
+        rel_residual_group_cols,
+        time_col='Time',
+        title='Relative residuals of processed_tt_* time series',
+        plot_after_all=False, sharey_axes = True
+    )
+    
+    # Result after inerpolation
+    group_cols = [
+        ['processed_tt_1234'],
+        ['processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134'],
+        ['processed_tt_12', 'processed_tt_23', 'processed_tt_34'],
+        ['processed_tt_13', 'processed_tt_24', 'processed_tt_14'],
+    ]
+
+    plot_grouped_series(data_df, group_cols, title=f'Counts pre-filtering per TT', plot_after_all=False, sharey_axes = True)
     
     print('----------------------------------------------------------------------')
     print('-------------------- Calculating efficiencies ------------------------')
@@ -1358,7 +1477,6 @@ for case in processing_regions:
     # eff_caseX. This should lead to a system of equations that defines the necessary function of e1, e2, e3, 
     # and e4 required to minimize the correlation between the transformed rate_caseX and the new eff_caseX.
     
-    detector_labels = ['1234', '123', '234', '12', '23', '34']
     
     # import matplotlib.pyplot as plt
     # from sklearn.linear_model import LinearRegression
@@ -1434,19 +1552,23 @@ for case in processing_regions:
     from scipy.optimize import minimize
     import warnings
 
-    def decorrelate_efficiency_least_change(eff, rate_corr, bounds=(0.01, 1.5)):
-        eff = np.asarray(eff)
-        rate_corr = np.asarray(rate_corr)
+    def decorrelate_efficiency_least_change(eff, rate_corr, bounds=(0.001, 0.999)):
+        import numpy as np
+        from scipy.optimize import minimize
+        import warnings
 
-        if len(eff) == 0 or len(rate_corr) == 0:
-            warnings.warn("Empty input array. Returning original efficiency.")
+        eff = np.asarray(eff, dtype=np.float64)
+        rate_corr = np.asarray(rate_corr, dtype=np.float64)
+
+        # Mask invalid entries (non-finite or near-zero eff)
+        mask = np.isfinite(eff) & np.isfinite(rate_corr) & (eff > 1e-8)
+        if not np.any(mask):
+            warnings.warn("No valid data after masking.")
             return eff, None
 
-        if len(eff) != len(rate_corr):
-            warnings.warn("eff and rate_corr must have the same length. Returning original efficiency.")
-            return eff, None
-
-        counts = eff * rate_corr  # fixed counts
+        eff = eff[mask]
+        rate_corr = rate_corr[mask]
+        counts = eff * rate_corr  # fixed N_i
 
         def objective(eff_prime):
             return np.sum((eff_prime - eff)**2)
@@ -1455,64 +1577,83 @@ for case in processing_regions:
             rate_prime = counts / eff_prime
             r_mean = np.mean(rate_prime)
             e_mean = np.mean(eff_prime)
-            return np.sum((rate_prime - r_mean) * (eff_prime - e_mean))  # covariance ~ 0
+            return np.nansum((rate_prime - r_mean) * (eff_prime - e_mean))  # enforce zero covariance
 
         cons = {'type': 'eq', 'fun': constraint}
         bounds_list = [bounds] * len(eff)
 
         try:
             res = minimize(objective, eff, method='SLSQP', bounds=bounds_list, constraints=cons)
+            if not res.success:
+                warnings.warn(f"Optimization failed: {res.message}")
+                return eff, None
+            return res.x, res
         except Exception as e:
-            warnings.warn(f"Optimization failed: {e}")
+            warnings.warn(f"Optimization error: {e}")
             return eff, None
 
-        return res.x, res
     
-    ancillary_data_df = data_df.copy()
-    data_df = ancillary_data_df.copy()
-    
+    data_df = data_df.copy()
+
     print(case)
+    
     for label in detector_labels:
         eff_col = f'detector_{label}_eff'
         rate_col = f'detector_{label}_eff_corr'
-        df_valid = data_df[[eff_col, rate_col]].dropna()
+
+        if eff_col not in data_df.columns or rate_col not in data_df.columns:
+            print(f"[SKIP] Missing columns for {label}")
+            continue
+
+        df_valid = data_df[[eff_col, rate_col]].copy()
+        mask_valid = np.isfinite(df_valid[eff_col]) & np.isfinite(df_valid[rate_col]) & (df_valid[eff_col] > 1e-8)
+        df_valid = df_valid[mask_valid]
+
+        if df_valid.empty:
+            print(f"[WARN] No valid data for {label}")
+            continue
+
         eff = df_valid[eff_col].values
         rate_corr = df_valid[rate_col].values
+
         eff_new, res = decorrelate_efficiency_least_change(eff, rate_corr)
         eff_prime_col = f'{eff_col}_decorrelated'
-        data_df.loc[df_valid.index, eff_prime_col] = eff_new
-        r_new = (rate_corr * eff) / eff_new  # back-compute N_i / eff'_i
-        cov_post = np.cov(r_new, eff_new)[0, 1]
-        print(f"[{label}] Final covariance after correction: {cov_post:.6e}")
+
+        if eff_new is not None:
+            data_df.loc[df_valid.index, eff_prime_col] = eff_new
+            r_new = (rate_corr * eff) / eff_new
+            cov_post = np.cov(r_new, eff_new)[0, 1]
+            print(f"[{label}] Final covariance after correction: {cov_post:.6e}")
+        else:
+            print(f"[{label}] Optimization failed.")
+
+    data_df = data_df.copy()
     
-    ancillary_data_df = data_df.copy()
-    data_df = ancillary_data_df.copy()
+    for label in detector_labels:
+        eff_prime_col = f'detector_{label}_eff_decorrelated'
+        rate_col = f'detector_{label}_eff_corr'
 
-    # for label in detector_labels:
-    #     eff_prime_col = f'detector_{label}_eff_decorrelated'
-    #     rate_col = f'detector_{label}_eff_corr'
-
-    #     valid = data_df[[eff_prime_col, rate_col]].dropna()
+        valid = data_df[[eff_prime_col, rate_col]].dropna()
         
-    #     if create_plots or create_essential_plots:
-    #         plt.figure(figsize=(5, 4))
-    #         plt.scatter(valid[eff_prime_col], valid[rate_col], s=2, alpha=0.7)
-    #         plt.xlabel(f"{eff_prime_col}")
-    #         plt.ylabel(f"{rate_col}")
-    #         plt.title(f"Decorrelated: {label}")
-    #         plt.axhline(valid[rate_col].mean(), linestyle='--', color='gray', linewidth=0.5)
-    #         plt.grid(True)
-    #         plt.tight_layout()
-    #         if show_plots:
-    #             plt.show()
-    #         elif save_plots:
-    #             new_figure_path = figure_path + f"{fig_idx}" + "_decorrelated.png"
-    #             fig_idx += 1
-    #             print(f"Saving figure to {new_figure_path}")
-    #             plt.savefig(new_figure_path, format='png', dpi=300)
-    #         plt.close()
-    #     else:
-    #         print(f"Plotting is disabled for {label}. Set `create_plots = True` to enable plotting.")
+        if create_plots or create_essential_plots:
+            plt.figure(figsize=(5, 4))
+            plt.scatter(valid[eff_prime_col], valid[rate_col], s=2, alpha=0.7)
+            plt.xlabel(f"{eff_prime_col}")
+            plt.ylabel(f"{rate_col}")
+            plt.title(f"Decorrelated: {label}")
+            plt.axhline(valid[rate_col].mean(), linestyle='--', color='gray', linewidth=0.5)
+            plt.grid(True)
+            plt.tight_layout()
+            if show_plots:
+                plt.show()
+            elif save_plots:
+                new_figure_path = figure_path + f"{fig_idx}" + "_decorrelated.png"
+                fig_idx += 1
+                print(f"Saving figure to {new_figure_path}")
+                plt.savefig(new_figure_path, format='png', dpi=300)
+            plt.close()
+        else:
+            print(f"Plotting is disabled for {label}. Set `create_plots = True` to enable plotting.")
 
     # group_cols = [
     #     ['sensors_ext_Pressure_ext'],
@@ -1538,16 +1679,26 @@ for case in processing_regions:
                 e1 * (1 - e2) * e3 * e4 +
                 e1 * e2 * (1 - e3) * e4 +
                 e1 * (1 - e2) * (1 - e3) * e4 )
+            
         elif label == '123':
-            return e1 * e2 * e3 + e1 * (1 - e2) * e3
+            return (
+                e1 * e2 * e3 +
+                e1 * (1 - e2) * e3 )
+                
         elif label == '234':
-            return e2 * e3 * e4 + e2 * (1 - e3) * e4
+            return (
+                e2 * e3 * e4 +
+                e2 * (1 - e3) * e4 )
+                
         elif label == '12':
             return e1 * e2
+        
         elif label == '23':
             return e2 * e3
+        
         elif label == '34':
             return e3 * e4
+        
         else:
             raise ValueError(f"Unknown label: {label}")
 
@@ -1585,11 +1736,6 @@ for case in processing_regions:
         df['final_eff_4_decorrelated'] = e4_list
 
     solve_eff_components_per_row(data_df)
-    
-    e1 = data_df['final_eff_1_decorrelated']
-    e2 = data_df['final_eff_2_decorrelated']
-    e3 = data_df['final_eff_3_decorrelated']
-    e4 = data_df['final_eff_4_decorrelated']
 
     group_cols = [
         ['sensors_ext_Pressure_ext'],
@@ -1599,252 +1745,17 @@ for case in processing_regions:
         ['final_eff_3', 'final_eff_3_decorrelated'],
         ['final_eff_4', 'final_eff_4_decorrelated'],
     ]
-    plot_grouped_series(data_df, group_cols, title='OG eff. vs DECORRELATED eff.')
-
+    plot_grouped_series(data_df, group_cols, title='OG eff. vs DECORRELATED eff.', plot_after_all=False)
+    
+    
+    
     # ------------------------------------------------------------------------------------------------------------------------
-
-    # Detector 1234
-    # 'processed_tt_1234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
-    data_df['detector_1234'] = data_df['detector_1234']  / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_1234_eff'] = e1 * e2 * e3 * e4 + \
-        e1 * (1 - e2) * e3 * e4 + \
-        e1 * e2 * (1 - e3) * e4 + \
-        e1 * (1 - e2) * (1 - e3) * e4
-
-    # Detector 123
-    # 'processed_tt_123', 'processed_tt_1234',  
-    # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123'] + \
-        data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_124'] + data_df['processed_tt_14'] 
-    data_df['detector_123'] = data_df['detector_123'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_123_eff'] = e1 * e2 * e3 + \
-        e1 * (1 - e2) * e3
-
-    # Detector 234
-    # 'processed_tt_234', 'processed_tt_1234', 'processed_tt_14'
-    # 'processed_tt_124', 'processed_tt_24', 'processed_tt_134',
-    data_df['detector_234'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
-        data_df['processed_tt_14'] + data_df['processed_tt_124'] + data_df['processed_tt_24'] + data_df['processed_tt_134']
-    data_df['detector_234'] = data_df['detector_234'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_234_eff'] = e2 * e3 * e4 + \
-        e2 * (1 - e3) * e4
-
-    # Detector 12
-    # 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 
-    # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_12'] = data_df['processed_tt_12'] + data_df['processed_tt_123'] + \
-        data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
-    data_df['detector_12'] = data_df['detector_12'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_12_eff'] = e1 * e2
-
-    # Detector 23
-    # 'processed_tt_234', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
-    # 'processed_tt_124', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_23'] = data_df['processed_tt_234'] + data_df['processed_tt_123'] + \
-        data_df['processed_tt_1234'] + data_df['processed_tt_23'] + data_df['processed_tt_124'] + \
-            data_df['processed_tt_24'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14']
-    data_df['detector_23'] = data_df['detector_23'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_23_eff'] = e2 * e3
-
-    # Detector 34
-    # 'processed_tt_234', 'processed_tt_1234',
-    # 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_34'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
-        data_df['processed_tt_124'] + data_df['processed_tt_34'] + data_df['processed_tt_24'] + \
-            data_df['processed_tt_134'] + data_df['processed_tt_14']
-
-    data_df['detector_34'] = data_df['detector_34'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_34_eff'] = e3 * e4
     
-    ancillary_data_df = data_df.copy()
-    data_df = ancillary_data_df.copy()
-    
-    # Now correcting by efficiency
-    data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
-    data_df['detector_123_eff_corr'] = data_df['detector_123'] / data_df['detector_123_eff']
-    data_df['detector_234_eff_corr'] = data_df['detector_234'] / data_df['detector_234_eff']
-    data_df['detector_12_eff_corr'] = data_df['detector_12'] / data_df['detector_12_eff']
-    data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
-    data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
-    
-    data_df = data_df.copy()
-    
-    # Assign to the original dataframe
-    data_df[f'detector_1234_eff_corr_{case}'] = data_df['detector_1234_eff_corr']
-    data_df[f'detector_123_eff_corr_{case}'] = data_df['detector_123_eff_corr'] 
-    data_df[f'detector_234_eff_corr_{case}'] = data_df['detector_234_eff_corr'] 
-    data_df[f'detector_12_eff_corr_{case}'] = data_df['detector_12_eff_corr'] 
-    data_df[f'detector_23_eff_corr_{case}'] = data_df['detector_23_eff_corr'] 
-    data_df[f'detector_34_eff_corr_{case}'] = data_df['detector_34_eff_corr']
-
-    # group_cols = [
-    #     ['sensors_ext_Pressure_ext'],
-    #     ['sensors_ext_Temperature_ext'],
-    #     ['detector_1234', 'detector_1234_eff_corr'],
-    #     ['detector_123', 'detector_123_eff_corr'],
-    #     ['detector_234', 'detector_234_eff_corr'],
-    #     ['detector_12', 'detector_12_eff_corr'],
-    #     ['detector_23', 'detector_23_eff_corr'],
-    #     ['detector_34', 'detector_34_eff_corr'],
-    # ]
-    # plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment, DECORRELATED')
-    
-    
-    # def plot_eff_vs_rate(data_df, eff_col, rate_col, corrected_col, label_suffix=''):
-    #     global create_plots, fig_idx, show_plots, save_plots, figure_path, case
-        
-    #     if create_plots or create_essential_plots:
-    #         valid = data_df[[eff_col, rate_col, corrected_col]].dropna()
-    #         x = valid[eff_col].values
-    #         y_orig = valid[rate_col].values
-    #         y_corr = valid[corrected_col].values
-    #         # Compute Pearson correlations
-    #         corr_orig, _ = pearsonr(x, y_orig)
-    #         corr_corr, _ = pearsonr(x, y_corr)
-    #         # Linear fits
-    #         p_orig = np.polyfit(x, y_orig, 1)
-    #         p_corr = np.polyfit(x, y_corr, 1)
-    #         x_fit = np.linspace(x.min(), x.max(), 500)
-    #         plt.figure(figsize=(8, 6))
-    #         plt.scatter(x, y_orig, alpha=0.7, label=f'Original rate {label_suffix}', s=2)
-    #         plt.scatter(x, y_corr, alpha=0.7, label=f'Corrected rate {label_suffix}', s=2)
-    #         plt.plot(x_fit, np.polyval(p_orig, x_fit), linestyle='--', linewidth=1.0, label='Fit: Original rate')
-    #         plt.plot(x_fit, np.polyval(p_corr, x_fit), linestyle='--', linewidth=1.0, label='Fit: Corrected rate')
-    #         # ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
-    #         plt.xlabel('Efficiency')
-    #         plt.ylabel('Rate')
-    #         plt.title(f'Efficiency vs. Rate {label_suffix}, {case}')
-    #         plt.grid(True)
-    #         textstr = f'Corr (original): {corr_orig:.3f}\nCorr (corrected): {corr_corr:.3f}'
-    #         plt.gcf().text(0.15, 0.80, textstr, fontsize=10, bbox=dict(boxstyle="round", facecolor='white', alpha=0.5))
-    #         plt.legend()
-    #         plt.tight_layout()
-    #         if show_plots:
-    #             plt.show()
-    #         elif save_plots:
-    #             new_figure_path = figure_path + f"{fig_idx}" + f"_scatter_{case}.png"
-    #             fig_idx += 1
-    #             print(f"Saving figure to {new_figure_path}")
-    #             plt.savefig(new_figure_path, format='png', dpi=300)
-    #         plt.close()
-    #     else:
-    #         print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-    
-    
-    # detector_labels = ['1234', '123', '234', '12', '23', '34']
-    # for label in detector_labels:
-    #     eff_col = f'detector_{label}_eff'
-    #     rate_col = f'detector_{label}'
-    #     corrected_col = f'detector_{label}_eff_corr'
-
-    #     plot_eff_vs_rate(
-    #         data_df,
-    #         eff_col=eff_col,
-    #         rate_col=rate_col,
-    #         corrected_col=corrected_col,
-    #         label_suffix=label,
-    #     )
-    
-    import matplotlib.pyplot as plt
-    import numpy as np
-    from scipy.stats import pearsonr
-
-    def plot_eff_vs_rate_grid(data_df, detector_labels):
-        global create_plots, fig_idx, show_plots, save_plots, figure_path, case, create_essential_plots
-
-        if not (create_plots or create_essential_plots):
-            # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-            # print("\n")
-            return
-
-        fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-        axes = axes.flatten()
-
-        for i, label in enumerate(detector_labels):
-            ax = axes[i]
-            eff_col = f'detector_{label}_eff'
-            rate_col = f'detector_{label}'
-            corrected_col = f'detector_{label}_eff_corr'
-
-            valid = data_df[[eff_col, rate_col, corrected_col]].dropna()
-            x = valid[eff_col].values
-            y_orig = valid[rate_col].values
-            y_corr = valid[corrected_col].values
-
-            corr_orig, _ = pearsonr(x, y_orig)
-            corr_corr, _ = pearsonr(x, y_corr)
-
-            p_orig = np.polyfit(x, y_orig, 1)
-            p_corr = np.polyfit(x, y_corr, 1)
-            x_fit = np.linspace(x.min(), x.max(), 500)
-
-            ax.scatter(x, y_orig, alpha=0.7, label='Original', s=2)
-            ax.scatter(x, y_corr, alpha=0.7, label='Corrected', s=2)
-            ax.plot(x_fit, np.polyval(p_orig, x_fit), linestyle='--', linewidth=1.0, label='Fit: Original')
-            ax.plot(x_fit, np.polyval(p_corr, x_fit), linestyle='--', linewidth=1.0, label='Fit: Corrected')
-
-            ax.set_xlabel('Efficiency')
-            ax.set_ylabel('Rate')
-            ax.set_title(f'{label}', fontsize=10)
-            ax.grid(True)
-
-            textstr = f'Corr (orig): {corr_orig:.2f}\nCorr (corr): {corr_corr:.2f}'
-            ax.text(0.05, 0.95, textstr, transform=ax.transAxes,
-                    fontsize=8, verticalalignment='top',
-                    bbox=dict(boxstyle="round", facecolor='white', alpha=0.6))
-
-        handles, labels = ax.get_legend_handles_labels()
-        fig.legend(handles, labels, loc='upper center', ncol=4, fontsize=9)
-        fig.suptitle(f'Efficiency vs. Rate (Original and Corrected) — {case}', fontsize=14)
-        fig.tight_layout(rect=[0, 0, 1, 0.95])
-
-        if show_plots:
-            plt.show()
-        elif save_plots:
-            new_figure_path = figure_path + f"{fig_idx}" + f"_scatter_grid_{case}.png"
-            fig_idx += 1
-            print(f"Saving figure to {new_figure_path}")
-            fig.savefig(new_figure_path, format='png', dpi=300)
-
-        plt.close(fig)
-
-    plot_eff_vs_rate_grid(data_df, detector_labels)
-    
-    ancillary_data_df = data_df.copy()
-    data_df = ancillary_data_df.copy()
     
     data_df[f'definitive_eff_1'] = data_df['final_eff_1_decorrelated']
     data_df[f'definitive_eff_2'] = data_df['final_eff_2_decorrelated']
     data_df[f'definitive_eff_3'] = data_df['final_eff_3_decorrelated']
     data_df[f'definitive_eff_4'] = data_df['final_eff_4_decorrelated']
-
-    data_df[f'definitive_eff_1_{case}'] = data_df[f'definitive_eff_1']
-    data_df[f'definitive_eff_2_{case}'] = data_df[f'definitive_eff_2']
-    data_df[f'definitive_eff_3_{case}'] = data_df[f'definitive_eff_3']
-    data_df[f'definitive_eff_4_{case}'] = data_df[f'definitive_eff_4']
-    
-    if case == 'all':
-        # Average the four to get a definitive value
-        data_df['global_eff'] = (data_df['definitive_eff_1'] + data_df['definitive_eff_2'] +
-                                    data_df['definitive_eff_3'] + data_df['definitive_eff_4']) / 4.0
-    
-    # ------------------------------------------------------------------------------------------------------------------------
-
-    # data_df['summed'] = data_df['detector_1234'] + data_df['detector_123'] + \
-    #     data_df['detector_234'] + data_df['detector_12'] + \
-    #     data_df['detector_23'] + data_df['detector_34']
-
-    # data_df['summed_eff_corr'] = data_df['detector_1234_eff_corr'] + data_df['detector_123_eff_corr'] + \
-    #     data_df['detector_234_eff_corr'] + data_df['detector_12_eff_corr'] + \
-    #     data_df['detector_23_eff_corr'] + data_df['detector_34_eff_corr']
-
-    # group_cols = [
-    #     ['sensors_ext_Pressure_ext'],
-    #     ['sensors_ext_Temperature_ext'],
-    #     [ 'summed', 'summed_eff_corr' ]
-    # ]
-    # plot_grouped_series(data_df, group_cols, title='Summed Detector Signals and Environment')
     
     
     # -------------------------------------------------------------------------------------------------------------------------
@@ -2175,29 +2086,53 @@ for case in processing_regions:
             # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
             # print("\n")
         
-        # Calculate relative error in efficiencies
-        for i in range(1, 5):
-            num = data_df[f'eff_fit_{i}']
-            denom = data_df[f'definitive_eff_{i}']
-            mask = np.isfinite(num) & np.isfinite(denom) & (denom != 0)
-
-            data_df[f'relative_residual_unfiltered{i}'] = np.where(mask, (num - denom) / denom, np.nan)
-            
-            mask = abs( data_df[f'relative_residual_unfiltered{i}'] ) < 0.2
-            data_df[f'relative_residual_{i}'] = np.where(mask, data_df[f'relative_residual_unfiltered{i}'], np.nan)
-            
-            rel_col = f'relative_residual_{i}'
-            eff_col = f'definitive_eff_{i}'
-            
-            # Create a mask for the nan values in relative_residuals and interpolate
-            # Mask: rows where relative residual is NaN
-            nan_mask = data_df[rel_col].isna()
-
-            # Interpolate both columns
-            data_df.loc[nan_mask, rel_col] = data_df[rel_col].interpolate(limit_direction='both')[nan_mask]
-            data_df.loc[nan_mask, eff_col] = data_df[eff_col].interpolate(limit_direction='both')[nan_mask]
-            
         
+        # --- Relative residuals and conditional interpolation ---------------------
+        max_deviation = 0.20        # 20 % cutoff
+
+        for i in range(1, 5):
+            # ------------------------------------------------------------------ names
+            eff_col   = f'definitive_eff_{i}'
+            fit_col   = f'eff_fit_{i}'
+            rel_u_col = f'relative_residual_unfiltered{i}'
+            rel_col   = f'relative_residual_{i}'
+
+            # ------------------------------------------------------------------ vectors
+            eff_fit = data_df[fit_col].astype(float)
+            eff_ref = data_df[eff_col].astype(float)
+
+            valid_mask = np.isfinite(eff_fit) & np.isfinite(eff_ref) & (eff_ref != 0.0)
+
+            # ------------------------------------------------------------------ residuals
+            rel_unf = np.full_like(eff_ref, np.nan, dtype=float)
+            rel_unf[valid_mask] = (eff_fit[valid_mask] - eff_ref[valid_mask]) / eff_ref[valid_mask]
+            data_df[rel_u_col] = rel_unf
+
+            # ------------------------------------------------------------------ outlier / inlier masks
+            outlier_mask = (np.abs(rel_unf) >= max_deviation) & valid_mask
+            inlier_mask  = valid_mask & ~outlier_mask
+
+            # Store final residuals: NaN for outliers
+            data_df[rel_col] = rel_unf
+            data_df.loc[outlier_mask, rel_col] = np.nan
+
+            # ------------------------------------------------------------------ replace efficiency by model prediction
+            data_df.loc[outlier_mask, eff_col] = eff_fit[outlier_mask]
+
+            # ------------------------------------------------------------------ (optional) interpolate non-outlier gaps
+            interp_mask = data_df[rel_col].isna() & ~outlier_mask
+            if interp_mask.any():
+                data_df.loc[interp_mask, rel_col] = (
+                    data_df[rel_col]
+                    .interpolate(method='linear', limit_direction='both', limit_area='inside')
+                    .loc[interp_mask]
+                )
+        # --------------------------------------------------------------------------
+        
+        
+        create_very_essential_plots = True
+        
+        # if create_plots or create_essential_plots or create_very_essential_plots:
         if create_plots or create_essential_plots or create_very_essential_plots:
             fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(17, 14), sharex=True)
             for i in range(1, 5):  # Loop from 1 to 4
@@ -2235,8 +2170,379 @@ for case in processing_regions:
         # else:
             # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
             # print("\n")
+    
+    
+    # ------------------------------------------------------------------------------------------------------------------------
+    
+    e1 = data_df['definitive_eff_1']
+    e2 = data_df['definitive_eff_2']
+    e3 = data_df['definitive_eff_3']
+    e4 = data_df['definitive_eff_4']
+    
+    # Detector 1234
+    # 'processed_tt_1234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_14'
+    data_df['detector_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
+    data_df['detector_1234'] = data_df['detector_1234']  / ( data_df["number_of_mins"] * 60 )
+    data_df['detector_1234_eff'] = e1 * e2 * e3 * e4 + \
+        e1 * (1 - e2) * e3 * e4 + \
+        e1 * e2 * (1 - e3) * e4 + \
+        e1 * (1 - e2) * (1 - e3) * e4
 
-        print('Efficiency calculations performed.')
+    # Detector 123
+    # 'processed_tt_123', 'processed_tt_1234',  
+    # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+    data_df['detector_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123'] + \
+        data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_124'] + data_df['processed_tt_14'] 
+    data_df['detector_123'] = data_df['detector_123'] / ( data_df["number_of_mins"] * 60 )
+    data_df['detector_123_eff'] = e1 * e2 * e3 + \
+        e1 * (1 - e2) * e3
+
+    # Detector 234
+    # 'processed_tt_234', 'processed_tt_1234', 'processed_tt_14'
+    # 'processed_tt_124', 'processed_tt_24', 'processed_tt_134',
+    data_df['detector_234'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
+        data_df['processed_tt_14'] + data_df['processed_tt_124'] + data_df['processed_tt_24'] + data_df['processed_tt_134']
+    data_df['detector_234'] = data_df['detector_234'] / ( data_df["number_of_mins"] * 60 )
+    data_df['detector_234_eff'] = e2 * e3 * e4 + \
+        e2 * (1 - e3) * e4
+
+    # Detector 12
+    # 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 
+    # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+    data_df['detector_12'] = data_df['processed_tt_12'] + data_df['processed_tt_123'] + \
+        data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
+    data_df['detector_12'] = data_df['detector_12'] / ( data_df["number_of_mins"] * 60 )
+    data_df['detector_12_eff'] = e1 * e2
+
+    # Detector 23
+    # 'processed_tt_234', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
+    # 'processed_tt_124', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+    data_df['detector_23'] = data_df['processed_tt_234'] + data_df['processed_tt_123'] + \
+        data_df['processed_tt_1234'] + data_df['processed_tt_23'] + data_df['processed_tt_124'] + \
+            data_df['processed_tt_24'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14']
+    data_df['detector_23'] = data_df['detector_23'] / ( data_df["number_of_mins"] * 60 )
+    data_df['detector_23_eff'] = e2 * e3
+
+    # Detector 34
+    # 'processed_tt_234', 'processed_tt_1234',
+    # 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_134', 'processed_tt_14'
+    data_df['detector_34'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
+        data_df['processed_tt_124'] + data_df['processed_tt_34'] + data_df['processed_tt_24'] + \
+            data_df['processed_tt_134'] + data_df['processed_tt_14']
+
+    data_df['detector_34'] = data_df['detector_34'] / ( data_df["number_of_mins"] * 60 )
+    data_df['detector_34_eff'] = e3 * e4
+    
+    data_df = data_df.copy()
+    
+    # Now correcting by efficiency
+    data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
+    data_df['detector_123_eff_corr'] = data_df['detector_123'] / data_df['detector_123_eff']
+    data_df['detector_234_eff_corr'] = data_df['detector_234'] / data_df['detector_234_eff']
+    data_df['detector_12_eff_corr'] = data_df['detector_12'] / data_df['detector_12_eff']
+    data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
+    data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
+    
+    # -------------------------------------------------------------------------------------
+    
+    
+    group_cols = [
+        ['detector_1234_eff_corr'],
+        ['detector_123_eff_corr', 'detector_234_eff_corr'],
+        ['detector_12_eff_corr', 'detector_23_eff_corr', 'detector_34_eff_corr']
+    ]
+
+    plot_grouped_series(data_df, group_cols, title=f'Counts per detector, efficiency corrected', plot_after_all=True, sharey_axes = True)
+    
+    from scipy.interpolate import UnivariateSpline
+    
+    # Spline fit and residual computation
+    for group in group_cols:
+        for col in group:
+            x_full = np.arange(len(data_df))
+            y_full = data_df[col].values
+
+            # Remove NaNs for spline fitting
+            mask_valid = np.isfinite(y_full)
+            x = x_full[mask_valid]
+            y = y_full[mask_valid]
+            
+            # Apply an horizontal median filter to the y
+            y = medfilt(y, kernel_size=5)
+            
+            std_y = np.nanstd(y)
+            if not np.isfinite(std_y) or std_y <= 0:
+                std_y = 1.0  # fallback to a small positive number
+            # s = len(x) * std_y / 2
+            s = len(x) * std_y * 20
+            
+            print(f"Fitting spline for {col} | std={std_y:.4f} | nan count={np.isnan(y).sum()}")
+            
+            spline = UnivariateSpline(x, y, s=s)
+            spline_values = spline(x)
+
+            spline_col = f'eff_corr_spline_{col}'
+            residual_col = f'eff_corr_rel_residual_{col}'
+
+            spline = UnivariateSpline(x, y, s=s)
+            spline_values = spline(x_full)  # evaluate spline on full x range
+
+            data_df[spline_col] = spline_values
+
+            # Compute relative residual safely
+            epsilon = 1e-12
+            denominator = spline_values.copy()
+            denominator[np.abs(denominator) < epsilon] = np.nan
+
+            rel_resid = (y_full - spline_values) / denominator
+
+            # Optional: remove high-residual outliers
+            mask_outlier = np.abs(rel_resid) > 0.9
+            rel_resid[mask_outlier] = np.nan
+            spline_values[mask_outlier] = np.nan
+            y_full[mask_outlier] = np.nan
+            
+            # Interpolate in the mask_outlier mask
+            rel_resid = pd.Series(rel_resid).interpolate(method='linear').fillna(0).values
+            spline_values = pd.Series(spline_values).interpolate(method='linear').fillna(0).values
+            y_full = pd.Series(y_full).interpolate(method='linear').fillna(0).values
+            
+            data_df[spline_col] = spline_values
+            data_df[residual_col] = rel_resid
+            data_df[col] = y_full
+    
+    
+    spline_group_cols = [
+        [f'eff_corr_spline_{col}' for col in group]
+        for group in group_cols
+    ]
+
+    # Call the user's plotting function with the new group structure
+    plot_grouped_series(
+        data_df,
+        spline_group_cols,
+        time_col='Time',
+        title='EFF CORR. Spline approximations of processed_tt_* time series',
+        plot_after_all=True, sharey_axes = True
+    )
+    
+    
+    rel_residual_group_cols = [
+        [f'eff_corr_rel_residual_{col}' for col in group]
+        for group in group_cols
+    ]
+
+    # Plot the relative residuals
+    plot_grouped_series(
+        data_df,
+        rel_residual_group_cols,
+        time_col='Time',
+        title='Relative residuals of processed_tt_* time series',
+        plot_after_all=False, sharey_axes = True
+    )
+    
+    # Result after inerpolation
+    group_cols = [
+        ['detector_1234_eff_corr'],
+        ['detector_123_eff_corr', 'detector_234_eff_corr'],
+        ['detector_12_eff_corr', 'detector_23_eff_corr', 'detector_34_eff_corr']
+    ]
+
+    plot_grouped_series(data_df, group_cols, title=f'Counts per detector, efficiency corrected, spline filtered', plot_after_all=True, sharey_axes = True)
+    
+    
+    # -------------------------------------------------------------------------------------
+    
+    data_df = data_df.copy()
+    
+    # Assign to the original dataframe
+    data_df[f'detector_1234_eff_corr_{case}'] = data_df['detector_1234_eff_corr']
+    data_df[f'detector_123_eff_corr_{case}'] = data_df['detector_123_eff_corr'] 
+    data_df[f'detector_234_eff_corr_{case}'] = data_df['detector_234_eff_corr'] 
+    data_df[f'detector_12_eff_corr_{case}'] = data_df['detector_12_eff_corr'] 
+    data_df[f'detector_23_eff_corr_{case}'] = data_df['detector_23_eff_corr'] 
+    data_df[f'detector_34_eff_corr_{case}'] = data_df['detector_34_eff_corr']
+    
+    group_cols = [
+            ['sensors_ext_Pressure_ext'],
+            ['sensors_ext_Temperature_ext'],
+            ['detector_1234_eff'],
+            ['detector_123_eff'],
+            ['detector_234_eff'],
+            ['detector_12_eff'],
+            ['detector_23_eff'],
+            ['detector_34_eff'],
+        ]
+    plot_grouped_series(data_df, group_cols, title='Efficiencies per detector, DECORRELATED', plot_after_all=True)
+    
+    # group_cols = [
+    #     ['sensors_ext_Pressure_ext'],
+    #     ['sensors_ext_Temperature_ext'],
+    #     ['detector_1234', 'detector_1234_eff_corr'],
+    #     ['detector_123', 'detector_123_eff_corr'],
+    #     ['detector_234', 'detector_234_eff_corr'],
+    #     ['detector_12', 'detector_12_eff_corr'],
+    #     ['detector_23', 'detector_23_eff_corr'],
+    #     ['detector_34', 'detector_34_eff_corr'],
+    # ]
+    # plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment, DECORRELATED')
+    
+    
+    # def plot_eff_vs_rate(data_df, eff_col, rate_col, corrected_col, label_suffix=''):
+    #     global create_plots, fig_idx, show_plots, save_plots, figure_path, case
+        
+    #     if create_plots or create_essential_plots or create_very_essential_plots:
+    #         valid = data_df[[eff_col, rate_col, corrected_col]].dropna()
+    #         x = valid[eff_col].values
+    #         y_orig = valid[rate_col].values
+    #         y_corr = valid[corrected_col].values
+    #         # Compute Pearson correlations
+    #         corr_orig, _ = pearsonr(x, y_orig)
+    #         corr_corr, _ = pearsonr(x, y_corr)
+    #         # Linear fits
+    #         p_orig = np.polyfit(x, y_orig, 1)
+    #         p_corr = np.polyfit(x, y_corr, 1)
+    #         x_fit = np.linspace(x.min(), x.max(), 500)
+    #         plt.figure(figsize=(8, 6))
+    #         plt.scatter(x, y_orig, alpha=0.7, label=f'Original rate {label_suffix}', s=2)
+    #         plt.scatter(x, y_corr, alpha=0.7, label=f'Corrected rate {label_suffix}', s=2)
+    #         plt.plot(x_fit, np.polyval(p_orig, x_fit), linestyle='--', linewidth=1.0, label='Fit: Original rate')
+    #         plt.plot(x_fit, np.polyval(p_corr, x_fit), linestyle='--', linewidth=1.0, label='Fit: Corrected rate')
+    #         # ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
+    #         plt.xlabel('Efficiency')
+    #         plt.ylabel('Rate')
+    #         plt.title(f'Efficiency vs. Rate {label_suffix}, {case}')
+    #         plt.grid(True)
+    #         textstr = f'Corr (original): {corr_orig:.3f}\nCorr (corrected): {corr_corr:.3f}'
+    #         plt.gcf().text(0.15, 0.80, textstr, fontsize=10, bbox=dict(boxstyle="round", facecolor='white', alpha=0.5))
+    #         plt.legend()
+    #         plt.tight_layout()
+    #         if show_plots:
+    #             plt.show()
+    #         elif save_plots:
+    #             new_figure_path = figure_path + f"{fig_idx}" + f"_scatter_{case}.png"
+    #             fig_idx += 1
+    #             print(f"Saving figure to {new_figure_path}")
+    #             plt.savefig(new_figure_path, format='png', dpi=300)
+    #         plt.close()
+    #     else:
+    #         print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+    
+    
+    # detector_labels = ['1234', '123', '234', '12', '23', '34']
+    # for label in detector_labels:
+    #     eff_col = f'detector_{label}_eff'
+    #     rate_col = f'detector_{label}'
+    #     corrected_col = f'detector_{label}_eff_corr'
+
+    #     plot_eff_vs_rate(
+    #         data_df,
+    #         eff_col=eff_col,
+    #         rate_col=rate_col,
+    #         corrected_col=corrected_col,
+    #         label_suffix=label,
+    #     )
+    
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from scipy.stats import pearsonr
+
+    def plot_eff_vs_rate_grid(data_df, detector_labels):
+        global create_plots, fig_idx, show_plots, save_plots, figure_path, case, create_essential_plots
+
+        if not (create_plots or create_essential_plots or create_very_essential_plots):
+            # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+            # print("\n")
+            return
+
+        fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+        axes = axes.flatten()
+
+        for i, label in enumerate(detector_labels):
+            ax = axes[i]
+            eff_col = f'detector_{label}_eff'
+            rate_col = f'detector_{label}'
+            corrected_col = f'detector_{label}_eff_corr'
+
+            valid = (
+                data_df[[eff_col, rate_col, corrected_col]]
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+            )
+            
+            x = valid[eff_col].values
+            y_orig = valid[rate_col].values
+            y_corr = valid[corrected_col].values
+
+            corr_orig, _ = pearsonr(x, y_orig)
+            corr_corr, _ = pearsonr(x, y_corr)
+
+            p_orig = np.polyfit(x, y_orig, 1)
+            p_corr = np.polyfit(x, y_corr, 1)
+            x_fit = np.linspace(x.min(), x.max(), 500)
+
+            ax.scatter(x, y_orig, alpha=0.7, label='Original', s=2)
+            ax.scatter(x, y_corr, alpha=0.7, label='Corrected', s=2)
+            ax.plot(x_fit, np.polyval(p_orig, x_fit), linestyle='--', linewidth=1.0, label='Fit: Original')
+            ax.plot(x_fit, np.polyval(p_corr, x_fit), linestyle='--', linewidth=1.0, label='Fit: Corrected')
+
+            ax.set_xlabel('Efficiency')
+            ax.set_ylabel('Rate')
+            ax.set_title(f'{label}', fontsize=10)
+            ax.grid(True)
+
+            textstr = f'Corr (orig): {corr_orig:.2f}\nCorr (corr): {corr_corr:.2f}'
+            ax.text(0.05, 0.95, textstr, transform=ax.transAxes,
+                    fontsize=8, verticalalignment='top',
+                    bbox=dict(boxstyle="round", facecolor='white', alpha=0.6))
+
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles, labels, loc='upper center', ncol=4, fontsize=9)
+        fig.suptitle(f'Efficiency vs. Rate (Original and Corrected) — {case}', fontsize=14)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + f"{fig_idx}" + f"_scatter_grid_{case}.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            fig.savefig(new_figure_path, format='png', dpi=300)
+
+        plt.close(fig)
+
+    plot_eff_vs_rate_grid(data_df, detector_labels)
+    
+    data_df = data_df.copy()
+
+    data_df[f'definitive_eff_1_{case}'] = data_df[f'definitive_eff_1']
+    data_df[f'definitive_eff_2_{case}'] = data_df[f'definitive_eff_2']
+    data_df[f'definitive_eff_3_{case}'] = data_df[f'definitive_eff_3']
+    data_df[f'definitive_eff_4_{case}'] = data_df[f'definitive_eff_4']
+    
+    if case == 'all':
+        # Average the four to get a definitive value
+        data_df['global_eff'] = (data_df['definitive_eff_1'] + data_df['definitive_eff_2'] +
+                                    data_df['definitive_eff_3'] + data_df['definitive_eff_4']) / 4.0
+    
+    # ------------------------------------------------------------------------------------------------------------------------
+
+    # data_df['summed'] = data_df['detector_1234'] + data_df['detector_123'] + \
+    #     data_df['detector_234'] + data_df['detector_12'] + \
+    #     data_df['detector_23'] + data_df['detector_34']
+
+    # data_df['summed_eff_corr'] = data_df['detector_1234_eff_corr'] + data_df['detector_123_eff_corr'] + \
+    #     data_df['detector_234_eff_corr'] + data_df['detector_12_eff_corr'] + \
+    #     data_df['detector_23_eff_corr'] + data_df['detector_34_eff_corr']
+
+    # group_cols = [
+    #     ['sensors_ext_Pressure_ext'],
+    #     ['sensors_ext_Temperature_ext'],
+    #     [ 'summed', 'summed_eff_corr' ]
+    # ]
+    # plot_grouped_series(data_df, group_cols, title='Summed Detector Signals and Environment')
+    
+    print('Efficiency calculations performed.')
 
 
 print('----------------------------------------------------------------------')
@@ -2277,28 +2583,28 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = Non
         # Filter outliers before fitting -----------------------------------------------------------------
         # ------------------------------------------------------------------------------------------------
         
-        z_scores = np.abs((df['log_I_over_I0'] - df['log_I_over_I0'].median()) / df['log_I_over_I0'].std())
-        # z_scores = (df['log_I_over_I0'] - df['log_I_over_I0'].median()) / df['log_I_over_I0'].std()
+        # z_scores = np.abs((df['log_I_over_I0'] - df['log_I_over_I0'].median()) / df['log_I_over_I0'].std())
+        # # z_scores = (df['log_I_over_I0'] - df['log_I_over_I0'].median()) / df['log_I_over_I0'].std()
         
-        # Make a small histogram of the z_scores to see the distribution
-        if create_plots:
-            plt.hist(z_scores, bins=400)
-            plt.axvline(x=z_score_th_pres_corr, color='r', linestyle='--', label='Threshold')
-            plt.title(f'{region}\nZ-Scores Distribution')
-            plt.xlabel('Z-Score')
-            plt.ylabel('Frequency')
-            if show_plots: 
-                plt.show()
-            elif save_plots:
-                new_figure_path = figure_path + f"{fig_idx}" + "_pre_pressure_z" + f"{region}" + ".png"
-                fig_idx += 1
-                print(f"Saving figure to {new_figure_path}")
-                plt.savefig(new_figure_path, format = 'png', dpi = 300)
-            plt.close()
-        # else:
-        #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+        # # Make a small histogram of the z_scores to see the distribution
+        # if create_plots:
+        #     plt.hist(z_scores, bins=400)
+        #     plt.axvline(x=z_score_th_pres_corr, color='r', linestyle='--', label='Threshold')
+        #     plt.title(f'{region}\nZ-Scores Distribution')
+        #     plt.xlabel('Z-Score')
+        #     plt.ylabel('Frequency')
+        #     if show_plots: 
+        #         plt.show()
+        #     elif save_plots:
+        #         new_figure_path = figure_path + f"{fig_idx}" + "_pre_pressure_z" + f"{region}" + ".png"
+        #         fig_idx += 1
+        #         print(f"Saving figure to {new_figure_path}")
+        #         plt.savefig(new_figure_path, format = 'png', dpi = 300)
+        #     plt.close()
+        # # else:
+        # #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
         
-        df = df[z_scores < z_score_th_pres_corr]
+        # df = df[z_scores < z_score_th_pres_corr]
         
         # WIP TO USE UNCERTAINTY OF PRESSURE ----------------------------------------------
         popt, pcov = curve_fit(fit_model, df['delta_P'], df['log_I_over_I0'], sigma=df['unc_log_I_over_I0'], absolute_sigma=True, p0=(1,0))
@@ -2553,6 +2859,11 @@ if create_plots or create_essential_plots or create_very_essential_plots:
 #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
+for region in regions_to_correct:
+    print(f"Region: {region}")
+    print(f"                    Eta_P: {global_variables[f'eta_P_{region}']}")
+    
+
 # ---------------------------------------------------------------------------------------------------
 
 # Filter regions that contain 'new_' to plot
@@ -2618,49 +2929,101 @@ if create_plots:
 # ---------------------------------------------------------------------------------------------------
 
 
-if remove_outliers:
-    print('Removing outliers and zero values...')
-    def remove_outliers_and_zeroes(series, z_thresh):
-        global create_plots, fig_idx
-        
-        """
-        Create a mask of rows that are outliers or have zero values.
-        """
-        # median = series.mean()
-        median = series.median()
-        std = series.std()
-        # z_scores = abs((series - median) / std)
-        z_scores = (series - median) / std
-        
-        if create_plots:
-            plt.hist(z_scores, bins=300)
-            plt.axvline(x=z_thresh, color='r', linestyle='--', label='Threshold')
-            plt.axvline(x=-1*z_thresh, color='r', linestyle='--', label='Threshold')
-            plt.title('Z-Scores Distribution')
-            plt.xlabel('Z-Score')
-            plt.ylabel('Frequency')
-            if show_plots: 
-                plt.show()
-            elif save_plots:
-                new_figure_path = figure_path + f"{fig_idx}" + "_after_pressure_corr_z.png"
-                fig_idx += 1
-                print(f"Saving figure to {new_figure_path}")
-                plt.savefig(new_figure_path, format = 'png', dpi = 300)
-            plt.close()
-        # else:
-        #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-        
-        # print(z_scores)
-        # Create a mask for rows where z_scores > z_thresh or values are zero
-        mask = (abs(z_scores) > z_thresh) | (series == 0)
-        return mask
+# print("\nDHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
+# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
+# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
+# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
+# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
+# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF\n")
 
-    # Initialize a mask of all False, meaning no rows are removed initially
-    rows_to_remove = pd.Series(False, index=data_df.index)
-    rows_to_remove = rows_to_remove | remove_outliers_and_zeroes(data_df[f'pres_{region}'], z_thresh = after_press_z_score_th)
+# create_very_essential_plots = True
 
-    data_df_cleaned = data_df[~rows_to_remove].copy()
-    data_df = data_df_cleaned.copy()
+# if remove_outliers:
+    
+#     # Begin actual filtering
+#     for tt in detector_labels:
+#         regions = regions_of_interest
+#         cols = 3
+#         num_rx = len(regions)
+#         rows = math.ceil(num_rx / cols)
+
+#         if create_plots or create_essential_plots or create_very_essential_plots:
+#             fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 3.5 * rows), sharex=False, sharey=False)
+#             axes = axes.flatten()
+
+#         for idx, rx in enumerate(regions):
+#             col_name = f'{tt}_{rx}'
+#             comb = f'detector_{tt}_eff_corr_{rx}'
+
+#             if comb not in data_df.columns:
+#                 continue
+
+#             series = data_df[comb].copy()
+#             series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+
+#             if series_clean.empty:
+#                 continue
+            
+#             # -----------------------  Code to filter here  -----------------------------
+#             # Robust outlier rejection based on the modified Z-score (MAD)
+#             #
+#             # User-configurable parameters
+#             outlier_cutoff = 3.5          # Modified-Z threshold (≈ 3.5 ≈ 0.3% outliers for N≈10^4)
+#             min_samples    = 10           # Skip filtering if too few valid points
+#             nbins          = 50           # Histogram granularity for later plotting
+
+#             if len(series_clean) >= min_samples:
+#                 data = series_clean.to_numpy(dtype=float)
+
+#                 # Median and MAD
+#                 med = np.median(data)
+#                 mad = np.median(np.abs(data - med))
+#                 # Guard against MAD = 0 (all identical)
+#                 if mad == 0:
+#                     filt_idx = np.ones_like(data, dtype=bool)
+#                 else:
+#                     mod_z = 0.6745 * (data - med) / mad          # 0.6745 = Φ⁻¹(0.75)
+#                     filt_idx = np.abs(mod_z) <= outlier_cutoff   # keep “inliers”
+
+#                 # Persist the cleaning in the main DataFrame (mark outliers as NaN)
+#                 outlier_mask = ~filt_idx
+#                 data_df.loc[series_clean.index[outlier_mask], comb] = np.nan
+
+#                 # Store the filtered series for plotting
+#                 series_filt = pd.Series(data[filt_idx], index=series_clean.index[filt_idx], name=col_name)
+#             else:
+#                 # Not enough statistics → leave data unchanged
+#                 series_filt = series_clean
+#             # ---------------------------------------------------------------------------
+
+            
+#         # ------------------------  Code to plot here  ------------------------------
+#         if create_plots or create_essential_plots or create_very_essential_plots:
+#             ax = axes[idx]
+
+#             # Raw versus filtered distributions
+#             ax.hist(series_clean, bins=nbins, histtype='step', linewidth=1.2, label='raw')
+#             ax.hist(series_filt,  bins=nbins, alpha=0.7, label='filtered')
+
+#             ax.set_title(f'{tt} – {rx}')
+#             ax.set_xlabel('Corrected efficiency')
+#             ax.set_ylabel('Counts')
+#             ax.grid(True, linestyle=':')
+#             ax.legend(frameon=False, fontsize='small')
+#         # ---------------------------------------------------------------------------
+
+
+#         if create_plots or create_essential_plots or create_very_essential_plots:
+#             for ax in axes[num_rx:]:
+#                 fig.delaxes(ax)
+#             plt.tight_layout()
+#             if show_plots:
+#                 plt.show()
+#             elif save_plots:
+#                 grouped_path = f"{figure_path}{fig_idx}_grouped_histo_{tt}_cols_{cols}_after_pressure.png"
+#                 plt.savefig(grouped_path, format='png', dpi=300)
+#             plt.close()
+#             fig_idx += 1
 
 
 
@@ -2780,8 +3143,7 @@ if high_order_correction:
         
         data_df[f'{region}_pressure_corrected'] = data_df[f'pres_{region}']
         
-        ancillary_data_df = data_df.copy()
-        data_df = ancillary_data_df.copy()
+        data_df = data_df.copy()
         
         # Use the pressure-corrected values directly
         # Calculate means for pressure and counts
@@ -2834,6 +3196,99 @@ print('----------------------------------------------------------------------')
 print('-------------------- Creating rate final plots -----------------------')
 print('----------------------------------------------------------------------')
 print('----------------------------------------------------------------------')
+
+
+group_cols = [
+    [  # all directions
+        'detector_1234_eff_corr_all_final_corrected',
+        'detector_123_eff_corr_all_final_corrected',
+        'detector_234_eff_corr_all_final_corrected',
+        'detector_12_eff_corr_all_final_corrected',
+        'detector_23_eff_corr_all_final_corrected',
+        'detector_34_eff_corr_all_final_corrected',
+    ],
+    [  # Vert direction
+        'detector_1234_eff_corr_Vert_final_corrected',
+        'detector_123_eff_corr_Vert_final_corrected',
+        'detector_234_eff_corr_Vert_final_corrected',
+        'detector_12_eff_corr_Vert_final_corrected',
+        'detector_23_eff_corr_Vert_final_corrected',
+        'detector_34_eff_corr_Vert_final_corrected',
+    ],
+    [  # North direction
+        'detector_1234_eff_corr_North_final_corrected',
+        'detector_123_eff_corr_North_final_corrected',
+        'detector_234_eff_corr_North_final_corrected',
+        'detector_12_eff_corr_North_final_corrected',
+        'detector_23_eff_corr_North_final_corrected',
+        'detector_34_eff_corr_North_final_corrected',
+    ],
+    [  # West direction
+        'detector_1234_eff_corr_West_final_corrected',
+        'detector_123_eff_corr_West_final_corrected',
+        'detector_234_eff_corr_West_final_corrected',
+        'detector_12_eff_corr_West_final_corrected',
+        'detector_23_eff_corr_West_final_corrected',
+        'detector_34_eff_corr_West_final_corrected',
+    ],
+    [  # South direction
+        'detector_1234_eff_corr_South_final_corrected',
+        'detector_123_eff_corr_South_final_corrected',
+        'detector_234_eff_corr_South_final_corrected',
+        'detector_12_eff_corr_South_final_corrected',
+        'detector_23_eff_corr_South_final_corrected',
+        'detector_34_eff_corr_South_final_corrected',
+    ],
+    [  # East direction
+        'detector_1234_eff_corr_East_final_corrected',
+        'detector_123_eff_corr_East_final_corrected',
+        'detector_234_eff_corr_East_final_corrected',
+        'detector_12_eff_corr_East_final_corrected',
+        'detector_23_eff_corr_East_final_corrected',
+        'detector_34_eff_corr_East_final_corrected',
+    ],
+]
+
+plot_grouped_series(
+    data_df,
+    group_cols,
+    time_col='Time',
+    title='Efficiency-corrected rates by direction and detector',
+    plot_after_all=True
+)
+
+
+
+import re
+import matplotlib.ticker as mtick
+import matplotlib.pyplot as plt
+
+# Define all relevant column names in the dataset
+all_columns = data_df.columns.tolist()
+
+# Extract unique RX regions from the provided list of column names
+rx_region_pattern = re.compile(r"detector_.*?_eff_corr_(R\d\.\d)_final_corrected")
+unique_rx_regions = sorted(set(rx_region_pattern.findall(" ".join(all_columns))))
+
+# Define all detector groups to consider
+detector_groups = ['1234', '123', '234', '12', '23', '34']
+
+# Group columns by RX region
+group_cols_rx = []
+for rx in unique_rx_regions:
+    group = [f'detector_{dg}_eff_corr_{rx}_final_corrected' for dg in detector_groups]
+    group_cols_rx.append(group)
+
+# Plot using the existing plot_grouped_series function
+plot_grouped_series(
+    data_df,
+    group_cols_rx,
+    time_col='Time',
+    title='Efficiency-corrected RX.X region rates by detector group',
+    plot_after_all=True
+)
+
+
 
 original_df = data_df.copy()
 
