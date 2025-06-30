@@ -100,6 +100,7 @@ def figure1(df: pd.DataFrame):
         ncols=4,
         figsize=(18, 12),
         sharex=True,
+        sharey='col',
         constrained_layout=True,
     )
 
@@ -278,20 +279,55 @@ def figure4(df: pd.DataFrame):
 
 
 def figure5(df: pd.DataFrame):
-    """Aggregate figure with global performance metrics."""
-    cols = [
-        "CRT_avg", "one_side_events", "purity_of_data_percentage",
-        "unc_y", "unc_tsum", "unc_tdif", "time_window_filtering",
-        "old_timing_method", "valid_lines_in_dat_file",
-        "z_P1", "z_P2", "z_P3", "z_P4",
+    """
+    One figure with 5 vertically stacked subplots (5×1),
+    each showing a group of global performance metrics.
+
+    The column 'valid_lines_in_dat_file' is multiplied by 100 before plotting.
+    """
+    groups = [
+        ["CRT_avg"],
+        ["purity_of_data_percentage", "valid_lines_in_dat_file"],
+        ["one_side_events", "time_window_filtering", "old_timing_method"],
+        ["z_P1", "z_P2", "z_P3", "z_P4"],
+        ["unc_y", "unc_tsum", "unc_tdif"],
     ]
-    fig, ax = plt.subplots(figsize=(14, 5), constrained_layout=True)
-    for col in cols:
-        if col in df:
-            ax.plot(df.index, df[col], label=col, linewidth=1.0)
-    ax.set_title("Global performance metrics")
-    ax.legend(frameon=False, ncol=2, fontsize="small")
-    _apply_time_axis(ax)
+
+    titles = [
+        "CRT Average",
+        "Data Quality and Valid Lines",
+        "One-side Events and Timing Flags",
+        "z Plane Calibration Offsets",
+        "Set Uncertainties",
+    ]
+
+    fig, axs = plt.subplots(
+        nrows=5,
+        ncols=1,
+        figsize=(14, 14),
+        sharex=True,
+        constrained_layout=True,
+    )
+
+    for ax, group, title in zip(axs, groups, titles):
+        for col in group:
+            if col not in df:
+                continue
+            if col == "valid_lines_in_dat_file":
+                data = df[col] * 100.0  # scale to percentage
+                label = col + " ×100"
+            if col == "unc_y":
+                data = df[col] / 300.0  # scale to percentage
+                label = col + " / speed of light in mm/ns"
+            else:
+                data = df[col]
+                label = col
+            ax.plot(df.index, data, label=label, linewidth=1.0)
+        ax.set_title(title)
+        ax.legend(frameon=False, fontsize="small")
+        _apply_time_axis(ax)
+
+    fig.suptitle("Global Performance Metrics", fontsize=16)
     return fig
 
 
@@ -354,7 +390,7 @@ def figure8(df: pd.DataFrame):
     ]
     planes = ["1", "2", "3", "4"]
 
-    fig, axs = plt.subplots(4, 6, figsize=(19, 12), sharex=True, constrained_layout=True)
+    fig, axs = plt.subplots(4, 6, figsize=(19, 12), sharex=True, sharey='col', constrained_layout=True)
     for r, p in enumerate(planes):
         for c, m in enumerate(metrics):
             ax = axs[r, c]
@@ -371,30 +407,49 @@ def figure8(df: pd.DataFrame):
 
 
 def figure9(df: pd.DataFrame):
+    """
+    4 × 6 grid – Matrix element rates (value / duration) for M1–M6 by plane.
+
+    Rate is computed as:  rate = M / (End_Time − Start_Time)
+    """
+    import numpy as np
+
     planes = ["P1", "P2", "P3", "P4"]
     ms = ["M1", "M2", "M3", "M4", "M5", "M6"]
 
-    fig, axs = plt.subplots(4, 6, figsize=(19, 12), sharex=True, constrained_layout=True)
+    # Compute acquisition duration per row
+    end_time = pd.to_datetime(df["End_Time"], errors="coerce")
+    duration_s = (end_time - df.index).dt.total_seconds()
+    duration_s = duration_s.where(duration_s > 0, np.nan)
+
+    fig, axs = plt.subplots(4, 6, figsize=(19, 12), sharex=True, sharey=True, constrained_layout=True)
+
     for r, p in enumerate(planes):
         for c, m in enumerate(ms):
             ax = axs[r, c]
             col = f"{p}_{m}"
             if col in df:
-                ax.plot(df.index, df[col])
+                rate = df[col] / duration_s
+                ax.plot(df.index, rate)
+                ax.set_yscale("log")
+
             if r == 0:
                 ax.set_title(m)
             if c == 0:
                 ax.set_ylabel(p)
+
             _apply_time_axis(ax)
-    fig.suptitle("Matrix elements M1–M6 by plane")
+
+    fig.suptitle("Matrix element rates (value / acquisition time) by plane [counts/s]")
     return fig
+
 
 
 def figure10(df: pd.DataFrame):
     planes = ["P1", "P2", "P3", "P4"]
     suffixes = ["x0", "k"]
 
-    fig, axs = plt.subplots(4, 2, figsize=(12, 12), sharex=True, constrained_layout=True)
+    fig, axs = plt.subplots(4, 2, figsize=(12, 12), sharex=True, sharey='col', constrained_layout=True)
     for r, p in enumerate(planes):
         for c, sfx in enumerate(suffixes):
             ax = axs[r, c]
@@ -433,6 +488,7 @@ def main():
         figure9(df_evt),
         figure10(df_evt),
     ]
+    
 
     if args.save:
         # Directory for PNGs
