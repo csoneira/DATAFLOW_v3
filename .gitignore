@@ -4,6 +4,7 @@
 *.h5
 *.hld
 *.mat
+*.log
 
 # Copernicus data
 *.nc
