@@ -1,0 +1,160 @@
+%% Configuration
+clear all;close all;
+
+run('./conf/initConf.m');
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+run([HOME 'software/conf/loadGeneralConf.m']);
+
+while 1
+    %% Load configuration
+    conf = initSystem();
+    conf = loadConfiguration({conf,HOSTNAME,SYSTEMNAME,HOME,SYS,INTERPRETER,OS});
+
+    
+    b = conf.bar;
+    %
+    %
+    message2log = ['***************************************************************'];
+    disp(message2log);
+    write2log(conf.logs,message2log,'   ','syslog',OS);
+    message2log = ['*** Starting unpacking'];
+    disp(message2log);
+    write2log(conf.logs,message2log,'   ','syslog',OS);
+    
+    if  0 %% Copy files from daq
+        
+        message2log = ['*** Starting the copy of daq files.'];
+        disp(message2log);
+        write2log(conf.logs,message2log,'   ','syslog',OS);
+        
+        for i=1:size(conf.daq,2)
+            %Read device is it is active and readable
+            active   = conf.daq(i).active;
+            readable = conf.daq(i).readable;
+            
+            %if active, readable
+            if active & readable
+                %Go to read
+                remoteAccessActive = conf.daq(i).rAccess.active;
+                localAccessActive  = conf.daq(i).lAccess.active;
+                if remoteAccessActive
+                    ip         = conf.daq(i).rAccess.IP;
+                    user       = conf.daq(i).rAccess.user;
+                    key        = conf.daq(i).rAccess.key;
+                    daqPath = conf.daq(i).rAccess.remotePath;
+                    localPath  = conf.daq(i).unpacking.path.rawDataDat;
+                    fileExt    = conf.daq(i).rAccess.fileExt;
+                    port       = conf.daq(i).rAccess.port;
+                    logs       = conf.logs;
+                    scpLastDoneAndMove(ip,user,key,daqPath,localPath,port,fileExt,logs,OS);
+                elseif localAccessActive
+                    daqPath       = conf.daq(i).lAccess.path;
+                    localPath  = conf.daq(i).unpacking.path.rawDataDat;
+                    fileExt    = conf.daq(i).lAccess.fileExt;
+                    zip        = conf.daq(i).lAccess.zip;
+                    logs       = conf.logs;
+                    cpLastCloseAndMove(daqPath,localPath,fileExt,zip,logs,OS);
+                else
+                    disp('not implemented for the moment');
+                end
+            end
+        end
+    end
+    
+    if 1 %% Unpack files
+        message2log = ['*** Starting the unpacking of daq files.'];
+        disp(message2log);
+        write2log(conf.logs,message2log,'   ','syslog',OS);
+        
+        for i=1:size(conf.daq,2)
+            %Convert to mat files
+            active   = conf.daq(i).active;
+            readable = conf.daq(i).readable;
+            %if active, readable
+            if active & readable
+                %Go to read
+                inPath        =  conf.daq(i).unpacking.path.rawDataDat;
+                outPath       =  conf.daq(i).unpacking.path.rawDataMat;
+                fileType      =  conf.daq(i).unpacking.fileExt;
+                bufferSize    =  conf.daq(i).unpacking.bufferSize;
+                logs          =  conf.logs;
+                alarms        =  conf.alarms;
+                keepHLDs      =  conf.daq(i).unpacking.keepHLDs;
+                writeTDCCal   = conf.daq(i).unpacking.writeTDCCal;
+                zipFiles      =  conf.daq(i).unpacking.zipFiles;
+                downScale     =  conf.daq(i).unpacking.downScale;
+                
+                if conf.daq(i).active
+                    tmpRaw2varPath = unpackerTRB3LunchContinuous(inPath,outPath,fileType,conf.daq(i).TRB3,bufferSize,writeTDCCal,keepHLDs,zipFiles,downScale,INTERPRETER,logs,alarms,OS);
+                elseif 0
+                    keyboard
+                else
+                    keyboard
+                end
+            end
+        end
+    end
+    
+    
+    if ~strcmp(tmpRaw2varPath,'none') %% raw 2 var
+        message2log = ['*** Starting the convertion from raw 2 var.'];
+        disp(message2log);
+        write2log(conf.logs,message2log,'   ','syslog',OS);
+        
+        for i=1:size(conf.daq,2)
+            %Convert to mat files
+            active   = conf.daq(i).active;
+            readable = conf.daq(i).readable;
+            %if active, readable
+            if active & readable
+                %Go to read
+                inPath        =  [conf.daq(i).unpacking.path.rawDataMat tmpRaw2varPath b];
+                outPath       =  [conf.daq(i).raw2var.path.varData tmpRaw2varPath b];mkdirOS(outPath,OS,0);
+                for j=1:size(conf.daq(i).raw2var.lookUpTables,2)
+                    lookUpTables{j}  =  [conf.daq(i).raw2var.path.lookUpTables conf.daq(i).raw2var.lookUpTables{j}];
+                end
+                keepRawFiles  =  conf.daq(i).raw2var.keepRawFiles;
+                logs          =  conf.logs;
+                
+                if conf.daq(i).active
+                    TRBs = conf.daq(i).TRB3;
+                    raw2varContinuous(inPath,outPath,TRBs,lookUpTables,keepRawFiles,INTERPRETER,logs,OS);
+                    if exist([inPath 'TDCCal/'],'dir')
+                        mkdirOS([inPath '../TDCCal/'],OS,0);
+                        mvOS([inPath 'TDCCal/'],[inPath '../TDCCal/'],'*.*',OS)
+                    end
+                    [~, ~] = system(['rm -r ' inPath]);
+                elseif 0
+                    keyboard
+                else
+                    keyboard
+                end
+            end
+        end
+    end
+    
+    
+    if ~strcmp(tmpRaw2varPath,'none')
+        %%% Export if necessary to Asci
+        if(conf.daq(i).var2cal.exportAsci == 1)
+            exportMingoData({[conf.daq(i).raw2var.path.varData tmpRaw2varPath b],conf.daq(i).var2cal.exportAsciPath});
+        end
+        
+        %%% Just move the data to var folder folder
+        inPath      =  outPath;
+        mvOS([conf.daq(i).raw2var.path.varData tmpRaw2varPath b],[conf.daq(i).raw2var.path.varData tmpRaw2varPath b '../'],'*.*',OS);
+                
+        [~, ~] = system(['rm -r ' conf.daq(i).raw2var.path.varData tmpRaw2varPath]);
+        message2log = ['***************************************************************'];
+        disp(message2log);
+        write2log(conf.logs,message2log,'   ','syslog',OS);
+    end
+
+    
+   disp('Waiting 5 seconds....');
+   pause(5)
+end
+message2log = ['***************************************************************'];
+disp(message2log);
+write2log(conf.logs,message2log,'   ','syslog',OS);
+

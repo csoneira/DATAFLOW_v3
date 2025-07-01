@@ -17,8 +17,8 @@ uncompressed_directory=${base_directory}/UNCOMPRESSED_HLDS
 # processed_directory=${base_directory}/ANCILLARY_DIRECTORY
 moved_directory=${base_directory}/SENT_TO_RAW_TO_LIST_PIPELINE
 
-hld_input_directory=/media/externalDisk/gate/system/devices/TRB3/data/daqData/rawData/dat
-asci_output_directory=/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci
+hld_input_directory=/home/cayetano/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat
+asci_output_directory=/home/cayetano/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci
 first_stage_raw_directory=/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY
 
 # mkdir -p "$uncompressed_directory" "$processed_directory" "$moved_directory"
@@ -101,8 +101,8 @@ echo ""
 echo "Running unpacking..."
 export RPCSYSTEM=mingo0$station
 export RPCRUNMODE=oneRun # Other option is oneRun 
-# /home/cayetano/gate/bin/unpack.sh
-/media/externalDisk/gate/bin/unpack.sh
+/home/cayetano/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh
+# /media/externalDisk/gate/bin/unpack.sh
 echo ""
 echo ""
 

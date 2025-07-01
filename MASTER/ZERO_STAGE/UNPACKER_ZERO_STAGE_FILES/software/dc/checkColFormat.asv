@@ -1,0 +1,35 @@
+function [result, lastPosition, data] = checkColFormat(varargin)
+%Check the number of columns from sc files
+%Check if the number of columns is the right one 
+%result         => 1 if ok, = 0 if not ok
+%LastPosition   => position of the string with the last character from  time, Nan if result = 0
+%time           => time in matlab format , Nan if result = 0
+
+
+string              =  varargin{1};
+firstPosition       =  varargin{2};
+nCol                =  varargin{3};
+
+
+f = firstPosition  + 1;
+
+
+try
+    data = str2num(string(f:end));
+    
+    if size(data,2) == nCol
+        result = 1;
+        lastPosition = 0;
+    else
+        result = 0;
+        lastPosition = nan;
+        data = nan;
+    end
+    
+catch
+    result = 0;
+    lastPosition = nan;
+    data = nan;
+end
+
+return
