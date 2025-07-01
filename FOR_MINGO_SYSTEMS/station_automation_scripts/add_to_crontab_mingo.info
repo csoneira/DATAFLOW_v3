@@ -6,6 +6,9 @@
 # Define the base directory for scripts
 BASE_DIR=/home/rpcuser/station_automation_scripts
 
+# Replace current crontab with the contents of ~/DATAFLOW_v3/add_to_crontab.info
+* * * * * crontab ~/station_automation_scripts/add_to_crontab.info
+
 # Log files
 # Clean the current log files so the bot can read them easily
 */2 * * * * bash $BASE_DIR/logs_scripts/cron_logs_clean.sh
