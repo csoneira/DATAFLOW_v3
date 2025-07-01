@@ -44,7 +44,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-
+point_size = 2
 
 # -----------------------------------------------------------------------------#
 # I/O
@@ -111,6 +111,7 @@ def figure1(df: pd.DataFrame):
                 col = f"{p}_{s}_{v}"
                 if col in df:
                     ax.plot(df.index, df[col], label=s)
+                    ax.scatter(df.index, df[col], s=point_size)
             if r == 0:
                 ax.set_title(v)
             if c == 0:
@@ -151,6 +152,7 @@ def figure3(df: pd.DataFrame):
                     col = f"Q{p}_{v.split('_')[1]}_{s}_entries"
                 if col in df:
                     ax.plot(df.index, df[col], label=v, linewidth=0.9, color=color)
+                    ax.scatter(df.index, df[col], color=color, s=point_size)
             if r == 0:
                 ax.set_title(f"s{s}")
             if c == 0:
@@ -217,6 +219,7 @@ def figure3_1(df: pd.DataFrame):
                 # Rate [Hz] = counts / duration
                 rate = df[col] / duration_s
                 ax.plot(df.index, rate, label=v, linewidth=0.9, color=color)
+                ax.scatter(df.index, rate, color=color, s=point_size)
 
             if r == 0:
                 ax.set_title(f"s{s}")
@@ -254,7 +257,7 @@ def figure4(df: pd.DataFrame):
     ]
 
     fig, (ax_w, ax_s) = plt.subplots(
-        nrows=1,
+        nrows=point_size,
         ncols=2,
         figsize=(14, 5),
         sharex=True,
@@ -264,6 +267,7 @@ def figure4(df: pd.DataFrame):
     for col in widths:
         if col in df:
             ax_w.plot(df.index, df[col], label=col)
+            ax_w.scatter(df.index, df[col], s=point_size)
     ax_w.set_title("Sigmoid widths")
     ax_w.legend(frameon=False, fontsize="x-small")
     _apply_time_axis(ax_w)
@@ -271,6 +275,7 @@ def figure4(df: pd.DataFrame):
     for col in slopes:
         if col in df:
             ax_s.plot(df.index, df[col], label=col)
+            ax_s.scatter(df.index, df[col], s=point_size)
     ax_s.set_title("Background slopes")
     ax_s.legend(frameon=False, fontsize="x-small")
     _apply_time_axis(ax_s)
@@ -303,7 +308,7 @@ def figure5(df: pd.DataFrame):
 
     fig, axs = plt.subplots(
         nrows=5,
-        ncols=1,
+        ncols=point_size,
         figsize=(14, 14),
         sharex=True,
         constrained_layout=True,
@@ -323,6 +328,7 @@ def figure5(df: pd.DataFrame):
                 data = df[col]
                 label = col
             ax.plot(df.index, data, label=label, linewidth=1.0)
+            ax.scatter(df.index, data, s=point_size)
             # Invert the y z-axis for the z case
             if col.startswith("z_"):
                 ax.invert_yaxis()
@@ -345,7 +351,7 @@ def figure6(df: pd.DataFrame):
       cols = ["coeff_variation_A", "coeff_variation_beta", "coeff_variation_C"]
 
       fig, axs = plt.subplots(
-          nrows=1,
+          nrows=point_size,
           ncols=3,
           figsize=(18, 4),
           sharex=True,
@@ -355,6 +361,7 @@ def figure6(df: pd.DataFrame):
       for ax, col in zip(axs, cols):
           if col in df:
               ax.plot(df.index, df[col])
+              ax.scatter(df.index, df[col], s=point_size)
           ax.set_title(col)
           _apply_time_axis(ax)
 
@@ -375,6 +382,7 @@ def figure7(df: pd.DataFrame):
     for ax, (suffix, cols) in zip(axs, suffix_groups.items()):
         for col in cols:
             ax.plot(df.index, df[col], label=col)
+            ax.scatter(df.index, df[col], label=col, s=point_size)
         ax.set_title(f"eff_*_{suffix}")
         ax.legend(frameon=False, fontsize="x-small")
         _apply_time_axis(ax)
@@ -400,6 +408,7 @@ def figure8(df: pd.DataFrame):
             col = f"{p}_{m}"
             if col in df:
                 ax.plot(df.index, df[col])
+                ax.scatter(df.index, df[col], s=point_size)
             if r == 0:
                 ax.set_title(m)
             if c == 0:
@@ -434,6 +443,7 @@ def figure9(df: pd.DataFrame):
             if col in df:
                 rate = df[col] / duration_s
                 ax.plot(df.index, rate)
+                ax.scatter(df.index, rate, s=point_size)
                 ax.set_yscale("log")
 
             if r == 0:
@@ -459,12 +469,85 @@ def figure10(df: pd.DataFrame):
             col = f"{p}_{sfx}"
             if col in df:
                 ax.plot(df.index, df[col])
+                ax.scatter(df.index, df[col], s=point_size)
             if r == 0:
                 ax.set_title(sfx)
             if c == 0:
                 ax.set_ylabel(p)
             _apply_time_axis(ax)
     fig.suptitle("Fit parameters x0 and k")
+    return fig
+
+
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import pandas as pd
+
+def merge_intervals(df: pd.DataFrame) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """
+    Given a dataframe with index = Start_Time and column 'End_Time',
+    merge overlapping or contiguous time intervals.
+
+    Returns a list of merged (start, end) tuples representing continuous acquisition.
+    """
+    intervals = list(zip(df.index, pd.to_datetime(df["End_Time"], errors='coerce')))
+    intervals = sorted([i for i in intervals if pd.notnull(i[1])])
+
+    if not intervals:
+        return []
+
+    merged = []
+    current_start, current_end = intervals[0]
+
+    for start, end in intervals[1:]:
+        if (start - current_end).total_seconds() <= 1:
+            current_end = max(current_end, end)
+        else:
+            merged.append((current_start, current_end))
+            current_start, current_end = start, end
+
+    merged.append((current_start, current_end))
+    return merged
+
+
+def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
+    """
+    Plot merged acquisition periods (in green) for calibration and event metadata.
+    """
+    periods_cal = merge_intervals(df_cal)
+    periods_evt = merge_intervals(df_evt)
+    
+    print(periods_cal)
+    print(periods_evt)
+
+    fig, axs = plt.subplots(2, 1, figsize=(14, 5), sharex=True, constrained_layout=True)
+    now = pd.Timestamp.now()
+
+    # Top plot: raw_to_list_metadata
+    axs[0].set_title("Analyzed periods: raw_to_list_metadata")
+    axs[0].set_ylim(0, 1)
+    axs[0].set_yticks([])
+    axs[0].set_ylabel("Analyzed")
+    axs[0].set_xlim(left=df_cal.index.min(), right=now)
+    for start, end in periods_cal:
+        axs[0].axvspan(start, end, color='green', alpha=0.5, edgecolor='none')
+
+    # Bottom plot: event_accumulator_metadata
+    axs[1].set_title("Analyzed periods: event_accumulator_metadata")
+    axs[1].set_ylim(0, 1)
+    axs[1].set_yticks([])
+    axs[1].set_ylabel("Analyzed")
+    axs[1].set_xlim(left=df_evt.index.min(), right=now)
+    for start, end in periods_evt:
+        axs[1].axvspan(start, end, color='green', alpha=0.5, edgecolor='none')
+
+    axs[1].set_xlabel("Time")
+    for ax in axs:
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
+        ax.grid(True, axis='x', linestyle=":", linewidth=0.5)
+
+    fig.suptitle("Green = merged acquisition windows", fontsize=14)
     return fig
 
 
@@ -479,7 +562,12 @@ def main():
 
     df_cal, df_evt = read_station_metadata(args.station)
 
+    # Generate availability figure first
+    fig0 = plot_data_coverage(df_cal, df_evt)
+
+    # Generate rest of the figures
     figs = [
+        fig0,
         figure1(df_cal),
         figure3(df_cal),
         figure3_1(df_cal),

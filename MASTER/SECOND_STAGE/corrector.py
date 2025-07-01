@@ -114,7 +114,7 @@ remove_outliers = True
 # Add a new outlier filter to the pressure correction
 after_press_z_score_th = 30
 
-res_win_min = 60 # 180 Resampling window minutes
+res_win_min = 10 # 180 Resampling window minutes
 # if int(station) == 4:
 #     res_win_min = 30
 
@@ -571,11 +571,85 @@ if remove_outliers:
 # # Add to global_variables the number of percentage of kept data
 # global_variables['percentage_kept'] = len(data_df_cleaned) / len(data_df) * 100
 # data_df = data_df_cleaned.copy()
-    
+
+
+def plot_grouped_series(df, group_cols, time_col='Time', title=None, figsize=(14, 4), save_path=None, plot_after_all = False, sharey_axes =False):
+
+    global create_plots, fig_idx
+    if create_plots or create_essential_plots or plot_after_all:
+        n_plots = len(group_cols)
+        fig, axes = plt.subplots(n_plots, 1, sharex=True, sharey=sharey_axes, figsize=(figsize[0], figsize[1] * n_plots))
+        
+        if n_plots == 1:
+            axes = [axes]  # Make iterable
+        
+        for idx, cols in enumerate(group_cols):
+            ax = axes[idx]
+            for col in cols:
+                if col in df.columns:
+                    ax.plot(df[time_col], df[col], label=col, alpha = 0.5)
+                    ax.scatter(df[time_col], df[col], alpha = 0.5)
+                else:
+                    print(f"Warning: column '{col}' not found in DataFrame")
+            ax.set_ylabel(' / '.join(cols))
+            ax.grid(True)
+            ax.legend(loc='best')
+            ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
+
+        axes[-1].set_xlabel('Time')
+        if title:
+            if 'case' in locals() or 'case' in globals():
+                title = title + f', {case}'
+            fig.suptitle(title, fontsize=14)
+            fig.subplots_adjust(top=0.95)
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.96] if title else None)
+
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            new_figure_path = figure_path + f"{fig_idx}" + "_series.png"
+            fig_idx += 1
+            print(f"Saving figure to {new_figure_path}")
+            plt.savefig(new_figure_path, format='png', dpi=300)
+        plt.close()
+    # else:
+        # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
+    #     print("\n")
+
 
 # -----------------------------------------------------------------------------
 # Resampling the data in a larger time window: some averaged, some summed -----
 # -----------------------------------------------------------------------------
+
+# Interpolate the columns ['sensors_ext_Pressure_ext', 'sensors_ext_Temperature_ext']
+# so every row has a value. Use splines
+
+# data_df.reset_index(inplace=True)
+# data_df = data_df.set_index('Time')
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+]
+
+plot_grouped_series(data_df, group_cols, title='Pre-interpolation', plot_after_all=True, sharey_axes=False)
+
+# Ensure 'Time' is the index for resampling
+data_df = data_df.set_index('Time')
+# Interpolate missing values in 'sensors_ext_Pressure_ext' and 'sensors_ext_Temperature_ext'
+data_df['sensors_ext_Pressure_ext'] = data_df['sensors_ext_Pressure_ext'].interpolate(method='spline', order=3)
+data_df['sensors_ext_Temperature_ext'] = data_df['sensors_ext_Temperature_ext'].interpolate(method='spline', order=3)
+# Reset index to keep 'Time' as a column
+data_df.reset_index(inplace=True)
+
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+]
+plot_grouped_series(data_df, group_cols, title=f'Post-interpolation', plot_after_all=True, sharey_axes = False)
+
 
 data_df = data_df.copy()
 
@@ -632,49 +706,6 @@ def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', 
     # else:
         # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
         # print("\n")
-
-
-def plot_grouped_series(df, group_cols, time_col='Time', title='Series', figsize=(14, 4), save_path=None, plot_after_all = False, sharey_axes =False):
-
-    global create_plots, fig_idx
-    if create_plots or create_essential_plots or plot_after_all:
-        n_plots = len(group_cols)
-        fig, axes = plt.subplots(n_plots, 1, sharex=True, sharey=sharey_axes, figsize=(figsize[0], figsize[1] * n_plots))
-        
-        if n_plots == 1:
-            axes = [axes]  # Make iterable
-        
-        for idx, cols in enumerate(group_cols):
-            ax = axes[idx]
-            for col in cols:
-                if col in df.columns:
-                    ax.plot(df[time_col], df[col], label=col)
-                else:
-                    print(f"Warning: column '{col}' not found in DataFrame")
-            ax.set_ylabel(' / '.join(cols))
-            ax.grid(True)
-            ax.legend(loc='best')
-            ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.3f'))
-
-        axes[-1].set_xlabel('Time')
-        if title:
-            title = title + f', {case}'
-            fig.suptitle(title, fontsize=14)
-            fig.subplots_adjust(top=0.95)
-        
-        plt.tight_layout(rect=[0, 0, 1, 0.96] if title else None)
-
-        if show_plots:
-            plt.show()
-        elif save_plots:
-            new_figure_path = figure_path + f"{fig_idx}" + "_series.png"
-            fig_idx += 1
-            print(f"Saving figure to {new_figure_path}")
-            plt.savefig(new_figure_path, format='png', dpi=300)
-        plt.close()
-    # else:
-        # print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-    #     print("\n")
 
 
 # --------------------------------------------------------------------------------
@@ -747,12 +778,11 @@ for case in processing_regions:
             y = y_full[mask_valid]
             
             # Apply an horizontal median filter to the y
-            y = medfilt(y, kernel_size=5)
+            y = medfilt(y, kernel_size=3)
             
             std_y = np.nanstd(y)
             if not np.isfinite(std_y) or std_y <= 0:
                 std_y = 1.0  # fallback to a small positive number
-            # s = len(x) * std_y / 2
             s = len(x) * std_y
             
             print(f"Fitting spline for {col} | std={std_y:.4f} | nan count={np.isnan(y).sum()}")
@@ -2130,8 +2160,6 @@ for case in processing_regions:
         # --------------------------------------------------------------------------
         
         
-        create_very_essential_plots = True
-        
         # if create_plots or create_essential_plots or create_very_essential_plots:
         if create_plots or create_essential_plots or create_very_essential_plots:
             fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(17, 14), sharex=True)
@@ -2252,7 +2280,7 @@ for case in processing_regions:
         ['detector_12_eff_corr', 'detector_23_eff_corr', 'detector_34_eff_corr']
     ]
 
-    plot_grouped_series(data_df, group_cols, title=f'Counts per detector, efficiency corrected', plot_after_all=True, sharey_axes = True)
+    plot_grouped_series(data_df, group_cols, title=f'Counts per detector, efficiency corrected', plot_after_all=False, sharey_axes = True)
     
     from scipy.interpolate import UnivariateSpline
     
@@ -2268,13 +2296,13 @@ for case in processing_regions:
             y = y_full[mask_valid]
             
             # Apply an horizontal median filter to the y
-            y = medfilt(y, kernel_size=5)
+            y = medfilt(y, kernel_size=3)
             
             std_y = np.nanstd(y)
             if not np.isfinite(std_y) or std_y <= 0:
                 std_y = 1.0  # fallback to a small positive number
-            # s = len(x) * std_y / 2
-            s = len(x) * std_y * 20
+            # s = len(x) * std_y
+            s = 1
             
             print(f"Fitting spline for {col} | std={std_y:.4f} | nan count={np.isnan(y).sum()}")
             
@@ -2297,7 +2325,7 @@ for case in processing_regions:
             rel_resid = (y_full - spline_values) / denominator
 
             # Optional: remove high-residual outliers
-            mask_outlier = np.abs(rel_resid) > 0.9
+            mask_outlier = np.abs(rel_resid) > 0.2
             rel_resid[mask_outlier] = np.nan
             spline_values[mask_outlier] = np.nan
             y_full[mask_outlier] = np.nan
@@ -2323,7 +2351,7 @@ for case in processing_regions:
         spline_group_cols,
         time_col='Time',
         title='EFF CORR. Spline approximations of processed_tt_* time series',
-        plot_after_all=True, sharey_axes = True
+        plot_after_all=False, sharey_axes = True
     )
     
     
@@ -2338,17 +2366,19 @@ for case in processing_regions:
         rel_residual_group_cols,
         time_col='Time',
         title='Relative residuals of processed_tt_* time series',
-        plot_after_all=False, sharey_axes = True
+        plot_after_all=True, sharey_axes = True
     )
     
     # Result after inerpolation
     group_cols = [
+        ['sensors_ext_Pressure_ext'],
+        ['sensors_ext_Temperature_ext'],
         ['detector_1234_eff_corr'],
         ['detector_123_eff_corr', 'detector_234_eff_corr'],
         ['detector_12_eff_corr', 'detector_23_eff_corr', 'detector_34_eff_corr']
     ]
 
-    plot_grouped_series(data_df, group_cols, title=f'Counts per detector, efficiency corrected, spline filtered', plot_after_all=True, sharey_axes = True)
+    plot_grouped_series(data_df, group_cols, title=f'Counts per detector, efficiency corrected, spline filtered', plot_after_all=True, sharey_axes = False)
     
     
     # -------------------------------------------------------------------------------------
@@ -2373,7 +2403,7 @@ for case in processing_regions:
             ['detector_23_eff'],
             ['detector_34_eff'],
         ]
-    plot_grouped_series(data_df, group_cols, title='Efficiencies per detector, DECORRELATED', plot_after_all=True)
+    plot_grouped_series(data_df, group_cols, title='Efficiencies per detector, DECORRELATED', plot_after_all=False)
     
     # group_cols = [
     #     ['sensors_ext_Pressure_ext'],
@@ -2527,14 +2557,6 @@ for case in processing_regions:
     
     # ------------------------------------------------------------------------------------------------------------------------
 
-    # data_df['summed'] = data_df['detector_1234'] + data_df['detector_123'] + \
-    #     data_df['detector_234'] + data_df['detector_12'] + \
-    #     data_df['detector_23'] + data_df['detector_34']
-
-    # data_df['summed_eff_corr'] = data_df['detector_1234_eff_corr'] + data_df['detector_123_eff_corr'] + \
-    #     data_df['detector_234_eff_corr'] + data_df['detector_12_eff_corr'] + \
-    #     data_df['detector_23_eff_corr'] + data_df['detector_34_eff_corr']
-
     # group_cols = [
     #     ['sensors_ext_Pressure_ext'],
     #     ['sensors_ext_Temperature_ext'],
@@ -2550,6 +2572,8 @@ print('----------------------------------------------------------------------')
 print('-------------------- Atmospheric corrections started -----------------')
 print('----------------------------------------------------------------------')
 print('----------------------------------------------------------------------')
+
+
 
 
 print('----------------------------------------------------------------------')
@@ -2578,33 +2602,6 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = Non
     if not df.empty:
         # Fit the exponential model using uncertainties in Y as weights
         print("Fitting pressure exponential model...")
-        
-        # ------------------------------------------------------------------------------------------------
-        # Filter outliers before fitting -----------------------------------------------------------------
-        # ------------------------------------------------------------------------------------------------
-        
-        # z_scores = np.abs((df['log_I_over_I0'] - df['log_I_over_I0'].median()) / df['log_I_over_I0'].std())
-        # # z_scores = (df['log_I_over_I0'] - df['log_I_over_I0'].median()) / df['log_I_over_I0'].std()
-        
-        # # Make a small histogram of the z_scores to see the distribution
-        # if create_plots:
-        #     plt.hist(z_scores, bins=400)
-        #     plt.axvline(x=z_score_th_pres_corr, color='r', linestyle='--', label='Threshold')
-        #     plt.title(f'{region}\nZ-Scores Distribution')
-        #     plt.xlabel('Z-Score')
-        #     plt.ylabel('Frequency')
-        #     if show_plots: 
-        #         plt.show()
-        #     elif save_plots:
-        #         new_figure_path = figure_path + f"{fig_idx}" + "_pre_pressure_z" + f"{region}" + ".png"
-        #         fig_idx += 1
-        #         print(f"Saving figure to {new_figure_path}")
-        #         plt.savefig(new_figure_path, format = 'png', dpi = 300)
-        #     plt.close()
-        # # else:
-        # #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-        
-        # df = df[z_scores < z_score_th_pres_corr]
         
         # WIP TO USE UNCERTAINTY OF PRESSURE ----------------------------------------------
         popt, pcov = curve_fit(fit_model, df['delta_P'], df['log_I_over_I0'], sigma=df['unc_log_I_over_I0'], absolute_sigma=True, p0=(1,0))
@@ -2655,17 +2652,8 @@ def calculate_eta_P(I_over_I0, unc_I_over_I0, delta_P, unc_delta_P, region = Non
     return eta_P, eta_P_uncertainty, eta_P_ordinate
 
 
-def quantile_mean(data_df, region, lower_quantile=0.1, upper_quantile=0.9):
-    """
-    Compute the mean of the data within the specified quantile range.
-    
-    :param data_df: DataFrame containing the data.
-    :param region: Column name to compute the small quantile mean for.
-    :param lower_quantile: Lower quantile threshold (default: 10%).
-    :param upper_quantile: Upper quantile threshold (default: 90%).
-    :return: Mean of the values within the quantile range.
-    """
-    values = data_df[region].dropna()  # Remove NaNs
+def quantile_mean(values, lower_quantile=0.01, upper_quantile=0.99):
+
     q_low, q_high = np.quantile(values, [lower_quantile, upper_quantile])
     filtered_values = values[(values >= q_low) & (values <= q_high)]
     
@@ -2713,11 +2701,10 @@ for region in regions_to_correct:
         unc_I = 1
     
     # I0 = data_df[region].mean()
-    I0 = quantile_mean(data_df, region)
+    I0 = quantile_mean(I)
     unc_I0 = unc_I / np.sqrt( len(I) )  # Uncertainty of the mean
     I_over_I0 = I / I0
     unc_I_over_I0 = I_over_I0 * np.sqrt( (unc_I / I)**2 + (unc_I0 / I0)**2 )
-    pressure_results = pd.DataFrame(columns=['Region', 'Eta_P'])
 
     # Filter the negative or 0 I_over_I0 values
     valid_mask = I_over_I0 > 0
@@ -2761,6 +2748,7 @@ for region in regions_to_correct:
             'unc_log_I_over_I0': unc_I_over_I0 / I_over_I0
         })
         
+        create_very_essential_plots = True
         if create_plots or create_very_essential_plots:
             plt.figure()
             if show_errorbar:
@@ -2785,10 +2773,7 @@ for region in regions_to_correct:
                 print(f"Saving figure to {new_figure_path}")
                 plt.savefig(new_figure_path, format = 'png', dpi = 300)
             plt.close()
-        # else:
-        #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-
-
+            
     # Create corrected rate column for the region
     data_df[f'pres_{region}'] = I * np.exp(-1 * eta_P / 100 * delta_P)
 
@@ -2809,6 +2794,7 @@ for region in regions_to_correct:
 # Convert the list of dictionaries into a DataFrame after the loop
 log_delta_I_df = pd.DataFrame(results)
 
+create_very_essential_plots = True
 if create_plots or create_essential_plots or create_very_essential_plots:
     # --- Plotting the vectors ---
     plt.figure(figsize=(12, 8))
@@ -2843,7 +2829,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
 
     plt.xlabel('Delta P')
     plt.ylabel('Log (I / I0)')
-    # plt.ylim(-0.6, 0.5)
+    plt.ylim(-0.5, 0.5)
     plt.title('Efficiency Fits for Different Regions')
     # plt.legend()
     plt.grid(True)
@@ -2859,10 +2845,35 @@ if create_plots or create_essential_plots or create_very_essential_plots:
 #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 
-for region in regions_to_correct:
-    print(f"Region: {region}")
-    print(f"                    Eta_P: {global_variables[f'eta_P_{region}']}")
+# for region in regions_to_correct:
+#     print(f"Region: {region}")
+#     print(f"                    Eta_P: {global_variables[f'eta_P_{region}']}")
+
+
+# Initialize the matrix as a nested dictionary
+eta_matrix = {}
+
+for detector_label in detector_labels:
+    detector_key = f'detector_{detector_label}'
+    eta_matrix[detector_key] = {}
     
+    for processing_region in processing_regions:
+        col_name = f'{detector_key}_eff_corr_{processing_region}'
+        key = f'eta_P_{col_name}'
+        
+        eta = global_variables.get(key, None)
+        if eta is not None:
+            eta_matrix[detector_key][processing_region] = eta
+
+# Convert to DataFrame
+df_eta = pd.DataFrame.from_dict(eta_matrix, orient='index')
+
+# Optional: sort the columns (regions)
+df_eta = df_eta.reindex(sorted(df_eta.columns), axis=1)
+
+print("\nEta Matrix:")
+print(df_eta)
+        
 
 # ---------------------------------------------------------------------------------------------------
 
@@ -2935,8 +2946,6 @@ if create_plots:
 # print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
 # print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
 # print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF\n")
-
-# create_very_essential_plots = True
 
 # if remove_outliers:
     
