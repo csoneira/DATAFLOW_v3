@@ -2,6 +2,8 @@
 *.npz
 *.bin
 *.h5
+*.hld
+*.mat
 
 # Copernicus data
 *.nc
