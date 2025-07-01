@@ -100,8 +100,9 @@ echo ""
 echo ""
 echo "Running unpacking..."
 export RPCSYSTEM=mingo0$station
-export RPCRUNMODE=oneRun # Other option is oneRun
-/home/cayetano/gate/bin/unpack.sh
+export RPCRUNMODE=oneRun # Other option is oneRun 
+# /home/cayetano/gate/bin/unpack.sh
+/media/externalDisk/gate/bin/unpack.sh
 echo ""
 echo ""
 
