@@ -3966,7 +3966,7 @@ if side_calculations:
         print(induction_section_df)
         
         # Load the LUT
-        lut_file = "/home/cayetano/DATAFLOW_v3/MASTER/ANCILLARY/lut.csv"
+        lut_file = "/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/lut.csv"
         lut_df = pd.read_csv(lut_file)
 
         # Initialize a list to store the best induction section values for each plane

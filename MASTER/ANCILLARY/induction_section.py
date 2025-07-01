@@ -45,7 +45,7 @@ lut_df = pd.DataFrame(lut, columns=["avalanche_width", "cluster_size_1", "cluste
 print(lut_df)
 
 # Save the LUT to a file
-lut_df.to_csv("/home/cayetano/DATAFLOW_v3/MASTER/ANCILLARY/lut.csv", index=False)
+lut_df.to_csv("/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/lut.csv", index=False)
 
 print("LUT generated and saved to lut.csv")
 # %%

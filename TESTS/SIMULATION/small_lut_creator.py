@@ -69,7 +69,7 @@ import matplotlib as mpl
 # Parameter definitions --------------------------------------------------------
 # ------------------------------------------------------------------------------
 
-PLOT_DIR = "/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION"
+PLOT_DIR = "/home/mingo/DATAFLOW_v3/TESTS/SIMULATION"
 tt_list = ['1234', '123', '234', '12', '23', '34']  # or VALID_MEASURED_TYPES
 
 plot_time_windows = False
@@ -136,8 +136,8 @@ VALID_CROSSING_TYPES = ['1234', '123', '234', '12',  '23', '34']
 VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '23', '24', '34']
 
 use_binary = True  # If True, will use a binary file instead of CSV
-bin_filename = f"/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.pkl"
-csv_filename = f"/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.csv"
+bin_filename = f"/home/mingo/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.pkl"
+csv_filename = f"/home/mingo/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.csv"
 
 fistensor2 = False
 if fistensor2:
@@ -186,7 +186,7 @@ for measured_type in measured_types:
     measured_rates[measured_type] = measured_events / total_time_seconds / total_generated_rate if total_time_seconds > 0 else 0
 
 # Fixed path to output file
-rates_LUT_filename = Path("/home/cayetano/DATAFLOW_v3/TESTS/SIMULATION/rates_LUT.csv")
+rates_LUT_filename = Path("/home/mingo/DATAFLOW_v3/TESTS/SIMULATION/rates_LUT.csv")
 write_header = not rates_LUT_filename.exists()
 
 with open(rates_LUT_filename, 'a') as f:

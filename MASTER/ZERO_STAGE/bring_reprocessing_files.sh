@@ -14,7 +14,7 @@ end=$3
 start_DOY=$(date -d "20${start:0:2}-${start:2:2}-${start:4:2}" +%y%j)
 end_DOY=$(date -d "20${end:0:2}-${end:2:2}-${end:4:2}" +%y%j)
 
-compressed_directory=/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE/COMPRESSED_HLDS
+compressed_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE/COMPRESSED_HLDS
 mkdir -p "$compressed_directory"
 
 echo "Fetching HLD files for MINGO0$station between $start_DOY and $end_DOY..."

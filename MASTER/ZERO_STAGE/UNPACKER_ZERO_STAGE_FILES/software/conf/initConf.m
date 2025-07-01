@@ -16,7 +16,7 @@ else
     HOSTNAME    = 1;
     SYSTEMNAME  = 'mingo01';
     %Software location
-    HOME        = '/home/cayetano/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/';
+    HOME        = '/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/';
     %System data structure
     SYS         = [HOME 'system/'];
     INTERPRETER = 'octave';

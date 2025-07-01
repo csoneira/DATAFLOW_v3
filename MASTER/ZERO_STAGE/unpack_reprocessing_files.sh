@@ -11,15 +11,15 @@ random_file=false  # set to true to enable random selection
 
 station=$1
 
-base_directory=/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE
+base_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE
 compressed_directory=${base_directory}/COMPRESSED_HLDS
 uncompressed_directory=${base_directory}/UNCOMPRESSED_HLDS
 # processed_directory=${base_directory}/ANCILLARY_DIRECTORY
 moved_directory=${base_directory}/SENT_TO_RAW_TO_LIST_PIPELINE
 
-hld_input_directory=/home/cayetano/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat
-asci_output_directory=/home/cayetano/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci
-first_stage_raw_directory=/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY
+hld_input_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat
+asci_output_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci
+first_stage_raw_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY
 
 # mkdir -p "$uncompressed_directory" "$processed_directory" "$moved_directory"
 mkdir -p "$uncompressed_directory" "$moved_directory" "$first_stage_raw_directory"
@@ -101,7 +101,7 @@ echo ""
 echo "Running unpacking..."
 export RPCSYSTEM=mingo0$station
 export RPCRUNMODE=oneRun # Other option is oneRun 
-/home/cayetano/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh
+/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh
 # /media/externalDisk/gate/bin/unpack.sh
 echo ""
 echo ""

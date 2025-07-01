@@ -1,4 +1,4 @@
-cd /home/cayetano/software/
+cd /home/mingo/software/
 
 # Save current HOME
 #OLD_HOME="$HOME"
@@ -6,7 +6,7 @@ cd /home/cayetano/software/
 # Set temporary HOME
 #export HOME="/media/externalDisk/gate"
 
-octave --no-gui --no-history /home/cayetano/software/unpackingContinuous.m
+octave --no-gui --no-history /home/mingo/software/unpackingContinuous.m
 
 # Restore original HOME
 #export HOME="$OLD_HOME"

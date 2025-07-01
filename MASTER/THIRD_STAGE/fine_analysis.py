@@ -62,10 +62,10 @@ if len(sys.argv) != 2 or sys.argv[1] not in {'1', '2', '3', '4'}:
     sys.exit(1)
 
 station_index = sys.argv[1]
-nmdb_path = "/home/cayetano/DATAFLOW_v3/MASTER/THIRD_STAGE/nmdb_combined.csv"
-corrected_path = f"/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0{station_index}/SECOND_STAGE/large_corrected_table.csv"
-output_path = f"/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0{station_index}/THIRD_STAGE/third_stage_table.csv"
-figure_path = f"/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0{station_index}/THIRD_STAGE/FIGURES/"
+nmdb_path = "/home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/nmdb_combined.csv"
+corrected_path = f"/home/mingo/DATAFLOW_v3/STATIONS/MINGO0{station_index}/SECOND_STAGE/large_corrected_table.csv"
+output_path = f"/home/mingo/DATAFLOW_v3/STATIONS/MINGO0{station_index}/THIRD_STAGE/third_stage_table.csv"
+figure_path = f"/home/mingo/DATAFLOW_v3/STATIONS/MINGO0{station_index}/THIRD_STAGE/FIGURES/"
 
 # City of the detector. 1: Madrid, 2: Warsaw, 3: Puebla, 4: Monterrey
 city_names = {
@@ -99,7 +99,7 @@ from io import StringIO
 
 
 # ----------- Load NMDB Data --------------------------------------
-nmdb_path = "/home/cayetano/DATAFLOW_v3/MASTER/THIRD_STAGE/nmdb_combined.csv"
+nmdb_path = "/home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/nmdb_combined.csv"
 
 with open(nmdb_path, 'r') as f:
     lines = f.readlines()
@@ -135,7 +135,7 @@ nmdb_df.iloc[:, 1:] = nmdb_df.iloc[:, 1:].apply(pd.to_numeric, errors='coerce')
 
 
 # ----------- Load Station Data -----------------------------------
-station_path = f"/home/cayetano/DATAFLOW_v3/STATIONS/MINGO0{station}/SECOND_STAGE/large_corrected_table.csv"
+station_path = f"/home/mingo/DATAFLOW_v3/STATIONS/MINGO0{station}/SECOND_STAGE/large_corrected_table.csv"
 station_df = pd.read_csv(station_path, low_memory=False)
 station_df["Time"] = pd.to_datetime(station_df["Time"], errors='coerce')
 station_df = station_df.apply(pd.to_numeric, errors='coerce').assign(Time=station_df["Time"])

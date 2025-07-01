@@ -4,7 +4,7 @@
 """
 
 RUN FROM CRONTAB
-    python3 /home/cayetano/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/Backbone/metadata_plotter.py 1 --save
+    python3 /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/Backbone/metadata_plotter.py 1 --save
 
 visualize_station_metadata.py
 
@@ -68,7 +68,7 @@ def read_station_metadata(station: int) -> tuple[pd.DataFrame, pd.DataFrame]:
           raise ValueError("station must be 1, 2, 3 or 4")
 
       base = (
-          Path("/home/cayetano/DATAFLOW_v3")
+          Path("/home/mingo/DATAFLOW_v3")
           / "STATIONS"
           / f"MINGO0{station}"
           / "FIRST_STAGE"
@@ -592,7 +592,7 @@ def main():
 
         # Save multi-page PDF in the same directory as the CSVs
         base = (
-            Path("/home/cayetano/DATAFLOW_v3")
+            Path("/home/mingo/DATAFLOW_v3")
             / "STATIONS"
             / f"MINGO0{args.station}"
             / "FIRST_STAGE"
