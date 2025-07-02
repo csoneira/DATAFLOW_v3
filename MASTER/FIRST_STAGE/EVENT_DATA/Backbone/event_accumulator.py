@@ -1,9 +1,8 @@
-#%%
 from __future__ import annotations
-#%%
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#%%
 
 """
 Created on Thu Jun 20 09:15:33 2024
@@ -26,86 +25,45 @@ print("__   ____________________________________________________________________
 print("  | |                                                                                                    | |  ")
 print("\n\n")
 
-import numpy as np
-import pandas as pd
-import sys
+
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
+# ----------------------------- Standard Library -----------------------------
 import os
-import builtins
-import shutil
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from scipy.stats import poisson
-from scipy.optimize import minimize
-from scipy.optimize import curve_fit
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
-from typing import List, Tuple, Dict
+import sys
+import math
 import random
-from datetime import datetime
-from matplotlib.backends.backend_pdf import PdfPages
-from PIL import Image
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-from scipy.ndimage import gaussian_filter1d
-from scipy.stats import poisson
-from scipy.optimize import minimize
-
-from pathlib import Path
-from typing import Union
-import numpy as np
-import pandas as pd
-import math
-from scipy.sparse import load_npz, csc_matrix
-from pathlib import Path
-from typing  import Union
-import numpy as np
-import pandas as pd
-import math
-from scipy.sparse import load_npz, csc_matrix
-
-import numpy as np
-import pandas as pd
-import math
-from typing import Optional, Dict
-from pathlib import Path
-from tqdm import tqdm
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-
-from tqdm import tqdm
-from scipy.optimize import curve_fit
-from scipy.stats import poisson
+import shutil
+import builtins
 from datetime import datetime, timedelta
+from pathlib import Path
+from collections import defaultdict
+from typing import List, Tuple, Dict, Optional, Union
+
+# ---------------------------- Third-party Libraries --------------------------
+import numpy as np
+import pandas as pd
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-import builtins
-
-from typing import Dict, Optional
-import numpy as np
-import pandas as pd
-import math
-from typing import Dict, Optional
-from pathlib import Path
-import numpy as np
-import pandas as pd
-import math
-from typing import Dict, Optional
-try:
-    from tqdm.auto import tqdm
-except ModuleNotFoundError:
-    tqdm = None
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+from matplotlib.cm import get_cmap
+from matplotlib.backends.backend_pdf import PdfPages
 from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import cm
 
-import matplotlib as mpl
+from PIL import Image
+from tqdm import tqdm
+
+from scipy.stats import poisson
+from scipy.optimize import minimize, curve_fit, nnls
+from scipy.special import gamma
+from scipy.ndimage import gaussian_filter1d
+from scipy.interpolate import interp1d, CubicSpline, RegularGridInterpolator
+from scipy.sparse import load_npz, csc_matrix
+
+
+# -----------------------------------------------------------------------------
 
 last_file_test = True
 reanalyze_completed = True
@@ -430,7 +388,7 @@ valid_times = df['Time'].dropna()
 
 # --- MULTIPLE FILES HANDLING ---
 if multiple_files:
-    from datetime import datetime, timedelta
+    
 
     # Configuration
     cluster_of_files = 7  # Adjust as needed
@@ -919,8 +877,6 @@ if side_calculations:
         df['subdetector_123_tt'] = df['processed_tt'].map(map_123)
         df['subdetector_234_tt'] = df['processed_tt'].map(map_234)
         df['subdetector_1234_tt'] = df['processed_tt']
-
-        from scipy.ndimage import gaussian_filter1d
         
         nbins = 12
         right = np.pi / 3
@@ -1043,7 +999,6 @@ if side_calculations:
             plt.close()
 
 
-        from scipy.optimize import curve_fit
         
         fit_params_list = []
         
@@ -1369,7 +1324,7 @@ if side_calculations:
         df['subdetector_234_tt'] = df['processed_tt'].map(map_234)
         df['subdetector_1234_tt'] = df['processed_tt']
 
-        from scipy.ndimage import gaussian_filter1d
+        
         
         # Explained / noise percentage
         def compute_noise_percentages(est, measured):
@@ -1548,7 +1503,6 @@ if side_calculations:
         plt.tight_layout()
         plt.show()
         
-        from matplotlib.cm import get_cmap
         cmap = get_cmap('tab10')
         colors = {}  # ensure this is a dict
 
@@ -1657,7 +1611,7 @@ if side_calculations:
         # ----------------------------------------------------------------------------------------------------
         # ----------------------------------------------------------------------------------------------------
         
-        from matplotlib.cm import get_cmap
+        
         cmap = get_cmap('tab10')
 
         for i, topo in enumerate(inferred_topologies):
@@ -1803,7 +1757,6 @@ if side_calculations:
         noise_2d = True
 
         if noise_2d:
-            import numpy as np
 
             # Reuse user-defined binning
             nbins_theta = 6
@@ -1874,7 +1827,6 @@ if side_calculations:
                 "noise_14": noise_14.flatten(),
             })
             
-            import matplotlib.pyplot as plt
 
             # Function to plot 2D efficiency or noise maps
             def plot_2d_map(data, title, vmin=0, vmax=100, cmap='viridis'):
@@ -1926,10 +1878,6 @@ if side_calculations:
     
     # histogram_results = True
     # if histogram_results:
-
-    #     import numpy as np
-    #     import matplotlib.pyplot as plt
-    #     from scipy.optimize import curve_fit
 
     #     def gaussian(x, mu, sigma, amplitude):
     #         return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
@@ -2107,7 +2055,6 @@ if side_calculations:
 
         # Create the DataFrame
         FEE_calibration = pd.DataFrame(FEE_calibration)
-        from scipy.interpolate import CubicSpline
         # Convert to NumPy arrays for interpolation
         width_table = FEE_calibration['Width'].to_numpy()
         fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
@@ -2160,10 +2107,7 @@ if side_calculations:
         for i in range(1, 5):
             total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
 
-        import numpy as np
-        import matplotlib.pyplot as plt
-        from scipy.special import gamma
-        from scipy.optimize import curve_fit
+        
 
         # Constants
         q_e = 1.602e-4  # fC
@@ -2202,7 +2146,6 @@ if side_calculations:
             theta_fit, nbar_fit, alpha_fit, A_fit, offset_fit = popt
             
             # Store fit results
-            from scipy.special import gamma
 
             polya_results = {
                 "module": module,
@@ -2324,7 +2267,6 @@ if side_calculations:
 
         # Create the DataFrame
         FEE_calibration = pd.DataFrame(FEE_calibration)
-        from scipy.interpolate import CubicSpline
         # Convert to NumPy arrays for interpolation
         width_table = FEE_calibration['Width'].to_numpy()
         fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
@@ -2409,7 +2351,6 @@ if side_calculations:
             theta_fit, nbar_fit, alpha_fit, A_fit, offset_fit = popt
             
             # Store fit results
-            from scipy.special import gamma
 
             # Fine x for fit curve
             x_fine = np.linspace(0, 1.1e7, 300)
@@ -2537,7 +2478,7 @@ if side_calculations:
             theta_fit, nbar_fit, alpha_fit, A_fit, offset_fit = popt
             
             # Store fit results
-            from scipy.special import gamma
+            
 
             # Fine x for fit curve
             x_fine = np.linspace(0, 1.1e7, 300)
@@ -2634,7 +2575,6 @@ if side_calculations:
         # Create the DataFrame
         FEE_calibration = pd.DataFrame(FEE_calibration)
 
-        from scipy.interpolate import CubicSpline
 
         # Convert to NumPy arrays for interpolation
         width_table = FEE_calibration['Width'].to_numpy()
@@ -3144,7 +3084,6 @@ if side_calculations:
         # # Create the DataFrame
         FEE_calibration = pd.DataFrame(FEE_calibration)
 
-        from scipy.interpolate import CubicSpline
 
         # Convert to NumPy arrays for interpolation
         width_table = FEE_calibration['Width'].to_numpy()
@@ -3624,9 +3563,7 @@ if side_calculations:
         if show_plots: plt.show()
         plt.close()
 
-        import matplotlib.pyplot as plt
-        import numpy as np
-        from scipy.optimize import nnls
+        
 
         # Parameters
         selected_alpha = 0.7
@@ -3703,7 +3640,6 @@ if side_calculations:
         # Step 2: Plot 5×2 grid
         fig, axes = plt.subplots(5, 2, figsize=(14, 18), sharex='col')
 
-        import pandas as pd
 
         coeff_tables = {dt: pd.DataFrame(index=[f"S{n}" for n in range(1, number_of_particles_bound_up + 1)],
                                         columns=["P1", "P2", "P3", "P4"])
@@ -4041,7 +3977,7 @@ if side_calculations:
 
         # Create the DataFrame
         FEE_calibration = pd.DataFrame(FEE_calibration)
-        from scipy.interpolate import CubicSpline
+        
         # Convert to NumPy arrays for interpolation
         width_table = FEE_calibration['Width'].to_numpy()
         fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
@@ -4264,11 +4200,7 @@ if side_calculations:
 
         # Fit a sigmoidal and store the fitting values to compare with temperature, etc.
 
-        import numpy as np
-        import matplotlib.pyplot as plt
-        from scipy.optimize import curve_fit
-        import pandas as pd
-        import os
+        
 
         # --- 1. Define 3-parameter sigmoid (bounded to [0,1]) ---
         def sigmoid_3p(x, x0, k):
@@ -4467,10 +4399,7 @@ if side_calculations:
 
                 # Assuming df is available and contains 'theta' and 'definitive_tt'
 
-                from scipy.interpolate import interp1d
-                from scipy.optimize import curve_fit
-                import matplotlib.pyplot as plt
-                import numpy as np
+                
                 
                 # Reuse the existing response_histograms from earlier simulation
                 fit_results_real = {}
@@ -4520,10 +4449,7 @@ if side_calculations:
                 fit_results_real
 
             else:
-                import numpy as np
-                import matplotlib.pyplot as plt
-                from scipy.interpolate import RegularGridInterpolator
-                from scipy.optimize import curve_fit
+                
 
                 # Define the simulation again for theta and phi
                 N = 1000000
@@ -4541,10 +4467,7 @@ if side_calculations:
                     '1234': (1, 4),
                 }
 
-                import numpy as np
-                import matplotlib.pyplot as plt
-                from scipy.interpolate import RegularGridInterpolator
-                from scipy.optimize import curve_fit
+                
 
                 # Set z_positions for the 4 planes (in mm)
                 
@@ -4673,9 +4596,7 @@ if side_calculations:
             # in each combination of planes, so you get a response function but taking account efficiencies. So 
             # in this case, 123 is not the same as 13, because for an event to be 13 then it must NOT be detected in plane 2,
 
-            import numpy as np
-            import matplotlib.pyplot as plt
-            from collections import defaultdict
+            
 
             # Simulation parameters
             N = 50_000_000
@@ -4772,7 +4693,6 @@ if side_calculations:
 
 
             # Plot simulated response densities
-            import matplotlib.cm as cm
 
             fig, ax = plt.subplots(figsize=(8, 6))
             colors = cm.viridis(np.linspace(0, 1, len(response_histograms)))
@@ -4800,9 +4720,6 @@ if side_calculations:
 
 
             # STEP 2: Fit the theta distribution to F_ij(theta) model using the simulated R_ij
-
-            from scipy.interpolate import interp1d
-            from scipy.optimize import curve_fit
 
             # Store fit results
             fit_results_real = {}

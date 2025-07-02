@@ -1,48 +1,25 @@
-#%%
-
-#!/usr/bin/env python3
-"""
-
-RUN FROM CRONTAB
-    python3 /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/Backbone/metadata_plotter.py 1 --save
-
-visualize_station_metadata.py
-
-Read raw-to-list metadata for a given MINGO station (1–4) and generate five
-diagnostic figures:
-
-Figure 1  (4 × 4):  rows = planes (P1–P4), columns = {Q_sum, Q_F, Q_B, T_sum}  
-                   Each subplot shows the four strips of that plane.
-
-Figure 2  (4 × 4):  rows = planes, columns = strips (s1–s4)  
-                   Each subplot shows {Q_F, Q_B, T_sum, T_dif} of that
-                   plane/strip.
-
-Figure 3  (4 × 4):  rows = planes, columns = strips  
-                   Each subplot shows entry counters  
-                   {T_F, T_B, Q_F, Q_B}.
-
-Figure 4  (1 × 2):  left = all sigmoid-width columns,  
-                   right = all background-slope columns.
-
-Figure 5:           All global performance metrics plotted together.
-
-All curves are shown as time series against *Start_Time*.
-
-Usage
------
-$ python visualize_station_metadata.py 2      # station 2
-"""
-
 from __future__ import annotations
 
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#%%
+
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
+# Standard Library
 import argparse
 from pathlib import Path
 
+# Third-party Libraries
+import numpy as np
 import pandas as pd
-import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from matplotlib.backends.backend_pdf import PdfPages
+
+# -----------------------------------------------------------------------------
 
 point_size = 2
 
@@ -164,11 +141,6 @@ def figure3(df: pd.DataFrame):
     fig.suptitle("Entries counters by plane and strip")
     return fig
 
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 
 
 def figure3_1(df: pd.DataFrame):
@@ -424,7 +396,6 @@ def figure9(df: pd.DataFrame):
 
     Rate is computed as:  rate = M / (End_Time − Start_Time)
     """
-    import numpy as np
 
     planes = ["P1", "P2", "P3", "P4"]
     ms = ["M1", "M2", "M3", "M4", "M5", "M6"]
@@ -479,9 +450,6 @@ def figure10(df: pd.DataFrame):
     return fig
 
 
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import pandas as pd
 
 def merge_intervals(df: pd.DataFrame) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     """

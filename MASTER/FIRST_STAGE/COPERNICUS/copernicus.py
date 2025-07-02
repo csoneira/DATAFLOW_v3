@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#%%
 
 print("__| |____________________________________________________________| |__")
 print("__   ____________________________________________________________   __")
@@ -17,16 +20,24 @@ print("  | |                                                            | |  ")
 
 test = True
 
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
+# Standard Library
+import os
 import sys
 from datetime import datetime, timedelta
+
+# Third-party Libraries
 import numpy as np
 import pandas as pd
 import cdsapi
 import xarray as xr
-import os
 
+# -----------------------------------------------------------------------------
 
-print('--------------------------- python reanalysis starts ---------------------------')
+print('---------------- python copernicus retrieval starts ------------------')
 
 
 # def usage():
@@ -41,7 +52,7 @@ print('--------------------------- python reanalysis starts --------------------
 #       - Processes data into clear and organized DataFrames.
 
 #     Output:
-#       - A CSV file named 'accumulated_reanalysis_data.csv'.
+#       - A CSV file named 'accumulated_copernicus_data.csv'.
 
 #     Note:
 #       - Ensure you have access to the CDS API with valid credentials.
@@ -94,7 +105,7 @@ else:
 # ------------------------------------------------------------------
 
 
-working_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/REANALYSIS")
+working_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/COPERNICUS")
 
 # Define subdirectories relative to the working directory
 base_directories = {
@@ -108,7 +119,7 @@ os.makedirs(working_directory, exist_ok=True)
 os.makedirs(copernicus_directory, exist_ok=True)
 
 # Construct file paths
-csv_file = os.path.join(working_directory, "big_reanalysis_data.csv")
+csv_file = os.path.join(working_directory, "big_copernicus_data.csv")
 nc_2m_temp_file = os.path.join(copernicus_directory, f"{location}_2m_temperature.nc")
 nc_100mbar_file = os.path.join(copernicus_directory, f"{location}_100mbar_temperature_geopotential.nc")
 
@@ -276,8 +287,8 @@ else:
 df_updated.to_csv(csv_file, index=False)
 print(f"Data saved to {csv_file}.")
 
-print('--------------------------- python reanalysis ends ---------------------------')
+print('--------------------------- python copernicus ends ---------------------------')
 
 print('------------------------------------------------------')
-print(f"reanalysis.py (Copernicus) completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print(f"copernicus.py (Copernicus) completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print('------------------------------------------------------')

@@ -1,16 +1,29 @@
+from __future__ import annotations
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#%%
+
 """
 Created on Wed Dec 18 2024
 
 @author: csoneira@ucm.es
 """
 
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
+# Standard Library
 import os
-import pandas as pd
-from glob import glob
 import sys
+from glob import glob
 from datetime import datetime
+
+# Third-party Libraries
+import pandas as pd
+
+# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
@@ -36,7 +49,7 @@ base_folder = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 directories = {
     "event_data": os.path.join(base_folder, "FIRST_STAGE/EVENT_DATA"),
     "lab_logs": os.path.join(base_folder, "FIRST_STAGE/LAB_LOGS"),
-    "reanalysis": os.path.join(base_folder, "FIRST_STAGE/REANALYSIS"),
+    "reanalysis": os.path.join(base_folder, "FIRST_STAGE/COPERNICUS"),
 }
 
 # Define the output directory

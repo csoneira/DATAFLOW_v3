@@ -1,11 +1,21 @@
+from __future__ import annotations
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#%%
 
-import pandas as pd
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
 import os
-import numpy as np
-import sys
 import shutil
+import sys
+
+import numpy as np
+import pandas as pd
+
+# -----------------------------------------------------------------------------
 
 create_new_csv = True
 

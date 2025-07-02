@@ -132,14 +132,22 @@ echo "Fetching data from $mingo_direction to $local_destination, excluding alrea
 echo '------------------------------------------------------'
 
 if [[ -s "$exclude_list_file" ]]; then
-  ssh $mingo_direction 'ls /media/externalDisk/gate/system/devices/TRB3/data/daqData/asci/*.dat'
-  rsync -avz --exclude-from="$exclude_list_file" "$mingo_direction:$dat_files_directory/*.dat" "$local_destination"
+  echo "Files currently available on $mingo_direction:"
+  ssh "$mingo_direction" "ls -lh $dat_files_directory"/*.dat
+
+  echo "Fetching new data files, excluding those already processed..."
+  rsync -avz --exclude-from="$exclude_list_file" "$mingo_direction:$dat_files_directory"/*.dat "$local_destination"
+
   rm "$exclude_list_file"
   rm -r "$base_working_directory/tmp"
 else
   echo "No exclude list found. Fetching all files..."
+  echo "Files currently available on $mingo_direction:"
+  ssh "$mingo_direction" "ls -lh $dat_files_directory"/*.dat
+
   rsync -avz "$mingo_direction:$dat_files_directory"/*.dat "$local_destination"
 fi
+
 
 echo '------------------------------------------------------'
 echo '------------------------------------------------------'
@@ -177,17 +185,7 @@ else
     echo "Error: Download failed. Continuing execution..."
 fi
 
-echo '------------------------------------------------------'
-echo '------------------------------------------------------'
-
-# Process the data: raw_to_list.py
-echo "Processing .dat files with Python script (raw_to_list.py)..."
-python3 "$raw_to_list_directory" "$station"
-
-# Process the data: event_accumulator.py
-echo "Processing list files with Python script (event_accumulator.py)..."
-python3 "$event_accumulator_directory" "$station"
 
 echo '------------------------------------------------------'
-echo "bring_and_analyze_events.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "bring_data_and_config_files.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
 echo '------------------------------------------------------'

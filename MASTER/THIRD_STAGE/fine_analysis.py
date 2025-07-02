@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#%%
 
 """
 Created on 2025-01-01
@@ -24,34 +27,43 @@ print("                               `._________`-.   `.   `.___")
 print("                                             SSt  `------'`")
 print("\n\n")
 
+
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
+
+# Standard Library
+import os
 import sys
+from io import StringIO
+from datetime import datetime, timedelta
+
+# Scientific Computing
 import numpy as np
 import pandas as pd
-from io import StringIO
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import medfilt
+from scipy.optimize import curve_fit, least_squares
+from scipy.interpolate import griddata
+from scipy.stats import (
+    norm,
+    halfnorm,
+    pearsonr
+)
+
+# Machine Learning
+from sklearn.linear_model import LinearRegression
+
+# Plotting
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend
+
 import matplotlib.pyplot as plt
-from scipy.signal import medfilt
-import os
-from sklearn.linear_model import LinearRegression
-from datetime import datetime, timedelta
-import sys
-from scipy.optimize import least_squares
-from scipy.ndimage import gaussian_filter1d
-import numpy as np
-import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 from mpl_toolkits.mplot3d import Axes3D
-from sklearn.linear_model import LinearRegression
-from scipy.optimize import curve_fit
-from scipy.stats import norm
-import matplotlib.pyplot as plt
-import numpy as np
-from scipy.stats import halfnorm
-from scipy.stats import norm
-from scipy.stats import pearsonr
-import sys
-import pandas as pd
-from io import StringIO
+
+# -----------------------------------------------------------------------------
 
 sta_time = datetime(2025, 5, 25)
 end_time = datetime(2025, 6, 5, 14)
@@ -84,18 +96,13 @@ os.makedirs(os.path.dirname(figure_path), exist_ok=True)
 
 
 
-import sys
-import pandas as pd
-import numpy as np
-from io import StringIO
 
 
 # ----------- Parse station argument from command line ------------
 if len(sys.argv) != 2 or sys.argv[1] not in ['1', '2', '3', '4']:
     raise ValueError("Usage: script.py <station> with station in {1, 2, 3, 4}")
 station = sys.argv[1]
-import pandas as pd
-from io import StringIO
+
 
 
 # ----------- Load NMDB Data --------------------------------------
@@ -187,7 +194,6 @@ save_plots = True
 show_plots = False
 fig_idx = 0
 
-import matplotlib.ticker as mtick
 
 def plot_grouped_series(df, group_cols, time_col='Time', title=None, figsize=(14, 4), save_path=None):
     """
@@ -313,7 +319,6 @@ print("-------------------------------------------------------------------------
 print("---------------------- Rigidity cutoff calculator ------------------------")
 print("--------------------------------------------------------------------------")
 
-from scipy.interpolate import griddata
 
 # Given data (effective vertical cut-off rigidities)
 data = [

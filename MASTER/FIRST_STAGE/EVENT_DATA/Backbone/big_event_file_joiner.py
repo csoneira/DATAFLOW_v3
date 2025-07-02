@@ -1,20 +1,32 @@
+from __future__ import annotations
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#%%
 
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
+# Standard Library
+import builtins
+import os
+import random
+import shutil
+import sys
+from datetime import datetime
+
+# Third-party Libraries
 import numpy as np
 import pandas as pd
-import sys
-import os
-import builtins
-import shutil
-import random
-from datetime import datetime
+import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from PIL import Image
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.stats import poisson
 from scipy.optimize import minimize
+from scipy.stats import poisson
+from tqdm import tqdm
+
+# -----------------------------------------------------------------------------
 
 # If the minutes of the time of execution are between 0 and 5 then put update_big_event_file to True
 # if datetime.now().minute < 5:
@@ -132,7 +144,6 @@ for file_name in files_to_copy:
         print(f"Failed to copy {file_name}: {e}")
 
 
-from tqdm import tqdm
 
 work_big_event_file = True
 update_big_event_file = False

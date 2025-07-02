@@ -1,6 +1,18 @@
+from __future__ import annotations
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 #%%
 
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# -----------------------------------------------------------------------------
 
 # Define the strip widths and their positions
 strip_widths = [63, 63, 63, 98] # mm
@@ -39,7 +51,6 @@ for avalanche_width in avalanche_widths:
 lut = [[round(value, 3) for value in row] for row in lut]
 
 # Transform the LUT into a dataframe
-import pandas as pd
 lut_df = pd.DataFrame(lut, columns=["avalanche_width", "cluster_size_1", "cluster_size_2", "cluster_size_3", "cluster_size_4"])
 
 print(lut_df)
@@ -49,8 +60,6 @@ lut_df.to_csv("/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/lut.csv", index=False)
 
 print("LUT generated and saved to lut.csv")
 # %%
-
-import matplotlib.pyplot as plt
 
 # Extract data for plotting
 avalanche_widths = [row[0] for row in lut]

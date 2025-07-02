@@ -1,8 +1,8 @@
 from __future__ import annotations
-#%%
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#%%
 
 """
 Created on Thu Jun 20 09:15:33 2024
@@ -32,13 +32,21 @@ print("----------------------------------------------------------------------")
 print("-------------------- RAW TO LIST SCRIPT IS STARTING ------------------")
 print("----------------------------------------------------------------------")
 
-stratos_save = False
+stratos_save = True
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
 last_file_test = True
 alternative_fitting = True
 
-# Standard library
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
+# Standard Library
 import os
 import re
 import sys
@@ -46,15 +54,15 @@ import csv
 import math
 import random
 import shutil
-from scipy.optimize import brentq
 import builtins
+import warnings
 from datetime import datetime, timedelta
 from collections import defaultdict
 from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable
 
-# Scientific computing
+# Scientific Computing
 from math import sqrt
 import numpy as np
 import pandas as pd
@@ -62,33 +70,39 @@ import scipy.linalg as linalg
 from scipy.constants import c
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import CubicSpline
-from scipy.optimize import curve_fit
-from scipy.stats import (norm, poisson, linregress, median_abs_deviation, skew)
+from scipy.optimize import brentq, curve_fit, minimize_scalar
+from scipy.special import erf
+from scipy.stats import (
+    norm,
+    poisson,
+    linregress,
+    median_abs_deviation,
+    skew
+)
 
-# Machine learning
+# Machine Learning
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 
 # Plotting
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+import seaborn as sns
 from matplotlib import gridspec
 from matplotlib.gridspec import GridSpec
 from matplotlib.backends.backend_pdf import PdfPages
-import seaborn as sns
-from mpl_toolkits.mplot3d import Axes3D  # for 3D plotting
-import matplotlib as mpl
+from mpl_toolkits.mplot3d import Axes3D
 
-# Image processing
+# Image Processing
 from PIL import Image
 
-# Progress bar
+# Progress Bar
 from tqdm import tqdm
 
-import warnings
+# Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
 
-import seaborn as sns
-from scipy.stats import norm
-from sklearn.metrics import r2_score
+# -----------------------------------------------------------------------------
 
 # Store the current time at the start. To time the execution
 start_execution_time_counting = datetime.now()
@@ -5569,7 +5583,7 @@ def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
     return (A1 * np.exp(-(x - mu1)**2 / (2 * sigma1**2)) +
             A2 * np.exp(-(x - mu2)**2 / (2 * sigma2**2)))
 
-from scipy.optimize import minimize_scalar
+
 
 def find_true_max(A1, mu1, sigma1, A2, mu2, sigma2):
     # Initial guess: midpoint between the two peaks
@@ -6200,7 +6214,6 @@ if create_plots:
 # if create_plots:
 if create_plots or create_essential_plots:
 # if create_plots or create_very_essential_plots or create_essential_plots:
-    from itertools import combinations
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
@@ -6255,7 +6268,6 @@ if create_plots or create_essential_plots:
 # if create_plots:
 if create_plots or create_essential_plots:
 # if create_plots or create_very_essential_plots or create_essential_plots:
-    from itertools import combinations
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
@@ -6307,8 +6319,6 @@ if create_plots or create_essential_plots:
         plt.show()
     plt.close()
     
-    
-    from itertools import combinations
 
     patterns_of_interest = ['1100', '0110', '0011']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(24, 18), sharex=True, sharey=False)
@@ -7940,7 +7950,6 @@ if time_window_fitting:
         # def signal_plus_background(w, S, w0, tau, B):
         #     return S / (1 + np.exp(-(w - w0) / tau)) + B * w
         
-        from scipy.special import erf
         def signal_plus_background(w, S, w0, sigma, B):
             return 0.5 * S * (1 + erf((w - w0) / (np.sqrt(2) * sigma))) + B * w
 

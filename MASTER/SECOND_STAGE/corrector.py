@@ -1,5 +1,7 @@
-#%%
 from __future__ import annotations
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 #%%
 
 #!/usr/bin/env python3
@@ -26,51 +28,51 @@ print("__   ________________________________________________________   __")
 print("  | |                                                        | |  ")
 print("\n\n")
 
+# -----------------------------------------------------------------------------
+# ------------------------------- Imports -------------------------------------
+# -----------------------------------------------------------------------------
+
+# Standard Library
+import os
+import re
+import sys
+import math
+import warnings
+from datetime import datetime, timedelta
+
+# Scientific Computing
 import numpy as np
 import pandas as pd
-import re
-import matplotlib.ticker as mtick
-import matplotlib
-from scipy.optimize import root
-matplotlib.use('Agg')  # Non-interactive backend
-import matplotlib.pyplot as plt
+from scipy.interpolate import UnivariateSpline
+from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import (
+    minimize,
+    root,
+    curve_fit,
+    least_squares
+)
 from scipy.signal import medfilt
+from scipy.stats import (
+    norm,
+    poisson,
+    halfnorm,
+    pearsonr
+)
 
-from scipy.optimize import least_squares
-from scipy.optimize import minimize
-import numpy as np
+# Machine Learning
+from sklearn.linear_model import LinearRegression
+
+# Plotting
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
 
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.ticker as mtick
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
-
-import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from matplotlib.lines import Line2D
-import numpy as np
 
-from sklearn.linear_model import LinearRegression
-from scipy.optimize import curve_fit
-import numpy as np
-import os
-from sklearn.linear_model import LinearRegression
-from datetime import datetime, timedelta
-import sys
-from scipy.optimize import least_squares
-from scipy.ndimage import gaussian_filter1d
-import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from sklearn.linear_model import LinearRegression
-from scipy.optimize import curve_fit
-from scipy.stats import norm
-import matplotlib.pyplot as plt
-import numpy as np
-from scipy.stats import halfnorm
-from scipy.stats import norm
-from scipy.stats import pearsonr
-
+# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
@@ -447,10 +449,7 @@ else:
 
 if remove_outliers:
     
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from scipy.stats import poisson
-    import math
+    
 
     for tt in detection_types:
         
@@ -464,11 +463,7 @@ if remove_outliers:
                 fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 3.5 * rows), sharex=False, sharey=False)
                 axes = axes.flatten()
 
-            from scipy.stats import poisson
-            from scipy.optimize import minimize
-
-            from scipy.stats import poisson
-            import numpy as np
+            
 
             for idx, rx in enumerate(regions_of_interest):
                 col_name = f'{tt}_{rx}'
@@ -764,7 +759,6 @@ for case in processing_regions:
 
     plot_grouped_series(data_df, group_cols, title=f'Counts pre-filtering per TT', plot_after_all=False, sharey_axes = True)
     
-    from scipy.interpolate import UnivariateSpline
     
     # Spline fit and residual computation
     for group in group_cols:
@@ -1508,9 +1502,6 @@ for case in processing_regions:
     # and e4 required to minimize the correlation between the transformed rate_caseX and the new eff_caseX.
     
     
-    # import matplotlib.pyplot as plt
-    # from sklearn.linear_model import LinearRegression
-    # import numpy as np
 
     # def fit_and_plot_eff_vs_rate(df, eff_col, rate_col, label_suffix):
     #     global create_plots, fig_idx, show_plots, save_plots, figure_path
@@ -1578,14 +1569,10 @@ for case in processing_regions:
         # fit_and_plot_eff_vs_rate(data_df, eff_col, rate_col, label)
 
 
-    import numpy as np
-    from scipy.optimize import minimize
-    import warnings
+    
 
     def decorrelate_efficiency_least_change(eff, rate_corr, bounds=(0.001, 0.999)):
-        import numpy as np
-        from scipy.optimize import minimize
-        import warnings
+        
 
         eff = np.asarray(eff, dtype=np.float64)
         rate_corr = np.asarray(rate_corr, dtype=np.float64)
@@ -1797,9 +1784,7 @@ for case in processing_regions:
     fit_efficiencies = True
     if fit_efficiencies:
         
-        from sklearn.linear_model import LinearRegression
-        import numpy as np
-        import warnings
+        
 
         def fit_efficiency_model(x, y, z, model_type='linear'):
             if len(x) == 0 or len(y) == 0 or len(z) == 0:
@@ -1959,10 +1944,7 @@ for case in processing_regions:
                 # plot_combined_efficiency_views(filtered_df, eff_col, fit_func, i)
         
         
-        import matplotlib.pyplot as plt
-        from matplotlib.lines import Line2D
-        from sklearn.linear_model import LinearRegression
-        import numpy as np
+        
 
         def plot_side_views_all_planes(data_df, planes, model_type='linear'):
             global create_plots, create_essential_plots, fig_idx, show_plots, save_plots, figure_path, low_lim_eff_plot
@@ -2282,7 +2264,7 @@ for case in processing_regions:
 
     plot_grouped_series(data_df, group_cols, title=f'Counts per detector, efficiency corrected', plot_after_all=False, sharey_axes = True)
     
-    from scipy.interpolate import UnivariateSpline
+    
     
     # Spline fit and residual computation
     for group in group_cols:
@@ -2473,9 +2455,7 @@ for case in processing_regions:
     #         label_suffix=label,
     #     )
     
-    import matplotlib.pyplot as plt
-    import numpy as np
-    from scipy.stats import pearsonr
+    
 
     def plot_eff_vs_rate_grid(data_df, detector_labels):
         global create_plots, fig_idx, show_plots, save_plots, figure_path, case, create_essential_plots
@@ -3268,9 +3248,6 @@ plot_grouped_series(
 
 
 
-import re
-import matplotlib.ticker as mtick
-import matplotlib.pyplot as plt
 
 # Define all relevant column names in the dataset
 all_columns = data_df.columns.tolist()

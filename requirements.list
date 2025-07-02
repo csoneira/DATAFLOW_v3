@@ -1,9 +1,10 @@
-pandas
 numpy
+pandas
 matplotlib
 scipy
-tqdm
 Pillow
+tqdm
 cdsapi
 xarray
-tkinter
+scikit-learn
+seaborn

@@ -52,8 +52,8 @@ DATAFLOW_v3/MASTER
 │   ├── LAB_LOGS
 │   │   ├── log_aggregate_and_join.py
 │   │   └── log_bring_and_clean.sh
-│   └── REANALYSIS
-│       └── reanalysis.py
+│   └── COPERNICUS
+│       └── copernicus.py
 └── SECOND_STAGE
     ├── corrector.py
     └── merge_into_large_table.py
@@ -96,7 +96,7 @@ DATAFLOW_v3/STATIONS/MINGO01
 │   │   ├── LOG_UNPROCESSED_DIRECTORY
 │   │   └── RAW_LOGS
 │   │       └── done
-│   └── REANALYSIS
+│   └── COPERNICUS
 │       └── COPERNICUS_DATA
 └── SECOND_STAGE
 ```
