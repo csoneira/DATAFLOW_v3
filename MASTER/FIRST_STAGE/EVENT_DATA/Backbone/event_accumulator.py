@@ -5646,6 +5646,8 @@ print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 main_df = df.copy()
+main_df['Theta_fit'] = main_df['theta']
+main_df['Phi_fit'] = main_df['phi']
 
 if correct_angle:
     print("----------------------------------------------------------------------")
@@ -5774,9 +5776,6 @@ if correct_angle:
 
     print(main_df.columns.to_list())
 
-    main_df['Theta_fit'] = main_df['theta']
-    main_df['Phi_fit'] = main_df['phi']
-
     #%%
 
     df_input = main_df
@@ -5790,8 +5789,8 @@ if correct_angle:
     df = df_pred.copy()
 else:
     print("Angle correction is disabled.")
-    df['Theta_pred'] = df['Theta_fit']
-    df['Phi_pred'] = df['Phi_fit']
+    df['Theta_pred'] = main_df['Theta_fit']
+    df['Phi_pred'] = main_df['Phi_fit']
 
 
 if create_very_essential_plots:    
@@ -6178,19 +6177,22 @@ for bin_width in time_bins:
     normalized_curves.append(normalized)
     time_curves.append(pivoted['Time'].values)
 
-# Plotting stage
-plt.figure(figsize=(12, 6))
+if create_essential_plots:
+    # Plotting stage
+    plt.figure(figsize=(12, 6))
 
-for t, norm, label in zip(time_curves, normalized_curves, time_bins):
-    idx = time_bins.index(label)
-    plt.plot(t, norm, label=f'{label} ({discarded_percentages[idx]:.1f}%)', alpha=0.6)
+    for t, norm, label in zip(time_curves, normalized_curves, time_bins):
+        idx = time_bins.index(label)
+        plt.plot(t, norm, label=f'{label} ({discarded_percentages[idx]:.1f}%)', alpha=0.6)
 
-plt.xlabel("Time")
-plt.ylabel("Normalized Event Rate")
-plt.title("Normalized Rates over Different Time Bins")
-plt.grid(True)
-plt.tight_layout()
-plt.show()
+    plt.xlabel("Time")
+    plt.ylabel("Normalized Event Rate")
+    plt.title("Normalized Rates over Different Time Bins")
+    plt.grid(True)
+    plt.tight_layout()
+    if show_plots:
+        plt.show()
+    plt.close()
 
 
 bin_seconds = [pd.to_timedelta(tb).total_seconds() for tb in time_bins]
@@ -6267,19 +6269,53 @@ if create_essential_plots:
     plt.tight_layout()
     plt.show()
 
-
 #%%
 
-df = df_original.copy()
-df['Time'] = df['Time'].dt.floor('1min')
+print("----------------------------------------------------------------------")
+print("--------------------- Outlier filtering and saving --------------------")
+print("----------------------------------------------------------------------")
 
-# Group and count
+df = df_original.copy()
+
+# --- 1. Floor to seconds for outlier detection ---
+df['Time'] = df['Time'].dt.floor('1s')
+
+# --- 2. Count events per second per (tt, region) ---
 binned = df.groupby(['Time', 'definitive_tt', 'region']).size().reset_index(name='counts')
 pivoted = binned.pivot_table(index='Time', columns=['definitive_tt', 'region'], values='counts', fill_value=0)
 pivoted.columns = [f"{tt}_{region}" for tt, region in pivoted.columns]
 pivoted['events'] = pivoted.sum(axis=1)
 pivoted = pivoted.reset_index()
 
+# --- 3. Empirical quantile outlier detection ---
+lower_q = 0.005  # 0.5%
+upper_q = 0.995  # 99.5%
+
+lower = pivoted['events'].quantile(lower_q)
+upper = pivoted['events'].quantile(upper_q)
+
+outlier_mask = (pivoted['events'] < lower) | (pivoted['events'] > upper)
+n_outliers = outlier_mask.sum()
+
+outliers_percentage = 100 * n_outliers / len(pivoted)
+print(f"Outliers detected: {n_outliers} ({outliers_percentage:.2f}%) using empirical quantiles in [{lower:.2f}, {upper:.2f}].")
+global_variables['outliers_removed_percentage'] = outliers_percentage
+
+# --- 4. Remove rows from df corresponding to outlier seconds ---
+outlier_times = set(pivoted.loc[outlier_mask, 'Time'])
+df = df[~df['Time'].isin(outlier_times)]
+
+# --- 5. Floor to 1-minute for accumulation ---
+df['Time'] = df['Time'].dt.floor('1min')
+
+# --- 6. Accumulate event counts per minute ---
+binned = df.groupby(['Time', 'definitive_tt', 'region']).size().reset_index(name='counts')
+pivoted = binned.pivot_table(index='Time', columns=['definitive_tt', 'region'], values='counts', fill_value=0)
+pivoted.columns = [f"{tt}_{region}" for tt, region in pivoted.columns]
+pivoted['events'] = pivoted.sum(axis=1)
+pivoted = pivoted.reset_index()
+
+# --- 7. Save to disk ---
 pivoted.to_csv(save_path, index=False, sep=',', float_format='%.5g')
 print(f"Accumulated columns datafile saved in {save_filename}. Path is {save_path}")
 
