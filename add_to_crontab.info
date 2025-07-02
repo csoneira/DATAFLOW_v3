@@ -1,6 +1,6 @@
 # Edit this file to introduce tasks to be run by cron.
-# m h  dom mon dow   command
-# Cron files sometimes require ending with a newline
+# m h dom mon dow ommand
+# Cron files sometimes require ending with a newline, and this case is.
 
 # Replace current crontab with the contents of ~/DATAFLOW_v3/add_to_crontab.info
 * * * * * crontab /home/mingo/DATAFLOW_v3/add_to_crontab.info

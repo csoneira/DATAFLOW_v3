@@ -19,6 +19,13 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.backends.backend_pdf import PdfPages
 
+import matplotlib
+import matplotlib.cm as cm
+from matplotlib.colors import Normalize
+from matplotlib.colorbar import ColorbarBase
+import matplotlib.cm as cm
+from matplotlib.colors import Normalize
+
 # -----------------------------------------------------------------------------
 
 point_size = 2
@@ -183,11 +190,11 @@ def figure3_1(df: pd.DataFrame):
                 # Map logical name → column name in the CSV
                 prefix, side = v.split("_")            # e.g. T, F
                 col = f"{prefix}{p}_{side}_{s}_entries"
-                print(f"Processing column: {col}")
+                # print(f"Processing column: {col}")
                 if col not in df:
                     continue
-                print(f"Found column: {col}")
-                print("----------------------------------------")
+                # print(f"Found column: {col}")
+                # print("----------------------------------------")
                 # Rate [Hz] = counts / duration
                 rate = df[col] / duration_s
                 ax.plot(df.index, rate, label=v, linewidth=0.9, color=color)
@@ -229,9 +236,9 @@ def figure4(df: pd.DataFrame):
     ]
 
     fig, (ax_w, ax_s) = plt.subplots(
-        nrows=point_size,
-        ncols=2,
-        figsize=(14, 5),
+        nrows=2,
+        ncols=1,
+        figsize=(10, 9),
         sharex=True,
         constrained_layout=True,
     )
@@ -280,7 +287,7 @@ def figure5(df: pd.DataFrame):
 
     fig, axs = plt.subplots(
         nrows=5,
-        ncols=point_size,
+        ncols=1,
         figsize=(14, 14),
         sharex=True,
         constrained_layout=True,
@@ -323,7 +330,7 @@ def figure6(df: pd.DataFrame):
       cols = ["coeff_variation_A", "coeff_variation_beta", "coeff_variation_C"]
 
       fig, axs = plt.subplots(
-          nrows=point_size,
+          nrows=1,
           ncols=3,
           figsize=(18, 4),
           sharex=True,
@@ -485,8 +492,8 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
     periods_cal = merge_intervals(df_cal)
     periods_evt = merge_intervals(df_evt)
     
-    print(periods_cal)
-    print(periods_evt)
+    # print(periods_cal)
+    # print(periods_evt)
 
     fig, axs = plt.subplots(2, 1, figsize=(14, 5), sharex=True, constrained_layout=True)
     now = pd.Timestamp.now()
@@ -498,7 +505,7 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
     axs[0].set_ylabel("Analyzed")
     axs[0].set_xlim(left=df_cal.index.min(), right=now)
     for start, end in periods_cal:
-        axs[0].axvspan(start, end, color='green', alpha=0.5, edgecolor='none')
+        axs[0].axvspan(start, end, facecolor='green', edgecolor='none', alpha=0.5)
 
     # Bottom plot: event_accumulator_metadata
     axs[1].set_title("Analyzed periods: event_accumulator_metadata")
@@ -507,7 +514,7 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
     axs[1].set_ylabel("Analyzed")
     axs[1].set_xlim(left=df_evt.index.min(), right=now)
     for start, end in periods_evt:
-        axs[1].axvspan(start, end, color='green', alpha=0.5, edgecolor='none')
+        axs[1].axvspan(start, end, facecolor='green', edgecolor='none', alpha=0.5)
 
     axs[1].set_xlabel("Time")
     for ax in axs:
@@ -517,6 +524,91 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
 
     fig.suptitle("Green = merged acquisition windows", fontsize=14)
     return fig
+
+
+# -----------------------------------------------------------------------------#
+# Dual execution-order colour-band figure
+# -----------------------------------------------------------------------------#
+
+def _exec_colour_dict(df: pd.DataFrame, cmap_name: str = "turbo") -> dict:
+    """Return {Start_Time → RGBA} based on execution_time rank (ascending)."""
+    if "execution_time" not in df.columns:
+        raise KeyError("'execution_time' column not found")
+    exec_time = pd.to_datetime(df["execution_time"], errors="coerce")
+    order     = exec_time.sort_values()                     # keep original index
+    cmap      = matplotlib.colormaps[cmap_name]             # Matplotlib ≥3.7
+    norm      = Normalize(vmin=0, vmax=len(order) - 1)
+    return {idx: cmap(norm(rank)) for rank, idx in enumerate(order.index)}, cmap, norm
+
+
+def figure_exec_bands_dual(df_cal: pd.DataFrame,
+                           df_evt: pd.DataFrame) -> plt.Figure:
+    """
+    Two stacked panels, one per dataframe.
+    Each span coloured by execution-time rank *within that dataframe*.
+    """
+    # colour lookup tables for each dataframe
+    colours_cal, cmap_cal, norm_cal = _exec_colour_dict(df_cal)
+    colours_evt, cmap_evt, norm_evt = _exec_colour_dict(df_evt)
+
+    fig, axs = plt.subplots(2, 1, figsize=(14, 8.5), sharex=True,
+                            constrained_layout=True)
+    now = pd.Timestamp.now()
+
+    # ------------ top panel : raw_to_list_metadata ---------------------------
+    ax = axs[0]
+    ax.set_title("Execution order: raw_to_list_metadata")
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_ylabel("Files")
+    ax.set_xlim(left=df_cal.index.min(), right=now)
+
+    for start, end in zip(df_cal.index,
+                          pd.to_datetime(df_cal["End_Time"], errors="coerce")):
+        if pd.isna(end):
+            continue
+        ax.axvspan(start, end,
+                   color=colours_cal.get(start, "grey"),
+                   alpha=0.9, linewidth=0)
+
+    # colour-bar (top)
+    sm = cm.ScalarMappable(cmap=cmap_cal, norm=norm_cal)
+    sm.set_array([])
+    fig.colorbar(sm, ax=ax, orientation="horizontal", pad=0.25,
+                 label="Execution-time rank (old → new)")
+
+    _apply_time_axis(ax)
+
+    # ------------ bottom panel : event_accumulator_metadata ------------------
+    ax = axs[1]
+    ax.set_title("Execution order: event_accumulator_metadata")
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_ylabel("Files")
+    ax.set_xlabel("Time")
+    ax.set_xlim(left=df_evt.index.min(), right=now)
+
+    for start, end in zip(df_evt.index,
+                          pd.to_datetime(df_evt["End_Time"], errors="coerce")):
+        if pd.isna(end):
+            continue
+        ax.axvspan(start, end,
+                   color=colours_evt.get(start, "grey"),
+                   alpha=0.9, linewidth=0)
+
+    # colour-bar (bottom)
+    sm = cm.ScalarMappable(cmap=cmap_evt, norm=norm_evt)
+    sm.set_array([])
+    fig.colorbar(sm, ax=ax, orientation="horizontal", pad=0.25,
+                 label="Execution-time rank (old → new)")
+
+    _apply_time_axis(ax)
+
+    fig.suptitle("Colour = execution-time order (separate scale per panel)",
+                 fontsize=14)
+    return fig
+
+
 
 
 # -------------------------------------------------------------------------- #
@@ -530,12 +622,13 @@ def main():
 
     df_cal, df_evt = read_station_metadata(args.station)
 
-    # Generate availability figure first
-    fig0 = plot_data_coverage(df_cal, df_evt)
+    fig0 = plot_data_coverage(df_cal, df_evt)                         # existing
+    fig_exec = figure_exec_bands_dual(df_cal, df_evt)      # NEW two-panel colour bands
 
     # Generate rest of the figures
     figs = [
         fig0,
+        fig_exec,                                                     #  NEW (right after fig0)
         figure1(df_cal),
         figure3(df_cal),
         figure3_1(df_cal),
@@ -575,7 +668,7 @@ def main():
         print(f"PDF saved to: {pdf_path.resolve()}")
 
     else:
-        plt.show()
+        print("Figures will not be saved. Use --save to enable saving.")
 
 
 if __name__ == "__main__":
