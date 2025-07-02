@@ -116,5 +116,5 @@ echo "Processing list files with Python script (event_accumulator.py)..."
 python3 "$event_accumulator_directory" "$station"
 
 echo '------------------------------------------------------'
-echo "bring_and_analyze_events.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "ev_accumulator.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
 echo '------------------------------------------------------'
