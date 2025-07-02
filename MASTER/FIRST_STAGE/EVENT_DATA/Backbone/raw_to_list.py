@@ -1895,7 +1895,7 @@ print("----------------------------------------------------------------------")
 
 for col in working_df.columns:
     if working_df[col].isna().any():
-        working_df[col].fillna(0, inplace=True)
+        working_df[col] = working_df[col].fillna(0)
 
 # Loop through all relevant columns and apply the filtering
 for col in working_df.columns:
@@ -4825,7 +4825,7 @@ if time_calibration:
             df.loc[l2, l1] = offset
         
     print("Antisymmetric matrix:")
-    print(df.applymap(lambda x: f"{x:.2f}" if pd.notnull(x) else ""))
+    print(df.map(lambda x: f"{x:.2f}" if pd.notnull(x) else ""))
 
     
     # -----------------------------------------------------------------------------
@@ -6009,6 +6009,7 @@ for plane in range(1, 5):
         # Zero the affected values
         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
+working_df = working_df.copy()
 
 print("----------------------------------------------------------------------")
 print("--------------------- Defining posfiltered_tt -----------------------")
@@ -7090,8 +7091,8 @@ if create_plots:
 
 
 # Filter the small values ----------------------------------------------------
-mask = working_df.applymap(is_small_nonzero)  # Create mask of small, non-zero numeric values
-nonzero_numeric_mask = working_df.applymap(lambda x: isinstance(x, (int, float)) and x != 0)  # Count total non-zero numeric entries
+mask = working_df.map(is_small_nonzero)  # Create mask of small, non-zero numeric values
+nonzero_numeric_mask = working_df.map(lambda x: isinstance(x, (int, float)) and x != 0)  # Count total non-zero numeric entries
 n_total = nonzero_numeric_mask.sum().sum()
 n_small = mask.sum().sum()
 working_df = working_df.mask(mask, 0)  # Apply the replacement
@@ -8166,8 +8167,8 @@ if create_plots or create_essential_plots:
 definitive_df = working_df.copy()
 
 # Remove small, non-zero values -----------------------------------------------
-mask = definitive_df.applymap(is_small_nonzero)
-nonzero_numeric_mask = definitive_df.applymap(lambda x: isinstance(x, (int, float)) and x != 0)
+mask = definitive_df.map(is_small_nonzero)
+nonzero_numeric_mask = definitive_df.map(lambda x: isinstance(x, (int, float)) and x != 0)
 n_total = nonzero_numeric_mask.sum().sum()
 n_small = mask.sum().sum()
 definitive_df = definitive_df.mask(mask, 0)

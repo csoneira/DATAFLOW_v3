@@ -86,8 +86,6 @@ mkdir -p "$uncompressed_directory" "$moved_directory" "$first_stage_raw_director
 
 
 
-
-
 # echo ""
 # echo "Unpacking HLD tarballs..."
 # for file in "$compressed_directory"/*.tar.gz; do
