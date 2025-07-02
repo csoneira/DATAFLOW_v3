@@ -109,6 +109,12 @@ else:
 
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
+# Store the current time at the start. To time the execution
+start_execution_time_counting = datetime.now()
+
+# Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
+execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
+print("Execution time is:", execution_time)
 
 # -----------------------------------------------------------------------------
 # -------------------------- Variables of execution ---------------------------
@@ -143,6 +149,7 @@ n_study_fit = False
 topology_plots = False
 
 global_variables = {}
+global_variables['execution_time'] = execution_time
 
 
 print("----------------------------------------------------------------------")

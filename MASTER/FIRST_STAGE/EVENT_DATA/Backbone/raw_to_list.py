@@ -107,6 +107,10 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 # Store the current time at the start. To time the execution
 start_execution_time_counting = datetime.now()
 
+# Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
+execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
+print("Execution time is:", execution_time)
+
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
@@ -650,7 +654,9 @@ Q_clip_max_ST = 500
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
+
 global_variables = {
+    'execution_time': execution_time,
     'CRT_avg': 0,
     'one_side_events': 0,
     'purity_of_data_percentage': 0,
