@@ -5,6 +5,7 @@
 *.hld
 *.mat
 *.log
+STATIONS/
 
 # Copernicus data
 *.nc
