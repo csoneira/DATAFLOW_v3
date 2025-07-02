@@ -77,7 +77,7 @@ echo "$(date) - No running instance found. Proceeding..."
 
 # If no duplicate process is found, continue
 echo "------------------------------------------------------"
-echo "bring_and_analyze_events.sh started on: $(date)"
+echo "ev_accumulator.sh started on: $(date)"
 echo "Station: $script_args"
 echo "Running the script..."
 echo "------------------------------------------------------"

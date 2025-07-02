@@ -11,6 +11,66 @@ random_file=false  # set to true to enable random selection
 
 station=$1
 
+
+# --------------------------------------------------------------------------------------------
+# Prevent the script from running multiple instances -----------------------------------------
+# --------------------------------------------------------------------------------------------
+
+# Variables
+script_name=$(basename "$0")
+script_args="$*"
+current_pid=$$
+
+# Debug: Check for running processes
+# echo "$(date) - Checking for existing processes of $script_name with args $script_args"
+# ps -eo pid,cmd | grep "[b]ash .*/$script_name"
+
+# Get all running instances of the script *with the same argument*, but exclude the current process
+# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | awk '{print $1}'); do
+for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
+    if [[ "$pid" != "$current_pid" ]]; then
+        cmdline=$(ps -p "$pid" -o args=)
+        # echo "$(date) - Found running process: PID $pid - $cmdline"
+        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
+            echo "------------------------------------------------------"
+            echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
+            echo "------------------------------------------------------"
+            exit 1
+        fi
+    fi
+done
+
+# If no duplicate process is found, continue
+echo "$(date) - No running instance found. Proceeding..."
+
+# Variables
+# script_name=$(basename "$0")
+# script_args="$*"
+# current_pid=$$
+
+# # Get all running instances of the script (excluding itself)
+# # for pid in $(pgrep -f "bash .*/$script_name $script_args"); do
+# for pid in $(pgrep -f "bash .*/$script_name $script_args" | grep -v $$); do
+#     if [ "$pid" != "$current_pid" ]; then
+#         cmdline=$(ps -p "$pid" -o args=)
+#         if [[ "$cmdline" == *"$script_name"* && "$cmdline" == *"$script_args"* ]]; then
+#             echo "------------------------------------------------------"
+#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
+#             echo "------------------------------------------------------"
+#             exit 1
+#         fi
+#     fi
+# done
+
+# If no duplicate process is found, continue
+echo "------------------------------------------------------"
+echo "unpack_reprocessing_files.sh started on: $(date)"
+echo "Station: $script_args"
+echo "Running the script..."
+echo "------------------------------------------------------"
+
+# --------------------------------------------------------------------------------------------
+
 base_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE
 compressed_directory=${base_directory}/COMPRESSED_HLDS
 uncompressed_directory=${base_directory}/UNCOMPRESSED_HLDS
@@ -24,11 +84,26 @@ first_stage_raw_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRS
 # mkdir -p "$uncompressed_directory" "$processed_directory" "$moved_directory"
 mkdir -p "$uncompressed_directory" "$moved_directory" "$first_stage_raw_directory"
 
+
+
+
+
+# echo ""
+# echo "Unpacking HLD tarballs..."
+# for file in "$compressed_directory"/*.tar.gz; do
+#     [ -e "$file" ] || continue
+#     tar -xvzf "$file" --strip-components=3 -C "$uncompressed_directory"
+# done
+
 echo ""
-echo "Unpacking HLD tarballs..."
+echo "Unpacking HLD tarballs and removing archives..."
 for file in "$compressed_directory"/*.tar.gz; do
     [ -e "$file" ] || continue
-    tar -xvzf "$file" --strip-components=3 -C "$uncompressed_directory"
+    if tar -xvzf "$file" --strip-components=3 -C "$uncompressed_directory"; then
+        rm "$file"
+    else
+        echo "Warning: Failed to unpack $file" >&2
+    fi
 done
 
 rm -f "$compressed_directory"/*.tar.gz

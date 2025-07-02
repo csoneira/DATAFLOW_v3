@@ -102,8 +102,8 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 7-59/10 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 4 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_4.log 2>&1
 
 # SECOND_STAGE - CORRECTOR ------------------------------------------------
-*/11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 1 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_1.log 2>&1
-4-59/11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 2 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_2.log 2>&1
-6-59/11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 3 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_3.log 2>&1
-8-59/11 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 4 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_4.log 2>&1
+*/31 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 1 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_1.log 2>&1
+4-59/31 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 2 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_2.log 2>&1
+6-59/31 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 3 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_3.log 2>&1
+8-59/31 * * * * python3 ~/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 4 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_4.log 2>&1
 
