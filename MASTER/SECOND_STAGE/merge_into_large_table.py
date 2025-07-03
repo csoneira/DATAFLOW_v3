@@ -22,8 +22,13 @@ from datetime import datetime
 
 # Third-party Libraries
 import pandas as pd
+import psutil
 
 # -----------------------------------------------------------------------------
+
+def print_memory_usage(tag=""):
+    mem = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2  # in MB
+    print(f"[{tag}] Memory usage: {mem:.2f} MB")
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
@@ -49,7 +54,7 @@ base_folder = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 directories = {
     "event_data": os.path.join(base_folder, "FIRST_STAGE/EVENT_DATA"),
     "lab_logs": os.path.join(base_folder, "FIRST_STAGE/LAB_LOGS"),
-    "reanalysis": os.path.join(base_folder, "FIRST_STAGE/COPERNICUS"),
+    "copernicus": os.path.join(base_folder, "FIRST_STAGE/COPERNICUS"),
 }
 
 # Define the output directory
@@ -59,7 +64,7 @@ output_directory = os.path.join(base_folder, "SECOND_STAGE")
 folder_paths = [
     directories["event_data"],
     directories["lab_logs"],
-    directories["reanalysis"],
+    directories["copernicus"],
 ]
 
 # Define the output file path
@@ -77,37 +82,83 @@ for folder_path in folder_paths:
 if not file_paths:
     raise FileNotFoundError("No CSV files found in the specified directories.")
 
-print("Bringin' the data together: ", file_paths)
+print("Bringin' the data together:")
+for path in file_paths:
+    print(f"    {path}")
+    print(f"     └──> {os.path.getsize(path)/1_048_576:.2f} MB")
+
+print("\nDuplicate-count per file:")
+for p in file_paths:
+    # load only the Time column
+    time_col = pd.read_csv(p, usecols=['Time'], parse_dates=['Time'])
+    dup_total = time_col.duplicated().sum()
+    max_per_ts = time_col.value_counts().iloc[0]
+    print(f"  {os.path.basename(p):30}  total duplicates = {dup_total:,}   "
+          f"max rows sharing one timestamp = {max_per_ts:,}")
+
+print("\nFile diagnostics:")
+for file_path in file_paths:
+    with open(file_path, 'r') as f:
+        header = f.readline().strip().split(',')
+        n_cols = len(header)
+    file_size = os.path.getsize(file_path) / (1024**2)
+    print(f"  {os.path.basename(file_path):<30}  →  columns = {n_cols:<4}  size = {file_size:6.2f} MB")
+
 
 # Load all CSV files into dataframes and store them in a list
-dataframes = [pd.read_csv(file_path, parse_dates=['Time']) for file_path in file_paths]
 
-for df in dataframes:
-    df['Time'] = df['Time'].dt.floor('1min')  # Round to minute precision
 
-for df in dataframes:
-    df.sort_values('Time', inplace=True)
+def aggregate_csv(path, chunksize=1_000_000):
+    tmp = []
+    for chunk in pd.read_csv(path, parse_dates=['Time'], chunksize=chunksize):
+        chunk['Time'] = chunk['Time'].dt.floor('1min')
+        grp = chunk.groupby('Time', sort=False).mean()
+        tmp.append(grp)
+    out = pd.concat(tmp).groupby('Time').mean()    # one row per minute
+    return out
 
-for df in dataframes:
-    df['Time'] = pd.to_datetime(df['Time'], errors='coerce')
 
-print(f"Loaded {len(dataframes)} CSV files.")
+import gc
+from pathlib import Path
 
-merged_df = dataframes[0]
-for df in dataframes[1:]:
-    merged_df = pd.merge(merged_df, df, on='Time', how='outer')
+tmp_parquets = []
+
+for p in file_paths:
+    df = aggregate_csv(p).astype("float32")
+    pq_path = Path(p).with_suffix(".parquet")
+    df.to_parquet(pq_path, compression="zstd")
+    tmp_parquets.append(pq_path)
+    del df
+    gc.collect()
+    print_memory_usage(f"after {pq_path.name}")
+
+# Single pass, memory-light merge
+merged = None
+for pq in tmp_parquets:
+    df = pd.read_parquet(pq)
+    df.replace(0, pd.NA, inplace=True)
+    if merged is None:
+        merged = df
+    else:
+        # merged = pd.merge_asof(merged, df, on="Time")
+        merged = merged.join(df, how="outer", sort=False)
+    del df
+    gc.collect()
+    print_memory_usage(f"after merge {pq.name}")
+
+merged_df = merged.reset_index()
 
 # Sort by Time after merging
-merged_df.sort_values('Time', inplace=True)
+merged_df = merged_df.sort_values('Time')
 
-print("Merged DataFrame Info:")
-print(merged_df.info())
+# print("Merged DataFrame Info:")
+# print(merged_df.info())
 
-print("First few rows of merged data:")
-print(merged_df.head())
+# print("First few rows of merged data:")
+# print(merged_df.head())
 
-print("Last few rows of merged data:")
-print(merged_df.tail())
+# print("Last few rows of merged data:")
+# print(merged_df.tail())
 
 # Save the merged dataframe
 # if os.path.exists(output_file):
@@ -127,6 +178,11 @@ combined_df = merged_df
 print("Replacing 0s with NaNs...")
 combined_df.replace(0, pd.NA, inplace=True)
 
+# Round the values to 2 decimal places for numeric columns
+print("Rounding values to 2 decimal places for numeric columns...")
+for col in combined_df.select_dtypes(include=['float32', 'float64']).columns:
+    combined_df[col] = combined_df[col].round(2)
+    
 print("Saving the data...")
 # Save the final dataframe to a CSV file
 combined_df.to_csv(output_file, index=False)

@@ -9,3 +9,6 @@ xarray
 scikit-learn
 seaborn
 tables
+psutil
+arrow
+fastparquet

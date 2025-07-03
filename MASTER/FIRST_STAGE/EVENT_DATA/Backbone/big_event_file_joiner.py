@@ -268,7 +268,13 @@ if work_big_event_file:
 
             # print(f"Merging file: {csv_path}")
             new_data = pd.read_csv(csv_path, sep=',', parse_dates=['Time'])
+            
+            # Put 0s to NaN
+            new_data = new_data.replace(0, np.nan)
+            new_data = new_data.copy()
+            
             new_data['Time'] = new_data['Time'].dt.floor('1min')  # Round to minute precision
+            new_data = new_data.copy()
             
             # Add as a new column, the this_time = os.path.getmtime(csv_path)
             new_data["execution_date"] = os.path.getmtime(csv_path)
@@ -293,6 +299,10 @@ if work_big_event_file:
     
     big_event_df = big_event_df.sort_values(by="Time")  # Now sorting should work fine
     
+    # Put every 0 to NaN, if this is cheaper in terms of memory
+    print("Replacing 0s with NaNs...")
+    big_event_df = big_event_df.replace(0, np.nan)
+    
     # -----------------------------------------------------------------------------
     # Save the updated big_event_data.csv -----------------------------------------
     # -----------------------------------------------------------------------------
@@ -301,12 +311,12 @@ if work_big_event_file:
 
     big_event_df.to_csv(big_event_file, sep=',', index=False)
     
-    # Print type of the dataframe
-    print(type(big_event_df))  # Should be <class 'pandas.DataFrame'>
+    # # Print type of the dataframe
+    # print(type(big_event_df))  # Should be <class 'pandas.DataFrame'>
     
-    # Print head of the dataframe
-    print(big_event_df.head())
-    print(big_event_df.tail())
+    # # Print head of the dataframe
+    # print(big_event_df.head())
+    # print(big_event_df.tail())
     
     print(big_event_df.columns.to_list())
     

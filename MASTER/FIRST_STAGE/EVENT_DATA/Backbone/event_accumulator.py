@@ -151,6 +151,7 @@ topology_plots = False
 
 global_variables = {}
 global_variables['execution_time'] = execution_time
+global_variables['correct_angle_with_lut'] = correct_angle
 
 
 print("----------------------------------------------------------------------")

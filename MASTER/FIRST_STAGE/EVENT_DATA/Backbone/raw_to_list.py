@@ -6804,7 +6804,8 @@ for i_plane in range(1, 5):
 
 
 # ----------------------------------------------------------------------------------------------------------------
-if stratos_save and station == 2:
+# if stratos_save and station == 2:
+if stratos_save:
     print("Saving X and Y for stratos.")
     
     stratos_df = working_df.copy()
