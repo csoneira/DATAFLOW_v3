@@ -1407,8 +1407,8 @@ read_df = read_df.apply(pd.to_numeric, errors='coerce')
 # Print the number of rows in input
 print(f"\nOriginal file has {read_lines} lines.")
 print(f"Processed file has {written_lines} lines.")
-valid_lines_in_dat_file = written_lines/read_lines
-print(f"--> A {valid_lines_in_dat_file*100:.2f}% of the lines were valid.\n")
+valid_lines_in_dat_file = written_lines/read_lines * 100
+print(f"--> A {valid_lines_in_dat_file:.2f}% of the lines were valid.\n")
 
 global_variables['valid_lines_in_dat_file'] =  valid_lines_in_dat_file
 

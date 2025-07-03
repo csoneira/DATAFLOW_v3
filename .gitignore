@@ -10,6 +10,7 @@ STATIONS/
 # Copernicus data
 *.nc
 *.nc4
+.cdsapirc
 
 # Ignore compressed and archive files
 *.tar

@@ -316,7 +316,58 @@ def figure5(df: pd.DataFrame):
         ax.legend(frameon=False, fontsize="small")
         _apply_time_axis(ax)
 
-    fig.suptitle("Global Performance Metrics", fontsize=16)
+    fig.suptitle("Raw to list. Global Performance Metrics", fontsize=16)
+    return fig
+
+
+def figure5_1(df: pd.DataFrame):
+    """
+    One figure with 5 vertically stacked subplots (5×1),
+    each showing a group of global performance metrics.
+
+    The column 'valid_lines_in_dat_file' is multiplied by 100 before plotting.
+    """
+    groups = [
+        ["outliers_removed_percentage"],
+        ['correct_angle_with_lut'],
+    ]
+
+    titles = [
+        "Outliers removed percentage",
+        "Corrected angle with LUT",
+    ]
+
+    fig, axs = plt.subplots(
+        nrows=2,
+        ncols=1,
+        figsize=(14, 7),
+        sharex=True,
+        constrained_layout=True,
+    )
+
+    for ax, group, title in zip(axs, groups, titles):
+        for col in group:
+            if col not in df:
+                continue
+            if col == "valid_lines_in_dat_file":
+                data = df[col] * 100.0  # scale to percentage
+                label = col + " ×100"
+            if col == "unc_y":
+                data = df[col] / 300.0  # scale to percentage
+                label = col + " / speed of light in mm/ns"
+            else:
+                data = df[col]
+                label = col
+            ax.plot(df.index, data, label=label, linewidth=1.0)
+            ax.scatter(df.index, data, s=point_size)
+            # Invert the y z-axis for the z case
+            if col.startswith("z_"):
+                ax.invert_yaxis()
+        ax.set_title(title)
+        ax.legend(frameon=False, fontsize="small")
+        _apply_time_axis(ax)
+
+    fig.suptitle("Event Accumulator. Global Performance Metrics", fontsize=16)
     return fig
 
 
@@ -635,6 +686,7 @@ def main():
         figure3_1(df_cal),
         figure4(df_cal),
         figure5(df_cal),
+        figure5_1(df_cal),
         figure6(df_evt),
         figure7(df_evt),
         figure8(df_evt),

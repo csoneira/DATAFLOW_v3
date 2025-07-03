@@ -18,13 +18,21 @@ print("__   ____________________________________________________________   __")
 print("  | |                                                            | |  ")
 
 
-test = True
+# The first data is available five days ago from today
+# The maximum number of weeks to retrieve is 21 weeks, else the API will return an error,
+# so the data range must be split in sets of 21 seeks, trying the ranges to have less than 21
+# weeks but the same size to each other.
+
+test = False
+weeks_behind_requested = 1 # 21 maxixum
+degree_apotema = 0.25  # 0.25 degrees apotema for the area around the station
 
 # -----------------------------------------------------------------------------
 # ------------------------------- Imports -------------------------------------
 # -----------------------------------------------------------------------------
 
 # Standard Library
+import math
 import os
 import sys
 from datetime import datetime, timedelta
@@ -39,35 +47,9 @@ import xarray as xr
 
 print('---------------- python copernicus retrieval starts ------------------')
 
-
-# def usage():
-#     """Display the usage message and exit."""
-#     print("""
-#     This script retrieves ERA5 reanalysis data for a specific location and saves 
-#     the processed results into a CSV file.
-
-#     Features:
-#       - Downloads 2m temperature data and 100 mbar geopotential/temperature data.
-#       - Merges newly retrieved data with existing data in the CSV file.
-#       - Processes data into clear and organized DataFrames.
-
-#     Output:
-#       - A CSV file named 'accumulated_copernicus_data.csv'.
-
-#     Note:
-#       - Ensure you have access to the CDS API with valid credentials.
-#       - The script does not accept any command-line arguments.
-
-#     Example:
-#       python3 <script_name>.py
-#     """)
-#     sys.exit(1)
-
-
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
-
 
 # Check if the script has an argument
 if len(sys.argv) < 2:
@@ -108,9 +90,7 @@ else:
 working_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/COPERNICUS")
 
 # Define subdirectories relative to the working directory
-base_directories = {
-    "copernicus_directory": os.path.join(working_directory, "COPERNICUS_DATA"),
-}
+base_directories = { "copernicus_directory": os.path.join(working_directory, "COPERNICUS_DATA"), }
 
 # Access the Copernicus directory
 copernicus_directory = base_directories["copernicus_directory"]
@@ -125,7 +105,7 @@ nc_100mbar_file = os.path.join(copernicus_directory, f"{location}_100mbar_temper
 
 # Define start date and file path
 if test:
-    start_date = datetime.now() - timedelta(weeks=4)
+    start_date = datetime.now() - timedelta(weeks=weeks_behind_requested)
 else:
     start_date = datetime(2023, 7, 1)
     
@@ -145,124 +125,143 @@ else:
     print('File does not exist so an empty dataframe is created.')
     existing_df = pd.DataFrame()
 
-end_date = datetime.now()
-print(f'Retrieving data from {start_date} to {end_date}')
+end_date = datetime.now() - timedelta(days=5)
+
+# Round to seconds
+start_date = start_date.replace(second=0, microsecond=0)
+end_date = end_date.replace(second=0, microsecond=0)
+print(f'\nRetrieving data from\n    {start_date} to\n    {end_date}\n')
 
 # If no new data is needed, skip the retrieval
 if start_date > end_date:
     print("No new data to retrieve.")
     sys.exit(0)
 
-# Check if .nc files already exist and are loaded
-temp_nc_file_exists = os.path.exists(nc_2m_temp_file)
-mbar_nc_file_exists = os.path.exists(nc_100mbar_file)
 
-if not temp_nc_file_exists or csv_exists:
-    print('-------------------- Temperature files retrieving --------------------')
-    # Generate date range
-    date_range = pd.date_range(start=start_date, end=end_date)
-    years = list(date_range.year.astype(str).unique())
+# ------------------------------------------------------------------
+# Helper: split the overall period in chunks of ≤ 20 weeks
+# ------------------------------------------------------------------
+
+MAX_WEEKS = 2  # CDS allows < 21 weeks, but this is faster
+DAY      = timedelta(days=1)
+WEEK     = timedelta(weeks=1)
+
+def block_boundaries(start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+    """Return a list of (block_start, block_end) tuples."""
+    tot_weeks = math.ceil((end - start + DAY) / WEEK)          # inclusive
+    n_blocks  = math.ceil(tot_weeks / MAX_WEEKS)               # minimum blocks needed
+    blk_weeks = math.ceil(tot_weeks / n_blocks)                # weeks per block (≤ MAX_WEEKS)
+    blk_weeks = min(blk_weeks, MAX_WEEKS)
+    blocks = []
+    s = start
+    while s <= end:
+        e = min(s + blk_weeks*WEEK - DAY, end)
+        blocks.append((s, e))
+        s = e + DAY
+    return blocks
+
+# ------------------------------------------------------------------
+# Retrieval loop
+# ------------------------------------------------------------------
+
+print('-------------------- Copernicus retrieval --------------------')
+blocks = block_boundaries(start_date, end_date)
+print(f'Request split into {len(blocks)} block(s) of ≤ {MAX_WEEKS} weeks each.\n')
+
+# Print the duration of the blocks
+for b_start, b_end in blocks:
+    duration = (b_end - b_start).days + 1  # inclusive
+    print(f'Block {b_start:%Y-%m-%d} → {b_end:%Y-%m-%d} ({duration} days)')
+
+
+frames_ground      : list[pd.DataFrame] = []
+frames_temp100     : list[pd.DataFrame] = []
+frames_geopot100   : list[pd.DataFrame] = []
+
+c = cdsapi.Client()                       # initialise once
+
+for b_start, b_end in blocks:
+    print('\n--------------------------------------------------------------')
+    print(f'\nBlock {b_start:%Y-%m-%d} → {b_end:%Y-%m-%d}')
+
+    date_range = pd.date_range(b_start, b_end)
+    years  = list(date_range.year.astype(str).unique())
     months = list(date_range.month.map(lambda x: f'{x:02d}').unique())
-    days = list(date_range.day.map(lambda x: f'{x:02d}').unique())
-    times = [f'{hour:02d}:00' for hour in range(24)]  # Hourly data
-
-    # Initialize the CDS API client
-    c = cdsapi.Client()
-
-    # Retrieve 2m temperature data (ground level)
-    print('Retrieve 2m temperature data (ground level)')
+    days   = list(date_range.day.map(lambda x: f'{x:02d}').unique())
+    times  = [f'{h:02d}:00' for h in range(24)]
+    
+    # ------- 2 m air temperature ----------------------------------
+    print("\nGround level temperature")
+    tmp_file = nc_2m_temp_file.replace('.nc',
+               f'_{b_start:%Y%m%d}_{b_end:%Y%m%d}.nc')
     c.retrieve(
         'reanalysis-era5-single-levels',
         {
             'product_type': 'reanalysis',
-            'variable': ['2m_temperature'],
-            'year': years,
-            'month': months,
-            'day': days,
-            'time': times,
-            'area': [
-                latitude + 0.25, longitude - 0.25,
-                latitude - 0.25, longitude + 0.25
-            ],
-            'format': 'netcdf'
+            'variable'    : ['2m_temperature'],
+            'year'        : years,
+            'month'       : months,
+            'day'         : days,
+            'time'        : times,
+            'area'        : [ latitude + degree_apotema,
+                              longitude - degree_apotema,
+                              latitude - degree_apotema,
+                              longitude + degree_apotema ],
+            'format'      : 'netcdf',
         },
-        nc_2m_temp_file
+        tmp_file
     )
-
-
-if not mbar_nc_file_exists or csv_exists:
-    print('-------------------- Pressure files retrieving --------------------')
-    # Generate date range
-    date_range = pd.date_range(start=start_date, end=end_date)
-    years = list(date_range.year.astype(str).unique())
-    months = list(date_range.month.map(lambda x: f'{x:02d}').unique())
-    days = list(date_range.day.map(lambda x: f'{x:02d}').unique())
-    times = [f'{hour:02d}:00' for hour in range(24)]  # Hourly data
-
-    # Initialize the CDS API client
-    c = cdsapi.Client()
-
-    # Retrieve temperature and geopotential height data at 100 mbar
-    print('Retrieve temperature and geopotential height data at 100 mbar')
+    
+    # ------- 100 mbar temperature & height-----------------
+    print("\n100 mbar temperature & geopotential")
+    prs_file = nc_100mbar_file.replace('.nc',
+               f'_{b_start:%Y%m%d}_{b_end:%Y%m%d}.nc')
     c.retrieve(
         'reanalysis-era5-pressure-levels',
         {
-            'product_type': 'reanalysis',
-            'variable': ['temperature', 'geopotential'],
+            'product_type' : 'reanalysis',
+            'variable'     : ['temperature', 'geopotential'],
             'pressure_level': ['100'],
-            'year': years,
-            'month': months,
-            'day': days,
-            'time': times,
-            'area': [
-                latitude + 0.25, longitude - 0.25,
-                latitude - 0.25, longitude + 0.25
-            ],
-            'format': 'netcdf'
+            'year'         : years,
+            'month'        : months,
+            'day'          : days,
+            'time'         : times,
+            'area'         : [ latitude + degree_apotema,
+                               longitude - degree_apotema,
+                               latitude - degree_apotema,
+                               longitude + degree_apotema ],
+            'format'       : 'netcdf',
         },
-        nc_100mbar_file
+        prs_file
     )
 
-print('DATA RETRIEVED or ALREADY LOADED!')
-print('Processing and saving...')
+    # ------- Load and process ------------------------------------
+    ds_2m   = xr.open_dataset(tmp_file).rename({'valid_time': 'Time'})
+    ds_100  = xr.open_dataset(prs_file).rename({'valid_time': 'Time'})
+
+    df_ground   = (ds_2m['t2m'] - 273.15).to_dataframe().reset_index()
+    df_temp100  = (ds_100['t']  - 273.15).to_dataframe().reset_index()
+    df_geop100  = (ds_100['z'] / 9.80665).to_dataframe().reset_index()
+
+    frames_ground    .append(df_ground .groupby('Time').mean(numeric_only=True).reset_index())
+    frames_temp100   .append(df_temp100.groupby('Time').mean(numeric_only=True).reset_index())
+    frames_geopot100 .append(df_geop100.groupby('Time').mean(numeric_only=True).reset_index())
+
 
 # ------------------------------------------------------------------
-# Load datasets and rename valid_time to time for ds_2m_temp
-ds_2m_temp = xr.open_dataset(nc_2m_temp_file).rename({'valid_time': 'Time'})
-ds_100mbar = xr.open_dataset(nc_100mbar_file).rename({'valid_time': 'Time'})
+# Concatenate all chunks and finish as before
+# ------------------------------------------------------------------
+df_ground_all  = pd.concat(frames_ground   , ignore_index=True)
+df_temp100_all = pd.concat(frames_temp100  , ignore_index=True)
+df_geop100_all = pd.concat(frames_geopot100, ignore_index=True)
 
-# Convert Kelvin to Celsius for variables
-ground_temp = ds_2m_temp['t2m'] - 273.15  # Celsius
-temp_100mbar = ds_100mbar['t'] - 273.15  # Celsius
-geopotential_height_100mbar = ds_100mbar['z'] / 9.80665  # Convert geopotential to meters. This is not clear, since the acceleration changes with altitude...
-
-# Convert datasets to DataFrames and reset index
-df_ground_temp = ground_temp.to_dataframe().reset_index()
-df_temp_100mbar = temp_100mbar.to_dataframe().reset_index()
-df_geopotential_height_100mbar = geopotential_height_100mbar.to_dataframe().reset_index()
-
-# Drop unnecessary columns
-df_ground_temp = df_ground_temp.drop(columns=['expver', 'number'], errors='ignore')
-df_temp_100mbar = df_temp_100mbar.drop(columns=['pressure_level', 'number', 'expver'], errors='ignore')
-
-# Debug: Check the DataFrame structure
-print("Columns in df_ground_temp:", df_ground_temp.columns)
-print("Sample data in df_ground_temp:\n", df_ground_temp.head())
-
-print("Columns in df_temp_100mbar:", df_temp_100mbar.columns)
-print("Sample data in df_temp_100mbar:\n", df_temp_100mbar.head())
-
-# Group by 'time' and calculate the mean for numeric columns
-df_ground_temp = df_ground_temp.groupby('Time').mean(numeric_only=True).reset_index()
-df_temp_100mbar = df_temp_100mbar.groupby('Time').mean(numeric_only=True).reset_index()
-df_geopotential_height_100mbar = df_geopotential_height_100mbar.groupby('Time').mean(numeric_only=True).reset_index()
-
-# Merge DataFrames on time
-df_new = (
-    df_ground_temp
-    .merge(df_temp_100mbar, on='Time')
-    .merge(df_geopotential_height_100mbar, on='Time')
-)
+df_new = (df_ground_all
+          .merge(df_temp100_all,  on='Time')
+          .merge(df_geop100_all, on='Time')
+          .loc[:, ['Time', 't2m', 't', 'z']]
+          .rename(columns={'t2m':'temp_ground',
+                           't'  :'temp_100mbar',
+                           'z'  :'height_100mbar'}))
 
 df_new = df_new[['Time', 't2m', 't', 'z']]  # Keep only relevant columns
 
@@ -279,9 +278,6 @@ if not existing_df.empty:
     df_updated = pd.concat([existing_df, df_new]).drop_duplicates(subset=['Time']).sort_values(by='Time')
 else:
     df_updated = df_new
-
-# Resample the DataFrame to hourly data
-# df_updated = df_updated.set_index('Time').resample('1H').mean().reset_index()
 
 # Save the updated DataFrame
 df_updated.to_csv(csv_file, index=False)
