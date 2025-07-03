@@ -19,6 +19,7 @@ import os
 import sys
 from glob import glob
 from datetime import datetime
+import numpy as np
 
 # Third-party Libraries
 import pandas as pd
@@ -107,7 +108,7 @@ for file_path in file_paths:
 
 # Load all CSV files into dataframes and store them in a list
 
-
+print("\nAggregating data from CSV files...")
 def aggregate_csv(path, chunksize=1_000_000):
     tmp = []
     for chunk in pd.read_csv(path, parse_dates=['Time'], chunksize=chunksize):
@@ -151,41 +152,53 @@ merged_df = merged.reset_index()
 # Sort by Time after merging
 merged_df = merged_df.sort_values('Time')
 
-# print("Merged DataFrame Info:")
-# print(merged_df.info())
-
-# print("First few rows of merged data:")
-# print(merged_df.head())
-
-# print("Last few rows of merged data:")
-# print(merged_df.tail())
-
-# Save the merged dataframe
-# if os.path.exists(output_file):
-#     # If the output file already exists, load it and append new rows
-#     existing_df = pd.read_csv(output_file, parse_dates=['Time'])
-#     combined_df = pd.concat([existing_df, merged_df]).drop_duplicates(subset=['Time'], keep='last')
-# else:
-    # combined_df = merged_df
-
 if os.path.exists(output_file):
     # If the output file already exists, load it and append new rows
-    print("Removing existing file: ", output_file)
+    print("\nRemoving existing file: ", output_file)
     os.remove(output_file)
 combined_df = merged_df
 
+
 # Replace all 0s with NaNs
-print("Replacing 0s with NaNs...")
+print("\nReplacing 0s with NaNs...")
 combined_df.replace(0, pd.NA, inplace=True)
 
+
 # Round the values to 2 decimal places for numeric columns
-print("Rounding values to 2 decimal places for numeric columns...")
-for col in combined_df.select_dtypes(include=['float32', 'float64']).columns:
-    combined_df[col] = combined_df[col].round(2)
-    
-print("Saving the data...")
+print("\nRounding values to 2 decimal places for columns (but Time)...")
+num_cols = combined_df.columns.difference(['Time'])   # 306 columns here
+
+# --- 1. Vectorised numeric coercion ---------------------------------
+# stack → to_numeric → unstack is the fastest way to coerce many columns
+tmp = (combined_df[num_cols]
+         .stack(dropna=False))                # 1-D view
+tmp = pd.to_numeric(tmp, errors='coerce')     # one pass
+combined_df[num_cols] = tmp.unstack(level=1)  # back to 2-D
+
+# --- 2. Single cast to float32 (memory halves) ----------------------
+combined_df[num_cols] = combined_df[num_cols].astype('float32')
+
+# --- 3. In-place NumPy rounding (no extra copy) ---------------------
+vals = combined_df[num_cols].to_numpy()       # float32 view
+np.round(vals, 2, out=vals)                   # modifies in place
+
+
+# If there are rows where all non-Time columns are NaN, drop them and count how many there are
+print("\nCounting rows with all NaN values (excluding 'Time')...")
+non_time_cols = combined_df.columns.difference(['Time'])
+nan_rows_mask = combined_df[non_time_cols].isna().all(axis=1)
+nan_rows_count = nan_rows_mask.sum()
+if nan_rows_count > 0:
+    print(f"Dropping {nan_rows_count} rows with all NaN values (excluding 'Time')...")
+    combined_df = combined_df[~nan_rows_mask]
+else:
+    print("No rows with all non-'Time' NaN values found.")
+
+
 # Save the final dataframe to a CSV file
+print("\nSaving the data...")
 combined_df.to_csv(output_file, index=False)
+
 
 print(f"Data has been merged and saved to {output_file}")
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 # Standard Library
 import argparse
 from pathlib import Path
+import shutil
 
 # Third-party Libraries
 import numpy as np
@@ -643,14 +644,7 @@ def main():
     
 
     if args.save:
-        # Directory for PNGs
-        outdir = Path(f"station{args.station}_figures")
-        outdir.mkdir(exist_ok=True)
-
-        # Save individual PNGs
-        for i, fig in enumerate(figs, 1):
-            fig.savefig(outdir / f"station{args.station}_figure{i}.png", dpi=300)
-
+        
         # Save multi-page PDF in the same directory as the CSVs
         base = (
             Path("/home/mingo/DATAFLOW_v3")
@@ -659,14 +653,29 @@ def main():
             / "FIRST_STAGE"
             / "EVENT_DATA"
         )
+        base.mkdir(parents=True, exist_ok=True)        # ensure path exists
         pdf_path = base / f"station{args.station}_summary.pdf"
+        
+        # Directory for PNGs
+        fig_dir = base / f"station{args.station}_figures"
+        fig_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save individual PNGs
+        for i, fig in enumerate(figs, 1):
+            fig.savefig(fig_dir / f"station{args.station}_figure{i}.png", dpi=300)
+        
         with PdfPages(pdf_path) as pdf:
             for fig in figs:
                 print(f"Saving figure {fig.number} to PDF...")
                 pdf.savefig(fig)
                 plt.close(fig)
         print(f"PDF saved to: {pdf_path.resolve()}")
-
+        
+        # Remove the outdir, also if it has files
+        if fig_dir.exists():
+            shutil.rmtree(fig_dir)          # recursive, ignores non-empty state
+            print(f"Temporary directory {fig_dir} removed.")
+        
     else:
         print("Figures will not be saved. Use --save to enable saving.")
 
