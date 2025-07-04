@@ -103,7 +103,7 @@ done
 ##############################################################################
 printf "\n"
 printf %b "Legend:\n"
-printf %b "  ${CLR_GREEN}green${CLR_RESET}   — updated < 1 min\n"
+printf %b "  ${CLR_GREEN}green${CLR_RESET}  — updated < 1 min\n"
 printf %b "  ${CLR_PURPLE}purple${CLR_RESET} — 1–60 min old\n"
 printf %b "  ${CLR_ORANGE}orange${CLR_RESET} — > 60 min old\n"
-printf %b "  ${CLR_RED}red${CLR_RESET}     — file missing\n"
+printf %b "  ${CLR_RED}red${CLR_RESET}    — file missing\n"

@@ -108,28 +108,62 @@ if test:
     start_date = datetime.now() - timedelta(weeks=weeks_behind_requested)
 else:
     start_date = datetime(2023, 7, 1)
-    
-    
+
+end_date = datetime.now() - timedelta(days=5)
+
+# Round start_date and end_date to day
+start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+start_date_og = start_date
+end_date_og = end_date
+
+exit_code = False
+
 # Determine the data retrieval range
 csv_exists = os.path.exists(csv_file)
 
 if csv_exists:
-    # Load existing data and find the last date
-    print('File exists and is being loaded. Last date will be checked.')
+    # Load existing data and find the first and last dates
+    print('File exists and is being loaded. Checking the date range.')
     existing_df = pd.read_csv(csv_file, parse_dates=['Time'])
-    last_date = existing_df['Time'].max()
-    start_date = last_date - timedelta(days=1)  # Start from the previous day
-    print(f'Last date is {last_date}, so loading data from {start_date}')
+    first_date = existing_df['Time'].min()  # First date in the file
+    last_date = existing_df['Time'].max()   # Last date in the file
+    
+    # Round to Day
+    first_date = first_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_date = last_date.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    
+    # Check if the file already covers the requested date range
+    if first_date <= start_date and last_date >= end_date:
+        # If the file already covers the requested range, no need to reload
+        print(f"The file already contains the data for the range selected. Skipping data retrieval.")
+        exit_code = True
+    else:
+        # If the range is not covered, extend the range and reload
+        print(f"The file doesn't contain the full range selected. Loading missing data.")
+        
+        start_date = first_date if first_date < start_date else start_date
+        end_date = last_date if last_date > end_date else end_date
+    
+    # Printing the table
+    print("\n")
+    date_ranges = pd.DataFrame({
+        'Start Date': [start_date_og, first_date, start_date],
+        'End Date': [end_date_og, last_date, end_date]
+    }, index=['Requested Dates', 'File Dates', 'Final Dates'])
+    date_ranges = date_ranges.map(lambda x: x.strftime('%Y-%m-%d') if isinstance(x, datetime) else x)
+    print(date_ranges)
+    
 else:
     # If the file doesn't exist, create an empty DataFrame
-    print('File does not exist so an empty dataframe is created.')
+    print('File does not exist, creating an empty DataFrame.')
     existing_df = pd.DataFrame()
 
-end_date = datetime.now() - timedelta(days=5)
 
-# Round to seconds
-start_date = start_date.replace(second=0, microsecond=0)
-end_date = end_date.replace(second=0, microsecond=0)
+if exit_code:
+    sys.exit(0)
+
 print(f'\nRetrieving data from\n    {start_date} to\n    {end_date}\n')
 
 # If no new data is needed, skip the retrieval
@@ -207,7 +241,7 @@ for b_start, b_end in blocks:
                               longitude - degree_apotema,
                               latitude - degree_apotema,
                               longitude + degree_apotema ],
-            'format'      : 'netcdf',
+            'format'      : 'netcdf',                                  # Consider changing to 'grib' for larger datasets, which is faster, apparently
         },
         tmp_file
     )
@@ -263,12 +297,12 @@ df_new = (df_ground_all
                            't'  :'temp_100mbar',
                            'z'  :'height_100mbar'}))
 
-df_new = df_new[['Time', 't2m', 't', 'z']]  # Keep only relevant columns
+df_new = df_new[['Time', 'temp_ground', 'temp_100mbar', 'height_100mbar']]  # Keep only relevant columns
 
 print("Columns in df_new:", df_new.columns)
 
 # Rename columns for clarity
-df_new.columns = ['Time', 'temp_ground', 'temp_100mbar', 'height_100mbar']
+# df_new.columns = ['Time', 'temp_ground', 'temp_100mbar', 'height_100mbar']
 
 # Debug: Check the final merged DataFrame
 print("Final merged DataFrame:\n", df_new.head())
