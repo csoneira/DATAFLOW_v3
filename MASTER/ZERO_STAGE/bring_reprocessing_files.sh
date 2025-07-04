@@ -64,23 +64,60 @@ echo "Fetching HLD files for MINGO0$station between $start_DOY and $end_DOY..."
 # Transfer loop
 ##############################################################################
 
+# for pattern in "mi0${station}" "minI${station}"; do
+#   echo ""
+#   echo "Listing all the files"
+#   ssh backuplip "ls /local/experiments/MINGOS/MINGO0${station}/${pattern}*{$start_DOY..$end_DOY}*.hld*" 2>/dev/null || continue
+#   echo ""
+
+#   while IFS= read -r file; do
+#     echo "Transferring $file ..."
+#     if scp "backuplip:$file" "$compressed_directory/"; then
+#     # if scp backuplip:"'$file'"  "$compressed_directory/"; then
+#       # update mtime to now
+#       touch "$compressed_directory/$(basename "$file")"
+#     else
+#       echo "Failed: $file"
+#     fi
+#   done < <(ssh backuplip "ls -1 /local/experiments/MINGOS/MINGO0${station}/${pattern}*{$start_DOY..$end_DOY}*.hld*" 2>/dev/null)
+# done
+
+
+
 for pattern in "mi0${station}" "minI${station}"; do
-  echo ""
-  echo "Listing all the files"
-  ssh backuplip "ls /local/experiments/MINGOS/MINGO0${station}/${pattern}*{$start_DOY..$end_DOY}*.hld*" 2>/dev/null || continue
+  echo "Fetching pattern: $pattern"
+
+  # Build exclude list from local files to avoid re-transfer
+  exclude_file=$(mktemp)
+  find /home/mingo/DATAFLOW_v3/STATIONS/MINGO0*/ZERO_STAGE -type f -name "*.hld*" -printf "%f\n" > "$exclude_file"
+
+  # Print the exclude list contents
+  echo "Excluding files listed in: $exclude_file"
+  echo "Excluding files already present in ZERO_STAGE/COMPRESSED_HLDS"
+  cat "$exclude_file"
   echo ""
 
-  while IFS= read -r file; do
-    echo "Transferring $file ..."
-    if scp "backuplip:$file" "$compressed_directory/"; then
-    # if scp backuplip:"'$file'"  "$compressed_directory/"; then
-      # update mtime to now
-      touch "$compressed_directory/$(basename "$file")"
-    else
-      echo "Failed: $file"
-    fi
-  done < <(ssh backuplip "ls -1 /local/experiments/MINGOS/MINGO0${station}/${pattern}*{$start_DOY..$end_DOY}*.hld*" 2>/dev/null)
+  echo "Syncing files for station MINGO0${station} from $start_DOY to $end_DOY"
+
+  for doy in $(seq "$start_DOY" "$end_DOY"); do
+    echo "Syncing files for DOY: $doy"
+
+    # Remote directory
+    remote_dir="/local/experiments/MINGOS/MINGO0${station}/"
+
+    # Use rsync to pull only the matching files
+    rsync -avz --progress \
+      --include="${pattern}*${doy}*.hld*" \
+      --exclude-from="$exclude_file" \
+      --exclude='*' \
+      --ignore-existing \
+      --no-compress \
+      "backuplip:${remote_dir}" "$compressed_directory/"
+  done
+
+  rm -f "$exclude_file"
 done
+
 
 
 

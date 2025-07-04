@@ -116,8 +116,8 @@ echo "Unpacking HLD tarballs and removing archives..."
 for file in "$compressed_directory"/*.tar.gz; do
     [ -e "$file" ] || continue
     if tar -xvzf "$file" --strip-components=3 -C "$uncompressed_directory"; then
-        echo "Successfully unpauntared $file"
-        rm "$file"
+        echo "Successfully untared $file"
+        # rm "$file"
     else
         echo "Warning: Failed to unpack $file" >&2
     fi
