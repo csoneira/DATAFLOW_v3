@@ -79,12 +79,30 @@ moved_directory=${base_directory}/SENT_TO_RAW_TO_LIST_PIPELINE
 
 hld_input_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat
 asci_output_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci
-first_stage_raw_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY
+first_stage_raw_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW
+first_stage_base = /home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA
 
 # mkdir -p "$uncompressed_directory" "$processed_directory" "$moved_directory"
 mkdir -p "$uncompressed_directory" "$moved_directory" "$first_stage_raw_directory"
 
 
+# Now Copy to first_stage_raw_directory every file from moved_directory that is not in any first_stage_base subdirectory (recursively)
+
+# Get list of all existing filenames under FIRST_STAGE/EVENT_DATA recursively
+mapfile -t existing_files < <(find "$first_stage_base" -type f -exec basename {} \; | sort -u)
+
+# Copy files from moved_directory only if not already present (by name) in first_stage_base
+find "$moved_directory" -maxdepth 1 -type f | while read -r src_file; do
+    fname=$(basename "$src_file")
+    if ! printf "%s\n" "${existing_files[@]}" | grep -Fxq "$fname"; then
+        echo "Moving $fname to RAW directory"
+        cp "$src_file" "$first_stage_raw_directory/"
+        # Update mdate to current time of the copied file
+        touch "$first_stage_raw_directory/$fname"
+    else
+        echo "Skipping $fname — already exists in EVENT_DATA"
+    fi
+done
 
 # echo ""
 # echo "Unpacking HLD tarballs..."
@@ -98,6 +116,7 @@ echo "Unpacking HLD tarballs and removing archives..."
 for file in "$compressed_directory"/*.tar.gz; do
     [ -e "$file" ] || continue
     if tar -xvzf "$file" --strip-components=3 -C "$uncompressed_directory"; then
+        echo "Successfully unpauntared $file"
         rm "$file"
     else
         echo "Warning: Failed to unpack $file" >&2

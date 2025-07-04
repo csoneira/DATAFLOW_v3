@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# ---------------------------------------------------------------------------
-# check_station_dirs.sh  –  file-count monitor with colour-coded recency
-# ---------------------------------------------------------------------------
 
 set -euo pipefail
 
@@ -30,6 +27,26 @@ DIRS=(
   "/FIRST_STAGE/EVENT_DATA/ACC_EVENTS_DIRECTORY"
 )
 
+SHORT_DIRS=(
+  "/ZERO_STAGE/COMPRESSED_HLDS"
+  "/ZERO_STAGE/UNCOMPRESSED_HLDS"
+  # "/ZERO_STAGE/SENT_TO_RAW_TO_LIST_PIPELINE"
+
+  # "/FIRST_STAGE/EVENT_DATA/RAW"
+
+  # "/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY"
+  # "/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/PROCESSING_DIRECTORY"
+  # "/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/COMPLETED_DIRECTORY"
+
+  "/FIRST_STAGE/EVENT_DATA/LIST_EVENTS_DIRECTORY"
+
+  # "/FIRST_STAGE/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ACC_UNPROCESSED"
+  # "/FIRST_STAGE/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ACC_PROCESSING"
+  # "/FIRST_STAGE/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ACC_COMPLETED"
+
+  "/FIRST_STAGE/EVENT_DATA/ACC_EVENTS_DIRECTORY"
+)
+
 FRESH_SEC=300       # < 5 min  → green
 STALE_SEC=3600      # ≥ 60 min → orange
 RECENT_SEC=3600     # files modified within last hour
@@ -37,11 +54,40 @@ RECENT_SEC=3600     # files modified within last hour
 ##############################################################################
 # ANSI colours (disable with --no-color)
 ##############################################################################
-USE_COLOR=true
-if [[ ${1:-} == "--no-color" ]]; then
-  USE_COLOR=false
+##############################################################################
+# Option parsing: --no-color  -s/--short  [station …]
+##############################################################################
+USE_COLOR=true                 # default: colourised output
+
+# Collect non-option words (station numbers) here
+declare -a POSITIONAL=()
+
+while (( $# )); do
+  case "$1" in
+    --no-color)
+      USE_COLOR=false
+      ;;
+    -s|--short)
+      # replace the full list with the reduced one
+      DIRS=("${SHORT_DIRS[@]}")
+      ;;
+    --)                     # explicit end-of-options marker
+      shift
+      break
+      ;;
+    -*)                     # unknown option
+      printf 'Unknown option: %s\n' "$1" >&2
+      exit 1
+      ;;
+    *)                      # positional argument → station number
+      POSITIONAL+=("$1")
+      ;;
+  esac
   shift
-fi
+done
+
+# Restore positional parameters so the existing station logic remains unchanged
+set -- "${POSITIONAL[@]}"
 
 if $USE_COLOR; then
   CLR_BOLD="\033[1m"; CLR_RESET="\033[0m"

@@ -63,14 +63,25 @@ echo "Fetching HLD files for MINGO0$station between $start_DOY and $end_DOY..."
 ##############################################################################
 # Transfer loop
 ##############################################################################
+
 for pattern in "mi0${station}" "minI${station}"; do
+  echo ""
+  echo "Listing all the files"
   ssh backuplip "ls /local/experiments/MINGOS/MINGO0${station}/${pattern}*{$start_DOY..$end_DOY}*.hld*" 2>/dev/null || continue
-  for file in $(ssh backuplip "ls /local/experiments/MINGOS/MINGO0${station}/${pattern}*{$start_DOY..$end_DOY}*.hld*" 2>/dev/null); do
+  echo ""
+
+  while IFS= read -r file; do
     echo "Transferring $file ..."
-    scp "backuplip:$file" "$compressed_directory/" || echo "Failed: $file"
-    # Modify the time metadata of modification time of the file to the current time
-    touch "$compressed_directory/$(basename "$file")"
-  done
+    if scp "backuplip:$file" "$compressed_directory/"; then
+    # if scp backuplip:"'$file'"  "$compressed_directory/"; then
+      # update mtime to now
+      touch "$compressed_directory/$(basename "$file")"
+    else
+      echo "Failed: $file"
+    fi
+  done < <(ssh backuplip "ls -1 /local/experiments/MINGOS/MINGO0${station}/${pattern}*{$start_DOY..$end_DOY}*.hld*" 2>/dev/null)
 done
+
+
 
 echo "Download completed."

@@ -52,16 +52,12 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # --------------------------------------------------------------------------------
 
 # ZERO_STAGE - REPROCESSING - BRING RANDOM ---------------------------------------
-30 1 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 1 -r >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
-30 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 2 -r >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
-30 3 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 3 -r >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
-30 4 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 4 -r >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
+30 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 1 -r >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
+30 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 2 -r >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
+30 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 3 -r >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
+30 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 4 -r >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
 
 # ZERO_STAGE - REPROCESSING - UNPACK ---------------------------------------------
-#* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 1 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_1.log 2>&1
-#* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 2 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_2.log 2>&1
-#* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 3 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_3.log 2>&1
-#* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 4 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_4.log 2>&1
 * * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 1 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_1.log 2>&1; done' &
 * * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 2 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_2.log 2>&1; done' &
 * * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 3 >> ~/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_3.log 2>&1; done' &

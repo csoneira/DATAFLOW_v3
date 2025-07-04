@@ -62,6 +62,7 @@ from collections import defaultdict
 from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable
+from pathlib import Path
 
 # Scientific Computing
 from math import sqrt
@@ -206,6 +207,43 @@ unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
 
+
+# The hierarchy is: 1. raw_files, then 2. unprocessed_files, then 3. processing_files, and finally 4. completed_files.
+# First start with completed_files: if any of those files is is processing_files, unprocessed or raw, remove it from those
+# and keep only the completed_files version.
+# Repeat with processing_files: if any of those files is in unprocessed_files or raw_files, remove it from those
+# and keep only the processing_files version.
+# Repeat with unprocessed_files: if any of those files is in raw_files, remove it from raw_files
+
+# Ordered list from highest to lowest priority
+LEVELS = [
+    completed_directory,
+    processing_directory,
+    unprocessed_directory,
+    raw_directory,
+]
+
+seen = set()
+for d in LEVELS:
+    d = Path(d)                     # ← convert string → Path each iteration
+    if not d.exists():
+        continue
+    current_files = {p.name for p in d.iterdir() if p.is_file()}
+
+    # files that must be removed from this level
+    duplicates = current_files & seen
+    for fname in duplicates:
+        fp = d / fname
+        try:
+            fp.unlink()            # delete the file
+            print(f"Removed duplicate: {fp}")
+        except FileNotFoundError:
+            pass                   # already gone, ignore
+
+    # update the `seen` set with (remaining) filenames of this level
+    seen |= (current_files - duplicates)
+
+
 # Search in all this directories for empty files and move them to the empty_files_directory
 for directory in [raw_directory, unprocessed_directory, processing_directory, completed_directory]:
     files = os.listdir(directory)
@@ -241,6 +279,7 @@ for file_name in files_to_move:
         print(f"Move {file_name} to UNPROCESSED directory.")
     except Exception as e:
         print(f"Failed to copy {file_name}: {e}")
+
 
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
