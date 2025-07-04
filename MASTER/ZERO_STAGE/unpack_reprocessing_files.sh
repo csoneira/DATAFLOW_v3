@@ -183,6 +183,15 @@ echo "Moving dat files to destiny folders, RAW included..."
 cp "$asci_output_directory"/*.dat "$first_stage_raw_directory/"
 mv "$asci_output_directory"/*.dat "$moved_directory/"
 
+# Update mdate to current time of the copied and moved files
+for file in "$first_stage_raw_directory"/*.dat; do
+    touch "$file"
+done
+
+for file in "$moved_directory"/*.dat; do
+    touch "$file"
+done
+
 # If there are hlds in hld_input_directory, move them to $hld_input_directory/removed
 if [ -d "$hld_input_directory" ]; then
     echo "Moving existing HLD files to removed directory..."

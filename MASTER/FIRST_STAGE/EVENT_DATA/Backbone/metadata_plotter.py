@@ -401,7 +401,7 @@ def figure6(df: pd.DataFrame):
 
 
 def figure7(df: pd.DataFrame):
-    """Three-panel figure for eff_* parameters grouped by suffix."""
+    """Three-panel figure for eff_* parameters grouped by suffix, with outlier filtering."""
     suffix_groups = {"a": [], "n": [], "0": []}
     for col in df:
         if col.startswith("eff_"):
@@ -409,16 +409,37 @@ def figure7(df: pd.DataFrame):
             if suffix in suffix_groups:
                 suffix_groups[suffix].append(col)
 
+    # Define column-specific filtering thresholds: (min, max)
+    thresholds = {
+        # Example limits — adjust as needed
+        "eff_P2_a": (-0.1, 0.1),
+        "eff_P2_n": (0.0, 25.0),
+        "eff_P2_0": (0.9, 1.0),
+        
+        "eff_P3_a": (-0.1, 0.1),
+        "eff_P3_n": (0.0, 25.0),
+        "eff_P3_0": (0.9, 1.0),
+    }
+
     fig, axs = plt.subplots(1, 3, figsize=(18, 5), sharex=True, constrained_layout=True)
     for ax, (suffix, cols) in zip(axs, suffix_groups.items()):
         for col in cols:
-            ax.plot(df.index, df[col], label=col)
-            ax.scatter(df.index, df[col], label=col, s=point_size)
+            if col in thresholds:
+                min_val, max_val = thresholds[col]
+                valid_mask = (df[col] > min_val) & (df[col] < max_val)
+                x_valid = df.index[valid_mask]
+                y_valid = df[col][valid_mask]
+            else:
+                x_valid = df.index
+                y_valid = df[col]
+            ax.plot(x_valid, y_valid, label=col)
+            ax.scatter(x_valid, y_valid, s=point_size)
         ax.set_title(f"eff_*_{suffix}")
         ax.legend(frameon=False, fontsize="x-small")
         _apply_time_axis(ax)
-    fig.suptitle("Efficiency model parameters")
+    fig.suptitle(r"Efficiency model parameters ($\varepsilon(\theta) = a \cdot \theta^n + \varepsilon_0$)")
     return fig
+
 
 
 def figure8(df: pd.DataFrame):
@@ -491,6 +512,7 @@ def figure9(df: pd.DataFrame):
 def figure10(df: pd.DataFrame):
     planes = ["P1", "P2", "P3", "P4"]
     suffixes = ["x0", "k"]
+    thresholds = {"x0": [700, 1000], "k": [0, 0.0175]}
 
     fig, axs = plt.subplots(4, 2, figsize=(12, 12), sharex=True, sharey='col', constrained_layout=True)
     for r, p in enumerate(planes):
@@ -498,8 +520,13 @@ def figure10(df: pd.DataFrame):
             ax = axs[r, c]
             col = f"{p}_{sfx}"
             if col in df:
-                ax.plot(df.index, df[col])
-                ax.scatter(df.index, df[col], s=point_size)
+                # Filter out outliers
+                valid_mask = ( df[col] > thresholds[sfx][0] ) & ( df[col].abs() < thresholds[sfx][1] )
+                valid_index = df.index[valid_mask]
+                valid_values = df[col][valid_mask]
+
+                ax.plot(valid_index, valid_values)
+                ax.scatter(valid_index, valid_values, s=point_size)
             if r == 0:
                 ax.set_title(sfx)
             if c == 0:
@@ -507,6 +534,7 @@ def figure10(df: pd.DataFrame):
             _apply_time_axis(ax)
     fig.suptitle("Fit parameters x0 and k")
     return fig
+
 
 
 

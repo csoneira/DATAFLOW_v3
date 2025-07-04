@@ -37,6 +37,7 @@ import math
 import random
 import shutil
 import builtins
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -184,7 +185,7 @@ base_directories = {
     "completed_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_COMPLETED"),
     
     "acc_events_directory": os.path.join(working_directory, "ACC_EVENTS_DIRECTORY"),
-    "full_acc_events_directory": os.path.join(working_directory, "FULL_ACC_EVENTS_DIRECTORY"),
+    # "full_acc_events_directory": os.path.join(working_directory, "FULL_ACC_EVENTS_DIRECTORY"),
     "acc_rejected_directory": os.path.join(working_directory, "ACC_REJECTED"),
 }
 
@@ -209,22 +210,22 @@ if files:  # Check if the directory contains any files
 # Move small or too big files in the destination folder to a directory of rejected -----------
 # --------------------------------------------------------------------------------------------
 
-source_dir = base_directories["acc_events_directory"]
-rejected_dir = base_directories["acc_rejected_directory"]
+# source_dir = base_directories["acc_events_directory"]
+# rejected_dir = base_directories["acc_rejected_directory"]
 
-for filename in os.listdir(source_dir):
-    file_path = os.path.join(source_dir, filename)
+# for filename in os.listdir(source_dir):
+#     file_path = os.path.join(source_dir, filename)
     
-    # Check if it's a file
-    if os.path.isfile(file_path):
-        # Count the number of lines in the file
-        with open(file_path, "r") as f:
-            line_count = sum(1 for _ in f)
+#     # Check if it's a file
+#     if os.path.isfile(file_path):
+#         # Count the number of lines in the file
+#         with open(file_path, "r") as f:
+#             line_count = sum(1 for _ in f)
 
-        # Move the file if it has < 10 or > 300 rows
-        if line_count < 2 or line_count > 10000:
-            shutil.move(file_path, os.path.join(rejected_dir, filename))
-            print(f"Moved: {filename}")
+#         # Move the file if it has < 10 or > 300 rows
+#         if line_count < 2 or line_count > 10000:
+#             shutil.move(file_path, os.path.join(rejected_dir, filename))
+#             print(f"Moved: {filename}")
 
 
 # Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
@@ -385,6 +386,10 @@ else:
 
 # This is for all cases
 file_path = processing_file_path
+
+now = time.time()
+os.utime(processing_file_path, (now, now))
+
 df = pd.read_csv(file_path, sep=',')
 df['Time'] = pd.to_datetime(df['Time'], errors='coerce') # Added errors='coerce' to handle NaT values
 print(f"Number of events in the file: {len(df)}")
@@ -494,8 +499,8 @@ else:
 
 print("Filename save suffix:", filename_save_suffix)
 
-full_save_filename = f"full_accumulated_events_{filename_save_suffix}.csv"
-full_save_path = os.path.join(base_directories["full_acc_events_directory"], full_save_filename)
+# full_save_filename = f"full_accumulated_events_{filename_save_suffix}.csv"
+# full_save_path = os.path.join(base_directories["full_acc_events_directory"], full_save_filename)
 
 save_filename = f"accumulated_events_{filename_save_suffix}.csv"
 save_path = os.path.join(base_directories["acc_events_directory"], save_filename)
@@ -6325,6 +6330,10 @@ print(f"Accumulated columns datafile saved in {save_filename}. Path is {save_pat
 # Move the original file in file_path to completed_directory
 print("Moving file to COMPLETED directory...")
 shutil.move(file_path, completed_file_path)
+
+now = time.time()
+os.utime(completed_file_path, (now, now))
+
 print(f"File moved to: {completed_file_path}")
 
 

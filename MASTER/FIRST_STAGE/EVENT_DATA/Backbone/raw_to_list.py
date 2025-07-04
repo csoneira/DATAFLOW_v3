@@ -56,6 +56,7 @@ import random
 import shutil
 import builtins
 import warnings
+import time
 from datetime import datetime, timedelta
 from collections import defaultdict
 from itertools import combinations
@@ -163,7 +164,7 @@ base_directories = {
     "figure_directory": os.path.join(raw_to_list_working_directory, f"PLOTS/FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
     
     "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
-    "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
+    # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
     
     "ancillary_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY"),
     
@@ -223,6 +224,8 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             
             print("Moving empty file:", file)
             shutil.move(file_empty, empty_destination_path)
+            now = time.time()
+            os.utime(empty_destination_path, (now, now))
 
 # Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
 files_to_move = raw_files - unprocessed_files - processing_files - completed_files
@@ -233,6 +236,8 @@ for file_name in files_to_move:
     dest_path = os.path.join(unprocessed_directory, file_name)
     try:
         shutil.move(src_path, dest_path)
+        now = time.time()
+        os.utime(dest_path, (now, now))
         print(f"Move {file_name} to UNPROCESSED directory.")
     except Exception as e:
         print(f"Failed to copy {file_name}: {e}")
@@ -296,7 +301,7 @@ limit = False
 limit_number = 10000
 number_of_time_cal_figures = 3
 save_calibrations = True
-save_full_data = False
+# save_full_data = False
 presentation = False
 presentation_plots = False
 force_replacement = True # Creates a new datafile even if there is already one that looks complete
@@ -1211,6 +1216,8 @@ def process_file(source_path, dest_path):
     print("**********************************************************************")
     
     shutil.move(source_path, dest_path)
+    now = time.time()
+    os.utime(dest_path, (now, now))
     return True
 
 def get_file_path(directory, file_name):
@@ -1322,6 +1329,10 @@ else:
 
 # This is for all cases
 file_path = processing_file_path
+
+# Modify the time of the processing file to the current time so it looks fresh
+now = time.time()
+os.utime(processing_file_path, (now, now))
 
 # Check the station number in the datafile
 try:
@@ -1463,7 +1474,7 @@ if exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
+    input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
     matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
     print(matching_confs)
     if not matching_confs.empty:
@@ -1502,7 +1513,7 @@ save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
 save_list_path = os.path.join(base_directories["list_events_directory"], save_filename)
-save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
+# save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 # Check if the file exists and its size
@@ -2151,6 +2162,8 @@ if low_value_cols:
     final_path = os.path.join(base_directories["error_directory"], file_name)
     print(f"Moving {file_path} to the error directory {final_path}...")
     shutil.move(file_path, final_path)
+    now = time.time()
+    os.utime(final_path, (now, now))
     sys.exit(1)
 
 
@@ -6814,7 +6827,7 @@ if stratos_save:
     filtered_columns = [col for col in stratos_df.columns if col.startswith("Y_") or "_T_diff_final" in col or 'datetime' in col]
 
     # Create a new DataFrame with the selected columns
-    filtered_stratos_df = stratos_df[filtered_columns]
+    filtered_stratos_df = stratos_df[filtered_columns].copy()
 
     # Rename "T<number>_T_diff_final" to "X_<number>" and multiply by 200
     filtered_stratos_df.rename(columns=lambda col: f'X_{col.split("_")[0][1:]}' if "_T_diff_final" in col else col, inplace=True)
@@ -9165,9 +9178,9 @@ else:
     print("Column 'datetime' not found in DataFrame!")
 
 # Save the data ---------------------------------------------------------------
-if save_full_data: # Save a full version of the data, for different studies and debugging
-    definitive_df.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
-    print(f"Datafile saved in {save_full_filename}.")
+# if save_full_data: # Save a full version of the data, for different studies and debugging
+#     definitive_df.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
+#     print(f"Datafile saved in {save_full_filename}.")
 
 # Save the main columns, relevant for the posterior analysis ------------------
 for i, module in enumerate(['1', '2', '3', '4']):
@@ -9413,9 +9426,11 @@ if os.path.exists(figure_directory):
 
 # Move the original datafile to PROCESSED -------------------------------------
 print("Moving file to COMPLETED directory...")
-# shutil.move(file_path, completed_path)
+
 if user_file_selection == False:
     shutil.move(file_path, completed_file_path)
+    now = time.time()
+    os.utime(completed_file_path, (now, now))
     print("************************************************************")
     print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
     print("************************************************************")

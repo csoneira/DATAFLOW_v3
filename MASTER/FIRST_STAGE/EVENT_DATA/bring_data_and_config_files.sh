@@ -97,9 +97,6 @@ storage_directory="$base_working_directory/RAW_TO_LIST"
 # Additional paths
 mingo_direction="mingo0$station"
 
-raw_to_list_directory="$HOME/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/Backbone/raw_to_list.py"
-event_accumulator_directory="$HOME/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/Backbone/event_accumulator.py"
-
 exclude_list_file="$base_working_directory/tmp/exclude_list.txt"
 
 # Create necessary directories
