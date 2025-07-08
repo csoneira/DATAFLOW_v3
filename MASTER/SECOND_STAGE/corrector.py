@@ -867,139 +867,148 @@ for case in processing_regions:
     print('----------------------------------------------------------------------')
     print('-------------------- Calculating efficiencies ------------------------')
     print('----------------------------------------------------------------------')
-
-    def solve_efficiencies(row):
-        A = row['processed_tt_1234']
-        B = row['processed_tt_134']
-        C = row['processed_tt_124']
-        def equations(vars):
-            e1, e2, e3 = vars  # Let e4 = e1
-            e4 = e1
-            eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
-            eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
-            eff_combined = (
-                e1 * e2 * e3 * e4 +
-                e1 * (1 - e2) * e3 * e4 +
-                e1 * e2 * (1 - e3) * e4 )
-            eq3 = (A + B + C) / eff_combined - A / (e1 * e2 * e3 * e4)
-            return [eq1, eq2, eq3]
-        initial_guess = [0.9, 0.9, 0.9]
-        result = root(equations, initial_guess, method='hybr')
-        if result.success and np.all((0 < result.x) & (result.x < 1)):
-            e1, e2, e3 = result.x
-            e4 = e1
-            return pd.Series([e1, e2, e3, e4])
-        else:
-            return pd.Series([np.nan, np.nan, np.nan, np.nan])
-
-
-    def solve_efficiencies_four_planes_inner(row):
-        A = row['processed_tt_1234']
-        B = row['processed_tt_134']
-        C = row['processed_tt_124']
-        
-        # System of equations to solve
-        def equations_1(vars):
-            e2, e3 = vars
-            eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
-            eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
-            return [eq1, eq2]
-        
-        def equations_2(vars):
-            e2, e3 = vars
-            eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
-            eff_combined = (
-                e2 * e3 +
-                (1 - e2) * e3 +
-                e2 * (1 - e3) )
-            eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
-            return [eq2, eq3]
-        
-        def equations_3(vars):
-            e2, e3 = vars
-            eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
-            eff_combined = (
-                e2 * e3 +
-                (1 - e2) * e3 +
-                e2 * (1 - e3) )
-            eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
-            return [eq1, eq3]
-        
-        # Initial guess
-        initial_guess = [0.9, 0.9]
-        result_1 = root(equations_1, initial_guess, method='hybr')
-        result_2 = root(equations_2, initial_guess, method='hybr')
-        result_3 = root(equations_3, initial_guess, method='hybr')
-
-        if result_1.success and np.all((0 < result_1.x) & (result_1.x < 1)) and\
-            result_2.success and np.all((0 < result_2.x) & (result_2.x < 1)) and\
-            result_3.success and np.all((0 < result_3.x) & (result_3.x < 1)):
-            e2_1, e3_1 = result_1.x
-            e2_2, e3_2 = result_2.x
-            e2_3, e3_3 = result_3.x
-            e2 = ( e2_1 + e2_2 + e2_3 ) / 3 
-            e3 = ( e3_1 + e3_2 + e3_3 ) / 3
-            e4 = e1 = 0.9
-            return pd.Series([e1, e2, e3, e4])
-        else:
-            return pd.Series([np.nan, np.nan, np.nan, np.nan])
     
-    
-    def solve_efficiencies_four_planes_outer(row):
-        A = row['processed_tt_1234']
-        B = row['processed_tt_234']
-        C = row['processed_tt_123']
+    eff_system = False
+    if eff_system:
+        def solve_efficiencies(row):
+            A = row['processed_tt_1234']
+            B = row['processed_tt_134']
+            C = row['processed_tt_124']
+            def equations(vars):
+                e1, e2, e3 = vars  # Let e4 = e1
+                e4 = e1
+                eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
+                eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
+                eff_combined = (
+                    e1 * e2 * e3 * e4 +
+                    e1 * (1 - e2) * e3 * e4 +
+                    e1 * e2 * (1 - e3) * e4 )
+                eq3 = (A + B + C) / eff_combined - A / (e1 * e2 * e3 * e4)
+                return [eq1, eq2, eq3]
+            initial_guess = [0.9, 0.9, 0.9]
+            result = root(equations, initial_guess, method='hybr')
+            if result.success and np.all((0 < result.x) & (result.x < 1)):
+                e1, e2, e3 = result.x
+                e4 = e1
+                return pd.Series([e1, e2, e3, e4])
+            else:
+                return pd.Series([np.nan, np.nan, np.nan, np.nan])
 
-        # System of equations to solve
-        def equations_1(vars):
-            e2, e3 = vars
-            eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
-            eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
-            return [eq1, eq2]
-        
-        def equations_2(vars):
-            e2, e3 = vars
-            eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
-            eff_combined = (
-                e2 * e3 +
-                (1 - e2) * e3 +
-                e2 * (1 - e3) )
-            eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
-            return [eq2, eq3]
-        
-        def equations_3(vars):
-            e2, e3 = vars
-            eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
-            eff_combined = (
-                e2 * e3 +
-                (1 - e2) * e3 +
-                e2 * (1 - e3) )
-            eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
-            return [eq1, eq3]
-        
-        # Initial guess
-        initial_guess = [0.6, 0.6]
-        result_1 = root(equations_1, initial_guess, method='hybr')
-        result_2 = root(equations_2, initial_guess, method='hybr')
-        result_3 = root(equations_3, initial_guess, method='hybr')
 
-        if result_1.success and np.all((0 < result_1.x) & (result_1.x < 1)) and\
-            result_2.success and np.all((0 < result_2.x) & (result_2.x < 1)) and\
-            result_3.success and np.all((0 < result_3.x) & (result_3.x < 1)):
-            e2_1, e3_1 = result_1.x
-            e2_2, e3_2 = result_2.x
-            e2_3, e3_3 = result_3.x
-            e2 = ( e2_1 + e2_2 + e2_3 ) / 3 
-            e3 = ( e3_1 + e3_2 + e3_3 ) / 3 
-            e4 = e1 = 0.9
-            return pd.Series([e2, e1, e4, e3])
-        else:
-            return pd.Series([np.nan, np.nan, np.nan, np.nan])
-    
-    
-    data_df[['ancillary_1', 'eff_sys_2', 'eff_sys_3', 'ancillary_4']] = data_df.apply(solve_efficiencies_four_planes_inner, axis=1)
-    data_df[[f'eff_sys_1', f'ancillary_2', f'ancillary_3', f'eff_sys_4']] = data_df.apply(solve_efficiencies_four_planes_outer, axis=1)
+        def solve_efficiencies_four_planes_inner(row):
+            A = row['processed_tt_1234']
+            B = row['processed_tt_134']
+            C = row['processed_tt_124']
+            
+            # System of equations to solve
+            def equations_1(vars):
+                e2, e3 = vars
+                eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
+                eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
+                return [eq1, eq2]
+            
+            def equations_2(vars):
+                e2, e3 = vars
+                eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
+                eff_combined = (
+                    e2 * e3 +
+                    (1 - e2) * e3 +
+                    e2 * (1 - e3) )
+                eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
+                return [eq2, eq3]
+            
+            def equations_3(vars):
+                e2, e3 = vars
+                eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
+                eff_combined = (
+                    e2 * e3 +
+                    (1 - e2) * e3 +
+                    e2 * (1 - e3) )
+                eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
+                return [eq1, eq3]
+            
+            # Initial guess
+            initial_guess = [0.9, 0.9]
+            result_1 = root(equations_1, initial_guess, method='hybr')
+            result_2 = root(equations_2, initial_guess, method='hybr')
+            result_3 = root(equations_3, initial_guess, method='hybr')
 
+            if result_1.success and np.all((0 < result_1.x) & (result_1.x < 1)) and\
+                result_2.success and np.all((0 < result_2.x) & (result_2.x < 1)) and\
+                result_3.success and np.all((0 < result_3.x) & (result_3.x < 1)):
+                e2_1, e3_1 = result_1.x
+                e2_2, e3_2 = result_2.x
+                e2_3, e3_3 = result_3.x
+                e2 = ( e2_1 + e2_2 + e2_3 ) / 3 
+                e3 = ( e3_1 + e3_2 + e3_3 ) / 3
+                e4 = e1 = 0.9
+                return pd.Series([e1, e2, e3, e4])
+            else:
+                return pd.Series([np.nan, np.nan, np.nan, np.nan])
+        
+        
+        def solve_efficiencies_four_planes_outer(row):
+            A = row['processed_tt_1234']
+            B = row['processed_tt_234']
+            C = row['processed_tt_123']
+
+            # System of equations to solve
+            def equations_1(vars):
+                e2, e3 = vars
+                eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
+                eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
+                return [eq1, eq2]
+            
+            def equations_2(vars):
+                e2, e3 = vars
+                eq2 = C * e3 - A * (1 - e3)  # C*e3 = A*(1 - e3)
+                eff_combined = (
+                    e2 * e3 +
+                    (1 - e2) * e3 +
+                    e2 * (1 - e3) )
+                eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
+                return [eq2, eq3]
+            
+            def equations_3(vars):
+                e2, e3 = vars
+                eq1 = B * e2 - A * (1 - e2)  # B*e2 = A*(1 - e2)
+                eff_combined = (
+                    e2 * e3 +
+                    (1 - e2) * e3 +
+                    e2 * (1 - e3) )
+                eq3 = (A + B + C) / eff_combined - A / ( e2 * e3 )
+                return [eq1, eq3]
+            
+            # Initial guess
+            initial_guess = [0.6, 0.6]
+            result_1 = root(equations_1, initial_guess, method='hybr')
+            result_2 = root(equations_2, initial_guess, method='hybr')
+            result_3 = root(equations_3, initial_guess, method='hybr')
+
+            if result_1.success and np.all((0 < result_1.x) & (result_1.x < 1)) and\
+                result_2.success and np.all((0 < result_2.x) & (result_2.x < 1)) and\
+                result_3.success and np.all((0 < result_3.x) & (result_3.x < 1)):
+                e2_1, e3_1 = result_1.x
+                e2_2, e3_2 = result_2.x
+                e2_3, e3_3 = result_3.x
+                e2 = ( e2_1 + e2_2 + e2_3 ) / 3 
+                e3 = ( e3_1 + e3_2 + e3_3 ) / 3 
+                e4 = e1 = 0.9
+                return pd.Series([e2, e1, e4, e3])
+            else:
+                return pd.Series([np.nan, np.nan, np.nan, np.nan])
+        
+        
+        data_df[['ancillary_1', 'eff_sys_2', 'eff_sys_3', 'ancillary_4']] = data_df.apply(solve_efficiencies_four_planes_inner, axis=1)
+        data_df[[f'eff_sys_1', f'ancillary_2', f'ancillary_3', f'eff_sys_4']] = data_df.apply(solve_efficiencies_four_planes_outer, axis=1)
+    else:
+        print("Calculating efficiency without the system")
+        data_df['eff_sys_1']  = data_df['processed_tt_1234'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_234'] )
+        data_df['eff_sys_3']  = data_df['processed_tt_1234'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_134'] )
+        data_df['eff_sys_2']  = data_df['processed_tt_1234'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_124'] )
+        data_df['eff_sys_4']  = data_df['processed_tt_1234'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_123'] )
+        
+        
     group_cols = [
         [f'eff_sys_1'],
         [f'eff_sys_2'],
@@ -1332,9 +1341,16 @@ for case in processing_regions:
         data_df['processed_tt_24'] = denoised_counts_24
         data_df['processed_tt_34'] = denoised_counts_34
         
-        data_df[['ancillary_1', 'eff_sys_2_denoised', 'eff_sys_3_denoised', 'ancillary_4']] = data_df.apply(solve_efficiencies_four_planes_inner, axis=1)
-        data_df[[f'eff_sys_1_denoised', f'ancillary_2', f'ancillary_3', f'eff_sys_4_denoised']] = data_df.apply(solve_efficiencies_four_planes_outer, axis=1)
-
+        if eff_system:
+            data_df[['ancillary_1', 'eff_sys_2_denoised', 'eff_sys_3_denoised', 'ancillary_4']] = data_df.apply(solve_efficiencies_four_planes_inner, axis=1)
+            data_df[[f'eff_sys_1_denoised', f'ancillary_2', f'ancillary_3', f'eff_sys_4_denoised']] = data_df.apply(solve_efficiencies_four_planes_outer, axis=1)
+        else:
+            print("Calculating denoised efficiency value with no system.")
+            data_df['eff_sys_1_denoised']  = data_df['processed_tt_1234'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_234'] )
+            data_df['eff_sys_3_denoised']  = data_df['processed_tt_1234'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_134'] )
+            data_df['eff_sys_2_denoised']  = data_df['processed_tt_1234'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_124'] )
+            data_df['eff_sys_4_denoised']  = data_df['processed_tt_1234'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_123'] )
+            
         group_cols = [
             ['eff_sys_1', 'eff_sys_1_denoised'],
             ['eff_sys_2', 'eff_sys_2_denoised'],
@@ -1481,7 +1497,9 @@ for case in processing_regions:
     data_df['detector_12_eff_corr'] = data_df['detector_12'] / data_df['detector_12_eff']
     data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
     data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
-
+    
+    print("Efficiency corrected rates calculated in first stage.")
+    
     # group_cols = [
     #     ['sensors_ext_Pressure_ext'],
     #     ['sensors_ext_Temperature_ext'],
@@ -1583,7 +1601,6 @@ for case in processing_regions:
 
     def decorrelate_efficiency_least_change(eff, rate_corr, bounds=(0.001, 0.999)):
         
-
         eff = np.asarray(eff, dtype=np.float64)
         rate_corr = np.asarray(rate_corr, dtype=np.float64)
 
@@ -1592,11 +1609,13 @@ for case in processing_regions:
         if not np.any(mask):
             warnings.warn("No valid data after masking.")
             return eff, None
-
+        
         eff = eff[mask]
         rate_corr = rate_corr[mask]
         counts = eff * rate_corr  # fixed N_i
-
+        
+        
+        
         def objective(eff_prime):
             return np.sum((eff_prime - eff)**2)
 
@@ -1625,6 +1644,9 @@ for case in processing_regions:
     print(case)
     
     for label in detector_labels:
+        
+        print("Decorrelating for case:", label)
+        
         eff_col = f'detector_{label}_eff'
         rate_col = f'detector_{label}_eff_corr'
 
@@ -1642,7 +1664,7 @@ for case in processing_regions:
 
         eff = df_valid[eff_col].values
         rate_corr = df_valid[rate_col].values
-
+        
         eff_new, res = decorrelate_efficiency_least_change(eff, rate_corr)
         eff_prime_col = f'{eff_col}_decorrelated'
 
@@ -1761,7 +1783,8 @@ for case in processing_regions:
         df['final_eff_2_decorrelated'] = e2_list
         df['final_eff_3_decorrelated'] = e3_list
         df['final_eff_4_decorrelated'] = e4_list
-
+    
+    print("Solving efficiency components per row...")
     solve_eff_components_per_row(data_df)
 
     group_cols = [
@@ -1794,7 +1817,7 @@ for case in processing_regions:
     fit_efficiencies = True
     if fit_efficiencies:
         
-        
+        print("Calculating the fit for the efficiencies.")
 
         def fit_efficiency_model(x, y, z, model_type='linear'):
             if len(x) == 0 or len(y) == 0 or len(z) == 0:
