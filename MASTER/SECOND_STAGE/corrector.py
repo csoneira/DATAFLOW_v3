@@ -110,6 +110,7 @@ create_very_essential_plots = False
 show_errorbar = False
 
 # Execution -------------------------------------
+only_all = True
 recalculate_pressure_coeff = True
 remove_outliers = True
 
@@ -214,7 +215,7 @@ for col in rx_columns:
     if len(parts) > 1 and parts[1].startswith('R'):
         rx_names.add(parts[1])
 angular_regions = sorted(rx_names)
-print(f"\nFound RX columns: {angular_regions}")
+# print(f"\nFound RX columns: {angular_regions}")
 
 # Create some more a combining existing ones, for example I will ask you to create a map in
 # a dictionary that indicates how the combination will be done: then you just take those
@@ -239,10 +240,10 @@ tt_prefixes = sorted(
 combination_dict = {
     # new label   -> R-region suffixes to add (without leading '_')
     "Vert": ['R0.0', 'R1.0', 'R1.1', 'R1.2', 'R1.3', 'R1.4', 'R1.5', 'R1.6', 'R1.7'],
-    "North": ['R2.0', 'R2.7', 'R3.0', 'R3.7'],
-    "West": ['R2.2', 'R2.1', 'R3.2', 'R3.1'],
-    "South": ['R2.4', 'R2.3', 'R3.4', 'R3.3'], 
-    "East": ['R2.6', 'R2.5', 'R3.6', 'R3.5'],
+    "South": ['R2.0', 'R2.7', 'R3.0', 'R3.7'],
+    "East": ['R2.2', 'R2.1', 'R3.2', 'R3.1'],
+    "North": ['R2.4', 'R2.3', 'R3.4', 'R3.3'], 
+    "West": ['R2.6', 'R2.5', 'R3.6', 'R3.5'],
     "all": ['R0.0', 'R1.0', 'R1.1', 'R1.2', 'R1.3', 'R1.4', 'R1.5', 'R1.6', 'R1.7',
             'R2.0', 'R2.7', 'R3.0', 'R3.7', 'R2.2', 'R2.1', 'R3.2', 'R3.1',
             'R2.4', 'R2.3', 'R3.4', 'R3.3', 'R2.6', 'R2.5', 'R3.6', 'R3.5'],
@@ -279,7 +280,7 @@ for col in rx_columns:
     if len(parts) > 1 and parts[1].startswith('R'):
         rx_names.add(parts[1])
 angular_regions = sorted(rx_names)
-print(f"\nFound RX columns: {angular_regions}")
+# print(f"\nFound RX columns: {angular_regions}")
 
 
 # Define the processed_tt_ columns based on the detection_types and angular_regions
@@ -292,6 +293,10 @@ print(f"\nFound RX columns: {angular_regions}")
 
 # angular_regions = angular_regions + ['all']  # Add 'all' to the angular regions
 processing_regions = angular_regions + combinations
+
+if only_all:
+    print("CHOSEN TO USE ONLY THE ALL COLUMN")
+    processing_regions = ['all']
 
 print(f"\nProcessing regions: {processing_regions}")
 
@@ -368,8 +373,8 @@ end_date = datetime.now()
 
 # Date filtering -------------------------------------------------------------------------------
 if date_selection:
-    start_date = pd.to_datetime("2025-06-25")  # Use a string in 'YYYY-MM-DD' format
-    end_date = pd.to_datetime("2025-06-30 10:15")
+    start_date = pd.to_datetime("2024-03-01")  # Use a string in 'YYYY-MM-DD' format
+    end_date = pd.to_datetime("2024-06-01")
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
 
@@ -390,6 +395,11 @@ if remove_non_data_points:
     print(f"Filtered data contains {len(data_df)} rows after removing non-data points.")
 
 
+# If len == 0, then exit
+if len(data_df) == 0:
+    print("No data points left after filtering. Exiting.")
+    sys.exit(0)
+
 
 # Define input file path -------------------------------------------------------------------------------
 input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
@@ -405,7 +415,7 @@ if exists_input_file:
     # Parse start/end timestamps in the configuration file
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"].fillna(pd.to_datetime('now'), inplace=True)
+    input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
 
     # Prepare empty Series aligned with data_df index
     acc_cols = {
@@ -449,8 +459,8 @@ else:
 
 if remove_outliers:
     
+    print("Removing outliers from the data...")
     
-
     for tt in detection_types:
         
         for iteration in [ [angular_regions, 5], [combinations, 3] ]:
@@ -583,7 +593,7 @@ def plot_grouped_series(df, group_cols, time_col='Time', title=None, figsize=(14
             for col in cols:
                 if col in df.columns:
                     ax.plot(df[time_col], df[col], label=col, alpha = 0.5)
-                    ax.scatter(df[time_col], df[col], alpha = 0.5)
+                    ax.scatter(df[time_col], df[col], alpha = 0.5, s = 1)
                 else:
                     print(f"Warning: column '{col}' not found in DataFrame")
             ax.set_ylabel(' / '.join(cols))

@@ -1,3 +1,5 @@
+.github/workflows/bug-detector.yml
+
 *.pkl
 *.npz
 *.bin

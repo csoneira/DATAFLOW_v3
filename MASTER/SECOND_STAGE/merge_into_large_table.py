@@ -23,6 +23,8 @@ import psutil
 import gc
 from pathlib import Path
 
+use_reference = "--reference-event" in sys.argv or "-r" in sys.argv
+
 # -----------------------------------------------------------------------------
 def print_memory_usage(tag=""):
     mem = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2  # in MB
@@ -104,17 +106,30 @@ for p in file_paths:
 # -----------------------------------------------------------------------------
 # Merge
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Merge
+# -----------------------------------------------------------------------------
 merged = None
+reference_index = None
+
 for pq in tmp_parquets:
     df = pd.read_parquet(pq)
     df.replace(0, np.nan, inplace=True)
+    
+    if 'event_data' in pq.as_posix():
+        reference_index = df.index if use_reference else None
+
     if merged is None:
         merged = df
     else:
-        merged = merged.join(df, how="outer", sort=False)
+        if use_reference and reference_index is not None:
+            df = df[df.index.isin(reference_index)]
+        merged = merged.join(df, how="outer" if not use_reference else "left", sort=False)
+    
     del df
     gc.collect()
     print_memory_usage(f"after merge {pq.name}")
+
 
 merged_df = merged.reset_index()
 merged_df = merged_df.sort_values('Time')
