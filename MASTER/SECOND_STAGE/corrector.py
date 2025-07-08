@@ -1614,7 +1614,8 @@ for case in processing_regions:
         rate_corr = rate_corr[mask]
         counts = eff * rate_corr  # fixed N_i
         
-        
+        # Count the number of valid entries
+        print(f"Number of valid entries after masking: {np.sum(mask)}")
         
         def objective(eff_prime):
             return np.sum((eff_prime - eff)**2)
