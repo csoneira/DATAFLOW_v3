@@ -6,7 +6,9 @@
 #     * *.hld                         → ZERO_STAGE/UNCOMPRESSED_HLDS
 # ---------------------------------------------------------------------------
 
-set -euo pipefail
+set -e  # Exit on command failure
+set -u  # Error on undefined variables
+set -o pipefail  # Fail on any part of a pipeline
 
 ##############################################################################
 # Parse arguments

@@ -81,6 +81,7 @@ hld_input_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAG
 asci_output_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci
 first_stage_raw_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW
 first_stage_base=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA
+first_stage_base_deep=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES
 
 # mkdir -p "$uncompressed_directory" "$processed_directory" "$moved_directory"
 echo "Creating necessary directories..."
@@ -88,13 +89,15 @@ mkdir -p "$uncompressed_directory" "$moved_directory" "$first_stage_raw_director
 
 # Now Copy to first_stage_raw_directory every file from moved_directory that is not in any first_stage_base subdirectory (recursively)
 
-echo "Moving files from $moved_directory to $first_stage_raw_directory if not already present in $first_stage_base..."
+printf "\n>> Moving files from:\n    %s\n--> to:\n    %s\n-> only if not already present in:\n    %s, %s, or %s\n\n" \
+"$moved_directory" "$first_stage_raw_directory" "$first_stage_base" "$first_stage_raw_directory" "$first_stage_base_deep"
 
 # Get list of all existing filenames under FIRST_STAGE/EVENT_DATA recursively
 # mapfile -t existing_files < <(find "$first_stage_base" -type f -exec basename {} \; | sort -u)
 
 mapfile -t existing_files < <(
-    find "$first_stage_base" -type f -printf '%f\n' | sort -u
+    find "$first_stage_raw_directory" "$first_stage_base_deep" \
+    -type f -printf '%f\n' | sort -u
 )
 
 
@@ -243,6 +246,38 @@ if [ -d "$asci_output_directory" ]; then
     mkdir -p "$asci_output_directory/removed"
     mv "$asci_output_directory"/*.dat* "$asci_output_directory/removed/" 2>/dev/null
 fi
+
+
+# Reordering the unpcaked files if needed according to its stations
+
+BASE_ROOT="/home/mingo/DATAFLOW_v3/STATIONS"
+SUBDIRS=("COMPRESSED_HLDS" "UNCOMPRESSED_HLDS" "SENT_TO_RAW_TO_LIST_PIPELINE")
+
+# Loop through station numbers 1 to 4
+for station in {1..4}; do
+    station_id="0${station}"
+    station_dir="${BASE_ROOT}/MINGO${station_id}/ZERO_STAGE"
+
+    for subdir in "${SUBDIRS[@]}"; do
+        current_dir="${station_dir}/${subdir}"
+        [[ -d "$current_dir" ]] || continue
+
+        find "$current_dir" -maxdepth 1 -type f -name "mi0*.dat" | while read -r file; do
+            filename=$(basename "$file")
+            file_station=${filename:2:2}  # Extract "0X" from "mi0X..."
+            
+            # If file_station does not match current station, move it
+            if [[ "$file_station" != "$station_id" ]]; then
+                target_dir="${BASE_ROOT}/MINGO${file_station}/ZERO_STAGE/${subdir}"
+                echo "→ Moving $filename from MINGO${station_id}/${subdir} to MINGO${file_station}/${subdir}"
+                mkdir -p "$target_dir"
+                mv "$file" "$target_dir/"
+            fi
+        done
+    done
+done
+
+
 
 echo '------------------------------------------------------'
 echo "unpack_reprocessing_files.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"

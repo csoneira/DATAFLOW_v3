@@ -8,7 +8,7 @@ fi
 
 # Configuration
 LOG_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS"
-LINES=7
+LINES=11
 DEFAULT_COLS=4
 JOBS=(log_bring_reprocessing_files log_unpack_reprocessing_files raw_to_list_events ev_accumulator)
 
