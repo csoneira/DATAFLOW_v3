@@ -67,8 +67,7 @@ from scipy.sparse import load_npz, csc_matrix
 # -----------------------------------------------------------------------------
 
 correct_angle = False
-last_file_test = True
-reanalyze_completed = True
+last_file_test = False
 update_big_event_file = False
 
 # If the minutes of the time of execution are between 0 and 5 then put update_big_event_file to True

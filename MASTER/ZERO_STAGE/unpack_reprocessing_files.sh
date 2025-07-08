@@ -80,16 +80,23 @@ moved_directory=${base_directory}/SENT_TO_RAW_TO_LIST_PIPELINE
 hld_input_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat
 asci_output_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci
 first_stage_raw_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW
-first_stage_base = /home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA
+first_stage_base=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA
 
 # mkdir -p "$uncompressed_directory" "$processed_directory" "$moved_directory"
+echo "Creating necessary directories..."
 mkdir -p "$uncompressed_directory" "$moved_directory" "$first_stage_raw_directory"
-
 
 # Now Copy to first_stage_raw_directory every file from moved_directory that is not in any first_stage_base subdirectory (recursively)
 
+echo "Moving files from $moved_directory to $first_stage_raw_directory if not already present in $first_stage_base..."
+
 # Get list of all existing filenames under FIRST_STAGE/EVENT_DATA recursively
-mapfile -t existing_files < <(find "$first_stage_base" -type f -exec basename {} \; | sort -u)
+# mapfile -t existing_files < <(find "$first_stage_base" -type f -exec basename {} \; | sort -u)
+
+mapfile -t existing_files < <(
+    find "$first_stage_base" -type f -printf '%f\n' | sort -u
+)
+
 
 # Copy files from moved_directory only if not already present (by name) in first_stage_base
 find "$moved_directory" -maxdepth 1 -type f | while read -r src_file; do
@@ -99,8 +106,8 @@ find "$moved_directory" -maxdepth 1 -type f | while read -r src_file; do
         cp "$src_file" "$first_stage_raw_directory/"
         # Update mdate to current time of the copied file
         touch "$first_stage_raw_directory/$fname"
-    else
-        echo "Skipping $fname — already exists in EVENT_DATA"
+    # else
+        # echo "Skipping $fname — already exists in EVENT_DATA."
     fi
 done
 
@@ -117,13 +124,17 @@ for file in "$compressed_directory"/*.tar.gz; do
     [ -e "$file" ] || continue
     if tar -xvzf "$file" --strip-components=3 -C "$uncompressed_directory"; then
         echo "Successfully untared $file"
-        # rm "$file"
+        # Touch the last untared file to update their modification date in this iteration
+        last_untared_file=$(ls -t "$uncompressed_directory"/*.hld | head -n 1)
+        touch "$last_untared_file"
+        echo "Updated modification date for $last_untared_file"
+        rm "$file"
     else
         echo "Warning: Failed to unpack $file" >&2
     fi
 done
 
-rm -f "$compressed_directory"/*.tar.gz
+# rm -f "$compressed_directory"/*.tar.gz
 
 # If there are hlds in hld_input_directory, move them to $hld_input_directory/removed
 if [ -d "$hld_input_directory" ]; then
@@ -199,17 +210,25 @@ echo ""
 echo ""
 
 echo "Moving dat files to destiny folders, RAW included..."
+# List all the files that will be moved
+find "$asci_output_directory" -maxdepth 1 -type f -name '*.dat' -print
+
+for file in "$asci_output_directory"/*.dat; do
+    touch "$file"
+done
+
+echo ""
 cp "$asci_output_directory"/*.dat "$first_stage_raw_directory/"
 mv "$asci_output_directory"/*.dat "$moved_directory/"
 
-# Update mdate to current time of the copied and moved files
-for file in "$first_stage_raw_directory"/*.dat; do
-    touch "$file"
-done
+# # Update mdate to current time of the copied and moved files
+# for file in "$first_stage_raw_directory"/*.dat; do
+#     touch "$file"
+# done
 
-for file in "$moved_directory"/*.dat; do
-    touch "$file"
-done
+# for file in "$moved_directory"/*.dat; do
+#     touch "$file"
+# done
 
 # If there are hlds in hld_input_directory, move them to $hld_input_directory/removed
 if [ -d "$hld_input_directory" ]; then
@@ -225,4 +244,6 @@ if [ -d "$asci_output_directory" ]; then
     mv "$asci_output_directory"/*.dat* "$asci_output_directory/removed/" 2>/dev/null
 fi
 
-echo "Unpacking and ASCII file handling completed."
+echo '------------------------------------------------------'
+echo "unpack_reprocessing_files.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
+echo '------------------------------------------------------'

@@ -95,7 +95,7 @@ def figure1(df: pd.DataFrame):
             for s in strips:
                 col = f"{p}_{s}_{v}"
                 if col in df:
-                    ax.plot(df.index, df[col], label=s)
+                    # ax.plot(df.index, df[col], label=s)
                     ax.scatter(df.index, df[col], s=point_size)
             if r == 0:
                 ax.set_title(v)
@@ -136,7 +136,7 @@ def figure3(df: pd.DataFrame):
                 else:
                     col = f"Q{p}_{v.split('_')[1]}_{s}_entries"
                 if col in df:
-                    ax.plot(df.index, df[col], label=v, linewidth=0.9, color=color)
+                    # ax.plot(df.index, df[col], label=v, linewidth=0.9, color=color)
                     ax.scatter(df.index, df[col], color=color, s=point_size)
             if r == 0:
                 ax.set_title(f"s{s}")
@@ -198,7 +198,7 @@ def figure3_1(df: pd.DataFrame):
                 # print("----------------------------------------")
                 # Rate [Hz] = counts / duration
                 rate = df[col] / duration_s
-                ax.plot(df.index, rate, label=v, linewidth=0.9, color=color)
+                # ax.plot(df.index, rate, label=v, linewidth=0.9, color=color)
                 ax.scatter(df.index, rate, color=color, s=point_size)
 
             if r == 0:
@@ -246,7 +246,7 @@ def figure4(df: pd.DataFrame):
 
     for col in widths:
         if col in df:
-            ax_w.plot(df.index, df[col], label=col)
+            # ax_w.plot(df.index, df[col], label=col)
             ax_w.scatter(df.index, df[col], s=point_size)
     ax_w.set_title("Sigmoid widths")
     ax_w.legend(frameon=False, fontsize="x-small")
@@ -254,7 +254,7 @@ def figure4(df: pd.DataFrame):
 
     for col in slopes:
         if col in df:
-            ax_s.plot(df.index, df[col], label=col)
+            # ax_s.plot(df.index, df[col], label=col)
             ax_s.scatter(df.index, df[col], s=point_size)
     ax_s.set_title("Background slopes")
     ax_s.legend(frameon=False, fontsize="x-small")
@@ -307,7 +307,7 @@ def figure5(df: pd.DataFrame):
             else:
                 data = df[col]
                 label = col
-            ax.plot(df.index, data, label=label, linewidth=1.0)
+            # ax.plot(df.index, data, label=label, linewidth=1.0)
             ax.scatter(df.index, data, s=point_size)
             # Invert the y z-axis for the z case
             if col.startswith("z_"):
@@ -358,7 +358,7 @@ def figure5_1(df: pd.DataFrame):
             else:
                 data = df[col]
                 label = col
-            ax.plot(df.index, data, label=label, linewidth=1.0)
+            # ax.plot(df.index, data, label=label, linewidth=1.0)
             ax.scatter(df.index, data, s=point_size)
             # Invert the y z-axis for the z case
             if col.startswith("z_"):
@@ -391,7 +391,7 @@ def figure6(df: pd.DataFrame):
 
       for ax, col in zip(axs, cols):
           if col in df:
-              ax.plot(df.index, df[col])
+            #   ax.plot(df.index, df[col])
               ax.scatter(df.index, df[col], s=point_size)
           ax.set_title(col)
           _apply_time_axis(ax)
@@ -432,7 +432,7 @@ def figure7(df: pd.DataFrame):
             else:
                 x_valid = df.index
                 y_valid = df[col]
-            ax.plot(x_valid, y_valid, label=col)
+            # ax.plot(x_valid, y_valid, label=col)
             ax.scatter(x_valid, y_valid, s=point_size)
         ax.set_title(f"eff_*_{suffix}")
         ax.legend(frameon=False, fontsize="x-small")
@@ -459,7 +459,7 @@ def figure8(df: pd.DataFrame):
             ax = axs[r, c]
             col = f"{p}_{m}"
             if col in df:
-                ax.plot(df.index, df[col])
+                # ax.plot(df.index, df[col])
                 ax.scatter(df.index, df[col], s=point_size)
             if r == 0:
                 ax.set_title(m)
@@ -493,7 +493,7 @@ def figure9(df: pd.DataFrame):
             col = f"{p}_{m}"
             if col in df:
                 rate = df[col] / duration_s
-                ax.plot(df.index, rate)
+                # ax.plot(df.index, rate)
                 ax.scatter(df.index, rate, s=point_size)
                 ax.set_yscale("log")
 
@@ -525,7 +525,7 @@ def figure10(df: pd.DataFrame):
                 valid_index = df.index[valid_mask]
                 valid_values = df[col][valid_mask]
 
-                ax.plot(valid_index, valid_values)
+                # ax.plot(valid_index, valid_values)
                 ax.scatter(valid_index, valid_values, s=point_size)
             if r == 0:
                 ax.set_title(sfx)

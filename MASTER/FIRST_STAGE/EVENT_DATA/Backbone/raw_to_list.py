@@ -35,7 +35,7 @@ print("----------------------------------------------------------------------")
 stratos_save = True
 fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
 debug_mode = False # Only 10000 rows with all detail
-last_file_test = True
+last_file_test = False
 alternative_fitting = True
 
 # -----------------------------------------------------------------------------
@@ -216,6 +216,35 @@ completed_files = set(os.listdir(completed_directory))
 # Repeat with unprocessed_files: if any of those files is in raw_files, remove it from raw_files
 
 # Ordered list from highest to lowest priority
+# LEVELS = [
+#     completed_directory,
+#     processing_directory,
+#     unprocessed_directory,
+#     raw_directory,
+# ]
+
+# seen = set()
+# for d in LEVELS:
+#     d = Path(d)                     # ← convert string → Path each iteration
+#     if not d.exists():
+#         continue
+#     current_files = {p.name for p in d.iterdir() if p.is_file()}
+    
+#     # files that must be removed from this level
+#     duplicates = current_files & seen
+#     for fname in duplicates:
+#         fp = d / fname
+#         try:
+#             fp.unlink()            # delete the file
+#             print(f"Removed duplicate: {fp}")
+#         except FileNotFoundError:
+#             pass                   # already gone, ignore
+
+#     # update the `seen` set with (remaining) filenames of this level
+#     seen |= (current_files - duplicates)
+
+
+# Ordered list from highest to lowest priority
 LEVELS = [
     completed_directory,
     processing_directory,
@@ -223,24 +252,45 @@ LEVELS = [
     raw_directory,
 ]
 
+station_re = re.compile(r'^mi0(\d).*\.dat$', re.IGNORECASE)
+
 seen = set()
 for d in LEVELS:
-    d = Path(d)                     # ← convert string → Path each iteration
+    d = Path(d)
     if not d.exists():
         continue
+
     current_files = {p.name for p in d.iterdir() if p.is_file()}
 
-    # files that must be removed from this level
+    # ────────────────────────────────────────────────────────────────
+    # Remove .dat files whose prefix “mi0X” does not match `station`
+    # ────────────────────────────────────────────────────────────────
+    mismatched = {
+        fname for fname in current_files
+        if (m := station_re.match(fname)) and int(m.group(1)) != int(station)
+    }
+    for fname in mismatched:
+        fp = d / fname
+        try:
+            fp.unlink()
+            print(f"Removed wrong-station file: {fp}")
+        except FileNotFoundError:
+            pass
+
+    current_files -= mismatched
+
+    # ────────────────────────────────────────────────────────────────
+    # Remove duplicates lower in the hierarchy
+    # ────────────────────────────────────────────────────────────────
     duplicates = current_files & seen
     for fname in duplicates:
         fp = d / fname
         try:
-            fp.unlink()            # delete the file
+            fp.unlink()
             print(f"Removed duplicate: {fp}")
         except FileNotFoundError:
-            pass                   # already gone, ignore
+            pass
 
-    # update the `seen` set with (remaining) filenames of this level
     seen |= (current_files - duplicates)
 
 
@@ -265,10 +315,16 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             now = time.time()
             os.utime(empty_destination_path, (now, now))
 
+
 # Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
+raw_files = set(os.listdir(raw_directory))
+unprocessed_files = set(os.listdir(unprocessed_directory))
+processing_files = set(os.listdir(processing_directory))
+completed_files = set(os.listdir(completed_directory))
+
 files_to_move = raw_files - unprocessed_files - processing_files - completed_files
 
-# Copy files to UNPROCESSED ---------------------------------------------------------------
+# Move files to UNPROCESSED ---------------------------------------------------------------
 for file_name in files_to_move:
     src_path = os.path.join(raw_directory, file_name)
     dest_path = os.path.join(unprocessed_directory, file_name)
@@ -278,7 +334,7 @@ for file_name in files_to_move:
         os.utime(dest_path, (now, now))
         print(f"Move {file_name} to UNPROCESSED directory.")
     except Exception as e:
-        print(f"Failed to copy {file_name}: {e}")
+        print(f"Failed to move {file_name}: {e}")
 
 
 # Erase all files in the figure_directory -------------------------------------------------
@@ -333,9 +389,9 @@ crontab_execution = True
 create_plots = False
 create_essential_plots = False
 create_very_essential_plots = False
-save_plots = True
+save_plots = False
 show_plots = False
-create_pdf = True
+create_pdf = False
 limit = False
 limit_number = 10000
 number_of_time_cal_figures = 3
@@ -430,7 +486,7 @@ if debug_mode:
     Q_B_left_pre_cal = -500
     Q_B_right_pre_cal = 500
 else:
-    T_F_left_pre_cal = -130
+    T_F_left_pre_cal = -200  #-130
     T_F_right_pre_cal = -100
 
     T_B_left_pre_cal = T_F_left_pre_cal
@@ -442,7 +498,7 @@ else:
     Q_B_left_pre_cal = Q_F_left_pre_cal
     Q_B_right_pre_cal = Q_F_right_pre_cal
 
-T_F_left_pre_cal_ST = -115
+T_F_left_pre_cal_ST = -200  #-115
 T_F_right_pre_cal_ST = -50
 T_B_left_pre_cal_ST = T_F_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_F_right_pre_cal_ST
@@ -463,7 +519,7 @@ Q_right_pre_cal = 500
 # Qdif
 Q_diff_pre_cal_threshold = 20
 # Tsum
-T_sum_left_pre_cal = -150 # was -130 for mingo01 but for mingo03 is different
+T_sum_left_pre_cal = -200 # was -130 for mingo01 but for mingo03 is different
 T_sum_right_pre_cal = -90
 
 # Tdif
@@ -1378,6 +1434,10 @@ try:
     file_station_number = int(file_name[3])  # 4th character (index 3)
     if file_station_number != int(station):
         print(f'File station number is: {file_station_number}, it does not match.')
+        # Move the file to the ERROR directory
+        error_file_path = os.path.join(base_directories["error_directory"], file_name)
+        print(f"Moving file '{file_name}' to ERROR directory: {error_file_path}")
+        process_file(file_path, error_file_path)
         sys.exit(f"File '{file_name}' does not belong to station {station}. Exiting.")
 except ValueError:
     sys.exit(f"Invalid station number in file '{file_name}'. Exiting.")
@@ -1516,14 +1576,18 @@ if exists_input_file:
     input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
     matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
     print(matching_confs)
+    
     if not matching_confs.empty:
         if len(matching_confs) > 1:
             print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
         selected_conf = matching_confs.iloc[0]
         print(f"Selected configuration: {selected_conf['conf']}")
         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
+        found_matching_conf = True
+        print(selected_conf['conf'])
     else:
         print("Error: No matching configuration found for the given date range. Using default z_positions.")
+        found_matching_conf = False
         z_positions = np.array([0, 150, 300, 450])  # In mm
 else:
     print("Error: No input file. Using default z_positions.")
@@ -1584,18 +1648,17 @@ for key, idx_range in column_indices.items():
 working_df = pd.DataFrame(columns_data)
 working_df["datetime"] = selected_df['datetime']
 
-print(selected_conf['conf'])
-
-# --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-if selected_conf['conf'] < 2:
-    if station == "2":
-        print("Configuration of the detector is less than 2.")
-        print("Swapping channels that give problems in plane 4.")
-        plane4_keys = ['T4_F', 'T4_B', 'Q4_F', 'Q4_B']
-        for key in plane4_keys:
-            col2 = f'{key}_3'
-            col4 = f'{key}_4'
-            working_df[[col2, col4]] = working_df[[col4, col2]].values  # swap columns
+if found_matching_conf:
+    # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
+    if selected_conf['conf'] < 2:
+        if station == "2":
+            print("Configuration of the detector is less than 2.")
+            print("Swapping channels that give problems in plane 4.")
+            plane4_keys = ['T4_F', 'T4_B', 'Q4_F', 'Q4_B']
+            for key in plane4_keys:
+                col2 = f'{key}_3'
+                col4 = f'{key}_4'
+                working_df[[col2, col4]] = working_df[[col4, col2]].values  # swap columns
 
 if self_trigger:
     # Extract and assign appropriate column names
@@ -1608,17 +1671,18 @@ if self_trigger:
     # Create a DataFrame from the columns data
     working_st_df = pd.DataFrame(columns_data)
     working_st_df["datetime"] = self_trigger_df['datetime']
-
-    # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-    if selected_conf['conf'] < 2:
-        if station == "2":
-            print("Configuration of the detector is less than 2.")
-            print("Swapping channels that give problems in plane 4.")
-            plane4_keys = ['T4_F', 'T4_B', 'Q4_F', 'Q4_B']
-            for key in plane4_keys:
-                col2 = f'{key}_3'
-                col4 = f'{key}_4'
-                working_st_df[[col2, col4]] = working_st_df[[col4, col2]].values  # swap columns
+    
+    if found_matching_conf:
+        # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
+        if selected_conf['conf'] < 2:
+            if station == "2":
+                print("Configuration of the detector is less than 2.")
+                print("Swapping channels that give problems in plane 4.")
+                plane4_keys = ['T4_F', 'T4_B', 'Q4_F', 'Q4_B']
+                for key in plane4_keys:
+                    col2 = f'{key}_3'
+                    col4 = f'{key}_4'
+                    working_st_df[[col2, col4]] = working_st_df[[col4, col2]].values  # swap columns
 
 
 # ----------------------------------------------------------------------------------

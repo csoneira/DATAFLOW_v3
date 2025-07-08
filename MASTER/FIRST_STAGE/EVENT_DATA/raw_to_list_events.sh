@@ -113,7 +113,7 @@ echo '------------------------------------------------------'
 
 # Process the data: raw_to_list.py
 echo "Processing .dat files with Python script (raw_to_list.py)..."
-python3 "$raw_to_list_directory" "$station"
+python3 -u "$raw_to_list_directory" "$station"
 
 echo '------------------------------------------------------'
 echo "raw_to_list.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
