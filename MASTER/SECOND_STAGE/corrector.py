@@ -101,6 +101,9 @@ print(f"Station: {station}")
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+use_two_planes_too = False
+date_selection = True  # Set to True if you want to filter by date
+
 # Aesthetic -------------------------------------
 show_plots = False
 save_plots = True
@@ -114,10 +117,21 @@ only_all = True
 recalculate_pressure_coeff = True
 remove_outliers = True
 
+
+rolling_effs = True
+mean_window, med_window = 5, 3
+rolling_mean, rolling_median = False, True
+
+
+outlier_gaussian_quantile = 0.02 # 2%
+
+# outlier_poisson_quantile = 0.005
+outlier_empirical_quantile = 0.02
+
 # Add a new outlier filter to the pressure correction
 after_press_z_score_th = 30
 
-res_win_min = 10 # 180 Resampling window minutes
+res_win_min = 60 # 180 Resampling window minutes
 # if int(station) == 4:
 #     res_win_min = 30
 
@@ -129,7 +143,6 @@ acceptance_corr = False
 low_lim_eff_plot = 0
 
 high_order_correction = False
-date_selection = True  # Set to True if you want to filter by date
 
 # This should come from an input file
 eta_P = -0.162 # pressure_coeff_input
@@ -296,6 +309,8 @@ processing_regions = angular_regions + combinations
 
 if only_all:
     print("CHOSEN TO USE ONLY THE ALL COLUMN")
+    # combinations = []
+    # angular_regions = ['all']
     processing_regions = ['all']
 
 print(f"\nProcessing regions: {processing_regions}")
@@ -373,8 +388,14 @@ end_date = datetime.now()
 
 # Date filtering -------------------------------------------------------------------------------
 if date_selection:
-    start_date = pd.to_datetime("2024-03-01")  # Use a string in 'YYYY-MM-DD' format
-    end_date = pd.to_datetime("2024-06-01")
+    
+    # start_date = pd.to_datetime("2024-03-01")  # Use a string in 'YYYY-MM-DD' format
+    # end_date = pd.to_datetime("2024-06-15")
+    
+    start_date = pd.to_datetime("2025-05-21")  # Use a string in 'YYYY-MM-DD' format
+    end_date = pd.to_datetime("2025-06-21")
+    
+    # end_date = pd.to_datetime("2025-08-01")
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
 
@@ -411,6 +432,7 @@ else:
     exists_input_file = False
     print("Input configuration file does not exist.")
 
+exists_input_file = False
 if exists_input_file:
     # Parse start/end timestamps in the configuration file
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
@@ -457,115 +479,532 @@ else:
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-if remove_outliers:
-    
-    print("Removing outliers from the data...")
-    
-    for tt in detection_types:
-        
-        for iteration in [ [angular_regions, 5], [combinations, 3] ]:
-            regions_of_interest, cols = iteration
-        
-            num_rx = len(regions_of_interest)
-            rows = math.ceil(num_rx / cols)
+# print(data_df.columns.to_list())
 
-            if create_plots or create_essential_plots:
-                fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 3.5 * rows), sharex=False, sharey=False)
-                axes = axes.flatten()
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.signal import medfilt
+import warnings
 
+# Example configuration
+# filter_widths = [5, 11, 21, 31, 41, 51, 101, 151, 201, 251, 301, 451, 501, 601]
+# filter_widths = [31, 101, 151, 501]
+filter_widths = [41, 51, 61, 71, 81, 91, 101, 111, 121, 131, 141, 151, 161, 171, 181, 191, 201, 211, 221, 231, 241, 251, 261, 271, 281, 291, 301, \
+    311, 321, 331, 341, 351, 361]
+quantile_range = (0.001, 0.999)
+
+processed_labels = [f"processed_tt_{tt}_all" for tt in detection_types]
+cases = ['events'] + processed_labels
+
+from scipy.optimize import curve_fit
+from scipy.stats import chisquare
+
+# Dictionary to store results per kernel
+gauss_fit_results = {}
+
+# Define Gaussian model
+def gaussian(x, A, mu, sigma):
+    return A * np.exp(-0.5 * ((x - mu) / sigma)**2)
+
+def piecewise_linear(x, x0, k1, k2, b1):
+    """
+    x0: breakpoint
+    k1: slope before x0
+    k2: slope after x0
+    b1: intercept before x0
+    b2: computed as continuity condition
+    """
+    b2 = (k1 - k2) * x0 + b1
+    return np.where(x < x0, k1 * x + b1, k2 * x + b2)
+
+for case in cases:
+    print(case)
+    
+    time_series = data_df['Time'].copy()
+    total_series = data_df[case].copy()
+
+    filtered_dict = {}
+    residual_dict = {}
+
+    # Apply filters
+    for k in filter_widths:
+        k = k if k % 2 == 1 else k + 1  # Ensure odd
+        filtered = medfilt(total_series, kernel_size=k)
+        residual = total_series - filtered
+        filtered_dict[k] = filtered
+        residual_dict[k] = residual
+        
+        # if remove_outliers:
+        #     q_low, q_high = np.quantile(residual, quantile_range)
+        #     mask = (residual >= q_low) & (residual <= q_high)
             
+        #     # Interpolate over outliers
+        #     total_series_interp = total_series.copy()
+        #     total_series_interp[~mask] = np.interp(
+        #         x=time_series[~mask],
+        #         xp=time_series[mask],
+        #         fp=total_series[mask]
+        #     )
+        #     total_series = total_series_interp
+        #     print(f"Removed {(~mask).sum()} outliers (quantiles {quantile_range}) using k={k}")
+    
+    
+    # === Multi-panel time series plot ===
+    if create_essential_plots:
+        fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
 
-            for idx, rx in enumerate(regions_of_interest):
-                col_name = f'{tt}_{rx}'
-                comb = f'processed_tt_{tt}_{rx}'
+        # Original
+        axes[0].scatter(time_series, total_series, s=0.1, alpha=0.5, color='black', label="Original")
+        axes[0].set_title("Original Time Series")
+        axes[0].set_ylabel("Counts")
+        axes[0].grid(True, alpha=0.3)
 
-                if comb not in data_df.columns:
-                    continue
+        # All filtered overlays
+        for k, f in filtered_dict.items():
+            axes[1].scatter(time_series, f, label=f"Median k={k}", s=0.1, alpha=0.5)
+        axes[1].set_title("Median-Filtered Series")
+        axes[1].set_ylabel("Filtered")
+        axes[1].grid(True, alpha=0.3)
+        # axes[1].legend(fontsize=8)
 
-                # Step 1: Clean column
-                series = data_df[comb].copy()
-                series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+        # Residuals overlay
+        for k, r in residual_dict.items():
+            axes[2].scatter(time_series, r, label=f"k={k}", s=0.1, alpha=0.5)
+        axes[2].set_title(f"Residuals (Original - Filtered)")
+        axes[2].set_ylabel("Residuals")
+        axes[2].set_xlabel("Time")
+        axes[2].grid(True, alpha=0.3)
+        # axes[2].legend(fontsize=8)
+        
+        plt.suptitle(f"Time Series Analysis: {case}", fontsize=14)
+        plt.tight_layout()
 
-                if series_clean.empty:
-                    continue
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            path = f"{figure_path}{fig_idx}_combined_series_allk.png"
+            print(f"Saving multi-panel plot to {path}")
+            plt.savefig(path, format='png', dpi=300)
+        plt.close()
+        fig_idx += 1
 
-                # Define histogram bins
-                max_val = int(series_clean.max())
-                bins = np.arange(0, max_val + 2)
-                counts, bin_edges = np.histogram(series_clean, bins=bins)
-                bin_centers = bin_edges[:-1]
-                x_vals = bin_centers
-                total_count = np.sum(counts)
+    # === Combined histogram ===
+    fig, ax = plt.subplots(figsize=(8, 5))
 
-                if total_count == 0:
-                    continue
+    # Bin range: symmetric and wide enough
+    all_res = np.concatenate(list(residual_dict.values()))
+    bins = np.linspace(-150, 150, 100)
 
-                # Compute density
-                bin_width = 1
-                density = counts / (total_count * bin_width)
-                density_err = np.sqrt(counts) / (total_count * bin_width)
+    for k, r in residual_dict.items():
+        counts, bin_edges = np.histogram(r, bins=bins)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
-                # Fit Poisson: use sample mean
-                mu_hat = series_clean.mean()
-                poisson_pdf = poisson.pmf(x_vals, mu_hat)
+        # Exclude zero-count bins for fitting
+        mask = counts > 0
+        x_fit = bin_centers[mask]
+        y_fit = counts[mask]
 
-                # Compute Poisson quantile bounds
-                lower_poiss = poisson.ppf(0.005, mu_hat)
-                upper_poiss = poisson.ppf(0.995, mu_hat)
+        # Initial guess: A, mu, sigma
+        A0 = np.max(y_fit)
+        mu0 = np.mean(r[np.isfinite(r)])
+        sigma0 = np.std(r[np.isfinite(r)])
 
-                # Compute empirical quantile bounds
-                lower_emp = np.quantile(series_clean, 0.005)
-                upper_emp = np.quantile(series_clean, 0.995)
+        try:
+            popt, pcov = curve_fit(gaussian, x_fit, y_fit, p0=[A0, mu0, sigma0])
+            A_fit, mu_fit, sigma_fit = popt
 
-                # === Outlier rejection (column-wise) ===
-                cleaned_col = series.copy()
-                mask = (series < lower_emp) | (series > upper_emp)
-                cleaned_col[mask] = np.nan
-                data_df[comb] = cleaned_col
+            # Compute fitted values and chi-squared
+            y_model = gaussian(x_fit, *popt)
+            chisq = np.sum((y_fit - y_model) ** 2 / y_model)
+            dof = len(x_fit) - len(popt)
+            chisq_ndf = chisq / dof if dof > 0 else np.nan
+
+            # Store in dictionary
+            gauss_fit_results[k] = {
+                'mu': mu_fit,
+                'sigma': sigma_fit,
+                'chisq_ndf': chisq_ndf
+            }
+
+            # Plot histogram and fit
+            ax.hist(r, bins=bins, histtype='step', label=f"k={k}", linewidth=1.0)
+            ax.plot(x_fit, y_model, linestyle='--', linewidth=1.0)
+
+        except Exception as e:
+            print(f"Gaussian fit failed for k={k}: {e}")
+            gauss_fit_results[k] = {
+                'mu': np.nan,
+                'sigma': np.nan,
+                'chisq_ndf': np.nan
+            }
+
+    ax.set_title(f"Residual Histograms (log scale), {case}")
+    ax.set_xlabel("Residual")
+    ax.set_ylabel("Frequency")
+    # ax.set_yscale("log")
+    ax.grid(True, alpha=0.3)
+    # ax.legend(title="Kernel Width")
+
+    plt.tight_layout()
+
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        path = f"{figure_path}{fig_idx}_residual_histogram_allk.png"
+        print(f"Saving histogram to {path}")
+        plt.savefig(path, format='png', dpi=300)
+    plt.close()
+    fig_idx += 1
+    
+    
+    # Fit result plot
+    
+    # Prepare sorted kernel values
+    k_values = sorted(gauss_fit_results.keys())
+    mu_values = [gauss_fit_results[k]['mu'] for k in k_values]
+    sigma_values = [gauss_fit_results[k]['sigma'] for k in k_values]
+    chisq_values = [gauss_fit_results[k]['chisq_ndf'] for k in k_values]
+
+    # === Multi-panel summary plot of Gaussian fit parameters ===
+    fig, axes = plt.subplots(3, 1, figsize=(8, 9), sharex=True)
+
+    # μ (mean)
+    axes[0].plot(k_values, mu_values, marker='o', linestyle='-', color='blue')
+    axes[0].set_ylabel(r'$\mu$ (Mean)')
+    axes[0].set_title("Gaussian Fit Mean vs. Median Filter Width")
+    axes[0].grid(True, alpha=0.3)
+
+    # σ (std dev)
+    x_data = np.array(k_values)
+    y_data = np.array(sigma_values)
+
+    # Initial guess
+    x0_init = np.median(x_data)
+    k1_init = (y_data[-1] - y_data[0]) / (x_data[-1] - x_data[0]) * 0.5
+    k2_init = k1_init * 1.5
+    b1_init = y_data[0]
+
+    p0 = [x0_init, k1_init, k2_init, b1_init]
+
+    # Bounds: enforce both slopes to be positive
+    bounds = (
+        [min(x_data), 0, 0, -np.inf],  # lower bounds: x0, k1, k2, b1
+        [max(x_data), np.inf, np.inf, np.inf]  # upper bounds
+    )
+
+    # Fit
+    try:
+        popt, pcov = curve_fit(piecewise_linear, x_data, y_data, p0=p0, bounds=bounds)
+        x0_fit, k1_fit, k2_fit, b1_fit = popt
+
+        # Compute fitted curve
+        x_fit = np.linspace(min(x_data), max(x_data), 500)
+        y_fit = piecewise_linear(x_fit, *popt)
+
+        # Plot on existing axes
+        axes[1].plot(x_fit, y_fit, 'k--', linewidth=1.5, label="Piecewise linear fit")
+        axes[1].axvline(x0_fit, color='gray', linestyle=':', label=f"Breakpoint at k={x0_fit:.1f}")
+        
+        axes[1].plot(k_values, sigma_values, marker='o', linestyle='-', color='green')
+        axes[1].set_ylabel(r'$\sigma$ (Std. Dev.)')
+        axes[1].set_title("Gaussian Fit Std. Dev. vs. Median Filter Width")
+        axes[1].grid(True, alpha=0.3)
+        
+        axes[1].legend(fontsize=8)
+
+        print(f"Piecewise fit completed: breakpoint at k = {x0_fit:.2f}, slopes = ({k1_fit:.4f}, {k2_fit:.4f})")
+
+    except Exception as e:
+        print(f"Piecewise linear fit failed: {e}")
+        x0_fit = np.nan
+
+    # χ²/NDF
+    axes[2].plot(k_values, chisq_values, marker='o', linestyle='-', color='red')
+    axes[2].set_ylabel(r'$\chi^2/\mathrm{NDF}$')
+    axes[2].set_title("Reduced Chi-squared vs. Median Filter Width")
+    axes[2].set_xlabel("Median Filter Width (k)")
+    axes[2].grid(True, alpha=0.3)
+    axes[2].set_ylim(0, max(chisq_values))  # Set y-limits to avoid clutter
+
+    plt.suptitle(f"Gaussian Fit Summary: {case}", fontsize=14)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    if show_plots:
+        plt.show()
+    elif save_plots:
+        path = f"{figure_path}{fig_idx}_gaussian_fit_summary_{case}.png"
+        print(f"Saving Gaussian fit summary plot to {path}")
+        plt.savefig(path, format='png', dpi=300)
+    plt.close()
+    fig_idx += 1
+    
+    
+    # Actual filter of data_df: choose the closest k in filtered_dict to the piecewise fit breakpoint
+    # then retrieve the residuals for that value, the sigma of the fit, and the mean. Then remove all the
+    # values that are out of the 0.1% of that gaussian, that is, do ( residuals - mean ) / sigma and remove
+    # and consider outliers the values that are out of the 0.1% on both sides. Plot the histogram of the residuals
+    # for this specific case and print in screen the number of outliers removed, and the percentage of outliers removed.
+    # put nan for the rows and columns that we are working with
+    
+        # === Outlier rejection using the breakpoint-optimised kernel ===
+    from scipy.stats import norm   # required for z-score threshold
+
+    try:
+        # 1. Select kernel width closest to the piece-wise breakpoint
+        if not np.isnan(x0_fit):
+            k_sel = min(k_values, key=lambda kv: abs(kv - x0_fit))
+        else:
+            k_sel = k_values[len(k_values) // 2]     # fallback: median kernel
+            warnings.warn("Piece-wise fit failed; using median kernel width for outlier rejection.")
+
+        res_sel = residual_dict[k_sel]
+        mu_sel = gauss_fit_results[k_sel]['mu']
+        sigma_sel = gauss_fit_results[k_sel]['sigma']
+
+        if np.isnan(mu_sel) or np.isnan(sigma_sel) or sigma_sel == 0:
+            raise ValueError("Invalid Gaussian parameters for the selected kernel.")
+
+        # 2. Identify points outside the central 99.9 % of the fitted Gaussian
+        z_thr = norm.ppf(1.0 - outlier_gaussian_quantile / 2.0)          # ≈ 3.2905
+        z_scores = (res_sel - mu_sel) / sigma_sel
+        outlier_mask = np.abs(z_scores) > z_thr
+
+        n_out = int(outlier_mask.sum())
+        pct_out = 100.0 * n_out / len(outlier_mask)
+
+        print(f"[{case}] k = {k_sel}: removed {n_out} samples "
+              f"({pct_out:.4f} %) with |z| > {z_thr:.3f}")
+
+        # 3. Replace outliers with NaN in the working column
+        data_df.loc[outlier_mask, case] = np.nan
+        
+        if create_essential_plots:
+            # 4. Diagnostic histogram
+            fig, ax = plt.subplots(figsize=(8, 5))
+            bin_width = 0.25 * sigma_sel
+            bins_diag = np.arange(res_sel.min(), res_sel.max() + bin_width, bin_width)
+
+            ax.hist(res_sel[~outlier_mask], bins=bins_diag,
+                    histtype='stepfilled', alpha=0.7, label='Kept')
+            if n_out > 0:
+                ax.hist(res_sel[outlier_mask], bins=bins_diag,
+                        histtype='stepfilled', alpha=0.7, label='Rejected')
+
+            # Overlay fitted Gaussian
+            x_gauss = np.linspace(bins_diag[0], bins_diag[-1], 400)
+            A_gauss = len(res_sel) * bin_width / (np.sqrt(2 * np.pi) * sigma_sel)
+            ax.plot(x_gauss, gaussian(x_gauss, A_gauss, mu_sel, sigma_sel),
+                    'k--', linewidth=1.2, label='Gaussian fit')
+
+            ax.set_title(f"Residuals after Outlier Rejection ({case}, k={k_sel})")
+            ax.set_xlabel("Residual")
+            ax.set_ylabel("Counts")
+            ax.grid(True, alpha=0.3)
+            # Log scale
+            # ax.set_yscale("log")
+            ax.legend(fontsize=8)
+            plt.tight_layout()
+
+            if show_plots:
+                plt.show()
+            elif save_plots:
+                path = f"{figure_path}{fig_idx}_residual_histogram_k{k_sel}_{case}.png"
+                print(f"Saving residual histogram to {path}")
+                plt.savefig(path, format='png', dpi=300)
+            plt.close()
+            fig_idx += 1
+
+    except Exception as e:
+        warnings.warn(f"[{case}] Outlier rejection step skipped: {e}")
+    
+    
+    
+    # === Multi-panel time series plot ===
+    if create_essential_plots:
+        fig, axes = plt.subplots(2, 1, figsize=(10, 9), sharex=True, sharey=True)
+
+        # Original
+        axes[0].scatter(time_series, total_series, s=0.1, alpha=0.5, color='black', label="Original")
+        axes[0].set_title("Original Time Series")
+        axes[0].set_ylabel("Counts")
+        axes[0].grid(True, alpha=0.3)
+        
+        # All filtered overlays
+        new_time_series = data_df['Time'].copy()
+        new_total_series = data_df[case].copy()
+        axes[1].scatter(new_time_series, new_total_series, label=f"Filtered", s=0.1, alpha=0.5)
+        axes[1].set_title("Median-Filtered Series")
+        axes[1].set_ylabel("Filtered")
+        axes[1].grid(True, alpha=0.3)
+        # axes[1].legend(fontsize=8)
+        
+        plt.suptitle(f"Time Series Analysis: {case}", fontsize=14)
+        plt.tight_layout()
+
+        if show_plots:
+            plt.show()
+        elif save_plots:
+            path = f"{figure_path}{fig_idx}_combined_series_OG_and_filtered.png"
+            print(f"Saving multi-panel plot to {path}")
+            plt.savefig(path, format='png', dpi=300)
+        plt.close()
+        fig_idx += 1
+
+
+# If in a row all the values in cases are nan, remove the row. print in the end the number of rows removed
+# ---------------------------------------------------------------
+# Fill NaN values by Akima interpolation instead of dropping rows
+# ---------------------------------------------------------------
+import numpy as np
+import pandas as pd
+from scipy.interpolate import Akima1DInterpolator     # SciPy ≥ 1.10
+
+def akima_fill(series: pd.Series) -> pd.Series:
+    """Return *series* with NaNs replaced by Akima-interpolated values."""
+    y = series.to_numpy(float)
+    mask = np.isnan(y)
+    if not mask.any():
+        return series                                 # nothing to do
+    x = np.arange(len(y))
+    xi = x[~mask]                                     # coordinates of valid samples
+    yi = y[~mask]
+
+    # If fewer than two valid points the interpolation is undefined
+    if yi.size < 2:
+        return series
+
+    ak = Akima1DInterpolator(xi, yi)
+    y[mask] = ak(x[mask])
+    return pd.Series(y, index=series.index, name=series.name)
+
+# 'cases' is the list of columns in which NaNs are not tolerated.
+cols_with_nans = data_df[cases].columns[data_df[cases].isna().any()]
+
+if len(cols_with_nans):
+    print(f"Detected {len(cols_with_nans)} columns with NaNs out of {len(cases)} cases, which is a {100 * len(cols_with_nans) / len(cases):.2f}%")
+    for col in cols_with_nans:
+        data_df[col] = akima_fill(data_df[col])
+
+    still_nans = data_df[cases].isna().any(axis=1).sum()
+    if still_nans:
+        print(f"Warning: {still_nans} rows still contain NaNs after Akima interpolation.")
+    else:
+        print("All missing values filled by Akima interpolation.")
+else:
+    print("No NaNs detected; nothing interpolated.")
+
+
+del case
+
+# if remove_outliers:
+    
+#     print("Removing outliers from the histograms...")
+#     for tt in detection_types:
+        
+#         for iteration in [ [angular_regions, 5], [combinations, 3] ]:
+#             regions_of_interest, cols = iteration
+        
+#             num_rx = len(regions_of_interest)
+#             rows = math.ceil(num_rx / cols)
+
+#             if create_plots or create_essential_plots:
+#                 fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 3.5 * rows), sharex=False, sharey=False)
+#                 axes = axes.flatten()
+
+#             for idx, rx in enumerate(regions_of_interest):
+#                 col_name = f'{tt}_{rx}'
+#                 comb = f'processed_tt_{tt}_{rx}'
+
+#                 if comb not in data_df.columns:
+#                     continue
+
+#                 # Step 1: Clean column
+#                 series = data_df[comb].copy()
+#                 series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+
+#                 if series_clean.empty:
+#                     continue
+
+#                 # Define histogram bins
+#                 max_val = int(series_clean.max())
+#                 bins = np.arange(0, max_val + 2)
+#                 counts, bin_edges = np.histogram(series_clean, bins=bins)
+#                 bin_centers = bin_edges[:-1]
+#                 x_vals = bin_centers
+#                 total_count = np.sum(counts)
+
+#                 if total_count == 0:
+#                     continue
+
+#                 # Compute density
+#                 bin_width = 1
+#                 density = counts / (total_count * bin_width)
+#                 density_err = np.sqrt(counts) / (total_count * bin_width)
+
+#                 # Fit Poisson: use sample mean
+#                 mu_hat = series_clean.mean()
+#                 poisson_pdf = poisson.pmf(x_vals, mu_hat)
+
+#                 # Compute Poisson quantile bounds
+#                 lower_poiss = poisson.ppf(outlier_poisson_quantile, mu_hat)
+#                 upper_poiss = poisson.ppf(1 - outlier_poisson_quantile, mu_hat)
+
+#                 # Compute empirical quantile bounds
+#                 lower_emp = np.quantile(series_clean, outlier_empirical_quantile)
+#                 upper_emp = np.quantile(series_clean, 1 - outlier_empirical_quantile)
+
+#                 # === Outlier rejection (column-wise) ===
+#                 cleaned_col = series.copy()
+#                 mask = (series < lower_emp) | (series > upper_emp)
+#                 cleaned_col[mask] = np.nan
+#                 data_df[comb] = cleaned_col
                 
-                # Count how many values were removed, in percentage
-                num_removed = mask.sum()
-                percentage_removed = (num_removed / len(series)) * 100
-                print(f"Removed {num_removed} outliers ({percentage_removed:.2f}%) from {comb} ({tt}, {rx})")
-                # Save the number and percentage of removed outliers to the global_variables
-                global_variables[f'{comb}_outlier_filtered'] = percentage_removed
+#                 # Count how many values were removed, in percentage
+#                 num_removed = mask.sum()
+#                 percentage_removed = (num_removed / len(series)) * 100
+#                 print(f"Removed {num_removed} outliers ({percentage_removed:.2f}%) from {comb} ({tt}, {rx})")
+#                 # Save the number and percentage of removed outliers to the global_variables
+#                 global_variables[f'{comb}_outlier_filtered'] = percentage_removed
 
-                # === Plot ===
-                if create_plots or create_essential_plots:
-                    ax = axes[idx]
-                    ax.errorbar(x_vals, density, yerr=density_err, fmt='.', label='Data')
-                    ax.plot(x_vals, poisson_pdf, drawstyle='steps-mid', color='orange',
-                            label=f'Poisson μ={mu_hat:.2f}')
+#                 # === Plot ===
+#                 if create_plots or create_essential_plots:
+#                     ax = axes[idx]
+#                     ax.errorbar(x_vals, density, yerr=density_err, fmt='.', label='Data')
+#                     ax.plot(x_vals, poisson_pdf, drawstyle='steps-mid', color='orange',
+#                             label=f'Poisson μ={mu_hat:.2f}')
 
-                    # Poisson quantile lines (red)
-                    ax.axvline(lower_poiss, color='red', linestyle='--', linewidth=1, label='0.1% Poisson')
-                    ax.axvline(upper_poiss, color='red', linestyle='--', linewidth=1, label='99.9% Poisson')
+#                     # Poisson quantile lines (red)
+#                     ax.axvline(lower_poiss, color='red', linestyle='--', linewidth=1, label=f'{outlier_poisson_quantile*100}% Poisson')
+#                     ax.axvline(upper_poiss, color='red', linestyle='--', linewidth=1, label=f'{(1-outlier_poisson_quantile)*100}% Poisson')
 
-                    # Empirical quantile lines (green)
-                    ax.axvline(lower_emp, color='green', linestyle='--', linewidth=1, label='0.1% Empirical')
-                    ax.axvline(upper_emp, color='green', linestyle='--', linewidth=1, label='99.9% Empirical')
+#                     # Empirical quantile lines (green)
+#                     ax.axvline(lower_emp, color='green', linestyle='--', linewidth=1, label=f'{outlier_empirical_quantile*100}% Empirical')
+#                     ax.axvline(upper_emp, color='green', linestyle='--', linewidth=1, label=f'{(1-outlier_empirical_quantile)*100}% Empirical')
 
-                    ax.set_title(f'{tt}, {rx}', fontsize=10)
-                    ax.set_xlabel('Value')
-                    ax.set_ylabel('Density')
-                    ax.legend(fontsize=8)
-                    ax.grid(True, alpha=0.3)
+#                     ax.set_title(f'{tt}, {rx}', fontsize=10)
+#                     ax.set_xlabel('Value')
+#                     ax.set_ylabel('Density')
+#                     ax.legend(fontsize=8)
+#                     ax.grid(True, alpha=0.3)
             
-            
-            if create_plots or create_essential_plots:
-                # Remove unused subplots
-                for ax in axes[num_rx:]:
-                    fig.delaxes(ax)
-                plt.tight_layout()
+#             if create_plots or create_essential_plots:
+#                 # Remove unused subplots
+#                 for ax in axes[num_rx:]:
+#                     fig.delaxes(ax)
+#                 plt.tight_layout()
 
-                if show_plots:
-                    plt.show()
-                elif save_plots:
-                    grouped_path = f"{figure_path}{fig_idx}_grouped_histo_{tt}_cols_{cols}.png"
-                    print(f"Saving grouped figure to {grouped_path}")
-                    plt.savefig(grouped_path, format='png', dpi=300)
-                plt.close()
-                fig_idx += 1
+#                 if show_plots:
+#                     plt.show()
+#                 elif save_plots:
+#                     grouped_path = f"{figure_path}{fig_idx}_grouped_histo_{tt}_cols_{cols}.png"
+#                     print(f"Saving grouped figure to {grouped_path}")
+#                     plt.savefig(grouped_path, format='png', dpi=300)
+#                 plt.close()
+#                 fig_idx += 1
+
+
+
 
 
             
@@ -635,25 +1074,34 @@ def plot_grouped_series(df, group_cols, time_col='Time', title=None, figsize=(14
 
 group_cols = [
     ['sensors_ext_Pressure_ext'],
-    ['sensors_ext_Temperature_ext'],
+    ['sensors_ext_Temperature_ext']
 ]
 
-plot_grouped_series(data_df, group_cols, title='Pre-interpolation', plot_after_all=True, sharey_axes=False)
+plot_grouped_series(data_df, group_cols, title='Pre-interpolation', plot_after_all=False, sharey_axes=False)
 
 # Ensure 'Time' is the index for resampling
 data_df = data_df.set_index('Time')
 # Interpolate missing values in 'sensors_ext_Pressure_ext' and 'sensors_ext_Temperature_ext'
-data_df['sensors_ext_Pressure_ext'] = data_df['sensors_ext_Pressure_ext'].interpolate(method='spline', order=3)
-data_df['sensors_ext_Temperature_ext'] = data_df['sensors_ext_Temperature_ext'].interpolate(method='spline', order=3)
+data_df['sensors_ext_Pressure_ext'] = data_df['sensors_ext_Pressure_ext'].interpolate(method='akima')
+data_df['sensors_ext_Temperature_ext'] = data_df['sensors_ext_Temperature_ext'].interpolate(method='akima')
+
 # Reset index to keep 'Time' as a column
 data_df.reset_index(inplace=True)
-
 
 group_cols = [
     ['sensors_ext_Pressure_ext'],
     ['sensors_ext_Temperature_ext'],
 ]
-plot_grouped_series(data_df, group_cols, title=f'Post-interpolation', plot_after_all=True, sharey_axes = False)
+plot_grouped_series(data_df, group_cols, title=f'Post-interpolation', plot_after_all=False, sharey_axes = False)
+
+
+# With the events now
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['events']
+]
+plot_grouped_series(data_df, group_cols, title=f'Pre-resampling', plot_after_all=True, sharey_axes = False)
 
 
 data_df = data_df.copy()
@@ -670,6 +1118,16 @@ data_df = data_df.resample(resampling_window).agg({
 })
 
 data_df.reset_index(inplace=True)
+
+
+# group_cols = [
+#     ['sensors_ext_Pressure_ext'],
+#     ['sensors_ext_Temperature_ext'],
+#     ['events']
+# ]
+# plot_grouped_series(data_df, group_cols, title=f'Resampled', plot_after_all=True, sharey_axes = False)
+
+
 
 
 # -----------------------------------------------------------------------------
@@ -719,11 +1177,30 @@ def plot_pressure_and_group(df, x_column, x_label, group_cols, time_col='Time', 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
 
-data_df['rate'] = data_df['events'] / ( data_df["number_of_mins"] * 60 )  # Counts per second (Hz)
-data_df['unc_rate'] = np.sqrt(data_df['events']) / ( data_df["number_of_mins"] * 60 )
+# Avoid division by zero or invalid mins
+denominator = data_df["number_of_mins"] * 60
+
+# Replace non-positive or invalid denominator with NaN to avoid division errors
+safe_denominator = np.where((denominator > 0) & np.isfinite(denominator), denominator, np.nan)
+
+# Compute rate and uncertainty safely
+data_df['rate'] = data_df['events'] / safe_denominator
+data_df['unc_rate'] = np.sqrt(data_df['events']) / safe_denominator
+
 
 data_df['hv_mean'] = ( data_df['hv_HVneg'] + data_df['hv_HVpos'] ) / 2
 data_df['current_mean'] = ( data_df['hv_CurrentNeg'] + data_df['hv_CurrentPos'] ) / 2
+
+
+group_cols = [
+    ['sensors_ext_Pressure_ext'],
+    ['sensors_ext_Temperature_ext'],
+    ['rate']
+]
+plot_grouped_series(data_df, group_cols, title=f'Resampled', plot_after_all=True, sharey_axes = False)
+
+
+# a = 1/0
 
 
 # The efficiencies work should be in a loop that at least should work the same for the
@@ -750,15 +1227,15 @@ for case in processing_regions:
             data_df[new_col] = data_df[original_col]
     
     
-    print('----------------------------------------------------------------------')
-    print('----------------- Filtering outliers in the counts -------------------')
-    print('----------------------------------------------------------------------')
+    # print('----------------------------------------------------------------------')
+    # print('----------------- Filtering outliers in the counts -------------------')
+    # print('----------------------------------------------------------------------')
     
-    # if "R" in case:
-    #     continue
+    # # if "R" in case:
+    # #     continue
     
-    # if case != "Vert":
-    #     continue
+    # # if case != "Vert":
+    # #     continue
     
     group_cols = [
         ['processed_tt_1234'],
@@ -767,102 +1244,102 @@ for case in processing_regions:
         ['processed_tt_13', 'processed_tt_24', 'processed_tt_14'],
     ]
 
-    plot_grouped_series(data_df, group_cols, title=f'Counts pre-filtering per TT', plot_after_all=False, sharey_axes = True)
+    plot_grouped_series(data_df, group_cols, title=f'Counts pre-filtering per TT', plot_after_all=True, sharey_axes = False)
     
     
-    # Spline fit and residual computation
-    for group in group_cols:
-        for col in group:
-            x_full = np.arange(len(data_df))
-            y_full = data_df[col].values
+    # # Spline fit and residual computation
+    # for group in group_cols:
+    #     for col in group:
+    #         x_full = np.arange(len(data_df))
+    #         y_full = data_df[col].values
 
-            # Remove NaNs for spline fitting
-            mask_valid = np.isfinite(y_full)
-            x = x_full[mask_valid]
-            y = y_full[mask_valid]
+    #         # Remove NaNs for spline fitting
+    #         mask_valid = np.isfinite(y_full)
+    #         x = x_full[mask_valid]
+    #         y = y_full[mask_valid]
             
-            # Apply an horizontal median filter to the y
-            y = medfilt(y, kernel_size=3)
+    #         # Apply an horizontal median filter to the y
+    #         y = medfilt(y, kernel_size=3)
             
-            std_y = np.nanstd(y)
-            if not np.isfinite(std_y) or std_y <= 0:
-                std_y = 1.0  # fallback to a small positive number
-            s = len(x) * std_y
+    #         std_y = np.nanstd(y)
+    #         if not np.isfinite(std_y) or std_y <= 0:
+    #             std_y = 1.0  # fallback to a small positive number
+    #         s = len(x) * std_y
             
-            print(f"Fitting spline for {col} | std={std_y:.4f} | nan count={np.isnan(y).sum()}")
+    #         print(f"Fitting spline for {col} | std={std_y:.4f} | nan count={np.isnan(y).sum()}")
             
-            spline = UnivariateSpline(x, y, s=s)
-            spline_values = spline(x)
+    #         spline = UnivariateSpline(x, y, s=s)
+    #         spline_values = spline(x)
 
-            spline_col = f'spline_{col}'
-            residual_col = f'rel_residual_{col}'
+    #         spline_col = f'spline_{col}'
+    #         residual_col = f'rel_residual_{col}'
 
-            spline = UnivariateSpline(x, y, s=s)
-            spline_values = spline(x_full)  # evaluate spline on full x range
+    #         spline = UnivariateSpline(x, y, s=s)
+    #         spline_values = spline(x_full)  # evaluate spline on full x range
 
-            data_df[spline_col] = spline_values
+    #         data_df[spline_col] = spline_values
 
-            # Compute relative residual safely
-            epsilon = 1e-12
-            denominator = spline_values.copy()
-            denominator[np.abs(denominator) < epsilon] = np.nan
+    #         # Compute relative residual safely
+    #         epsilon = 1e-12
+    #         denominator = spline_values.copy()
+    #         denominator[np.abs(denominator) < epsilon] = np.nan
 
-            rel_resid = (y_full - spline_values) / denominator
+    #         rel_resid = (y_full - spline_values) / denominator
 
-            # Optional: remove high-residual outliers
-            mask_outlier = np.abs(rel_resid) > 0.9
-            rel_resid[mask_outlier] = np.nan
-            spline_values[mask_outlier] = np.nan
-            y_full[mask_outlier] = np.nan
+    #         # Optional: remove high-residual outliers
+    #         mask_outlier = np.abs(rel_resid) > 0.9
+    #         rel_resid[mask_outlier] = np.nan
+    #         spline_values[mask_outlier] = np.nan
+    #         y_full[mask_outlier] = np.nan
             
-            # Interpolate in the mask_outlier mask
-            rel_resid = pd.Series(rel_resid).interpolate(method='linear').fillna(0).values
-            spline_values = pd.Series(spline_values).interpolate(method='linear').fillna(0).values
-            y_full = pd.Series(y_full).interpolate(method='linear').fillna(0).values
+    #         # Interpolate in the mask_outlier mask
+    #         rel_resid = pd.Series(rel_resid).interpolate(method='linear').fillna(0).values
+    #         spline_values = pd.Series(spline_values).interpolate(method='linear').fillna(0).values
+    #         y_full = pd.Series(y_full).interpolate(method='linear').fillna(0).values
             
-            data_df[spline_col] = spline_values
-            data_df[residual_col] = rel_resid
-            data_df[col] = y_full
+    #         data_df[spline_col] = spline_values
+    #         data_df[residual_col] = rel_resid
+    #         data_df[col] = y_full
     
     
-    spline_group_cols = [
-        [f'spline_{col}' for col in group]
-        for group in group_cols
-    ]
+    # spline_group_cols = [
+    #     [f'spline_{col}' for col in group]
+    #     for group in group_cols
+    # ]
 
-    # Call the user's plotting function with the new group structure
-    plot_grouped_series(
-        data_df,
-        spline_group_cols,
-        time_col='Time',
-        title='Spline approximations of processed_tt_* time series',
-        plot_after_all=False, sharey_axes = True
-    )
+    # # Call the user's plotting function with the new group structure
+    # plot_grouped_series(
+    #     data_df,
+    #     spline_group_cols,
+    #     time_col='Time',
+    #     title='Spline approximations of processed_tt_* time series',
+    #     plot_after_all=False, sharey_axes = True
+    # )
     
     
-    rel_residual_group_cols = [
-        [f'rel_residual_{col}' for col in group]
-        for group in group_cols
-    ]
+    # rel_residual_group_cols = [
+    #     [f'rel_residual_{col}' for col in group]
+    #     for group in group_cols
+    # ]
 
-    # Plot the relative residuals
-    plot_grouped_series(
-        data_df,
-        rel_residual_group_cols,
-        time_col='Time',
-        title='Relative residuals of processed_tt_* time series',
-        plot_after_all=False, sharey_axes = True
-    )
+    # # Plot the relative residuals
+    # plot_grouped_series(
+    #     data_df,
+    #     rel_residual_group_cols,
+    #     time_col='Time',
+    #     title='Relative residuals of processed_tt_* time series',
+    #     plot_after_all=False, sharey_axes = True
+    # )
     
-    # Result after inerpolation
-    group_cols = [
-        ['processed_tt_1234'],
-        ['processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134'],
-        ['processed_tt_12', 'processed_tt_23', 'processed_tt_34'],
-        ['processed_tt_13', 'processed_tt_24', 'processed_tt_14'],
-    ]
+    # # Result after inerpolation
+    # group_cols = [
+    #     ['processed_tt_1234'],
+    #     ['processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134'],
+    #     ['processed_tt_12', 'processed_tt_23', 'processed_tt_34'],
+    #     ['processed_tt_13', 'processed_tt_24', 'processed_tt_14'],
+    # ]
 
-    plot_grouped_series(data_df, group_cols, title=f'Counts pre-filtering per TT', plot_after_all=False, sharey_axes = True)
+    # plot_grouped_series(data_df, group_cols, title=f'Counts pre-filtering per TT', plot_after_all=False, sharey_axes = True)
     
     print('----------------------------------------------------------------------')
     print('-------------------- Calculating efficiencies ------------------------')
@@ -1014,8 +1491,54 @@ for case in processing_regions:
         [f'eff_sys_2'],
         [f'eff_sys_3'],
         [f'eff_sys_4'] ]
+    plot_grouped_series(data_df, group_cols, title=f'Four plane efficiencies', plot_after_all=True, sharey_axes = False)
+    
+    
+    if rolling_effs:
+        print("Rolling efficiencies...")
+        
+        data_df['eff_pre_roll_1'] = data_df['eff_sys_1']
+        data_df['eff_pre_roll_2'] = data_df['eff_sys_2']
+        data_df['eff_pre_roll_3'] = data_df['eff_sys_3']
+        data_df['eff_pre_roll_4'] = data_df['eff_sys_4']
+        
+        cols_to_interpolate = ['eff_sys_1', 'eff_sys_2', 'eff_sys_3', 'eff_sys_4']
 
-    # plot_grouped_series(data_df, group_cols, title=f'Four plane efficiencies')
+        # Step 1: Identify rows where interpolation will be applied
+        interpolated_mask = data_df[cols_to_interpolate].replace(0, np.nan).isna()
+
+        # Step 2: Perform interpolation
+        data_df[cols_to_interpolate] = data_df[cols_to_interpolate].replace(0, np.nan).interpolate(method='akima')
+
+        if rolling_median:
+            for col in cols_to_interpolate:
+                data_df[col] = medfilt(data_df[col], kernel_size=med_window)
+
+        if rolling_mean:
+            for col in cols_to_interpolate:
+                data_df[col] = data_df[col].rolling(window=mean_window, center=True, min_periods=1).mean()
+
+        # Step 4: Set previously interpolated positions back to NaN
+        for col in cols_to_interpolate:
+            data_df.loc[interpolated_mask[col], col] = np.nan
+
+        group_cols = [ ['eff_pre_roll_1', 'eff_pre_roll_2', 'eff_pre_roll_3', 'eff_pre_roll_4'],
+                    ['eff_sys_1', 'eff_sys_2', 'eff_sys_3', 'eff_sys_4'] ]
+        plot_grouped_series(data_df, group_cols, title='Final calculated efficiencies, rolling', plot_after_all=True)
+
+    else:
+        group_cols = [ ['eff_sys_1', 'eff_sys_2', 'eff_sys_3', 'eff_sys_4'] ]
+        plot_grouped_series(data_df, group_cols, title='Final calculated efficiencies, not rolling', plot_after_all=True)
+    
+    
+    group_cols = [
+        [f'eff_sys_1'],
+        [f'eff_sys_2'],
+        [f'eff_sys_3'],
+        [f'eff_sys_4'] ]
+    plot_grouped_series(data_df, group_cols, title=f'Four plane efficiencies', plot_after_all=True, sharey_axes = True)
+    
+    
     
     check_efficiency_calculations = False
     if check_efficiency_calculations:
@@ -1188,7 +1711,6 @@ for case in processing_regions:
     comp_eff_3  = data_df['processed_tt_124'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_124'] )
     comp_eff_23 = comp_eff_2 * comp_eff_3
     comp_eff_23_true = data_df['processed_tt_14'] / ( data_df['processed_tt_1234'] + data_df['processed_tt_14'] )
-
     
     eff_df = pd.DataFrame({
         'Time': data_df['Time'],
@@ -1263,6 +1785,47 @@ for case in processing_regions:
     noise_counts_24 = np.zeros_like(counts_24)
     noise_counts_34 = np.zeros_like(counts_34)
     
+    # ------------------------------------------------------------------------------
+    
+    comp_eff_1 = counts_234 / (counts_1234 + counts_234)     # P(plane-1 misfire)
+    comp_eff_4 = counts_123 / (counts_1234 + counts_123)     # P(plane-4 misfire)
+
+    # 2.  Noise in the remaining three-fold coincidences (123 and 234)
+    est_123   = counts_1234 * comp_eff_4           # only plane-4 missing
+    noise_123 = compute_noise_percentages(est_123, counts_123)
+    noise_counts_123 = noise_123 / 100 * counts_123
+
+    est_234   = counts_1234 * comp_eff_1           # only plane-1 missing
+    noise_234 = compute_noise_percentages(est_234, counts_234)
+    noise_counts_234 = noise_234 / 100 * counts_234
+
+    # 3.  Two-fold coincidences: build the required double-inefficiency terms
+    comp_eff_12 = comp_eff_1 * comp_eff_2
+    comp_eff_14 = comp_eff_1 * comp_eff_4
+    comp_eff_34 = comp_eff_3 * comp_eff_4
+    comp_eff_13 = comp_eff_1 * comp_eff_3
+    comp_eff_24 = comp_eff_2 * comp_eff_4
+
+    est_34   = counts_1234 * comp_eff_12
+    est_23   = counts_1234 * comp_eff_14
+    est_12   = counts_1234 * comp_eff_34
+    est_13   = counts_1234 * comp_eff_24
+    est_24   = counts_1234 * comp_eff_13
+
+    noise_12 = compute_noise_percentages(est_12, counts_12)
+    noise_23 = compute_noise_percentages(est_23, counts_23)
+    noise_34 = compute_noise_percentages(est_34, counts_34)
+    noise_13 = compute_noise_percentages(est_13, counts_13)
+    noise_24 = compute_noise_percentages(est_24, counts_24)
+
+    noise_counts_12 = noise_12 / 100 * counts_12
+    noise_counts_23 = noise_23 / 100 * counts_23
+    noise_counts_34 = noise_34 / 100 * counts_34
+    noise_counts_13 = noise_13 / 100 * counts_13
+    noise_counts_24 = noise_24 / 100 * counts_24
+    
+    # ------------------------------------------------------------------------------
+    
     # Denoise the counts by subtracting the noise counts
     denoised_counts_124 = counts_124 - noise_counts_124
     denoised_counts_134 = counts_134 - noise_counts_134
@@ -1282,37 +1845,79 @@ for case in processing_regions:
     # Create a new dataframe with the noise vectors as columns so you can apply the plot_groupes_series
     noise_df = pd.DataFrame({
         'Time': data_df['Time'],
-        
-        'counts_124': counts_124,
-        'counts_134': counts_134,
-        'counts_14': counts_14,
+
+        # ───────────────────────────── raw counts ─────────────────────────────
+        'counts_1234': counts_1234,
+        'counts_124':  counts_124,
+        'counts_134':  counts_134,
+        'counts_14':   counts_14,
+        'counts_123':  counts_123,
+        'counts_234':  counts_234,
+        'counts_12':   counts_12,
+        'counts_23':   counts_23,
+        'counts_34':   counts_34,
+        'counts_13':   counts_13,
+        'counts_24':   counts_24,
         'counts_13_sd_123': counts_13_sd_123,
         'counts_24_sd_234': counts_24_sd_234,
-        
-        'est_124': est_124,
-        'est_134': est_134,
-        'est_14': est_14,
+
+        # ────────────────────────── model estimates ───────────────────────────
+        'est_124':  est_124,
+        'est_134':  est_134,
+        'est_14':   est_14,
+        'est_123':  est_123,
+        'est_234':  est_234,
+        'est_12':   est_12,
+        'est_23':   est_23,
+        'est_34':   est_34,
+        'est_13':   est_13,
+        'est_24':   est_24,
         'est_13_sd_123': est_13_sd_123,
         'est_24_sd_234': est_24_sd_234,
-        
-        'noise_124': noise_124,
-        'noise_134': noise_134,
-        'noise_14': noise_14,
+
+        # ───────────────────────── noise percentages ──────────────────────────
+        'noise_124':  noise_124,
+        'noise_134':  noise_134,
+        'noise_14':   noise_14,
+        'noise_123':  noise_123,
+        'noise_234':  noise_234,
+        'noise_12':   noise_12,
+        'noise_23':   noise_23,
+        'noise_34':   noise_34,
+        'noise_13':   noise_13,
+        'noise_24':   noise_24,
         'noise_13_sd_123': noise_13_sd_123,
         'noise_24_sd_234': noise_24_sd_234,
-        
-        'noise_counts_124': noise_counts_124,
-        'noise_counts_134': noise_counts_134,
-        'noise_counts_14': noise_counts_14,
+
+        # ─────────────────────── absolute noise counts ────────────────────────
+        'noise_counts_124':  noise_counts_124,
+        'noise_counts_134':  noise_counts_134,
+        'noise_counts_14':   noise_counts_14,
+        'noise_counts_123':  noise_counts_123,
+        'noise_counts_234':  noise_counts_234,
+        'noise_counts_12':   noise_counts_12,
+        'noise_counts_23':   noise_counts_23,
+        'noise_counts_34':   noise_counts_34,
+        'noise_counts_13':   noise_counts_13,
+        'noise_counts_24':   noise_counts_24,
         'noise_counts_13_sd_123': noise_counts_13_sd_123,
         'noise_counts_24_sd_234': noise_counts_24_sd_234,
-        
-        'denoised_counts_124': denoised_counts_124,
-        'denoised_counts_134': denoised_counts_134,
-        'denoised_counts_14': denoised_counts_14,
+
+        # ─────────────────────────── denoised data ────────────────────────────
+        'denoised_counts_124':  denoised_counts_124,
+        'denoised_counts_134':  denoised_counts_134,
+        'denoised_counts_14':   denoised_counts_14,
+        'denoised_counts_123':  denoised_counts_123,
+        'denoised_counts_234':  denoised_counts_234,
+        'denoised_counts_12':   denoised_counts_12,
+        'denoised_counts_23':   denoised_counts_23,
+        'denoised_counts_34':   denoised_counts_34,
+        'denoised_counts_13':   denoised_counts_13,
+        'denoised_counts_24':   denoised_counts_24,
         'denoised_counts_13_sd_123': denoised_counts_13_sd_123,
         'denoised_counts_24_sd_234': denoised_counts_24_sd_234,
     })
+
     
     # Clip negative values to 0, but not the time column, which is datetime
     noise_df.loc[:, noise_df.columns != 'Time'] = noise_df.loc[:, noise_df.columns != 'Time'].clip(lower=0)
@@ -1320,27 +1925,57 @@ for case in processing_regions:
     
     # Create group cols but now pair the counts_ and the denoised_counts_
     group_cols = [
+        # single–plane-missing
         ['counts_124', 'denoised_counts_124', 'est_124'],
         ['counts_134', 'denoised_counts_134', 'est_134'],
-        ['counts_14', 'denoised_counts_14', 'est_14'],
+        ['counts_14',  'denoised_counts_14',  'est_14'],
+
+        # mixed sub-detector channels (keep if you still need them)
         ['counts_13_sd_123', 'denoised_counts_13_sd_123', 'est_13_sd_123'],
-        ['counts_24_sd_234', 'denoised_counts_24_sd_234', 'est_24_sd_234'] ]
-    # plot_grouped_series(noise_df, group_cols, title='Noise study: counts and denoised counts')
+        ['counts_24_sd_234', 'denoised_counts_24_sd_234', 'est_24_sd_234'],
+
+        # two-fold and three-fold coincidences just added
+        ['counts_13', 'denoised_counts_13', 'est_13'],
+        ['counts_24', 'denoised_counts_24', 'est_24'],
+        ['counts_12', 'denoised_counts_12', 'est_12'],
+        ['counts_23', 'denoised_counts_23', 'est_23'],
+        ['counts_34', 'denoised_counts_34', 'est_34'],
+        ['counts_123', 'denoised_counts_123', 'est_123'],
+        ['counts_234', 'denoised_counts_234', 'est_234'],
+    ]
+
+    plot_grouped_series(
+        noise_df,
+        group_cols,
+        title='Noise study: raw, denoised and estimated counts',
+        plot_after_all=True,
+    )
+    
+    data_df['processed_tt_1234'] = denoised_counts_1234
+    data_df['processed_tt_124'] = denoised_counts_124
+    data_df['processed_tt_134'] = denoised_counts_134
+    data_df['processed_tt_123'] = denoised_counts_123
+    data_df['processed_tt_234'] = denoised_counts_234
+    data_df['processed_tt_14'] = denoised_counts_14
+    data_df['processed_tt_12'] = denoised_counts_12
+    data_df['processed_tt_13'] = denoised_counts_13
+    data_df['processed_tt_23'] = denoised_counts_23
+    data_df['processed_tt_24'] = denoised_counts_24
+    data_df['processed_tt_34'] = denoised_counts_34
+    
+    
+    group_cols = [
+        ['processed_tt_1234'],
+        ['processed_tt_123', 'processed_tt_234', 'processed_tt_124', 'processed_tt_134'],
+        ['processed_tt_12', 'processed_tt_23', 'processed_tt_34'],
+        ['processed_tt_13', 'processed_tt_24', 'processed_tt_14'],
+    ]
+
+    plot_grouped_series(data_df, group_cols, title=f'Denoised. Counts per TT', plot_after_all=True, sharey_axes = False)
+    
     
     repeat_efficiency_calculation = True
     if repeat_efficiency_calculation:
-        data_df['processed_tt_1234'] = denoised_counts_1234
-        data_df['processed_tt_124'] = denoised_counts_124
-        data_df['processed_tt_134'] = denoised_counts_134
-        data_df['processed_tt_123'] = denoised_counts_123
-        data_df['processed_tt_234'] = denoised_counts_234
-        data_df['processed_tt_14'] = denoised_counts_14
-        data_df['processed_tt_12'] = denoised_counts_12
-        data_df['processed_tt_13'] = denoised_counts_13
-        data_df['processed_tt_23'] = denoised_counts_23
-        data_df['processed_tt_24'] = denoised_counts_24
-        data_df['processed_tt_34'] = denoised_counts_34
-        
         if eff_system:
             data_df[['ancillary_1', 'eff_sys_2_denoised', 'eff_sys_3_denoised', 'ancillary_4']] = data_df.apply(solve_efficiencies_four_planes_inner, axis=1)
             data_df[[f'eff_sys_1_denoised', f'ancillary_2', f'ancillary_3', f'eff_sys_4_denoised']] = data_df.apply(solve_efficiencies_four_planes_outer, axis=1)
@@ -1357,7 +1992,7 @@ for case in processing_regions:
             ['eff_sys_3' , 'eff_sys_3_denoised'],
             ['eff_sys_4', 'eff_sys_4_denoised'] ]
 
-        plot_grouped_series(data_df, group_cols, title=f'Four plane efficiencies, denoised version')
+        plot_grouped_series(data_df, group_cols, title=f'Four plane efficiencies, denoised version', plot_after_all=True)
     
     # -----------------------------------------------------------------------------------------------------
     # -----------------------------------------------------------------------------------------------------
@@ -1386,14 +2021,13 @@ for case in processing_regions:
     
     # --------------------------------------------------------------------------
     
-    rolling_effs = False
     if rolling_effs:
         print("Rolling efficiencies...")
         
-        data_df['final_eff_pre_roll_1'] = data_df['final_eff_1']
-        data_df['final_eff_pre_roll_2'] = data_df['final_eff_2']
-        data_df['final_eff_pre_roll_3'] = data_df['final_eff_3']
-        data_df['final_eff_pre_roll_4'] = data_df['final_eff_4']
+        data_df['eff_pre_roll_1'] = data_df['final_eff_1']
+        data_df['eff_pre_roll_2'] = data_df['final_eff_2']
+        data_df['eff_pre_roll_3'] = data_df['final_eff_3']
+        data_df['eff_pre_roll_4'] = data_df['final_eff_4']
         
         cols_to_interpolate = ['final_eff_1', 'final_eff_2', 'final_eff_3', 'final_eff_4']
 
@@ -1401,11 +2035,7 @@ for case in processing_regions:
         interpolated_mask = data_df[cols_to_interpolate].replace(0, np.nan).isna()
 
         # Step 2: Perform interpolation
-        data_df[cols_to_interpolate] = data_df[cols_to_interpolate].replace(0, np.nan).interpolate(method='linear')
-
-        # Step 3: Apply rolling filters
-        mean_window, med_window = 5, 1
-        rolling_mean, rolling_median = True, True
+        data_df[cols_to_interpolate] = data_df[cols_to_interpolate].replace(0, np.nan).interpolate(method='akima')
 
         if rolling_median:
             for col in cols_to_interpolate:
@@ -1419,13 +2049,22 @@ for case in processing_regions:
         for col in cols_to_interpolate:
             data_df.loc[interpolated_mask[col], col] = np.nan
 
-        group_cols = [ ['final_eff_pre_roll_1', 'final_eff_pre_roll_2', 'final_eff_pre_roll_3', 'final_eff_pre_roll_4'],
+        group_cols = [ ['eff_pre_roll_1', 'eff_pre_roll_2', 'eff_pre_roll_3', 'eff_pre_roll_4'],
                     ['final_eff_1', 'final_eff_2', 'final_eff_3', 'final_eff_4'] ]
-        # plot_grouped_series(data_df, group_cols, title='Final calculated efficiencies, rolling')
+        plot_grouped_series(data_df, group_cols, title='Denoised. Final calculated efficiencies, rolling', plot_after_all=True)
 
     else:
         group_cols = [ ['final_eff_1', 'final_eff_2', 'final_eff_3', 'final_eff_4'] ]
-        # plot_grouped_series(data_df, group_cols, title='Final calculated efficiencies')
+        plot_grouped_series(data_df, group_cols, title='Denoised. Final calculated efficiencies, not rolling', plot_after_all=True)
+    
+    
+    group_cols = [
+        [f'final_eff_1'],
+        [f'final_eff_2'],
+        [f'final_eff_3'],
+        [f'final_eff_4'] ]
+    plot_grouped_series(data_df, group_cols, title=f'Denoised. Four plane efficiencies', plot_after_all=True, sharey_axes = True)
+
 
 
     print('----------------------------------------------------------------------')
@@ -1436,83 +2075,250 @@ for case in processing_regions:
     e2 = data_df['final_eff_2']
     e3 = data_df['final_eff_3']
     e4 = data_df['final_eff_4']
+    
+    if use_two_planes_too:
+        # Detector 1234
+        # 'processed_tt_1234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
+        data_df['detector_1234'] = data_df['detector_1234']  / ( data_df["number_of_mins"] * 60 )
+        
+        # Detector 123
+        # 'processed_tt_123', 'processed_tt_1234',  
+        # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123'] + \
+            data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_124'] + data_df['processed_tt_14'] 
+        data_df['detector_123'] = data_df['detector_123'] / ( data_df["number_of_mins"] * 60 )
 
-    # Detector 1234
-    # 'processed_tt_1234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
-    data_df['detector_1234'] = data_df['detector_1234']  / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_1234_eff'] = e1 * e2 * e3 * e4 + \
-        e1 * (1 - e2) * e3 * e4 + \
-        e1 * e2 * (1 - e3) * e4 + \
-        e1 * (1 - e2) * (1 - e3) * e4
+        # Detector 234
+        # 'processed_tt_234', 'processed_tt_1234', 'processed_tt_14'
+        # 'processed_tt_124', 'processed_tt_24', 'processed_tt_134',
+        data_df['detector_234'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
+            data_df['processed_tt_14'] + data_df['processed_tt_124'] + data_df['processed_tt_24'] + data_df['processed_tt_134']
+        data_df['detector_234'] = data_df['detector_234'] / ( data_df["number_of_mins"] * 60 )
 
-    # Detector 123
-    # 'processed_tt_123', 'processed_tt_1234',  
-    # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123'] + \
-        data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_124'] + data_df['processed_tt_14'] 
-    data_df['detector_123'] = data_df['detector_123'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_123_eff'] = e1 * e2 * e3 + \
-        e1 * (1 - e2) * e3
+        # Detector 12
+        # 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 
+        # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_12'] = data_df['processed_tt_12'] + data_df['processed_tt_123'] + \
+            data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
+        data_df['detector_12'] = data_df['detector_12'] / ( data_df["number_of_mins"] * 60 )
 
-    # Detector 234
-    # 'processed_tt_234', 'processed_tt_1234', 'processed_tt_14'
-    # 'processed_tt_124', 'processed_tt_24', 'processed_tt_134',
-    data_df['detector_234'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
-        data_df['processed_tt_14'] + data_df['processed_tt_124'] + data_df['processed_tt_24'] + data_df['processed_tt_134']
-    data_df['detector_234'] = data_df['detector_234'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_234_eff'] = e2 * e3 * e4 + \
-        e2 * (1 - e3) * e4
+        # Detector 23
+        # 'processed_tt_234', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
+        # 'processed_tt_124', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_23'] = data_df['processed_tt_234'] + data_df['processed_tt_123'] + \
+            data_df['processed_tt_1234'] + data_df['processed_tt_23'] + data_df['processed_tt_124'] + \
+                data_df['processed_tt_24'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14']
+        data_df['detector_23'] = data_df['detector_23'] / ( data_df["number_of_mins"] * 60 )
 
-    # Detector 12
-    # 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 
-    # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_12'] = data_df['processed_tt_12'] + data_df['processed_tt_123'] + \
-        data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
-    data_df['detector_12'] = data_df['detector_12'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_12_eff'] = e1 * e2
+        # Detector 34
+        # 'processed_tt_234', 'processed_tt_1234',
+        # 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_34'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
+            data_df['processed_tt_124'] + data_df['processed_tt_34'] + data_df['processed_tt_24'] + \
+                data_df['processed_tt_134'] + data_df['processed_tt_14']
+        data_df['detector_34'] = data_df['detector_34'] / ( data_df["number_of_mins"] * 60 )
+        
+        
+        # ─────────────────────────────────────────────────────────────────────────────
+        # Efficiencies – every term corresponds to one counted coincidence pattern
+        # ─────────────────────────────────────────────────────────────────────────────
 
-    # Detector 23
-    # 'processed_tt_234', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
-    # 'processed_tt_124', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_23'] = data_df['processed_tt_234'] + data_df['processed_tt_123'] + \
-        data_df['processed_tt_1234'] + data_df['processed_tt_23'] + data_df['processed_tt_124'] + \
-            data_df['processed_tt_24'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14']
-    data_df['detector_23'] = data_df['detector_23'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_23_eff'] = e2 * e3
+        # 1234 detector  →  patterns 1234, 124, 134, 14
+        data_df['detector_1234_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
 
-    # Detector 34
-    # 'processed_tt_234', 'processed_tt_1234',
-    # 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_34'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
-        data_df['processed_tt_124'] + data_df['processed_tt_34'] + data_df['processed_tt_24'] + \
-            data_df['processed_tt_134'] + data_df['processed_tt_14']
-    data_df['detector_34'] = data_df['detector_34'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_34_eff'] = e3 * e4
+        # 123 detector   →  patterns 1234, 123, 124, 134, 13, 14
+        data_df['detector_123_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + e1 *  e2 *  e3 * (1 - e4)                  # 123
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + e1 * (1 - e2) *  e3 * (1 - e4)             # 13
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
 
-    # Now correcting by efficiency
-    data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
-    data_df['detector_123_eff_corr'] = data_df['detector_123'] / data_df['detector_123_eff']
-    data_df['detector_234_eff_corr'] = data_df['detector_234'] / data_df['detector_234_eff']
-    data_df['detector_12_eff_corr'] = data_df['detector_12'] / data_df['detector_12_eff']
-    data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
-    data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
+        # 234 detector   →  patterns 1234, 234, 124, 134, 24, 14
+        data_df['detector_234_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + (1 - e1) * e2 *  e3 *  e4                  # 234
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + (1 - e1) * e2 * (1 - e3) * e4              # 24
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
+
+        # 12 detector    →  patterns 1234, 123, 124, 134, 13, 14, 12
+        data_df['detector_12_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + e1 *  e2 *  e3 * (1 - e4)                  # 123
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + e1 * (1 - e2) *  e3 * (1 - e4)             # 13
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+            + e1 *  e2 * (1 - e3) * (1 - e4)             # 12
+        )
+
+        # 23 detector    →  patterns 1234, 234, 23, 124, 24, 13, 134, 14
+        data_df['detector_23_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + (1 - e1) * e2 *  e3 *  e4                  # 234
+            + (1 - e1) * e2 *  e3 * (1 - e4)             # 23
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + (1 - e1) * e2 * (1 - e3) * e4              # 24
+            + e1 * (1 - e2) *  e3 * (1 - e4)             # 13
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
+
+        # 34 detector    →  patterns 1234, 234, 124, 134, 34, 24, 14
+        data_df['detector_34_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + (1 - e1) * e2 *  e3 *  e4                  # 234
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + (1 - e1) * (1 - e2) * e3 *  e4             # 34
+            + (1 - e1) * e2 * (1 - e3) * e4              # 24
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
+        
+        # Now correcting by efficiency
+        data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
+        data_df['detector_123_eff_corr'] = data_df['detector_123'] / data_df['detector_123_eff']
+        data_df['detector_234_eff_corr'] = data_df['detector_234'] / data_df['detector_234_eff']
+        data_df['detector_12_eff_corr'] = data_df['detector_12'] / data_df['detector_12_eff']
+        data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
+        data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
+    
+    else:
+        
+        # ────────────────────────────────────────────────────────────────────────────────
+        #  SINGLE-PLANE AND THREE-PLANE TOPOLOGIES ONLY ( == False)
+        # ────────────────────────────────────────────────────────────────────────────────
+
+        # ── Detector 1234 ───────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 124, 134
+        data_df['detector_1234'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_1234_eff'] = (
+              e1 * e2 *  e3 *  e4          # 1234
+            + e1 * e2 * (1-e3) * e4        # 124  (plane-3 missing)
+            + e1 * (1-e2) * e3 *  e4       # 134  (plane-2 missing)
+        )
+
+        # ── Detector 123 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 123, 124, 134
+        data_df['detector_123'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_123']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_123_eff'] = (
+              e1 * e2 *  e3 *  e4          # 1234
+            + e1 * e2 *  e3 * (1-e4)       # 123  (plane-4 missing)
+            + e1 * e2 * (1-e3) * e4        # 124  (plane-3 missing)
+            + e1 * (1-e2) * e3 *  e4       # 134  (plane-2 missing)
+        )
+
+        # ── Detector 234 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 234, 124, 134
+        data_df['detector_234'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_234']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_234_eff'] = (
+              e1 *  e2 *  e3 *  e4         # 1234
+            + (1-e1)*e2 *  e3 *  e4        # 234  (plane-1 missing)
+            + e1 *  e2 * (1-e3) * e4       # 124  (plane-3 missing)
+            + e1 * (1-e2)* e3 *  e4        # 134  (plane-2 missing)
+        )
+
+        # ── Detector 12 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 123, 124, 134
+        data_df['detector_12'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_123']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_12_eff'] = (
+              e1 * e2 *  e3 *  e4          # 1234
+            + e1 * e2 *  e3 * (1-e4)       # 123
+            + e1 * e2 * (1-e3) * e4        # 124
+            + e1 * (1-e2)* e3 *  e4        # 134
+        )
+
+        # ── Detector 23 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 234, 124, 134
+        data_df['detector_23'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_234']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_23_eff'] = (
+              e1 *  e2 *  e3 *  e4         # 1234
+            + (1-e1)*e2 *  e3 *  e4        # 234
+            + e1 *  e2 * (1-e3) * e4       # 124
+            + e1 * (1-e2)* e3 *  e4        # 134
+        )
+
+        # ── Detector 34 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 234, 124, 134
+        data_df['detector_34'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_234']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_34_eff'] = (
+              e1 *  e2 *  e3 *  e4         # 1234
+            + (1-e1)*e2 *  e3 *  e4        # 234
+            + e1 *  e2 * (1-e3) * e4       # 124
+            + e1 * (1-e2)* e3 *  e4        # 134
+        )
+
+        # ── Efficiency-corrected rates ────────────────────────────────────────────────
+        data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
+        data_df['detector_123_eff_corr']  = data_df['detector_123']  / data_df['detector_123_eff']
+        data_df['detector_234_eff_corr']  = data_df['detector_234']  / data_df['detector_234_eff']
+        data_df['detector_12_eff_corr']   = data_df['detector_12']   / data_df['detector_12_eff']
+        data_df['detector_23_eff_corr']   = data_df['detector_23']   / data_df['detector_23_eff']
+        data_df['detector_34_eff_corr']   = data_df['detector_34']   / data_df['detector_34_eff']
+
     
     print("Efficiency corrected rates calculated in first stage.")
     
-    # group_cols = [
-    #     ['sensors_ext_Pressure_ext'],
-    #     ['sensors_ext_Temperature_ext'],
-    #     ['detector_1234', 'detector_1234_eff_corr'],
-    #     ['detector_123', 'detector_123_eff_corr'],
-    #     ['detector_234', 'detector_234_eff_corr'],
-    #     ['detector_12', 'detector_12_eff_corr'],
-    #     ['detector_23', 'detector_23_eff_corr'],
-    #     ['detector_34', 'detector_34_eff_corr'],
-    # ]
-    # plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment')
-
-
+    group_cols = [
+        ['sensors_ext_Pressure_ext'],
+        ['sensors_ext_Temperature_ext'],
+        ['detector_1234', 'detector_1234_eff_corr'],
+        ['detector_123', 'detector_123_eff_corr'],
+        ['detector_234', 'detector_234_eff_corr'],
+        ['detector_12', 'detector_12_eff_corr'],
+        ['detector_23', 'detector_23_eff_corr'],
+        ['detector_34', 'detector_34_eff_corr'],
+    ]
+    plot_grouped_series(data_df, group_cols, title='Detector Signals and Environment', plot_after_all=True)
+    
+    # a = 1/0
+    
     # ------------------------------------------------------------------------------------------------------------------------
 
     # CODE TO RECALCULATE EFFICIENCIES TO MINIMIZE THE CORRELATION OF THE CORR RATES WITH THE COMBINED EFFS
@@ -1599,38 +2405,80 @@ for case in processing_regions:
 
     
 
-    def decorrelate_efficiency_least_change(eff, rate_corr, bounds=(0.001, 0.999)):
+    import numpy as np
+    from scipy.optimize import minimize
+    import warnings
+
+    # def decorrelate_efficiency_least_change(eff, rate_corr, bounds=(0.001, 0.999), verbose=True):
+    #     eff = np.asarray(eff, dtype=np.float64)
+    #     rate_corr = np.asarray(rate_corr, dtype=np.float64)
+
+    #     # Mask invalid entries
+    #     mask = np.isfinite(eff) & np.isfinite(rate_corr) & (eff > 1e-8)
+    #     if not np.any(mask):
+    #         warnings.warn("No valid data after masking.")
+    #         return eff, None
+
+    #     eff = eff[mask]
+    #     rate_corr = rate_corr[mask]
+    #     counts = eff * rate_corr  # fixed counts = N_i
+
+    #     n = len(eff)
+    #     if verbose:
+    #         print(f"[decorrelate_efficiency_least_change] Valid entries: {n}")
+
+    #     # Precompute quantities to speed up constraint evaluation
+    #     def constraint(eff_prime):
+    #         rate_prime = counts / eff_prime
+    #         r_mean = np.sum(rate_prime) / n
+    #         e_mean = np.sum(eff_prime) / n
+    #         return np.dot(rate_prime - r_mean, eff_prime - e_mean)
+
+    #     def objective(eff_prime):
+    #         return np.dot(eff_prime - eff, eff_prime - eff)
+
+    #     bounds_list = [bounds] * n
+    #     cons = {'type': 'eq', 'fun': constraint}
+
+    #     try:
+    #         res = minimize(objective, eff, method='SLSQP', bounds=bounds_list, constraints=cons,
+    #                        options={'maxiter': 500, 'ftol': 1e-9, 'disp': False})
+    #         if not res.success:
+    #             warnings.warn(f"Optimization failed: {res.message}")
+    #             return eff, None
+    #         return res.x, res
+    #     except Exception as e:
+    #         warnings.warn(f"Optimization error: {e}")
+    #         return eff, None
         
+
+    def decorrelate_efficiency_least_change(eff, rate_corr, bounds=(0.001, 0.999), penalty=1e5, verbose=True):
         eff = np.asarray(eff, dtype=np.float64)
         rate_corr = np.asarray(rate_corr, dtype=np.float64)
 
-        # Mask invalid entries (non-finite or near-zero eff)
         mask = np.isfinite(eff) & np.isfinite(rate_corr) & (eff > 1e-8)
         if not np.any(mask):
             warnings.warn("No valid data after masking.")
             return eff, None
-        
+
         eff = eff[mask]
         rate_corr = rate_corr[mask]
-        counts = eff * rate_corr  # fixed N_i
-        
-        # Count the number of valid entries
-        print(f"Number of valid entries after masking: {np.sum(mask)}")
-        
-        def objective(eff_prime):
-            return np.sum((eff_prime - eff)**2)
+        counts = eff * rate_corr
+        n = len(eff)
 
-        def constraint(eff_prime):
+        if verbose:
+            print(f"[decorrelate_efficiency_penalty] Valid entries: {n}")
+
+        def loss(eff_prime):
             rate_prime = counts / eff_prime
-            r_mean = np.mean(rate_prime)
-            e_mean = np.mean(eff_prime)
-            return np.nansum((rate_prime - r_mean) * (eff_prime - e_mean))  # enforce zero covariance
+            # Mean-centered covariance
+            cov = np.dot(rate_prime - rate_prime.mean(), eff_prime - eff_prime.mean()) / n
+            return np.sum((eff_prime - eff) ** 2) + penalty * cov**2
 
-        cons = {'type': 'eq', 'fun': constraint}
-        bounds_list = [bounds] * len(eff)
+        bounds_list = [bounds] * n
 
         try:
-            res = minimize(objective, eff, method='SLSQP', bounds=bounds_list, constraints=cons)
+            res = minimize(loss, eff, method='L-BFGS-B', bounds=bounds_list, options={'maxiter': 300, 'ftol': 1e-6})
             if not res.success:
                 warnings.warn(f"Optimization failed: {res.message}")
                 return eff, None
@@ -1796,18 +2644,14 @@ for case in processing_regions:
         ['final_eff_3', 'final_eff_3_decorrelated'],
         ['final_eff_4', 'final_eff_4_decorrelated'],
     ]
-    plot_grouped_series(data_df, group_cols, title='OG eff. vs DECORRELATED eff.', plot_after_all=False)
-    
-    
+    plot_grouped_series(data_df, group_cols, title='OG eff. vs DECORRELATED eff.', plot_after_all=True)
     
     # ------------------------------------------------------------------------------------------------------------------------
-    
     
     data_df[f'definitive_eff_1'] = data_df['final_eff_1_decorrelated']
     data_df[f'definitive_eff_2'] = data_df['final_eff_2_decorrelated']
     data_df[f'definitive_eff_3'] = data_df['final_eff_3_decorrelated']
     data_df[f'definitive_eff_4'] = data_df['final_eff_4_decorrelated']
-    
     
     # -------------------------------------------------------------------------------------------------------------------------
     # -------------------------------------------------------------------------------------------------------------------------
@@ -2134,7 +2978,7 @@ for case in processing_regions:
         
         
         # --- Relative residuals and conditional interpolation ---------------------
-        max_deviation = 0.20        # 20 % cutoff
+        max_deviation = 20        # 20 % cutoff
 
         for i in range(1, 5):
             # ------------------------------------------------------------------ names
@@ -2223,69 +3067,231 @@ for case in processing_regions:
     e3 = data_df['definitive_eff_3']
     e4 = data_df['definitive_eff_4']
     
-    # Detector 1234
-    # 'processed_tt_1234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
-    data_df['detector_1234'] = data_df['detector_1234']  / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_1234_eff'] = e1 * e2 * e3 * e4 + \
-        e1 * (1 - e2) * e3 * e4 + \
-        e1 * e2 * (1 - e3) * e4 + \
-        e1 * (1 - e2) * (1 - e3) * e4
+    if use_two_planes_too:
+        # Detector 1234
+        # 'processed_tt_1234', 'processed_tt_124', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_1234'] = data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
+        data_df['detector_1234'] = data_df['detector_1234']  / ( data_df["number_of_mins"] * 60 )
+        
+        # Detector 123
+        # 'processed_tt_123', 'processed_tt_1234',  
+        # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123'] + \
+            data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_124'] + data_df['processed_tt_14'] 
+        data_df['detector_123'] = data_df['detector_123'] / ( data_df["number_of_mins"] * 60 )
 
-    # Detector 123
-    # 'processed_tt_123', 'processed_tt_1234',  
-    # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_123'] = data_df['processed_tt_1234'] + data_df['processed_tt_123'] + \
-        data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_124'] + data_df['processed_tt_14'] 
-    data_df['detector_123'] = data_df['detector_123'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_123_eff'] = e1 * e2 * e3 + \
-        e1 * (1 - e2) * e3
+        # Detector 234
+        # 'processed_tt_234', 'processed_tt_1234', 'processed_tt_14'
+        # 'processed_tt_124', 'processed_tt_24', 'processed_tt_134',
+        data_df['detector_234'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
+            data_df['processed_tt_14'] + data_df['processed_tt_124'] + data_df['processed_tt_24'] + data_df['processed_tt_134']
+        data_df['detector_234'] = data_df['detector_234'] / ( data_df["number_of_mins"] * 60 )
 
-    # Detector 234
-    # 'processed_tt_234', 'processed_tt_1234', 'processed_tt_14'
-    # 'processed_tt_124', 'processed_tt_24', 'processed_tt_134',
-    data_df['detector_234'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
-        data_df['processed_tt_14'] + data_df['processed_tt_124'] + data_df['processed_tt_24'] + data_df['processed_tt_134']
-    data_df['detector_234'] = data_df['detector_234'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_234_eff'] = e2 * e3 * e4 + \
-        e2 * (1 - e3) * e4
+        # Detector 12
+        # 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 
+        # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_12'] = data_df['processed_tt_12'] + data_df['processed_tt_123'] + \
+            data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
+        data_df['detector_12'] = data_df['detector_12'] / ( data_df["number_of_mins"] * 60 )
 
-    # Detector 12
-    # 'processed_tt_12', 'processed_tt_123', 'processed_tt_1234', 
-    # 'processed_tt_124', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_12'] = data_df['processed_tt_12'] + data_df['processed_tt_123'] + \
-        data_df['processed_tt_1234'] + data_df['processed_tt_124'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14'] 
-    data_df['detector_12'] = data_df['detector_12'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_12_eff'] = e1 * e2
+        # Detector 23
+        # 'processed_tt_234', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
+        # 'processed_tt_124', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_23'] = data_df['processed_tt_234'] + data_df['processed_tt_123'] + \
+            data_df['processed_tt_1234'] + data_df['processed_tt_23'] + data_df['processed_tt_124'] + \
+                data_df['processed_tt_24'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14']
+        data_df['detector_23'] = data_df['detector_23'] / ( data_df["number_of_mins"] * 60 )
 
-    # Detector 23
-    # 'processed_tt_234', 'processed_tt_123', 'processed_tt_1234', 'processed_tt_23', 
-    # 'processed_tt_124', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_23'] = data_df['processed_tt_234'] + data_df['processed_tt_123'] + \
-        data_df['processed_tt_1234'] + data_df['processed_tt_23'] + data_df['processed_tt_124'] + \
-            data_df['processed_tt_24'] + data_df['processed_tt_13'] + data_df['processed_tt_134'] + data_df['processed_tt_14']
-    data_df['detector_23'] = data_df['detector_23'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_23_eff'] = e2 * e3
+        # Detector 34
+        # 'processed_tt_234', 'processed_tt_1234',
+        # 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_134', 'processed_tt_14'
+        data_df['detector_34'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
+            data_df['processed_tt_124'] + data_df['processed_tt_34'] + data_df['processed_tt_24'] + \
+                data_df['processed_tt_134'] + data_df['processed_tt_14']
+        data_df['detector_34'] = data_df['detector_34'] / ( data_df["number_of_mins"] * 60 )
+        
+        
+        # ─────────────────────────────────────────────────────────────────────────────
+        # Efficiencies – every term corresponds to one counted coincidence pattern
+        # ─────────────────────────────────────────────────────────────────────────────
 
-    # Detector 34
-    # 'processed_tt_234', 'processed_tt_1234',
-    # 'processed_tt_124', 'processed_tt_34', 'processed_tt_24', 'processed_tt_134', 'processed_tt_14'
-    data_df['detector_34'] = data_df['processed_tt_234'] + data_df['processed_tt_1234'] + \
-        data_df['processed_tt_124'] + data_df['processed_tt_34'] + data_df['processed_tt_24'] + \
-            data_df['processed_tt_134'] + data_df['processed_tt_14']
+        # 1234 detector  →  patterns 1234, 124, 134, 14
+        data_df['detector_1234_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
 
-    data_df['detector_34'] = data_df['detector_34'] / ( data_df["number_of_mins"] * 60 )
-    data_df['detector_34_eff'] = e3 * e4
+        # 123 detector   →  patterns 1234, 123, 124, 134, 13, 14
+        data_df['detector_123_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + e1 *  e2 *  e3 * (1 - e4)                  # 123
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + e1 * (1 - e2) *  e3 * (1 - e4)             # 13
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
+
+        # 234 detector   →  patterns 1234, 234, 124, 134, 24, 14
+        data_df['detector_234_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + (1 - e1) * e2 *  e3 *  e4                  # 234
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + (1 - e1) * e2 * (1 - e3) * e4              # 24
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
+
+        # 12 detector    →  patterns 1234, 123, 124, 134, 13, 14, 12
+        data_df['detector_12_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + e1 *  e2 *  e3 * (1 - e4)                  # 123
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + e1 * (1 - e2) *  e3 * (1 - e4)             # 13
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+            + e1 *  e2 * (1 - e3) * (1 - e4)             # 12
+        )
+
+        # 23 detector    →  patterns 1234, 234, 23, 124, 24, 13, 134, 14
+        data_df['detector_23_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + (1 - e1) * e2 *  e3 *  e4                  # 234
+            + (1 - e1) * e2 *  e3 * (1 - e4)             # 23
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + (1 - e1) * e2 * (1 - e3) * e4              # 24
+            + e1 * (1 - e2) *  e3 * (1 - e4)             # 13
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
+
+        # 34 detector    →  patterns 1234, 234, 124, 134, 34, 24, 14
+        data_df['detector_34_eff'] = (
+              e1 *  e2 *  e3 *  e4                       # 1234
+            + (1 - e1) * e2 *  e3 *  e4                  # 234
+            + e1 *  e2 * (1 - e3) * e4                   # 124
+            + e1 * (1 - e2) *  e3 *  e4                  # 134
+            + (1 - e1) * (1 - e2) * e3 *  e4             # 34
+            + (1 - e1) * e2 * (1 - e3) * e4              # 24
+            + e1 * (1 - e2) * (1 - e3) * e4              # 14
+        )
+        
+        # Now correcting by efficiency
+        data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
+        data_df['detector_123_eff_corr'] = data_df['detector_123'] / data_df['detector_123_eff']
+        data_df['detector_234_eff_corr'] = data_df['detector_234'] / data_df['detector_234_eff']
+        data_df['detector_12_eff_corr'] = data_df['detector_12'] / data_df['detector_12_eff']
+        data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
+        data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
     
-    data_df = data_df.copy()
-    
-    # Now correcting by efficiency
-    data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
-    data_df['detector_123_eff_corr'] = data_df['detector_123'] / data_df['detector_123_eff']
-    data_df['detector_234_eff_corr'] = data_df['detector_234'] / data_df['detector_234_eff']
-    data_df['detector_12_eff_corr'] = data_df['detector_12'] / data_df['detector_12_eff']
-    data_df['detector_23_eff_corr'] = data_df['detector_23'] / data_df['detector_23_eff']
-    data_df['detector_34_eff_corr'] = data_df['detector_34'] / data_df['detector_34_eff']
+    else:
+        
+        # ────────────────────────────────────────────────────────────────────────────────
+        #  SINGLE-PLANE AND THREE-PLANE TOPOLOGIES ONLY (use_two_planes_too == False)
+        # ────────────────────────────────────────────────────────────────────────────────
+
+        # ── Detector 1234 ───────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 124, 134
+        data_df['detector_1234'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_1234_eff'] = (
+              e1 * e2 *  e3 *  e4          # 1234
+            + e1 * e2 * (1-e3) * e4        # 124  (plane-3 missing)
+            + e1 * (1-e2) * e3 *  e4       # 134  (plane-2 missing)
+        )
+
+        # ── Detector 123 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 123, 124, 134
+        data_df['detector_123'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_123']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_123_eff'] = (
+              e1 * e2 *  e3 *  e4          # 1234
+            + e1 * e2 *  e3 * (1-e4)       # 123  (plane-4 missing)
+            + e1 * e2 * (1-e3) * e4        # 124  (plane-3 missing)
+            + e1 * (1-e2) * e3 *  e4       # 134  (plane-2 missing)
+        )
+
+        # ── Detector 234 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 234, 124, 134
+        data_df['detector_234'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_234']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_234_eff'] = (
+              e1 *  e2 *  e3 *  e4         # 1234
+            + (1-e1)*e2 *  e3 *  e4        # 234  (plane-1 missing)
+            + e1 *  e2 * (1-e3) * e4       # 124  (plane-3 missing)
+            + e1 * (1-e2)* e3 *  e4        # 134  (plane-2 missing)
+        )
+
+        # ── Detector 12 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 123, 124, 134
+        data_df['detector_12'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_123']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_12_eff'] = (
+              e1 * e2 *  e3 *  e4          # 1234
+            + e1 * e2 *  e3 * (1-e4)       # 123
+            + e1 * e2 * (1-e3) * e4        # 124
+            + e1 * (1-e2)* e3 *  e4        # 134
+        )
+
+        # ── Detector 23 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 234, 124, 134
+        data_df['detector_23'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_234']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_23_eff'] = (
+              e1 *  e2 *  e3 *  e4         # 1234
+            + (1-e1)*e2 *  e3 *  e4        # 234
+            + e1 *  e2 * (1-e3) * e4       # 124
+            + e1 * (1-e2)* e3 *  e4        # 134
+        )
+
+        # ── Detector 34 ────────────────────────────────────────────────────────────────
+        #  counted patterns: 1234, 234, 124, 134
+        data_df['detector_34'] = (
+              data_df['processed_tt_1234']
+            + data_df['processed_tt_234']
+            + data_df['processed_tt_124']
+            + data_df['processed_tt_134']
+        ) / (data_df["number_of_mins"] * 60)
+
+        data_df['detector_34_eff'] = (
+              e1 *  e2 *  e3 *  e4         # 1234
+            + (1-e1)*e2 *  e3 *  e4        # 234
+            + e1 *  e2 * (1-e3) * e4       # 124
+            + e1 * (1-e2)* e3 *  e4        # 134
+        )
+
+        # ── Efficiency-corrected rates ────────────────────────────────────────────────
+        data_df['detector_1234_eff_corr'] = data_df['detector_1234'] / data_df['detector_1234_eff']
+        data_df['detector_123_eff_corr']  = data_df['detector_123']  / data_df['detector_123_eff']
+        data_df['detector_234_eff_corr']  = data_df['detector_234']  / data_df['detector_234_eff']
+        data_df['detector_12_eff_corr']   = data_df['detector_12']   / data_df['detector_12_eff']
+        data_df['detector_23_eff_corr']   = data_df['detector_23']   / data_df['detector_23_eff']
+        data_df['detector_34_eff_corr']   = data_df['detector_34']   / data_df['detector_34_eff']
     
     # -------------------------------------------------------------------------------------
     
@@ -2300,90 +3306,90 @@ for case in processing_regions:
     
     
     
-    # Spline fit and residual computation
-    for group in group_cols:
-        for col in group:
-            x_full = np.arange(len(data_df))
-            y_full = data_df[col].values
+    # # Spline fit and residual computation
+    # for group in group_cols:
+    #     for col in group:
+    #         x_full = np.arange(len(data_df))
+    #         y_full = data_df[col].values
 
-            # Remove NaNs for spline fitting
-            mask_valid = np.isfinite(y_full)
-            x = x_full[mask_valid]
-            y = y_full[mask_valid]
+    #         # Remove NaNs for spline fitting
+    #         mask_valid = np.isfinite(y_full)
+    #         x = x_full[mask_valid]
+    #         y = y_full[mask_valid]
             
-            # Apply an horizontal median filter to the y
-            y = medfilt(y, kernel_size=3)
+    #         # Apply an horizontal median filter to the y
+    #         y = medfilt(y, kernel_size=3)
             
-            std_y = np.nanstd(y)
-            if not np.isfinite(std_y) or std_y <= 0:
-                std_y = 1.0  # fallback to a small positive number
-            # s = len(x) * std_y
-            s = 1
+    #         std_y = np.nanstd(y)
+    #         if not np.isfinite(std_y) or std_y <= 0:
+    #             std_y = 1.0  # fallback to a small positive number
+    #         # s = len(x) * std_y
+    #         s = 1
             
-            print(f"Fitting spline for {col} | std={std_y:.4f} | nan count={np.isnan(y).sum()}")
+    #         print(f"Fitting spline for {col} | std={std_y:.4f} | nan count={np.isnan(y).sum()}")
             
-            spline = UnivariateSpline(x, y, s=s)
-            spline_values = spline(x)
+    #         spline = UnivariateSpline(x, y, s=s)
+    #         spline_values = spline(x)
 
-            spline_col = f'eff_corr_spline_{col}'
-            residual_col = f'eff_corr_rel_residual_{col}'
+    #         spline_col = f'eff_corr_spline_{col}'
+    #         residual_col = f'eff_corr_rel_residual_{col}'
 
-            spline = UnivariateSpline(x, y, s=s)
-            spline_values = spline(x_full)  # evaluate spline on full x range
+    #         spline = UnivariateSpline(x, y, s=s)
+    #         spline_values = spline(x_full)  # evaluate spline on full x range
 
-            data_df[spline_col] = spline_values
+    #         data_df[spline_col] = spline_values
 
-            # Compute relative residual safely
-            epsilon = 1e-12
-            denominator = spline_values.copy()
-            denominator[np.abs(denominator) < epsilon] = np.nan
+    #         # Compute relative residual safely
+    #         epsilon = 1e-12
+    #         denominator = spline_values.copy()
+    #         denominator[np.abs(denominator) < epsilon] = np.nan
 
-            rel_resid = (y_full - spline_values) / denominator
+    #         rel_resid = (y_full - spline_values) / denominator
 
-            # Optional: remove high-residual outliers
-            mask_outlier = np.abs(rel_resid) > 0.2
-            rel_resid[mask_outlier] = np.nan
-            spline_values[mask_outlier] = np.nan
-            y_full[mask_outlier] = np.nan
+    #         # Optional: remove high-residual outliers
+    #         mask_outlier = np.abs(rel_resid) > 0.2
+    #         rel_resid[mask_outlier] = np.nan
+    #         spline_values[mask_outlier] = np.nan
+    #         y_full[mask_outlier] = np.nan
             
-            # Interpolate in the mask_outlier mask
-            rel_resid = pd.Series(rel_resid).interpolate(method='linear').fillna(0).values
-            spline_values = pd.Series(spline_values).interpolate(method='linear').fillna(0).values
-            y_full = pd.Series(y_full).interpolate(method='linear').fillna(0).values
+    #         # Interpolate in the mask_outlier mask
+    #         rel_resid = pd.Series(rel_resid).interpolate(method='linear').fillna(0).values
+    #         spline_values = pd.Series(spline_values).interpolate(method='linear').fillna(0).values
+    #         y_full = pd.Series(y_full).interpolate(method='linear').fillna(0).values
             
-            data_df[spline_col] = spline_values
-            data_df[residual_col] = rel_resid
-            data_df[col] = y_full
+    #         data_df[spline_col] = spline_values
+    #         data_df[residual_col] = rel_resid
+    #         data_df[col] = y_full
     
     
-    spline_group_cols = [
-        [f'eff_corr_spline_{col}' for col in group]
-        for group in group_cols
-    ]
+    # spline_group_cols = [
+    #     [f'eff_corr_spline_{col}' for col in group]
+    #     for group in group_cols
+    # ]
 
-    # Call the user's plotting function with the new group structure
-    plot_grouped_series(
-        data_df,
-        spline_group_cols,
-        time_col='Time',
-        title='EFF CORR. Spline approximations of processed_tt_* time series',
-        plot_after_all=False, sharey_axes = True
-    )
+    # # Call the user's plotting function with the new group structure
+    # plot_grouped_series(
+    #     data_df,
+    #     spline_group_cols,
+    #     time_col='Time',
+    #     title='EFF CORR. Spline approximations of processed_tt_* time series',
+    #     plot_after_all=False, sharey_axes = True
+    # )
     
     
-    rel_residual_group_cols = [
-        [f'eff_corr_rel_residual_{col}' for col in group]
-        for group in group_cols
-    ]
+    # rel_residual_group_cols = [
+    #     [f'eff_corr_rel_residual_{col}' for col in group]
+    #     for group in group_cols
+    # ]
 
-    # Plot the relative residuals
-    plot_grouped_series(
-        data_df,
-        rel_residual_group_cols,
-        time_col='Time',
-        title='Relative residuals of processed_tt_* time series',
-        plot_after_all=True, sharey_axes = True
-    )
+    # # Plot the relative residuals
+    # plot_grouped_series(
+    #     data_df,
+    #     rel_residual_group_cols,
+    #     time_col='Time',
+    #     title='Relative residuals of processed_tt_* time series',
+    #     plot_after_all=True, sharey_axes = True
+    # )
     
     # Result after inerpolation
     group_cols = [
@@ -2588,7 +3594,7 @@ print('----------------------------------------------------------------------')
 print('----------------------------------------------------------------------')
 
 
-
+# a = 1/0
 
 print('----------------------------------------------------------------------')
 print('---------------------- Pressure correction started -------------------')
@@ -2845,7 +3851,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     plt.ylabel('Log (I / I0)')
     plt.ylim(-0.5, 0.5)
     plt.title('Efficiency Fits for Different Regions')
-    # plt.legend()
+    plt.legend()    
     plt.grid(True)
     if show_plots:
         plt.show()
@@ -3286,29 +4292,28 @@ plot_grouped_series(
 # Define all relevant column names in the dataset
 all_columns = data_df.columns.tolist()
 
-# Extract unique RX regions from the provided list of column names
-rx_region_pattern = re.compile(r"detector_.*?_eff_corr_(R\d\.\d)_final_corrected")
-unique_rx_regions = sorted(set(rx_region_pattern.findall(" ".join(all_columns))))
+if only_all == False:
+    # Extract unique RX regions from the provided list of column names
+    rx_region_pattern = re.compile(r"detector_.*?_eff_corr_(R\d\.\d)_final_corrected")
+    unique_rx_regions = sorted(set(rx_region_pattern.findall(" ".join(all_columns))))
 
-# Define all detector groups to consider
-detector_groups = ['1234', '123', '234', '12', '23', '34']
+    # Define all detector groups to consider
+    detector_groups = ['1234', '123', '234', '12', '23', '34']
 
-# Group columns by RX region
-group_cols_rx = []
-for rx in unique_rx_regions:
-    group = [f'detector_{dg}_eff_corr_{rx}_final_corrected' for dg in detector_groups]
-    group_cols_rx.append(group)
+    # Group columns by RX region
+    group_cols_rx = []
+    for rx in unique_rx_regions:
+        group = [f'detector_{dg}_eff_corr_{rx}_final_corrected' for dg in detector_groups]
+        group_cols_rx.append(group)
 
-# Plot using the existing plot_grouped_series function
-plot_grouped_series(
-    data_df,
-    group_cols_rx,
-    time_col='Time',
-    title='Efficiency-corrected RX.X region rates by detector group',
-    plot_after_all=True
-)
-
-
+    # Plot using the existing plot_grouped_series function
+    plot_grouped_series(
+        data_df,
+        group_cols_rx,
+        time_col='Time',
+        title='Efficiency-corrected RX.X region rates by detector group',
+        plot_after_all=True
+    )
 
 original_df = data_df.copy()
 
