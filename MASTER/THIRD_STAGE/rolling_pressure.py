@@ -13,7 +13,7 @@ beta_min = -0.02 # -8
 
 start = 1
 end = 52
-step = 10
+step = 1
 time_windows = list(range(start, end, step))  # Weeks
 
 # Create a suffix with the time windows start, end and step to add to the saving files
@@ -31,8 +31,12 @@ regression_plots = False  # Set to True to display individual regression plots f
 # Define the file paths
 # pressure_file_path = 'pressure.csv'
 # rate_file_path = 'rate.csv'
-pressure_file_path = 'pressure_OULU.csv'
-rate_file_path = 'rate_OULU.csv'
+# pressure_file_path = 'pressure_OULU.csv'
+# rate_file_path = 'rate_OULU.csv'
+
+pressure_file_path = '/home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/OULU_pressure.txt'
+rate_file_path = '/home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/OULU_uncorrected.txt'
+corr_rate_file_path = '/home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/OULU_corrected.txt'
 
 #%%
 
@@ -63,25 +67,39 @@ else:
     rate_df['start_date_time'] = rate_df['start_date_time'].str.strip()
     rate_df['RUNCORR'] = pd.to_numeric(rate_df['RUNCORR'], errors='coerce')
     rate_df['start_date_time'] = pd.to_datetime(rate_df['start_date_time'], errors='coerce')
-
+    
+    # Read and process the corrected rate data
+    corr_rate_df = pd.read_csv(corr_rate_file_path, sep=';', skiprows=23, names=["start_date_time", "1HCOR_E"], comment='#')
+    corr_rate_df['start_date_time'] = corr_rate_df['start_date_time'].str.strip()
+    corr_rate_df['1HCOR_E'] = pd.to_numeric(corr_rate_df['1HCOR_E'], errors='coerce')
+    corr_rate_df['start_date_time'] = pd.to_datetime(corr_rate_df['start_date_time'], errors='coerce')
+    
     merged_df = pd.merge(pressure_df, rate_df, on='start_date_time', how='inner') # Merge the two dataframes on start_date_time
+    merged_df = pd.merge(merged_df, corr_rate_df, on='start_date_time', how='inner') # Merge the two dataframes on start_date_time
     merged_df = merged_df.dropna() # Drop rows with NaN values
 
     # Plot the time series of both columns
     plt.figure(figsize=(12, 6))
 
-    plt.subplot(2, 1, 1)
+    plt.subplot(3, 1, 1)
     plt.plot(merged_df['start_date_time'], merged_df['RPRESS'], label='RPRESS', color='b')
     plt.xlabel('Time')
     plt.ylabel('RPRESS')
     plt.title('Time Series of RPRESS')
     plt.legend()
 
-    plt.subplot(2, 1, 2)
+    plt.subplot(3, 1, 2)
     plt.plot(merged_df['start_date_time'], merged_df['RUNCORR'], label='RUNCORR', color='r')
     plt.xlabel('Time')
     plt.ylabel('RUNCORR')
     plt.title('Time Series of RUNCORR')
+    plt.legend()
+    
+    plt.subplot(3, 1, 3)
+    plt.plot(merged_df['start_date_time'], merged_df['1HCOR_E'], label='1HCOR_E', color='r')
+    plt.xlabel('Time')
+    plt.ylabel('1HCOR_E')
+    plt.title('Time Series of 1HCOR_E')
     plt.legend()
 
     plt.tight_layout()
@@ -633,7 +651,7 @@ def plot_daily_beta_for_r2(results):
     plt.ylabel("Beta Value")
     plt.grid(True)
     legend = plt.legend()
-    for handle in legend.legendHandles:
+    for handle in legend.get_lines():
         handle.set_sizes([30])  # Adjusted marker size for legend
     plt.tight_layout()
     plt.show()
@@ -663,7 +681,7 @@ def plot_daily_beta_for_r2(results, sigma):
     plt.ylabel("Beta Value")
     plt.grid(True)
     legend = plt.legend()
-    for handle in legend.legendHandles:
+    for handle in legend.get_lines():
         handle.set_linewidth(2.5)  # Adjusted line width for legend
     plt.tight_layout()
     plt.show()
@@ -1004,4 +1022,79 @@ fig.text(0.5, 0.04, "Date", ha='center', va='center', fontsize=12)
 plt.tight_layout(rect=[0, 0.05, 1, 1])  # Leave space at the bottom for the common xlabel
 plt.show()
 
+# %%
+
+
+
+# %%
+# ==============================================================================
+# NEW CODE ADDED FOR CORRECTION COMPARISON
+# ==============================================================================
+
+# 1. Select the best beta values (from smoothed data, for R² = 0.99)
+best_beta_df = results[0.99].copy()
+best_beta_df.rename(columns={'beta': 'BEST_BETA'}, inplace=True)
+
+# 2. Add 'BEST_BETA' as a new column to merged_df
+# Create an ordinal day column in merged_df for merging
+merged_df['day'] = merged_df['start_date_time'].apply(lambda x: x.toordinal())
+
+# Merge the best beta values into the main dataframe
+merged_df = pd.merge(merged_df, best_beta_df, on='day', how='left')
+
+# Forward-fill missing beta values, assuming beta changes slowly
+merged_df['BEST_BETA'].fillna(method='ffill', inplace=True)
+merged_df['BEST_BETA'].fillna(method='bfill', inplace=True) # Back-fill for any leading NaNs
+
+# Check if there are still any NaN values in BEST_BETA
+if merged_df['BEST_BETA'].isnull().any():
+    print("Warning: Could not determine BEST_BETA for all timestamps.")
+
+# 3. Create a new column 'NEW_CORRECTED'
+# Calculate the overall mean pressure
+pressure_mean_overall = merged_df['RPRESS'].mean()
+
+# Apply the correction formula
+# Corrected Rate = Uncorrected_Rate / exp(beta * (Pressure - Mean_Pressure))
+merged_df['NEW_CORRECTED'] = merged_df['RUNCORR'] / np.exp(merged_df['BEST_BETA'] * (merged_df['RPRESS'] - pressure_mean_overall))
+
+print("Created 'BEST_BETA' and 'NEW_CORRECTED' columns in merged_df.")
+
+
+# 4. Plot the time series of 1HCOR_E vs RPRESS and NEW_CORRECTED vs RPRESS
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10), sharex=True, sharey=True)
+
+# Plot for the original correction
+ax1.scatter(merged_df['RPRESS'], merged_df['1HCOR_E'], alpha=0.5, s=2, label='1HCOR_E (Old Correction)')
+ax1.set_ylabel('Corrected Rate')
+ax1.set_title('Old Correction vs. Pressure')
+ax1.grid(True)
+ax1.legend()
+
+# Plot for the new correction
+ax2.scatter(merged_df['RPRESS'], merged_df['NEW_CORRECTED'], alpha=0.5, s=2, label='NEW_CORRECTED (New Correction)', color='g')
+ax2.set_xlabel('RPRESS (Pressure)')
+ax2.set_ylabel('Corrected Rate')
+ax2.set_title('New Correction vs. Pressure')
+ax2.grid(True)
+ax2.legend()
+
+plt.suptitle('Comparison of Pressure Correction Methods', fontsize=16)
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+plt.show()
+
+
+# 5. Calculate and print the correlation coefficients
+# A correlation closer to zero is better.
+corr_old = merged_df['1HCOR_E'].corr(merged_df['RPRESS'])
+corr_new = merged_df['NEW_CORRECTED'].corr(merged_df['RPRESS'])
+
+print("\n--- Correlation Analysis ---")
+print(f"Correlation between '1HCOR_E' (Old) and 'RPRESS': {corr_old:.6f}")
+print(f"Correlation between 'NEW_CORRECTED' and 'RPRESS': {corr_new:.6f}")
+
+if abs(corr_new) < abs(corr_old):
+    print("\nThe new correction method appears to be better (correlation is closer to zero).")
+else:
+    print("\nThe old correction method appears to be better or equivalent (correlation is closer to zero).")
 # %%

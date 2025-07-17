@@ -122,11 +122,12 @@ print("Execution time is:", execution_time)
 # -----------------------------------------------------------------------------
 
 remove_outliers = True
+
 create_plots = False
 create_essential_plots = False
 create_very_essential_plots = False
-save_plots = True
-create_pdf = True
+save_plots = False
+create_pdf = False
 force_replacement = True  # Creates a new datafile even if there is already one that looks complete
 show_plots = False
 
@@ -138,7 +139,7 @@ region_layout = [1, 8, 8, 8]
 
 side_calculations = True # !!!!!!!!!!!!
 
-eff_vs_charge = False
+eff_vs_charge = True
 eff_vs_angle_and_pos = True
 noise_vs_angle = False
 charge_vs_angle = False
@@ -641,6 +642,11 @@ def compute_definitive_tt(row):
 
 df["definitive_tt"] = df.apply(compute_definitive_tt, axis=1)
 original_df = df.copy()
+
+# Print the head of the df
+print("----------------------------------------------------------------------")
+print("Dataframe head:")
+print(df.head())
 
 
 # ---------------------------------------------------------------------------------
@@ -3700,12 +3706,25 @@ if side_calculations:
                 coeff_text = " + ".join([f"{a:.3f}×S{idx+1}" for idx, a in enumerate(coeffs) if a > 0.001])
                 ax_hist.text(0.02, 0.95 - j * 0.08, f"{module}: {coeff_text}", transform=ax_hist.transAxes,
                             fontsize=8, color=color, verticalalignment='top')
+                
+                # Get positive values
+                model_pos = model[model > 0]
+                counts_pos = counts_df[counts_df > 0]
 
-                # Scatter: frequency of singles (model) vs multiple (data)
-                ax_scatter.scatter(model, counts_df, label=module, color=color, s=1)
-                min_val = max(np.min(model[model > 0]), np.min(counts_df[counts_df > 0]))
-                max_val = max(np.max(model), np.max(counts_df))
-                ax_scatter.plot([min_val, max_val], [min_val, max_val], 'k--', linewidth=1, label='y = x' if j == 0 else None)
+                # Safely compute min_val only if both arrays are non-empty
+                if model_pos.size > 0 and counts_pos.size > 0:
+                    min_val = max(np.min(model_pos), np.min(counts_pos))
+                else:
+                    min_val = 0  # or choose a sensible fallback, e.g., np.nan or skip the plot
+
+                max_val = max(np.max(model) if model.size > 0 else 0,
+                              np.max(counts_df) if counts_df.size > 0 else 0)
+
+                # Plot only if data exists
+                if model.size > 0 and counts_df.size > 0:
+                    ax_scatter.scatter(model, counts_df, label=module, color=color, s=1)
+                    ax_scatter.plot([min_val, max_val], [min_val, max_val], 'k--', linewidth=1,
+                                    label='y = x' if j == 0 else None)
 
             # Format histogram panel
             ax_hist.set_title(f"{detection_type}")
@@ -3740,10 +3759,12 @@ if side_calculations:
         plt.close()
 
 
-        # Normalize the columns to the sum of each column
+        # Normalize the columns to the sum of each column (safely handle zero-division)
         coeff_tables_normalized = coeff_tables.copy()
         for detection_type, df_coeffs in coeff_tables.items():
-            coeff_tables_normalized[detection_type] = df_coeffs.div(df_coeffs.sum(axis=0), axis=1)
+            col_sums = df_coeffs.sum(axis=0).replace(0, np.nan)  # avoid division by zero
+            coeff_tables_normalized[detection_type] = df_coeffs.div(col_sums, axis=1).fillna(0)
+
 
         for detection_type, df_coeffs in coeff_tables_normalized.items():
             df_coeffs = df_coeffs.astype(float)

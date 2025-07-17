@@ -112,7 +112,9 @@ if len(sys.argv) > 1:
     except ValueError:
         print("Invalid FLUX value provided. Using default value of 0.009 cts/s/cm^2/sr.")
         FLUX =  1/12/60 # cts/s/cm^2/sr
-
+else:
+    FLUX =  1/12/60
+    
 area = 2 * xlim * 2 * ylim / 100  # cm^2
 cts_sr = FLUX * area
 cts = cts_sr * 2 * np.pi
@@ -128,7 +130,7 @@ Z_POSITIONS = [0, 145, 290, 435]
 Y_WIDTHS = [np.array([63, 63, 63, 98]), np.array([98, 63, 63, 63])]
 
 # ----------------------------------------------
-N_TRACKS = 1_000_000
+N_TRACKS = 100000000
 # ----------------------------------------------
 
 BASE_TIME = datetime(2024, 1, 1, 12, 0, 0)
@@ -152,6 +154,9 @@ else:
       df = pd.read_csv(csv_filename)
       print(f"DataFrame read from {csv_filename}")
 
+# Keep only the n first rows, being n = 100000 of df
+df = df.head(100000)
+
 for col in df.columns:
       if '_type' in col:
             # To integer before going to string. TO INTEGER
@@ -168,7 +173,10 @@ from pathlib import Path
 df_test = df[df['crossing_type'].notna() & ~df['crossing_type'].isin(['1', '2', '3', '4', ''])]
 df_test = df_test[df_test['measured_type'].notna() & ~df_test['measured_type'].isin(['1', '2', '3', '4', ''])]
 
-total_time_seconds = (df_test['time'].max() - df_test['time'].min()).total_seconds()
+try:
+    total_time_seconds = (df_test['time'].max() - df_test['time'].min()).total_seconds()
+except AttributeError:
+    total_time_seconds = 1
 
 # Calculate the total rate of events
 total_events = len(df_test)

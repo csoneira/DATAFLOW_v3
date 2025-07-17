@@ -391,6 +391,39 @@ def restart_tunnel(message):
     except Exception as e:
         bot.send_message(message.chat.id, f'Error killing process: {e}')
 
+@bot.message_handler(commands=['gas_weight_measurement'])
+@require_password
+def gas_weight_measurement(message):
+    chat_id = message.chat.id
+    bot.send_message(chat_id, "Enter the gas weight in **kilograms** (kg). The number must include **at least one decimal digit** (e.g., 2.5, 0.8).")
+
+    def process_input(msg):
+        user_input = msg.text.strip()
+
+        try:
+            # Try converting to float and ensure it contains a decimal point
+            if '.' not in user_input or user_input.count('.') != 1:
+                raise ValueError("Invalid format: No decimal point found.")
+
+            value = float(user_input)
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_entry = f"{now} {value:.3f}\n"
+
+            log_dir = "/home/rpcuser/logs"
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = os.path.join(log_dir, "clean_gas_weight_measurements.log")
+
+            with open(log_file, "a") as f:
+                f.write(log_entry)
+
+            bot.send_message(chat_id, f"Logged: {log_entry.strip()}")
+
+        except ValueError:
+            bot.send_message(chat_id, "Invalid input. Please enter a numeric value in kg with at least one decimal digit (e.g., 1.2).")
+
+    bot.register_next_step_handler(message, process_input)
+
+
 # -----------------------------------------------------------------------------------------
 
 @bot.message_handler(func=lambda message: True)
@@ -440,6 +473,10 @@ Report and plots:\n\
 Emergency and assistance:\n\
 -----------------------------\n\
 - /restart_tunnel: closes the tunnel so it reopens automatically.\n\
+\n\
+Logging tools:\n\
+-----------------------------\n\
+- /gas_weight_measurement: manually log the weight of the gas bottle in kilograms (must include at least one decimal digit).\n\
 '
 	bot.send_message(message.chat.id, string)
 
