@@ -1,155 +1,87 @@
 # Unified Dataflow for miniTRASGO Cosmic Ray Network
 
 ## Overview
-This repository contains the unified dataflow system for analyzing data from the **miniTRASGO** charged secondary cosmic ray network. The dataflow integrates various sources, processes them in real time, and outputs a unified dataset that can be used for visualization, monitoring, or further analysis.
+This repository hosts the pipeline used to ingest, process, and consolidate cosmic ray observations collected by the **miniTRASGO** network. It includes the bash and Python tooling that currently runs in production for four stations and the orchestration snippets (cron, tmux) needed to keep the jobs alive on-premise.
 
-The system supports:
-- **Cosmic Ray (CR) Data**: Captured by miniTRASGO detectors.
-- **Log Atmospheric and Performance Data**: Provides environmental and detector operational context.
-- **Reanalysis Data from COPERNICUS**: Supplies high-resolution atmospheric parameters for enhanced analysis.
+The project brings together:
+- **Detector event streams** from each miniTRASGO station (miniTRASGO01–04).
+- **Laboratory logbooks** produced by operators and local environmental probes.
+- **Copernicus ERA5 reanalysis** products, used for atmospheric corrections.
 
-### Current Deployment
-The network currently consists of miniTRASGO stations in the following locations:
-- **Madrid, Spain**
-- **Warsaw, Poland**
-- **Puebla, Mexico**
-- **Monterrey, Mexico**
+## Key capabilities
 
-### Key Features
-- **Real-Time Data Integration**: Combines CR data, atmospheric logs, and COPERNICUS data in real-time.
-- **Unified Data Table**: Generates a unified table suitable for:
-  - Ingestion into a Grafana system for live visualization and monitoring.
-  - Storage for future analysis.
-- **Extensible Architecture**: Can be expanded to include more stations or additional data sources.
+- **Zero stage (staging & unpacking)** – nightly rsync of detector archives, checksum/retimestamp scripts, and orderly fan-out into per-station working directories.
+- **First stage (per-source processing)** – transformation of raw detector ASCII into filtered LIST/ACC files, cleaning and aggregation of lab logs, and batched download/formatting of Copernicus data.
+- **Second stage (integration & correction)** – pressure/temperature corrections plus a wide merge that yields the "large table" consumed by Grafana dashboards and downstream science notebooks.
+- **Operations tooling** – helper scripts for cron scheduling, tmux session layout, and purging temporary products when disk pressure rises.
 
-## System Architecture
-The dataflow system is designed with modularity and real-time processing in mind:
-1. **Data Acquisition**:
-   - CR data is collected from miniTRASGO detectors.
-   - Atmospheric logs and performance data are ingested from local sensors.
-   - Reanalysis data is fetched from the COPERNICUS database.
-2. **Data Processing**:
-   - All data streams are synchronized and processed in real-time.
-   - Missing data is interpolated where possible.
-3. **Unified Output**:
-   - A single table is generated and updated in real-time.
-   - Supports both live Grafana integration and file-based storage.
+The existing implementation favors explicit directory choreography over workflow managers so that operators can reason about every intermediate artefact. While opinionated, the repository is designed to be reproducible when cloned onto a fresh host with the expected directory layout.
 
-## Repository Structure
+## Deployment footprint
 
-### Master Tree
+Stations currently connected to the network:
+- **MINGO01 – Madrid, Spain**
+- **MINGO02 – Warsaw, Poland**
+- **MINGO03 – Puebla, Mexico**
+- **MINGO04 – Monterrey, Mexico**
+
+Each station mirrors the same directory tree under `STATIONS/<ID>/` so that scripts can operate identically regardless of location. Most paths default to `/home/mingo/DATAFLOW_v3`, although this can be adapted by editing the environment variables at the top of the shell entrypoints.
+
+## Repository layout
+
 ```
-DATAFLOW_v3/MASTER
-├── ZERO_STAGE
-│   ├── reprocessing.sh
-│   └── scheme_reprocessing_scheme.sh
-├── FIRST_STAGE
-│   ├── EVENT_DATA
-│   │   ├── Backbone
-│   │   │   ├── event_accumulator.py
-│   │   │   └── raw_to_list.py
-│   │   └── bring_and_analyze_events.sh
-│   ├── LAB_LOGS
-│   │   ├── log_aggregate_and_join.py
-│   │   └── log_bring_and_clean.sh
-│   └── COPERNICUS
-│       └── copernicus.py
-└── SECOND_STAGE
-    ├── corrector.py
-    └── merge_into_large_table.py
+MASTER/
+├── ZERO_STAGE/                 # Unpacking, deduplication, housekeeping
+├── FIRST_STAGE/
+│   ├── EVENT_DATA/             # RAW→LIST→ACC converters and their helpers
+│   ├── LAB_LOGS/               # Logbook ingestion and cleaning scripts
+│   └── COPERNICUS/             # ERA5 download and wrangling utilities
+└── SECOND_STAGE/               # Corrections + unified table builder
+
+STATIONS/<ID>/
+├── ZERO_STAGE/                 # Station-local buffers (ASCII, HLDS, etc.)
+├── FIRST_STAGE/                # Mirrors MASTER logic for per-station runs
+└── SECOND_STAGE/               # Outputs ready for Grafana and archival use
+
+GRAFANA_DATA/                   # Published tables and dashboard assets
+TESTS/                          # Sample inputs and regression notebooks
 ```
 
-### Station Tree (MINGO01 Example)
-```
-DATAFLOW_v3/STATIONS/MINGO01
-├── ZERO_STAGE
-│   ├── ASCII
-│   ├── COMPRESSED_HLDS
-│   ├── MOVED_ASCII
-│   └── UNCOMPRESSED_HLDS
-├── FIRST_STAGE
-│   ├── EVENT_DATA
-│   │   ├── ACC_EVENTS_DIRECTORY
-│   │   ├── LIST_EVENTS_DIRECTORY
-│   │   ├── LIST_TO_ACC
-│   │   │   └── ACC_FILES
-│   │   │       ├── ACC_COMPLETED
-│   │   │       ├── ACC_PROCESSING
-│   │   │       └── ACC_UNPROCESSED
-│   │   ├── RAW
-│   │   └── RAW_TO_LIST
-│   │       ├── ANCILLARY
-│   │       │   ├── EMPTY_FILES
-│   │       │   ├── REJECTED_FILES
-│   │       │   └── TEMP_FILES
-│   │       ├── PLOTS
-│   │       │   ├── FIGURE_DIRECTORY
-│   │       │   │   └── FIGURES_EXEC_ON_25-02-04_14.21.03
-│   │       │   └── PDF_DIRECTORY
-│   │       └── RAW_TO_LIST_FILES
-│   │           ├── COMPLETED_DIRECTORY
-│   │           ├── PROCESSING_DIRECTORY
-│   │           └── UNPROCESSED_DIRECTORY
-│   ├── LAB_LOGS
-│   │   ├── CLEAN_LOGS
-│   │   ├── LOG_ACC_DIRECTORY
-│   │   ├── LOG_UNPROCESSED_DIRECTORY
-│   │   └── RAW_LOGS
-│   │       └── done
-│   └── COPERNICUS
-│       └── COPERNICUS_DATA
-└── SECOND_STAGE
-```
+Use `top_large_dirs.sh` to inspect disk usage and the `clean_*.sh` utilities to prune transient files when needed.
 
-## Setup and Usage
+## Getting started
 
-### Prerequisites
-- Python 3.8 or later
-- Required libraries:
-  - `pandas`
-  - `numpy`
-  - `matplotlib`
-  - `scipy`
-  - `tqdm`
-  - `Pillow`
-  - `cdsapi`
-  - `xarray`
-- Access credentials for the COPERNICUS database (if using reanalysis data). Check the tutorial on its website.
+### Requirements
 
-### Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/csoneira/DATAFLOW_v3.git
-   cd DATAFLOW_v3
-   ```
+- Linux host with passwordless SSH access to each miniTRASGO station (`mingo0X`).
+- Python 3.9+ with the scientific stack listed in `requirements.list` (install via `pip install -r requirements.list`).
+- Copernicus Climate Data Store account and configured `~/.cdsapirc` credentials for ERA5 downloads.
+- Cron and tmux available on the processing node.
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.list
-   ```
+### Initial setup
 
-### Running the System
-1. Configure the system by creating SSH links to every station using the `~/.ssh/config` file so the stations are called `mingo0X`, where `X` ranges from 1 to 4.
-2. Start the dataflow system: add the lines in `add_to_crontab.info` to your crontab.
-3. Monitor the logs for real-time updates and error handling in the tmux session, which can be set up using the text in `add_to_tmux.info`.
+1. **Clone the repository** onto the processing host and ensure the root matches the paths expected by the scripts (default `/home/mingo/DATAFLOW_v3`).
+2. **Populate SSH config** entries for each station so that `ssh mingo0X` resolves without passwords. Test `rsync` connectivity before scheduling automated jobs.
+3. **Install Python dependencies** within the environment used for the first and second stage scripts.
+4. **Review configuration headers** inside the shell/Python entrypoints to adjust station IDs, root paths, or retention windows for your deployment.
 
-### Data Outputs
-- **Grafana Integration**:
-  - The unified table is exposed via an API endpoint that Grafana can query.
-- **File-Based Storage**:
-  - The unified table is periodically saved as `.csv` files in the `output/` directory.
+### Operating the pipeline
 
-## Contribution
-Contributions are welcome! To contribute:
-1. Fork the repository.
-2. Create a feature branch.
-3. Submit a pull request with a detailed description of your changes.
+1. Load the tmux layout from `add_to_tmux.info` (e.g., `tmux source-file add_to_tmux.info`) to prepare named panes for each stage.
+2. Append the contents of `add_to_crontab.info` to the service user's crontab to trigger staging, processing, and integration jobs on schedule.
+3. Inspect logs in each tmux pane or under the station directories to verify progress. Several scripts emit bannered stdout instead of structured logs, so saving the tmux history is recommended.
+4. Use the helper scripts in `MASTER/ZERO_STAGE/` for ad-hoc reprocessing when backfilling historical data or replaying failed days.
 
-## Future Developments
-- Deployment of the Monterrey station.
-- Integration with additional reanalysis datasets.
-- Automated anomaly detection in real-time CR data.
+### Outputs
 
-## Contact
-For questions or support, please contact:
-- C. Soneira-Landín (Madrid Station): [csoneira@ucm.es](mailto:csoneira@ucm.es)
+- **Unified CSV/Parquet tables** under `GRAFANA_DATA/` or `MASTER/SECOND_STAGE/` for visualization and archival analysis.
+- **Diagnostic plots** generated during the RAW→LIST transformation, saved under each station’s `FIRST_STAGE/EVENT_DATA/PLOTS/` subtree.
+- **Intermediate artefacts** for auditability (raw lab logs, cleaned aggregates, Copernicus NetCDF downloads) maintained per station.
+
+## Contributing
+
+Improvements are welcome. Please open an issue or draft pull request describing the motivation, expected data impact, and testing performed. Given the operational nature of this codebase, coordinating changes with station operators is encouraged before merging.
+
+## Support
+
+For questions about deployment or data usage, contact the miniTRASGO operations team via `csoneira@ucm.es`.
