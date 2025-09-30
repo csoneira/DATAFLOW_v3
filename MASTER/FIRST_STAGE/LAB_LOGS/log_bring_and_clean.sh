@@ -26,53 +26,6 @@ OUTPUT_DIR="${base_working_directory}/CLEAN_LOGS"
 
 mkdir -p "${local_destination}" "${DONE_DIR}" "${OUTPUT_DIR}"
 
-# usage() {
-#   echo ""
-#   echo "This script synchronizes and processes log files from a remote server."
-#   echo ""
-#   echo "Configuration:"
-#   echo "  - Remote Server: Update 'mingo_direction' (default: minitrasgo.fis.ucm.es)."
-#   echo "  - Local Directory: Logs are saved to '~/DATAFLOW_v3/LAB_LOGS/LOGS_FROM_MINGO'."
-#   echo "  - Processed Logs: Stored in '~/DATAFLOW_v3/LAB_LOGS/processed'."
-#   echo ""
-#   echo "File Processing:"
-#   echo "  - Matches files by predefined prefixes (e.g., 'Flow0_', 'hv0_')."
-#   echo "  - Cleans valid rows and skips already processed files."
-#   echo ""
-#   echo "Steps:"
-#   echo "  1. Synchronize logs from the server using rsync."
-#   echo "  2. Process files and save outputs to the processed directory."
-#   echo ""
-#   echo "Requirements:"
-#   echo "  - Ensure rsync is installed and you have server access."
-#   echo ""
-#   echo "Example:"
-#   echo "  ./$(basename $0)"
-#   echo ""
-# }
-
-
-# # Check for command-line arguments
-# while getopts "h" opt; do
-#   case $opt in
-#     h)
-#       usage
-#       exit 0
-#       ;;
-#     \?)
-#       echo "Error: Invalid option -$OPTARG"
-#       usage
-#       exit 0
-#       ;;
-#   esac
-# done
-
-# if [[ $OPTIND -le $# ]]; then
-#   echo "Error: no arguments required."
-#   usage
-#   exit 1
-# fi
-
 
 echo '--------------------------- bash script starts ---------------------------'
 

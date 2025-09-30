@@ -21,10 +21,6 @@ if [[ ! "$station" =~ ^[1-4]$ ]]; then
   exit 1
 fi
 
-# echo "Station: $station"
-# ----------------------------------------------
-
-
 # --------------------------------------------------------------------------------------------
 # Prevent the script from running multiple instances -----------------------------------------
 # --------------------------------------------------------------------------------------------
@@ -34,12 +30,7 @@ script_name=$(basename "$0")
 script_args="$*"
 current_pid=$$
 
-# Debug: Check for running processes
-# echo "$(date) - Checking for existing processes of $script_name with args $script_args"
-# ps -eo pid,cmd | grep "[b]ash .*/$script_name"
-
 # Get all running instances of the script *with the same argument*, but exclude the current process
-# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | awk '{print $1}'); do
 for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
     if [[ "$pid" != "$current_pid" ]]; then
         cmdline=$(ps -p "$pid" -o args=)
@@ -56,28 +47,10 @@ done
 # If no duplicate process is found, continue
 echo "$(date) - No running instance found. Proceeding..."
 
-# Variables
-# script_name=$(basename "$0")
-# script_args="$*"
-# current_pid=$$
-
-# # Get all running instances of the script (excluding itself)
-# # for pid in $(pgrep -f "bash .*/$script_name $script_args"); do
-# for pid in $(pgrep -f "bash .*/$script_name $script_args" | grep -v $$); do
-#     if [ "$pid" != "$current_pid" ]; then
-#         cmdline=$(ps -p "$pid" -o args=)
-#         if [[ "$cmdline" == *"$script_name"* && "$cmdline" == *"$script_args"* ]]; then
-#             echo "------------------------------------------------------"
-#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-#             echo "------------------------------------------------------"
-#             exit 1
-#         fi
-#     fi
-# done
 
 # If no duplicate process is found, continue
 echo "------------------------------------------------------"
-echo "bring_and_analyze_events.sh started on: $(date)"
+echo "bring_data_and_config_files.sh started on: $(date)"
 echo "Station: $script_args"
 echo "Running the script..."
 echo "------------------------------------------------------"
@@ -152,18 +125,53 @@ echo '------------------------------------------------------'
 # Bring the input files from the logbook
 echo "Bringing the input files from the logbook..."
 
-# Google Sheet ID (common for all stations)
-SHEET_ID="1ato36QkIXCxFkDT_LtAaLjPP7pvLcor-xZAP4fy00l0"
+# # Google Sheet ID (common for all stations)
+# SHEET_ID="1ato36QkIXCxFkDT_LtAaLjPP7pvLcor-xZAP4fy00l0"
 
-# Mapping of station numbers to their respective GIDs
-declare -A STATION_GID_MAP
-STATION_GID_MAP[1]="1331842924"
-STATION_GID_MAP[2]="600987525"
-STATION_GID_MAP[3]="376764978"
-STATION_GID_MAP[4]="1268265225"
+# # Mapping of station numbers to their respective GIDs
+# declare -A STATION_GID_MAP
+# STATION_GID_MAP[1]="1331842924"
+# STATION_GID_MAP[2]="600987525"
+# STATION_GID_MAP[3]="376764978"
+# STATION_GID_MAP[4]="1268265225"
 
-# Get the corresponding GID
-GID=${STATION_GID_MAP[$station]}
+# # Get the corresponding GID
+# GID=${STATION_GID_MAP[$station]}
+
+# ---------------------------------------------
+# Read IDs from YAML (requires PyYAML in Python)
+# ---------------------------------------------
+CONFIG_FILE="/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+
+# # Read Sheet ID
+# SHEET_ID=$(python3 - "$CONFIG_FILE" <<'PY'
+# import sys, yaml
+# cfg = yaml.safe_load(open(sys.argv[1]))
+# print(cfg["logbook"]["sheet_id"])
+# PY
+# )
+
+# # Read GID for the chosen station
+# GID=$(python3 - "$CONFIG_FILE" "$station" <<'PY'
+# import sys, yaml
+# cfg = yaml.safe_load(open(sys.argv[1]))
+# station = str(sys.argv[2])
+# print(cfg["logbook"]["gid_by_station"][station])
+# PY
+# )
+
+CONFIG_FILE="/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+SHEET_ID=$(yq -r '.logbook.sheet_id' "$CONFIG_FILE")
+GID=$(yq -r ".logbook.gid_by_station.\"$station\"" "$CONFIG_FILE")
+
+# Basic validation
+if [[ -z "$SHEET_ID" || -z "$GID" ]]; then
+  echo "Error: Could not read SHEET_ID or GID for station $station from $CONFIG_FILE"
+  exit 1
+fi
+
+echo $SHEET_ID
+echo $GID
 
 # Define output file path
 OUTPUT_FILE="$station_directory/input_file_mingo0${station}.csv"

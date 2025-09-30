@@ -1,3 +1,4 @@
+# Python
 numpy
 pandas
 matplotlib
@@ -14,3 +15,8 @@ arrow
 fastparquet
 netcdf4
 h5netcdf
+yaml
+
+
+# Bash
+yq

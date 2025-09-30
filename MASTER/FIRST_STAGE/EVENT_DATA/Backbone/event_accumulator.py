@@ -64,15 +64,70 @@ from scipy.interpolate import interp1d, CubicSpline, RegularGridInterpolator
 from scipy.sparse import load_npz, csc_matrix
 
 
-# -----------------------------------------------------------------------------
 
-correct_angle = False
-last_file_test = False
-update_big_event_file = False
+# TO CONFIG FILE --------------------------------------------------------------
 
-# If the minutes of the time of execution are between 0 and 5 then put update_big_event_file to True
-# if datetime.now().minute < 5:
-#     update_big_event_file = True
+import yaml
+
+# Load configuration
+config_file_path = "/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+
+
+
+# General Settings
+correct_angle = config["correct_angle"]
+last_file_test = config["last_file_test"]
+update_big_event_file = config["update_big_event_file"]
+multiple_files = config["multiple_files"]
+run_jupyter_notebook = config["run_jupyter_notebook"]
+remove_outliers = config["remove_outliers"]
+create_plots = config["create_plots"]
+create_essential_plots = config["create_essential_plots"]
+create_very_essential_plots = config["create_very_essential_plots"]
+save_plots = config["save_plots"]
+create_pdf = config["create_pdf"]
+force_replacement = config["force_replacement"]
+show_plots = config["show_plots"]
+
+# Angular Region Selection
+theta_boundaries = config["theta_boundaries"]
+region_layout = config["region_layout"]
+
+# Particular Analysis Settings
+side_calculations = config["side_calculations"]
+eff_vs_charge = config["eff_vs_charge"]
+eff_vs_angle_and_pos = config["eff_vs_angle_and_pos"]
+noise_vs_angle = config["noise_vs_angle"]
+noise_2d = config["noise_2d"]
+charge_vs_angle = config["charge_vs_angle"]
+polya_fit = config["polya_fit"]
+real_strip_case_study = config["real_strip_case_study"]
+multiplicity_calculations = config["multiplicity_calculations"]
+crosstalk_probability = config["crosstalk_probability"]
+n_study_fit = config["n_study_fit"]
+topology_plots = config["topology_plots"]
+
+# Configuration for Multiple Files in Event Accumulator
+cluster_of_files = config["cluster_of_files"]
+time_window_in_hours = config["time_window_in_hours"]
+time_tolerance_in_minutes = config["time_tolerance_in_minutes"]
+
+# Additional Settings
+three_plane_eff = config["three_plane_eff"]
+crosstalk_limit = config["crosstalk_limit"]
+streamer_limit = config["streamer_limit"]
+
+# Constants
+q_e = config["q_e"]
+
+# Example: Printing a few of the values to verify
+print("Correct Angle:", correct_angle)
+print("Theta Boundaries:", theta_boundaries)
+print("Side Calculations:", side_calculations)
+print("q_e:", q_e)
+
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -80,13 +135,43 @@ print("--------- Running event_accumulator.py -------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
+
+home_path = config["home_path"]
+tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/tot_to_charge_calibration.csv"
+
+
+# Load calibration
+
+FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
+FEE_calibration = {
+    "Width": FEE_calibration_df['Width'].tolist(),
+    "Fast Charge": FEE_calibration_df['Fast_Charge'].tolist() }
+FEE_calibration = pd.DataFrame(FEE_calibration)
+
+width_table = FEE_calibration['Width'].to_numpy()
+fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
+# Create a cubic spline interpolator
+cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
+
+def interpolate_fast_charge(width):
+    """
+    Interpolates the Fast Charge for given Width values using cubic spline interpolation.
+    Parameters:
+    - width (float or np.ndarray): The Width value(s) to interpolate in ns.
+    Returns:
+    - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
+    """
+    width = np.asarray(width)  # Ensure input is a NumPy array
+    # Keep zero values unchanged
+    result = np.where(width == 0, 0, cs(width))
+    return result
+
+
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
 
-multiple_files = True
 
-run_jupyter_notebook = False
 if run_jupyter_notebook:
     station = "2"
 else:
@@ -120,35 +205,6 @@ print("Execution time is:", execution_time)
 # -----------------------------------------------------------------------------
 # -------------------------- Variables of execution ---------------------------
 # -----------------------------------------------------------------------------
-
-remove_outliers = True
-
-create_plots = False
-create_essential_plots = False
-create_very_essential_plots = False
-save_plots = False
-create_pdf = False
-force_replacement = False  # Creates a new datafile even if there is already one that looks complete
-show_plots = False
-
-# Angular region selection
-theta_boundaries = [5, 15, 25]
-region_layout = [1, 8, 8, 8]
-
-# Particular analysis -----------------
-
-side_calculations = True # !!!!!!!!!!!!
-
-eff_vs_charge = True
-eff_vs_angle_and_pos = True
-noise_vs_angle = False
-charge_vs_angle = False
-polya_fit = True
-real_strip_case_study = False
-multiplicity_calculations = True
-crosstalk_probability = True
-n_study_fit = False
-topology_plots = False
 
 global_variables = {}
 global_variables['execution_time'] = execution_time
@@ -210,22 +266,22 @@ if files:  # Check if the directory contains any files
 # Move small or too big files in the destination folder to a directory of rejected -----------
 # --------------------------------------------------------------------------------------------
 
-# source_dir = base_directories["acc_events_directory"]
-# rejected_dir = base_directories["acc_rejected_directory"]
+source_dir = base_directories["acc_events_directory"]
+rejected_dir = base_directories["acc_rejected_directory"]
 
-# for filename in os.listdir(source_dir):
-#     file_path = os.path.join(source_dir, filename)
+for filename in os.listdir(source_dir):
+    file_path = os.path.join(source_dir, filename)
     
-#     # Check if it's a file
-#     if os.path.isfile(file_path):
-#         # Count the number of lines in the file
-#         with open(file_path, "r") as f:
-#             line_count = sum(1 for _ in f)
+    # Check if it's a file
+    if os.path.isfile(file_path):
+        # Count the number of lines in the file
+        with open(file_path, "r") as f:
+            line_count = sum(1 for _ in f)
 
-#         # Move the file if it has < 10 or > 300 rows
-#         if line_count < 2 or line_count > 10000:
-#             shutil.move(file_path, os.path.join(rejected_dir, filename))
-#             print(f"Moved: {filename}")
+        # Move the file if it has < 10 or > 300 rows
+        if line_count < 2 or line_count > 10000:
+            shutil.move(file_path, os.path.join(rejected_dir, filename))
+            print(f"Moved: {filename}")
 
 
 # Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
@@ -272,9 +328,6 @@ def round_to_significant_digits(x):
     if isinstance(x, float):
         return float(f"{x:.6g}")
     return x
-
-# def clean_type_column(x):
-#     return str(int(float(x))) if isinstance(x, (float, int, str)) and not pd.isna(x) else x
 
 
 print("----------------------------------------------------------------------")
@@ -402,13 +455,10 @@ valid_times = df['Time'].dropna()
 
 # --- MULTIPLE FILES HANDLING ---
 if multiple_files:
+        
+    time_window = timedelta(hours=time_window_in_hours)
+    time_tolerance = timedelta(minutes=time_tolerance_in_minutes)
     
-
-    # Configuration
-    cluster_of_files = 7  # Adjust as needed
-    time_window = timedelta(hours=10)
-    time_tolerance = timedelta(minutes=10)
-
     # Extract timestamp from filename
     def extract_datetime_from_filename(name):
         try:
@@ -1155,7 +1205,6 @@ if side_calculations:
             )
 
             
-            
             print("----------------------------------------------------------------------")
             print("--------------------- Efficiency respect (x, y) ----------------------")
             print("----------------------------------------------------------------------")
@@ -1460,7 +1509,7 @@ if side_calculations:
         # -----------------------------------------------------------------------------
         
         # --- Compute per-bin efficiencies for plane 2 and 3 -------------------------
-        three_plane_eff = False
+        
         if three_plane_eff:
             eff_2 = 1 - counts_134 / np.where(counts_1234 == 0, 1, counts_1234)
             eff_3 = 1 - counts_124 / np.where(counts_1234 == 0, 1, counts_1234)
@@ -1773,7 +1822,6 @@ if side_calculations:
         # ---------------------------------------------------------------------------------
         # ---------------------------------------------------------------------------------
 
-        noise_2d = True
 
         if noise_2d:
 
@@ -1895,91 +1943,6 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     
     
-    # histogram_results = True
-    # if histogram_results:
-
-    #     def gaussian(x, mu, sigma, amplitude):
-    #         return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
-
-    #     columns_all = [
-    #         ['x', 'theta', 's', 'y', 'phi', 'th_chi'],          # TimTrack
-    #         ['alt_x', 'alt_theta', 'alt_s', 'alt_y', 'alt_phi', 'alt_th_chi'],  # Alternative
-    #         ['x', 'theta', 'new_s', 'y', 'phi', 'new_th_chi']   # Averaged
-    #     ]
-
-    #     titles = ['TimTrack Results', 'Alternative Results', 'Averaged Results']
-    #     color_map = {
-    #         "theta": "blue", "phi": "green", "x": "darkorange", "y": "darkorange",
-    #         "alt_y": "darkorange", "s": "purple", "alt_s": "purple", "th_chi": "red"
-    #     }
-
-    #     ranges = {
-    #         "theta": (0, np.pi/2), "phi": (-np.pi, np.pi),
-    #         "x": (-500, 500), "y": (-500, 500), "alt_y": (-500, 500),
-    #         "s": (-0.01, 0.02), "alt_s": (-0.01, 0.02),
-    #         "th_chi": (0, 10)
-    #     }
-
-    #     fig, axs = plt.subplots(3, 6, figsize=(24, 10), constrained_layout=True)
-    #     axs = axs.flatten()
-    #     idx = 0
-    #     quantile = 0.99
-    #     fit_gaussian = True
-
-    #     for row, (columns, row_title) in enumerate(zip(columns_all, titles)):
-    #         for col in columns:
-    #             data = df[col].to_numpy()
-    #             data = data[data != 0]
-    #             ax = axs[idx]
-    #             idx += 1
-
-    #             if len(data) == 0:
-    #                 ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha='center', va='center', color='gray')
-    #                 ax.set_title(col)
-    #                 continue
-
-    #             for key in ranges:
-    #                 if key in col:
-    #                     left, right = ranges[key]
-    #                     break
-    #             else:
-    #                 left, right = np.min(data), np.max(data)
-
-    #             color = next((v for k, v in color_map.items() if k in col), 'gray')
-
-    #             hist_data, bin_edges, _ = ax.hist(data, bins=200, color=color, alpha=0.7)
-
-    #             ax.set_xlim(left, right)
-    #             ax.set_title(col)
-
-    #             if fit_gaussian and len(data) > 10:
-    #                 try:
-    #                     qmin, qmax = np.quantile(data, [1 - quantile, quantile])
-    #                     filt_data = data[(data >= qmin) & (data <= qmax)]
-
-    #                     if len(filt_data) >= 2:
-    #                         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-    #                         popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filt_data), np.std(filt_data), np.max(hist_data)])
-    #                         x = np.linspace(qmin, qmax, 1000)
-    #                         ax.plot(x, gaussian(x, *popt), 'r-', label=f'μ={popt[0]:.2g}, σ={popt[1]:.2g}')
-    #                         ax.legend()
-    #                     else:
-    #                         ax.text(0.5, 0.5, "Not enough data", transform=ax.transAxes, ha='center', va='center', color='gray')
-    #                 except (RuntimeError, ValueError):
-    #                     ax.text(0.5, 0.5, "Fit failed", transform=ax.transAxes, ha='center', va='center', color='red')
-
-    #     for i in range(idx, len(axs)):
-    #         fig.delaxes(axs[i])
-
-    #     fig.suptitle("Histograms with Optional Gaussian Fits", fontsize=18)
-    #     plt.show()
-
-
-    # ---------------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------------
-    
-    
     if charge_vs_angle:
         
         print("----------------------------------------------------------------------")
@@ -2049,49 +2012,8 @@ if side_calculations:
         print("----------------------------------------------------------------------")
         
         print("Polya fit. WIP.")
-
-        remove_crosstalk = False
-        remove_streamer = True
-        crosstalk_limit = 1
-        streamer_limit = 100
-
-        FEE_calibration = {
-            "Width": [
-                0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-                160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
-                300, 310, 320, 330, 340, 350, 360, 370, 380, 390
-            ],
-            "Fast Charge": [
-                4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-                9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
-                1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
-                1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
-                2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-                2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
-                2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
-            ]
-        }
-
-        # Create the DataFrame
-        FEE_calibration = pd.DataFrame(FEE_calibration)
-        # Convert to NumPy arrays for interpolation
-        width_table = FEE_calibration['Width'].to_numpy()
-        fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-        # Create a cubic spline interpolator
-        cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
-
-        def interpolate_fast_charge(width):
-            """
-            Interpolates the Fast Charge for given Width values using cubic spline interpolation.
-            Parameters:
-            - width (float or np.ndarray): The Width value(s) to interpolate in ns.
-            Returns:
-            - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-            """
-            width = np.asarray(width)  # Ensure input is a NumPy array
-            # Keep zero values unchanged
-            result = np.where(width == 0, 0, cs(width))
-            return result
+        
+        
 
         df_list_OG = [df]  # Adjust delimiter if needed
 
@@ -2108,11 +2030,9 @@ if side_calculations:
         
         # merged_df = df.copy()
 
-        if remove_crosstalk or remove_streamer:    
-            if remove_streamer:
-                for col in merged_df.columns:
-                    if "Q_" in col and "s" in col:
-                        merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
+        for col in merged_df.columns:
+            if "Q_" in col and "s" in col:
+                merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
 
         columns_to_drop = ['Time','x', 'y', 'theta', 'phi']
         merged_df = merged_df.drop(columns=columns_to_drop)
@@ -2125,11 +2045,6 @@ if side_calculations:
         total_charge = pd.DataFrame()
         for i in range(1, 5):
             total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
-
-        
-
-        # Constants
-        q_e = 1.602e-4  # fC
 
         # Polya model
         def polya_induced_charge(Q, theta, nbar, alpha, A, offset):
@@ -2203,12 +2118,6 @@ if side_calculations:
             ax2 = axs[1, idx]
             ax3 = axs[2, idx]
 
-            # --- Fit plot ---
-        #     plot_label = (
-        #         rf"$\theta={theta_fit:.2f},\ \bar{{n}}={nbar_fit:.0f},\ "
-        #         rf"\alpha={alpha_fit:.2f},\ A={A_fit:.2f},\ \mathrm{{off}}={offset_fit:.2f},\ "
-        #         rf"\bar{{n}}/\alpha={nbar_fit / alpha_fit:.3g}$"
-        #     )
             plot_label = (
                 rf"$\theta={theta_fit:.2f},\ \mathrm{{off}}={offset_fit:.2f},\ "
                 rf"\bar{{n}}/\alpha={nbar_fit / alpha_fit:.3g}$"
@@ -2262,49 +2171,6 @@ if side_calculations:
         
         print("Polya fit respect to the angle. WIP.")
 
-        remove_crosstalk = False
-        remove_streamer = True
-        crosstalk_limit = 1
-        streamer_limit = 100
-
-        FEE_calibration = {
-            "Width": [
-                0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-                160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
-                300, 310, 320, 330, 340, 350, 360, 370, 380, 390
-            ],
-            "Fast Charge": [
-                4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-                9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
-                1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
-                1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
-                2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-                2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
-                2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
-            ]
-        }
-
-        # Create the DataFrame
-        FEE_calibration = pd.DataFrame(FEE_calibration)
-        # Convert to NumPy arrays for interpolation
-        width_table = FEE_calibration['Width'].to_numpy()
-        fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-        # Create a cubic spline interpolator
-        cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
-
-        def interpolate_fast_charge(width):
-            """
-            Interpolates the Fast Charge for given Width values using cubic spline interpolation.
-            Parameters:
-            - width (float or np.ndarray): The Width value(s) to interpolate in ns.
-            Returns:
-            - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-            """
-            width = np.asarray(width)  # Ensure input is a NumPy array
-            # Keep zero values unchanged
-            result = np.where(width == 0, 0, cs(width))
-            return result
-
         df_list_OG = [df]  # Adjust delimiter if needed
         df_list = df_list_OG.copy()
         merged_df = pd.concat(df_list, ignore_index=True)
@@ -2315,11 +2181,9 @@ if side_calculations:
         merged_df = merged_df[ merged_df['processed_tt'] > 10 ]
         merged_df = merged_df[ merged_df['theta'] < 0.5 ]
 
-        if remove_crosstalk or remove_streamer:    
-            if remove_streamer:
-                for col in merged_df.columns:
-                    if "Q_" in col and "s" in col:
-                        merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
+        for col in merged_df.columns:
+            if "Q_" in col and "s" in col:
+                merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
 
         columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
         merged_df = merged_df.drop(columns=columns_to_drop)
@@ -2333,8 +2197,7 @@ if side_calculations:
         for i in range(1, 5):
             total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
 
-        # Constants
-        q_e = 1.602e-4  # fC
+        
 
         # Polya model
         def polya_induced_charge(Q, theta, nbar, alpha, A, offset):
@@ -2442,11 +2305,9 @@ if side_calculations:
         merged_df = merged_df[ merged_df['processed_tt'] > 10 ]
         merged_df = merged_df[ merged_df['theta'] > 0.5 ]
 
-        if remove_crosstalk or remove_streamer:    
-            if remove_streamer:
-                for col in merged_df.columns:
-                    if "Q_" in col and "s" in col:
-                        merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
+        for col in merged_df.columns:
+            if "Q_" in col and "s" in col:
+                merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)
 
         columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
         merged_df = merged_df.drop(columns=columns_to_drop)
@@ -2460,8 +2321,6 @@ if side_calculations:
         for i in range(1, 5):
             total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
 
-        # Constants
-        q_e = 1.602e-4  # fC
 
         # Polya model
         def polya_induced_charge(Q, theta, nbar, alpha, A, offset):
@@ -2574,55 +2433,9 @@ if side_calculations:
         # Drop duplicates if necessary
         merged_df.drop_duplicates(inplace=True)
 
-        FEE_calibration = {
-            "Width": [
-                0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-                160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
-                300, 310, 320, 330, 340, 350, 360, 370, 380, 390
-            ],
-            "Fast Charge": [
-                4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-                9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
-                1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
-                1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
-                2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-                2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
-                2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
-            ]
-        }
-
-        # Create the DataFrame
-        FEE_calibration = pd.DataFrame(FEE_calibration)
-
-
-        # Convert to NumPy arrays for interpolation
-        width_table = FEE_calibration['Width'].to_numpy()
-        fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-
-        # Create a cubic spline interpolator
-        cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
-
-        def interpolate_fast_charge(width):
-            """
-            Interpolates the Fast Charge for given Width values using cubic spline interpolation.
-            Parameters:
-            - width (float or np.ndarray): The Width value(s) to interpolate in ns.
-            Returns:
-            - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-            """
-            width = np.asarray(width)  # Ensure input is a NumPy array
-
-            # Keep zero values unchanged
-            result = np.where(width == 0, 0, cs(width))
-
-            return result
-
         columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
         merged_df = merged_df.drop(columns=columns_to_drop)
 
-        # For all the columns apply the calibration and not change the name of the columns
-        # for col in merged_df.columns:
-        #     merged_df[col] = interpolate_fast_charge(merged_df[col])
 
         # Initialize dictionaries to store charge distributions
         singles = {f'single_M{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
@@ -3070,11 +2883,6 @@ if side_calculations:
 
         # Take the cluster size 1 charge spectrum per plane for four-plane coincidence events
 
-        remove_crosstalk = False
-        crosstalk_limit = 0.1 #2.6
-
-        remove_streamer = True
-        streamer_limit = 100
 
         # Read and concatenate all files
         df_list = [df]  # Adjust delimiter if needed
@@ -3083,53 +2891,9 @@ if side_calculations:
         # Drop duplicates if necessary
         merged_df.drop_duplicates(inplace=True)
 
-        FEE_calibration = {
-            "Width": [
-                0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-                160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
-                300, 310, 320, 330, 340, 350, 360, 370, 380, 390
-            ],
-            "Fast Charge": [
-                4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-                9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
-                1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
-                1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
-                2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-                2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
-                2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
-            ]
-        }
-
-        # # Create the DataFrame
-        FEE_calibration = pd.DataFrame(FEE_calibration)
-
-
-        # Convert to NumPy arrays for interpolation
-        width_table = FEE_calibration['Width'].to_numpy()
-        fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-
-        # Create a cubic spline interpolator
-        cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
-
-        def interpolate_fast_charge(width):
-            width = np.asarray(width)  # Ensure input is a NumPy array
-
-            # Keep zero values unchanged
-            result = np.where(width == 0, 0, cs(width))
-
-            return result
-
-
-        if remove_crosstalk or remove_streamer:
-            if remove_crosstalk:
-                    for col in merged_df.columns:
-                        if "Q_" in col and "s" in col:
-                                merged_df[col] = merged_df[col].apply(lambda x: 0 if x < crosstalk_limit else x)
-                        
-            if remove_streamer:
-                    for col in merged_df.columns:
-                        if "Q_" in col and "s" in col:
-                                merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)     
+        for col in merged_df.columns:
+            if "Q_" in col and "s" in col:
+                    merged_df[col] = merged_df[col].apply(lambda x: 0 if x > streamer_limit else x)     
 
 
         columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
@@ -3936,7 +3700,7 @@ if side_calculations:
         print(induction_section_df)
         
         # Load the LUT
-        lut_file = "/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/lut.csv"
+        lut_file = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/lut.csv"
         lut_df = pd.read_csv(lut_file)
 
         # Initialize a list to store the best induction section values for each plane
@@ -3991,45 +3755,6 @@ if side_calculations:
         right_lim = 1400 # 1250
         crosstalk_limit = 1 #2.6
         charge_vector = np.linspace(crosstalk_limit, right_lim, n_bins)
-
-        FEE_calibration = {
-            "Width": [
-                0.0000001, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-                160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
-                300, 310, 320, 330, 340, 350, 360, 370, 380, 390
-            ],
-            "Fast Charge": [
-                4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-                9.3562E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
-                1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
-                1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
-                2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-                2.3939E+03, 2.4625E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
-                2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
-            ]
-        }
-
-        # Create the DataFrame
-        FEE_calibration = pd.DataFrame(FEE_calibration)
-        
-        # Convert to NumPy arrays for interpolation
-        width_table = FEE_calibration['Width'].to_numpy()
-        fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
-        # Create a cubic spline interpolator
-        cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
-
-        def interpolate_fast_charge(width):
-            """
-            Interpolates the Fast Charge for given Width values using cubic spline interpolation.
-            Parameters:
-            - width (float or np.ndarray): The Width value(s) to interpolate in ns.
-            Returns:
-            - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-            """
-            width = np.asarray(width)  # Ensure input is a NumPy array
-            # Keep zero values unchanged
-            result = np.where(width == 0, 0, cs(width))
-            return result
 
         df_list_OG = [df]  # Adjust delimiter if needed
 
@@ -4182,59 +3907,6 @@ if side_calculations:
 
             return x_vals, fraction_dict, uncertainty_dict
 
-        # ---------------------------------------------------------------------
-        # Example usage to produce the 4x4 grid of plots:
-        # ---------------------------------------------------------------------
-        
-        
-        # # 1. Compute fraction + uncertainty
-        # x_vals, fraction_hist, frac_err = compute_fraction_and_uncertainty(
-        #     charge_vector,  # bin edges from your snippet
-        #     histograms_no_crosstalk,
-        #     histograms_yes_crosstalk
-        # )
-
-        # 2. Plot in 4x4
-        # fig, axs = plt.subplots(4, 4, figsize=(16, 12), sharex=True, sharey=True)
-        # fig.suptitle(f"Crosstalk probability with Poisson Error Bands, mingo0{station}", fontsize=14)
-
-        # for m in range(1, 5):
-        #     for s in range(1, 5):
-        #         ax = axs[m-1, s-1]
-        #         key = f"P{m}_s{s}"
-
-        #         y_vals = fraction_hist[key]
-        #         y_err  = frac_err[key]
-
-        #         ax.plot(x_vals, y_vals, label=key)
-        #         ax.fill_between(x_vals, y_vals - y_err, y_vals + y_err, alpha=0.3)
-        #         ax.set_ylim(0, 1)         # Because fraction can be negative if N_yes > N_no
-        #         ax.set_title(key)
-        #         ax.grid(True)
-
-        # # Better spacing
-        # for ax in axs[-1, :]:
-        #     ax.set_xlabel("Charge")
-        # for ax in axs[:, 0]:
-        #     ax.set_ylabel("Probability")
-
-        # # plt.tight_layout(rect=[0, 0, 1, 0.95])
-        # plt.tight_layout()
-        # figure_name = f"crosstalk_probability_mingo0{station}"
-        # if save_plots:
-        #     name_of_file = figure_name
-        #     final_filename = f'{fig_idx}_{name_of_file}.png'
-        #     fig_idx += 1
-        #     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        #     plot_list.append(save_fig_path)
-        #     plt.savefig(save_fig_path, format='png')
-        # if show_plots: plt.show()
-        # plt.close()
-
-
-        # Fit a sigmoidal and store the fitting values to compare with temperature, etc.
-
-        
 
         # --- 1. Define 3-parameter sigmoid (bounded to [0,1]) ---
         def sigmoid_3p(x, x0, k):
@@ -5205,463 +4877,6 @@ if side_calculations:
     # ---------------------------------------------------------------------------------
     # ---------------------------------------------------------------------------------
 
-    # This should be the definition of another table which contains all the metadata and metanalysis, and
-    # in principle we are not joining them, I think.
-    
-    # print("----------------------------------------------------------------------")
-    # print("----------------- Derived metrics pre-aggregation --------------------")
-    # print("----------------------------------------------------------------------")
-
-    # # Derived metrics
-    # print("Derived metrics...")
-    # for i in range(1, 5):
-    #     df[f'Q_{i}'] = df[[f'Q_P{i}s{j}' for j in range(1, 5)]].sum(axis=1)
-    #     df[f'count_in_{i}'] = (df[f'Q_{i}'] > 0).astype(int)
-    #     df[f'streamer_{i}'] = (df[f'Q_{i}'] > 100).astype(int)
-
-    # df[f'Q_event'] = df[[f'Q_{j}' for j in range(1, 5)]].sum(axis=1)
-
-
-
-    # print("----------------------------------------------------------------------")
-    # print("----------------- Aggregation and Poisson filtering ------------------")
-    # print("----------------------------------------------------------------------")
-
-    # df['events'] = 1
-
-    # # Aggregation logic
-    # # Start with your static aggregation dictionary
-    # agg_dict = {
-    #     'events': 'sum',
-    #     'count_in_1': 'sum',
-    #     'count_in_2': 'sum',
-    #     'count_in_3': 'sum',
-    #     'count_in_4': 'sum',
-    #     'streamer_1': 'sum',
-    #     'streamer_2': 'sum',
-    #     'streamer_3': 'sum',
-    #     'streamer_4': 'sum',
-    
-    #     'original_tt': lambda x: pd.Series(x).value_counts().to_dict(),
-    #     'processed_tt': lambda x: pd.Series(x).value_counts().to_dict(),
-    #     # 'tracking_tt': lambda x: pd.Series(x).value_counts().to_dict(),
-    
-    #     'x': [custom_mean, custom_std],
-    #     'y': [custom_mean, custom_std],
-    #     'theta': [custom_mean, custom_std],
-    #     'phi': [custom_mean, custom_std],
-    #     'new_s': [custom_mean, custom_std],
-    #     'new_th_chi': [custom_mean, custom_std],
-    
-    #     'Q_event': [custom_mean, custom_std],
-    
-    #     'CRT_avg': custom_mean,
-    #     'one_side_events': custom_mean,
-    #     'purity_of_data_percentage': custom_mean,
-    #     'unc_y': custom_mean,
-    #     'unc_tsum': custom_mean,
-    #     'unc_tdif': custom_mean,
-    
-    #     "over_P1": custom_mean,
-    #     "P1-P2": custom_mean,
-    #     "P2-P3": custom_mean,
-    #     "P3-P4": custom_mean,
-    #     "phi_north": custom_mean,
-    
-    #     "P1_induction_section": custom_mean,
-    #     "P2_induction_section": custom_mean,
-    #     "P3_induction_section": custom_mean,
-    #     "P4_induction_section": custom_mean,
-    
-    #     # Efficiency fitting
-    #     "P2_3fold_a": custom_mean,
-    #     "P2_3fold_eps0": custom_mean,
-    #     "P2_3fold_n": custom_mean,
-    #     "P2_2fold_a": custom_mean,
-    #     "P2_2fold_eps0": custom_mean,
-    #     "P2_2fold_n": custom_mean,
-    #     "P3_3fold_a": custom_mean,
-    #     "P3_3fold_eps0": custom_mean,
-    #     "P3_3fold_n": custom_mean,
-    #     "P3_3fold_a": custom_mean,
-    #     "P3_3fold_eps0": custom_mean,
-    #     "P3_3fold_n": custom_mean,
-    # }
-
-    # # Dynamically add all sigmoid_width_XXX and background_slope_XXX columns
-    # sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
-    # background_cols = [col for col in df.columns if col.startswith('background_slope_')]
-
-    # for col in sigmoid_cols + background_cols:
-    #     agg_dict[col] = custom_mean
-
-    # # Add all new region columns with sum aggregation
-    # for col in df.columns:
-    #     if col.startswith("new_region_theta_"):
-    #         agg_dict[col] = 'sum'
-
-
-    # # Fit a Poisson distribution to the 1-second data and removed outliers based on the Poisson -------------------------
-    # if remove_outliers:
-    #     print("Resampling for outlier removal...")
-    #     # Resampling
-    #     resampled_df_test = df.resample('1min', on='Time').agg(agg_dict)
-    #     # TEST 1s rates -------------------------------------------------------
-    #     resampled_second_df = df.resample('1s', on='Time').agg(agg_dict)
-    #     print("Resampled.")
-    #     # Plot the 1 min and 1 s rates ----------------------------------------
-    #     if create_plots:
-    #         fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    #         ax[0].plot(resampled_df_test.index, resampled_df_test['events'], label='Q_event')
-    #         ax[0].set_ylabel('Q_event (mean)')
-    #         ax[0].legend()
-
-    #         ax[1].plot(resampled_second_df.index, resampled_second_df['events'], label='Q_event')
-    #         ax[1].set_ylabel('Q_event (mean)')
-    #         ax[1].legend()
-
-    #         plt.tight_layout()
-    #         # Show the plot
-    #         if save_plots:
-    #             name_of_file = 'original_rates'
-    #             final_filename = f'{fig_idx}_{name_of_file}.png'
-    #             fig_idx += 1
-            
-    #             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    #             plot_list.append(save_fig_path)
-    #             plt.savefig(save_fig_path, format='png')
-            
-    #         if show_plots: plt.show()
-    #         plt.close()
-
-    #     print("Removing outliers...")
-    #     # Data: Replace with your actual data
-    #     data = resampled_second_df['events']
-
-    #     # Define the negative log-likelihood function for Poisson
-    #     def negative_log_likelihood(lambda_hat, data):
-    #         return -np.sum(poisson.logpmf(data, lambda_hat))
-
-    #     # Initial guess for λ (mean of data)
-    #     initial_guess = np.mean(data)
-
-    #     # Optimize λ to minimize the negative log-likelihood
-    #     result = minimize(negative_log_likelihood, x0=initial_guess, args=(data,), bounds=[(1e-5, None)])
-    #     lambda_fit = result.x[0]
-
-    #     print(f"Best-fit λ: {lambda_fit:.2f}")
-
-    #     lower_bound = poisson.ppf(0.0005, lambda_fit)  # Lower 00.05% bound
-    #     upper_bound = poisson.ppf(0.9995, lambda_fit)  # Upper 99.95% bound
-
-    #     # Overlay the fitted Poisson distribution
-    #     if create_plots:
-    #         # Generate Poisson probabilities for the range of your data
-    #         x = np.arange(0, np.max(data) + 1)  # Range of event counts
-    #         poisson_probs = poisson.pmf(x, lambda_fit) * len(data)  # Scale by sample size
-
-    #         plt.hist(data, bins=100, alpha=0.7, label='Observed data', color='blue', density=False)
-    #         plt.plot(x, poisson_probs, 'r-', lw=2, label=f'Poisson Fit ($\lambda={lambda_fit:.2f}$)')
-    #         plt.axvline(lower_bound, color='r', linestyle='--', label='Poisson 0.1%')
-    #         plt.axvline(upper_bound, color='r', linestyle='--', label='Poisson 99.9%')
-    #         plt.xlabel('Number of events per second')
-    #         plt.ylabel('Frequency')
-    #         plt.title('Histogram of events per second with Poisson Fit')
-    #         plt.legend()
-    #         if save_plots:
-    #             name_of_file = 'poisson_fit'
-    #             final_filename = f'{fig_idx}_{name_of_file}.png'
-    #             fig_idx += 1
-    #             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    #             plot_list.append(save_fig_path)
-    #             plt.savefig(save_fig_path, format='png')
-    #         if show_plots: plt.show()
-    #         plt.close()
-        
-    #     # Now, if any value is outside of the tails of the poisson distribution, we can remove it
-    #     # so obtain the extremes, obtain the seconds in which the values are outside of the distribution
-    #     # and remove those seconds from a copy of the original df, so a new resampled_df can be created
-    #     # with the new data
-    
-    #     # Ensure 'events' is a flat Series
-    #     events_series = resampled_second_df['events']
-    #     # Count how many values fall below or above the bounds
-    #     below_count = (events_series < lower_bound).sum()
-    #     above_count = (events_series > upper_bound).sum()
-    #     print("-------------------------------------------------------------")
-    #     print(f"Below bound: {below_count.sum()}")
-    #     print(f"Above bound: {above_count.sum()}")
-    #     print(f"Total outliers: {(below_count + above_count).sum()}")
-    #     print("-------------------------------------------------------------")
-    #     # Identify outlier indices correctly
-    #     outlier_mask = (events_series < lower_bound) | (events_series > upper_bound)
-    #     # Flatten outlier_mask to 1D
-    #     outlier_mask = outlier_mask.values.ravel()  # Turn into a 1D array
-    #     # Extract the indices of outliers
-    #     outlier_indices = events_series.index[outlier_mask]
-    #     # Create a temporary 'Time_sec' column floored to seconds for alignment
-    #     df['Time_sec'] = df['Time'].dt.floor('1s')
-    #     # Filter out rows corresponding to the outlier indices
-    #     filtered_df = df[~df['Time_sec'].isin(outlier_indices)].drop(columns=['Time_sec'])
-    #     # Resample the filtered data to 1-minute intervals
-    #     new_resampled_df = filtered_df.resample('1min', on='Time').agg(agg_dict)
-
-    #     # Plot the new resampled data
-    #     if create_plots:
-    #         fig, ax = plt.subplots(figsize=(12, 6))
-    #         ax.plot(new_resampled_df.index, new_resampled_df['events'], label='Q_event (filtered)')
-    #         ax.set_ylabel('Q_event (mean)')
-    #         ax.set_title('1-Minute Resampled Data After Outlier Removal')
-    #         ax.legend()
-    #         plt.tight_layout()
-    #         if save_plots:
-    #             name_of_file = 'filtered_rate'
-    #             final_filename = f'{fig_idx}_{name_of_file}.png'
-    #             fig_idx += 1
-    #             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    #             plot_list.append(save_fig_path)
-    #             plt.savefig(save_fig_path, format='png')
-    #         if show_plots: plt.show()
-    #         plt.close()
-
-    #     # Create a resampled_df with the new one
-    
-    #     rejected_percentage = ((below_count + above_count) / len(df)) * 100
-    #     global_variables["poisson_rejected"] = rejected_percentage
-    
-    #     resampled_df = new_resampled_df
-    # else:
-    #     resampled_df = df.resample('1min', on='Time').agg(agg_dict)
-
-
-    # print("----------------------------------------------------------------------")
-    # print("--------------------------- Some renaming ----------------------------")
-    # print("----------------------------------------------------------------------")
-
-    # resampled_df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in resampled_df.columns.values]
-
-    # resampled_df.rename(columns=lambda x: x.replace('custom_mean', 'mean').replace('custom_std', 'std'), inplace=True)
-    # resampled_df.rename(columns=lambda x: x.replace('_sum', ''), inplace=True)
-    # resampled_df.rename(columns=lambda x: x.replace('_mean', ''), inplace=True)
-    # resampled_df.rename(columns=lambda x: x.replace('new_', ''), inplace=True)
-
-
-    # print("----------------------------------------------------------------------")
-    # print("------------------------ Column aggregation --------------------------")
-    # print("----------------------------------------------------------------------")
-
-    # # Region-specific count aggregation -------------------------------------------
-    # region_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region'])
-    # resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
-
-    # # Hans' region-specific count aggregation -------------------------------------
-    # # region_hans_counts = pd.crosstab(df['Time'].dt.floor('1min'), df['region_hans'])
-    # # resampled_df = resampled_df.join(region_hans_counts, how='left').fillna(0)
-
-    # # New region-specific count aggregation ---------------------------------------
-    # # Floor time to 1-minute bins
-    # df['Time_floor'] = df['Time'].dt.floor('1min')
-    # # Select only the binary region columns
-    # region_cols = [col for col in df.columns if col.startswith('region_theta_')]
-    # # Group by floored time and sum the binary indicators
-    # region_counts = df.groupby('Time_floor')[region_cols].sum()
-    # # Join to resampled_df (assuming resampled_df has time index compatible with Time_floor)
-    # resampled_df = resampled_df.join(region_counts, how='left').fillna(0)
-
-
-    # print("----------------------------------------------------------------------")
-    # print("-------------------------- Counting types ----------------------------")
-    # print("----------------------------------------------------------------------")
-
-    # # Split 'type_<lambda>' dictionary into separate columns for each type
-    # # types = ["original_tt", "processed_tt", "tracking_tt"]
-    # types = ["original_tt", "processed_tt"]
-    # for type_key in types:
-    #     if f'{type_key}_<lambda>' in resampled_df.columns:
-    #         type_dict_col = resampled_df[f'{type_key}_<lambda>']
-    #         for type_key_unique in df[type_key].unique():
-    #             resampled_df[f'{type_key}_{type_key_unique}'] = type_dict_col.apply(lambda x: x.get(type_key_unique, 0) if isinstance(x, dict) else 0)
-    #         resampled_df.drop(columns=[f'{type_key}_<lambda>'], inplace=True)
-
-    # # Streamer percentage
-    # for i in range(1, 5):
-    #     resampled_df[f"streamer_percent_{i}"] = ( (resampled_df[f"streamer_{i}"] / resampled_df[f"count_in_{i}"]).fillna(0) * 100 )
-
-    # print("----------------------------------------------------------------------")
-    # print("----------------------------------------------------------------------")
-    # print("----------------------- Saving and finishing -------------------------")
-    # print("----------------------------------------------------------------------")
-    # print("----------------------------------------------------------------------")
-
-    # resampled_df.reset_index(inplace=True)
-
-    # if polya_fit:
-
-    #     print("\n\n")
-    #     # Flatten df_polya_fit into wide format
-    #     df_single_row = df_polya_fit.set_index('module').stack().rename('value').reset_index()
-    #     df_single_row['column'] = 'polya_' + df_single_row['level_1'] + '_' + df_single_row['module'].astype(str)
-
-    #     # Fix: pivot without setting index=None
-    #     df_wide = df_single_row.pivot(columns='column', values='value')
-    #     df_wide.columns.name = None  # remove column index name
-    #     df_wide = df_wide.reset_index(drop=True)
-
-    #     # Check available columns
-    #     print(df_wide.columns.to_list())
-
-    #     # Optional: restrict to specific subset of columns
-    #     df_wide = df_wide[[
-    #         'polya_A_1', 'polya_A_2', 'polya_A_3', 'polya_A_4',
-    #         'polya_theta_1', 'polya_theta_2', 'polya_theta_3', 'polya_theta_4',
-    #         'polya_nbar/alpha_1', 'polya_nbar/alpha_2', 'polya_nbar/alpha_3', 'polya_nbar/alpha_4',
-    #     ]]
-
-    #     # Repeat values to match number of rows in resampled_df
-    #     df_polya_expanded = pd.concat([df_wide] * len(resampled_df), ignore_index=True)
-
-    #     # Merge with original DataFrame
-    #     resampled_df = pd.concat([resampled_df, df_polya_expanded], axis=1)
-    
-    #     with pd.option_context('display.precision', 1):
-    #         print(df_polya_fit)
-    
-    #     # Optional print
-    #     with pd.option_context('display.precision', 3):
-    #         print(resampled_df[df_wide.columns])
-
-
-    # print(df_polya_flat.columns)
-    # print(df_polya_flat.columns)
-    # df_polya = df_polya_flat['polya_theta', 'polya_nbar/alpha', 'polya_A']
-
-    # print(df_polya)
-
-    # # --- Flatten df_cross_fit ---
-    # df_cross_flat = df_cross_fit.set_index('key').add_prefix('cross_')  # cross_M1_s1_x0, cross_M1_s1_k
-
-    # # --- Flatten df_mult_fit ---
-    # df_mult_long = df_mult_fit.melt(id_vars=['detection_type', 'multiplicity'], var_name='module', value_name='value')
-    # df_mult_long['colname'] = (
-    #     df_mult_long['detection_type'] + '_' +
-    #     df_mult_long['multiplicity'] + '_' +
-    #     df_mult_long['module']
-    # )
-    # df_mult_flat = df_mult_long.set_index('colname')['value'].to_frame().T.add_prefix('mult_')  # single row
-
-    # # --- Combine all into one row DataFrame ---
-    # flat_polya = df_polya_flat.stack().to_frame().T
-    # flat_cross = df_cross_flat.stack().to_frame().T
-    # flat_mult = df_mult_flat
-
-    # print(flat_polya)
-
-    # flat_all = pd.concat([flat_polya, flat_cross, flat_mult], axis=1)
-
-    # # --- Repeat and merge with resampled_df ---
-    # flat_all_repeated = pd.concat([flat_all] * len(resampled_df), ignore_index=True)
-    # resampled_df = pd.concat([resampled_df.reset_index(drop=True), flat_all_repeated], axis=1)
-
-
-    # print("----------------------------------------------------------------------")
-    # print("------------------------- Saving the data ----------------------------")
-    # print("----------------------------------------------------------------------")
-
-    # # Print the columns of resampled_df
-    # print("\n\n")
-    # print(resampled_df.columns.to_list())
-    # print("\n\n")
-
-    # resampled_df = resampled_df.applymap(round_to_significant_digits)
-
-    # # Save the newly created file to ACC_EVENTS_DIRECTORY --------------------------
-    # resampled_df.to_csv(full_save_path, sep=',', index=False)
-    # print(f"Complete datafile saved in {full_save_filename}. Path is {full_save_path}")
-
-    # sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
-    # background_cols = [col for col in df.columns if col.startswith('background_slope_')]
-
-    # columns_to_keep = [
-    #     # Introductory
-    #     'Time',
-    
-    #     # Columns to sum -----------------------------------------------------------
-    
-    #     # Basic counts
-    #     'events', 'count_in_1', 'count_in_2', 'count_in_3', 'count_in_4',
-    
-    #     # Detection types
-    #     'original_tt_123', 'original_tt_12', 'original_tt_234', 'original_tt_34', 'original_tt_23', 'original_tt_1234', 'original_tt_134', 'original_tt_124', 'original_tt_13',
-    #     'processed_tt_123', 'processed_tt_12', 'processed_tt_234', 'processed_tt_34', 'processed_tt_23', 'processed_tt_1234', 'processed_tt_24', 'processed_tt_13', 'processed_tt_134', 'processed_tt_14', 'processed_tt_124',
-    #     # 'tracking_tt_1234', 'tracking_tt_123', 'tracking_tt_12', 'tracking_tt_234', 'tracking_tt_34', 'tracking_tt_23',
-    
-    #     # Region-specific counts
-    #     'High', 'N', 'S', 'E', 'W',
-    
-    #     # Counts to average ---------------------------------------------------------
-    
-    #     # Summary metrics and quality flags
-    #     'CRT_avg', 'one_side_events', 'purity_of_data_percentage',
-    #     'unc_y', 'unc_tsum', 'unc_tdif',
-
-    #     # Reconstruction outputs
-    #     'x', 'y', 'theta', 'phi', 's', 'th_chi',
-    #     'x_std', 'y_std', 'theta_std', 'phi_std', 's_std', 'th_chi_std',
-
-    #     'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4',
-    
-    #     # Configuration parameters
-    #     "over_P1", "P1-P2", "P2-P3", "P3-P4", "phi_north",
-    
-    #     # Induction section
-    #     "P1_induction_section", "P2_induction_section", "P3_induction_section", "P4_induction_section",
-    
-    #     # Efficiency fittings
-    #     "P2_3fold_a", "P2_3fold_eps0", "P2_3fold_n",
-    #     "P2_2fold_a", "P2_2fold_eps0", "P2_2fold_n",
-    #     "P3_3fold_a", "P3_3fold_eps0", "P3_3fold_n",
-    #     "P3_3fold_a", "P3_3fold_eps0", "P3_3fold_n",
-    # ]
-
-    # sigmoid_cols = [col for col in df.columns if col.startswith('sigmoid_width_')]
-    # background_cols = [col for col in df.columns if col.startswith('background_slope_')]
-
-    # columns_to_keep.extend(sigmoid_cols + background_cols)
-
-    # # Filter columns_to_keep to include only those present in resampled_df
-    # valid_columns = [col for col in columns_to_keep if col in resampled_df.columns]
-
-    # # Optionally, fill missing columns with NaN (or zeros) before subsetting
-    # missing_columns = [col for col in columns_to_keep if col not in resampled_df.columns]
-    # for col in missing_columns:
-    #     resampled_df[col] = np.nan  # or 0, depending on context
-
-    # # Now subset safely
-    # reduced_df = resampled_df[columns_to_keep]
-
-    # reduced_df = resampled_df[columns_to_keep]
-    # reduced_df.to_csv(save_path, index=False, sep=',', float_format='%.5g')
-    # print(f"Reduced columns datafile saved in {save_filename}. Path is {save_path}")
-
-
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------
 
 #%%
 
@@ -6241,7 +5456,13 @@ standard_deviations = np.array(standard_deviations)
 
 # Apply condition
 cond = standard_deviations < 100
-bin_seconds = np.array(bin_seconds)[cond]
+try:
+    bin_seconds = np.array(bin_seconds)[cond]
+except IndexError:
+    error_file_path = os.path.join(base_directories["error_directory"], file_name)
+    print(f"File '{processing_file_path}' gave error. Moving it temporarily to ERROR for analysis...")
+    shutil.move(processing_file_path, error_file_path)
+    sys.exit(1)
 standard_deviations = standard_deviations[cond]
 
 

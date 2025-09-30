@@ -1,0 +1,207 @@
+
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# GLOBAL
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+home_path: "/home/mingo"
+
+
+
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# ANCILLARY
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+# METADATA PLOTTER (metadata_plotter.py)
+
+
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# FIRST STAGE
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# FIRST_STAGE - LAB_LOGS (log_bring_and_clean.sh)
+# -----------------------------------------------------------------------------
+
+create_new_csv: true
+
+outlier_limits:
+  rates_Asserted: [0, 60]
+  rates_Edge: [0, 45]
+  rates_Accepted: [0, 30]
+  rates_Multiplexer1: [0, 400]
+  rates_M2: [0, 400]
+  rates_M3: [0, 400]
+  rates_M4: [0, 400]
+  rates_CM1: [0, 30]
+  rates_CM2: [0, 30]
+  rates_CM3: [0, 30]
+  rates_CM4: [0, 30]
+  sensors_ext_Temperature_ext: [0, 50]
+  sensors_ext_RH_ext: [0, 100]
+  sensors_ext_Pressure_ext: [500, 1300]
+  sensors_int_Temperature_int: [0, 100]
+  sensors_int_RH_int: [0, 100]
+  sensors_int_Pressure_int: [500, 1300]
+  odroid_DiskFill1: [0, 100]
+  odroid_DiskFill2: [0, 100]
+  odroid_DiskFillX: [0, 100000]
+  flow_FlowRate1: [0, 1500]
+  flow_FlowRate2: [0, 1500]
+  flow_FlowRate3: [0, 1500]
+  flow_FlowRate4: [0, 1500]
+  hv_HVneg: [-0.1, 20]
+  hv_HVpos: [-0.1, 20]
+
+
+# -----------------------------------------------------------------------------
+# FIRST_STAGE - COPERNICUS (copernicus.py)
+# -----------------------------------------------------------------------------
+
+test_mode: false
+weeks_behind_requested: 1
+max_weeks_allowed: 2  # Maximum admitted by CDS is 21, but this is faster
+degree_apotema: 0.25
+
+
+# -----------------------------------------------------------------------------
+# EVENT_DATA
+# -----------------------------------------------------------------------------
+
+# FIRST_STAGE - EVENT_DATA - BRING (bring_data_and_config_files.sh)
+
+logbook:
+  sheet_id: "1ato36QkIXCxFkDT_LtAaLjPP7pvLcor-xZAP4fy00l0"
+  gid_by_station:
+    "1": 1331842924
+    "2": 600987525
+    "3": 376764978
+    "4": 1268265225
+
+
+# FIRST_STAGE - EVENT_DATA - RAW_TO_LIST (raw_to_list_events.sh)
+
+
+
+# FIRST_STAGE - EVENT_DATA - EVENT_ACCUMULATOR (ev_accumulator.sh)
+
+# General settings
+correct_angle: false
+last_file_test: false
+update_big_event_file: false
+
+multiple_files: true
+
+run_jupyter_notebook: false
+
+remove_outliers: true
+
+# Plot settings
+create_plots: false
+create_essential_plots: false
+create_very_essential_plots: false
+save_plots: false
+create_pdf: false
+force_replacement: false  # Creates a new datafile even if there is already one that looks complete
+show_plots: false
+
+# Angular region selection
+theta_boundaries:
+  - 5
+  - 15
+  - 25
+region_layout:
+  - 1
+  - 8
+  - 8
+  - 8
+
+# Particular analysis
+side_calculations: true
+eff_vs_charge: true
+eff_vs_angle_and_pos: true
+noise_vs_angle: false
+noise_2d: true
+charge_vs_angle: false
+polya_fit: true
+real_strip_case_study: false
+multiplicity_calculations: true
+crosstalk_probability: true
+n_study_fit: false
+topology_plots: false
+
+# Configuration for multiple files in event_accumulator
+cluster_of_files: 7  # Adjust as needed
+time_window_in_hours: 10  # Time window in hours to look for files
+time_tolerance_in_minutes: 10  # Tolerance in minutes for overlapping time ranges
+
+three_plane_eff: false
+
+# Limits
+crosstalk_limit: 1
+streamer_limit: 100
+
+# Constants
+q_e: 1.602e-4  # fC
+
+
+# FIRST_STAGE - EVENT_DATA - BIG EVENT FILE JOINER (big_event_file_joiner.py)
+
+load_big_event_file: false
+significant_digits: 6
+
+suffixes:
+  # Summary metrics and quality flags
+  - CRT_avg
+  - sigmoid_width
+  - background_slope
+  - one_side_events
+  - purity_of_data_percentage
+  - unc_y
+  - unc_tsum
+  - unc_tdif
+
+  # Reconstruction outputs
+  - x
+  - y
+  - theta
+  - phi
+  - s
+  - th_chi
+  - x_std
+  - y_std
+  - theta_std
+  - phi_std
+  - s_std
+  - th_chi_std
+
+  # Streamer fractions
+  - streamer_percent_1
+  - streamer_percent_2
+  - streamer_percent_3
+  - streamer_percent_4
+
+  # Config
+  - over_P1
+  - P1-P2
+  - P2-P3
+  - P3-P4
+  - phi_north
+
+
+
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# SECOND STAGE
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+
+# SECOND_STAGE - MERGE INTO LARGE TABLE
+
+# SECOND_STAGE - CORRECTOR

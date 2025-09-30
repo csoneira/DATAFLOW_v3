@@ -26,11 +26,37 @@ from scipy.optimize import minimize
 from scipy.stats import poisson
 from tqdm import tqdm
 
+import yaml
+
 # -----------------------------------------------------------------------------
 
-# If the minutes of the time of execution are between 0 and 5 then put update_big_event_file to True
-# if datetime.now().minute < 5:
-#     update_big_event_file = True
+user_home = os.path.expanduser("~")
+
+# Construct the config file path dynamically
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+
+print(f"Using config file: {config_file_path}")
+
+# Load YAML configuration
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+
+home_path = config["home_path"]
+load_big_event_file = config["load_big_event_file"]
+
+
+
+# Load the config once at the top of your script
+with open(f"{home_path}/DATAFLOW_v3/MASTER/config.yaml") as f:
+    config = yaml.safe_load(f)
+
+SIG_DIGITS = config["significant_digits"]
+
+
+suffixes = config["suffixes"]
+
+print(suffixes)
+
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -96,27 +122,10 @@ if files:  # Check if the directory contains any files
     for file in files:
         os.remove(os.path.join(figure_directory, file))
 
+
 # --------------------------------------------------------------------------------------------
 # Move small or too big files in the destination folder to a directory of rejected -----------
 # --------------------------------------------------------------------------------------------
-
-# source_dir = base_directories["acc_events_directory"]
-# rejected_dir = base_directories["acc_rejected_directory"]
-
-# for filename in os.listdir(source_dir):
-#     file_path = os.path.join(source_dir, filename)
-    
-#     # Check if it's a file
-#     if os.path.isfile(file_path):
-#         # Count the number of lines in the file
-#         with open(file_path, "r") as f:
-#             line_count = sum(1 for _ in f)
-
-#         # Move the file if it has < 15 or > 100 rows
-#         if line_count < 10 or line_count > 300:
-#             shutil.move(file_path, os.path.join(rejected_dir, filename))
-#             print(f"Moved: {filename}")
-
 
 list_events_directory = base_directories["list_events_directory"]
 unprocessed_directory = base_directories["unprocessed_directory"]
@@ -144,14 +153,9 @@ for file_name in files_to_copy:
         print(f"Failed to copy {file_name}: {e}")
 
 
-
-work_big_event_file = True
-update_big_event_file = False
-create_big_event_file = True
-
 def round_to_significant_digits(x):
     if isinstance(x, float):
-        return float(f"{x:.6g}")
+        return float(f"{x:.{SIG_DIGITS}g}")
     return x
 
 def combine_duplicates(group):
@@ -187,22 +191,22 @@ def combine_duplicates(group):
         weights = consecutive_group["events"].fillna(0)  # Ensure no NaNs in weights
 
         # Columns to average (weighted)
-        suffixes = [
-            # Summary metrics and quality flags
-            'CRT_avg', 'sigmoid_width', 'background_slope',
-            'one_side_events', 'purity_of_data_percentage',
-            'unc_y', 'unc_tsum', 'unc_tdif',
+        # suffixes = [
+        #     # Summary metrics and quality flags
+        #     'CRT_avg', 'sigmoid_width', 'background_slope',
+        #     'one_side_events', 'purity_of_data_percentage',
+        #     'unc_y', 'unc_tsum', 'unc_tdif',
 
-            # Reconstruction outputs
-            'x', 'y', 'theta', 'phi', 's', 'th_chi',
-            'x_std', 'y_std', 'theta_std', 'phi_std', 's_std', 'th_chi_std',
+        #     # Reconstruction outputs
+        #     'x', 'y', 'theta', 'phi', 's', 'th_chi',
+        #     'x_std', 'y_std', 'theta_std', 'phi_std', 's_std', 'th_chi_std',
 
-            # Streamer fractions
-            'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4',
+        #     # Streamer fractions
+        #     'streamer_percent_1', 'streamer_percent_2', 'streamer_percent_3', 'streamer_percent_4',
 
-            # Config
-            'over_P1', 'P1-P2', 'P2-P3', 'P3-P4', 'phi_north',
-        ]
+        #     # Config
+        #     'over_P1', 'P1-P2', 'P2-P3', 'P3-P4', 'phi_north',
+        # ]
 
         avg_columns = [col for col in group.columns if any(s in col for s in suffixes)]
     
@@ -234,98 +238,81 @@ def combine_duplicates(group):
     return group.iloc[[0]]
 
 
-if work_big_event_file:
-    if update_big_event_file:
-        print("Whatever.")
-        
-        if os.path.exists(big_event_file):
-            big_event_df = pd.read_csv(big_event_file, sep=',', parse_dates=['Time'])
-            print(f"Loaded existing big_event_data.csv with {len(big_event_df)} rows.")
-            
-            # big_event_df = pd.concat([big_event_df, resampled_df], ignore_index=True)
-            
-        else:
-            # big_event_df = pd.DataFrame(columns=resampled_df.columns)
-            print("Created new empty big_event_data.csv dataframe.")
-            create_big_event_file = True
+create_big_event_file = False
 
-    if create_big_event_file:
-        print("Creating big_event_data.csv...")
+if load_big_event_file:
+    print("Whatever.")
+    
+    if os.path.exists(big_event_file):
+        big_event_df = pd.read_csv(big_event_file, sep=',', parse_dates=['Time'])
+        print(f"Loaded existing big_event_data.csv with {len(big_event_df)} rows.")
         
-        big_event_df = pd.DataFrame()
+    else:
+        print("Created new empty big_event_data.csv dataframe.")
+        create_big_event_file = True
+
+
+if create_big_event_file:
+    print("Creating big_event_data.csv...")
+    
+    big_event_df = pd.DataFrame()
+    
+    # Process all CSV files in ACC_EVENTS_DIRECTORY
+    acc_directory = base_directories["acc_events_directory"]  # Get the directory where new CSVs are saved
+    csv_files = [f for f in os.listdir(acc_directory) if f.endswith('.csv')]
+    
+    csv_files = sorted(csv_files)
+    
+    # Add a tqdm progress bar
+    iterator = tqdm(csv_files, total=len(csv_files), desc="Joining CSVs")
+
+    for csv_file in iterator:
+        csv_path = os.path.join(acc_directory, csv_file)
+
+        # print(f"Merging file: {csv_path}")
+        new_data = pd.read_csv(csv_path, sep=',', parse_dates=['Time'])
         
-        # Process all CSV files in ACC_EVENTS_DIRECTORY
-        acc_directory = base_directories["acc_events_directory"]  # Get the directory where new CSVs are saved
-        csv_files = [f for f in os.listdir(acc_directory) if f.endswith('.csv')]
+        # Put 0s to NaN
+        new_data = new_data.replace(0, np.nan)
+        new_data = new_data.copy()
         
-        csv_files = sorted(csv_files)
+        new_data['Time'] = new_data['Time'].dt.floor('1min')  # Round to minute precision
+        new_data = new_data.copy()
         
-        # Add a tqdm progress bar
-        iterator = tqdm(csv_files, total=len(csv_files), desc="Joining CSVs")
+        # Add as a new column, the this_time = os.path.getmtime(csv_path)
+        new_data["execution_date"] = os.path.getmtime(csv_path)
+        big_event_df = pd.concat([big_event_df, new_data], ignore_index=True)
 
-        for csv_file in iterator:
-            csv_path = os.path.join(acc_directory, csv_file)
 
-            # print(f"Merging file: {csv_path}")
-            new_data = pd.read_csv(csv_path, sep=',', parse_dates=['Time'])
-            
-            # Put 0s to NaN
-            new_data = new_data.replace(0, np.nan)
-            new_data = new_data.copy()
-            
-            new_data['Time'] = new_data['Time'].dt.floor('1min')  # Round to minute precision
-            new_data = new_data.copy()
-            
-            # Add as a new column, the this_time = os.path.getmtime(csv_path)
-            new_data["execution_date"] = os.path.getmtime(csv_path)
-            big_event_df = pd.concat([big_event_df, new_data], ignore_index=True)
-    
-    # Once created or updated, we need to handle duplicates in 'Time'
-    print("Grouping the CSVs by 'Time' and combining duplicates...")
-    
-    # Print the columns of big_event_df
-    print("Columns in big_event_df:", big_event_df.columns.to_list())
-    
-    # Group by 'Time' to combine duplicates
-    print("Combining duplicates...")
-    
-    tqdm.pandas()
-    big_event_df = big_event_df.groupby('Time', as_index=False).progress_apply(combine_duplicates).reset_index(drop=True)
-    
-    # Ensure big_event_df is a DataFrame
-    if not isinstance(big_event_df, pd.DataFrame):
-        print("Warning: big_event_df is not a DataFrame. Converting it...")
-        big_event_df = big_event_df.to_frame()  # Convert Series to DataFrame if needed
-    
-    big_event_df = big_event_df.sort_values(by="Time")  # Now sorting should work fine
-    
-    # Put every 0 to NaN, if this is cheaper in terms of memory
-    print("Replacing 0s with NaNs...")
-    big_event_df = big_event_df.replace(0, np.nan)
-    
-    # -----------------------------------------------------------------------------
-    # Save the updated big_event_data.csv -----------------------------------------
-    # -----------------------------------------------------------------------------
-    # numeric_cols = big_event_df.select_dtypes(include=['number']).columns
-    # big_event_df[numeric_cols] = big_event_df[numeric_cols].applymap(round_to_significant_digits)
+# Once created or updated, we need to handle duplicates in 'Time'
+print("Grouping the CSVs by 'Time' and combining duplicates...")
 
-    big_event_df.to_csv(big_event_file, sep=',', index=False)
-    
-    # # Print type of the dataframe
-    # print(type(big_event_df))  # Should be <class 'pandas.DataFrame'>
-    
-    # # Print head of the dataframe
-    # print(big_event_df.head())
-    # print(big_event_df.tail())
-    
-    print(big_event_df.columns.to_list())
-    
-    print(f"Saved big_event_data.csv with {len(big_event_df)} rows.")
+# Print the columns of big_event_df
+print("Columns in big_event_df:", big_event_df.columns.to_list())
 
-else:
-    print("------------------------------------------------------------------------")
-    print("------------------------------------------------------------------------")
-    print("big_event_data.csv not updated by configuration.")
-    print("------------------------------------------------------------------------")
-    print("------------------------------------------------------------------------")
+# Group by 'Time' to combine duplicates
+print("Combining duplicates...")
+
+tqdm.pandas()
+big_event_df = big_event_df.groupby('Time', as_index=False).progress_apply(combine_duplicates).reset_index(drop=True)
+
+# Ensure big_event_df is a DataFrame
+if not isinstance(big_event_df, pd.DataFrame):
+    print("Warning: big_event_df is not a DataFrame. Converting it...")
+    big_event_df = big_event_df.to_frame()  # Convert Series to DataFrame if needed
+
+big_event_df = big_event_df.sort_values(by="Time")  # Now sorting should work fine
+
+# Put every 0 to NaN, if this is cheaper in terms of memory
+print("Replacing 0s with NaNs...")
+big_event_df = big_event_df.replace(0, np.nan)
+
+# -----------------------------------------------------------------------------
+# Save the updated big_event_data.csv -----------------------------------------
+# -----------------------------------------------------------------------------
+
+big_event_df.to_csv(big_event_file, sep=',', index=False)
+print(big_event_df.columns.to_list())
+
+print(f"Saved big_event_data.csv with {len(big_event_df)} rows.")
 

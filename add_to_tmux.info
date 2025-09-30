@@ -12,18 +12,18 @@ run-shell "tmux has-session -t pipeline_monitor 2>/dev/null && tmux kill-session
 new-session -d -s pipeline_monitor -n 'Pipeline check'
 
 # Left pane: file flow check
-send-keys -t pipeline_monitor:0 "watch -n 1 /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/file_flow_check.sh" C-m
+send-keys -t pipeline_monitor:0 "watch -n 1 /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_REAL_TIME_CHECK/file_flow_check.sh" C-m
 
 # Right pane: pipeline check
 split-window -h -t pipeline_monitor:0
-send-keys -t pipeline_monitor:0.1 "watch -n 1 /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/pipeline_check.sh" C-m
+send-keys -t pipeline_monitor:0.1 "watch -n 1 /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_REAL_TIME_CHECK/pipeline_check.sh" C-m
 
 # Layout adjustment
 select-layout -t pipeline_monitor:0 even-horizontal
 
 # ──────────────── Window 2: Execution Logs ────────────────
 new-window -t pipeline_monitor -n 'Execution logs'
-send-keys -t pipeline_monitor:1 "/bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/track_logs.sh" C-m
+send-keys -t pipeline_monitor:1 "/bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_REAL_TIME_CHECK/track_logs.sh" C-m
 select-layout -t pipeline_monitor:1 tiled
 
 # ──────────────── Start with Window 1 ────────────────

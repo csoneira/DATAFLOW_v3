@@ -17,7 +17,32 @@ import pandas as pd
 
 # -----------------------------------------------------------------------------
 
-create_new_csv = True
+# CONFIG 
+
+import yaml
+
+# Dynamically get the user's home directory
+user_home = os.path.expanduser("~")
+
+# Construct the config file path dynamically
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+
+print(f"Using config file: {config_file_path}")
+
+# Load YAML configuration
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+
+outlier_limits = config["outlier_limits"]
+print(outlier_limits)
+
+
+create_new_csv = config["create_new_csv"]
+print(f"Create new CSV: {create_new_csv}")
+
+home_path = config["home_path"]
+
+print(f"Home path: {home_path}")
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
@@ -37,7 +62,7 @@ print(f"Station: {station}")
 
 replace_data = True
 
-log_base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/LAB_LOGS/")
+log_base_directory = os.path.expanduser(f"{home_path}/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/LAB_LOGS/")
 
 # Define directory paths relative to base_directory
 base_directories = {
@@ -246,34 +271,34 @@ def merge_dataframes(file_mappings, start_time=None):
 
 
 # Define the limits for outliers as a dictionary
-outlier_limits = {
-    "rates_Asserted": (0, 60),
-    "rates_Edge": (0, 45),
-    "rates_Accepted": (0, 30),
-    "rates_Multiplexer1": (0, 400),
-    "rates_M2": (0, 400),
-    "rates_M3": (0, 400),
-    "rates_M4": (0, 400),
-    "rates_CM1": (0, 30),
-    "rates_CM2": (0, 30),
-    "rates_CM3": (0, 30),
-    "rates_CM4": (0, 30),
-    "sensors_ext_Temperature_ext": (0, 50),
-    "sensors_ext_RH_ext": (0, 100),
-    "sensors_ext_Pressure_ext": (500, 1300),
-    "sensors_int_Temperature_int": (0, 100),
-    "sensors_int_RH_int": (0, 100),
-    "sensors_int_Pressure_int": (500, 1300),
-    "odroid_DiskFill1": (0, 100),
-    "odroid_DiskFill2": (0, 100),
-    "odroid_DiskFillX": (0, 100000),
-    "flow_FlowRate1": (0, 1500),
-    "flow_FlowRate2": (0, 1500),
-    "flow_FlowRate3": (0, 1500),
-    "flow_FlowRate3": (0, 1500),
-    "hv_HVneg": (-0.1, 20),
-    "hv_HVpos": (-0.1, 20),
-}
+# outlier_limits = {
+#     "rates_Asserted": (0, 60),
+#     "rates_Edge": (0, 45),
+#     "rates_Accepted": (0, 30),
+#     "rates_Multiplexer1": (0, 400),
+#     "rates_M2": (0, 400),
+#     "rates_M3": (0, 400),
+#     "rates_M4": (0, 400),
+#     "rates_CM1": (0, 30),
+#     "rates_CM2": (0, 30),
+#     "rates_CM3": (0, 30),
+#     "rates_CM4": (0, 30),
+#     "sensors_ext_Temperature_ext": (0, 50),
+#     "sensors_ext_RH_ext": (0, 100),
+#     "sensors_ext_Pressure_ext": (500, 1300),
+#     "sensors_int_Temperature_int": (0, 100),
+#     "sensors_int_RH_int": (0, 100),
+#     "sensors_int_Pressure_int": (500, 1300),
+#     "odroid_DiskFill1": (0, 100),
+#     "odroid_DiskFill2": (0, 100),
+#     "odroid_DiskFillX": (0, 100000),
+#     "flow_FlowRate1": (0, 1500),
+#     "flow_FlowRate2": (0, 1500),
+#     "flow_FlowRate3": (0, 1500),
+#     "flow_FlowRate4": (0, 1500),
+#     "hv_HVneg": (-0.1, 20),
+#     "hv_HVpos": (-0.1, 20),
+# }
 
 
 # Check if merged CSV exists

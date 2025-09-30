@@ -23,9 +23,31 @@ print("  | |                                                            | |  ")
 # so the data range must be split in sets of 21 seeks, trying the ranges to have less than 21
 # weeks but the same size to each other.
 
-test = False
-weeks_behind_requested = 1 # 21 maxixum
-degree_apotema = 0.25  # 0.25 degrees apotema for the area around the station
+
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# TO PUT INTO CONGIF FILES LATER ----------------------------------------------
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+# test = False
+# weeks_behind_requested = 1 # 21 maxixum
+# degree_apotema = 0.25  # 0.25 degrees apotema for the area around the station
+
+import yaml
+
+# Load configuration from YAML
+with open("/home/mingo/DATAFLOW_v3/MASTER/config.yaml", "r") as config_file:
+    config = yaml.safe_load(config_file)
+
+test = config["test_mode"]
+weeks_behind_requested = config["weeks_behind_requested"]
+max_weeks_allowed = config["max_weeks_allowed"]
+degree_apotema = config["degree_apotema"]
+
+
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # ------------------------------- Imports -------------------------------------
@@ -64,7 +86,7 @@ print(f"Station: {station}")
 # -----------------------------------------------------------------------------
 
 
-# Location definition --------------------------------------------- good solution
+# Location definition ------------------------------------------- good solution
 
 station = int(station)
 
@@ -176,7 +198,7 @@ if start_date > end_date:
 # Helper: split the overall period in chunks of ≤ 20 weeks
 # ------------------------------------------------------------------
 
-MAX_WEEKS = 2  # CDS allows < 21 weeks, but this is faster
+MAX_WEEKS = max_weeks_allowed  # CDS allows < 21 weeks, but this is faster
 DAY      = timedelta(days=1)
 WEEK     = timedelta(weeks=1)
 

@@ -21,9 +21,6 @@ if [[ ! "$station" =~ ^[1-4]$ ]]; then
   exit 1
 fi
 
-# echo "Station: $station"
-# ----------------------------------------------
-
 
 # --------------------------------------------------------------------------------------------
 # Prevent the script from running multiple instances -----------------------------------------
@@ -35,11 +32,7 @@ script_args="$*"
 current_pid=$$
 
 # Debug: Check for running processes
-# echo "$(date) - Checking for existing processes of $script_name with args $script_args"
-# ps -eo pid,cmd | grep "[b]ash .*/$script_name"
 
-# Get all running instances of the script *with the same argument*, but exclude the current process
-# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | awk '{print $1}'); do
 for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
     if [[ "$pid" != "$current_pid" ]]; then
         cmdline=$(ps -p "$pid" -o args=)
@@ -56,24 +49,6 @@ done
 # If no duplicate process is found, continue
 echo "$(date) - No running instance found. Proceeding..."
 
-# Variables
-# script_name=$(basename "$0")
-# script_args="$*"
-# current_pid=$$
-
-# # Get all running instances of the script (excluding itself)
-# # for pid in $(pgrep -f "bash .*/$script_name $script_args"); do
-# for pid in $(pgrep -f "bash .*/$script_name $script_args" | grep -v $$); do
-#     if [ "$pid" != "$current_pid" ]; then
-#         cmdline=$(ps -p "$pid" -o args=)
-#         if [[ "$cmdline" == *"$script_name"* && "$cmdline" == *"$script_args"* ]]; then
-#             echo "------------------------------------------------------"
-#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-#             echo "------------------------------------------------------"
-#             exit 1
-#         fi
-#     fi
-# done
 
 # If no duplicate process is found, continue
 echo "------------------------------------------------------"

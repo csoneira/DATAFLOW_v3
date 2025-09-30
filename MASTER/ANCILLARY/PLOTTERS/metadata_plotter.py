@@ -724,9 +724,45 @@ def main():
     ]
     
 
-    if args.save:
+    # if args.save:
         
-        # Save multi-page PDF in the same directory as the CSVs
+    #     # Save multi-page PDF in the same directory as the CSVs
+    #     base = (
+    #         Path("/home/mingo/DATAFLOW_v3")
+    #         / "STATIONS"
+    #         / f"MINGO0{args.station}"
+    #         / "FIRST_STAGE"
+    #         / "EVENT_DATA"
+    #     )
+    #     base.mkdir(parents=True, exist_ok=True)        # ensure path exists
+    #     pdf_path = base / f"station{args.station}_summary.pdf"
+        
+    #     # Directory for PNGs
+    #     fig_dir = base / f"station{args.station}_figures"
+    #     fig_dir.mkdir(parents=True, exist_ok=True)
+
+    #     # Save individual PNGs
+    #     for i, fig in enumerate(figs, 1):
+    #         fig.savefig(fig_dir / f"station{args.station}_figure{i}.png", dpi=300)
+        
+    #     with PdfPages(pdf_path) as pdf:
+    #         for fig in figs:
+    #             print(f"Saving figure {fig.number} to PDF...")
+    #             pdf.savefig(fig)
+    #             plt.close(fig)
+    #     print(f"PDF saved to: {pdf_path.resolve()}")
+        
+    #     # Remove the outdir, also if it has files
+    #     if fig_dir.exists():
+    #         shutil.rmtree(fig_dir)          # recursive, ignores non-empty state
+    #         print(f"Temporary directory {fig_dir} removed.")
+        
+    # else:
+    #     print("Figures will not be saved. Use --save to enable saving.")
+    
+    
+    if args.save:
+        # Base output directory (same place you used for the CSVs)
         base = (
             Path("/home/mingo/DATAFLOW_v3")
             / "STATIONS"
@@ -734,29 +770,43 @@ def main():
             / "FIRST_STAGE"
             / "EVENT_DATA"
         )
-        base.mkdir(parents=True, exist_ok=True)        # ensure path exists
+        base.mkdir(parents=True, exist_ok=True)
+
+        # Paths
         pdf_path = base / f"station{args.station}_summary.pdf"
-        
-        # Directory for PNGs
         fig_dir = base / f"station{args.station}_figures"
         fig_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save individual PNGs
+        # 1) Save each figure as PNG (and close the live figure)
+        png_paths = []
         for i, fig in enumerate(figs, 1):
-            fig.savefig(fig_dir / f"station{args.station}_figure{i}.png", dpi=300)
-        
+            out = fig_dir / f"station{args.station}_figure{i}.png"
+            fig.savefig(out, dpi=300, bbox_inches="tight")
+            png_paths.append(out)
+            plt.close(fig)
+
+        # 2) Create the PDF where each page is the PNG
         with PdfPages(pdf_path) as pdf:
-            for fig in figs:
-                print(f"Saving figure {fig.number} to PDF...")
+            for png in png_paths:
+                img = plt.imread(png)
+                h, w = img.shape[:2]
+
+                # make a page that matches the PNG pixel size at 300 dpi
+                dpi = 300
+                fig = plt.figure(figsize=(w / dpi, h / dpi), dpi=dpi)
+                ax = fig.add_axes([0, 0, 1, 1])
+                ax.imshow(img)
+                ax.axis("off")
+
                 pdf.savefig(fig)
                 plt.close(fig)
-        print(f"PDF saved to: {pdf_path.resolve()}")
-        
-        # Remove the outdir, also if it has files
-        if fig_dir.exists():
-            shutil.rmtree(fig_dir)          # recursive, ignores non-empty state
-            print(f"Temporary directory {fig_dir} removed.")
-        
+
+        print(f"PDF (raster pages) saved to: {pdf_path.resolve()}")
+
+        # 3) (optional) remove the temporary PNG directory, or keep it
+        # shutil.rmtree(fig_dir)   # uncomment if you want to delete the PNGs
+        # print(f"Temporary directory {fig_dir} removed.")
+
     else:
         print("Figures will not be saved. Use --save to enable saving.")
 
