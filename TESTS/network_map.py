@@ -1,6 +1,16 @@
 #%%
 
 #!/usr/bin/env python3
+
+import os
+import yaml
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+home_path = config["home_path"]
+
 # ------------------------------------------------------------------
 #  Sky‑coverage (zenith ≤ 45 °) of a telescope network
 #  ────────────────────────────────────────────────────────────────
@@ -127,6 +137,6 @@ ax.legend(handles[::2], labels[::2],
 ax.set_title(f"Sky‑coverage (zenith ≤ {ZENITH_RADIUS_DEG}°) of ground stations", fontsize="medium")
 #plt.show()
 # Save figure
-plt.savefig("/home/mingo/DATAFLOW_v3/TESTS/network_map.png", bbox_inches="tight", dpi=300)
+plt.savefig(f"{home_path}/DATAFLOW_v3/TESTS/network_map.png", bbox_inches="tight", dpi=300)
 
 # %%

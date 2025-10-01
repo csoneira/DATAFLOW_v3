@@ -77,7 +77,6 @@ with open(config_file_path, "r") as config_file:
 home_path = config["home_path"]
 
 
-
 # General Settings
 correct_angle = config["correct_angle"]
 last_file_test = config["last_file_test"]
