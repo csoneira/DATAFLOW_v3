@@ -104,6 +104,7 @@ def figure1(df1, df2, df3, df4):
     """
     Plot the 'hv_HVneg' column from four DataFrames in a 4-row figure.
     """
+    
     fig, axs = plt.subplots(4, 1, figsize=(14, 10), sharex=True, constrained_layout=True)
     dataframes = [df1, df2, df3, df4]
     titles = ["Station 1", "Station 2", "Station 3", "Station 4"]
@@ -126,6 +127,11 @@ def figure1(df1, df2, df3, df4):
         ax.set_ylabel("HV- (V)")
         ax.set_title(title)
         ax.grid(True, linestyle=":", linewidth=0.4)
+        
+        import datetime
+        execution_time = datetime.datetime.now()
+        ax.axvline(execution_time, color='red', linestyle='--', label="Last execution")
+
         _apply_time_axis(ax)
 
 
@@ -255,6 +261,10 @@ def figure2(df1, df2, df3, df4, thr=3.0):
         ax.set_title(title)
         ax.grid(True, linestyle=":", linewidth=0.4)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y‑%m‑%d\n%H:%M"))
+        
+        import datetime
+        execution_time = datetime.datetime.now()
+        ax.axvline(execution_time, color='red', linestyle='--', label="Last execution")
 
     axs[-1].set_xlabel("Time")
     return fig
@@ -313,6 +323,11 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
     axs[0].set_yticks([])
     axs[0].set_ylabel("Analyzed")
     axs[0].set_xlim(left=df_cal.index.min(), right=now)
+    
+    import datetime
+    execution_time = datetime.datetime.now()
+    axs[0].axvline(execution_time, color='red', linestyle='--', label="Last execution")
+    
     for start, end in periods_cal:
         axs[0].axvspan(start, end, facecolor='green', edgecolor='none', alpha=0.5)
 
@@ -322,6 +337,9 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
     axs[1].set_yticks([])
     axs[1].set_ylabel("Analyzed")
     axs[1].set_xlim(left=df_evt.index.min(), right=now)
+    
+    axs[1].axvline(execution_time, color='red', linestyle='--', label="Last execution")
+    
     for start, end in periods_evt:
         axs[1].axvspan(start, end, facecolor='green', edgecolor='none', alpha=0.5)
 
@@ -371,6 +389,10 @@ def figure_exec_bands_dual(df_cal: pd.DataFrame,
     ax.set_yticks([])
     ax.set_ylabel("Files")
     ax.set_xlim(left=df_cal.index.min(), right=now)
+    
+    import datetime
+    execution_time = datetime.datetime.now()
+    ax.axvline(execution_time, color='red', linestyle='--', label="Last execution")
 
     for start, end in zip(df_cal.index,
                           pd.to_datetime(df_cal["End_Time"], errors="coerce")):
@@ -396,6 +418,10 @@ def figure_exec_bands_dual(df_cal: pd.DataFrame,
     ax.set_ylabel("Files")
     ax.set_xlabel("Time")
     ax.set_xlim(left=df_evt.index.min(), right=now)
+    
+    import datetime
+    execution_time = datetime.datetime.now()
+    ax.axvline(execution_time, color='red', linestyle='--', label="Last execution")
 
     for start, end in zip(df_evt.index,
                           pd.to_datetime(df_evt["End_Time"], errors="coerce")):
@@ -423,9 +449,16 @@ def figure_exec_bands_dual(df_cal: pd.DataFrame,
 # -------------------------------------------------------------------------- #
 def main():
     parser = argparse.ArgumentParser(description="Visualize all MINGO stations.")
-    parser.add_argument("--save", action="store_true", help="Save figures as PNG and PDF.")
+    parser.add_argument("--save", action="store_true", help="Save figures as Pfigure1NG and PDF.")
     args = parser.parse_args()
-
+    
+    
+    if args.save:
+        print("Figures will be saved.")
+    else:
+        print("Figures will not be saved. Use --save to enable saving.")
+        plt.show()
+    
     # Load data from all 4 stations
     df1, df2, df3, df4 = read_station_metadata(station=1)  # station arg unused inside
     
@@ -435,8 +468,6 @@ def main():
     
     
     print(df1['hv_HVneg'].describe())
-    
-    
     
     # Generate figures
     fig_hv = figure1(df1, df2, df3, df4)                 # HV voltage plots
