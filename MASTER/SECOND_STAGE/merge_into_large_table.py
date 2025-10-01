@@ -25,11 +25,25 @@ from pathlib import Path
 
 use_reference = "--reference-event" in sys.argv or "-r" in sys.argv
 
+
+# -----------------------------------------------------------------------------
+# ----------------------------- Config file -----------------------------------
+# -----------------------------------------------------------------------------
+
+import yaml
+
+# Load configuration
+config_file_path = "/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+
+DECIMAL_PLACES = config["DECIMAL_PLACES"]
+
+
 # -----------------------------------------------------------------------------
 def print_memory_usage(tag=""):
     mem = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2  # in MB
     print(f"[{tag}] Memory usage: {mem:.2f} MB")
-
 # -----------------------------------------------------------------------------
 
 # Check input argument
@@ -109,8 +123,8 @@ for p in file_paths:
 # -----------------------------------------------------------------------------
 # Merge
 # -----------------------------------------------------------------------------
-merged = None
-reference_index = None
+
+
 
 for pq in tmp_parquets:
     df = pd.read_parquet(pq)
@@ -146,15 +160,16 @@ combined_df = merged_df
 print("\nReplacing 0s and pd.NA with np.nan...")
 combined_df = combined_df.replace([0, pd.NA], np.nan).infer_objects(copy=False)
 
-print("\nRounding values to 2 decimal places for columns (but Time)...")
+print("\nRounding values to X decimal places for columns (but Time)...")
 num_cols = combined_df.columns.difference(['Time'])
+
 
 # Convert to float32 safely after coercion
 combined_df[num_cols] = combined_df[num_cols].apply(pd.to_numeric, errors='coerce')
 combined_df[num_cols] = combined_df[num_cols].astype('float32')
 
 vals = combined_df[num_cols].to_numpy()
-np.round(vals, 2, out=vals)
+np.round(vals, DECIMAL_PLACES, out=vals)
 
 # -----------------------------------------------------------------------------
 # Drop rows where all non-Time columns are NaN

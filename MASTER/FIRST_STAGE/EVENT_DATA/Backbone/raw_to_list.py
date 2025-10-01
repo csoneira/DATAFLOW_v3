@@ -8600,7 +8600,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             # 'alt_th_chi': [0, 12],
             
             # Dinamic
-            'charge_event': [charge_plot_limit_left, charge_plot_event_limit_right400],
+            'charge_event': [charge_plot_limit_left, charge_plot_event_limit_right],
             'charge_1': [charge_plot_limit_left, charge_plot_limit_right],
             'charge_2': [charge_plot_limit_left, charge_plot_limit_right],
             'charge_3': [charge_plot_limit_left, charge_plot_limit_right],

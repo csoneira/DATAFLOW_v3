@@ -498,7 +498,7 @@ q_e: 1.602e-4  # fC
 load_big_event_file: false
 significant_digits: 6
 
-suffixes:
+suffixes: # These are the columns to average, the others are summing
   # Summary metrics and quality flags
   - CRT_avg
   - sigmoid_width
@@ -547,4 +547,70 @@ suffixes:
 
 # SECOND_STAGE - MERGE INTO LARGE TABLE
 
+DECIMAL_PLACES: 2
+
+
+
 # SECOND_STAGE - CORRECTOR
+
+# -----------------------------------------------------------------------------
+# Touch -----------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+use_two_planes_too: false
+date_selection: true  # Set to true if you want to filter by date
+start_date_filter: "2025-01-01"
+end_date_filter: "2025-12-31"
+
+# Aesthetic -------------------------------------
+show_plots: false
+save_plots: true
+create_plots: false
+create_essential_plots: false
+create_very_essential_plots: false
+show_errorbar: false
+
+# Execution -------------------------------------
+only_all: true
+recalculate_pressure_coeff: true
+remove_outliers: true
+
+rolling_effs: true
+mean_window: 5
+med_window: 3
+rolling_mean: false
+rolling_median: true
+
+outlier_gaussian_quantile: 0.02 # 2%
+
+res_win_min: 60 # 180 Resampling window minutes
+HMF_ker: 3 # It must be odd. Horizontal Median Filter
+MAF_ker: 0 # Moving Average Filter
+acceptance_corr: false
+high_order_correction: false
+
+
+# -----------------------------------------------------------------------------
+# To not touch unless necesary ------------------------------------------------
+# -----------------------------------------------------------------------------
+
+# This should come from an input file
+eta_P: -0.162 # pressure_coeff_input
+unc_eta_P: 0.013 # unc_pressure_coeff_input
+set_a: -0.11357 # pressure_intercept_input
+mean_pressure_used_for_the_fit: 940
+
+low_lim_eff_plot: 0
+systematic_unc:
+  - 0
+  - 0
+  - 0
+  - 0 # From simulation
+
+systematic_unc_corr_to_real_rate: 0
+
+remove_non_data_points: true
+repeat_efficiency_calculation: true
+decorrelate: true
+fit_efficiencies: true
+significant_digits: 4

@@ -110,56 +110,76 @@ print('-------------------------------- Header ------------------------------')
 print('----------------------------------------------------------------------')
 print('----------------------------------------------------------------------')
 
+import yaml
+
+# Load configuration
+config_file_path = "/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+
+DECIMAL_PLACES = config["DECIMAL_PLACES"]
+
 # -----------------------------------------------------------------------------
 # Touch -----------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-use_two_planes_too = False
-date_selection = True  # Set to True if you want to filter by date
+use_two_planes_too = config["use_two_planes_too"]
+date_selection = config["date_selection"]  # Set to True if you want to filter by date
+start_date_filter = config["start_date_filter"]
+end_date_filter = config["end_date_filter"]
 
 # Aesthetic -------------------------------------
-show_plots = False
-save_plots = True
-create_plots = False
-create_essential_plots = False
-create_very_essential_plots = False
-show_errorbar = False
+show_plots = config["show_plots"]
+save_plots = config["save_plots"]
+create_plots = config["create_plots"]
+create_essential_plots = config["create_essential_plots"]
+create_very_essential_plots = config["create_very_essential_plots"]
+show_errorbar = config["show_errorbar"]
 
 # Execution -------------------------------------
-only_all = True
-recalculate_pressure_coeff = True
-remove_outliers = True
+only_all = config["only_all"]
+recalculate_pressure_coeff = config["recalculate_pressure_coeff"]
+remove_outliers = config["remove_outliers"]
 
-rolling_effs = True
-mean_window, med_window = 5, 3
-rolling_mean, rolling_median = False, True
+rolling_effs = config["rolling_effs"]
+mean_window = config["mean_window"]
+med_window = config["med_window"]
+rolling_mean = config["rolling_mean"]
+rolling_median = config["rolling_median"]
 
-outlier_gaussian_quantile = 0.02 # 2%
+outlier_gaussian_quantile = config["outlier_gaussian_quantile"]
 
-res_win_min = 60 # 180 Resampling window minutes
-HMF_ker = 3 # It must be odd. Horizontal Median Filter
-MAF_ker = 0 # Moving Average Filter
-acceptance_corr = False
-high_order_correction = False
+res_win_min = config["res_win_min"]
+HMF_ker = config["HMF_ker"]
+MAF_ker = config["MAF_ker"]
+acceptance_corr = config["acceptance_corr"]
+high_order_correction = config["high_order_correction"]
 
 
 # -----------------------------------------------------------------------------
 # To not touch unless necesary ------------------------------------------------
 # -----------------------------------------------------------------------------
 
+# This should come from an input file
+eta_P = config["eta_P"]
+unc_eta_P = config["unc_eta_P"]
+set_a = config["set_a"]
+mean_pressure_used_for_the_fit = config["mean_pressure_used_for_the_fit"]
+
+low_lim_eff_plot = config["low_lim_eff_plot"]
+systematic_unc = config["systematic_unc"]
+
+systematic_unc_corr_to_real_rate = config["systematic_unc_corr_to_real_rate"]
+
+remove_non_data_points = config["remove_non_data_points"]
+repeat_efficiency_calculation = config["repeat_efficiency_calculation"]
+decorrelate = config["decorrelate"]
+fit_efficiencies = config["fit_efficiencies"]
+significant_digits = config["significant_digits"]
+
+
 resampling_window = f'{res_win_min}min'  # '10min' # '5min' stands for 5 minutes.
 print(f"Resampling window set to {resampling_window}.")
-
-# This should come from an input file
-eta_P = -0.162 # pressure_coeff_input
-unc_eta_P = 0.013 # unc_pressure_coeff_input
-set_a = -0.11357 # pressure_intercept_input
-mean_pressure_used_for_the_fit = 940
-
-low_lim_eff_plot = 0
-systematic_unc = [0, 0, 0, 0] # From simulation
-
-systematic_unc_corr_to_real_rate = 0
 
 global_variables = {}
 global_variables['res_win_min'] = res_win_min
@@ -977,14 +997,6 @@ angular_regions = sorted(rx_names)
 # print(f"\nFound RX columns: {angular_regions}")
 
 
-# Define the processed_tt_ columns based on the detection_types and angular_regions
-# for tt in detection_types:
-#     data_df[f'{tt}_all'] = 0  # Initialize processed_tt_ columns
-#     for rx in angular_regions:
-#         col_name = f'{tt}_{rx}'
-#         data_df[f'{tt}_all'] += data_df[col_name].fillna(0)  # Sum the angular regions
-
-
 # angular_regions = angular_regions + ['all']  # Add 'all' to the angular regions
 processing_regions = angular_regions + combinations
 
@@ -1067,13 +1079,11 @@ end_date = datetime.now()
 # Date filtering -------------------------------------------------------------------------------
 if date_selection:
     
-    # start_date = pd.to_datetime("2024-03-01")  # Use a string in 'YYYY-MM-DD' format
-    # end_date = pd.to_datetime("2024-06-15")
+    start_date = pd.to_datetime(start_date_filter)  # Use a string in 'YYYY-MM-DD' format
+    end_date = pd.to_datetime(end_date_filter)  # Use a string in 'YYYY-MM-DD' format
     
-    start_date = pd.to_datetime("2025-05-21")  # Use a string in 'YYYY-MM-DD' format
-    end_date = pd.to_datetime("2025-06-21")
+    print(f"Filtering data from {start_date} to {end_date}...")
     
-    # end_date = pd.to_datetime("2025-08-01")
     print("------- SELECTION BY DATE IS BEING PERFORMED -------")
     data_df = data_df[(data_df['Time'] >= start_date) & (data_df['Time'] <= end_date)]
 
@@ -1085,7 +1095,6 @@ start_time = data_df['Time'].min()
 end_time = data_df['Time'].max()
 
 
-remove_non_data_points = True
 if remove_non_data_points:
     # Remove rows where 'events' is NaN or zero
     print(f"Original data contains {len(data_df)} rows before removing non-data points.")
@@ -2121,7 +2130,7 @@ for case in processing_regions:
         plot_grouped_series(data_df, group_cols, title=f'Denoised. Counts per TT', plot_after_all=True, sharey_axes = False)
         
         
-        repeat_efficiency_calculation = True
+        
         if repeat_efficiency_calculation:
             if eff_system:
                 data_df[['ancillary_1', 'eff_sys_2_denoised', 'eff_sys_3_denoised', 'ancillary_4']] = data_df.apply(solve_efficiencies_four_planes_inner, axis=1)
@@ -2467,7 +2476,7 @@ for case in processing_regions:
     
     
     # ------------------------------------------------------------------------------------------------------------------------
-    decorrelate = True
+    
     if decorrelate:
         
         print('----------------------------------------------------------------------')
@@ -2595,7 +2604,6 @@ for case in processing_regions:
     # -------------------------------------------------------------------------------------------------------------------------
     # -------------------------------------------------------------------------------------------------------------------------
     
-    fit_efficiencies = True
     if fit_efficiencies:
         
         print("Calculating the fit for the efficiencies.")
@@ -3081,9 +3089,6 @@ print('-------------------- Atmospheric corrections started -----------------')
 print('----------------------------------------------------------------------')
 print('----------------------------------------------------------------------')
 
-
-# a = 1/0
-
 print('----------------------------------------------------------------------')
 print('---------------------- Pressure correction started -------------------')
 print('----------------------------------------------------------------------')
@@ -3268,13 +3273,6 @@ if create_plots or create_essential_plots or create_very_essential_plots:
         print(f"Saving figure to {new_figure_path}")
         plt.savefig(new_figure_path, format = 'png', dpi = 300)
     plt.close()
-# else:
-#     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
-
-
-# for region in regions_to_correct:
-#     print(f"Region: {region}")
-#     print(f"                    Eta_P: {global_variables[f'eta_P_{region}']}")
 
 
 # Initialize the matrix as a nested dictionary
@@ -3303,9 +3301,6 @@ print(df_eta)
         
 
 # ---------------------------------------------------------------------------------------------------
-
-# Filter regions that contain 'new_' to plot
-# regions_to_plot = [region for region in log_delta_I_df['Region'] if 'new_' in region]
 
 if create_plots:
     regions_to_plot = regions_to_correct
@@ -3362,102 +3357,6 @@ if create_plots:
 #     print("Plotting is disabled. Set `create_plots = True` to enable plotting.")
 
 # ---------------------------------------------------------------------------------------------------
-
-
-# print("\nDHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
-# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
-# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
-# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
-# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF")
-# print("DHSFGAKSDJGFAKJSDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFKJASDGHFSJGF\n")
-
-# if remove_outliers:
-    
-#     # Begin actual filtering
-#     for tt in detector_labels:
-#         regions = regions_of_interest
-#         cols = 3
-#         num_rx = len(regions)
-#         rows = math.ceil(num_rx / cols)
-
-#         if create_plots or create_essential_plots or create_very_essential_plots:
-#             fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 3.5 * rows), sharex=False, sharey=False)
-#             axes = axes.flatten()
-
-#         for idx, rx in enumerate(regions):
-#             col_name = f'{tt}_{rx}'
-#             comb = f'detector_{tt}_eff_corr_{rx}'
-
-#             if comb not in data_df.columns:
-#                 continue
-
-#             series = data_df[comb].copy()
-#             series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
-
-#             if series_clean.empty:
-#                 continue
-            
-#             # -----------------------  Code to filter here  -----------------------------
-#             # Robust outlier rejection based on the modified Z-score (MAD)
-#             #
-#             # User-configurable parameters
-#             outlier_cutoff = 3.5          # Modified-Z threshold (≈ 3.5 ≈ 0.3% outliers for N≈10^4)
-#             min_samples    = 10           # Skip filtering if too few valid points
-#             nbins          = 50           # Histogram granularity for later plotting
-
-#             if len(series_clean) >= min_samples:
-#                 data = series_clean.to_numpy(dtype=float)
-
-#                 # Median and MAD
-#                 med = np.median(data)
-#                 mad = np.median(np.abs(data - med))
-#                 # Guard against MAD = 0 (all identical)
-#                 if mad == 0:
-#                     filt_idx = np.ones_like(data, dtype=bool)
-#                 else:
-#                     mod_z = 0.6745 * (data - med) / mad          # 0.6745 = Φ⁻¹(0.75)
-#                     filt_idx = np.abs(mod_z) <= outlier_cutoff   # keep “inliers”
-
-#                 # Persist the cleaning in the main DataFrame (mark outliers as NaN)
-#                 outlier_mask = ~filt_idx
-#                 data_df.loc[series_clean.index[outlier_mask], comb] = np.nan
-
-#                 # Store the filtered series for plotting
-#                 series_filt = pd.Series(data[filt_idx], index=series_clean.index[filt_idx], name=col_name)
-#             else:
-#                 # Not enough statistics → leave data unchanged
-#                 series_filt = series_clean
-#             # ---------------------------------------------------------------------------
-
-            
-#         # ------------------------  Code to plot here  ------------------------------
-#         if create_plots or create_essential_plots or create_very_essential_plots:
-#             ax = axes[idx]
-
-#             # Raw versus filtered distributions
-#             ax.hist(series_clean, bins=nbins, histtype='step', linewidth=1.2, label='raw')
-#             ax.hist(series_filt,  bins=nbins, alpha=0.7, label='filtered')
-
-#             ax.set_title(f'{tt} – {rx}')
-#             ax.set_xlabel('Corrected efficiency')
-#             ax.set_ylabel('Counts')
-#             ax.grid(True, linestyle=':')
-#             ax.legend(frameon=False, fontsize='small')
-#         # ---------------------------------------------------------------------------
-
-
-#         if create_plots or create_essential_plots or create_very_essential_plots:
-#             for ax in axes[num_rx:]:
-#                 fig.delaxes(ax)
-#             plt.tight_layout()
-#             if show_plots:
-#                 plt.show()
-#             elif save_plots:
-#                 grouped_path = f"{figure_path}{fig_idx}_grouped_histo_{tt}_cols_{cols}_after_pressure.png"
-#                 plt.savefig(grouped_path, format='png', dpi=300)
-#             plt.close()
-#             fig_idx += 1
-
 
 
 print('----------------------------------------------------------------------')
@@ -3795,42 +3694,6 @@ plot_grouped_series(data_df,
 
 
 # -----------------------------------------------------------------------------
-# Smoothing filters -----------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# Horizontal Median Filter ----------------------------------------------------
-
-# Apply median filter to columns of interest
-# if HMF_ker > 0:
-#     print(f"Median filter applied with kernel size: {HMF_ker}, which are {HMF_ker * res_win_min} min")
-#     for region in regions_to_correct:
-#         data_df[f'pres_{region}'] = medfilt(data_df[f'pres_{region}'], kernel_size=HMF_ker)
-# else:
-#     print('Horizontal Median Filter not applied.')
-
-
-# Moving Average Filter -------------------------------------------------------
-# window_size = MAF_ker # 5   # This includes the current point, so it averages n before and n after
-
-# # Apply moving average filter to columns of interest
-# if window_size > 0:
-#     for region in angular_regions:
-#         data_df[region] = data_df[region].rolling(window=window_size, center=True).mean()
-    
-# # Remove the points in the time limit
-# data_df = data_df.iloc[skip:-skip]
-
-
-# -----------------------------------------------------------------------------
-# One more systematic error should be added to the corrected rate:
-# from simulation, the uncertainty due to the corrected rate to real rate
-# value, which accounts for the size of the detector, mostly.
-# -----------------------------------------------------------------------------
-
-# data_df[f'unc_sys_pres_{region}'] = np.sqrt( data_df[f'unc_pres_{region}']**2 + systematic_unc_corr_to_real_rate**2 )
-
-
-# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Saving ----------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -3855,7 +3718,7 @@ def round_sig(x, sig=4):
 for key, value in global_variables.items():
     if not isinstance(value, (datetime, pd.Timestamp)):
         try:
-            global_variables[key] = round_sig(value, 4)
+            global_variables[key] = round_sig(value, significant_digits)
         except Exception:
             pass
 
