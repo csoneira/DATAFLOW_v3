@@ -38,6 +38,7 @@ import random
 import shutil
 import builtins
 import time
+import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -75,6 +76,55 @@ print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 home_path = config["home_path"]
+
+
+def _append_status_row(status_csv_path: str) -> str:
+    """Append a new status row marking the start of an execution."""
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    os.makedirs(os.path.dirname(status_csv_path), exist_ok=True)
+    file_exists = os.path.exists(status_csv_path)
+
+    with open(status_csv_path, "a", newline="") as status_file:
+        writer = csv.writer(status_file)
+        if not file_exists:
+            writer.writerow(["timestamp", "status"])
+        writer.writerow([timestamp, "0"])
+
+    return timestamp
+
+
+def _mark_status_complete(status_csv_path: str, timestamp: str) -> None:
+    """Mark the previously appended status row as completed."""
+
+    if not os.path.exists(status_csv_path):
+        print(f"Warning: status CSV not found at {status_csv_path}")
+        return
+
+    rows = []
+    updated = False
+
+    with open(status_csv_path, newline="") as status_file:
+        reader = csv.reader(status_file)
+        for row in reader:
+            if (
+                row
+                and row[0] == timestamp
+                and len(row) > 1
+                and row[1] == "0"
+                and not updated
+            ):
+                row[1] = "1"
+                updated = True
+            rows.append(row)
+
+    if not updated:
+        print("Warning: could not locate the pending status row to mark as complete.")
+        return
+
+    with open(status_csv_path, "w", newline="") as status_file:
+        writer = csv.writer(status_file)
+        writer.writerows(rows)
 
 
 # General Settings
@@ -231,6 +281,8 @@ working_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/
 acc_working_directory = os.path.join(working_directory, "LIST_TO_ACC")
 
 csv_path = os.path.join(working_directory, "event_accumulator_metadata.csv")
+status_csv_path = os.path.join(working_directory, "event_accumulator_status.csv")
+status_timestamp = _append_status_row(status_csv_path)
 
 # Define subdirectories relative to the working directory
 base_directories = {
@@ -5257,5 +5309,7 @@ if create_pdf:
 if os.path.exists(figure_directory):
     print("Removing figure directory...")
     os.rmdir(figure_directory)
+
+_mark_status_complete(status_csv_path, status_timestamp)
 
 print("event_accumulator.py finished.\n\n")

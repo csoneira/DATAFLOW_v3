@@ -107,6 +107,55 @@ with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 home_path = config["home_path"]
 
+
+def _append_status_row(status_csv_path: str) -> str:
+    """Append a new status row marking the start of an execution."""
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    os.makedirs(os.path.dirname(status_csv_path), exist_ok=True)
+    file_exists = os.path.exists(status_csv_path)
+
+    with open(status_csv_path, "a", newline="") as status_file:
+        writer = csv.writer(status_file)
+        if not file_exists:
+            writer.writerow(["timestamp", "status"])
+        writer.writerow([timestamp, "0"])
+
+    return timestamp
+
+
+def _mark_status_complete(status_csv_path: str, timestamp: str) -> None:
+    """Mark the previously appended status row as completed."""
+
+    if not os.path.exists(status_csv_path):
+        print(f"Warning: status CSV not found at {status_csv_path}")
+        return
+
+    rows = []
+    updated = False
+
+    with open(status_csv_path, newline="") as status_file:
+        reader = csv.reader(status_file)
+        for row in reader:
+            if (
+                row
+                and row[0] == timestamp
+                and len(row) > 1
+                and row[1] == "0"
+                and not updated
+            ):
+                row[1] = "1"
+                updated = True
+            rows.append(row)
+
+    if not updated:
+        print("Warning: could not locate the pending status row to mark as complete.")
+        return
+
+    with open(status_csv_path, "w", newline="") as status_file:
+        writer = csv.writer(status_file)
+        writer.writerows(rows)
+
 # -----------------------------------------------------------------------------
 
 # Store the current time at the start. To time the execution
@@ -190,6 +239,8 @@ for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
 csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
+status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
+status_timestamp = _append_status_row(status_csv_path)
 
 # Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
@@ -9564,6 +9615,8 @@ if os.path.exists(temp_file):
 end_execution_time_counting = datetime.now()
 time_taken = (end_execution_time_counting - start_execution_time_counting).total_seconds() / 60
 print(f"Time taken for the whole execution: {time_taken:.2f} minutes")
+
+_mark_status_complete(status_csv_path, status_timestamp)
 
 print("----------------------------------------------------------------------")
 print("------------------- Finished list_events creation --------------------")
