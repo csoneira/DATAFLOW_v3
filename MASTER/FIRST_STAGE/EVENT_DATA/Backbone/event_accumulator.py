@@ -136,12 +136,9 @@ print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 
+# Load calibration
 home_path = config["home_path"]
 tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/tot_to_charge_calibration.csv"
-
-
-# Load calibration
-
 FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
 FEE_calibration = {
     "Width": FEE_calibration_df['Width'].tolist(),

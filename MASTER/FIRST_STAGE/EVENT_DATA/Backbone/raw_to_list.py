@@ -380,206 +380,306 @@ else:
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+import yaml
+
+# Load configuration
+config_file_path = "/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+
+# Accessing all the variables from the configuration
+crontab_execution = config["crontab_execution"]
+create_plots = config["create_plots"]
+create_essential_plots = config["create_essential_plots"]
+create_very_essential_plots = config["create_very_essential_plots"]
+save_plots = config["save_plots"]
+show_plots = config["show_plots"]
+create_pdf = config["create_pdf"]
+limit = config["limit"]
+limit_number = config["limit_number"]
+number_of_time_cal_figures = config["number_of_time_cal_figures"]
+save_calibrations = config["save_calibrations"]
+presentation = config["presentation"]
+presentation_plots = config["presentation_plots"]
+force_replacement = config["force_replacement"]
+article_format = config["article_format"]
+
+# Charge calibration to fC
+calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
+
+# Charge front-back
+charge_front_back = config["charge_front_back"]
+
+# Slewing correction
+slewing_correction = config["slewing_correction"]
+
+# Time filtering
+time_window_filtering = config["time_window_filtering"]
+
+# Time calibration
+time_calibration = config["time_calibration"]
+old_timing_method = config["old_timing_method"]
+brute_force_analysis_time_calibration_path_finding = config["brute_force_analysis_time_calibration_path_finding"]
+
+# Y position
+y_position_complex_method = config["y_position_complex_method"]
+uniform_y_method = config["uniform_y_method"]
+uniform_weighted_method = config["uniform_weighted_method"]
+
+# RPC variables
+y_new_method = config["y_new_method"]
+blur_y = config["blur_y"]
+
+# Alternative
+alternative_iteration = config["alternative_iteration"]
+number_of_alt_executions = config["number_of_alt_executions"]
+
+# TimTrack
+fixed_speed = config["fixed_speed"]
+res_ana_removing_planes = config["res_ana_removing_planes"]
+timtrack_iteration = config["timtrack_iteration"]
+number_of_TT_executions = config["number_of_TT_executions"]
+
+# Validation
+validate_charge_pedestal_calibration = config["validate_charge_pedestal_calibration"]
+
+EXPECTED_COLUMNS_config = config["EXPECTED_COLUMNS_config"]
+
+residual_plots = config["residual_plots"]
+residual_plots_fast = config["residual_plots_fast"]
+residual_plots_debug = config["residual_plots_debug"]
+
+timtrack_iteration = config["timtrack_iteration"]
+timtrack_iteration_fast = config["timtrack_iteration_fast"]
+timtrack_iteration_debug = config["timtrack_iteration_debug"]
+
+time_calibration = config["time_calibration"]
+time_calibration_fast = config["time_calibration_fast"]
+time_calibration_debug = config["time_calibration_debug"]
+
+charge_front_back = config["charge_front_back"]
+charge_front_back_fast = config["charge_front_back_fast"]
+charge_front_back_debug = config["charge_front_back_debug"]
+
+create_plots = config["create_plots"]
+create_plots_fast = config["create_plots_fast"]
+create_plots_debug = config["create_plots_debug"]
+
+limit = config["limit"]
+limit_fast = config["limit_fast"]
+limit_debug = config["limit_debug"]
+
+limit_number = config["limit_number"]
+limit_number_fast = config["limit_number_fast"]
+limit_number_debug = config["limit_number_debug"]
+
+# Pre-cal Front & Back
+T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
+T_side_right_pre_cal_debug = config["T_side_right_pre_cal_debug"]
+Q_side_left_pre_cal_debug = config["Q_side_left_pre_cal_debug"]
+Q_side_right_pre_cal_debug = config["Q_side_right_pre_cal_debug"]
+
+T_side_left_pre_cal_default = config["T_side_left_pre_cal_default"]
+T_side_right_pre_cal_default = config["T_side_right_pre_cal_default"]
+Q_side_left_pre_cal_default = config["Q_side_left_pre_cal_default"]
+Q_side_right_pre_cal_default = config["Q_side_right_pre_cal_default"]
+
+T_side_left_pre_cal_ST = config["T_side_left_pre_cal_ST"]
+T_side_right_pre_cal_ST = config["T_side_right_pre_cal_ST"]
+Q_side_left_pre_cal_ST = config["Q_side_left_pre_cal_ST"]
+Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
+
+# Pre-cal Sum & Diff
+Q_left_pre_cal = config["Q_left_pre_cal"]
+Q_right_pre_cal = config["Q_right_pre_cal"]
+Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
+T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
+T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+
+# Post-calibration
+Q_sum_left_cal = config["Q_sum_left_cal"]
+Q_sum_right_cal = config["Q_sum_right_cal"]
+Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
+Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
+Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+T_sum_left_cal = config["T_sum_left_cal"]
+T_sum_right_cal = config["T_sum_right_cal"]
+T_diff_cal_threshold = config["T_diff_cal_threshold"]
+
+# Once calculated the RPC variables
+T_sum_RPC_left = config["T_sum_RPC_left"]
+T_sum_RPC_right = config["T_sum_RPC_right"]
+T_diff_RPC_left = config["T_diff_RPC_left"]
+T_diff_RPC_right = config["T_diff_RPC_right"]
+Q_RPC_left = config["Q_RPC_left"]
+Q_RPC_right = config["Q_RPC_right"]
+Q_dif_RPC_left = config["Q_dif_RPC_left"]
+Q_dif_RPC_right = config["Q_dif_RPC_right"]
+Y_RPC_left = config["Y_RPC_left"]
+Y_RPC_right = config["Y_RPC_right"]
+
+# Alternative fitter filter
+alt_pos_filter = config["alt_pos_filter"]
+alt_theta_left_filter = config["alt_theta_left_filter"]
+alt_theta_right_filter = config["alt_theta_right_filter"]
+alt_phi_left_filter = config["alt_phi_left_filter"]
+alt_phi_right_filter = config["alt_phi_right_filter"]
+alt_slowness_filter_left = config["alt_slowness_filter_left"]
+alt_slowness_filter_right = config["alt_slowness_filter_right"]
+
+alt_res_ystr_filter = config["alt_res_ystr_filter"]
+alt_res_tsum_filter = config["alt_res_tsum_filter"]
+alt_res_tdif_filter = config["alt_res_tdif_filter"]
+
+# TimTrack filter
+proj_filter = config["proj_filter"]
+res_ystr_filter = config["res_ystr_filter"]
+res_tsum_filter = config["res_tsum_filter"]
+res_tdif_filter = config["res_tdif_filter"]
+ext_res_ystr_filter = config["ext_res_ystr_filter"]
+ext_res_tsum_filter = config["ext_res_tsum_filter"]
+ext_res_tdif_filter = config["ext_res_tdif_filter"]
+
+# Fitting comparison
+delta_s_left = config["delta_s_left"]
+delta_s_right = config["delta_s_right"]
+
+# Calibrations
+CRT_gaussian_fit_quantile = config["CRT_gaussian_fit_quantile"]
+coincidence_window_og_ns = config["coincidence_window_og_ns"]
+coincidence_window_precal_ns = config["coincidence_window_precal_ns"]
+coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
+coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_of_points"]
+
+# Pedestal charge calibration
+pedestal_left = config["pedestal_left"]
+pedestal_right = config["pedestal_right"]
+
+# Front-back charge
+distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
+distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
+distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
+distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_sum_charges_plot = config["distance_sum_charges_plot"]
+front_back_fit_threshold = config["front_back_fit_threshold"]
+
+# Variables to modify
+beta = config["beta"]
+strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
+validate_pos_cal = config["validate_pos_cal"]
+
+output_order = config["output_order"]
+degree_of_polynomial = config["degree_of_polynomial"]
+
+# X
+strip_length = config["strip_length"]
+narrow_strip = config["narrow_strip"]
+wide_strip = config["wide_strip"]
+
+# Timtrack parameters
+d0 = config["d0"]
+cocut = config["cocut"]
+iter_max = config["iter_max"]
+anc_sy = config["anc_sy"]
+anc_sts = config["anc_sts"]
+anc_std = config["anc_std"]
+anc_sz = config["anc_sz"]
+
+n_planes_timtrack = config["n_planes_timtrack"]
+
+# Plotting options
+T_clip_min_debug = config["T_clip_min_debug"]
+T_clip_max_debug = config["T_clip_max_debug"]
+Q_clip_min_debug = config["Q_clip_min_debug"]
+Q_clip_max_debug = config["Q_clip_max_debug"]
+num_bins_debug = config["num_bins_debug"]
+
+T_clip_min_default = config["T_clip_min_default"]
+T_clip_max_default = config["T_clip_max_default"]
+Q_clip_min_default = config["Q_clip_min_default"]
+Q_clip_max_default = config["Q_clip_max_default"]
+num_bins_default = config["num_bins_default"]
+
+T_clip_min_ST = config["T_clip_min_ST"]
+T_clip_max_ST = config["T_clip_max_ST"]
+Q_clip_min_ST = config["Q_clip_min_ST"]
+Q_clip_max_ST = config["Q_clip_max_ST"]
+
+log_scale = config["log_scale"]
+
+calibrate_strip_Q_pedestal_thr_factor = config["calibrate_strip_Q_pedestal_thr_factor"]
+calibrate_strip_Q_pedestal_thr_factor_2 = config["calibrate_strip_Q_pedestal_thr_factor_2"]
+calibrate_strip_Q_pedestal_translate_charge_cal = config["calibrate_strip_Q_pedestal_translate_charge_cal"]
+
+calibrate_strip_Q_pedestal_percentile = config["calibrate_strip_Q_pedestal_percentile"]
+calibrate_strip_Q_pedestal_rel_th = config["calibrate_strip_Q_pedestal_rel_th"]
+calibrate_strip_Q_pedestal_rel_th_cal = config["calibrate_strip_Q_pedestal_rel_th_cal"]
+calibrate_strip_Q_pedestal_abs_th = config["calibrate_strip_Q_pedestal_abs_th"]
+calibrate_strip_Q_pedestal_q_quantile = config["calibrate_strip_Q_pedestal_q_quantile"]
+
+scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
+scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
+scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
+scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
+
+calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
+calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+
+interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
+interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
+interpolate_fast_charge_num_bins = config["interpolate_fast_charge_num_bins"]
+interpolate_fast_charge_log_scale = config["interpolate_fast_charge_log_scale"]
+
+crosstalk_fitting = config["crosstalk_fitting"]
+delta_t_left = config["delta_t_left"]
+delta_t_right = config["delta_t_right"]
+q_sum_left = config["q_sum_left"]
+q_sum_right = config["q_sum_right"]
+q_diff_left = config["q_diff_left"]
+q_diff_right = config["q_diff_right"]
+
+Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
+Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
+Q_sum_semisum_left = config["Q_sum_semisum_left"]
+Q_sum_semisum_right = config["Q_sum_semisum_right"]
+T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
+T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+slewing_residual_range = config["slewing_residual_range"]
+
+t_comparison_lim = config["t_comparison_lim"]
+t0_time_cal_lim = config["t0_time_cal_lim"]
+
+crosstalk_fit_mu_max = config["crosstalk_fit_mu_max"]
+crosstalk_fit_sigma_min = config["crosstalk_fit_sigma_min"]
+crosstalk_fit_sigma_max = config["crosstalk_fit_sigma_max"]
+
+slewing_correction_r2_threshold = config["slewing_correction_r2_threshold"]
+
+time_window_fitting = config["time_window_fitting"]
+
+charge_plot_limit_left = config["charge_plot_limit_left"]
+charge_plot_limit_right = config["charge_plot_limit_right"]
+charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
+
+
+
+
 # -----------------------------------------------------------------------------
-# Execution options -----------------------------------------------------------
+# Some variables that define the analysis, define a dictionary with the variables:
+# 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
-
-# Plots and savings -------------------------
-crontab_execution = True
-create_plots = False
-create_essential_plots = False
-create_very_essential_plots = False
-save_plots = False
-show_plots = False
-create_pdf = False
-limit = False
-limit_number = 10000
-number_of_time_cal_figures = 3
-save_calibrations = True
-# save_full_data = False
-presentation = False
-presentation_plots = False
-force_replacement = False # Creates a new datafile even if there is already one that looks complete
-article_format = False
-
-# Charge calibration to fC -------------------------
-calibrate_charge_ns_to_fc = True
-
-# Charge front-back --------------------------------
-charge_front_back = True
-
-# Slewing correction -------------------------------
-slewing_correction = True
-
-# Time filtering -----------------------------------
-time_window_filtering = True
-
-# Time calibration ---------------------------------
-time_calibration = True
-old_timing_method = False
-brute_force_analysis_time_calibration_path_finding = False
-
-# Y position ---------------------------------------
-y_position_complex_method = False
-uniform_y_method = True
-uniform_weighted_method = False
-
-# RPC variables ------------------------------------
-y_new_method = True
-blur_y = True
-
-# Alternative --------------------------------------
-alternative_iteration = False
-number_of_alt_executions = 2
-
-# TimTrack -----------------------------------------
-fixed_speed = False
-res_ana_removing_planes = True
-timtrack_iteration = False
-number_of_TT_executions = 1
-residual_plots = False
-
-if fast_mode:
-    print('Working in fast mode.')
-    residual_plots = False
-    timtrack_iteration = False
-    time_calibration = False
-    charge_front_back = False
-    create_plots = False
-    # save_full_data = False
-    limit = False
-    limit_number = 10000
-    
-if debug_mode:
-    print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = False
-    time_calibration = False
-    charge_front_back = False
-    create_plots = True
-    # save_full_data = False
-    limit = True
-    limit_number = 10000
 
 
 # -----------------------------------------------------------------------------
+# Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
-# Filters ---------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
+Q_sum_color = 'orange'
+Q_diff_color = 'red'
+T_sum_color = 'blue'
+T_diff_color = 'green'
 
-# General ---------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Pre-cal Front & Back --------------------------------------------------------
-# -----------------------------------------------------------------------------
-if debug_mode:
-    T_F_left_pre_cal = -500
-    T_F_right_pre_cal = 500
-
-    T_B_left_pre_cal = -500
-    T_B_right_pre_cal = 500
-
-    Q_F_left_pre_cal = -500
-    Q_F_right_pre_cal = 500
-
-    Q_B_left_pre_cal = -500
-    Q_B_right_pre_cal = 500
-else:
-    T_F_left_pre_cal = -200  #-130
-    T_F_right_pre_cal = -100
-
-    T_B_left_pre_cal = T_F_left_pre_cal
-    T_B_right_pre_cal = T_F_right_pre_cal
-
-    Q_F_left_pre_cal = 80
-    Q_F_right_pre_cal = 300
-
-    Q_B_left_pre_cal = Q_F_left_pre_cal
-    Q_B_right_pre_cal = Q_F_right_pre_cal
-
-T_F_left_pre_cal_ST = -200  #-115
-T_F_right_pre_cal_ST = -50
-T_B_left_pre_cal_ST = T_F_left_pre_cal_ST
-T_B_right_pre_cal_ST = T_F_right_pre_cal_ST
-Q_F_left_pre_cal_ST = 80
-Q_F_right_pre_cal_ST = 300
-Q_B_left_pre_cal_ST = Q_F_left_pre_cal_ST
-Q_B_right_pre_cal_ST = Q_F_right_pre_cal_ST
-
-Q_left_side = Q_F_left_pre_cal
-Q_right_side = 150
-
-# -----------------------------------------------------------------------------
-# Pre-cal Sum & Diff ----------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Qsum
-Q_left_pre_cal = 75
-Q_right_pre_cal = 500
-# Qdif
-Q_diff_pre_cal_threshold = 20
-# Tsum
-T_sum_left_pre_cal = -200 # was -130 for mingo01 but for mingo03 is different
-T_sum_right_pre_cal = -90
-
-# Tdif
-T_diff_pre_cal_threshold = 20
-
-# -----------------------------------------------------------------------------
-# Post-calibration ------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Qsum
-Q_sum_left_cal = -20
-Q_sum_right_cal = 300
-# Qdif
-Q_diff_cal_threshold = 10
-Q_diff_cal_threshold_FB = 2 # 1.25
-Q_diff_cal_threshold_FB_wide = 10 # In case the fitting fails
-# Tsum
-T_sum_left_cal = -5
-T_sum_right_cal = 5
-# Tdif
-T_diff_cal_threshold = 1
-
-# -----------------------------------------------------------------------------
-# Once calculated the RPC variables -------------------------------------------
-# -----------------------------------------------------------------------------
-# Tsum
-T_sum_RPC_left = -5
-T_sum_RPC_right = 5 # -100
-# Tdiff
-T_diff_RPC_left = -0.8
-T_diff_RPC_right = 0.8
-# Qsum
-Q_RPC_left = 0
-Q_RPC_right = 500
-# Qdiff
-Q_dif_RPC_left = -4
-Q_dif_RPC_right = 4
-# Y pos
-Y_RPC_left = -200 # -150
-Y_RPC_right = 200 # 150
-
-# -----------------------------------------------------------------------------
-# Alternative fitter filter ---------------------------------------------------
-# -----------------------------------------------------------------------------
-alt_pos_filter = 650
-alt_theta_left_filter = 0
-alt_theta_right_filter = np.pi/2
-alt_phi_left_filter = -1*np.pi
-alt_phi_right_filter = np.pi
-alt_slowness_filter_left = -0.005
-alt_slowness_filter_right = 0.01 # 0.025
-
-alt_res_ystr_filter = 300
-alt_res_tsum_filter = 2
-alt_res_tdif_filter = 0.7
-
-# -----------------------------------------------------------------------------
-# TimTrack filter -------------------------------------------------------------
-# -----------------------------------------------------------------------------
 pos_filter = alt_pos_filter
-proj_filter = 2
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
 slowness_filter_left = alt_slowness_filter_left
@@ -590,44 +690,8 @@ theta_right_filter = alt_theta_right_filter
 phi_left_filter = alt_phi_left_filter
 phi_right_filter = alt_phi_right_filter
 
-res_ystr_filter = 300
-res_tsum_filter = 2
-res_tdif_filter = 0.7
-
-ext_res_ystr_filter = 300
-ext_res_tsum_filter = 2
-ext_res_tdif_filter = 0.7
-
-# -----------------------------------------------------------------------------
-# Fitting comparison ----------------------------------------------------------
-# -----------------------------------------------------------------------------
-delta_s_left = -0.0003
-delta_s_right = 0.0003
-
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Calibrations ----------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# Time sum
-CRT_gaussian_fit_quantile = 0.03
-coincidence_window_og_ns = 10  # ns
-coincidence_window_precal_ns = 7  # ns
-coincidence_window_cal_ns = 3  # ns
-
-# Pedestal charge calibration
-pedestal_left = -3
-pedestal_right = 2
-
-# Front-back charge
-distance_sum_charges_left_fit = -5
-distance_sum_charges_right_fit = 200
-distance_diff_charges_up_fit = 10
-distance_diff_charges_low_fit = -10
-distance_sum_charges_plot = 800
-front_back_fit_threshold = 4 # It was 1.4
+fig_idx = 1
+plot_list = []
 
 # Time dif calibration (time_dif_reference)
 time_dif_distance = 30
@@ -665,34 +729,72 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-# -----------------------------------------------------------------------------
-# Variables to modify ---------------------------------------------------------
-# -----------------------------------------------------------------------------
-beta = 1
+if fast_mode:
+    print('Working in fast mode.')
+    residual_plots = residual_plots_fast
+    timtrack_iteration = timtrack_iteration_fast
+    time_calibration = time_calibration_fast
+    charge_front_back = charge_front_back_fast
+    create_plots = create_plots_fast
+    limit = limit_fast
+    limit_number = limit_number_fast
 
-# -----------------------------------------------------------------------------
-# Variables to not touch unless necessary -------------------------------------
-# -----------------------------------------------------------------------------
-Q_sum_color = 'orange'
-Q_diff_color = 'red'
-T_sum_color = 'blue'
-T_diff_color = 'green'
+if debug_mode:
+    print('Working in debug mode.')
+    residual_plots = True
+    timtrack_iteration = timtrack_iteration_debug
+    time_calibration = time_calibration_debug
+    charge_front_back = charge_front_back_debug
+    create_plots = create_plots_debug
+    limit = limit_debug
+    limit_number = limit_number_debug
 
-fig_idx = 1
-plot_list = []
+if debug_mode:
+    T_F_left_pre_cal = T_side_left_pre_cal_debug
+    T_F_right_pre_cal = T_side_right_pre_cal_debug
 
-# Front-back charge
-output_order = 0
-degree_of_polynomial = 4
+    T_B_left_pre_cal = T_side_left_pre_cal_debug
+    T_B_right_pre_cal = T_side_right_pre_cal_debug
 
-# X ---------------------------------------------------------------------------
-strip_length = 300
+    Q_F_left_pre_cal = Q_side_left_pre_cal_debug
+    Q_F_right_pre_cal = Q_side_right_pre_cal_debug
+
+    Q_B_left_pre_cal = Q_side_left_pre_cal_debug
+    Q_B_right_pre_cal = Q_side_right_pre_cal_debug
+else:
+    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
+    T_F_right_pre_cal = T_side_right_pre_cal_default
+
+    T_B_left_pre_cal = T_side_left_pre_cal_default
+    T_B_right_pre_cal = T_side_right_pre_cal_default
+
+    Q_F_left_pre_cal = Q_side_left_pre_cal_default
+    Q_F_right_pre_cal = Q_side_right_pre_cal_default
+
+    Q_B_left_pre_cal = Q_side_left_pre_cal_default
+    Q_B_right_pre_cal = Q_side_right_pre_cal_default
+
+T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
+T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
+T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
+T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
+Q_F_left_pre_cal_ST = Q_side_left_pre_cal_ST
+Q_F_right_pre_cal_ST = Q_side_right_pre_cal_ST
+Q_B_left_pre_cal_ST = Q_side_left_pre_cal_ST
+Q_B_right_pre_cal_ST = Q_side_right_pre_cal_ST
+
+Q_left_side = Q_side_left_pre_cal_ST
+Q_right_side = Q_side_right_pre_cal_ST
+
+
 
 # Y ---------------------------------------------------------------------------
+y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
+            np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
+
 def y_pos(y_width):
     return np.cumsum(y_width) - (np.sum(y_width) + y_width) / 2
 
-y_widths = [np.array([63, 63, 63, 98]), np.array([98, 63, 63, 63])]  # P1-P3 and P2-P4 widths
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 y_width_P1_and_P3 = y_widths[0]
 y_width_P2_and_P4 = y_widths[1]
@@ -700,60 +802,39 @@ y_pos_P1_and_P3 = y_pos(y_width_P1_and_P3)
 y_pos_P2_and_P4 = y_pos(y_width_P2_and_P4)
 total_width = np.sum(y_width_P1_and_P3)
 
-# Miscelanous ----------------------------
 c_mm_ns = c/1000000
-muon_speed = beta * c_mm_ns
-strip_speed = 2/3 * c_mm_ns # 200 mm/ns
-tdiff_to_x = strip_speed # Factor to transform t_diff to X
+print(c_mm_ns)
 
-# Timtrack parameters --------------------
-# Hardcoded
-d0    = 10 # initial value of the convergence parameter
-cocut = 1  # convergence cut: 0.1
-iter_max = 10 # maximum number of iterations: 50
-anc_sy = 25 # 2.5 cm
-anc_sts = 0.35 # 400 ps
-anc_std = 0.075
-anc_sz = 10 # 5 cm
+# Miscelanous ----------------------------
+muon_speed = beta * c_mm_ns
+strip_speed = strip_speed_factor_of_c * c_mm_ns # 200 mm/ns
+tdiff_to_x = strip_speed # Factor to transform t_diff to X
 
 # Not-Hardcoded
 vc    = beta * c_mm_ns # mm/ns
 sc    = 1/vc
 ss    = 1/strip_speed # slowness of the signal in the strip
-nplan = 4
+nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-
-# -----------------------------------------------------------------------------
-# Plotting options ------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# New channel-wise plot -------------------------------------------------------
-log_scale = True
 if debug_mode:
-    T_clip_min = -500
-    T_clip_max = 500
-    Q_clip_min = -500
-    Q_clip_max = 500
-    num_bins = 100  # Parameter for the number of bins
+    T_clip_min = T_clip_min_debug
+    T_clip_max = T_clip_max_debug
+    Q_clip_min = Q_clip_min_debug
+    Q_clip_max = Q_clip_max_debug
+    num_bins = num_bins_debug
 else:
-    T_clip_min = -300
-    T_clip_max = 100
-    Q_clip_min = 0
-    Q_clip_max = 500
-    num_bins = 100  # Parameter for the number of bins
+    T_clip_min = T_clip_min_default
+    T_clip_max = T_clip_max_default
+    Q_clip_min = Q_clip_min_default
+    Q_clip_max = Q_clip_max_default
+    num_bins = num_bins_default
 
-T_clip_min_ST = -300
-T_clip_max_ST = 100
-Q_clip_min_ST = 0
-Q_clip_max_ST = 500
-
-
-# -----------------------------------------------------------------------------
-# Some variables that define the analysis, define a dictionary with the variables:
-# 'purity_of_data', etc.
-# -----------------------------------------------------------------------------
+T_clip_min_ST = T_clip_min_ST
+T_clip_max_ST = T_clip_max_ST
+Q_clip_min_ST = Q_clip_min_ST
+Q_clip_max_ST = Q_clip_max_ST
 
 global_variables = {
     'execution_time': execution_time,
@@ -833,9 +914,10 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
     
     # ------------------------------------------------------------------------------
     
-    T_rel_th = 0.1
-    abs_th = 1
     
+    T_rel_th = calibrate_strip_T_diff_T_rel_th
+    abs_th = calibrate_strip_T_diff_T_abs_th
+
     # Apply mask to filter values within the threshold
     mask = (np.abs(T_diff) < T_diff_pre_cal_threshold)
     T_diff = T_diff[mask]
@@ -884,6 +966,14 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
 
 def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     
+    translate_charge_cal = calibrate_strip_Q_pedestal_translate_charge_cal
+    percentile = calibrate_strip_Q_pedestal_percentile
+    
+    rel_th = calibrate_strip_Q_pedestal_rel_th
+    rel_th_cal = calibrate_strip_Q_pedestal_rel_th_cal
+    abs_th = calibrate_strip_Q_pedestal_abs_th
+    q_quantile = calibrate_strip_Q_pedestal_q_quantile # percentile
+    
     # First let's tale good values of Time, we want to avoid outliers that might confuse the charge pedestal calibration
     
     if self_trigger_mode:
@@ -900,18 +990,15 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     
     # Condition based on the charge difference: it cannot be too high
     Q_dif = Q_ch - Q_other
-    percentile = 10
-    if station == 4:
-        percentile = 0.5
+    
     cond = ( Q_dif > np.percentile(Q_dif, percentile) ) & ( Q_dif < np.percentile(Q_dif, 100 - percentile ) )
-    # cond = ( Q_dif > -1 * Q_diff_pre_cal_threshold ) & ( Q_dif < Q_diff_pre_cal_threshold )
     T_ch = T_ch[cond]
     Q_ch = Q_ch[cond]
     
     counts, bin_edges = np.histogram(T_ch, bins='auto')
     max_counts = np.max(counts)
     min_counts = np.min(counts[counts > 0])
-    threshold = max_counts / 10**1.5
+    threshold = max_counts / calibrate_strip_Q_pedestal_thr_factor
     
     indices_above_threshold = np.where(counts > threshold)[0]
 
@@ -920,23 +1007,12 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
         max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
     else:
         print("No bins have counts above the threshold; Q pedestal calibration.")
-        threshold = (min_counts + max_counts) / 1.5
+        threshold = (min_counts + max_counts) / calibrate_strip_Q_pedestal_thr_factor_2
         indices_above_threshold = np.where(counts > threshold)[0]
         min_bin_edge = bin_edges[indices_above_threshold[0]]
         max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]
     
     Q_ch = Q_ch[(T_ch > min_bin_edge) & (T_ch < max_bin_edge)]
-    
-    # 5% of the maximum count
-    rel_th = 0.015
-    rel_th_cal = 0.4
-    abs_th = 3
-    q_quantile = 0.4 # percentile
-    
-    if station == 4:
-        rel_th = 0.005
-        q_quantile = 0.1
-        rel_th_cal = 0.1
     
     # First take the values that are not zero
     Q_ch = Q_ch[Q_ch != 0]
@@ -1008,9 +1084,8 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     pedestal = offset + offset_cal
     pedestal = offset
     
-    translate_charge_cal = True
     if translate_charge_cal:
-        pedestal = pedestal - 0.25
+        pedestal = pedestal - translate_charge_cal
         
     return pedestal
 
@@ -1074,8 +1149,8 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
         plt.title(title)
         plt.xlabel(x_label)
         plt.ylabel(y_label)
-        plt.xlim([-5, 200])
-        plt.ylim([-11, 11])
+        plt.xlim([scatter_2d_and_fit_new_xlim_left, scatter_2d_and_fit_new_xlim_right])
+        plt.ylim([scatter_2d_and_fit_new_ylim_bottom, scatter_2d_and_fit_new_ylim_top])
         plt.grid()
         plt.legend(markerscale=5)  # Increase marker scale by 5 times
         plt.tight_layout()
@@ -1090,6 +1165,20 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
         plt.close()
     return coeffs
 
+
+def interpolate_fast_charge(width):
+        """
+        Interpolates the Fast Charge for given Width values using cubic spline interpolation.
+        Parameters:
+        - width (float or np.ndarray): The Width value(s) to interpolate in ns.
+        Returns:
+        - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
+        """
+        width = np.asarray(width)  # Ensure input is a NumPy array
+        # Keep zero values unchanged
+        result = np.where(width == 0, 0, cs(width))
+        return result
+    
 
 def summary(vector):
     global coincidence_window_cal_ns
@@ -1123,8 +1212,7 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     vdat = np.array(vdat)  # Convert list to NumPy array
     cond = (vdat > -coincidence_window_cal_ns) & (vdat < coincidence_window_cal_ns)  # This should result in a boolean array
     vdat = vdat[cond]
-    counts, bins, _ = ax.hist(vdat, bins=bin_number, alpha=0.5, color="red",
-                              label=f"All hits, {len(vdat)} events", density=False)
+    counts, bins, _ = ax.hist(vdat, bins=bin_number, alpha=0.5, color="red", label=f"All hits, {len(vdat)} events", density=False)
     bin_centers = (bins[:-1] + bins[1:]) / 2
     h1_q = CRT_gaussian_fit_quantile
     lower_bound = np.quantile(vdat, h1_q)
@@ -1456,7 +1544,7 @@ temp_file = os.path.join(base_directories["temp_files_directory"], f"temp_file_{
 rejected_file = os.path.join(base_directories["rejected_files_directory"], f"temp_file_{date_execution}.csv")
 
 print(f"Temporal file is {temp_file}")
-EXPECTED_COLUMNS = 71  # Expected number of columns
+EXPECTED_COLUMNS = EXPECTED_COLUMNS_config  # Expected number of columns
 
 # Function to process each line
 def process_line(line):
@@ -1471,11 +1559,13 @@ def process_line(line):
 def contains_malformed_numbers(line):
     return bool(re.search(r'-?\d+\.\d+\.\d+', line))  # Detects multiple decimal points
 
+
+
 # Function to validate year, month, and day
 def is_valid_date(values):
     try:
         year, month, day = int(values[0]), int(values[1]), int(values[2])
-        if year not in {2023, 2024, 2025, 2026, 2027}:  # Check valid years
+        if year not in {2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030, 2031, 2032}:  # Check valid years
             return False
         if not (1 <= month <= 12):  # Check valid month
             return False
@@ -2428,7 +2518,6 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 
 # Plot histograms of all the pedestal substractions
-validate_charge_pedestal_calibration = True
 if validate_charge_pedestal_calibration:
     # if create_plots or create_essential_plots:
     if create_plots:
@@ -2568,32 +2657,21 @@ if validate_charge_pedestal_calibration:
 
 if calibrate_charge_ns_to_fc:
 
-    # --- Define FEE Calibration ---
+    # Load calibration
+    home_path = config["home_path"]
+    tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/tot_to_charge_calibration.csv"
+    FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
     FEE_calibration = {
-        "Width": [
-            0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-            160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
-            300, 310, 320, 330, 340, 350, 360, 370, 380, 390
-        ],
-        "Fast Charge": [
-            4.0530E+01, 2.6457E+02, 4.5081E+02, 6.0573E+02, 7.3499E+02, 8.4353E+02,
-            9.3563E+02, 1.0149E+03, 1.0845E+03, 1.1471E+03, 1.2047E+03, 1.2592E+03,
-            1.3118E+03, 1.3638E+03, 1.4159E+03, 1.4688E+03, 1.5227E+03, 1.5779E+03,
-            1.6345E+03, 1.6926E+03, 1.7519E+03, 1.8125E+03, 1.8742E+03, 1.9368E+03,
-            2.0001E+03, 2.0642E+03, 2.1288E+03, 2.1940E+03, 2.2599E+03, 2.3264E+03,
-            2.3939E+03, 2.4635E+03, 2.5325E+03, 2.6044E+03, 2.6786E+03, 2.7555E+03,
-            2.8356E+03, 2.9196E+03, 3.0079E+03, 3.1012E+03
-        ]
-    }
+        "Width": FEE_calibration_df['Width'].tolist(),
+        "Fast Charge": FEE_calibration_df['Fast_Charge'].tolist() }
     FEE_calibration = pd.DataFrame(FEE_calibration)
-    cs = CubicSpline(FEE_calibration['Width'].to_numpy(),
-                    FEE_calibration['Fast Charge'].to_numpy(),
-                    bc_type='natural')
 
-    def interpolate_fast_charge(width_array):
-        """ Interpolates fast charge for array-like width values using cubic spline. """
-        width_array = np.asarray(width_array)
-        return np.where(width_array == 0, 0, cs(width_array))
+    width_table = FEE_calibration['Width'].to_numpy()
+    fast_charge_table = FEE_calibration['Fast Charge'].to_numpy()
+    # Create a cubic spline interpolator
+    cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
+
+    
 
     # --- Calibrate and store new columns in working_df ---
     for key in ['Q1', 'Q2', 'Q3', 'Q4']:
@@ -2607,12 +2685,12 @@ if calibrate_charge_ns_to_fc:
                     charge_test[col_fC] = 0.0  # initialize
                     charge_test.loc[mask, col_fC] = interpolate_fast_charge(raw[mask])
 
-
     if create_plots:
-        Q_clip_min = 0
-        Q_clip_max = 1750
-        num_bins = 100
-        log_scale = True
+        
+        Q_clip_min = interpolate_fast_charge_Q_clip_min
+        Q_clip_max = interpolate_fast_charge_Q_clip_max
+        num_bins = interpolate_fast_charge_num_bins
+        log_scale = interpolate_fast_charge_log_scale
         
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))
         axes_Q = axes_Q.flatten()
@@ -2871,7 +2949,6 @@ Tdiff_cal = np.array(Tdiff_cal)
 print("\nTime diff. offset:")
 print(Tdiff_cal, "\n")
 
-validate_pos_cal = True
 if validate_pos_cal:
 
     for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
@@ -3339,52 +3416,6 @@ if self_trigger:
     for col in working_st_df.columns:
         if 'Q_diff' in col:
             working_st_df[col] = np.where((working_st_df[col] > Q_diff_cal_threshold) | (working_st_df[col] < -Q_diff_cal_threshold), 0, working_st_df[col])
-
-
-# For articles and presentations
-# if presentation_plots:
-#     plane = 2
-#     strip = 2
-#     data = [f'P{plane}_T_sum_{strip}', f'P{plane}_T_diff_{strip}', f'Q{plane}_Q_sum_{strip}', f'Q{plane}_Q_diff_{strip}']
-#     fig_idx = 0  # Assuming fig_idx is defined earlier
-#     plot_list = []  # Assuming plot_list is defined earlier
-
-#     for i, col in enumerate([col for col in working_df.columns if col != 'datetime'][:len(data)]):
-#         y = working_df[col]
-#         if 'Q_sum' in col:
-#             color = 'green'
-#         elif 'Q_diff' in col:
-#             color = 'blue'
-#         elif 'T_sum' in col:
-#             color = T_sum_color
-#         elif 'T_diff' in col:
-#             color = 'red'
-#         y_p = y[y != 0]
-#         fig, ax = plt.subplots(figsize=(5, 3.5))
-#         ax.hist(y_p, bins=500, label=f"{len(y_p)} entries", alpha=0.5, color=color)
-#         if 'T_diff' in col:
-#             ax.set_xlim([-1, 1])
-#         if 'Q_diff' in col:
-#             ax.set_xlim([-2, 2])
-#         if 'Q_sum' in col:
-#             ax.set_yscale('log')
-#             ax.set_xlim([-5, 50])
-#         if 'Q' in col:
-#             ax.set_xlabel('QtW / ns')
-#         elif 'T' in col:
-#             ax.set_xlabel('T / ns')
-#         ax.set_ylabel('Counts')
-#         ax.legend(frameon=False, handletextpad=0, handlelength=0)
-#         plt.tight_layout()
-#         if save_plots:
-#             name_of_file = data[i].replace(' ', '_').replace('/', '_')  # Sanitize file name
-#             final_filename = f'{fig_idx}_{name_of_file}.png'
-#             fig_idx += 1
-#             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#             plot_list.append(save_fig_path)
-#             plt.savefig(save_fig_path, format='png')
-#         if show_plots: plt.show()
-#         plt.close()
 
 
 # if create_essential_plots or create_plots:
@@ -4099,9 +4130,11 @@ if slewing_correction:
                 ax3d.set_xlabel('ΔT corrected (ns)')
                 ax3d.set_ylabel('Q_sum_semisum')
                 ax3d.set_zlabel('Q_sum_semidiff')
-                ax3d.set_xlim([-5, 5])
-                ax3d.set_ylim([0, 60])
-                ax3d.set_zlim([-40, 40])
+                
+
+                ax3d.set_xlim([delta_t_left, delta_t_right])
+                ax3d.set_ylim([q_sum_left, q_sum_right])
+                ax3d.set_zlim([q_diff_left, q_diff_right])
 
                 # XY projection
                 ax_xy = fig.add_subplot(spec[2, col_idx])
@@ -4109,18 +4142,18 @@ if slewing_correction:
                 ax_xy.set_xlabel('ΔT corrected')
                 ax_xy.set_ylabel('Q_sum_semisum')
                 ax_xy.set_title('XY projection')
-                ax_xy.set_xlim([-5, 5])
-                ax_xy.set_ylim([0, 60])
-                
+                ax_xy.set_xlim([delta_t_left, delta_t_right])
+                ax_xy.set_ylim([q_sum_left, q_sum_right])
+
                 # XZ projection
                 ax_xz = fig.add_subplot(spec[3, col_idx])
                 ax_xz.scatter(x, z, s=5, alpha=0.5, c='tab:red')
                 ax_xz.set_xlabel('ΔT corrected')
                 ax_xz.set_ylabel('Q_sum_semidiff')
                 ax_xz.set_title('XZ projection')
-                ax_xz.set_xlim([-5, 5])
-                ax_xz.set_ylim([-40, 40])
-                
+                ax_xz.set_xlim([delta_t_left, delta_t_right])
+                ax_xz.set_ylim([q_diff_left, q_diff_right])
+
             fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
             fig.suptitle(f"Batch {batch + 1}/{num_batches} — 3D Slewing Observables", fontsize=16)  # increase font size
 
@@ -4179,12 +4212,12 @@ if slewing_correction:
 
         if len(data) < 10:
             continue  # not enough data to fit
-        
+
         # Apply some filtering on the values of Q_sum_semidiff and Q_sum_semisum
         data = data[
-            (data['Q_sum_semidiff'] > -10) & (data['Q_sum_semidiff'] < 10) &
-            (data['Q_sum_semisum'] > 10) & (data['Q_sum_semisum'] < 50) &
-            (data['T_sum_corrected_diff'] > -5) & (data['T_sum_corrected_diff'] < 5)
+            (data['Q_sum_semidiff'] > Q_sum_semidiff_left) & (data['Q_sum_semidiff'] < Q_sum_semidiff_right) &
+            (data['Q_sum_semisum'] > Q_sum_semisum_left) & (data['Q_sum_semisum'] < Q_sum_semisum_right) &
+            (data['T_sum_corrected_diff'] > T_sum_corrected_diff_left) & (data['T_sum_corrected_diff'] < T_sum_corrected_diff_right)
         ]
         
         # Apply it to your DataFrame:
@@ -4298,9 +4331,10 @@ if slewing_correction:
                 ax3d.set_xlabel('ΔT corrected (ns)')
                 ax3d.set_ylabel('Q_sum_semisum')
                 ax3d.set_zlabel('Q_sum_semidiff')
-                ax3d.set_xlim([-5, 5])
-                ax3d.set_ylim([0, 60])
-                ax3d.set_zlim([-40, 40])
+
+                ax3d.set_xlim([delta_t_left, delta_t_right])
+                ax3d.set_ylim([q_sum_left, q_sum_right])
+                ax3d.set_zlim([q_diff_left, q_diff_right])
 
                 # XY projection
                 ax_xy = fig.add_subplot(spec[2, col_idx])
@@ -4313,8 +4347,8 @@ if slewing_correction:
                 ax_xy.set_ylabel('Q_sum_semisum')
                 ax_xy.set_title('XY projection')
                 ax_xy.legend(fontsize='x-small')
-                ax_xy.set_xlim([-5, 5])
-                ax_xy.set_ylim([0, 60])
+                ax_xy.set_xlim([delta_t_left, delta_t_right])
+                ax_xy.set_ylim([q_sum_left, q_sum_right])
 
                 # XZ projection
                 ax_xz = fig.add_subplot(spec[3, col_idx])
@@ -4327,8 +4361,8 @@ if slewing_correction:
                 ax_xz.set_ylabel('Q_sum_semidiff')
                 ax_xz.set_title('XZ projection')
                 ax_xz.legend(fontsize='x-small')
-                ax_xz.set_xlim([-5, 5])
-                ax_xz.set_ylim([-40, 40])
+                ax_xz.set_xlim([T_sum_corrected_diff_left, T_sum_corrected_diff_right])
+                ax_xz.set_ylim([Q_sum_semidiff_left, Q_sum_semidiff_right])
 
             fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
             fig.suptitle(f"Batch {batch + 1}/{num_batches} — 3D Slewing + Fitted Projections", fontsize=16)  # increase font size
@@ -4414,7 +4448,7 @@ if slewing_correction:
                 residual = t_true - t_pred
                 
                 # Filter residuals, remove if out of the range
-                residual_range = 5
+                residual_range = slewing_residual_range
                 cond = (residual > -1*residual_range) & (residual < residual_range)
                 residual = residual[cond]
                 t_true = t_true[cond]
@@ -4429,8 +4463,9 @@ if slewing_correction:
                 ax0.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
                 ax0.set_xlabel("T_true")
                 ax0.set_ylabel("T_predicted")
-                ax0.set_xlim([-4, 4])
-                ax0.set_ylim([-4, 4])
+
+                ax0.set_xlim([-t_comparison_lim, t_comparison_lim])
+                ax0.set_ylim([-t_comparison_lim, t_comparison_lim])
 
                 # Residuals histogram
                 ax1 = axes[1, col_idx]
@@ -4828,13 +4863,16 @@ if time_calibration:
 
         if create_plots:
         # if create_plots or create_essential_plots:
+        
             # Convert data to numpy arrays and filter
             pos_x = np.array(pos_x)
             pos_x = pos_x[(-200 < pos_x) & (pos_x < 200) & (pos_x != 0)]
             v_travel_time = np.array(v_travel_time)
             v_travel_time = v_travel_time[v_travel_time < 1.6]
             t_0 = np.array(t_0)
-            t_0 = t_0[(-10 < t_0) & (t_0 < 10)]
+            
+            
+            t_0 = t_0[(-t0_time_cal_lim < t_0) & (t_0 < t0_time_cal_lim)]
             t_0 = t_0[t_0 != 0]
             
             # Prepare a figure with 1x3 subplots
@@ -5234,8 +5272,6 @@ if crosstalk_removal_and_recalibration:
         "crstlk_mx_b_P4s1": [0, 0], "crstlk_mx_b_P4s2": [0, 0], "crstlk_mx_b_P4s3": [0, 0], "crstlk_mx_b_P4s4": [0, 0]
     }
 
-    crosstalk_fitting = True
-
     # Gaussian + linear function
     def gaussian_linear(x, a, mu, sigma, m, b):
         return a * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2)) + m * x + b
@@ -5259,10 +5295,10 @@ if crosstalk_removal_and_recalibration:
                 a_max = 2*max(hist_vals) + 1
                 
                 mu_min = pedestal_left # -1
-                mu_max = 3 # 1.5
+                mu_max = crosstalk_fit_mu_max
                 
-                sigma_min = 0.25
-                sigma_max = 1
+                sigma_min = crosstalk_fit_sigma_min
+                sigma_max = crosstalk_fit_sigma_max
                 
                 # print(f"P{key}s{j+1}")
                 
@@ -5543,7 +5579,8 @@ if slewing_correction:
         plt.close()
     
     # Step 1: Select pairs with good fit quality
-    r2_threshold = 0.2
+    
+    r2_threshold = slewing_correction_r2_threshold
     good_fits_df = slewing_fit_df[slewing_fit_df["r2_score"] > r2_threshold].copy()
 
     # Store good fit keys
@@ -6045,7 +6082,7 @@ if time_window_filtering:
                 print(f"[Warning] Skipping Preprocessed TT {preprocessed_tt}: all T_sum values filtered out.")
                 continue
 
-            widths = np.linspace(0, coincidence_window_cal_ns, 20)
+            widths = np.linspace(0, coincidence_window_cal_ns, coincidence_window_cal_number_of_points)
             counts_per_width = []
             counts_per_width_dev = []
 
@@ -8020,7 +8057,6 @@ def compute_definitive_tt(row):
 # Apply to all rows
 working_df["definitive_tt"] = working_df.apply(compute_definitive_tt, axis=1)
 
-time_window_fitting = True
 if time_window_fitting:
     
     print("---------------------------- Fitting loop ----------------------------")
@@ -8044,7 +8080,7 @@ if time_window_fitting:
             print(f"\n[Warning] Skipping definitive_tt {definitive_tt}: no non-zero T_sum data.")
             continue
         
-        widths = np.linspace(0, 2 * coincidence_window_cal_ns, 60)  # Scan range of window widths in ns
+        widths = np.linspace(0, 2 * coincidence_window_cal_ns, coincidence_window_cal_number_of_points)  # Scan range of window widths in ns
         
         counts_per_width = []
         counts_per_width_dev = []
@@ -8323,11 +8359,13 @@ print("----------------------------------------------------------------------")
 
 df_plot_ancillary = definitive_df.copy()
 
-cond = ( df_plot_ancillary['charge_1'] < 100 ) &\
-    ( df_plot_ancillary['charge_2'] < 100 ) &\
-    ( df_plot_ancillary['charge_3'] < 100 ) &\
-    ( df_plot_ancillary['charge_4'] < 100 ) &\
-    ( df_plot_ancillary['charge_event'] > 0 )
+
+
+cond = ( df_plot_ancillary['charge_1'] < charge_plot_limit_right ) &\
+    ( df_plot_ancillary['charge_2'] < charge_plot_limit_right ) &\
+    ( df_plot_ancillary['charge_3'] < charge_plot_limit_right ) &\
+    ( df_plot_ancillary['charge_4'] < charge_plot_limit_right ) &\
+    ( df_plot_ancillary['charge_event'] > charge_plot_limit_left )
 
 df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 
@@ -8536,6 +8574,7 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
 # -----------------------------------------------------------------------------------------------------------------------------
 
 
+
 # if create_plots:
 # if create_plots or create_essential_plots:
 if create_plots or create_very_essential_plots or create_essential_plots:
@@ -8561,11 +8600,11 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             # 'alt_th_chi': [0, 12],
             
             # Dinamic
-            'charge_event': [0, 400],
-            'charge_1': [0, 100],
-            'charge_2': [0, 100],
-            'charge_3': [0, 100],
-            'charge_4': [0, 100],
+            'charge_event': [charge_plot_limit_left, charge_plot_event_limit_right400],
+            'charge_1': [charge_plot_limit_left, charge_plot_limit_right],
+            'charge_2': [charge_plot_limit_left, charge_plot_limit_right],
+            'charge_3': [charge_plot_limit_left, charge_plot_limit_right],
+            'charge_4': [charge_plot_limit_left, charge_plot_limit_right],
             'res_ystr_1': [-res_ystr_filter, res_ystr_filter], 'res_ystr_2': [-res_ystr_filter, res_ystr_filter], 'res_ystr_3': [-res_ystr_filter, res_ystr_filter], 'res_ystr_4': [-res_ystr_filter, res_ystr_filter],
             'res_tsum_1': [-res_tsum_filter, res_tsum_filter], 'res_tsum_2': [-res_tsum_filter, res_tsum_filter], 'res_tsum_3': [-res_tsum_filter, res_tsum_filter], 'res_tsum_4': [-res_tsum_filter, res_tsum_filter],
             'res_tdif_1': [-res_tdif_filter, res_tdif_filter], 'res_tdif_2': [-res_tdif_filter, res_tdif_filter], 'res_tdif_3': [-res_tdif_filter, res_tdif_filter], 'res_tdif_4': [-res_tdif_filter, res_tdif_filter],
