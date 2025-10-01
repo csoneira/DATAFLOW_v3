@@ -34,16 +34,21 @@ print("  | |                                                            | |  ")
 # weeks_behind_requested = 1 # 21 maxixum
 # degree_apotema = 0.25  # 0.25 degrees apotema for the area around the station
 
+import os
 import yaml
-
-# Load configuration from YAML
-with open("/home/mingo/DATAFLOW_v3/MASTER/config.yaml", "r") as config_file:
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
+with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+home_path = config["home_path"]
 
 test = config["test_mode"]
 weeks_behind_requested = config["weeks_behind_requested"]
 max_weeks_allowed = config["max_weeks_allowed"]
 degree_apotema = config["degree_apotema"]
+
+
 
 
 # -----------------------------------------------------------------------------

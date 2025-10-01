@@ -4,7 +4,7 @@ set -euo pipefail
 ##############################################################################
 # Configuration
 ##############################################################################
-BASE="/home/mingo/DATAFLOW_v3/STATIONS"
+BASE="$HOME/DATAFLOW_v3/STATIONS"
 
 DIRS=(
   "/ZERO_STAGE/COMPRESSED_HLDS"

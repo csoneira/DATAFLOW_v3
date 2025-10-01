@@ -17,6 +17,9 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # Setup Copernicus API codes
 0 * * * * /bin/cp /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/COPERNICUS/.cdsapirc /home/mingo/.cdsapirc
 
+# Save snapshot of the config file
+0 * * * * python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/VERSION_CONTROL/snapshot_config.py
+
 # -----------
 # NMDB update
 # -----------

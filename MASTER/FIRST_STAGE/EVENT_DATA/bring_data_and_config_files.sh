@@ -141,26 +141,7 @@ echo "Bringing the input files from the logbook..."
 # ---------------------------------------------
 # Read IDs from YAML (requires PyYAML in Python)
 # ---------------------------------------------
-CONFIG_FILE="/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
-
-# # Read Sheet ID
-# SHEET_ID=$(python3 - "$CONFIG_FILE" <<'PY'
-# import sys, yaml
-# cfg = yaml.safe_load(open(sys.argv[1]))
-# print(cfg["logbook"]["sheet_id"])
-# PY
-# )
-
-# # Read GID for the chosen station
-# GID=$(python3 - "$CONFIG_FILE" "$station" <<'PY'
-# import sys, yaml
-# cfg = yaml.safe_load(open(sys.argv[1]))
-# station = str(sys.argv[2])
-# print(cfg["logbook"]["gid_by_station"][station])
-# PY
-# )
-
-CONFIG_FILE="/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+CONFIG_FILE="$HOME/DATAFLOW_v3/MASTER/config.yaml"
 SHEET_ID=$(yq -r '.logbook.sheet_id' "$CONFIG_FILE")
 GID=$(yq -r ".logbook.gid_by_station.\"$station\"" "$CONFIG_FILE")
 

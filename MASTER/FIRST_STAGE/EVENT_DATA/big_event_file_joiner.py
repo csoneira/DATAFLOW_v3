@@ -15,6 +15,7 @@ import random
 import shutil
 import sys
 from datetime import datetime
+from pathlib import Path
 
 # Third-party Libraries
 import numpy as np
@@ -26,22 +27,19 @@ from scipy.optimize import minimize
 from scipy.stats import poisson
 from tqdm import tqdm
 
+
+
+
 import yaml
-
-# -----------------------------------------------------------------------------
-
 user_home = os.path.expanduser("~")
-
-# Construct the config file path dynamically
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
-
 print(f"Using config file: {config_file_path}")
-
-# Load YAML configuration
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
-
 home_path = config["home_path"]
+
+
+
 load_big_event_file = config["load_big_event_file"]
 
 
@@ -238,81 +236,98 @@ def combine_duplicates(group):
     return group.iloc[[0]]
 
 
-create_big_event_file = False
+processed_files_path = Path(working_directory) / "big_event_data_processed_files.txt"
+processed_files: set[str] = set()
+metadata_needs_write = False
 
-if load_big_event_file:
-    print("Whatever.")
-    
-    if os.path.exists(big_event_file):
-        big_event_df = pd.read_csv(big_event_file, sep=',', parse_dates=['Time'])
-        print(f"Loaded existing big_event_data.csv with {len(big_event_df)} rows.")
-        
-    else:
-        print("Created new empty big_event_data.csv dataframe.")
-        create_big_event_file = True
+if processed_files_path.exists():
+    processed_files = {
+        line.strip()
+        for line in processed_files_path.read_text().splitlines()
+        if line.strip()
+    }
+else:
+    metadata_needs_write = True
 
+big_event_df = pd.DataFrame()
+loaded_existing_file = False
 
-if create_big_event_file:
-    print("Creating big_event_data.csv...")
-    
-    big_event_df = pd.DataFrame()
-    
-    # Process all CSV files in ACC_EVENTS_DIRECTORY
-    acc_directory = base_directories["acc_events_directory"]  # Get the directory where new CSVs are saved
-    csv_files = [f for f in os.listdir(acc_directory) if f.endswith('.csv')]
-    
-    csv_files = sorted(csv_files)
-    
-    # Add a tqdm progress bar
-    iterator = tqdm(csv_files, total=len(csv_files), desc="Joining CSVs")
+if load_big_event_file and os.path.exists(big_event_file):
+    big_event_df = pd.read_csv(big_event_file, sep=',', parse_dates=['Time'])
+    loaded_existing_file = True
+    print(f"Loaded existing big_event_data.csv with {len(big_event_df)} rows.")
+elif load_big_event_file:
+    print("Existing big_event_data.csv not found. Creating a new one from available ACC files.")
+else:
+    print("Configuration requests fresh big_event_data.csv creation.")
 
-    for csv_file in iterator:
+acc_directory = base_directories["acc_events_directory"]
+csv_files = sorted([f for f in os.listdir(acc_directory) if f.endswith('.csv')])
+
+if metadata_needs_write and load_big_event_file and loaded_existing_file:
+    big_event_mtime = os.path.getmtime(big_event_file)
+    for csv_file in csv_files:
         csv_path = os.path.join(acc_directory, csv_file)
+        if os.path.getmtime(csv_path) <= big_event_mtime:
+            processed_files.add(csv_file)
+    if processed_files:
+        print("Reconstructed processed ACC file list from timestamps (metadata was missing).")
+    metadata_needs_write = True
 
-        # print(f"Merging file: {csv_path}")
-        new_data = pd.read_csv(csv_path, sep=',', parse_dates=['Time'])
-        
-        # Put 0s to NaN
-        new_data = new_data.replace(0, np.nan)
-        new_data = new_data.copy()
-        
-        new_data['Time'] = new_data['Time'].dt.floor('1min')  # Round to minute precision
-        new_data = new_data.copy()
-        
-        # Add as a new column, the this_time = os.path.getmtime(csv_path)
-        new_data["execution_date"] = os.path.getmtime(csv_path)
-        big_event_df = pd.concat([big_event_df, new_data], ignore_index=True)
+files_to_process = [f for f in csv_files if f not in processed_files]
+processed_any_new_file = False
 
+if files_to_process:
+    iterator = tqdm(files_to_process, total=len(files_to_process), desc="Joining CSVs")
+else:
+    iterator = []
 
-# Once created or updated, we need to handle duplicates in 'Time'
-print("Grouping the CSVs by 'Time' and combining duplicates...")
+for csv_file in iterator:
+    csv_path = os.path.join(acc_directory, csv_file)
+    new_data = pd.read_csv(csv_path, sep=',', parse_dates=['Time'])
+    new_data = new_data.replace(0, np.nan).copy()
+    new_data['Time'] = new_data['Time'].dt.floor('1min')
+    new_data = new_data.copy()
+    new_data["execution_date"] = os.path.getmtime(csv_path)
+    big_event_df = pd.concat([big_event_df, new_data], ignore_index=True)
+    processed_files.add(csv_file)
+    processed_any_new_file = True
+    metadata_needs_write = True
 
-# Print the columns of big_event_df
-print("Columns in big_event_df:", big_event_df.columns.to_list())
+if not files_to_process:
+    if loaded_existing_file and csv_files:
+        print("No new ACC CSV files found to append.")
+    elif not csv_files:
+        print("No ACC CSV files found in ACC_EVENTS_DIRECTORY. Nothing to process.")
 
-# Group by 'Time' to combine duplicates
-print("Combining duplicates...")
+needs_aggregation = processed_any_new_file or not loaded_existing_file
 
-tqdm.pandas()
-big_event_df = big_event_df.groupby('Time', as_index=False).progress_apply(combine_duplicates).reset_index(drop=True)
+if big_event_df.empty:
+    print("No data available to aggregate or save.")
+elif needs_aggregation:
+    if "Time" not in big_event_df.columns:
+        print("Column 'Time' missing; cannot aggregate big_event_df.")
+    else:
+        print("Grouping the CSVs by 'Time' and combining duplicates...")
+        print("Columns in big_event_df:", big_event_df.columns.to_list())
+        tqdm.pandas()
+        big_event_df = big_event_df.groupby('Time', as_index=False).progress_apply(combine_duplicates).reset_index(drop=True)
 
-# Ensure big_event_df is a DataFrame
-if not isinstance(big_event_df, pd.DataFrame):
-    print("Warning: big_event_df is not a DataFrame. Converting it...")
-    big_event_df = big_event_df.to_frame()  # Convert Series to DataFrame if needed
+        if not isinstance(big_event_df, pd.DataFrame):
+            print("Warning: big_event_df is not a DataFrame. Converting it...")
+            big_event_df = big_event_df.to_frame()
 
-big_event_df = big_event_df.sort_values(by="Time")  # Now sorting should work fine
+        big_event_df = big_event_df.sort_values(by="Time")
+        print("Replacing 0s with NaNs...")
+        big_event_df = big_event_df.replace(0, np.nan)
 
-# Put every 0 to NaN, if this is cheaper in terms of memory
-print("Replacing 0s with NaNs...")
-big_event_df = big_event_df.replace(0, np.nan)
+        big_event_df.to_csv(big_event_file, sep=',', index=False)
+        print(big_event_df.columns.to_list())
+        print(f"Saved big_event_data.csv with {len(big_event_df)} rows.")
+else:
+    print("No new ACC files to append. Existing big_event_data.csv left unchanged.")
 
-# -----------------------------------------------------------------------------
-# Save the updated big_event_data.csv -----------------------------------------
-# -----------------------------------------------------------------------------
-
-big_event_df.to_csv(big_event_file, sep=',', index=False)
-print(big_event_df.columns.to_list())
-
-print(f"Saved big_event_data.csv with {len(big_event_df)} rows.")
-
+if metadata_needs_write:
+    processed_files_path.parent.mkdir(parents=True, exist_ok=True)
+    processed_files_path.write_text("\n".join(sorted(processed_files)))
+    print(f"Recorded {len(processed_files)} processed ACC files.")

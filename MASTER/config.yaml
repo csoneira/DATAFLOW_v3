@@ -7,7 +7,6 @@
 home_path: "/home/mingo"
 
 
-
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # ANCILLARY
@@ -15,7 +14,7 @@ home_path: "/home/mingo"
 # -----------------------------------------------------------------------------
 
 # METADATA PLOTTER (metadata_plotter.py)
-
+new_just_to_check: 0
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -92,6 +91,11 @@ fast_mode: false # Do not iterate TimTrack, neither save figures, etc.
 debug_mode: false # Only 10000 rows with all detail
 last_file_test: false
 alternative_fitting: true
+
+not_use_q_semisum_for_slew_corr: true
+
+residue_plots: false
+
 
 # -----------------------------------------------------------------------------
 # Execution options -----------------------------------------------------------

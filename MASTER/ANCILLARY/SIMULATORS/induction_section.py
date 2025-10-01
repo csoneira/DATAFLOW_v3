@@ -8,6 +8,15 @@ from __future__ import annotations
 # ------------------------------- Imports -------------------------------------
 # -----------------------------------------------------------------------------
 
+import os
+import yaml
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+home_path = config["home_path"]
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -56,7 +65,7 @@ lut_df = pd.DataFrame(lut, columns=["avalanche_width", "cluster_size_1", "cluste
 print(lut_df)
 
 # Save the LUT to a file
-lut_df.to_csv("/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/lut.csv", index=False)
+lut_df.to_csv(f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/lut.csv", index=False)
 
 print("LUT generated and saved to lut.csv")
 # %%

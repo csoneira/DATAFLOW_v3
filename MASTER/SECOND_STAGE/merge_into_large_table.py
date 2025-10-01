@@ -30,12 +30,14 @@ use_reference = "--reference-event" in sys.argv or "-r" in sys.argv
 # ----------------------------- Config file -----------------------------------
 # -----------------------------------------------------------------------------
 
+import os
 import yaml
-
-# Load configuration
-config_file_path = "/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+home_path = config["home_path"]
 
 DECIMAL_PLACES = config["DECIMAL_PLACES"]
 

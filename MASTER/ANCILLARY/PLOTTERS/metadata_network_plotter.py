@@ -4,6 +4,17 @@ from __future__ import annotations
 # -*- coding: utf-8 -*-
 #%%
 
+import os
+import yaml
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+home_path = config["home_path"]
+
+
+
 # -----------------------------------------------------------------------------
 # ------------------------------- Imports -------------------------------------
 # -----------------------------------------------------------------------------
@@ -58,7 +69,7 @@ def read_station_metadata(station: int = 1) -> tuple[pd.DataFrame, pd.DataFrame,
               print(f"Warning: File not found → {path}")
               return pd.DataFrame()
 
-      base = Path("/home/mingo/DATAFLOW_v3/STATIONS")
+      base = Path(f"{home_path}/DATAFLOW_v3/STATIONS")
         
       df1 = safe_read(base / "MINGO01" / "FIRST_STAGE" / "LAB_LOGS" / "big_log_lab_data.csv")
       df2 = safe_read(base / "MINGO02" / "FIRST_STAGE" / "LAB_LOGS" / "big_log_lab_data.csv")
@@ -442,32 +453,13 @@ def main():
         # Add more here
     ]
 
-    # if args.save:
-    #     outdir = Path("/home/mingo/DATAFLOW_v3/STATIONS/")
-    #     outdir.mkdir(parents=True, exist_ok=True)
-    #     fig_dir = outdir / "figures"
-    #     fig_dir.mkdir(parents=True, exist_ok=True)
-
-    #     # Save PNGs
-    #     for i, fig in enumerate(figs, 1):
-    #         fig.savefig(fig_dir / f"figure{i}.png", dpi=300, format='png')
-
-    #     # Save all in one PDF
-    #     pdf_path = outdir / "summary.pdf"
-    #     with PdfPages(pdf_path) as pdf:
-    #         for fig in figs:
-    #             print(f"Saving figure {fig.number} to PDF...")
-    #             pdf.savefig(fig)
-    #             plt.close(fig)
-
-    #     print(f"PDF saved to: {pdf_path.resolve()}")
     
     from matplotlib.backends.backend_pdf import PdfPages
     import matplotlib.pyplot as plt
     import matplotlib.image as mpimg
 
     if args.save:
-        outdir = Path("/home/mingo/DATAFLOW_v3/STATIONS/")
+        outdir = Path(f"{home_path}/DATAFLOW_v3/STATIONS/")
         outdir.mkdir(parents=True, exist_ok=True)
         fig_dir = outdir / "figures"
         fig_dir.mkdir(parents=True, exist_ok=True)

@@ -44,7 +44,7 @@ end_DOY=$(  date -d "20${end:0:2}-${end:2:2}-${end:4:2}"   +%y%j)
 ##############################################################################
 # Target directories
 ##############################################################################
-base_dir=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE
+base_dir="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE"
 compressed_directory="${base_dir}/COMPRESSED_HLDS"
 uncompressed_directory="${base_dir}/UNCOMPRESSED_HLDS"
 mkdir -p "$compressed_directory" "$uncompressed_directory"

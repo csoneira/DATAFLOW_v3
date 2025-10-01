@@ -1,5 +1,14 @@
 #%%
 
+import os
+import yaml
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+home_path = config["home_path"]
+
 import pandas as pd
 import numpy as np
 from scipy.optimize import curve_fit
@@ -34,9 +43,9 @@ regression_plots = False  # Set to True to display individual regression plots f
 # pressure_file_path = 'pressure_OULU.csv'
 # rate_file_path = 'rate_OULU.csv'
 
-pressure_file_path = '/home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/OULU_pressure.txt'
-rate_file_path = '/home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/OULU_uncorrected.txt'
-corr_rate_file_path = '/home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/OULU_corrected.txt'
+pressure_file_path = 'f"{home_path}/DATAFLOW_v3/MASTER/THIRD_STAGE/OULU_pressure.txt'
+rate_file_path = 'f"{home_path}/DATAFLOW_v3/MASTER/THIRD_STAGE/OULU_uncorrected.txt'
+corr_rate_file_path = 'f"{home_path}/DATAFLOW_v3/MASTER/THIRD_STAGE/OULU_corrected.txt'
 
 #%%
 

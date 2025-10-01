@@ -99,6 +99,14 @@ from tqdm import tqdm
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
 
+import yaml
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+home_path = config["home_path"]
+
 # -----------------------------------------------------------------------------
 
 # Store the current time at the start. To time the execution
@@ -376,13 +384,13 @@ else:
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+import os
 import yaml
-
-# Load configuration
-config_file_path = "/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
-
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -717,8 +725,6 @@ time_window_fitting = config["time_window_fitting"]
 charge_plot_limit_left = config["charge_plot_limit_left"]
 charge_plot_limit_right = config["charge_plot_limit_right"]
 charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
-
-
 
 
 # -----------------------------------------------------------------------------
@@ -1568,6 +1574,12 @@ else:
 
 # This is for all cases
 file_path = processing_file_path
+
+the_filename = os.path.basename(file_path)
+print(f"File to process: {the_filename}")
+
+analysis_date = datetime.now().strftime("%Y-%m-%d")
+print(f"Analysis date and time: {analysis_date}")
 
 # Modify the time of the processing file to the current time so it looks fresh
 now = time.time()
@@ -9444,7 +9456,9 @@ print(f"Datafile saved in {save_filename}. Path is {save_list_path}")
 # -----------------------------------------------------------------------------
 
 # Construct the new calibration row
-new_row = {'Start_Time': start_time, 'End_Time': end_time}
+
+# Current time of the analysis
+new_row = {'Filename': the_filename, 'Analysis_Date': analysis_date, 'Start_Time': start_time, 'End_Time': end_time}
 
 # Include pedestal and calibration parameters
 for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
@@ -9479,16 +9493,18 @@ existing_row_index = metadata_df[match].index
 
 if not existing_row_index.empty:
     metadata_df.loc[existing_row_index[0]] = new_row
-    print(f"Updated existing calibration for time range: {start_time} to {end_time}")
+    print(f"Updated existing metadata for time range: {start_time} to {end_time}")
 else:
     metadata_df = pd.concat([metadata_df, pd.DataFrame([new_row])], ignore_index=True)
-    print(f"Added new calibration for time range: {start_time} to {end_time}")
+    print(f"Added new metadata for time range: {start_time} to {end_time}")
 
 # Sort and save
 metadata_df.sort_values(by='Start_Time', inplace=True)
 
+
+
 # Put Start_Time and End_Time as first columns
-metadata_df = metadata_df[['Start_Time', 'End_Time'] + [col for col in metadata_df.columns if col not in ['Start_Time', 'End_Time']]]
+metadata_df = metadata_df[['Filename', 'Analysis_Date', 'Start_Time', 'End_Time'] + [col for col in metadata_df.columns if col not in ['Start_Time', 'End_Time']]]
 
 metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
 print(f'{csv_path} updated with the calibration summary.')

@@ -67,12 +67,14 @@ from scipy.sparse import load_npz, csc_matrix
 
 # TO CONFIG FILE --------------------------------------------------------------
 
+import os
 import yaml
-
-# Load configuration
-config_file_path = "/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+home_path = config["home_path"]
 
 
 
@@ -198,6 +200,9 @@ else:
 
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
+analysis_date = datetime.now().strftime("%Y-%m-%d")
+print(f"Analysis date and time: {analysis_date}")
+
 # Store the current time at the start. To time the execution
 start_execution_time_counting = datetime.now()
 
@@ -245,7 +250,7 @@ base_directories = {
     
     "acc_events_directory": os.path.join(working_directory, "ACC_EVENTS_DIRECTORY"),
     # "full_acc_events_directory": os.path.join(working_directory, "FULL_ACC_EVENTS_DIRECTORY"),
-    "acc_rejected_directory": os.path.join(working_directory, "ACC_REJECTED"),
+    "acc_rejected_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_REJECTED"),
 }
 
 # Create ALL directories if they don't already exist
@@ -269,22 +274,24 @@ if files:  # Check if the directory contains any files
 # Move small or too big files in the destination folder to a directory of rejected -----------
 # --------------------------------------------------------------------------------------------
 
-source_dir = base_directories["acc_events_directory"]
-rejected_dir = base_directories["acc_rejected_directory"]
+# print("Moving small and big files to rejected folder.")
 
-for filename in os.listdir(source_dir):
-    file_path = os.path.join(source_dir, filename)
+# source_dir = base_directories["acc_events_directory"]
+# rejected_dir = base_directories["acc_rejected_directory"]
+
+# for filename in os.listdir(source_dir):
+#     file_path = os.path.join(source_dir, filename)
     
-    # Check if it's a file
-    if os.path.isfile(file_path):
-        # Count the number of lines in the file
-        with open(file_path, "r") as f:
-            line_count = sum(1 for _ in f)
+#     # Check if it's a file
+#     if os.path.isfile(file_path):
+#         # Count the number of lines in the file
+#         with open(file_path, "r") as f:
+#             line_count = sum(1 for _ in f)
 
-        # Move the file if it has < 10 or > 300 rows
-        if line_count < 2 or line_count > 10000:
-            shutil.move(file_path, os.path.join(rejected_dir, filename))
-            print(f"Moved: {filename}")
+#         # Move the file if it has < 10 or > 300 rows
+#         if line_count < 2 or line_count > 10000:
+#             shutil.move(file_path, os.path.join(rejected_dir, filename))
+#             print(f"Moved: {filename}")
 
 
 # Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
@@ -305,7 +312,12 @@ completed_files = set(os.listdir(completed_directory))
 # Files to copy: in LIST but not in UNPROCESSED, PROCESSING, or COMPLETED
 files_to_copy = list_event_files - unprocessed_files - processing_files - completed_files
 
+
+
 # Copy files to UNPROCESSED
+
+print(f"Copying {len(files_to_copy)} files to UNPROCESSED directory...")
+
 for file_name in files_to_copy:
     src_path = os.path.join(list_events_directory, file_name)
     dest_path = os.path.join(unprocessed_directory, file_name)
@@ -456,9 +468,11 @@ valid_times = df['Time'].dropna()
 
 # ------------------------------------------------------------------------------------------
 
+used_files_names = [os.path.basename(file_path)]
+
 # --- MULTIPLE FILES HANDLING ---
 if multiple_files:
-        
+    
     time_window = timedelta(hours=time_window_in_hours)
     time_tolerance = timedelta(minutes=time_tolerance_in_minutes)
     
@@ -514,6 +528,7 @@ if multiple_files:
             print(f"Processing file: {fname} with min time {min_t} and max time {max_t}")
             if not (max_t < min_time_original - time_tolerance or min_t > max_time_original + time_tolerance):
                 print(f"Merging file: {fname}")
+                used_files_names.append(fname)
                 merged_df = pd.concat([merged_df, temp_df], ignore_index=True)
                 # Update time range for rolling inclusion
                 min_time_original = min(min_time_original, min_t)
@@ -524,6 +539,19 @@ if multiple_files:
 
     df = merged_df
     print(f"Total events after merging: {len(df)}")
+
+
+print("-" * 30)
+print("-" * 30)
+print("-" * 30)
+print("-" * 30)
+print("Files used in this accumulation:")
+print(used_files_names)
+print("-" * 30)
+print("-" * 30)
+print("-" * 30)
+print("-" * 30)
+print("-" * 30)
 
 # ------------------------------------------------------------------------------------------
 
@@ -5159,7 +5187,9 @@ if side_calculations:
 
 
 # Construct the new calibration row
-new_row = {'Start_Time': start_time, 'End_Time': end_time}
+# Current time of the analysis
+new_row = {'Analysis_Date': analysis_date, 'Used_Files': used_files_names, 'Start_Time': start_time, 'End_Time': end_time}
+
 
 # Add global variables (e.g., counts, sigmoid widths, slopes)
 for key, value in global_variables.items():

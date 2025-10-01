@@ -3,5 +3,5 @@
 #    initConf.m, the HOME line, THAT MUST END WITH A SLASH
 #    
 
-cd /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/software/
+cd $HOME/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/software/
 octave --no-gui ./unpackingContinuous.m

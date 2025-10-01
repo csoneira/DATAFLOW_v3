@@ -71,17 +71,17 @@ echo "------------------------------------------------------"
 
 # --------------------------------------------------------------------------------------------
 
-base_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE
+base_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE"
 compressed_directory=${base_directory}/COMPRESSED_HLDS
 uncompressed_directory=${base_directory}/UNCOMPRESSED_HLDS
 # processed_directory=${base_directory}/ANCILLARY_DIRECTORY
 moved_directory=${base_directory}/SENT_TO_RAW_TO_LIST_PIPELINE
 
-hld_input_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat
-asci_output_directory=/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci
-first_stage_raw_directory=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW
-first_stage_base=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA
-first_stage_base_deep=/home/mingo/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES
+hld_input_directory=$HOME/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat
+asci_output_directory=$HOME/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci
+first_stage_raw_directory=$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW
+first_stage_base=$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA
+first_stage_base_deep=$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES
 
 # mkdir -p "$uncompressed_directory" "$processed_directory" "$moved_directory"
 echo "Creating necessary directories..."
@@ -207,7 +207,7 @@ echo ""
 echo "Running unpacking..."
 export RPCSYSTEM=mingo0$station
 export RPCRUNMODE=oneRun # Other option is oneRun 
-/home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh
+$HOME/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh
 # /media/externalDisk/gate/bin/unpack.sh
 echo ""
 echo ""
@@ -250,7 +250,7 @@ fi
 
 # Reordering the unpcaked files if needed according to its stations
 
-BASE_ROOT="/home/mingo/DATAFLOW_v3/STATIONS"
+BASE_ROOT="$HOME/DATAFLOW_v3/STATIONS"
 SUBDIRS=("COMPRESSED_HLDS" "UNCOMPRESSED_HLDS" "SENT_TO_RAW_TO_LIST_PIPELINE")
 
 # Loop through station numbers 1 to 4

@@ -3,6 +3,15 @@ from __future__ import annotations
 
 #%%
 
+import os
+import yaml
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+print(f"Using config file: {config_file_path}")
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+home_path = config["home_path"]
+
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # HEADER -----------------------------------------------------------------------
@@ -63,7 +72,7 @@ from matplotlib import cm
 # Parameter definitions --------------------------------------------------------
 # ------------------------------------------------------------------------------
 
-PLOT_DIR = "/home/mingo/DATAFLOW_v3/TESTS/SIMULATION"
+PLOT_DIR = f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION"
 
 plot_time_windows = False
 show_plots = True
@@ -130,8 +139,8 @@ VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '2
 
 read_file = True
 use_binary = True  # If True, will use a binary file instead of CSV
-bin_filename = f"/home/mingo/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.pkl"
-csv_filename = f"/home/mingo/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.csv"
+bin_filename = f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.pkl"
+csv_filename = f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION/simulated_tracks_{N_TRACKS}.csv"
 
 fistensor2 = False
 if fistensor2:
@@ -543,7 +552,7 @@ for measured_type in measured_types:
     measured_rates[measured_type] = measured_events / total_time_seconds / total_generated_rate if total_time_seconds > 0 else 0
 
 # Fixed path to output file
-rates_LUT_filename = Path("/home/mingo/DATAFLOW_v3/TESTS/SIMULATION/rates_LUT.csv")
+rates_LUT_filename = Path(f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION/rates_LUT.csv")
 write_header = not rates_LUT_filename.exists()
 
 with open(rates_LUT_filename, 'a') as f:
@@ -954,7 +963,7 @@ y_bins   = np.linspace(-1, 1, 100)
 
 tt_list = ['1234', '123', '234', '12', '23', '34']  # or VALID_MEASURED_TYPES
 
-PLOT_DIR = "/home/mingo/DATAFLOW_v3/TESTS/SIMULATION"
+PLOT_DIR = f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION"
 
 groups = [tt_list]                             # list of topology lists
 for tt_group in groups:
@@ -1028,7 +1037,7 @@ y_bins   = np.linspace(-distance_limit, distance_limit, 200)
 
 tt_list = ['1234', '123', '234', '12', '23', '34']  # or VALID_MEASURED_TYPES
 
-PLOT_DIR = "/home/mingo/DATAFLOW_v3/TESTS/SIMULATION"
+PLOT_DIR = f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION"
 
 groups = [tt_list]                             # list of topology lists
 for tt_group in groups:
@@ -1388,7 +1397,7 @@ if only_angles_input:
     df_pred = sample_true_angles_nearest(
         df_fit=df_input,
         matrices=None,                        # o `matrices` si ya las tienes en RAM
-        lut_dir="/home/mingo/DATAFLOW_v3/TESTS/SIMULATION",
+        lut_dir=f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION",
         n_bins=n_bins,
         u_edges=u_edges,
         v_edges=v_edges,
@@ -2033,7 +2042,7 @@ for tt_list in tt_lists:
 
 # df_pred = og_df
 
-PLOT_DIR = "/home/mingo/DATAFLOW_v3/TESTS/SIMULATION"
+PLOT_DIR = f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION"
 tt_list = ['1234', '123', '234', '12', '23', '34']  # or VALID_MEASURED_TYPES
 
 # ----------------------------------------------------------------------

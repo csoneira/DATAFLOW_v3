@@ -4,7 +4,7 @@
 # 0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/update_log.txt 2>&1
 
 # ==== CONFIGURATION ====
-BASE_DIR="/home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE"
+BASE_DIR="$HOME/DATAFLOW_v3/MASTER/THIRD_STAGE"
 CSV_FILE="$BASE_DIR/nmdb_combined.csv"
 TMP_FILE="$BASE_DIR/nmdb_tmp.csv"
 ADDRESS_FILE="$BASE_DIR/address.conf"

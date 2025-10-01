@@ -21,28 +21,25 @@ import pandas as pd
 
 import yaml
 
-# Dynamically get the user's home directory
 user_home = os.path.expanduser("~")
-
-# Construct the config file path dynamically
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
 
 print(f"Using config file: {config_file_path}")
 
-# Load YAML configuration
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+
+home_path = config["home_path"]
+print(f"Home path: {home_path}")
+
+
 
 outlier_limits = config["outlier_limits"]
 print(outlier_limits)
 
-
 create_new_csv = config["create_new_csv"]
 print(f"Create new CSV: {create_new_csv}")
 
-home_path = config["home_path"]
-
-print(f"Home path: {home_path}")
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------

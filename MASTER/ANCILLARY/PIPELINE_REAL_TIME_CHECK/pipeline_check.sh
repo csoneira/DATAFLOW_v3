@@ -8,7 +8,7 @@ set -euo pipefail
 ##############################################################################
 # Configuration
 ##############################################################################
-BASE="/home/mingo/DATAFLOW_v3/STATIONS"
+BASE="$HOME/DATAFLOW_v3/STATIONS"
 
 FILES=(
   "FIRST_STAGE/EVENT_DATA/raw_to_list_metadata.csv"
