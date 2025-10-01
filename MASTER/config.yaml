@@ -87,6 +87,11 @@ logbook:
 # FIRST_STAGE - EVENT_DATA - RAW_TO_LIST (raw_to_list_events.sh)
 # -----------------------------------------------------------------------------
 
+stratos_save: true
+fast_mode: false # Do not iterate TimTrack, neither save figures, etc.
+debug_mode: false # Only 10000 rows with all detail
+last_file_test: false
+alternative_fitting: true
 
 # -----------------------------------------------------------------------------
 # Execution options -----------------------------------------------------------
@@ -491,6 +496,18 @@ streamer_limit: 100
 
 # Constants
 q_e: 1.602e-4  # fC
+
+
+blurring_angular: true
+blurring_sigma_angular: 2
+
+blurring_xy: false
+blurring_sigma_xy: 0.05
+
+draw_angular_regions: true
+time_to_min: false
+
+
 
 
 # FIRST_STAGE - EVENT_DATA - BIG EVENT FILE JOINER (big_event_file_joiner.py)

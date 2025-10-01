@@ -10,7 +10,6 @@ Created on Thu Jun 20 09:15:33 2024
 @author: csoneira@ucm.es
 """
 
-run_jupyter_notebook = False
 
 print("\n\n")
 print("__| |___________________________________________________________| |__")
@@ -32,11 +31,7 @@ print("----------------------------------------------------------------------")
 print("-------------------- RAW TO LIST SCRIPT IS STARTING ------------------")
 print("----------------------------------------------------------------------")
 
-stratos_save = True
-fast_mode = False # Do not iterate TimTrack, neither save figures, etc.
-debug_mode = False # Only 10000 rows with all detail
-last_file_test = False
-alternative_fitting = True
+
 
 # -----------------------------------------------------------------------------
 # ------------------------------- Imports -------------------------------------
@@ -117,6 +112,7 @@ print("Execution time is:", execution_time)
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
 
+run_jupyter_notebook = False
 if run_jupyter_notebook:
     station = "2"
 else:
@@ -386,6 +382,66 @@ import yaml
 config_file_path = "/home/mingo/DATAFLOW_v3/MASTER/config.yaml"
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+
+home_path = config["home_path"]
+
+ITINERARY_FILE_PATH = Path(
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+)
+
+
+def load_itineraries_from_file(file_path: Path, required: bool = True) -> list[list[str]]:
+    """Return itineraries stored as comma-separated lines in *file_path*."""
+    if not file_path.exists():
+        if required:
+            raise FileNotFoundError(f"Cannot find itineraries file: {file_path}")
+        return []
+
+    itineraries: list[list[str]] = []
+    with file_path.open("r", encoding="utf-8") as itinerary_file:
+        print(f"Loading itineraries from {file_path}:")
+        for line_number, raw_line in enumerate(itinerary_file, start=1):
+            stripped_line = raw_line.strip()
+            if not stripped_line or stripped_line.startswith("#"):
+                continue
+            segments = [segment.strip() for segment in stripped_line.split(",") if segment.strip()]
+            if segments:
+                itineraries.append(segments)
+                print(segments)
+
+    if not itineraries and required:
+        raise ValueError(f"Itineraries file {file_path} is empty.")
+
+    return itineraries
+
+
+def write_itineraries_to_file(
+    file_path: Path,
+    itineraries: Iterable[Iterable[str]],
+) -> None:
+    """Persist unique itineraries to *file_path* as comma-separated lines."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    unique_itineraries: dict[tuple[str, ...], None] = {}
+
+    for itinerary in itineraries:
+        itinerary_tuple = tuple(itinerary)
+        if not itinerary_tuple:
+            continue
+        unique_itineraries.setdefault(itinerary_tuple, None)
+
+    with file_path.open("w", encoding="utf-8") as itinerary_file:
+        for itinerary_tuple in unique_itineraries:
+            itinerary_file.write(",".join(itinerary_tuple) + "\n")
+
+
+
+not_use_q_semisum = False
+
+stratos_save = config["stratos_save"]
+fast_mode = config["fast_mode"]
+debug_mode = config["debug_mode"]
+last_file_test = config["last_file_test"]
+alternative_fitting = config["alternative_fitting"]
 
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
@@ -4223,7 +4279,6 @@ if slewing_correction:
         # Apply it to your DataFrame:
         # data = robust_z_filter(data, ['Q_sum_semidiff', 'Q_sum_semisum', 'T_sum_corrected_diff'])
         
-        not_use_q_semisum = False
         if not_use_q_semisum:
             X = data[['Q_sum_semidiff']].values
             y = data['T_sum_corrected_diff'].values
@@ -4988,7 +5043,7 @@ if time_calibration:
     
     if brute_force_analysis_time_calibration_path_finding:
         # Main itinerary
-        itinerary = ["P1s1", "P3s1", "P1s2", "P3s2", "P1s3", "P3s3", "P1s4", "P3s4","P4s4", "P2s4", "P4s3", "P2s3", "P4s2", "P2s2", "P4s1", "P2s1"]
+        itinerary = ["P1s1", "P3s1", "P1s2", "P3s2", "P1s3", "P3s3", "P1s4", "P3s4", "P4s4", "P2s4", "P4s3", "P2s3", "P4s2", "P2s2", "P4s1", "P2s1"]
         k = 0
         max_iter = 2000000
         brute_force_list = []
@@ -4997,6 +5052,14 @@ if time_calibration:
         columns = ['s{}'.format(i) for i in range(1,5)]
         brute_force_df = pd.DataFrame(0, index=rows, columns=columns)
         jump = False
+
+        existing_itineraries = load_itineraries_from_file(ITINERARY_FILE_PATH, required=False)
+        successful_itineraries: dict[tuple[str, ...], None] = {
+            tuple(existing_itinerary): None
+            for existing_itinerary in existing_itineraries
+        }
+        found_new_itinerary = False
+
         while k < max_iter:
             if k % 50000 == 0: print(f"Itinerary {k}")
             brute_force_df[brute_force_df.columns] = 0
@@ -5017,6 +5080,10 @@ if time_calibration:
             # and save it for the next step.
             if jump == False:
                 print(itinerary)
+                itinerary_tuple = tuple(step)
+                if itinerary_tuple not in successful_itineraries:
+                    successful_itineraries[itinerary_tuple] = None
+                    found_new_itinerary = True
             # Shuffle the path
             random.shuffle(itinerary)
             # Iterate
@@ -5031,124 +5098,20 @@ if time_calibration:
         # Calculate the mean of all the paths
         calibrated_times_bf = np.nanmean(brute_force_list, axis=0)
         calibration_times = calibrated_times_bf
+
+        if successful_itineraries and (found_new_itinerary or not ITINERARY_FILE_PATH.exists()):
+            write_itineraries_to_file(ITINERARY_FILE_PATH, successful_itineraries.keys())
+    
     
     # -----------------------------------------------------------------------------
     # Selected paths method
     # -----------------------------------------------------------------------------
-    itineraries = [
-    ['P1s1', 'P3s1', 'P1s2', 'P3s2', 'P1s3', 'P3s3', 'P1s4', 'P3s4', 'P4s4', 'P2s4', 'P4s3', 'P2s3', 'P4s2', 'P2s2', 'P4s1', 'P2s1'],
-    ['P3s4', 'P1s4', 'P2s4', 'P4s4', 'P2s2', 'P4s3', 'P2s3', 'P1s3', 'P3s3', 'P2s1', 'P4s2', 'P1s2', 'P3s2', 'P1s1', 'P4s1', 'P3s1'],
-    ['P3s2', 'P1s2', 'P2s2', 'P4s1', 'P3s1', 'P1s1', 'P3s3', 'P4s2', 'P2s3', 'P1s3', 'P3s4', 'P2s4', 'P4s4', 'P1s4', 'P4s3', 'P2s1'],
-    ['P2s4', 'P4s2', 'P1s4', 'P4s4', 'P2s3', 'P4s1', 'P1s3', 'P3s3', 'P1s2', 'P2s2', 'P3s2', 'P2s1', 'P3s1', 'P1s1', 'P4s3', 'P3s4'],
-    ['P2s4', 'P4s4', 'P2s2', 'P1s2', 'P3s1', 'P1s1', 'P4s3', 'P2s3', 'P4s1', 'P1s3', 'P3s4', 'P1s4', 'P3s3', 'P2s1', 'P4s2', 'P3s2'],
-    ['P3s1', 'P2s1', 'P1s2', 'P4s3', 'P1s3', 'P2s2', 'P3s3', 'P4s1', 'P3s2', 'P1s1', 'P4s4', 'P2s3', 'P3s4', 'P2s4', 'P4s2', 'P1s4'],
-    ['P2s3', 'P4s4', 'P2s4', 'P4s2', 'P1s1', 'P3s2', 'P2s1', 'P3s1', 'P4s1', 'P1s3', 'P2s2', 'P1s2', 'P3s3', 'P1s4', 'P4s3', 'P3s4'],
-    ['P2s4', 'P3s4', 'P4s2', 'P1s1', 'P2s1', 'P3s1', 'P1s2', 'P4s1', 'P1s3', 'P4s4', 'P2s2', 'P3s3', 'P1s4', 'P2s3', 'P4s3', 'P3s2'],
-    ['P3s3', 'P1s2', 'P3s2', 'P2s1', 'P4s3', 'P2s3', 'P4s4', 'P3s4', 'P2s4', 'P1s4', 'P4s2', 'P2s2', 'P1s3', 'P4s1', 'P1s1', 'P3s1'],
-    ['P2s4', 'P3s4', 'P1s4', 'P3s3', 'P4s1', 'P2s3', 'P4s2', 'P2s1', 'P3s2', 'P1s3', 'P4s3', 'P2s2', 'P1s2', 'P4s4', 'P1s1', 'P3s1'],
-    ['P4s2', 'P3s2', 'P4s3', 'P1s3', 'P2s2', 'P4s1', 'P1s1', 'P2s1', 'P3s3', 'P1s4', 'P2s3', 'P3s4', 'P2s4', 'P4s4', 'P1s2', 'P3s1'],
-    ['P1s3', 'P2s3', 'P3s4', 'P1s4', 'P4s4', 'P2s4', 'P4s3', 'P1s2', 'P3s1', 'P4s1', 'P2s1', 'P4s2', 'P3s2', 'P1s1', 'P3s3', 'P2s2'],
-    ['P2s4', 'P4s3', 'P1s2', 'P2s1', 'P3s2', 'P2s2', 'P4s2', 'P3s3', 'P1s4', 'P2s3', 'P1s3', 'P3s4', 'P4s4', 'P1s1', 'P3s1', 'P4s1'],
-    ['P2s2', 'P1s2', 'P4s1', 'P1s1', 'P3s1', 'P2s1', 'P3s3', 'P4s2', 'P2s4', 'P4s4', 'P1s4', 'P2s3', 'P3s4', 'P4s3', 'P1s3', 'P3s2'],
-    ['P3s1', 'P2s1', 'P3s3', 'P2s2', 'P4s2', 'P2s4', 'P4s4', 'P1s2', 'P3s2', 'P1s3', 'P3s4', 'P1s4', 'P2s3', 'P4s1', 'P1s1', 'P4s3'],
-    ['P4s2', 'P3s2', 'P2s2', 'P4s4', 'P3s3', 'P1s4', 'P2s3', 'P1s3', 'P3s4', 'P2s4', 'P4s3', 'P2s1', 'P1s2', 'P3s1', 'P4s1', 'P1s1'],
-    ['P1s2', 'P3s3', 'P4s4', 'P1s1', 'P4s1', 'P3s1', 'P2s1', 'P3s2', 'P1s3', 'P3s4', 'P2s3', 'P4s3', 'P2s2', 'P4s2', 'P2s4', 'P1s4'],
-    ['P3s3', 'P1s2', 'P4s2', 'P3s2', 'P1s3', 'P2s2', 'P4s1', 'P1s1', 'P3s1', 'P2s1', 'P4s3', 'P1s4', 'P2s4', 'P3s4', 'P4s4', 'P2s3'],
-    ['P3s4', 'P1s3', 'P4s2', 'P2s4', 'P4s3', 'P3s2', 'P1s2', 'P3s3', 'P2s2', 'P4s1', 'P2s3', 'P1s4', 'P4s4', 'P2s1', 'P1s1', 'P3s1'],
-    ['P2s1', 'P1s1', 'P3s1', 'P1s2', 'P3s3', 'P1s4', 'P2s3', 'P4s4', 'P3s4', 'P4s2', 'P2s4', 'P4s3', 'P1s3', 'P2s2', 'P4s1', 'P3s2'],
-    ['P3s3', 'P2s2', 'P1s2', 'P4s4', 'P2s1', 'P3s2', 'P1s3', 'P3s4', 'P1s4', 'P2s3', 'P4s1', 'P3s1', 'P1s1', 'P4s3', 'P2s4', 'P4s2'],
-    ['P3s2', 'P2s2', 'P4s2', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P4s1', 'P1s2', 'P3s1', 'P1s1', 'P3s3', 'P4s4', 'P2s3', 'P4s3', 'P2s1'],
-    ['P3s2', 'P1s2', 'P4s2', 'P1s1', 'P4s4', 'P2s3', 'P1s4', 'P3s3', 'P2s1', 'P3s1', 'P4s1', 'P2s2', 'P1s3', 'P3s4', 'P2s4', 'P4s3'],
-    ['P3s2', 'P2s2', 'P3s3', 'P1s1', 'P4s2', 'P1s3', 'P4s3', 'P3s4', 'P2s4', 'P1s4', 'P2s3', 'P4s4', 'P1s2', 'P4s1', 'P3s1', 'P2s1'],
-    ['P1s3', 'P3s4', 'P2s4', 'P1s4', 'P3s3', 'P1s2', 'P2s1', 'P4s4', 'P2s3', 'P4s1', 'P3s2', 'P4s2', 'P2s2', 'P4s3', 'P1s1', 'P3s1'],
-    ['P2s1', 'P3s3', 'P1s4', 'P2s3', 'P3s4', 'P1s3', 'P4s2', 'P1s1', 'P3s1', 'P4s1', 'P2s2', 'P3s2', 'P1s2', 'P4s3', 'P2s4', 'P4s4'],
-    ['P3s1', 'P4s1', 'P3s2', 'P1s1', 'P4s2', 'P2s4', 'P1s4', 'P2s3', 'P1s3', 'P3s3', 'P2s2', 'P1s2', 'P4s4', 'P3s4', 'P4s3', 'P2s1'],
-    ['P1s3', 'P3s4', 'P2s4', 'P4s2', 'P1s4', 'P4s4', 'P3s3', 'P2s3', 'P4s3', 'P3s2', 'P4s1', 'P2s1', 'P1s1', 'P3s1', 'P1s2', 'P2s2'],
-    ['P3s2', 'P2s2', 'P1s3', 'P4s3', 'P1s4', 'P2s3', 'P4s2', 'P1s1', 'P4s1', 'P3s1', 'P2s1', 'P1s2', 'P3s3', 'P4s4', 'P2s4', 'P3s4'],
-    ['P2s3', 'P3s3', 'P1s1', 'P3s1', 'P1s2', 'P4s2', 'P2s1', 'P3s2', 'P4s1', 'P2s2', 'P4s4', 'P1s3', 'P3s4', 'P4s3', 'P1s4', 'P2s4'],
-    ['P1s1', 'P3s1', 'P1s2', 'P4s1', 'P2s1', 'P3s2', 'P1s3', 'P2s3', 'P1s4', 'P4s4', 'P2s2', 'P4s3', 'P2s4', 'P3s4', 'P4s2', 'P3s3'],
-    ['P1s3', 'P3s3', 'P1s4', 'P2s4', 'P3s4', 'P4s2', 'P2s3', 'P4s4', 'P1s2', 'P3s2', 'P2s2', 'P4s3', 'P2s1', 'P4s1', 'P3s1', 'P1s1'],
-    ['P2s3', 'P3s4', 'P2s4', 'P4s4', 'P1s1', 'P4s1', 'P2s2', 'P4s2', 'P1s2', 'P3s1', 'P2s1', 'P3s2', 'P1s3', 'P3s3', 'P4s3', 'P1s4'],
-    ['P2s4', 'P4s4', 'P1s2', 'P4s2', 'P2s3', 'P3s4', 'P1s4', 'P3s3', 'P1s3', 'P4s1', 'P2s1', 'P4s3', 'P2s2', 'P3s2', 'P1s1', 'P3s1'],
-    ['P4s3', 'P2s1', 'P1s2', 'P2s2', 'P3s2', 'P1s1', 'P3s1', 'P4s1', 'P3s3', 'P4s2', 'P2s4', 'P1s4', 'P4s4', 'P2s3', 'P3s4', 'P1s3'],
-    ['P2s2', 'P4s4', 'P2s4', 'P4s3', 'P2s3', 'P4s1', 'P2s1', 'P1s1', 'P3s1', 'P1s2', 'P3s2', 'P4s2', 'P1s3', 'P3s3', 'P1s4', 'P3s4'],
-    ['P3s1', 'P4s1', 'P2s3', 'P4s3', 'P1s1', 'P2s1', 'P1s2', 'P2s2', 'P4s2', 'P2s4', 'P4s4', 'P3s4', 'P1s4', 'P3s3', 'P1s3', 'P3s2'],
-    ['P4s2', 'P3s3', 'P2s1', 'P1s2', 'P4s4', 'P2s2', 'P4s3', 'P1s3', 'P3s4', 'P2s4', 'P1s4', 'P2s3', 'P4s1', 'P3s1', 'P1s1', 'P3s2'],
-    ['P1s3', 'P3s4', 'P2s4', 'P4s2', 'P1s1', 'P3s1', 'P1s2', 'P2s2', 'P4s4', 'P2s3', 'P1s4', 'P3s3', 'P4s3', 'P3s2', 'P4s1', 'P2s1'],
-    ['P3s2', 'P1s3', 'P4s2', 'P3s3', 'P2s3', 'P3s4', 'P2s4', 'P1s4', 'P4s4', 'P2s2', 'P4s1', 'P2s1', 'P3s1', 'P1s2', 'P4s3', 'P1s1'],
-    ['P2s3', 'P4s4', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P3s2', 'P2s2', 'P4s2', 'P2s1', 'P4s3', 'P3s3', 'P1s1', 'P3s1', 'P1s2', 'P4s1'],
-    ['P4s1', 'P3s1', 'P1s1', 'P2s1', 'P4s4', 'P1s3', 'P2s3', 'P4s3', 'P2s2', 'P3s2', 'P1s2', 'P4s2', 'P3s3', 'P1s4', 'P3s4', 'P2s4'],
-    ['P2s4', 'P4s3', 'P2s3', 'P4s1', 'P1s3', 'P2s2', 'P3s2', 'P4s2', 'P1s2', 'P3s1', 'P2s1', 'P3s3', 'P1s1', 'P4s4', 'P1s4', 'P3s4'],
-    ['P1s4', 'P2s4', 'P4s3', 'P2s3', 'P3s3', 'P1s1', 'P3s2', 'P4s1', 'P1s3', 'P3s4', 'P4s4', 'P2s2', 'P4s2', 'P2s1', 'P3s1', 'P1s2'],
-    ['P2s2', 'P4s1', 'P2s3', 'P1s3', 'P3s2', 'P1s1', 'P3s1', 'P1s2', 'P3s3', 'P2s1', 'P4s3', 'P2s4', 'P3s4', 'P4s2', 'P1s4', 'P4s4'],
-    ['P2s2', 'P1s2', 'P2s1', 'P3s2', 'P1s1', 'P4s3', 'P2s4', 'P4s2', 'P2s3', 'P3s4', 'P1s4', 'P3s3', 'P4s4', 'P1s3', 'P4s1', 'P3s1'],
-    ['P2s1', 'P3s1', 'P4s1', 'P2s3', 'P3s3', 'P2s2', 'P3s2', 'P1s3', 'P4s4', 'P1s2', 'P4s2', 'P1s1', 'P4s3', 'P3s4', 'P1s4', 'P2s4'],
-    ['P1s1', 'P3s3', 'P2s3', 'P1s3', 'P3s4', 'P4s4', 'P1s4', 'P2s4', 'P4s3', 'P2s1', 'P4s1', 'P3s1', 'P1s2', 'P2s2', 'P4s2', 'P3s2'],
-    ['P2s2', 'P4s3', 'P2s3', 'P3s3', 'P4s4', 'P1s2', 'P4s2', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P4s1', 'P3s1', 'P1s1', 'P3s2', 'P2s1'],
-    ['P4s1', 'P1s1', 'P3s1', 'P1s2', 'P2s1', 'P3s2', 'P2s2', 'P4s3', 'P3s3', 'P4s4', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P2s3', 'P4s2'],
-    ['P4s4', 'P1s3', 'P3s3', 'P2s2', 'P1s2', 'P3s1', 'P2s1', 'P3s2', 'P1s1', 'P4s1', 'P2s3', 'P4s2', 'P1s4', 'P3s4', 'P2s4', 'P4s3'],
-    ['P1s3', 'P4s4', 'P3s4', 'P2s4', 'P4s2', 'P2s2', 'P3s3', 'P1s1', 'P3s1', 'P1s2', 'P3s2', 'P4s3', 'P1s4', 'P2s3', 'P4s1', 'P2s1'],
-    ['P3s2', 'P4s3', 'P2s1', 'P1s1', 'P3s1', 'P4s1', 'P1s3', 'P2s2', 'P1s2', 'P4s4', 'P2s4', 'P1s4', 'P3s4', 'P2s3', 'P3s3', 'P4s2'],
-    ['P2s3', 'P4s2', 'P2s1', 'P4s4', 'P2s2', 'P1s2', 'P3s1', 'P1s1', 'P3s3', 'P4s3', 'P3s2', 'P4s1', 'P1s3', 'P3s4', 'P1s4', 'P2s4'],
-    ['P2s2', 'P3s2', 'P4s1', 'P3s1', 'P2s1', 'P1s2', 'P4s4', 'P1s1', 'P4s3', 'P2s3', 'P3s3', 'P1s3', 'P3s4', 'P1s4', 'P4s2', 'P2s4'],
-    ['P4s4', 'P2s2', 'P1s3', 'P3s3', 'P1s4', 'P3s4', 'P2s4', 'P4s2', 'P1s2', 'P4s1', 'P3s1', 'P1s1', 'P3s2', 'P2s1', 'P4s3', 'P2s3'],
-    ['P2s2', 'P3s2', 'P1s1', 'P3s1', 'P2s1', 'P3s3', 'P4s1', 'P2s3', 'P1s4', 'P4s4', 'P2s4', 'P3s4', 'P1s3', 'P4s3', 'P1s2', 'P4s2'],
-    ['P2s3', 'P3s3', 'P2s2', 'P1s3', 'P3s2', 'P1s2', 'P3s1', 'P4s1', 'P1s1', 'P2s1', 'P4s4', 'P1s4', 'P4s3', 'P3s4', 'P2s4', 'P4s2'],
-    ['P2s4', 'P1s4', 'P3s3', 'P1s1', 'P3s1', 'P4s1', 'P2s2', 'P3s2', 'P4s3', 'P1s3', 'P3s4', 'P2s3', 'P4s4', 'P2s1', 'P4s2', 'P1s2'],
-    ['P3s1', 'P1s1', 'P4s4', 'P2s1', 'P3s3', 'P4s1', 'P1s2', 'P4s2', 'P1s4', 'P2s3', 'P3s4', 'P1s3', 'P2s2', 'P3s2', 'P4s3', 'P2s4'],
-    ['P2s2', 'P4s4', 'P2s1', 'P4s3', 'P2s4', 'P1s4', 'P4s2', 'P3s4', 'P2s3', 'P1s3', 'P3s3', 'P1s2', 'P3s2', 'P4s1', 'P3s1', 'P1s1'],
-    ['P3s2', 'P1s3', 'P2s3', 'P4s2', 'P2s4', 'P1s4', 'P3s3', 'P1s1', 'P2s1', 'P4s4', 'P3s4', 'P4s3', 'P1s2', 'P3s1', 'P4s1', 'P2s2'],
-    ['P1s4', 'P2s3', 'P4s4', 'P3s3', 'P1s1', 'P4s1', 'P3s1', 'P2s1', 'P4s3', 'P1s3', 'P3s4', 'P2s4', 'P4s2', 'P1s2', 'P3s2', 'P2s2'],
-    ['P1s1', 'P3s1', 'P2s1', 'P3s3', 'P2s3', 'P4s2', 'P3s4', 'P1s4', 'P2s4', 'P4s4', 'P1s2', 'P2s2', 'P4s1', 'P3s2', 'P1s3', 'P4s3'],
-    ['P1s4', 'P2s4', 'P4s2', 'P3s4', 'P2s3', 'P4s1', 'P3s1', 'P1s2', 'P2s1', 'P4s4', 'P3s3', 'P1s1', 'P4s3', 'P1s3', 'P3s2', 'P2s2'],
-    ['P1s1', 'P3s1', 'P2s1', 'P3s2', 'P4s1', 'P2s3', 'P1s3', 'P3s3', 'P1s2', 'P4s2', 'P2s2', 'P4s4', 'P3s4', 'P1s4', 'P2s4', 'P4s3'],
-    ['P1s3', 'P2s2', 'P3s2', 'P2s1', 'P4s3', 'P1s1', 'P4s1', 'P3s1', 'P1s2', 'P4s2', 'P1s4', 'P3s3', 'P4s4', 'P2s3', 'P3s4', 'P2s4'],
-    ['P3s1', 'P1s2', 'P4s4', 'P1s4', 'P4s3', 'P2s2', 'P4s1', 'P2s1', 'P1s1', 'P3s3', 'P2s3', 'P1s3', 'P3s4', 'P2s4', 'P4s2', 'P3s2'],
-    ['P4s4', 'P1s1', 'P3s1', 'P2s1', 'P3s2', 'P4s1', 'P1s2', 'P4s2', 'P3s4', 'P2s4', 'P1s4', 'P3s3', 'P2s2', 'P1s3', 'P4s3', 'P2s3'],
-    ['P1s1', 'P4s1', 'P3s1', 'P2s1', 'P3s2', 'P4s2', 'P2s4', 'P4s4', 'P1s2', 'P2s2', 'P4s3', 'P2s3', 'P3s4', 'P1s3', 'P3s3', 'P1s4'],
-    ['P2s4', 'P3s4', 'P4s3', 'P1s3', 'P2s2', 'P4s1', 'P3s2', 'P1s2', 'P2s1', 'P4s2', 'P1s4', 'P2s3', 'P4s4', 'P3s3', 'P1s1', 'P3s1'],
-    ['P2s4', 'P4s3', 'P1s2', 'P3s2', 'P2s2', 'P3s3', 'P4s1', 'P3s1', 'P1s1', 'P2s1', 'P4s2', 'P2s3', 'P3s4', 'P1s3', 'P4s4', 'P1s4'],
-    ['P2s2', 'P1s3', 'P4s1', 'P3s1', 'P2s1', 'P1s1', 'P3s2', 'P1s2', 'P3s3', 'P4s3', 'P3s4', 'P1s4', 'P4s4', 'P2s4', 'P4s2', 'P2s3'],
-    ['P2s4', 'P4s4', 'P2s2', 'P4s2', 'P3s4', 'P1s3', 'P2s3', 'P1s4', 'P4s3', 'P3s3', 'P1s2', 'P3s2', 'P1s1', 'P3s1', 'P2s1', 'P4s1'],
-    ['P3s2', 'P2s1', 'P3s3', 'P1s1', 'P4s4', 'P2s2', 'P4s3', 'P1s2', 'P3s1', 'P4s1', 'P2s3', 'P4s2', 'P1s3', 'P3s4', 'P2s4', 'P1s4'],
-    ['P3s1', 'P4s1', 'P3s3', 'P2s2', 'P3s2', 'P1s1', 'P2s1', 'P1s2', 'P4s4', 'P3s4', 'P2s4', 'P4s3', 'P1s3', 'P2s3', 'P4s2', 'P1s4'],
-    ['P2s3', 'P4s2', 'P2s4', 'P1s4', 'P4s4', 'P2s2', 'P4s3', 'P1s1', 'P3s2', 'P4s1', 'P3s1', 'P1s2', 'P2s1', 'P3s3', 'P1s3', 'P3s4'],
-    ['P2s4', 'P4s2', 'P1s1', 'P3s1', 'P1s2', 'P3s2', 'P1s3', 'P3s4', 'P1s4', 'P4s4', 'P2s3', 'P3s3', 'P4s1', 'P2s2', 'P4s3', 'P2s1'],
-    ['P2s1', 'P4s4', 'P1s3', 'P4s1', 'P1s2', 'P3s1', 'P1s1', 'P3s2', 'P2s2', 'P4s2', 'P3s3', 'P4s3', 'P1s4', 'P2s4', 'P3s4', 'P2s3'],
-    ['P4s1', 'P3s3', 'P4s3', 'P2s4', 'P4s2', 'P1s3', 'P3s4', 'P2s3', 'P1s4', 'P4s4', 'P2s2', 'P1s2', 'P3s2', 'P1s1', 'P3s1', 'P2s1'],
-    ['P4s3', 'P2s1', 'P1s1', 'P3s2', 'P2s2', 'P3s3', 'P1s4', 'P2s3', 'P3s4', 'P4s2', 'P2s4', 'P4s4', 'P1s3', 'P4s1', 'P3s1', 'P1s2'],
-    ['P4s4', 'P1s2', 'P3s1', 'P2s1', 'P3s2', 'P2s2', 'P1s3', 'P3s4', 'P1s4', 'P4s3', 'P2s4', 'P4s2', 'P2s3', 'P4s1', 'P1s1', 'P3s3'],
-    ['P1s1', 'P3s2', 'P1s2', 'P4s2', 'P2s2', 'P1s3', 'P4s3', 'P2s4', 'P1s4', 'P3s4', 'P4s4', 'P2s3', 'P3s3', 'P2s1', 'P3s1', 'P4s1'],
-    ['P2s1', 'P3s1', 'P1s1', 'P3s2', 'P4s2', 'P2s4', 'P3s4', 'P4s4', 'P1s2', 'P2s2', 'P1s3', 'P4s1', 'P3s3', 'P2s3', 'P1s4', 'P4s3'],
-    ['P2s4', 'P4s4', 'P1s2', 'P4s2', 'P3s3', 'P2s1', 'P3s2', 'P1s3', 'P2s3', 'P1s4', 'P3s4', 'P4s3', 'P2s2', 'P4s1', 'P3s1', 'P1s1'],
-    ['P2s2', 'P3s3', 'P2s3', 'P1s4', 'P3s4', 'P4s2', 'P1s2', 'P2s1', 'P3s1', 'P4s1', 'P1s3', 'P3s2', 'P4s3', 'P2s4', 'P4s4', 'P1s1'],
-    ['P4s3', 'P2s2', 'P3s3', 'P4s2', 'P2s4', 'P3s4', 'P1s4', 'P2s3', 'P1s3', 'P4s1', 'P2s1', 'P3s1', 'P1s1', 'P3s2', 'P1s2', 'P4s4'],
-    ['P3s1', 'P4s1', 'P3s2', 'P1s1', 'P4s2', 'P2s4', 'P1s4', 'P2s3', 'P3s4', 'P4s4', 'P1s2', 'P2s2', 'P1s3', 'P4s3', 'P2s1', 'P3s3'],
-    ['P2s4', 'P3s4', 'P1s4', 'P2s3', 'P4s3', 'P1s2', 'P3s2', 'P1s1', 'P2s1', 'P3s1', 'P4s1', 'P1s3', 'P2s2', 'P4s2', 'P3s3', 'P4s4'],
-    ['P2s1', 'P4s2', 'P1s3', 'P3s3', 'P4s3', 'P1s2', 'P4s1', 'P2s3', 'P1s4', 'P3s4', 'P2s4', 'P4s4', 'P2s2', 'P3s2', 'P1s1', 'P3s1'],
-    ['P3s3', 'P1s1', 'P3s1', 'P2s1', 'P4s4', 'P1s2', 'P4s3', 'P3s2', 'P4s2', 'P2s4', 'P1s4', 'P3s4', 'P1s3', 'P2s3', 'P4s1', 'P2s2'],
-    ['P2s3', 'P3s4', 'P4s3', 'P2s1', 'P1s1', 'P3s1', 'P1s2', 'P3s3', 'P4s1', 'P2s2', 'P4s2', 'P3s2', 'P1s3', 'P4s4', 'P2s4', 'P1s4'],
-    ['P1s4', 'P2s4', 'P4s2', 'P1s3', 'P3s4', 'P4s3', 'P3s2', 'P2s2', 'P1s2', 'P3s3', 'P2s3', 'P4s1', 'P3s1', 'P1s1', 'P2s1', 'P4s4'],
-    ['P1s1', 'P3s3', 'P1s2', 'P2s1', 'P3s1', 'P4s1', 'P3s2', 'P4s3', 'P2s2', 'P1s3', 'P4s4', 'P3s4', 'P4s2', 'P2s4', 'P1s4', 'P2s3'],
-    ['P2s2', 'P1s2', 'P3s1', 'P2s1', 'P1s1', 'P4s3', 'P3s2', 'P4s1', 'P2s3', 'P4s2', 'P3s3', 'P1s4', 'P2s4', 'P3s4', 'P1s3', 'P4s4'],
-    ['P1s1', 'P3s2', 'P1s3', 'P4s4', 'P1s4', 'P4s3', 'P2s2', 'P4s2', 'P2s4', 'P3s4', 'P2s3', 'P3s3', 'P1s2', 'P2s1', 'P4s1', 'P3s1'],
-    ['P1s3', 'P4s4', 'P2s2', 'P1s2', 'P3s2', 'P4s3', 'P2s4', 'P3s4', 'P1s4', 'P2s3', 'P3s3', 'P2s1', 'P4s2', 'P1s1', 'P4s1', 'P3s1'],
-    ['P1s4', 'P2s4', 'P4s3', 'P3s4', 'P4s4', 'P2s2', 'P4s1', 'P1s3', 'P3s2', 'P1s1', 'P3s1', 'P1s2', 'P4s2', 'P2s1', 'P3s3', 'P2s3'],
-    ['P2s3', 'P1s3', 'P4s2', 'P3s2', 'P4s1', 'P1s2', 'P4s3', 'P2s4', 'P1s4', 'P3s4', 'P4s4', 'P2s2', 'P3s3', 'P1s1', 'P3s1', 'P2s1'],
-    ['P4s1', 'P3s1', 'P1s2', 'P4s4', 'P1s4', 'P2s4', 'P4s3', 'P1s1', 'P2s1', 'P3s3', 'P2s2', 'P4s2', 'P3s2', 'P1s3', 'P2s3', 'P3s4'],
-    ['P1s4', 'P2s4', 'P3s4', 'P4s3', 'P2s2', 'P3s2', 'P2s1', 'P4s4', 'P1s2', 'P3s1', 'P1s1', 'P4s2', 'P1s3', 'P2s3', 'P3s3', 'P4s1'],
-    ['P3s2', 'P1s1', 'P4s3', 'P1s3', 'P2s2', 'P1s2', 'P4s1', 'P3s1', 'P2s1', 'P4s4', 'P3s3', 'P4s2', 'P3s4', 'P2s3', 'P1s4', 'P2s4'],
-    ['P4s3', 'P1s2', 'P4s1', 'P2s3', 'P3s4', 'P1s4', 'P4s4', 'P2s4', 'P4s2', 'P2s2', 'P3s3', 'P1s3', 'P3s2', 'P1s1', 'P3s1', 'P2s1'],
-    ['P2s2', 'P4s1', 'P1s2', 'P3s3', 'P2s3', 'P1s3', 'P3s2', 'P4s3', 'P1s4', 'P4s2', 'P3s4', 'P2s4', 'P4s4', 'P2s1', 'P3s1', 'P1s1'],
-    ['P2s2', 'P4s1', 'P3s1', 'P1s1', 'P4s3', 'P2s4', 'P3s4', 'P1s4', 'P4s4', 'P1s3', 'P4s2', 'P2s3', 'P3s3', 'P1s2', 'P2s1', 'P3s2'],
-    ['P4s3', 'P1s4', 'P2s3', 'P3s4', 'P1s3', 'P2s2', 'P3s3', 'P4s1', 'P1s1', 'P3s2', 'P2s1', 'P3s1', 'P1s2', 'P4s2', 'P2s4', 'P4s4'],
-    ['P3s1', 'P2s1', 'P1s1', 'P4s3', 'P2s2', 'P1s3', 'P4s1', 'P3s3', 'P4s2', 'P3s2', 'P1s2', 'P4s4', 'P2s4', 'P1s4', 'P2s3', 'P3s4'],
-    ['P2s4', 'P1s4', 'P4s4', 'P1s3', 'P2s3', 'P3s4', 'P4s3', 'P1s1', 'P3s1', 'P4s1', 'P3s2', 'P1s2', 'P2s2', 'P3s3', 'P2s1', 'P4s2'],
-    ['P4s2', 'P3s2', 'P2s1', 'P3s1', 'P1s2', 'P4s1', 'P1s3', 'P2s2', 'P4s4', 'P3s4', 'P2s4', 'P4s3', 'P1s4', 'P2s3', 'P3s3', 'P1s1'],
-    ['P3s2', 'P2s2', 'P4s4', 'P3s3', 'P2s1', 'P4s1', 'P2s3', 'P4s2', 'P1s2', 'P3s1', 'P1s1', 'P4s3', 'P1s4', 'P2s4', 'P3s4', 'P1s3'],
-    ['P2s2', 'P1s3', 'P4s1', 'P3s1', 'P2s1', 'P3s3', 'P4s2', 'P1s2', 'P3s2', 'P1s1', 'P4s4', 'P2s4', 'P1s4', 'P3s4', 'P2s3', 'P4s3'],
-    ]
-    
+    try:
+        itineraries = load_itineraries_from_file(ITINERARY_FILE_PATH)
+    except (FileNotFoundError, ValueError) as itinerary_error:
+        print(itinerary_error)
+        sys.exit(1)
+
     def has_duplicate_sublists(lst):
         seen = set()
         for sub_list in lst:

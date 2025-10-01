@@ -60,8 +60,6 @@ print(f"Station: {station}")
 
 # -----------------------------------------------------------------------------
 
-replace_data = True
-
 log_base_directory = os.path.expanduser(f"{home_path}/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/LAB_LOGS/")
 
 # Define directory paths relative to base_directory
@@ -268,74 +266,6 @@ def merge_dataframes(file_mappings, start_time=None):
     merged_df = pd.concat(dataframes, axis=1)
     
     return merged_df
-
-
-# Define the limits for outliers as a dictionary
-# outlier_limits = {
-#     "rates_Asserted": (0, 60),
-#     "rates_Edge": (0, 45),
-#     "rates_Accepted": (0, 30),
-#     "rates_Multiplexer1": (0, 400),
-#     "rates_M2": (0, 400),
-#     "rates_M3": (0, 400),
-#     "rates_M4": (0, 400),
-#     "rates_CM1": (0, 30),
-#     "rates_CM2": (0, 30),
-#     "rates_CM3": (0, 30),
-#     "rates_CM4": (0, 30),
-#     "sensors_ext_Temperature_ext": (0, 50),
-#     "sensors_ext_RH_ext": (0, 100),
-#     "sensors_ext_Pressure_ext": (500, 1300),
-#     "sensors_int_Temperature_int": (0, 100),
-#     "sensors_int_RH_int": (0, 100),
-#     "sensors_int_Pressure_int": (500, 1300),
-#     "odroid_DiskFill1": (0, 100),
-#     "odroid_DiskFill2": (0, 100),
-#     "odroid_DiskFillX": (0, 100000),
-#     "flow_FlowRate1": (0, 1500),
-#     "flow_FlowRate2": (0, 1500),
-#     "flow_FlowRate3": (0, 1500),
-#     "flow_FlowRate4": (0, 1500),
-#     "hv_HVneg": (-0.1, 20),
-#     "hv_HVpos": (-0.1, 20),
-# }
-
-
-# Check if merged CSV exists
-# if os.path.exists(final_output_path):
-#     print(f"Existing {final_output_path} found. Checking for new data...")
-
-#     # Load existing merged data
-#     existing_df = pd.read_csv(final_output_path, parse_dates=['Time'])
-#     existing_df.set_index('Time', inplace=True)
-
-#     # Determine the first and last timestamps in the existing data
-#     first_timestamp = existing_df.index.min()
-#     last_timestamp = existing_df.index.max()
-#     print(f"Last timestamp in existing data: {last_timestamp}")
-    
-#     if create_new_csv:
-#         print("Creating a new CSV with all available data...")
-#         # Merge all data from the beginning
-#         updated_df = merge_dataframes(file_mappings)
-#     else:
-#         if replace_data:
-#             print("Replacing existing data...")
-#             start_timestamp = first_timestamp
-#         else:
-#             start_timestamp = last_timestamp - pd.Timedelta(hours=3)
-#             print(f'Starting from {start_timestamp}, 3h before.')
-        
-#         # Merge only new data
-#         new_data = merge_dataframes(file_mappings, start_time=start_timestamp)
-
-#         # Append new data to the existing data
-#         updated_df = pd.concat([existing_df, new_data]).drop_duplicates(keep='last').sort_index()
-# else:
-#     print(f"No existing {final_output_path} found. Processing all data...")
-    
-#     # Merge all data from the beginning
-#     updated_df = merge_dataframes(file_mappings)
 
 # -----------------------------------------------------------------------------
 # Remove this if we actually want to update the data, because this line always creates a new one
