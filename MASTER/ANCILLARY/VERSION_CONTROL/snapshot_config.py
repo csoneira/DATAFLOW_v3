@@ -11,9 +11,16 @@ from typing import Optional
 import json
 import yaml
 
+# Dynamically get the home directory using the environment variable
+home_directory = Path(os.environ.get("HOME", os.path.expanduser("~")))
 
-CONFIG_PATH = Path("/home/mingo/DATAFLOW_v3/MASTER/config.yaml")
-SNAPSHOT_DIR = Path("/home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CONFIG_FILES")
+# Define paths relative to the home directory
+CONFIG_PATH = home_directory / "DATAFLOW_v3" / "MASTER" / "config.yaml"
+SNAPSHOT_DIR = home_directory / "DATAFLOW_v3" / "EXECUTION_LOGS" / "CONFIG_FILES"
+
+# Test the paths
+print(f"Config Path: {CONFIG_PATH}")
+print(f"Snapshot Directory: {SNAPSHOT_DIR}")
 
 
 def extract_json_payload(snapshot_path: Path) -> str:
