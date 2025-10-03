@@ -5145,6 +5145,118 @@ pivoted = pivoted.reset_index()
 pivoted.to_csv(save_path, index=False, sep=',', float_format='%.5g')
 print(f"Accumulated columns datafile saved in {save_filename}. Path is {save_path}")
 
+
+# -----------------------------------------------------------------------------
+# Update pipeline status CSV with accumulation metadata
+# -----------------------------------------------------------------------------
+def _pipeline_strip_suffix(name: str) -> str:
+    for suffix in ('.txt', '.csv', '.dat', '.hld.tar.gz', '.hld-tar-gz', '.hld'):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def _pipeline_compute_start_timestamp(base: str) -> str:
+    digits = base[-11:]
+    if len(digits) == 11 and digits.isdigit():
+        yy = int(digits[:2])
+        doy = int(digits[2:5])
+        hh = int(digits[5:7])
+        mm = int(digits[7:9])
+        ss = int(digits[9:11])
+        year = 2000 + yy
+        try:
+            dt = datetime(year, 1, 1) + timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
+            return dt.strftime('%Y-%m-%d_%H.%M.%S')
+        except ValueError:
+            return ''
+    return ''
+
+
+def _update_pipeline_csv_for_accumulation() -> None:
+    csv_headers = [
+        'basename',
+        'start_date',
+        'hld_remote_add_date',
+        'hld_local_add_date',
+        'dat_add_date',
+        'list_ev_name',
+        'list_ev_add_date',
+        'acc_name',
+        'acc_add_date',
+        'merge_add_date',
+    ]
+
+    station_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
+    csv_path = station_dir / f'database_status_{station}.csv'
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    if not csv_path.exists():
+        with csv_path.open('w', newline='') as handle:
+            csv.writer(handle).writerow(csv_headers)
+
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    acc_filename = save_filename
+    list_event_set = {Path(name).name for name in used_files_names}
+
+    rows: list[dict[str, str]] = []
+    with csv_path.open('r', newline='') as handle:
+        reader = csv.DictReader(handle)
+        rows.extend(reader)
+
+    updated = False
+    for row in rows:
+        list_ev_name = row.get('list_ev_name', '')
+        if list_ev_name in list_event_set:
+            if not row.get('start_date'):
+                base_name = row.get('basename', '')
+                if base_name:
+                    start_value = _pipeline_compute_start_timestamp(base_name)
+                    if start_value:
+                        row['start_date'] = start_value
+            row['acc_name'] = acc_filename
+            row['acc_add_date'] = timestamp
+            updated = True
+
+    # Ensure ACC files on disk are represented
+    acc_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}' / 'FIRST_STAGE' / 'EVENT_DATA' / 'ACC_EVENTS_DIRECTORY'
+    existing_acc_names = {row.get('acc_name', '') for row in rows}
+    if acc_dir.exists():
+        for acc_path in sorted(acc_dir.glob('accumulated_events_*.csv')):
+            acc_name = acc_path.name
+            if acc_name in existing_acc_names:
+                continue
+
+            stem = acc_path.stem
+            derived_base = _pipeline_strip_suffix(acc_name)
+            derived_start = ''
+            if stem.startswith('accumulated_events_'):
+                stamp = stem[len('accumulated_events_'):]
+                try:
+                    dt = datetime.strptime(stamp, '%y-%m-%d_%H.%M.%S')
+                    derived_start = dt.strftime('%Y-%m-%d_%H.%M.%S')
+                except ValueError:
+                    derived_start = ''
+
+            add_timestamp = datetime.fromtimestamp(acc_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            filler = {header: '' for header in csv_headers}
+            filler['basename'] = derived_base
+            if derived_start:
+                filler['start_date'] = derived_start
+            filler['acc_name'] = acc_name
+            filler['acc_add_date'] = add_timestamp
+            rows.append(filler)
+            existing_acc_names.add(acc_name)
+            updated = True
+
+    if updated:
+        with csv_path.open('w', newline='') as handle:
+            writer = csv.DictWriter(handle, fieldnames=csv_headers)
+            writer.writeheader()
+            writer.writerows(rows)
+
+
+_update_pipeline_csv_for_accumulation()
+
 #%%
 
 # Move the original file in file_path to completed_directory

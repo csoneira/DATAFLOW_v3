@@ -77,6 +77,88 @@ uncompressed_directory=${base_directory}/UNCOMPRESSED_HLDS
 # processed_directory=${base_directory}/ANCILLARY_DIRECTORY
 moved_directory=${base_directory}/SENT_TO_RAW_TO_LIST_PIPELINE
 
+csv_path="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/database_status_${station}.csv"
+csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_date,list_ev_name,list_ev_add_date,acc_name,acc_add_date,merge_add_date"
+
+ensure_csv() {
+    if [[ ! -f "$csv_path" ]]; then
+        printf '%s\n' "$csv_header" > "$csv_path"
+    elif [[ ! -s "$csv_path" ]]; then
+        printf '%s\n' "$csv_header" > "$csv_path"
+    else
+        local current_header
+        current_header=$(head -n1 "$csv_path")
+        if [[ "$current_header" != "$csv_header" ]]; then
+            local upgrade_tmp
+            upgrade_tmp=$(mktemp)
+            {
+                printf '%s\n' "$csv_header"
+                tail -n +2 "$csv_path" | awk -F',' -v OFS=',' '{ while (NF < 10) { $(NF+1)="" } if (NF > 10) { NF=10 } print }'
+            } > "$upgrade_tmp"
+            mv "$upgrade_tmp" "$csv_path"
+        fi
+    fi
+}
+
+ensure_csv
+
+strip_suffix() {
+    local name="$1"
+    name=${name%.hld.tar.gz}
+    name=${name%.hld-tar-gz}
+    name=${name%.tar.gz}
+    name=${name%.hld}
+    name=${name%.dat}
+    printf '%s' "$name"
+}
+
+compute_start_date() {
+    local name="$1"
+    local base
+    base=$(strip_suffix "$name")
+    if [[ $base =~ ([0-9]{11})$ ]]; then
+        local digits=${BASH_REMATCH[1]}
+        local yy=${digits:0:2}
+        local doy=${digits:2:3}
+        local hhmmss=${digits:5:6}
+        local hh=${hhmmss:0:2}
+        local mm=${hhmmss:2:2}
+        local ss=${hhmmss:4:2}
+        local year=$((2000 + 10#$yy))
+        local offset=$((10#$doy - 1))
+        (( offset < 0 )) && offset=0
+        date -d "${year}-01-01 +${offset} days ${hh}:${mm}:${ss}" '+%Y-%m-%d_%H.%M.%S' 2>/dev/null || printf ''
+    else
+        printf ''
+    fi
+}
+
+declare -A csv_rows=()
+if [[ -s "$csv_path" ]]; then
+    while IFS=',' read -r existing_basename _; do
+        [[ -z "$existing_basename" || "$existing_basename" == "basename" ]] && continue
+        existing_basename=${existing_basename//$'\r'/}
+        csv_rows["$existing_basename"]=1
+    done < "$csv_path"
+fi
+
+append_row_if_missing() {
+    local base="$1"
+    local remote_date="$2"
+    local local_date="$3"
+    local dat_date="$4"
+    [[ -z "$base" ]] && return
+    if [[ -n ${csv_rows["$base"]+_} ]]; then
+        return
+    fi
+    local start_value
+    start_value=$(compute_start_date "$base")
+    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+        "$base" "$start_value" "$remote_date" "$local_date" "$dat_date" "" "" "" "" "" >> "$csv_path"
+    csv_rows["$base"]=1
+}
+
 hld_input_directory=$HOME/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat
 asci_output_directory=$HOME/DATAFLOW_v3/MASTER/ZERO_STAGE/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci
 first_stage_raw_directory=$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EVENT_DATA/RAW
@@ -86,6 +168,20 @@ first_stage_base_deep=$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/EV
 # mkdir -p "$uncompressed_directory" "$processed_directory" "$moved_directory"
 echo "Creating necessary directories..."
 mkdir -p "$uncompressed_directory" "$moved_directory" "$first_stage_raw_directory"
+
+pipeline_before=$(mktemp)
+pipeline_after=""
+pipeline_new=""
+
+cleanup_pipeline() {
+    rm -f "$pipeline_before"
+    [[ -n "$pipeline_after" ]] && rm -f "$pipeline_after"
+    [[ -n "$pipeline_new" ]] && rm -f "$pipeline_new"
+}
+
+trap cleanup_pipeline EXIT
+
+find "$moved_directory" -maxdepth 1 -type f -name '*.dat' -printf '%f\n' | sort -u > "$pipeline_before"
 
 # Now Copy to first_stage_raw_directory every file from moved_directory that is not in any first_stage_base subdirectory (recursively)
 
@@ -175,6 +271,19 @@ fi
 
 echo "Selected HLD file: $(basename "$selected_file")"
 
+selected_base=$(basename "${selected_file%.hld}")
+append_row_if_missing "$selected_base" "" "$csv_timestamp" ""
+
+awk -F',' -v OFS=',' -v key="$selected_base" -v ts="$csv_timestamp" '
+    NR == 1 { print; next }
+    {
+        if ($1 == key && $4 == "") {
+            $4 = ts
+        }
+        print
+    }
+' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
+
 # Move selected file to HLD input directory
 mv "$selected_file" "$hld_input_directory/"
 
@@ -223,6 +332,73 @@ done
 echo ""
 cp "$asci_output_directory"/*.dat "$first_stage_raw_directory/"
 mv "$asci_output_directory"/*.dat "$moved_directory/"
+
+pipeline_after=$(mktemp)
+find "$moved_directory" -maxdepth 1 -type f -name '*.dat' -printf '%f\n' | sort -u > "$pipeline_after"
+
+pipeline_new=$(mktemp)
+comm -13 "$pipeline_before" "$pipeline_after" > "$pipeline_new"
+
+if [[ -s "$pipeline_after" ]]; then
+    while IFS= read -r dat_entry; do
+        dat_entry=${dat_entry//$'\r'/}
+        [[ -z "$dat_entry" ]] && continue
+        dat_base=$(strip_suffix "$dat_entry")
+        append_row_if_missing "$dat_base" "" "$csv_timestamp" "$csv_timestamp"
+    done < "$pipeline_after"
+fi
+
+if [[ -s "$pipeline_after" || -s "$pipeline_new" ]]; then
+    awk -F',' -v OFS=',' -v all="$pipeline_after" -v new="$pipeline_new" -v ts="$csv_timestamp" '
+        function canonical(name) {
+            gsub(/\r/, "", name)
+            sub(/\.hld\.tar\.gz$/, "", name)
+            sub(/\.hld-tar-gz$/, "", name)
+            sub(/\.tar\.gz$/, "", name)
+            sub(/\.hld$/, "", name)
+            sub(/\.dat$/, "", name)
+            return name
+        }
+        BEGIN {
+            if (all != "") {
+                while ((getline line < all) > 0) {
+                    if (line == "") { continue }
+                    roots_all[canonical(line)] = 1
+                }
+                close(all)
+            }
+            if (new != "") {
+                while ((getline line < new) > 0) {
+                    if (line == "") { continue }
+                    roots_new[canonical(line)] = 1
+                }
+                close(new)
+            }
+        }
+        NR == 1 { print; next }
+        {
+            base = canonical($1)
+            if (base == "") {
+                print
+                next
+            }
+            if (base in roots_new) {
+                if ($4 == "") {
+                    $4 = ts
+                }
+                $5 = ts
+            } else if (base in roots_all) {
+                if ($4 == "") {
+                    $4 = ts
+                }
+                if ($5 == "") {
+                    $5 = ts
+                }
+            }
+            print
+        }
+    ' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
+fi
 
 # # Update mdate to current time of the copied and moved files
 # for file in "$first_stage_raw_directory"/*.dat; do

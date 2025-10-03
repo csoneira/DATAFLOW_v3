@@ -56,7 +56,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from itertools import combinations
 from functools import reduce
-from typing import Dict, Tuple, Iterable
+from typing import Dict, Tuple, Iterable, List
 from pathlib import Path
 
 # Scientific Computing
@@ -9498,6 +9498,123 @@ columns_to_keep = [
 reduced_df = definitive_df[columns_to_keep]
 reduced_df.to_csv(save_list_path, index=False, sep=',', float_format='%.5g')
 print(f"Datafile saved in {save_filename}. Path is {save_list_path}")
+
+# -----------------------------------------------------------------------------
+# Update pipeline status CSV with list events metadata
+# -----------------------------------------------------------------------------
+def _pipeline_strip_suffix(name: str) -> str:
+    for suffix in ('.txt', '.csv', '.dat', '.hld.tar.gz', '.hld-tar-gz', '.hld'):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def _pipeline_compute_start_timestamp(base: str) -> str:
+    digits = base[-11:]
+    if len(digits) == 11 and digits.isdigit():
+        yy = int(digits[:2])
+        doy = int(digits[2:5])
+        hh = int(digits[5:7])
+        mm = int(digits[7:9])
+        ss = int(digits[9:11])
+        year = 2000 + yy
+        try:
+            dt = datetime(year, 1, 1) + timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
+            return dt.strftime('%Y-%m-%d_%H.%M.%S')
+        except ValueError:
+            return ''
+    return ''
+
+
+def _update_pipeline_csv_for_list_event() -> None:
+    csv_headers = [
+        'basename',
+        'start_date',
+        'hld_remote_add_date',
+        'hld_local_add_date',
+        'dat_add_date',
+        'list_ev_name',
+        'list_ev_add_date',
+        'acc_name',
+        'acc_add_date',
+        'merge_add_date',
+    ]
+
+    station_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
+    csv_path = station_dir / f'database_status_{station}.csv'
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    if not csv_path.exists():
+        with csv_path.open('w', newline='') as handle:
+            writer = csv.writer(handle)
+            writer.writerow(csv_headers)
+
+    base_name = _pipeline_strip_suffix(os.path.basename(the_filename))
+    list_event_name = save_filename
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    start_value = _pipeline_compute_start_timestamp(base_name)
+
+    rows: List[dict[str, str]] = []
+    with csv_path.open('r', newline='') as handle:
+        reader = csv.DictReader(handle)
+        rows.extend(reader)
+
+    found = False
+    for row in rows:
+        if row.get('basename', '') == base_name:
+            found = True
+            if not row.get('start_date') and start_value:
+                row['start_date'] = start_value
+            row['list_ev_name'] = list_event_name
+            row['list_ev_add_date'] = timestamp
+            break
+
+    if not found:
+        new_row = {header: '' for header in csv_headers}
+        new_row['basename'] = base_name
+        if start_value:
+            new_row['start_date'] = start_value
+        new_row['list_ev_name'] = list_event_name
+        new_row['list_ev_add_date'] = timestamp
+        rows.append(new_row)
+
+    # Ensure existing list events on disk are reflected in the CSV
+    list_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}' / 'FIRST_STAGE' / 'EVENT_DATA' / 'LIST_EVENTS_DIRECTORY'
+    existing_names = {row.get('list_ev_name', '') for row in rows}
+
+    if list_dir.exists():
+        for list_path in sorted(list_dir.glob('list_events_*.txt')):
+            list_name = list_path.name
+            if list_name in existing_names:
+                continue
+
+            derived_base = _pipeline_strip_suffix(list_name)
+            derived_start = ''
+            stem = Path(list_name).stem
+            if stem.startswith('list_events_'):
+                stamp = stem[len('list_events_'):]
+                try:
+                    dt = datetime.strptime(stamp, '%Y.%m.%d_%H.%M.%S')
+                    derived_start = dt.strftime('%Y-%m-%d_%H.%M.%S')
+                except ValueError:
+                    derived_start = ''
+
+            add_timestamp = datetime.fromtimestamp(list_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            filler = {header: '' for header in csv_headers}
+            filler['basename'] = derived_base
+            if derived_start:
+                filler['start_date'] = derived_start
+            filler['list_ev_name'] = list_name
+            filler['list_ev_add_date'] = add_timestamp
+            rows.append(filler)
+            existing_names.add(list_name)
+
+    with csv_path.open('w', newline='') as handle:
+        writer = csv.DictWriter(handle, fieldnames=csv_headers)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+_update_pipeline_csv_for_list_event()
 
 
 # -----------------------------------------------------------------------------

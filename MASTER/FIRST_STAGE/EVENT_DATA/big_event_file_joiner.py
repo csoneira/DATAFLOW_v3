@@ -14,8 +14,9 @@ import os
 import random
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+import csv
 
 # Third-party Libraries
 import numpy as np
@@ -75,6 +76,73 @@ if len(sys.argv) < 2:
 # Get the station argument
 station = sys.argv[1]
 print(f"Station: {station}")
+
+PIPELINE_CSV_HEADERS = [
+    'basename',
+    'start_date',
+    'hld_remote_add_date',
+    'hld_local_add_date',
+    'dat_add_date',
+    'list_ev_name',
+    'list_ev_add_date',
+    'acc_name',
+    'acc_add_date',
+    'merge_add_date',
+]
+
+station_dir = Path.home() / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
+pipeline_csv_path = station_dir / f'database_status_{station}.csv'
+pipeline_csv_path.parent.mkdir(parents=True, exist_ok=True)
+if not pipeline_csv_path.exists():
+    with pipeline_csv_path.open('w', newline='') as handle:
+        csv.writer(handle).writerow(PIPELINE_CSV_HEADERS)
+
+
+def ensure_start_value(row):
+    base_name = row.get('basename', '')
+    digits = base_name[-11:]
+    if len(digits) == 11 and digits.isdigit() and not row.get('start_date'):
+        yy = int(digits[:2])
+        doy = int(digits[2:5])
+        hh = int(digits[5:7])
+        mm = int(digits[7:9])
+        ss = int(digits[9:11])
+        year = 2000 + yy
+        try:
+            dt = datetime(year, 1, 1) + timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
+            row['start_date'] = dt.strftime('%Y-%m-%d_%H.%M.%S')
+        except ValueError:
+            pass
+
+
+def load_pipeline_rows():
+    rows = []
+    with pipeline_csv_path.open('r', newline='') as handle:
+        reader = csv.DictReader(handle)
+        rows.extend(reader)
+    return rows
+
+
+def store_pipeline_rows(rows):
+    with pipeline_csv_path.open('w', newline='') as handle:
+        writer = csv.DictWriter(handle, fieldnames=PIPELINE_CSV_HEADERS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def update_merge_timestamp(acc_filename: str, timestamp: str) -> None:
+    rows = load_pipeline_rows()
+    updated = False
+    for row in rows:
+        if row.get('acc_name') == acc_filename:
+            ensure_start_value(row)
+            row['merge_add_date'] = timestamp
+            updated = True
+    if updated:
+        store_pipeline_rows(rows)
+
+
+merge_excluded_acc = {row.get('acc_name') for row in load_pipeline_rows() if row.get('acc_name') and row.get('merge_add_date')}
 
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
@@ -274,7 +342,7 @@ if metadata_needs_write and load_big_event_file and loaded_existing_file:
         print("Reconstructed processed ACC file list from timestamps (metadata was missing).")
     metadata_needs_write = True
 
-files_to_process = [f for f in csv_files if f not in processed_files]
+files_to_process = [f for f in csv_files if f not in processed_files and f not in merge_excluded_acc]
 processed_any_new_file = False
 
 if files_to_process:
@@ -293,6 +361,7 @@ for csv_file in iterator:
     processed_files.add(csv_file)
     processed_any_new_file = True
     metadata_needs_write = True
+    update_merge_timestamp(csv_file, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
 
 if not files_to_process:
     if loaded_existing_file and csv_files:
