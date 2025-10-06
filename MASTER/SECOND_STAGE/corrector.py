@@ -29,7 +29,22 @@ print("\n\n")
 # -----------------------------------------------------------------------------
 
 import os
+from pathlib import Path
 import yaml
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.status_csv import append_status_row, mark_status_complete
+
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
 print(f"Using config file: {config_file_path}")
@@ -209,6 +224,9 @@ fig_idx = 0
 os.makedirs(base_folder, exist_ok=True)
 os.makedirs(figure_path, exist_ok=True)
 os.makedirs(grafana_directory, exist_ok=True)
+
+status_csv_path = os.path.join(base_folder, "corrector_status.csv")
+status_timestamp = append_status_row(status_csv_path)
 
 csv_path = os.path.join(base_folder, "corrector_metadata.csv")
 
@@ -3800,5 +3818,7 @@ print(f'Data for Grafana saved to {grafana_save_filename}.')
 print('------------------------------------------------------')
 print(f"corrector.py completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print('------------------------------------------------------')
+
+mark_status_complete(status_csv_path, status_timestamp)
 
 sys.exit(0)

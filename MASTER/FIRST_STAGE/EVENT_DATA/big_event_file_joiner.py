@@ -32,6 +32,20 @@ from tqdm import tqdm
 
 
 import yaml
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.status_csv import append_status_row, mark_status_complete
+
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
 print(f"Using config file: {config_file_path}")
@@ -152,6 +166,9 @@ plot_list = []
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 working_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/EVENT_DATA")
 acc_working_directory = os.path.join(working_directory, "LIST_TO_ACC")
+
+status_csv_path = os.path.join(working_directory, "big_event_file_joiner_status.csv")
+status_timestamp = append_status_row(status_csv_path)
 
 # Define subdirectories relative to the working directory
 base_directories = {
@@ -400,3 +417,5 @@ if metadata_needs_write:
     processed_files_path.parent.mkdir(parents=True, exist_ok=True)
     processed_files_path.write_text("\n".join(sorted(processed_files)))
     print(f"Recorded {len(processed_files)} processed ACC files.")
+
+mark_status_complete(status_csv_path, status_timestamp)

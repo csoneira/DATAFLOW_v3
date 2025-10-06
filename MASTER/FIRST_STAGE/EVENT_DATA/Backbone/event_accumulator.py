@@ -70,61 +70,26 @@ from scipy.sparse import load_npz, csc_matrix
 
 import os
 import yaml
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.status_csv import append_status_row, mark_status_complete
+
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 home_path = config["home_path"]
-
-
-def _append_status_row(status_csv_path: str) -> str:
-    """Append a new status row marking the start of an execution."""
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    os.makedirs(os.path.dirname(status_csv_path), exist_ok=True)
-    file_exists = os.path.exists(status_csv_path)
-
-    with open(status_csv_path, "a", newline="") as status_file:
-        writer = csv.writer(status_file)
-        if not file_exists:
-            writer.writerow(["timestamp", "status"])
-        writer.writerow([timestamp, "0"])
-
-    return timestamp
-
-
-def _mark_status_complete(status_csv_path: str, timestamp: str) -> None:
-    """Mark the previously appended status row as completed."""
-
-    if not os.path.exists(status_csv_path):
-        print(f"Warning: status CSV not found at {status_csv_path}")
-        return
-
-    rows = []
-    updated = False
-
-    with open(status_csv_path, newline="") as status_file:
-        reader = csv.reader(status_file)
-        for row in reader:
-            if (
-                row
-                and row[0] == timestamp
-                and len(row) > 1
-                and row[1] == "0"
-                and not updated
-            ):
-                row[1] = "1"
-                updated = True
-            rows.append(row)
-
-    if not updated:
-        print("Warning: could not locate the pending status row to mark as complete.")
-        return
-
-    with open(status_csv_path, "w", newline="") as status_file:
-        writer = csv.writer(status_file)
-        writer.writerows(rows)
 
 
 # General Settings
@@ -282,7 +247,7 @@ acc_working_directory = os.path.join(working_directory, "LIST_TO_ACC")
 
 csv_path = os.path.join(working_directory, "event_accumulator_metadata.csv")
 status_csv_path = os.path.join(working_directory, "event_accumulator_status.csv")
-status_timestamp = _append_status_row(status_csv_path)
+status_timestamp = append_status_row(status_csv_path)
 
 # Define subdirectories relative to the working directory
 base_directories = {
@@ -1183,8 +1148,16 @@ if side_calculations:
             for eff, err, label, color in eff_results:
                 # mask out extreme/invalid efficiency points
                 mask = (eff >= 0.5) & (eff <= 1.01)
-                theta_fit      = bin_centers[mask]
-                eff_fit_data   = eff[mask]
+                valid_mask = mask & np.isfinite(eff)
+
+                theta_fit    = bin_centers[valid_mask]
+                eff_fit_data = eff[valid_mask]
+
+                if theta_fit.size < 3:
+                    print(f"[WARN] Not enough valid efficiency samples to fit for {label} (got {theta_fit.size}).")
+                    fit_params_list.append(dict(label=label, color=color, a=np.nan, n=np.nan, eps0=np.nan))
+                    fit_curves.append(np.full_like(bin_centers, np.nan))
+                    continue
 
                 try:
                     popt, _ = curve_fit(
@@ -4944,14 +4917,16 @@ df_original = df.copy()
 
 #%%
 
-# Define time bin widths, from 1s to 360s with 5s steps
-time_bins = [ pd.Timedelta(seconds=i) for i in range(1, 601, 1) ]
+# Define time bin widths, from 1s to 360s with 1s steps
+time_bins = [pd.Timedelta(seconds=i) for i in range(1, 601, 1)]
 
-# Initialize containers
-discarded_percentages = []
-standard_deviations = []
-normalized_curves = []
-time_curves = []
+# Initialize containers that stay aligned
+used_time_bins: List[pd.Timedelta] = []
+bin_seconds: List[float] = []
+discarded_percentages: List[float] = []
+standard_deviations: List[float] = []
+normalized_curves: List[np.ndarray] = []
+time_curves: List[np.ndarray] = []
 
 for bin_width in time_bins:
     df = df_original.copy()
@@ -4974,8 +4949,12 @@ for bin_width in time_bins:
 
     data = pivoted['events'].values
 
+    used_time_bins.append(bin_width)
+    bin_seconds.append(bin_width.total_seconds())
+
     # Poisson fit
-    def nll(lmbda, data): return -np.sum(poisson.logpmf(data, lmbda))
+    def nll(lmbda, data):
+        return -np.sum(poisson.logpmf(data, lmbda))
     res = minimize(nll, x0=[np.mean(data)], args=(data,), bounds=[(1e-5, None)])
     lmbda_fit = res.x[0]
 
@@ -4997,13 +4976,14 @@ for bin_width in time_bins:
     normalized_curves.append(normalized)
     time_curves.append(pivoted['Time'].values)
 
-if create_essential_plots:
+if create_essential_plots and used_time_bins:
     # Plotting stage
     plt.figure(figsize=(12, 6))
 
-    for t, norm, label in zip(time_curves, normalized_curves, time_bins):
-        idx = time_bins.index(label)
-        plt.plot(t, norm, label=f'{label} ({discarded_percentages[idx]:.1f}%)', alpha=0.6)
+    for idx, (t_curve, norm_curve) in enumerate(zip(time_curves, normalized_curves)):
+        label_td = used_time_bins[idx]
+        label_text = f'{label_td} ({discarded_percentages[idx]:.1f}%)'
+        plt.plot(t_curve, norm_curve, label=label_text, alpha=0.6)
 
     plt.xlabel("Time")
     plt.ylabel("Normalized Event Rate")
@@ -5014,12 +4994,8 @@ if create_essential_plots:
         plt.show()
     plt.close()
 
-
-bin_seconds = [pd.to_timedelta(tb).total_seconds() for tb in time_bins]
-
-if create_essential_plots:
+if create_essential_plots and bin_seconds:
     # Plot discarded percentage vs bin width
-
     plt.figure(figsize=(8, 5))
     plt.plot(bin_seconds, discarded_percentages, marker='o')
     plt.xlabel("Time Bin Width [s]")
@@ -5027,73 +5003,77 @@ if create_essential_plots:
     plt.title("Kept Percentage vs. Accumulation Time")
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    if show_plots:
+        plt.show()
+    plt.close()
 
 
 # These must match in length
-standard_deviations = np.array(standard_deviations)
+standard_deviations_arr = np.array(standard_deviations, dtype=float)
+bin_seconds_arr = np.array(bin_seconds, dtype=float)
 
-# Apply condition
-cond = standard_deviations < 100
-try:
-    bin_seconds = np.array(bin_seconds)[cond]
-except IndexError:
-    error_file_path = os.path.join(base_directories["error_directory"], file_name)
-    print(f"File '{processing_file_path}' gave error. Moving it temporarily to ERROR for analysis...")
-    shutil.move(processing_file_path, error_file_path)
-    sys.exit(1)
-standard_deviations = standard_deviations[cond]
+if bin_seconds_arr.size == 0 or standard_deviations_arr.size == 0:
+    print("[WARN] No valid time bins available for coefficient of variation fit; skipping.")
+else:
+    # Apply condition
+    cond = (standard_deviations_arr < 100) & np.isfinite(standard_deviations_arr)
+    bin_seconds_arr = bin_seconds_arr[cond]
+    standard_deviations_arr = standard_deviations_arr[cond]
 
-
-# Power-law decay + offset model
-def power_law_model(t, A, beta, C):
-    return A * (t ** -beta) + C
-
-# Fit
-popt, _ = curve_fit(
-    power_law_model,
-    bin_seconds,
-    standard_deviations,
-    p0=[30, 0.5, 1],
-    bounds=([0, 0, 0], [100, 3, 10]),
-    maxfev=10000
-)
-
-# Print fit parameters
-print(f"Fit parameters: A={popt[0]:.2f}, β={popt[1]:.2f}, C={popt[2]:.2f}")
-
-global_variables['coeff_variation_model'] = "A * (t ** -beta) + C"
-global_variables['coeff_variation_A'] = float(popt[0])
-global_variables['coeff_variation_beta'] = float(popt[1])
-global_variables['coeff_variation_C'] = float(popt[2])
-
-if create_essential_plots:
-    # Generate curve
-    t_fit = np.linspace(min(bin_seconds), max(bin_seconds), 500)
-    y_fit = power_law_model(t_fit, *popt)
-
-    # Optional: convert to minutes for x-axis
-    
-    if time_to_min:
-        bin_seconds = bin_seconds / 60
-        t_fit = t_fit / 60
-        unit = "min"
+    if bin_seconds_arr.size < 3:
+        print("[WARN] Not enough bin samples to fit coefficient of variation model; skipping.")
     else:
-        unit = "s"
-    
-    plt.figure(figsize=(8, 5))
-    plt.scatter(bin_seconds, standard_deviations, s=1, label='Data')
-    plt.plot(t_fit, y_fit, 'r-', label=f'Fit: A={popt[0]:.2f}, β={popt[1]:.2f}, C={popt[2]:.2f}')
-    plt.axhline(y=5, color='green', linestyle='--', linewidth=1.5, label='5% Coefficient of Variation')
-    plt.axhline(y=1, color='red', linestyle='--', linewidth=1.5, label='1% Coefficient of Variation')
-    plt.xlabel(f"Time Bin Width [{unit}]")
-    plt.ylabel("Coefficient of variation [%]")
-    plt.title("Coeff. of variation vs. Accumulation Time")
-    plt.grid(True)
-    plt.ylim(0, 20)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+        # Power-law decay + offset model
+        def power_law_model(t, A, beta, C):
+            return A * (t ** -beta) + C
+
+        # Fit
+        popt, _ = curve_fit(
+            power_law_model,
+            bin_seconds_arr,
+            standard_deviations_arr,
+            p0=[30, 0.5, 1],
+            bounds=([0, 0, 0], [100, 3, 10]),
+            maxfev=10000
+        )
+
+        # Print fit parameters
+        print(f"Fit parameters: A={popt[0]:.2f}, β={popt[1]:.2f}, C={popt[2]:.2f}")
+
+        global_variables['coeff_variation_model'] = "A * (t ** -beta) + C"
+        global_variables['coeff_variation_A'] = float(popt[0])
+        global_variables['coeff_variation_beta'] = float(popt[1])
+        global_variables['coeff_variation_C'] = float(popt[2])
+
+        if create_essential_plots:
+            # Generate curve
+            t_fit = np.linspace(float(bin_seconds_arr.min()), float(bin_seconds_arr.max()), 500)
+            y_fit = power_law_model(t_fit, *popt)
+
+            if time_to_min:
+                x_data = bin_seconds_arr / 60
+                x_fit = t_fit / 60
+                unit = "min"
+            else:
+                x_data = bin_seconds_arr
+                x_fit = t_fit
+                unit = "s"
+
+            plt.figure(figsize=(8, 5))
+            plt.scatter(x_data, standard_deviations_arr, s=1, label='Data')
+            plt.plot(x_fit, y_fit, 'r-', label=f'Fit: A={popt[0]:.2f}, β={popt[1]:.2f}, C={popt[2]:.2f}')
+            plt.axhline(y=5, color='green', linestyle='--', linewidth=1.5, label='5% Coefficient of Variation')
+            plt.axhline(y=1, color='red', linestyle='--', linewidth=1.5, label='1% Coefficient of Variation')
+            plt.xlabel(f"Time Bin Width [{unit}]")
+            plt.ylabel("Coefficient of variation [%]")
+            plt.title("Coeff. of variation vs. Accumulation Time")
+            plt.grid(True)
+            plt.ylim(0, 20)
+            plt.legend()
+            plt.tight_layout()
+            if show_plots:
+                plt.show()
+            plt.close()
 
 #%%
 
@@ -5420,8 +5400,11 @@ if create_pdf:
 # Erase the figure_directory
 if os.path.exists(figure_directory):
     print("Removing figure directory...")
-    os.rmdir(figure_directory)
+    try:
+        shutil.rmtree(figure_directory)
+    except OSError as exc:
+        print(f"Warning: could not delete {figure_directory}: {exc}")
 
-_mark_status_complete(status_csv_path, status_timestamp)
+mark_status_complete(status_csv_path, status_timestamp)
 
 print("event_accumulator.py finished.\n\n")

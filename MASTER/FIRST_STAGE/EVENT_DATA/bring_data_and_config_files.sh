@@ -15,6 +15,15 @@ fi
 
 station=$1
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MASTER_DIR="$SCRIPT_DIR"
+while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
+  MASTER_DIR="$(dirname "${MASTER_DIR}")"
+done
+STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
+STATUS_TIMESTAMP=""
+STATUS_CSV=""
+
 # If $1 is not 1, 2, 3, 4, exit
 if [[ ! "$station" =~ ^[1-4]$ ]]; then
   echo "Error: Invalid station number. Please provide a number between 1 and 4."
@@ -66,6 +75,13 @@ csv_path="$station_directory/database_status_${station}.csv"
 csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_date,list_ev_name,list_ev_add_date,acc_name,acc_add_date,merge_add_date"
 csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 
+mkdir -p "$base_working_directory"
+STATUS_CSV="$base_working_directory/bring_data_and_config_files_status.csv"
+if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
+  echo "Warning: unable to record status in $STATUS_CSV" >&2
+  STATUS_TIMESTAMP=""
+fi
+
 # Define directories
 local_destination="$base_working_directory/RAW"
 storage_directory="$base_working_directory/RAW_TO_LIST"
@@ -83,7 +99,15 @@ cleanup() {
   rm -f "$exclude_list_file" "$csv_exclude_file" "$before_list" "$after_list" "$new_list"
 }
 
-trap cleanup EXIT
+finish() {
+  local exit_code="$1"
+  cleanup
+  if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
+    python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
+  fi
+}
+
+trap 'finish $?' EXIT
 
 ensure_csv() {
   if [[ ! -f "$csv_path" ]]; then

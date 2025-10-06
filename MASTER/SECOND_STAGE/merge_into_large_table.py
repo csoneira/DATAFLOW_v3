@@ -23,6 +23,19 @@ import psutil
 import gc
 from pathlib import Path
 
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.status_csv import append_status_row, mark_status_complete
+
 use_reference = "--reference-event" in sys.argv or "-r" in sys.argv
 
 
@@ -68,6 +81,9 @@ directories = {
 output_directory = os.path.join(base_folder, "SECOND_STAGE")
 os.makedirs(output_directory, exist_ok=True)
 output_file = os.path.join(output_directory, "total_data_table.csv")
+
+status_csv_path = os.path.join(output_directory, "merge_into_large_table_status.csv")
+status_timestamp = append_status_row(status_csv_path)
 
 # Collect CSVs
 file_paths = []
@@ -196,3 +212,5 @@ print(f"Data has been merged and saved to {output_file}")
 print('------------------------------------------------------')
 print(f"merge_into_large_table.py completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print('------------------------------------------------------')
+
+mark_status_complete(status_csv_path, status_timestamp)

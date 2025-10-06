@@ -11,6 +11,22 @@ random_file=false  # set to true to enable random selection
 
 station=$1
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MASTER_DIR="$SCRIPT_DIR"
+while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
+    MASTER_DIR="$(dirname "${MASTER_DIR}")"
+done
+STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
+STATUS_TIMESTAMP=""
+
+finish() {
+    local exit_code="$1"
+    if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
+        python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
+    fi
+}
+trap 'finish $?' EXIT
+
 
 # --------------------------------------------------------------------------------------------
 # Prevent the script from running multiple instances -----------------------------------------
@@ -76,6 +92,13 @@ compressed_directory=${base_directory}/COMPRESSED_HLDS
 uncompressed_directory=${base_directory}/UNCOMPRESSED_HLDS
 # processed_directory=${base_directory}/ANCILLARY_DIRECTORY
 moved_directory=${base_directory}/SENT_TO_RAW_TO_LIST_PIPELINE
+
+mkdir -p "$base_directory"
+STATUS_CSV="${base_directory}/unpack_reprocessing_files_status.csv"
+if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
+    echo "Warning: unable to record status in $STATUS_CSV" >&2
+    STATUS_TIMESTAMP=""
+fi
 
 csv_path="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/database_status_${station}.csv"
 csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"

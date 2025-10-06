@@ -9,6 +9,7 @@ from __future__ import annotations
 # -----------------------------------------------------------------------------
 
 import os
+from pathlib import Path
 import shutil
 import sys
 
@@ -20,6 +21,19 @@ import pandas as pd
 # CONFIG 
 
 import yaml
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
@@ -58,6 +72,9 @@ print(f"Station: {station}")
 # -----------------------------------------------------------------------------
 
 log_base_directory = os.path.expanduser(f"{home_path}/DATAFLOW_v3/STATIONS/MINGO0{station}/FIRST_STAGE/LAB_LOGS/")
+
+status_csv_path = os.path.join(log_base_directory, "log_aggregate_and_join_status.csv")
+status_timestamp = append_status_row(status_csv_path)
 
 # Define directory paths relative to base_directory
 base_directories = {
@@ -284,3 +301,5 @@ updated_df.reset_index(inplace=True)
 updated_df.to_csv(final_output_path, index=False, float_format="%.5g")
 
 print(f"Updated merged data saved to {final_output_path}")
+
+mark_status_complete(status_csv_path, status_timestamp)

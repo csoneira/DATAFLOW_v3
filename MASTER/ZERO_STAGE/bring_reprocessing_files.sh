@@ -10,6 +10,22 @@ set -e  # Exit on command failure
 set -u  # Error on undefined variables
 set -o pipefail  # Fail on any part of a pipeline
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MASTER_DIR="$SCRIPT_DIR"
+while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
+  MASTER_DIR="$(dirname "${MASTER_DIR}")"
+done
+STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
+STATUS_TIMESTAMP=""
+
+finish() {
+  local exit_code="$1"
+  if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
+    python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
+  fi
+}
+trap 'finish $?' EXIT
+
 ##############################################################################
 # Parse arguments
 ##############################################################################
@@ -48,6 +64,12 @@ base_dir="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/ZERO_STAGE"
 compressed_directory="${base_dir}/COMPRESSED_HLDS"
 uncompressed_directory="${base_dir}/UNCOMPRESSED_HLDS"
 mkdir -p "$compressed_directory" "$uncompressed_directory"
+
+STATUS_CSV="${base_dir}/bring_reprocessing_files_status.csv"
+if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
+  echo "Warning: unable to record status in $STATUS_CSV" >&2
+  STATUS_TIMESTAMP=""
+fi
 
 remote_dir="/local/experiments/MINGOS/MINGO0${station}/"
 remote_user="rpcuser"

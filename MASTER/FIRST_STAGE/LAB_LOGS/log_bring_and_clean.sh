@@ -11,6 +11,15 @@ fi
 station=$1
 echo "Station: $station"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MASTER_DIR="$SCRIPT_DIR"
+while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
+  MASTER_DIR="$(dirname "${MASTER_DIR}")"
+done
+STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
+STATUS_TIMESTAMP=""
+STATUS_CSV=""
+
 # ----------------------------------------------
 
 # Additional paths
@@ -19,6 +28,22 @@ mingo_direction="mingo0$station"
 python_script_path="$HOME/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_aggregate_and_join.py"
 
 base_working_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/FIRST_STAGE/LAB_LOGS"
+
+mkdir -p "${base_working_directory}"
+STATUS_CSV="${base_working_directory}/log_bring_and_clean_status.csv"
+if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
+  echo "Warning: unable to record status in $STATUS_CSV" >&2
+  STATUS_TIMESTAMP=""
+fi
+
+finish() {
+  local exit_code="$1"
+  if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
+    python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
+  fi
+}
+
+trap 'finish $?' EXIT
 
 local_destination="${base_working_directory}/RAW_LOGS"
 DONE_DIR="${local_destination}/done"

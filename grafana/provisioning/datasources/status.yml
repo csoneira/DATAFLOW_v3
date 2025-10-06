@@ -1,0 +1,35 @@
+apiVersion: 1
+datasources:
+- name: Status CSV
+  uid: status-csv
+  type: yesoreyeram-infinity-datasource
+  access: proxy
+  isDefault: false
+  editable: true
+  jsonData:
+    authenticationType: none
+    cacheDurationSeconds: 0
+    tlsSkipVerify: true
+    data:
+    - refId: A
+      type: csv
+      url: http://localhost:8050/status_timeseries.csv
+      timeField: timestamp
+      timeFormat: '2006-01-02 15:04:05'
+      valueField: status
+      columns:
+      - name: timestamp
+        selector: timestamp
+        type: time
+      - name: status
+        selector: status
+        type: number
+      - name: script
+        selector: script
+        type: string
+      - name: station
+        selector: station
+        type: string
+      - name: source
+        selector: source
+        type: string

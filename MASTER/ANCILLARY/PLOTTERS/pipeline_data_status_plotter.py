@@ -70,7 +70,7 @@ def collect_stage_points(rows: Iterable[Dict[str, str]]) -> Dict[str, List[Tuple
     points: Dict[str, List[Tuple[datetime, int]]] = {key: [] for key, _, _ in STAGE_MAP}
     for row in rows:
         start = parse_start_date(row.get("start_date", ""))
-        if start is None:
+        if start is None or start.year < 2000:
             continue
         for field, level, _ in STAGE_MAP:
             if row.get(field, "").strip():
@@ -87,7 +87,7 @@ def plot_station(station: str, output_dir: Path, global_min: datetime | None, gl
     per_row_levels: List[Tuple[datetime, List[int]]] = []
     for row in rows:
         start = parse_start_date(row.get("start_date", ""))
-        if start is None:
+        if start is None or start.year < 2000:
             continue
         levels = [level for field, level, _ in STAGE_MAP if row.get(field, "").strip()]
         if levels:
