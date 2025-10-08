@@ -90,22 +90,22 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 0 7 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/COPERNICUS/copernicus.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_4.log 2>&1
 
 # FIRST_STAGE - EVENT_DATA - BRING -----------------------------------------------
-*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_1.log 2>&1
-*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_2.log 2>&1
-*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_3.log 2>&1
-*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_4.log 2>&1
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_1.log 2>&1
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_2.log 2>&1
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_3.log 2>&1
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_4.log 2>&1
 
 # FIRST_STAGE - EVENT_DATA - RAW_TO_LIST -----------------------------------------
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_1.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_2.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_3.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_4.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_1.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_2.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_3.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_4.log 2>&1
 
 # FIRST_STAGE - EVENT_DATA - EVENT_ACCUMULATOR -----------------------------------
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_1.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_2.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_3.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_4.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_1.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_2.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_3.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_4.log 2>&1
 
 # FIRST_STAGE - EVENT_DATA - BIG EVENT FILE JOINER -------------------------------
 7 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/big_event_file_joiner.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_1.log 2>&1

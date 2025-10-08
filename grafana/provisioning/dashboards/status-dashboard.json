@@ -1,0 +1,1603 @@
+{
+  "id": null,
+  "uid": "status-overview",
+  "title": "Pipeline Status Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "editable": true,
+  "graphTooltip": 0,
+  "time": {
+    "from": "now-5y",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "bring_data_and_config_files",
+      "type": "timeseries",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status-csv"
+      },
+      "targets": [
+        {
+          "refId": "S1",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=bring_data_and_config_files&station=1",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 1"
+        },
+        {
+          "refId": "S2",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=bring_data_and_config_files&station=2",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 2"
+        },
+        {
+          "refId": "S3",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=bring_data_and_config_files&station=3",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 3"
+        },
+        {
+          "refId": "S4",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=bring_data_and_config_files&station=4",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 4"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "target": {
+                  "field": "status"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "raw_to_list",
+      "type": "timeseries",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status-csv"
+      },
+      "targets": [
+        {
+          "refId": "S1",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=raw_to_list&station=1",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 1"
+        },
+        {
+          "refId": "S2",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=raw_to_list&station=2",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 2"
+        },
+        {
+          "refId": "S3",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=raw_to_list&station=3",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 3"
+        },
+        {
+          "refId": "S4",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=raw_to_list&station=4",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 4"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "target": {
+                  "field": "status"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "raw_to_list_events",
+      "type": "timeseries",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status-csv"
+      },
+      "targets": [
+        {
+          "refId": "S1",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=raw_to_list_events&station=1",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 1"
+        },
+        {
+          "refId": "S2",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=raw_to_list_events&station=2",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 2"
+        },
+        {
+          "refId": "S3",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=raw_to_list_events&station=3",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 3"
+        },
+        {
+          "refId": "S4",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=raw_to_list_events&station=4",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 4"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "target": {
+                  "field": "status"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "ev_accumulator",
+      "type": "timeseries",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status-csv"
+      },
+      "targets": [
+        {
+          "refId": "S1",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=ev_accumulator&station=1",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 1"
+        },
+        {
+          "refId": "S2",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=ev_accumulator&station=2",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 2"
+        },
+        {
+          "refId": "S3",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=ev_accumulator&station=3",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 3"
+        },
+        {
+          "refId": "S4",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=ev_accumulator&station=4",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 4"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "target": {
+                  "field": "status"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "event_accumulator",
+      "type": "timeseries",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status-csv"
+      },
+      "targets": [
+        {
+          "refId": "S1",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=event_accumulator&station=1",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 1"
+        },
+        {
+          "refId": "S2",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=event_accumulator&station=2",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 2"
+        },
+        {
+          "refId": "S3",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=event_accumulator&station=3",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 3"
+        },
+        {
+          "refId": "S4",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=event_accumulator&station=4",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 4"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "target": {
+                  "field": "status"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "log_bring_and_clean",
+      "type": "timeseries",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status-csv"
+      },
+      "targets": [
+        {
+          "refId": "S1",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=log_bring_and_clean&station=1",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 1"
+        },
+        {
+          "refId": "S2",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=log_bring_and_clean&station=2",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 2"
+        },
+        {
+          "refId": "S3",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=log_bring_and_clean&station=3",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 3"
+        },
+        {
+          "refId": "S4",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=log_bring_and_clean&station=4",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 4"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "target": {
+                  "field": "status"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "log_aggregate_and_join",
+      "type": "timeseries",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status-csv"
+      },
+      "targets": [
+        {
+          "refId": "S1",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=log_aggregate_and_join&station=1",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 1"
+        },
+        {
+          "refId": "S2",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=log_aggregate_and_join&station=2",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 2"
+        },
+        {
+          "refId": "S3",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=log_aggregate_and_join&station=3",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 3"
+        },
+        {
+          "refId": "S4",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=log_aggregate_and_join&station=4",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 4"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "target": {
+                  "field": "status"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "unpack_reprocessing_files",
+      "type": "timeseries",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status-csv"
+      },
+      "targets": [
+        {
+          "refId": "S1",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=unpack_reprocessing_files&station=1",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 1"
+        },
+        {
+          "refId": "S2",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=unpack_reprocessing_files&station=2",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 2"
+        },
+        {
+          "refId": "S3",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=unpack_reprocessing_files&station=3",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 3"
+        },
+        {
+          "refId": "S4",
+          "type": "csv",
+          "format": "time_series",
+          "method": "GET",
+          "parser": "backend",
+          "source": "url",
+          "url": "http://localhost:8050/status_timeseries.csv?script=unpack_reprocessing_files&station=4",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [],
+            "headers": [],
+            "body": ""
+          },
+          "timeField": "timestamp",
+          "timeFormat": "2006-01-02 15:04:05",
+          "valueField": "status",
+          "columns": [
+            {
+              "selector": "timestamp",
+              "text": "timestamp",
+              "type": "time"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "number"
+            }
+          ],
+          "skipRows": 0,
+          "rootSelector": "",
+          "alias": "Station 4"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "target": {
+                  "field": "status"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": []
+  }
+}

@@ -42,13 +42,26 @@ current_pid=$$
 
 # Debug: Check for running processes
 
+# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
+#     if [[ "$pid" != "$current_pid" ]]; then
+#         cmdline=$(ps -p "$pid" -o args=)
+#         # echo "$(date) - Found running process: PID $pid - $cmdline"
+#         if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
+#             echo "------------------------------------------------------"
+#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
+#             echo "------------------------------------------------------"
+#             exit 1
+#         fi
+#     fi
+# done
+
 for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
     if [[ "$pid" != "$current_pid" ]]; then
         cmdline=$(ps -p "$pid" -o args=)
         # echo "$(date) - Found running process: PID $pid - $cmdline"
-        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
+        if [[ "$cmdline" == *"$script_name"* ]]; then
             echo "------------------------------------------------------"
-            echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
+            echo "$(date): The script $script_name is already running (PID: $pid). Exiting."
             echo "------------------------------------------------------"
             exit 1
         fi

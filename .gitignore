@@ -27,6 +27,7 @@ STATIONS/
 *.csv
 *.tsv
 *.json
+!grafana/**/*.json
 *.txt
 
 # Ignore images
