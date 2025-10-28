@@ -31,17 +31,17 @@ Each station mirrors the same directory tree under `STATIONS/<ID>/` so that scri
 
 ```
 MASTER/
-├── ZERO_STAGE/                 # Unpacking, deduplication, housekeeping
-├── FIRST_STAGE/
+├── STAGE_0/                 # Unpacking, deduplication, housekeeping
+├── STAGE_1/
 │   ├── EVENT_DATA/             # RAW→LIST→ACC converters and their helpers
 │   ├── LAB_LOGS/               # Logbook ingestion and cleaning scripts
 │   └── COPERNICUS/             # ERA5 download and wrangling utilities
-└── SECOND_STAGE/               # Corrections + unified table builder
+└── STAGE_2/               # Corrections + unified table builder
 
 STATIONS/<ID>/
-├── ZERO_STAGE/                 # Station-local buffers (ASCII, HLDS, etc.)
-├── FIRST_STAGE/                # Mirrors MASTER logic for per-station runs
-└── SECOND_STAGE/               # Outputs ready for Grafana and archival use
+├── STAGE_0/                 # Station-local buffers (ASCII, HLDS, etc.)
+├── STAGE_1/                # Mirrors MASTER logic for per-station runs
+└── STAGE_2/               # Outputs ready for Grafana and archival use
 
 GRAFANA_DATA/                   # Published tables and dashboard assets
 TESTS/                          # Sample inputs and regression notebooks
@@ -70,12 +70,12 @@ Use `top_large_dirs.sh` to inspect disk usage and the `clean_*.sh` utilities to 
 1. Load the tmux layout from `add_to_tmux.info` (e.g., `tmux source-file add_to_tmux.info`) to prepare named panes for each stage.
 2. Append the contents of `add_to_crontab.info` to the service user's crontab to trigger staging, processing, and integration jobs on schedule.
 3. Inspect logs in each tmux pane or under the station directories to verify progress. Several scripts emit bannered stdout instead of structured logs, so saving the tmux history is recommended.
-4. Use the helper scripts in `MASTER/ZERO_STAGE/` for ad-hoc reprocessing when backfilling historical data or replaying failed days.
+4. Use the helper scripts in `MASTER/STAGE_0/` for ad-hoc reprocessing when backfilling historical data or replaying failed days.
 
 ### Outputs
 
-- **Unified CSV/Parquet tables** under `GRAFANA_DATA/` or `MASTER/SECOND_STAGE/` for visualization and archival analysis.
-- **Diagnostic plots** generated during the RAW→LIST transformation, saved under each station’s `FIRST_STAGE/EVENT_DATA/PLOTS/` subtree.
+- **Unified CSV/Parquet tables** under `GRAFANA_DATA/` or `MASTER/STAGE_2/` for visualization and archival analysis.
+- **Diagnostic plots** generated during the RAW→LIST transformation, saved under each station’s `STAGE_1/EVENT_DATA/PLOTS/` subtree.
 - **Intermediate artefacts** for auditability (raw lab logs, cleaned aggregates, Copernicus NetCDF downloads) maintained per station.
 
 ## Contributing

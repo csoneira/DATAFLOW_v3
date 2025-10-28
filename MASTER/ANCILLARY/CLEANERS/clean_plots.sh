@@ -5,6 +5,24 @@
 set -euo pipefail
 LC_ALL=C   # consistent decimals in awk/printf
 
+if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
+  cat <<'EOF'
+clean_plots.sh
+Purges the contents of every PLOTS directory beneath STATIONS and reports disk
+space reclaimed.
+
+Usage:
+  clean_plots.sh
+
+Options:
+  -h, --help    Show this help message and exit.
+
+The script keeps the PLOTS directories themselves but deletes all files and
+subdirectories inside each one. Run only when plot exports are no longer needed.
+EOF
+  exit 0
+fi
+
 BASE_DIR="$HOME/DATAFLOW_v3/STATIONS"
 
 if [[ ! -d "$BASE_DIR" ]]; then

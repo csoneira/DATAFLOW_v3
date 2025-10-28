@@ -15,6 +15,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.execution_logger import start_timer
+
+start_timer(__file__)
+
 
 def append_status_row(status_csv_path: Path | str) -> str:
     """Append a new row marking the start of an execution.
@@ -114,4 +122,3 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

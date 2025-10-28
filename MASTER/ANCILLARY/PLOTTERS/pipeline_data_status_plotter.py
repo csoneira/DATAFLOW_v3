@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Dict, Iterable, List, Tuple
 
 import matplotlib.dates as mdates
@@ -15,6 +16,13 @@ from matplotlib.colors import Normalize, to_rgba
 from matplotlib.collections import LineCollection
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.execution_logger import start_timer
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+
+start_timer(__file__)
 STATIONS: Tuple[str, ...] = ("1", "2", "3", "4")
 CSV_COLUMNS: Tuple[str, ...] = (
     "basename",
@@ -212,7 +220,7 @@ def main() -> None:
                 display_fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
                 ax.imshow(img)
                 ax.axis('off')
-                pdf.savefig(display_fig, bbox_inches="tight")
+                pdf_save_rasterized_page(pdf, display_fig, bbox_inches="tight")
                 plt.close(display_fig)
             finally:
                 try:

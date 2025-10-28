@@ -1,10 +1,13 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #%%
 
+from __future__ import annotations
+
 import os
+import sys
+from pathlib import Path
+
 import yaml
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
@@ -12,6 +15,22 @@ print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 home_path = config["home_path"]
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.execution_logger import start_timer
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+
+start_timer(__file__)
 
 
 
@@ -21,7 +40,6 @@ home_path = config["home_path"]
 
 # Standard Library
 import argparse
-from pathlib import Path
 import shutil
 
 # Third-party Libraries
@@ -71,15 +89,15 @@ def read_station_metadata(station: int = 1) -> tuple[pd.DataFrame, pd.DataFrame,
 
       base = Path(f"{home_path}/DATAFLOW_v3/STATIONS")
         
-      df1 = safe_read(base / "MINGO01" / "FIRST_STAGE" / "LAB_LOGS" / "big_log_lab_data.csv")
-      df2 = safe_read(base / "MINGO02" / "FIRST_STAGE" / "LAB_LOGS" / "big_log_lab_data.csv")
-      df3 = safe_read(base / "MINGO03" / "FIRST_STAGE" / "LAB_LOGS" / "big_log_lab_data.csv")
-      df4 = safe_read(base / "MINGO04" / "FIRST_STAGE" / "LAB_LOGS" / "big_log_lab_data.csv")
+      df1 = safe_read(base / "MINGO01" / "STAGE_1" / "LAB_LOGS" / "big_log_lab_data.csv")
+      df2 = safe_read(base / "MINGO02" / "STAGE_1" / "LAB_LOGS" / "big_log_lab_data.csv")
+      df3 = safe_read(base / "MINGO03" / "STAGE_1" / "LAB_LOGS" / "big_log_lab_data.csv")
+      df4 = safe_read(base / "MINGO04" / "STAGE_1" / "LAB_LOGS" / "big_log_lab_data.csv")
       
-    #   df1 = safe_read(base / "MINGO01" / "SECOND_STAGE" / "total_data_table.csv")
-    #   df2 = safe_read(base / "MINGO02" / "SECOND_STAGE" / "total_data_table.csv")
-    #   df3 = safe_read(base / "MINGO03" / "SECOND_STAGE" / "total_data_table.csv")
-    #   df4 = safe_read(base / "MINGO04" / "SECOND_STAGE" / "total_data_table.csv")
+    #   df1 = safe_read(base / "MINGO01" / "STAGE_2" / "total_data_table.csv")
+    #   df2 = safe_read(base / "MINGO02" / "STAGE_2" / "total_data_table.csv")
+    #   df3 = safe_read(base / "MINGO03" / "STAGE_2" / "total_data_table.csv")
+    #   df4 = safe_read(base / "MINGO04" / "STAGE_2" / "total_data_table.csv")
       
       return df1, df2, df3, df4
 
@@ -511,7 +529,7 @@ def main():
                 fig, ax = plt.subplots(figsize=(14, 10))
                 ax.imshow(img)
                 ax.axis('off')
-                pdf.savefig(fig, bbox_inches='tight')
+                pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
                 plt.close(fig)
 
         print(f"Rasterized PDF saved to: {pdf_path.resolve()}")

@@ -11,12 +11,12 @@ set -euo pipefail
 BASE="$HOME/DATAFLOW_v3/STATIONS"
 
 FILES=(
-  "FIRST_STAGE/EVENT_DATA/raw_to_list_metadata.csv"
-  "FIRST_STAGE/EVENT_DATA/event_accumulator_metadata.csv"
-  "FIRST_STAGE/EVENT_DATA/big_event_data.csv"
-  "FIRST_STAGE/LAB_LOGS/big_log_lab_data.csv"
-  "FIRST_STAGE/COPERNICUS/big_copernicus_data.csv"
-  "SECOND_STAGE/total_data_table.csv"
+  "STAGE_1/EVENT_DATA/raw_to_list_metadata.csv"
+  "STAGE_1/EVENT_DATA/event_accumulator_metadata.csv"
+  "STAGE_1/EVENT_DATA/big_event_data.csv"
+  "STAGE_1/LAB_LOGS/big_log_lab_data.csv"
+  "STAGE_1/COPERNICUS/big_copernicus_data.csv"
+  "STAGE_2/total_data_table.csv"
 )
 
 FRESH_SEC=300       # < 5 min     → green
@@ -26,9 +26,30 @@ STALE_SEC=3600      # > 60 min    → orange
 # ANSI colour definitions (can be disabled with --no-color)
 ##############################################################################
 USE_COLOR=true
+show_help() {
+  cat <<'EOF'
+pipeline_check.sh
+Reports freshness and size of key pipeline outputs for each station.
+
+Usage:
+  pipeline_check.sh [options] [station ...]
+
+Options:
+  -h, --help    Show this help message and exit.
+      --no-color  Disable ANSI colour output.
+
+Provide station numbers (e.g. 2 4) to limit the report; otherwise stations
+1–4 are inspected. Files newer than 5 minutes are highlighted green, older
+than 60 minutes orange, and missing files red.
+EOF
+}
+
 if [[ ${1:-} == "--no-color" ]]; then
   USE_COLOR=false
   shift
+elif [[ ${1:-} =~ ^(-h|--help)$ ]]; then
+  show_help
+  exit 0
 fi
 
 if $USE_COLOR; then

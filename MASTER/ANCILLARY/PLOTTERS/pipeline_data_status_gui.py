@@ -8,6 +8,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 import matplotlib.dates as mdates
@@ -17,6 +18,12 @@ from matplotlib.collections import LineCollection
 from matplotlib.colors import Normalize, to_rgba
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.execution_logger import start_timer
+
+start_timer(__file__)
 DEFAULT_STATIONS: Sequence[str] = ("1", "2", "3", "4")
 CSV_HEADERS: Tuple[str, ...] = (
     "basename",

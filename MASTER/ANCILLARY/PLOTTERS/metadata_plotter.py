@@ -1,10 +1,13 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #%%
 
+from __future__ import annotations
+
 import os
+import sys
+from pathlib import Path
+
 import yaml
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
@@ -13,13 +16,28 @@ with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 home_path = config["home_path"]
 
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+
+start_timer(__file__)
+
 # -----------------------------------------------------------------------------
 # ------------------------------- Imports -------------------------------------
 # -----------------------------------------------------------------------------
 
 # Standard Library
 import argparse
-from pathlib import Path
 import shutil
 
 # Third-party Libraries
@@ -66,7 +84,7 @@ def read_station_metadata(station: int) -> tuple[pd.DataFrame, pd.DataFrame]:
           Path(home_path)
           / "STATIONS"
           / f"MINGO0{station}"
-          / "FIRST_STAGE"
+          / "STAGE_1"
           / "EVENT_DATA"
       )
 
@@ -710,6 +728,8 @@ def main():
     parser.add_argument("--save", action="store_true", help="Save figures as PNG and PDF.")
     args = parser.parse_args()
 
+    set_station(args.station)
+
     df_cal, df_evt = read_station_metadata(args.station)
 
     fig0 = plot_data_coverage(df_cal, df_evt)                         # existing
@@ -740,7 +760,7 @@ def main():
             Path(f"{home_path}/DATAFLOW_v3")
             / "STATIONS"
             / f"MINGO0{args.station}"
-            / "FIRST_STAGE"
+            / "STAGE_1"
             / "EVENT_DATA"
         )
         base.mkdir(parents=True, exist_ok=True)
@@ -771,7 +791,7 @@ def main():
                 ax.imshow(img)
                 ax.axis("off")
 
-                pdf.savefig(fig)
+                pdf_save_rasterized_page(pdf, fig)
                 plt.close(fig)
 
         print(f"PDF (raster pages) saved to: {pdf_path.resolve()}")

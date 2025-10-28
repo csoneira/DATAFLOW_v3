@@ -11,6 +11,14 @@ from typing import Optional
 import json
 import yaml
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.execution_logger import start_timer
+
+start_timer(__file__)
+
 # Dynamically get the home directory using the environment variable
 home_directory = Path(os.environ.get("HOME", os.path.expanduser("~")))
 

@@ -14,34 +14,34 @@ set -euo pipefail
 BASE="$HOME/DATAFLOW_v3/STATIONS"
 
 DIRS=(
-  "/ZERO_STAGE/COMPRESSED_HLDS"
-  "/ZERO_STAGE/UNCOMPRESSED_HLDS"
-  "/ZERO_STAGE/SENT_TO_RAW_TO_LIST_PIPELINE"
+  "/STAGE_0/COMPRESSED_HLDS"
+  "/STAGE_0/UNCOMPRESSED_HLDS"
+  "/STAGE_0/SENT_TO_RAW_TO_LIST_PIPELINE"
 
-  "/FIRST_STAGE/EVENT_DATA/RAW"
+  "/STAGE_1/EVENT_DATA/RAW"
 
-  "/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY"
-  "/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/PROCESSING_DIRECTORY"
-  "/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/ERROR_DIRECTORY"
-  "/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/COMPLETED_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/PROCESSING_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/ERROR_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/COMPLETED_DIRECTORY"
 
-  "/FIRST_STAGE/EVENT_DATA/LIST_EVENTS_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/LIST_EVENTS_DIRECTORY"
 
-  "/FIRST_STAGE/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ACC_UNPROCESSED"
-  "/FIRST_STAGE/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ACC_PROCESSING"
-  "/FIRST_STAGE/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ERROR_DIRECTORY"
-  "/FIRST_STAGE/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ACC_COMPLETED"
+  "/STAGE_1/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ACC_UNPROCESSED"
+  "/STAGE_1/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ACC_PROCESSING"
+  "/STAGE_1/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ERROR_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ACC_COMPLETED"
 
-  "/FIRST_STAGE/EVENT_DATA/ACC_EVENTS_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/ACC_EVENTS_DIRECTORY"
 )
 
 SHORT_DIRS=(
-  "/ZERO_STAGE/COMPRESSED_HLDS"
-  "/ZERO_STAGE/UNCOMPRESSED_HLDS"
-  "/FIRST_STAGE/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/ERROR_DIRECTORY"
-  "/FIRST_STAGE/EVENT_DATA/LIST_EVENTS_DIRECTORY"
-  "/FIRST_STAGE/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ERROR_DIRECTORY"
-  "/FIRST_STAGE/EVENT_DATA/ACC_EVENTS_DIRECTORY"
+  "/STAGE_0/COMPRESSED_HLDS"
+  "/STAGE_0/UNCOMPRESSED_HLDS"
+  "/STAGE_1/EVENT_DATA/RAW_TO_LIST/RAW_TO_LIST_FILES/ERROR_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/LIST_EVENTS_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/LIST_TO_ACC/ACC_FILES/ERROR_DIRECTORY"
+  "/STAGE_1/EVENT_DATA/ACC_EVENTS_DIRECTORY"
 )
 
 # Defaults
@@ -52,12 +52,40 @@ YOUNG_CH="#"
 OLD_CH="+"
 PAD_CH="·"                # you can switch to '.' if you want pure ASCII
 
+show_help() {
+  cat <<'EOF'
+file_flow_check_new.sh
+Displays an ASCII bar chart summarising pipeline file ages for each station.
+
+Usage:
+  file_flow_check_new.sh [options] [station ...]
+
+Options:
+  -h, --help         Show this help message and exit.
+      --color        Enable ANSI colour labels (bars remain ASCII).
+      --no-color     Disable coloured labels (default).
+  -s, --short        Use the trimmed directory list.
+  -w, --width N      Set bar width (default: 60 characters).
+  -i, --interval S   Refresh interval in seconds (default: 5).
+      --young-ch C   Character used for the youngest bucket (default '#').
+      --old-ch   C   Character used for the oldest bucket (default '+').
+      --pad-ch   C   Character used for padding (default '·').
+
+Pass station numbers (e.g. 1 2 3) to limit the display. Without arguments,
+stations 1–4 are shown.
+EOF
+}
+
 ##############################################################################
 # Options
 ##############################################################################
 declare -a POSITIONAL=()
 while (( $# )); do
   case "$1" in
+    -h|--help)
+      show_help
+      exit 0
+      ;;
     --no-color) USE_COLOR=false ;;
     --color)    USE_COLOR=true ;;
     -s|--short) DIRS=("${SHORT_DIRS[@]}") ;;

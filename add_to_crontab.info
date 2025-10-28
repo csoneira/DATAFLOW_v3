@@ -15,7 +15,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 0 5 * * * rsync -av --exclude="STATIONS" --exclude=".git" --exclude=".gitignore" /home/mingo/DATAFLOW_v3/ /home/mingo/SAFE_DATAFLOW_v3/
 
 # Setup Copernicus API codes
-0 * * * * /bin/cp /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/COPERNICUS/.cdsapirc /home/mingo/.cdsapirc
+0 * * * * /bin/cp /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/.cdsapirc /home/mingo/.cdsapirc
 
 # Save snapshot of the config file
 0 * * * * python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/VERSION_CONTROL/snapshot_config.py
@@ -23,7 +23,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # -----------
 # NMDB update
 # -----------
-0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/MASTER/THIRD_STAGE/update_log.txt 2>&1
+0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/update_log.txt 2>&1
 
 # -----------------
 # Grafana splitting
@@ -33,17 +33,17 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # -------------------------------------------------------
 # ANCILLARY. Update the Drive with the raw Monterrey data
 # -------------------------------------------------------
-45 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO04/FIRST_STAGE/EVENT_DATA/RAW/ gdrive:MONTERREY_RAW_DATA --progress
+45 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO04/STAGE_1/EVENT_DATA/RAW/ gdrive:MONTERREY_RAW_DATA --progress
 
 
 # ----------------------------------------
 # Update the Drive with the processed data
 # ----------------------------------------
 
-15 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO01/SECOND_STAGE/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO01 --progress
-20 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO02/SECOND_STAGE/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO02 --progress
-25 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO03/SECOND_STAGE/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO03 --progress
-30 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO04/SECOND_STAGE/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO04 --progress
+15 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO01/STAGE_2/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO01 --progress
+20 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO02/STAGE_2/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO02 --progress
+25 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO03/STAGE_2/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO03 --progress
+30 * * * * rclone sync /home/mingo/DATAFLOW_v3/STATIONS/MINGO04/STAGE_2/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO04 --progress
 
 
 # ------------------------------------------------------------------------------------------
@@ -60,70 +60,70 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # Execute analysis for Stations 1 to 4, staggering to not execute them all at once 
 # --------------------------------------------------------------------------------
 
-# ZERO_STAGE - REPROCESSING - BRING RANDOM ---------------------------------------
-0 1 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 1 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
-0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 2 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
-0 3 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 3 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
-0 4 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/bring_reprocessing_files.sh 4 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
+# STAGE_0 - REPROCESSING - BRING RANDOM ---------------------------------------
+0 1 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/bring_reprocessing_files.sh 1 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
+0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/bring_reprocessing_files.sh 2 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
+0 3 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/bring_reprocessing_files.sh 3 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
+0 4 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/bring_reprocessing_files.sh 4 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
 
-# ZERO_STAGE - REPROCESSING - UNPACK ---------------------------------------------
-#* * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_1.log 2>&1; done' &
-#* * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_2.log 2>&1; done' &
-#* * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_3.log 2>&1; done' &
-#* * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_4.log 2>&1; done' &
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_1.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_2.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_3.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ZERO_STAGE/unpack_reprocessing_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_4.log 2>&1
+# STAGE_0 - REPROCESSING - UNPACK ---------------------------------------------
+#* * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/unpack_reprocessing_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_1.log 2>&1; done' &
+#* * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/unpack_reprocessing_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_2.log 2>&1; done' &
+#* * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/unpack_reprocessing_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_3.log 2>&1; done' &
+#* * * * * /bin/bash -c 'for i in 0 1 2 3; do sleep $((i * 15)); /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/unpack_reprocessing_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_4.log 2>&1; done' &
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/unpack_reprocessing_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_1.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/unpack_reprocessing_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_2.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/unpack_reprocessing_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_3.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/unpack_reprocessing_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_4.log 2>&1
 
 
-# FIRST_STAGE - LOG --------------------------------------------------------------
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_1.log 2>&1
-1-59/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_2.log 2>&1
-2-59/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_3.log 2>&1
-3-59/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/LAB_LOGS/log_bring_and_clean.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_4.log 2>&1
+# STAGE_1 - LOG --------------------------------------------------------------
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/log_bring_and_clean.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_1.log 2>&1
+1-59/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/log_bring_and_clean.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_2.log 2>&1
+2-59/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/log_bring_and_clean.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_3.log 2>&1
+3-59/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/log_bring_and_clean.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_4.log 2>&1
 
-# FIRST_STAGE - COPERNICUS -------------------------------------------------------
-0 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/COPERNICUS/copernicus.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_1.log 2>&1
-0 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/COPERNICUS/copernicus.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_2.log 2>&1
-0 5 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/COPERNICUS/copernicus.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_3.log 2>&1
-0 7 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/COPERNICUS/copernicus.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_4.log 2>&1
+# STAGE_1 - COPERNICUS -------------------------------------------------------
+0 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/copernicus.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_1.log 2>&1
+0 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/copernicus.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_2.log 2>&1
+0 5 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/copernicus.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_3.log 2>&1
+0 7 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/copernicus.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_4.log 2>&1
 
-# FIRST_STAGE - EVENT_DATA - BRING -----------------------------------------------
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_1.log 2>&1
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_2.log 2>&1
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_3.log 2>&1
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/bring_data_and_config_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_4.log 2>&1
+# STAGE_1 - EVENT_DATA - BRING -----------------------------------------------
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/bring_data_and_config_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_1.log 2>&1
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/bring_data_and_config_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_2.log 2>&1
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/bring_data_and_config_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_3.log 2>&1
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/bring_data_and_config_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_4.log 2>&1
 
-# FIRST_STAGE - EVENT_DATA - RAW_TO_LIST -----------------------------------------
-*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_1.log 2>&1
-*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_2.log 2>&1
-*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_3.log 2>&1
-*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/raw_to_list_events.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_4.log 2>&1
+# STAGE_1 - EVENT_DATA - RAW_TO_LIST -----------------------------------------
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/raw_to_list_events.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_1.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/raw_to_list_events.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_2.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/raw_to_list_events.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_3.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/raw_to_list_events.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_4.log 2>&1
 
-# FIRST_STAGE - EVENT_DATA - EVENT_ACCUMULATOR -----------------------------------
-*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_1.log 2>&1
-*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_2.log 2>&1
-*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_3.log 2>&1
-*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/ev_accumulator.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_4.log 2>&1
+# STAGE_1 - EVENT_DATA - EVENT_ACCUMULATOR -----------------------------------
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/ev_accumulator.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_1.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/ev_accumulator.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_2.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/ev_accumulator.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_3.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/ev_accumulator.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_4.log 2>&1
 
-# FIRST_STAGE - EVENT_DATA - BIG EVENT FILE JOINER -------------------------------
-7 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/big_event_file_joiner.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_1.log 2>&1
-22 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/big_event_file_joiner.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_2.log 2>&1
-37 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/big_event_file_joiner.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_3.log 2>&1
-52 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/FIRST_STAGE/EVENT_DATA/big_event_file_joiner.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_4.log 2>&1
+# STAGE_1 - EVENT_DATA - BIG EVENT FILE JOINER -------------------------------
+7 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_1.log 2>&1
+22 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_2.log 2>&1
+37 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_3.log 2>&1
+52 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_4.log 2>&1
 
-# SECOND_STAGE - MERGE INTO LARGE TABLE ------------------------------------------
-0 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_1.log 2>&1
-15 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_2.log 2>&1
-30 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_3.log 2>&1
-45 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/SECOND_STAGE/merge_into_large_table.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_4.log 2>&1
+# STAGE_2 - MERGE INTO LARGE TABLE ------------------------------------------
+0 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_1.log 2>&1
+15 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_2.log 2>&1
+30 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_3.log 2>&1
+45 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_4.log 2>&1
 
-# SECOND_STAGE - CORRECTOR -------------------------------------------------------
-# */31 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_1.log 2>&1
-# 4-59/31 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_2.log 2>&1
-# 6-59/31 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_3.log 2>&1
-# 8-59/31 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/SECOND_STAGE/corrector.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_4.log 2>&1
+# STAGE_2 - CORRECTOR -------------------------------------------------------
+# */31 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/corrector.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_1.log 2>&1
+# 4-59/31 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/corrector.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_2.log 2>&1
+# 6-59/31 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/corrector.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_3.log 2>&1
+# 8-59/31 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/corrector.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_4.log 2>&1
 
 
 # --------------------------------------------------------------------------------
@@ -139,3 +139,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 
 # NETWORK PLOTTER ------------------------------------
 0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_network_plotter.py 1 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_network_plotter.log 2>&1
+
+
+# PIPELINE PLOTTER
+1 0 0 0 0 python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/pipeline_data_status_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1

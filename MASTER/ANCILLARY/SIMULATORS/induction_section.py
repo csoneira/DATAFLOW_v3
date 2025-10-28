@@ -1,14 +1,17 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #%%
+
+from __future__ import annotations
 
 # -----------------------------------------------------------------------------
 # ------------------------------- Imports -------------------------------------
 # -----------------------------------------------------------------------------
 
 import os
+import sys
+from pathlib import Path
+
 import yaml
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
@@ -16,6 +19,21 @@ print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 home_path = config["home_path"]
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.execution_logger import start_timer
+
+start_timer(__file__)
 
 import numpy as np
 import pandas as pd
