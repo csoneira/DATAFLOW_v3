@@ -155,24 +155,28 @@ trap 'finish $?' EXIT
 # # Additional paths
 # mingo_direction="mingo0$station"
 
-raw_to_list_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/Backbone/raw_to_list.py"
-# event_accumulator_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/Backbone/event_accumulator.py"
-
-exclude_list_file="$base_working_directory/tmp/exclude_list.txt"
-
-# # Create necessary directories
-# mkdir -p "$station_directory"
-# mkdir -p "$base_working_directory/tmp"
-# mkdir -p "$local_destination"
-# mkdir -p "$storage_directory"
+TASK_SCRIPTS=(
+  "$SCRIPT_DIR/TASK_1/raw_to_clean.py"
+  "$SCRIPT_DIR/TASK_2/clean_to_cal.py"
+  "$SCRIPT_DIR/TASK_3/cal_to_list.py"
+  "$SCRIPT_DIR/TASK_4/list_to_fit.py"
+)
 
 echo '------------------------------------------------------'
 echo '------------------------------------------------------'
 
-# Process the data: raw_to_list.py
-echo "Processing .dat files with Python script (raw_to_list.py)..."
-python3 -u "$raw_to_list_directory" "$station"
+for task_script in "${TASK_SCRIPTS[@]}"; do
+  if [[ ! -x "$task_script" ]]; then
+    echo "Warning: task script $task_script not found or not executable. Skipping."
+    continue
+  fi
+  echo "Running $(basename "$task_script")..."
+  if ! python3 -u "$task_script" "$station"; then
+    echo "Task $(basename "$task_script") failed; aborting pipeline."
+    exit 1
+  fi
+  echo '------------------------------------------------------'
+done
 
-echo '------------------------------------------------------'
-echo "raw_to_list.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "raw_to_list_events.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
 echo '------------------------------------------------------'

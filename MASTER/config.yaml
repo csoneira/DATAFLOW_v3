@@ -127,11 +127,11 @@ residue_plots: false
 # Plots and savings -------------------------
 crontab_execution: true
 create_plots: true
-create_essential_plots: false
-create_very_essential_plots: false
+create_essential_plots: true
+create_very_essential_plots: true
 save_plots: true
 show_plots: false
-create_pdf: false
+create_pdf: true
 limit: false
 limit_number: 10000
 number_of_time_cal_figures: 3
