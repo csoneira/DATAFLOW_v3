@@ -1,6 +1,18 @@
-
-
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 #%%
+
+from __future__ import annotations
+
+"""
+Created on Thu Jun 20 09:15:33 2024
+
+@author: csoneira@ucm.es
+"""
+
+task_number = 3
+
+
 
 
 # import glob
@@ -132,7 +144,7 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -155,7 +167,7 @@ print("Execution time is:", execution_time)
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -745,6 +757,16 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
+if task_number == 1:
+    raw_directory = "RAW"
+else:
+    raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
+if task_number == 5:
+    output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
+else:
+    output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
+raw_working_directory = os.path.join(base_directory, raw_directory)
+raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
 # /home/mingo/DATAFLOW_v3/STATIONS/MINGO01/STAGE_1/EVENT_DATA/STEP_1/TASK_1/OUTPUT_FILES
 raw_working_directory = os.path.join(base_directory, "STEP_1/TASK_2/OUTPUT_FILES")
@@ -760,9 +782,6 @@ base_directories = {
     "pdf_directory": os.path.join(raw_to_list_working_directory, "PLOTS/PDF_DIRECTORY"),
     "base_figure_directory": os.path.join(raw_to_list_working_directory, "PLOTS/FIGURE_DIRECTORY"),
     "figure_directory": os.path.join(raw_to_list_working_directory, f"PLOTS/FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
-    
-    "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
-    # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
     
     "ancillary_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY"),
     
@@ -810,7 +829,22 @@ completed_files = set(os.listdir(completed_directory))
 
 
 
-save_filename_suffix = "0"
+# Note that the middle between start and end time could also be taken. This is for calibration storage.
+datetime_value = working_df['datetime'].iloc[0]
+end_datetime_value = working_df['datetime'].iloc[-1]
+
+if self_trigger:
+    print(self_trigger_df)
+    datetime_value_st = self_trigger_df['datetime'].iloc[0]
+    end_datetime_value_st = self_trigger_df['datetime'].iloc[-1]
+    datetime_str_st = str(datetime_value_st)
+    save_filename_suffix_st = datetime_str_st.replace(' ', "_").replace(':', ".").replace('-', ".")
+
+start_time = datetime_value
+end_time = end_datetime_value
+datetime_str = str(datetime_value)
+save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
+
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -823,8 +857,6 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
-save_list_path = os.path.join(base_directories["list_events_directory"], save_filename)
-# save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 
@@ -915,7 +947,7 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -940,7 +972,7 @@ print("Execution time is:", execution_time)
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -1556,7 +1588,7 @@ global_variables = {
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)

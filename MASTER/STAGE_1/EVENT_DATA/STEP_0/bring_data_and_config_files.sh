@@ -313,7 +313,7 @@ echo "Bringing the input files from the logbook..."
 # ---------------------------------------------
 # Read IDs from YAML (requires PyYAML in Python)
 # ---------------------------------------------
-CONFIG_FILE="$HOME/DATAFLOW_v3/MASTER/config.yaml"
+CONFIG_FILE="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml"
 SHEET_ID=$(yq -r '.logbook.sheet_id' "$CONFIG_FILE")
 GID=$(yq -r ".logbook.gid_by_station.\"$station\"" "$CONFIG_FILE")
 

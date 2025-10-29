@@ -89,7 +89,7 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -164,7 +164,7 @@ print("----------------------------------------------------------------------")
 
 # Load calibration
 home_path = config["home_path"]
-tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/tot_to_charge_calibration.csv"
+tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/tot_to_charge_calibration.csv"
 FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
 FEE_calibration = {
     "Width": FEE_calibration_df['Width'].tolist(),
@@ -4480,6 +4480,7 @@ print("----------------------------------------------------------------------")
 
 #%%
 
+
 if draw_angular_regions:
     
     print("----------------------- Drawing angular regions ----------------------")
@@ -4746,7 +4747,6 @@ if create_essential_plots or create_very_essential_plots:
     if show_plots:
         plt.show()
     plt.close()
-
 
 #%%
 

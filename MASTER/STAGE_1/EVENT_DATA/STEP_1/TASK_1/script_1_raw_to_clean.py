@@ -3,6 +3,7 @@
 #%%
 
 from __future__ import annotations
+
 """
 Created on Thu Jun 20 09:15:33 2024
 
@@ -44,6 +45,8 @@ print("\n\n")
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+
+task_number = 1
 
 
 
@@ -139,7 +142,7 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -190,6 +193,7 @@ else:
 
 
 
+
 print("Creating the necessary directories...")
 
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
@@ -198,8 +202,16 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
-raw_working_directory = os.path.join(base_directory, "RAW")
-raw_to_list_working_directory = os.path.join(base_directory, "STEP_1/TASK_1")
+if task_number == 1:
+    raw_directory = "RAW"
+else:
+    raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
+if task_number == 5:
+    output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
+else:
+    output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
+raw_working_directory = os.path.join(base_directory, raw_directory)
+raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
 # Define directory paths relative to base_directory
 base_directories = {
@@ -210,9 +222,6 @@ base_directories = {
     "pdf_directory": os.path.join(raw_to_list_working_directory, "PLOTS/PDF_DIRECTORY"),
     "base_figure_directory": os.path.join(raw_to_list_working_directory, "PLOTS/FIGURE_DIRECTORY"),
     "figure_directory": os.path.join(raw_to_list_working_directory, f"PLOTS/FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
-    
-    "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
-    # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
     
     "ancillary_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY"),
     
@@ -435,7 +444,7 @@ else:
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -1875,8 +1884,6 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
-save_list_path = os.path.join(base_directories["list_events_directory"], save_filename)
-# save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 # Check if the file exists and its size

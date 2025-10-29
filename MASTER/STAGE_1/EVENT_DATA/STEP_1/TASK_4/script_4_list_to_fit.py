@@ -1,3 +1,19 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#%%
+
+from __future__ import annotations
+
+"""
+Created on Thu Jun 20 09:15:33 2024
+
+@author: csoneira@ucm.es
+"""
+
+
+
+
+task_number = 4
 
 
 # import glob
@@ -109,7 +125,7 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -291,6 +307,16 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
+if task_number == 1:
+    raw_directory = "RAW"
+else:
+    raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
+if task_number == 5:
+    output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
+else:
+    output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
+raw_working_directory = os.path.join(base_directory, raw_directory)
+raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
 # /home/mingo/DATAFLOW_v3/STATIONS/MINGO01/STAGE_1/EVENT_DATA/STEP_1/TASK_1/OUTPUT_FILES
 raw_working_directory = os.path.join(base_directory, "STEP_1/TASK_3/OUTPUT_FILES")
@@ -306,9 +332,6 @@ base_directories = {
     "pdf_directory": os.path.join(raw_to_list_working_directory, "PLOTS/PDF_DIRECTORY"),
     "base_figure_directory": os.path.join(raw_to_list_working_directory, "PLOTS/FIGURE_DIRECTORY"),
     "figure_directory": os.path.join(raw_to_list_working_directory, f"PLOTS/FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
-    
-    "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
-    # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
     
     "ancillary_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY"),
     
@@ -714,6 +737,7 @@ working_df = pd.read_hdf(file_path, key=KEY)
 print(f"✅ Listed dataframe reloaded from: {file_path}")
 
 
+# List all names of columns
 
 # Original number of events
 original_number_of_events = len(working_df)
@@ -736,7 +760,7 @@ print("Execution time is:", execution_time)
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -1279,8 +1303,6 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
-save_list_path = os.path.join(base_directories["list_events_directory"], save_filename)
-# save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 
@@ -1406,7 +1428,7 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -1431,7 +1453,7 @@ print("Execution time is:", execution_time)
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -2076,8 +2098,6 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
-save_list_path = os.path.join(base_directories["list_events_directory"], save_filename)
-# save_full_path = os.path.join(base_directories["full_list_events_directory"], save_full_filename)
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 
@@ -2132,7 +2152,7 @@ global_variables['z_P4'] =  z_positions[3]
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -2556,6 +2576,10 @@ if debug_mode:
     limit = limit_debug
     limit_number = limit_number_debug
 
+
+create_plots = True
+create_pdf = True
+
 if debug_mode:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
@@ -2810,7 +2834,7 @@ for alt_iteration in range(repeat + 1):
         
         # Angular part -----------------------------------------------------------------
         x = np.array([tdiff_to_x * getattr(trk, f'P{p}_T_diff_final') for p in planes])
-        y = np.array([getattr(trk, f'P{p}_Q_diff_final') for p in planes])
+        y = np.array([getattr(trk, f'P{p}_Y_final') for p in planes])
         z = z_positions[np.array(planes) - 1]
 
         (fit_res['alt_x'][i], fit_res['alt_y'][i], fit_res['alt_theta'][i], fit_res['alt_phi'][i], fit_res['alt_chi2'][i], res_td, res_y) = fit_3d_line(x, y, z, anc_sx, anc_sy, anc_sz, planes, tdiff_to_x)
@@ -3099,49 +3123,67 @@ working_df = pd.concat([working_df, new_columns_df], axis=1)
 # TimTrack starts ------------------------------------------------------
 repeat = number_of_TT_executions - 1 if timtrack_iteration else 0
 for iteration in range(repeat + 1):
-    working_df.loc[:, timtrack_results] = 0.0
-    
     fitted = 0
     if timtrack_iteration:
         print(f"TimTrack iteration {iteration+1} out of {number_of_TT_executions}")
     
-    if crontab_execution:
-        iterator = working_df.iterrows()
-    else:
-        iterator = tqdm(working_df.iterrows(), total=working_df.shape[0], desc="Processing events")
+    n_rows = len(working_df)
+    charge_arr = np.zeros((n_rows, 4), dtype=float)
+    res_ystr_arr = np.zeros((n_rows, 4), dtype=float)
+    res_tsum_arr = np.zeros((n_rows, 4), dtype=float)
+    res_tdif_arr = np.zeros((n_rows, 4), dtype=float)
+    ext_res_ystr_arr = np.zeros((n_rows, 4), dtype=float)
+    ext_res_tsum_arr = np.zeros((n_rows, 4), dtype=float)
+    ext_res_tdif_arr = np.zeros((n_rows, 4), dtype=float)
+
+    charge_event_arr = np.zeros(n_rows, dtype=float)
+    iterations_arr = np.zeros(n_rows, dtype=np.int32)
+    conv_distance_arr = np.zeros(n_rows, dtype=float)
+    converged_arr = np.zeros(n_rows, dtype=np.int8)
+    processed_tt_arr = np.zeros(n_rows, dtype=np.int32)
+
+    th_chi_arr = np.zeros(n_rows, dtype=float)
+    x_arr = np.zeros(n_rows, dtype=float)
+    xp_arr = np.zeros(n_rows, dtype=float)
+    y_arr = np.zeros(n_rows, dtype=float)
+    yp_arr = np.zeros(n_rows, dtype=float)
+    t0_arr = np.zeros(n_rows, dtype=float)
+    s_arr = np.zeros(n_rows, dtype=float)
+
+    th_chi_ndf_arrays = {}
+
+    iterator = working_df.itertuples(index=False, name='Track')
+    if not crontab_execution:
+        iterator = tqdm(iterator, total=working_df.shape[0], desc="Processing events")
     
-    for idx, track in iterator:
+    for pos, track in enumerate(iterator):
         # INTRODUCTION ------------------------------------------------------------------
-        track_numeric = pd.to_numeric(track.drop('datetime'), errors='coerce')
-        name_type = ""
+        name_type_parts = []
         planes_to_iterate = []
-        charge_event = 0
+        charge_event = 0.0
         for i_plane in range(nplan):
-            # Check if the sum of the charges in the current plane is non-zero
-            charge_plane = getattr(track, f'P{i_plane + 1}_Q_sum_final')
+            plane_id = i_plane + 1
+            charge_plane = getattr(track, f'P{plane_id}_Q_sum_final')
             if charge_plane != 0:
-                # Append the plane number to name_type and planes_to_iterate
-                name_type += f'{i_plane + 1}'
-                planes_to_iterate.append(i_plane + 1)
-                working_df.at[idx, f'charge_{i_plane + 1}'] = charge_plane
+                name_type_parts.append(str(plane_id))
+                planes_to_iterate.append(plane_id)
+                if plane_id <= 4:
+                    charge_arr[pos, plane_id - 1] = charge_plane
                 charge_event += charge_plane
         
-        try:
-            name_type = int(name_type)
-        except ValueError:
-            name_type = 0
-
-        working_df.at[idx, 'charge_event'] = charge_event
-        planes_to_iterate = np.array(planes_to_iterate)
+        name_type = int(''.join(name_type_parts)) if name_type_parts else 0
+        processed_tt_arr[pos] = name_type
+        charge_event_arr[pos] = charge_event
         
         # FITTING -----------------------------------------------------------------------
         if len(planes_to_iterate) <= 1:
             continue
         
         if fixed_speed:
-            vs  = np.asarray([0,0,0,0,0])
+            vs  = np.zeros(5, dtype=float)
         else:
-            vs  = np.asarray([0,0,0,0,0,sc])
+            vs  = np.zeros(6, dtype=float)
+            vs[5] = sc
         mk  = np.zeros([npar, npar])
         va  = np.zeros(npar)
         istp = 0   # nb. of fitting steps
@@ -3153,8 +3195,8 @@ for iteration in range(repeat + 1):
                 vdat, vsig, zi = extract_plane_data(track, iplane)
                 # -------------------------------------------------------------
                 
-                mk = mk + fmkx(nvar, npar, vs, vsig, ss, zi)
-                va = va + fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
+                mk += fmkx(nvar, npar, vs, vsig, ss, zi)
+                va += fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
             istp = istp + 1
             vs0 = vs
             vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
@@ -3162,9 +3204,9 @@ for iteration in range(repeat + 1):
             dist = fmahd(npar, vs, vs0, merr)
             
         if istp >= iter_max or dist >= cocut:
-            working_df.at[idx, 'converged'] = 1
-        working_df.at[idx, 'iterations'] = istp
-        working_df.at[idx, 'conv_distance'] = dist
+            converged_arr[pos] = 1
+        iterations_arr[pos] = istp
+        conv_distance_arr[pos] = dist
         
         vsf = vs       # final saeta
         fitted += 1
@@ -3190,28 +3232,29 @@ for iteration in range(repeat + 1):
                 res_tsum  = res_tsum  + vres[1]
                 res_tdif  = res_tdif  + vres[2]
                 
-                working_df.at[idx, f'res_ystr_{iplane}'] = vres[0]
-                working_df.at[idx, f'res_tsum_{iplane}'] = vres[1]
-                working_df.at[idx, f'res_tdif_{iplane}'] = vres[2]
+                if iplane <= 4:
+                    res_ystr_arr[pos, iplane - 1] = vres[0]
+                    res_tsum_arr[pos, iplane - 1] = vres[1]
+                    res_tdif_arr[pos, iplane - 1] = vres[2]
             
-            working_df.at[idx, 'processed_tt'] = name_type
+            processed_tt_arr[pos] = name_type
             
             ndf  = ndat - npar    # number of degrees of freedom; was ndat - npar
             
             chi2 = ( res_ystr / anc_sy )**2 + ( res_tsum / anc_sts )**2 + ( res_tdif / anc_std )**2
-            working_df.at[idx, 'th_chi'] = chi2
-            working_df.at[idx, f'th_chi_{ndf}'] = chi2
+            th_chi_arr[pos] = chi2
+            th_chi_ndf_arrays.setdefault(ndf, np.zeros(n_rows, dtype=float))[pos] = chi2
             
-            working_df.at[idx, 'x'] = vsf[0]
-            working_df.at[idx, 'xp'] = vsf[1]
-            working_df.at[idx, 'y'] = vsf[2]
-            working_df.at[idx, 'yp'] = vsf[3]
-            working_df.at[idx, 't0'] = vsf[4]
+            x_arr[pos] = vsf[0]
+            xp_arr[pos] = vsf[1]
+            y_arr[pos] = vsf[2]
+            yp_arr[pos] = vsf[3]
+            t0_arr[pos] = vsf[4]
             
             if fixed_speed:
-                working_df.at[idx, 's'] = sc
+                s_arr[pos] = sc
             else:
-                working_df.at[idx, 's'] = vsf[5]
+                s_arr[pos] = vsf[5]
         
         
         # ---------------------------------------------------------------------------------------------
@@ -3226,7 +3269,7 @@ for iteration in range(repeat + 1):
                 vdat_ref, _, z_ref = extract_plane_data(track, iplane_ref)
                 # -----------------------------------------------------------------
                 
-                planes_to_iterate_short = planes_to_iterate[planes_to_iterate != iplane_ref]
+                planes_to_iterate_short = [p for p in planes_to_iterate if p != iplane_ref]
                 
                 vs     = vsf  # We start with the previous 4-planes fit
                 mk     = np.zeros([npar, npar])
@@ -3241,8 +3284,8 @@ for iteration in range(repeat + 1):
                         zi  = zi - z_ref    
                         # -------------------------------------------------------------
                         
-                        mk = mk + fmkx(nvar, npar, vs, vsig, ss, zi)
-                        va = va + fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
+                        mk += fmkx(nvar, npar, vs, vsig, ss, zi)
+                        va += fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
                     istp = istp + 1
                     vs0 = vs
                     vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
@@ -3251,30 +3294,73 @@ for iteration in range(repeat + 1):
                     
                 v_res = fres(vs, vdat_ref, lenx, ss, 0)
                 
-                working_df.at[idx, f'ext_res_ystr_{iplane_ref}'] = v_res[0]
-                working_df.at[idx, f'ext_res_tsum_{iplane_ref}'] = v_res[1]
-                working_df.at[idx, f'ext_res_tdif_{iplane_ref}'] = v_res[2]
+                if iplane_ref <= 4:
+                    ext_res_ystr_arr[pos, iplane_ref - 1] = v_res[0]
+                    ext_res_tsum_arr[pos, iplane_ref - 1] = v_res[1]
+                    ext_res_tdif_arr[pos, iplane_ref - 1] = v_res[2]
+    
+    # Push the accumulated results back to the DataFrame in a single shot ------
+    for plane_idx in range(4):
+        col_suffix = plane_idx + 1
+        working_df[f'charge_{col_suffix}'] = charge_arr[:, plane_idx]
+        working_df[f'res_ystr_{col_suffix}'] = res_ystr_arr[:, plane_idx]
+        working_df[f'res_tsum_{col_suffix}'] = res_tsum_arr[:, plane_idx]
+        working_df[f'res_tdif_{col_suffix}'] = res_tdif_arr[:, plane_idx]
+        working_df[f'ext_res_ystr_{col_suffix}'] = ext_res_ystr_arr[:, plane_idx]
+        working_df[f'ext_res_tsum_{col_suffix}'] = ext_res_tsum_arr[:, plane_idx]
+        working_df[f'ext_res_tdif_{col_suffix}'] = ext_res_tdif_arr[:, plane_idx]
+
+    working_df['charge_event'] = charge_event_arr
+    working_df['iterations'] = iterations_arr
+    working_df['conv_distance'] = conv_distance_arr
+    working_df['converged'] = converged_arr
+    working_df['processed_tt'] = processed_tt_arr
+
+    working_df['th_chi'] = th_chi_arr
+    working_df['x'] = x_arr
+    working_df['xp'] = xp_arr
+    working_df['y'] = y_arr
+    working_df['yp'] = yp_arr
+    working_df['t0'] = t0_arr
+    working_df['s'] = s_arr
+    working_df[['res_y', 'res_ts', 'res_td']] = 0.0
+
+    possible_ndf = {nvar * planes - npar for planes in range(2, nplan + 1)}
+    possible_ndf = {ndf for ndf in possible_ndf if ndf >= 0}
+    for ndf in possible_ndf:
+        working_df[f'th_chi_{ndf}'] = th_chi_ndf_arrays.get(ndf, np.zeros(n_rows, dtype=float))
     
     # Filter according to residual ------------------------------------------------
-    changed_event_count = 0
-    for index, row in working_df.iterrows():
-        changed = False
-        for i in range(1, 5):
-            if abs(row[f'res_tsum_{i}']) > res_tsum_filter or \
-                abs(row[f'res_tdif_{i}']) > res_tdif_filter or \
-                abs(row[f'res_ystr_{i}']) > res_ystr_filter or \
-                abs(row[f'res_tsum_{i}']) > ext_res_tsum_filter or \
-                abs(row[f'res_tdif_{i}']) > ext_res_tdif_filter or \
-                abs(row[f'res_ystr_{i}']) > ext_res_ystr_filter:
-                
-                changed = True
-                working_df.at[index, f'P{i}_Y_final'] = 0
-                working_df.at[index, f'P{i}_T_sum_final'] = 0
-                working_df.at[index, f'P{i}_T_diff_final'] = 0
-                working_df.at[index, f'P{i}_Q_sum_final'] = 0
-                working_df.at[index, f'P{i}_Q_diff_final'] = 0
-        if changed:
-            changed_event_count += 1
+    plane_cols = range(1, 5)
+    res_tsum_abs = np.abs(working_df[[f'res_tsum_{i}' for i in plane_cols]].to_numpy())
+    res_tdif_abs = np.abs(working_df[[f'res_tdif_{i}' for i in plane_cols]].to_numpy())
+    res_ystr_abs = np.abs(working_df[[f'res_ystr_{i}' for i in plane_cols]].to_numpy())
+    ext_res_tsum_abs = np.abs(working_df[[f'ext_res_tsum_{i}' for i in plane_cols]].to_numpy())
+    ext_res_tdif_abs = np.abs(working_df[[f'ext_res_tdif_{i}' for i in plane_cols]].to_numpy())
+    ext_res_ystr_abs = np.abs(working_df[[f'ext_res_ystr_{i}' for i in plane_cols]].to_numpy())
+
+    plane_rejected = (
+        (res_tsum_abs > res_tsum_filter) |
+        (res_tdif_abs > res_tdif_filter) |
+        (res_ystr_abs > res_ystr_filter) |
+        (ext_res_tsum_abs > ext_res_tsum_filter) |
+        (ext_res_tdif_abs > ext_res_tdif_filter) |
+        (ext_res_ystr_abs > ext_res_ystr_filter)
+    )
+    plane_rejected_df = pd.DataFrame(plane_rejected, index=working_df.index, columns=list(plane_cols))
+
+    changed_event_mask = plane_rejected_df.any(axis=1)
+    changed_event_count = int(changed_event_mask.sum())
+
+    for plane_idx in plane_cols:
+        mask = plane_rejected_df[plane_idx]
+        if mask.any():
+            working_df.loc[mask, [f'P{plane_idx}_Y_final',
+                                  f'P{plane_idx}_T_sum_final',
+                                  f'P{plane_idx}_T_diff_final',
+                                  f'P{plane_idx}_Q_sum_final',
+                                  f'P{plane_idx}_Q_diff_final']] = 0
+
     print(f"--> {changed_event_count} events were residual filtered.")
     
     print(f"{len(working_df[working_df.iterations == iter_max])} reached the maximum number of iterations ({iter_max}).")
@@ -4835,11 +4921,6 @@ for col in definitive_df.select_dtypes(include=[np.number]).columns:
     definitive_df.loc[:, col] = definitive_df[col].apply(round_to_4_significant_digits)
 
 
-# Change 'datetime' column to 'Time' ------------------------------------------
-if 'datetime' in definitive_df.columns:
-    definitive_df.rename(columns={'datetime': 'Time'}, inplace=True)
-else:
-    print("Column 'datetime' not found in DataFrame!")
 
 # Save the data ---------------------------------------------------------------
 # if save_full_data: # Save a full version of the data, for different studies and debugging
@@ -5171,23 +5252,10 @@ print("----------------------------------------------------------------------\n\
 
 
 
-# Path to save the cleaned dataframe
-os.makedirs("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_4/DONE/", exist_ok=True)
-OUT_PATH = f"/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_4/DONE/fitted_{basename_no_ext}.h5"
-KEY = "df"  # HDF5 key name
-
-# Ensure output directory exists
-os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
-
-# --- Example: your cleaned DataFrame is called working_df ---
-# (Here, you would have your data cleaning code before saving)
-# working_df = ...
-
-
 
 columns_to_keep = [
     # Timestamp and identifiers
-    'Time', 'original_tt', 'processed_tt', 'tracking_tt', 'definitive_tt',
+    'datetime', 'original_tt', 'processed_tt', 'tracking_tt', 'definitive_tt',
 
     # New definitions
     'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
@@ -5203,8 +5271,24 @@ columns_to_keep = [
 ]
 
 reduced_df = definitive_df[columns_to_keep]
-reduced_df.to_csv(save_list_path, index=False, sep=',', float_format='%.5g')
-print(f"Datafile saved in {save_filename}. Path is {save_list_path}")
+
+
+
+
+
+# Path to save the cleaned dataframe
+# Create output directory if it does not exist /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/
+os.makedirs(f"{output_directory}", exist_ok=True)
+OUT_PATH = f"{output_directory}/fitted_{basename_no_ext}.h5"
+KEY = "df"  # HDF5 key name
+
+# Ensure output directory exists
+os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
+
+# --- Example: your cleaned DataFrame is called working_df ---
+# (Here, you would have your data cleaning code before saving)
+# working_df = ...
+
 
 
 # Print all column names in the dataframe
@@ -5242,16 +5326,16 @@ for col in reduced_df.columns:
 
 
 
-def _collect_columns(columns: Iterable[str], pattern: re.Pattern[str]) -> list[str]:
-    """Return all column names that match *pattern*."""
-    return [name for name in columns if pattern.match(name)]
+# def _collect_columns(columns: Iterable[str], pattern: re.Pattern[str]) -> list[str]:
+#     """Return all column names that match *pattern*."""
+#     return [name for name in columns if pattern.match(name)]
 
-# Pattern for P1_Q_sum_*, P2_Q_sum_*, P3_Q_sum_*, P4_Q_sum_*
-Q_SUM_PATTERN = re.compile(r'^P[1-4]_Q_sum_.*$')
+# # Pattern for P1_Q_sum_*, P2_Q_sum_*, P3_Q_sum_*, P4_Q_sum_*
+# Q_SUM_PATTERN = re.compile(r'^P[1-4]_Q_sum_.*$')
 
-# If Q*_F_* and Q*_B_* are zero for all cases, remove the row
-Q_cols = _collect_columns(reduced_df.columns, Q_SUM_PATTERN)
-reduced_df = reduced_df[(reduced_df[Q_cols] != 0).any(axis=1)]
+# # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
+# Q_cols = _collect_columns(reduced_df.columns, Q_SUM_PATTERN)
+# reduced_df = reduced_df[(reduced_df[Q_cols] != 0).any(axis=1)]
 
 
 
