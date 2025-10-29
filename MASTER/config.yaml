@@ -126,12 +126,12 @@ residue_plots: false
 
 # Plots and savings -------------------------
 crontab_execution: true
-create_plots: true
-create_essential_plots: true
-create_very_essential_plots: true
-save_plots: true
-show_plots: false
-create_pdf: true
+stage1_create_plots: true
+stage1_create_essential_plots: true
+stage1_create_very_essential_plots: true
+stage1_save_plots: true
+stage1_show_plots: false
+stage1_create_pdf: true
 limit: false
 limit_number: 10000
 number_of_time_cal_figures: 3
@@ -151,11 +151,11 @@ charge_front_back: true
 slewing_correction: false
 
 # Time filtering -----------------------------------
-time_window_filtering: true
+time_window_filtering: false
 
 # Time calibration ---------------------------------
 time_calibration: true
-old_timing_method: false
+old_timing_method: true
 brute_force_analysis_time_calibration_path_finding: false
 
 # Y position ---------------------------------------
@@ -225,7 +225,7 @@ Q_side_right_pre_cal_debug: 500
 T_side_left_pre_cal_default: -200  #-130
 T_side_right_pre_cal_default: -100
 Q_side_left_pre_cal_default: 80
-Q_side_right_pre_cal_default: 300
+Q_side_right_pre_cal_default: 350
 
 T_side_left_pre_cal_ST: -200  #-115
 T_side_right_pre_cal_ST: -50
@@ -254,15 +254,15 @@ Q_diff_cal_threshold: 10
 Q_diff_cal_threshold_FB: 2 # 1.25
 Q_diff_cal_threshold_FB_wide: 10 # In case the fitting fails
 # Tsum
-T_sum_left_cal: -5
-T_sum_right_cal: 5
+T_sum_left_cal: -10
+T_sum_right_cal: 10
 # Tdif
 T_diff_cal_threshold: 1
 
 # Once calculated the RPC variables -------------------------------------------
 # Tsum
-T_sum_RPC_left: -5
-T_sum_RPC_right: 5 # -100
+T_sum_RPC_left: -7
+T_sum_RPC_right: 7 # -100
 # Tdiff
 T_diff_RPC_left: -0.8
 T_diff_RPC_right: 0.8
