@@ -13,6 +13,28 @@ Created on Thu Jun 20 09:15:33 2024
 task_number = 5
 
 
+import sys
+from pathlib import Path
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.status_csv import append_status_row, mark_status_complete
+
+from datetime import datetime
+
+
 # import glob
 # import pandas as pd
 # import random
@@ -25,7 +47,7 @@ task_number = 5
 
 # # Load dataframe
 # working_df = pd.read_hdf(IN_PATH, key=KEY)
-# print(f"✅ Listed dataframe reloaded from: {IN_PATH}")
+# print(f"Listed dataframe reloaded from: {IN_PATH}")
 
 # # --- Continue your calibration or analysis code here ---
 # # e.g.:
@@ -36,8 +58,6 @@ task_number = 5
 # basename_no_ext = os.path.splitext(os.path.basename(IN_PATH))[0].replace("listed_", "")
 # print(f"File basename (no extension): {basename_no_ext}")
 
-
-from datetime import datetime
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
@@ -59,48 +79,13 @@ import shutil
 import builtins
 import warnings
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from collections import defaultdict
 from itertools import combinations
 from functools import reduce
-from typing import Dict, Tuple, Iterable, List
+from typing import Dict, Tuple, Iterable, List, Optional, Union
 from pathlib import Path
 
-
-# ----------------------------- Standard Library -----------------------------
-import os
-import sys
-import math
-import random
-import shutil
-import builtins
-import time
-import csv
-import gc
-from datetime import datetime, timedelta
-from pathlib import Path
-from collections import defaultdict
-from typing import List, Tuple, Dict, Optional, Union
-
-# ---------------------------- Third-party Libraries --------------------------
-import numpy as np
-import pandas as pd
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from matplotlib.cm import get_cmap
-from matplotlib.backends.backend_pdf import PdfPages
-from mpl_toolkits.mplot3d import Axes3D
-
-from PIL import Image
-from tqdm import tqdm
-
-from scipy.stats import poisson
-from scipy.optimize import minimize, curve_fit, nnls
-from scipy.special import gamma
-from scipy.ndimage import gaussian_filter1d
-from scipy.interpolate import interp1d, CubicSpline, RegularGridInterpolator
-from scipy.sparse import load_npz, csc_matrix
 
 # Scientific Computing
 from math import sqrt
@@ -109,9 +94,10 @@ import pandas as pd
 import scipy.linalg as linalg
 from scipy.constants import c
 from scipy.ndimage import gaussian_filter1d
-from scipy.interpolate import CubicSpline
-from scipy.optimize import brentq, curve_fit, minimize_scalar
-from scipy.special import erf
+from scipy.interpolate import CubicSpline, interp1d, RegularGridInterpolator
+from scipy.optimize import brentq, curve_fit, minimize, minimize_scalar, nnls
+from scipy.special import erf, gamma
+from scipy.sparse import load_npz, csc_matrix
 from scipy.stats import (
     norm,
     poisson,
@@ -127,6 +113,8 @@ from sklearn.metrics import r2_score
 # Plotting
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from matplotlib.cm import get_cmap
 import seaborn as sns
 from matplotlib import gridspec
 from matplotlib.gridspec import GridSpec
@@ -144,27 +132,17 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 
 import yaml
 
-CURRENT_PATH = Path(__file__).resolve()
-REPO_ROOT = None
-for parent in CURRENT_PATH.parents:
-    if parent.name == "MASTER":
-        REPO_ROOT = parent.parent
-        break
-if REPO_ROOT is None:
-    REPO_ROOT = CURRENT_PATH.parents[-1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.append(str(REPO_ROOT))
-
-from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
-
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
+parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 
@@ -227,6 +205,7 @@ if station not in ["1", "2", "3", "4"]:
 # print(f"Station: {station}")
 
 set_station(station)
+config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
@@ -673,7 +652,7 @@ KEY = "df"
 
 # Load dataframe
 working_df = pd.read_hdf(file_path, key=KEY)
-print(f"✅ Listed dataframe reloaded from: {file_path}")
+print(f"Listed dataframe reloaded from: {file_path}")
 
 
 
@@ -704,10 +683,14 @@ print("Execution time is:", execution_time)
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -772,7 +755,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -843,8 +825,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -1247,6 +1229,10 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
+if create_plots == False:
+    if create_essential_plots == True:
+        save_pdf_filename = "essential_" + save_pdf_filename
+
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 
@@ -1290,115 +1276,17 @@ self_trigger = False
 
 
 
-# -----------------------------------------------------------------------------
-# ------------------------------- Imports -------------------------------------
-# -----------------------------------------------------------------------------
-
-# Standard Library
-import os
-import re
-import sys
-import csv
-import math
-import random
-import gc
-import shutil
-import builtins
-import warnings
-import time
-from datetime import datetime, timedelta
-from collections import defaultdict
-from itertools import combinations
-from functools import reduce
-from typing import Dict, Tuple, Iterable, List
-from pathlib import Path
-
-# Scientific Computing
-from math import sqrt
-import numpy as np
-import pandas as pd
-import scipy.linalg as linalg
-from scipy.constants import c
-from scipy.ndimage import gaussian_filter1d
-from scipy.interpolate import CubicSpline
-from scipy.optimize import brentq, curve_fit, minimize_scalar
-from scipy.special import erf
-from scipy.stats import (
-    norm,
-    poisson,
-    linregress,
-    median_abs_deviation,
-    skew
-)
-
-# Machine Learning
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
-
-# Plotting
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib import gridspec
-from matplotlib.gridspec import GridSpec
-from matplotlib.backends.backend_pdf import PdfPages
-from mpl_toolkits.mplot3d import Axes3D
-
-# Image Processing
-from PIL import Image
-
-# Progress Bar
-from tqdm import tqdm
-
-# Warning Filters
-warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
-
-import yaml
-
-CURRENT_PATH = Path(__file__).resolve()
-REPO_ROOT = None
-for parent in CURRENT_PATH.parents:
-    if parent.name == "MASTER":
-        REPO_ROOT = parent.parent
-        break
-if REPO_ROOT is None:
-    REPO_ROOT = CURRENT_PATH.parents[-1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.append(str(REPO_ROOT))
-
-from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
-
-start_timer(__file__)
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
-print(f"Using config file: {config_file_path}")
-with open(config_file_path, "r") as config_file:
-    config = yaml.safe_load(config_file)
-home_path = config["home_path"]
-
-
-
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Header ----------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-
-# Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
-execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
-print("Execution time is:", execution_time)
-
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -1463,7 +1351,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -1534,8 +1421,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -1947,6 +1834,7 @@ if station not in ["1", "2", "3", "4"]:
 # print(f"Station: {station}")
 
 set_station(station)
+config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
@@ -2091,10 +1979,14 @@ global_variables['z_P4'] =  z_positions[3]
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -2159,7 +2051,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -2230,8 +2121,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -2803,7 +2694,7 @@ print(df['region'].value_counts())
 
 #%%
 
-if create_essential_plots or create_very_essential_plots or create_plots:
+if create_essential_plots or create_plots:
     
     print("-------------------------- Angular plots -----------------------------")
         
@@ -3094,7 +2985,7 @@ if correct_angle:
     df = df_pred.copy()
     
     # Plotting corrected vs measured angles
-    if create_very_essential_plots or create_essential_plots or create_plots:    
+    if create_essential_plots or create_plots:    
         VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '23', '24', '34']
         tt_lists = [ VALID_MEASURED_TYPES ]
         
@@ -3164,6 +3055,7 @@ working_df = df.copy()
 # -----------------------------------------------------------------------------
 
 if create_pdf:
+    print(f"Creating PDF with all plots in {save_pdf_path}...")
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:

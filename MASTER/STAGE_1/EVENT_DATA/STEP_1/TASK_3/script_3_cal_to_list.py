@@ -14,6 +14,26 @@ task_number = 3
 
 
 
+import sys
+from pathlib import Path
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.status_csv import append_status_row, mark_status_complete
+
+from datetime import datetime
 
 # import glob
 # import pandas as pd
@@ -27,7 +47,7 @@ task_number = 3
 
 # # Load dataframe
 # working_df = pd.read_hdf(IN_PATH, key=KEY)
-# print(f"✅ Calibrated dataframe reloaded from: {IN_PATH}")
+# print(f"Calibrated dataframe reloaded from: {IN_PATH}")
 
 # # --- Continue your calibration or analysis code here ---
 # # e.g.:
@@ -37,8 +57,6 @@ task_number = 3
 # # Take basename of IN_PATH without extension and witouth the 'calibrated_' prefix
 # basename_no_ext = os.path.splitext(os.path.basename(IN_PATH))[0].replace("calibrated_", "")
 # print(f"File basename (no extension): {basename_no_ext}")
-
-from datetime import datetime
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
@@ -71,7 +89,6 @@ start_execution_time_counting = datetime.now()
 # Standard Library
 import os
 import re
-import sys
 import csv
 import math
 import random
@@ -80,12 +97,11 @@ import shutil
 import builtins
 import warnings
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from collections import defaultdict
 from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable, List
-from pathlib import Path
 
 # Scientific Computing
 from math import sqrt
@@ -129,27 +145,31 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 
 import yaml
 
-CURRENT_PATH = Path(__file__).resolve()
-REPO_ROOT = None
-for parent in CURRENT_PATH.parents:
-    if parent.name == "MASTER":
-        REPO_ROOT = parent.parent
-        break
-if REPO_ROOT is None:
-    REPO_ROOT = CURRENT_PATH.parents[-1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.append(str(REPO_ROOT))
-
-from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
-
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
+parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+home_path = config["home_path"]
+
+run_jupyter_notebook = False
+if run_jupyter_notebook:
+    station = "2"
+else:
+    if len(sys.argv) < 2:
+        print("Error: No station provided.")
+        print("Usage: python3 script.py <station>")
+        sys.exit(1)
+    station = sys.argv[1]
+
+if station not in ["1", "2", "3", "4"]:
+    print("Error: Invalid station. Please provide a valid station (1, 2, 3, or 4).")
+    sys.exit(1)
+
+set_station(station)
+config = update_config_with_parameters(config, parameter_config_file_path, station)
 home_path = config["home_path"]
 
 
@@ -164,13 +184,15 @@ home_path = config["home_path"]
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
 
-import os
-import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -235,7 +257,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -306,8 +327,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -705,6 +726,7 @@ if station not in ["1", "2", "3", "4"]:
 # print(f"Station: {station}")
 
 set_station(station)
+config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
@@ -917,10 +939,14 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 
@@ -967,15 +993,6 @@ def save_execution_metadata(home_dir: str, station_id: str, task_id: int, row: D
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
-
-import os
-import yaml
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
-print(f"Using config file: {config_file_path}")
-with open(config_file_path, "r") as config_file:
-    config = yaml.safe_load(config_file)
-home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
@@ -1039,7 +1056,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -1110,8 +1126,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -1511,6 +1527,7 @@ if station not in ["1", "2", "3", "4"]:
 # print(f"Station: {station}")
 
 set_station(station)
+config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
@@ -1586,10 +1603,14 @@ global_variables = {
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -1654,7 +1675,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -1725,8 +1745,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -2014,12 +2034,6 @@ if debug_mode:
 
 
 
-create_pdf = True
-create_essential_plots = True
-create_plots = True
-
-create_plots = True
-create_pdf = True
 
 
 if debug_mode:
@@ -2467,7 +2481,7 @@ KEY = "df"
 
 # Load dataframe
 working_df = pd.read_hdf(file_path, key=KEY)
-print(f"✅ Cleaned dataframe reloaded from: {file_path}")
+print(f"Cleaned dataframe reloaded from: {file_path}")
 
 original_number_of_events = len(working_df)
 print(f"Original number of events in the dataframe: {original_number_of_events}")
@@ -2506,10 +2520,11 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
+if create_plots == False:
+    if create_essential_plots == True:
+        save_pdf_filename = "essential_" + save_pdf_filename
+
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
-
-
-
 
 
 
@@ -2616,7 +2631,7 @@ print("Active strips per plane calculated.")
 print(working_df[['active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4']].head())
 
 if create_plots:
-# if create_plots:
+
     fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 12), sharex=True, sharey=True)
     colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red']
     y_max = 0
@@ -2667,7 +2682,7 @@ print("----------------------------------------------------------------------")
 
 
 if create_plots:
-# if create_plots or create_essential_plots:
+
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
         print(f"\n--- Plane {i_plane} ---")
@@ -2775,9 +2790,9 @@ if create_plots:
                 plt.close()
 
 
-# if create_plots:
+
 if create_plots:
-# if create_plots or create_very_essential_plots or create_essential_plots:
+
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
@@ -2829,9 +2844,9 @@ if create_plots:
     plt.close()
 
 
-# if create_plots:
+
 if create_plots:
-# if create_plots or create_very_essential_plots or create_essential_plots:
+
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
@@ -3056,9 +3071,8 @@ if y_new_method:
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
 
 
-if create_essential_plots or create_plots:
-# if create_very_essential_plots or create_essential_plots or create_plots:
-# if create_plots:
+if create_plots:
+
     for posfiltered_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
         mask = working_df['posfiltered_tt'] == posfiltered_tt
         filtered_df = working_df[mask].copy()  # Work on a copy for fitting
@@ -3107,7 +3121,6 @@ print("------------ Last comprobation to the per-strip variables ------------")
 print("----------------------------------------------------------------------")
 
 if create_plots or create_essential_plots:
-# if create_plots:
 
     for i_plane in range(1, 5):
         
@@ -3166,8 +3179,8 @@ if create_plots or create_essential_plots:
 
 
 if self_trigger:
-    if create_plots or create_essential_plots:
-    # if create_plots:
+    if create_plots:
+   
 
         for i_plane in range(1, 5):
             
@@ -3276,7 +3289,7 @@ for i_plane in range(1, 5):
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
 
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
@@ -3413,7 +3426,7 @@ if stratos_save:
 
 # Same for hexbin
 if create_plots or create_essential_plots:
-# if create_plots:
+
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -3472,6 +3485,7 @@ if create_plots or create_essential_plots:
 
 
 if create_pdf:
+    print(f"Creating PDF with all plots in {save_pdf_path}...")
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:

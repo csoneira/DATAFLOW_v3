@@ -17,7 +17,7 @@ import pandas as pd
 from pandas.api import types as pdt
 import yaml
 
-CONFIG_PATH = Path.home() / "DATAFLOW_v3" / "MASTER" / "config.yaml"
+CONFIG_PATH = Path.home() / "DATAFLOW_v3" / "MASTER" / "config_global.yaml"
 
 
 @dataclass(frozen=True)

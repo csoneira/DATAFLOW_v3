@@ -11,26 +11,6 @@ Created on Thu Jun 20 09:15:33 2024
 """
 
 
-print("\n\n")
-print("__| |___________________________________________________________| |__")
-print("__   ___________________________________________________________   __")
-print("  | |                                                           | |  ")
-print("  | |                     _           _ _     _                 | |  ")
-print("  | | _ __ __ ___      __| |_ ___    | (_)___| |_   _ __  _   _ | |  ")
-print("  | || '__/ _` \\ \\ /\\ / /| __/ _ \\   | | / __| __| | '_ \\| | | || |  ")
-print("  | || | | (_| |\\ V  V / | || (_) |  | | \\__ \\ |_ _| |_) | |_| || |  ")
-print("  | ||_|  \\__,_| \\_/\\_/___\\__\\___/___|_|_|___/\\__(_) .__/ \\__, || |  ")
-print("  | |                |_____|    |_____|            |_|    |___/ | |  ")
-print("__| |___________________________________________________________| |__")
-print("__   ___________________________________________________________   __")
-print("  | |                                                           | |  ")
-print("\n\n")
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -51,10 +31,32 @@ task_number = 1
 
 
 print("----------------------------------------------------------------------")
-print("-------------------- RAW TO LIST SCRIPT IS STARTING ------------------")
+print("-------------------- RAW TO LIST CLEAN IS STARTING -------------------")
 print("----------------------------------------------------------------------")
 
-from datetime import datetime
+
+import sys
+from pathlib import Path
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.status_csv import append_status_row, mark_status_complete
+
+
+
+from datetime import datetime, timedelta
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
@@ -66,7 +68,6 @@ start_execution_time_counting = datetime.now()
 # Standard Library
 import os
 import re
-import sys
 import csv
 import math
 import random
@@ -75,12 +76,11 @@ import shutil
 import builtins
 import warnings
 import time
-from datetime import datetime, timedelta
 from collections import defaultdict
 from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable, List
-from pathlib import Path
+
 
 # Scientific Computing
 from math import sqrt
@@ -121,39 +121,23 @@ from tqdm import tqdm
 
 import yaml
 
-import os
-import yaml
-
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
 
 
 
-CURRENT_PATH = Path(__file__).resolve()
-REPO_ROOT = None
-for parent in CURRENT_PATH.parents:
-    if parent.name == "MASTER":
-        REPO_ROOT = parent.parent
-        break
-if REPO_ROOT is None:
-    REPO_ROOT = CURRENT_PATH.parents[-1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.append(str(REPO_ROOT))
-
-
-from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
-
-
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
+parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
-
 
 def save_execution_metadata(home_dir: str, station_id: str, task_id: int, row: Dict[str, object]) -> Path:
     """Append the execution metadata row to the per-task CSV."""
@@ -189,7 +173,6 @@ def save_execution_metadata(home_dir: str, station_id: str, task_id: int, row: D
 
 # -----------------------------------------------------------------------------
 
-
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
@@ -218,6 +201,8 @@ if station not in ["1", "2", "3", "4"]:
 
 set_station(station)
 
+config = update_config_with_parameters(config, parameter_config_file_path, station)
+
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
     user_file_selection = True
@@ -226,9 +211,6 @@ else:
     user_file_selection = False
 
 # -----------------------------------------------------------------------------
-
-
-
 
 print("Creating the necessary directories...")
 
@@ -303,43 +285,6 @@ raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
-
-
-# The hierarchy is: 1. raw_files, then 2. unprocessed_files, then 3. processing_files, and finally 4. completed_files.
-# First start with completed_files: if any of those files is is processing_files, unprocessed or raw, remove it from those
-# and keep only the completed_files version.
-# Repeat with processing_files: if any of those files is in unprocessed_files or raw_files, remove it from those
-# and keep only the processing_files version.
-# Repeat with unprocessed_files: if any of those files is in raw_files, remove it from raw_files
-
-# Ordered list from highest to lowest priority
-# LEVELS = [
-#     completed_directory,
-#     processing_directory,
-#     unprocessed_directory,
-#     raw_directory,
-# ]
-
-# seen = set()
-# for d in LEVELS:
-#     d = Path(d)                     # ← convert string → Path each iteration
-#     if not d.exists():
-#         continue
-#     current_files = {p.name for p in d.iterdir() if p.is_file()}
-    
-#     # files that must be removed from this level
-#     duplicates = current_files & seen
-#     for fname in duplicates:
-#         fp = d / fname
-#         try:
-#             fp.unlink()            # delete the file
-#             print(f"Removed duplicate: {fp}")
-#         except FileNotFoundError:
-#             pass                   # already gone, ignore
-
-#     # update the `seen` set with (remaining) filenames of this level
-#     seen |= (current_files - duplicates)
-
 
 # Ordered list from highest to lowest priority
 LEVELS = [
@@ -470,7 +415,6 @@ else:
     z_3 = 300
     z_4 = 450
 
-
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Header ----------------------------------------------------------------------
@@ -478,11 +422,13 @@ else:
 # -----------------------------------------------------------------------------
 
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
+parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 home_path = config["home_path"]
+config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
@@ -546,7 +492,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -617,8 +562,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -823,7 +768,6 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
 
-
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
@@ -902,7 +846,6 @@ if debug_mode:
     limit = limit_debug
     limit_number = limit_number_debug
 
-
 if debug_mode:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
@@ -939,7 +882,6 @@ Q_B_right_pre_cal_ST = Q_side_right_pre_cal_ST
 
 Q_left_side = Q_side_left_pre_cal_ST
 Q_right_side = Q_side_right_pre_cal_ST
-
 
 
 # Y ---------------------------------------------------------------------------
@@ -1281,7 +1223,6 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     if r_squared < 0.5:
         print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
     
-    # if create_plots or create_essential_plots:
     if create_plots:
         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
         y_fit = polynomial(x_fit, *coeffs)
@@ -1666,14 +1607,10 @@ else:
 
 # This is for all cases
 file_path = processing_file_path
-
 the_filename = os.path.basename(file_path)
 print(f"File to process: {the_filename}")
-
 basename_no_ext, file_extension = os.path.splitext(the_filename)
-
 print(f"File basename (no extension): {basename_no_ext}")
-
 
 analysis_date = datetime.now().strftime("%Y-%m-%d")
 print(f"Analysis date and time: {analysis_date}")
@@ -1724,9 +1661,6 @@ T_BACK_PATTERN = re.compile(r"^T\d+_B_\d+$")
 Q_FRONT_PATTERN = re.compile(r"^Q\d+_F_\d+$")
 Q_BACK_PATTERN = re.compile(r"^Q\d+_B_\d+$")
 
-
-
-
 def _apply_bounds(frame: pd.DataFrame, column_names: Iterable[str], lower: float, upper: float) -> None:
     """Zero out values outside [lower, upper] for the provided columns."""
     cols = tuple(column_names)
@@ -1734,7 +1668,6 @@ def _apply_bounds(frame: pd.DataFrame, column_names: Iterable[str], lower: float
         return
     subset = frame.loc[:, cols]
     frame.loc[:, cols] = subset.where((subset >= lower) & (subset <= upper), 0)
-
 
 def _collect_columns(columns: Iterable[str], pattern: re.Pattern[str]) -> list[str]:
     """Return all column names that match *pattern*."""
@@ -1753,8 +1686,6 @@ def process_line(line):
 def contains_malformed_numbers(line):
     return bool(MALFORMED_NUMBER_PATTERN.search(line))  # Detects multiple decimal points
 
-
-
 # Function to validate year, month, and day
 def is_valid_date(values):
     try:
@@ -1768,6 +1699,28 @@ def is_valid_date(values):
         return True
     except ValueError:  # In case of non-numeric values
         return False
+
+
+
+
+
+
+
+
+
+# -----------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------------------------------------
+# TASK 1 start
+# -----------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------------------
 
 # Process the file
 read_lines = 0
@@ -1918,6 +1871,10 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
+if create_plots == False:
+    if create_essential_plots == True:
+        save_pdf_filename = "essential_" + save_pdf_filename
+
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 # Check if the file exists and its size
@@ -2032,9 +1989,7 @@ if self_trigger:
     working_st_df = create_original_tt(working_st_df)
     working_st_df['original_tt'] = working_st_df['original_tt'].apply(builtins.int)
 
-# if create_plots:
-# if create_plots or create_essential_plots:
-if create_plots or create_very_essential_plots or create_essential_plots:
+if create_plots :
     event_counts = working_df['original_tt'].value_counts()
 
     plt.figure(figsize=(10, 6))
@@ -2058,7 +2013,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
 
 if self_trigger:
     if create_essential_plots or create_plots:
-    # if create_plots:
+   
         event_counts = working_st_df['original_tt'].value_counts()
 
         plt.figure(figsize=(10, 6))
@@ -2084,7 +2039,6 @@ if self_trigger:
 # New channel-wise plot -------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# if create_plots or create_essential_plots:
 if create_plots:
     # Create the grand figure for T values
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2167,7 +2121,7 @@ if create_plots:
 
 if self_trigger:
     if create_plots or create_essential_plots:
-    # if create_plots:
+   
         # Create the grand figure for T values
         fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_T = axes_T.flatten()
@@ -2340,7 +2294,6 @@ if self_trigger:
 # New channel-wise plot -------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# if create_plots or create_essential_plots:
 if create_plots:
     # Create the grand figure for T values
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2418,7 +2371,6 @@ if create_plots:
 
 
 if create_plots or create_essential_plots:
-# if create_plots:
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_TQ = axes_TQ.flatten()
@@ -2478,7 +2430,6 @@ if create_plots or create_essential_plots:
 
 if self_trigger:
     if create_plots or create_essential_plots:
-    # if create_plots:
         # Initialize figure and axes for scatter plot of Time vs Charge
         fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_TQ = axes_TQ.flatten()
@@ -2581,7 +2532,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
+   
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
@@ -2630,7 +2581,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
+   
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
@@ -2665,10 +2616,8 @@ if os.path.exists(temp_file):
 # Create and save the PDF -----------------------------------------------------
 # -----------------------------------------------------------------------------
 
-create_pdf = True
-
-
 if create_pdf:
+    print(f"Creating PDF with all plots in {save_pdf_path}...")
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:

@@ -127,12 +127,6 @@ residue_plots: false
 
 # Plots and savings -------------------------
 crontab_execution: true
-stage1_create_plots: true
-stage1_create_essential_plots: true
-stage1_create_very_essential_plots: true
-stage1_save_plots: true
-stage1_show_plots: false
-stage1_create_pdf: true
 limit: false
 limit_number: 10000
 number_of_time_cal_figures: 3
@@ -198,10 +192,6 @@ charge_front_back: true
 charge_front_back_fast: false
 charge_front_back_debug: false
 
-create_plots: true
-create_plots_fast: false
-create_plots_debug: true
-
 limit: false
 limit_fast: false
 limit_debug: true
@@ -211,230 +201,9 @@ limit_number_fast: 10000
 limit_number_debug: 10000
 
 
-# -----------------------------------------------------------------------------
-# Filters ---------------------------------------------------------------------
-# -----------------------------------------------------------------------------
+# ALL THE VARIABLES THAT WERE HERE ARE NOW IN THE PARAMETER CSV FILE
+# ~/DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv
 
-# General ---------------------------------------------------------------------
-
-# Pre-cal Front & Back --------------------------------------------------------
-T_side_left_pre_cal_debug: -500
-T_side_right_pre_cal_debug: 500
-Q_side_left_pre_cal_debug: -500
-Q_side_right_pre_cal_debug: 500
-
-T_side_left_pre_cal_default: -200  #-130
-T_side_right_pre_cal_default: -100
-Q_side_left_pre_cal_default: 80
-Q_side_right_pre_cal_default: 350
-
-T_side_left_pre_cal_ST: -200  #-115
-T_side_right_pre_cal_ST: -50
-Q_side_left_pre_cal_ST: 80
-Q_side_right_pre_cal_ST: 300
-
-# Pre-cal Sum & Diff ----------------------------------------------------------
-# Qsum
-Q_left_pre_cal: 75
-Q_right_pre_cal: 500
-# Qdif
-Q_diff_pre_cal_threshold: 20
-# Tsum
-T_sum_left_pre_cal: -200 # was -130 for mingo01 but for mingo03 is different
-T_sum_right_pre_cal: -90
-
-# Tdif
-T_diff_pre_cal_threshold: 20
-
-# Post-calibration ------------------------------------------------------------
-# Qsum
-Q_sum_left_cal: -20
-Q_sum_right_cal: 300
-# Qdif
-Q_diff_cal_threshold: 10
-Q_diff_cal_threshold_FB: 2 # 1.25
-Q_diff_cal_threshold_FB_wide: 10 # In case the fitting fails
-# Tsum
-T_sum_left_cal: -10
-T_sum_right_cal: 10
-# Tdif
-T_diff_cal_threshold: 1
-
-# Once calculated the RPC variables -------------------------------------------
-# Tsum
-T_sum_RPC_left: -7
-T_sum_RPC_right: 7 # -100
-# Tdiff
-T_diff_RPC_left: -0.8
-T_diff_RPC_right: 0.8
-# Qsum
-Q_RPC_left: 0
-Q_RPC_right: 500
-# Qdiff
-Q_dif_RPC_left: -4
-Q_dif_RPC_right: 4
-# Y pos
-Y_RPC_left: -200 # -150
-Y_RPC_right: 200 # 150
-
-# Alternative fitter filter ---------------------------------------------------
-alt_pos_filter: 650
-alt_theta_left_filter: 0
-alt_theta_right_filter: 1.5708 # np.pi/2
-alt_phi_left_filter: -3.141592 # -1*np.pi
-alt_phi_right_filter: 3.141592 # np.pi
-alt_slowness_filter_left: -0.005
-alt_slowness_filter_right: 0.01 # 0.025
-
-alt_res_ystr_filter: 300
-alt_res_tsum_filter: 2
-alt_res_tdif_filter: 0.7
-
-# TimTrack filter -------------------------------------------------------------
-proj_filter: 2
-
-res_ystr_filter: 300
-res_tsum_filter: 2
-res_tdif_filter: 0.7
-
-ext_res_ystr_filter: 300
-ext_res_tsum_filter: 2
-ext_res_tdif_filter: 0.7
-
-# Fitting comparison ----------------------------------------------------------
-delta_s_left: -0.0003
-delta_s_right: 0.0003
-
-
-# -----------------------------------------------------------------------------
-# Calibrations ----------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# Time sum
-CRT_gaussian_fit_quantile: 0.03
-coincidence_window_og_ns: 10  # ns
-coincidence_window_precal_ns: 7  # ns
-coincidence_window_cal_ns: 3  # ns
-coincidence_window_cal_number_of_points: 20  # ns
-
-# Pedestal charge calibration
-pedestal_left: -3
-pedestal_right: 2
-
-# Front-back charge
-distance_sum_charges_left_fit: -5
-distance_sum_charges_right_fit: 200
-distance_diff_charges_up_fit: 10
-distance_diff_charges_low_fit: -10
-distance_sum_charges_plot: 800
-front_back_fit_threshold: 4 # It was 1.4
-
-# Variables to modify ---------------------------------------------------------
-beta: 1
-strip_speed_factor_of_c: 0.666666667
-validate_pos_cal: true
-
-# Front-back charge
-output_order: 0
-degree_of_polynomial: 4
-
-# X ---------------------------------------------------------------------------
-strip_length: 300
-narrow_strip: 63
-wide_strip: 98
-
-
-# Timtrack parameters --------------------
-# Hardcoded
-d0   : 10 # initial value of the convergence parameter
-cocut: 1  # convergence cut: 0.1
-iter_max: 10 # maximum number of iterations: 50
-anc_sy: 25 # 2.5 cm
-anc_sts: 0.35 # 400 ps
-anc_std: 0.075
-anc_sz: 10 # 5 cm
-
-n_planes_timtrack: 4
-
-# -----------------------------------------------------------------------------
-# Plotting options ------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-T_clip_min_debug: -500
-T_clip_max_debug: 500
-Q_clip_min_debug: -500
-Q_clip_max_debug: 500
-num_bins_debug: 100  # Parameter for the number of bins
-
-T_clip_min_default: -300
-T_clip_max_default: 100
-Q_clip_min_default: 0
-Q_clip_max_default: 500
-num_bins_default: 100  # Parameter for the number of bins
-
-T_clip_min_ST: -300
-T_clip_max_ST: 100
-Q_clip_min_ST: 0
-Q_clip_max_ST: 500
-
-# New channel-wise plot -------------------------------------------------------
-log_scale: true
-
-calibrate_strip_Q_pedestal_thr_factor: 31.62
-calibrate_strip_Q_pedestal_thr_factor_2: 1.5
-calibrate_strip_Q_pedestal_translate_charge_cal: 0.25
-
-calibrate_strip_Q_pedestal_percentile: 10
-
-# 5% of the maximum count
-calibrate_strip_Q_pedestal_rel_th: 0.015
-calibrate_strip_Q_pedestal_rel_th_cal: 0.4
-calibrate_strip_Q_pedestal_abs_th: 3
-calibrate_strip_Q_pedestal_q_quantile: 0.4
-
-scatter_2d_and_fit_new_xlim_left: -5
-scatter_2d_and_fit_new_xlim_right: 200
-scatter_2d_and_fit_new_ylim_bottom: -11
-scatter_2d_and_fit_new_ylim_top: 11
-
-calibrate_strip_T_diff_T_rel_th: 0.1
-calibrate_strip_T_diff_T_abs_th: 1
-
-interpolate_fast_charge_Q_clip_min: 0
-interpolate_fast_charge_Q_clip_max: 1750
-interpolate_fast_charge_num_bins: 100
-interpolate_fast_charge_log_scale: true
-
-crosstalk_fitting: true
-delta_t_left: -5
-delta_t_right: 5
-q_sum_left: 0
-q_sum_right: 60
-q_diff_left: -40
-q_diff_right: 40
-
-Q_sum_semidiff_left: -10
-Q_sum_semidiff_right: 10
-Q_sum_semisum_left: 10
-Q_sum_semisum_right: 50
-T_sum_corrected_diff_left: -5
-T_sum_corrected_diff_right: 5
-slewing_residual_range: 5
-
-t_comparison_lim: 4
-t0_time_cal_lim: 10
-
-crosstalk_fit_mu_max: 3 # 1.5
-crosstalk_fit_sigma_min: 0.25
-crosstalk_fit_sigma_max: 1
-
-slewing_correction_r2_threshold: 0.2
-
-time_window_fitting: true
-
-charge_plot_limit_left: 0
-charge_plot_limit_right: 100
-charge_plot_event_limit_right: 400
 
 
 # -----------------------------------------------------------------------------
@@ -453,24 +222,13 @@ run_jupyter_notebook: false
 remove_outliers: true
 
 # Plot settings
-create_plots: true
+create_plots: false
 create_essential_plots: true
-create_very_essential_plots: true
 save_plots: true
 create_pdf: true
 force_replacement: true  # Creates a new datafile even if there is already one that looks complete
 show_plots: false
 
-# Angular region selection
-theta_boundaries:
-  - 5
-  - 15
-  - 25
-region_layout:
-  - 1
-  - 8
-  - 8
-  - 8
 
 # Particular analysis
 side_calculations: true
@@ -593,11 +351,6 @@ start_date_filter: "2025-01-01"
 end_date_filter: "2025-12-31"
 
 # Aesthetic -------------------------------------
-show_plots: false
-save_plots: true
-create_plots: true
-create_essential_plots: true
-create_very_essential_plots: true
 show_errorbar: false
 
 # Execution -------------------------------------

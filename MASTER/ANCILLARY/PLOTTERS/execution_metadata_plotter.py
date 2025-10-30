@@ -88,6 +88,7 @@ def plot_station(
     station: str, dataframes: Iterable[pd.DataFrame], pdf: PdfPages
 ) -> None:
     """Render a page with five subplots for one station."""
+    current_time = datetime.now()
     fig, axes = plt.subplots(
         len(TASK_IDS),
         1,
@@ -105,6 +106,14 @@ def plot_station(
         ax.set_ylabel("Exec Time (min)")
         ax.grid(True, axis="y", alpha=0.3)
 
+        now_line = ax.axvline(
+            current_time,
+            color="green",
+            linestyle="--",
+            linewidth=1.0,
+            label="Current time",
+        )
+
         if df.empty:
             ax.text(
                 0.5,
@@ -117,6 +126,7 @@ def plot_station(
                 color="dimgray",
             )
             ax.set_ylim(0, 1)
+            ax.legend([now_line], [now_line.get_label()], loc="upper left")
             continue
 
         x = df["execution_timestamp"]
@@ -140,7 +150,7 @@ def plot_station(
         )
         ax_second.set_ylabel("Purity (%)")
 
-        handles = [runtime_line, purity_line]
+        handles = [runtime_line, purity_line, now_line]
         labels = [h.get_label() for h in handles]
         ax.legend(handles, labels, loc="upper left")
 

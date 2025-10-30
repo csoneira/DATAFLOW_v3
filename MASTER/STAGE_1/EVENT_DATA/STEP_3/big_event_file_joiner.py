@@ -49,7 +49,7 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -62,7 +62,7 @@ load_big_event_file = config["load_big_event_file"]
 
 
 # Load the config once at the top of your script
-with open(f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml") as f:
+with open(f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml") as f:
     config = yaml.safe_load(f)
 
 SIG_DIGITS = config["significant_digits"]

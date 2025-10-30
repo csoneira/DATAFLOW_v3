@@ -15,6 +15,27 @@ Created on Thu Jun 20 09:15:33 2024
 task_number = 2
 
 
+import sys
+from pathlib import Path
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.status_csv import append_status_row, mark_status_complete
+
+from datetime import datetime
+
 # import glob
 # import pandas as pd
 # import random
@@ -27,7 +48,7 @@ task_number = 2
 
 # # Load dataframe
 # working_df = pd.read_hdf(IN_PATH, key=KEY)
-# print(f"✅ Cleaned dataframe reloaded from: {IN_PATH}")
+# print(f"Cleaned dataframe reloaded from: {IN_PATH}")
 
 # # --- Continue your calibration or analysis code here ---
 # # e.g.:
@@ -42,15 +63,12 @@ task_number = 2
 # ------------------------------- Imports -------------------------------------
 # -----------------------------------------------------------------------------
 
-from datetime import datetime
-
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
 
 # Standard Library
 import os
 import re
-import sys
 import csv
 import math
 import random
@@ -59,12 +77,11 @@ import shutil
 import builtins
 import warnings
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from collections import defaultdict
 from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable, List
-from pathlib import Path
 
 # Scientific Computing
 from math import sqrt
@@ -108,27 +125,17 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 
 import yaml
 
-CURRENT_PATH = Path(__file__).resolve()
-REPO_ROOT = None
-for parent in CURRENT_PATH.parents:
-    if parent.name == "MASTER":
-        REPO_ROOT = parent.parent
-        break
-if REPO_ROOT is None:
-    REPO_ROOT = CURRENT_PATH.parents[-1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.append(str(REPO_ROOT))
-
-from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
-
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
+parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 
@@ -188,6 +195,8 @@ if station not in ["1", "2", "3", "4"]:
 # print(f"Station: {station}")
 
 set_station(station)
+
+config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
@@ -454,10 +463,14 @@ print("Execution time is:", execution_time)
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 
@@ -518,7 +531,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -589,8 +601,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -1203,7 +1215,7 @@ KEY = "df"
 
 # Load dataframe
 working_df = pd.read_hdf(file_path, key=KEY)
-print(f"✅ Cleaned dataframe reloaded from: {file_path}")
+print(f"Cleaned dataframe reloaded from: {file_path}")
 
 
 original_number_of_events = len(working_df)
@@ -1242,6 +1254,10 @@ print("----------------------------------------------------------------------")
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
+
+if create_plots == False:
+    if create_essential_plots == True:
+        save_pdf_filename = "essential_" + save_pdf_filename
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
@@ -1296,10 +1312,14 @@ global_variables['z_P4'] =  z_positions[3]
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -1364,7 +1384,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -1435,8 +1454,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -2098,7 +2117,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     if r_squared < 0.5:
         print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
     
-    # if create_plots or create_essential_plots:
+    
     if create_plots:
         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
         y_fit = polynomial(x_fit, *coeffs)
@@ -2419,7 +2438,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 # Plot histograms of all the pedestal substractions
 if validate_charge_pedestal_calibration:
-    # if create_plots or create_essential_plots:
+    
     if create_plots:
         # Create the grand figure for Q values
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2459,8 +2478,8 @@ if validate_charge_pedestal_calibration:
         plt.close(fig_Q)
         
         
-    if create_plots or create_essential_plots:
-    # if create_plots:
+    if create_plots:
+    
         # ZOOOOOOOOOOOOOOOOOOOM ------------------------------------------------
         # Create the grand figure for Q values
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2505,8 +2524,8 @@ if validate_charge_pedestal_calibration:
         plt.close(fig_Q)
     
     
-    if create_plots or create_essential_plots:
-    # if create_plots:
+    if create_plots:
+    
         # ZOOOOOOOOOOOOOM ------------------------------------------------
         # Create the grand figure for Q values
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2692,7 +2711,7 @@ if self_trigger:
     # Plot histograms of all the pedestal substractions
     validate_charge_pedestal_calibration = True
     if validate_charge_pedestal_calibration:
-        # if create_plots or create_essential_plots:
+        
         if create_plots:
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2732,8 +2751,8 @@ if self_trigger:
             plt.close(fig_Q)
         
         
-        if create_plots or create_essential_plots:
-        # if create_plots:
+        if create_plots:
+        
             # ZOOOOOOOOOOOOOOOOOOOM ------------------------------------------------
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2778,8 +2797,8 @@ if self_trigger:
             plt.close(fig_Q)
     
     
-        if create_plots or create_essential_plots:
-        # if create_plots:
+        if create_plots:
+        
             # ZOOOOOOOOOOOOOM ------------------------------------------------
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2856,8 +2875,8 @@ if validate_pos_cal:
             mask = pos_test_copy[f'{key}_diff_{j+1}'] != 0
             pos_test.loc[mask, f'{key}_diff_{j+1}'] -= Tdiff_cal[i][j]
 
-    # if create_plots:
-    if create_essential_plots or create_plots:
+    
+    if create_plots:
         # Create the grand figure for Q values
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
@@ -2932,8 +2951,8 @@ if self_trigger:
                 mask = pos_test_copy[f'{key}_diff_{j+1}'] != 0
                 pos_test.loc[mask, f'{key}_diff_{j+1}'] -= Tdiff_cal_ST[i][j]
 
-        # if create_plots:
-        if create_essential_plots or create_plots:
+        
+        if create_plots:
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
@@ -3026,7 +3045,7 @@ if self_trigger:
 
         working_st_df = pd.concat([working_st_df, pd.DataFrame(new_cols, index=working_st_df.index)], axis=1)
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -3092,8 +3111,8 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
-    if create_essential_plots or create_plots:
+    
+    if create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
         for i, tt in enumerate(sorted(spread_df["original_tt"].unique())):
@@ -3141,8 +3160,8 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
-    if create_essential_plots or create_plots:
+    
+    if create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
         for i, tt in enumerate(sorted(spread_df["original_tt"].unique())):
@@ -3186,7 +3205,7 @@ for col in working_df.columns:
         working_df[col] = np.where((working_df[col] > Q_diff_pre_cal_threshold) | (working_df[col] < -Q_diff_pre_cal_threshold), 0, working_df[col])
 
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -3318,7 +3337,7 @@ if self_trigger:
             working_st_df[col] = np.where((working_st_df[col] > Q_diff_cal_threshold) | (working_st_df[col] < -Q_diff_cal_threshold), 0, working_st_df[col])
 
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -3397,7 +3416,10 @@ if charge_front_back:
             name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum"
             coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
             print([f"{coeff:.3g}" for coeff in coeffs])
-            working_df.loc[cond, f'Q{key}_Q_diff_{i+1}'] = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
+            column_name = f'Q{key}_Q_diff_{i+1}'
+            target_dtype = working_df[column_name].dtype
+            corrected_diff = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
+            working_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
     
     if self_trigger:
         print("SELF TRIGGER Charge front-back correction...")
@@ -3422,7 +3444,10 @@ if charge_front_back:
                 y_label = "Charge diff"
                 name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_diff_vs_sum_ST"
                 coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_diff_adjusted, title, x_label, y_label, name_of_file)
-                working_st_df.loc[cond, f'Q{key}_Q_diff_{i+1}'] = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
+                column_name = f'Q{key}_Q_diff_{i+1}'
+                target_dtype = working_st_df[column_name].dtype
+                corrected_diff = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
+                working_st_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
         
     print('\nCharge front-back correction performed.')
     
@@ -3444,7 +3469,7 @@ if self_trigger:
             working_st_df[col] = np.where(np.abs(working_st_df[col]) < Q_diff_cal_threshold_FB, working_st_df[col], 0)
 
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -3555,8 +3580,8 @@ if self_trigger:
             working_st_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
 
-if create_essential_plots or create_plots:
-# if create_plots:
+if create_plots:
+
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
     plot_df = working_df.copy()
@@ -3608,8 +3633,8 @@ if create_essential_plots or create_plots:
 
 
 if self_trigger:
-    if create_essential_plots or create_plots:
-    # if create_plots:
+    if create_plots:
+    
 
         # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
         plot_df = working_st_df.copy()
@@ -3751,7 +3776,7 @@ if slewing_correction:
     # dx vs Time Differences
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
 
         pair_labels = [
@@ -3832,7 +3857,7 @@ if slewing_correction:
     # dx vs Travel Time
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
         pair_labels = [
             (p1, s1, p2, s2)
@@ -3905,7 +3930,7 @@ if slewing_correction:
     # Slewing histograms
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
         
         pair_labels = [
@@ -3983,7 +4008,7 @@ if slewing_correction:
     # 3D Slewing Observables
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
         
         pair_labels = [
@@ -4168,7 +4193,7 @@ if slewing_correction:
     # 3D Slewing with fit projections
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
 
         pair_labels = [
@@ -4286,7 +4311,7 @@ if slewing_correction:
     # FIT VALIDATION with y = x
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
 
         pair_labels = [
@@ -4767,7 +4792,7 @@ if time_calibration:
         ]
 
         if create_plots:
-        # if create_plots or create_essential_plots:
+        
         
             # Convert data to numpy arrays and filter
             pos_x = np.array(pos_x)
@@ -5148,8 +5173,8 @@ if crosstalk_removal_and_recalibration:
     matrix = np.array(values).reshape(4, 4)
     print(matrix, '\n')
     
-    # if create_plots:
-    if create_plots or create_essential_plots:
+    
+    if create_plots:
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
 
@@ -5244,8 +5269,8 @@ if crosstalk_removal_and_recalibration:
         working_st_df = working_st_df.copy()
     
     
-    if create_plots or create_essential_plots:
-    # if create_plots:
+    if create_plots:
+    
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
 
@@ -5302,8 +5327,8 @@ if crosstalk_removal_and_recalibration:
                 working_st_df.loc[mask, f'Q{key}_Q_sum_{j+1}'] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
 
 
-    # if create_plots or create_essential_plots:
-    if create_plots:
+    
+    if create_plots or create_essential_plots:
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
 
@@ -5395,7 +5420,7 @@ if slewing_correction:
     print("----------------------- Slewing correction 2/2 -----------------------")
     print("----------------------------------------------------------------------")
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
         
         plt.figure(figsize=(8, 5))
@@ -5506,12 +5531,13 @@ if slewing_correction:
 
 
 
-if create_essential_plots or create_plots:
-# if create_plots:
+if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
     plot_df = working_df.copy()
     plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    # Remove columns with _crstlk in their names
+    plot_df = plot_df[[col for col in plot_df.columns if '_crstlk' not in col]]
     
     num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
@@ -5583,8 +5609,8 @@ if create_essential_plots or create_plots:
 
 
 
-# if create_essential_plots or create_plots:
-# # if create_plots:
+
+#
 
 #     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
 #     plot_df = working_df.copy()
@@ -5826,8 +5852,8 @@ if create_essential_plots or create_plots:
 #         working_df.loc[~mask & (series != 0), col] = 0.0
 
 
-# if create_essential_plots or create_plots:
-# # if create_plots:
+
+#
 #     fig, axs = plt.subplots(4, 4, figsize=(20, 16))
 #     fig.suptitle("Double Gaussian Fits for $T_\\mathrm{sum}$ Distributions", fontsize=16)
 
@@ -5959,8 +5985,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
-    if create_essential_plots or create_plots:
+    if create_plots:
         fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
         for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
@@ -6008,8 +6033,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
-    if create_essential_plots or create_plots:
+    if create_plots:
         fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
         for i, tt in enumerate(sorted(spread_df["preprocessed_tt"].unique())):
@@ -6034,7 +6058,6 @@ if time_window_filtering:
 
 
     if create_plots:
-    # if create_essential_plots or create_plots:
         # Identify all _T_sum_ columns
         T_sum_columns = working_df.filter(regex='_T_sum_').columns
         replaced_count = 0  # Global counter
@@ -6229,6 +6252,7 @@ print(f'{csv_path} updated with the calibration summary.')
 
 
 if create_pdf:
+    print(f"Creating PDF with all plots in {save_pdf_path}...")
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:

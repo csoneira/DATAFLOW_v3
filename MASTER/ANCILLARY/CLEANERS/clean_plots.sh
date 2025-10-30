@@ -85,7 +85,7 @@ ta_gib=$(awk -v v="$total_after"  'BEGIN{printf "%.3f", v/1024/1024/1024}')
 tf_gib=$(awk -v v="$total_freed"  'BEGIN{printf "%.3f", v/1024/1024/1024}')
 
 echo "All PLOTS directories cleaned."
-echo "✅ Limpieza completada."
+echo "Limpieza completada."
 echo "   Total antes:    ${tb_gb} GB  (${tb_gib} GiB)"
 echo "   Total después:  ${ta_gb} GB  (${ta_gib} GiB)"
 echo "   Total liberado: ${tf_gb} GB  (${tf_gib} GiB)"

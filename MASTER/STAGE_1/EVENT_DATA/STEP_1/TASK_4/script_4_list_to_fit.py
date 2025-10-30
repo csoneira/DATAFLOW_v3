@@ -16,6 +16,27 @@ Created on Thu Jun 20 09:15:33 2024
 task_number = 4
 
 
+import sys
+from pathlib import Path
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.status_csv import append_status_row, mark_status_complete
+
+from datetime import datetime
+
 # import glob
 # import pandas as pd
 # import random
@@ -28,7 +49,7 @@ task_number = 4
 
 # # Load dataframe
 # working_df = pd.read_hdf(IN_PATH, key=KEY)
-# print(f"✅ Listed dataframe reloaded from: {IN_PATH}")
+# print(f"Listed dataframe reloaded from: {IN_PATH}")
 
 # # --- Continue your calibration or analysis code here ---
 # # e.g.:
@@ -39,8 +60,6 @@ task_number = 4
 # basename_no_ext = os.path.splitext(os.path.basename(IN_PATH))[0].replace("listed_", "")
 # print(f"File basename (no extension): {basename_no_ext}")
 
-
-from datetime import datetime
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
@@ -53,7 +72,6 @@ start_execution_time_counting = datetime.now()
 # Standard Library
 import os
 import re
-import sys
 import csv
 import math
 import random
@@ -62,12 +80,11 @@ import shutil
 import builtins
 import warnings
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from collections import defaultdict
 from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable, List
-from pathlib import Path
 
 # Scientific Computing
 from math import sqrt
@@ -111,27 +128,17 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 
 import yaml
 
-CURRENT_PATH = Path(__file__).resolve()
-REPO_ROOT = None
-for parent in CURRENT_PATH.parents:
-    if parent.name == "MASTER":
-        REPO_ROOT = parent.parent
-        break
-if REPO_ROOT is None:
-    REPO_ROOT = CURRENT_PATH.parents[-1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.append(str(REPO_ROOT))
-
-from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
-
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
+parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 
@@ -326,6 +333,7 @@ if station not in ["1", "2", "3", "4"]:
 # print(f"Station: {station}")
 
 set_station(station)
+config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
@@ -756,6 +764,7 @@ right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 #     print(f'Taking the first {limit_number} rows.')
 
 
+
 # Read the data file into a DataFrame
 
 
@@ -769,7 +778,7 @@ KEY = "df"
 
 # Load dataframe
 working_df = pd.read_hdf(file_path, key=KEY)
-print(f"✅ Listed dataframe reloaded from: {file_path}")
+print(f"Listed dataframe reloaded from: {file_path}")
 
 
 # List all names of columns
@@ -793,10 +802,14 @@ print("Execution time is:", execution_time)
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -861,7 +874,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -932,8 +944,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -1323,20 +1335,6 @@ global_variables = {
 
 
 
-save_filename_suffix = "0"
-
-print("----------------------------------------------------------------------")
-print("----------------------------------------------------------------------")
-print(f"------------- Starting date is {save_filename_suffix} -------------------") # This is longer so it displays nicely
-print("----------------------------------------------------------------------")
-print("----------------------------------------------------------------------")
-
-# Defining the directories that will store the data
-save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
-save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
-
-save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
 
 
@@ -1461,10 +1459,14 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 
@@ -1484,10 +1486,14 @@ print("Execution time is:", execution_time)
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -1552,7 +1558,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -1623,8 +1628,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -2036,6 +2041,7 @@ if station not in ["1", "2", "3", "4"]:
 # print(f"Station: {station}")
 
 set_station(station)
+config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
@@ -2116,7 +2122,6 @@ save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace(
 
 
 
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print(f"------------- Starting date is {save_filename_suffix} -------------------") # This is longer so it displays nicely
@@ -2128,7 +2133,14 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
+if create_plots == False:
+    if create_essential_plots == True:
+        print("Creating essential plots, modifying the PDF filename.")
+        save_pdf_filename = "essential_" + save_pdf_filename
+
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
+
+
 
 
 
@@ -2189,10 +2201,14 @@ global_variables['z_P4'] =  z_positions[3]
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
@@ -2257,7 +2273,6 @@ alternative_fitting = config["alternative_fitting"]
 crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
@@ -2328,8 +2343,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -2614,8 +2629,6 @@ if debug_mode:
     limit_number = limit_number_debug
 
 
-create_plots = True
-create_pdf = True
 
 if debug_mode:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
@@ -2918,7 +2931,7 @@ def is_small_nonzero(x):
     return isinstance(x, (int, float)) and x != 0 and abs(x) < eps
 
 if create_plots:
-# if create_essential_plots or create_plots:
+
     # Flatten all numeric values except 0
     flat_values = working_df.select_dtypes(include=[np.number]).values.ravel()
     flat_values = flat_values[flat_values != 0]
@@ -3421,9 +3434,9 @@ print("----------------------------------------------------------------------")
 print("------------------ TimTrack convergence comprobation -----------------")
 print("----------------------------------------------------------------------")
 
-# if create_plots
-# if create_plots or create_essential_plots:
-if create_plots or create_essential_plots or create_very_essential_plots:
+
+
+if create_plots:
 
     df_filtered = working_df.copy()
     colors = plt.cm.tab10.colors
@@ -3480,9 +3493,9 @@ print("----------------------------------------------------------------------")
 
 working_df['delta_s'] = working_df['alt_s'] - working_df['s']  # Calculate the difference from the speed of light
 
-# if create_plots
-# if create_plots or create_essential_plots:
-if create_plots or create_essential_plots or create_very_essential_plots:
+
+
+if create_plots:
     print("Plotting residuals of alt_s - s for each original_tt to processed_tt case...")
     
     df_filtered = working_df.copy()
@@ -3746,8 +3759,8 @@ if time_window_fitting:
         global_variables[f'sigmoid_width_{definitive_tt}'] = tau_fit
         global_variables[f'background_slope_{definitive_tt}'] = B_fit
 
-        # if create_plots:
-        if create_essential_plots or create_plots:
+       
+        if create_plots:
             fig, ax = plt.subplots(figsize=(10, 6))
             ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
             ax.axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
@@ -3864,7 +3877,7 @@ def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_id
     return fig_idx + 1
 
 
-if create_plots or create_essential_plots:
+if create_plots:
     fig_idx = plot_tt_correlation(
         df=working_df,
         row_label='original_tt',
@@ -3903,7 +3916,8 @@ if create_plots or create_essential_plots:
         save_plots=save_plots,
         plot_list=plot_list
     )
-    
+
+if create_plots or create_essential_plots:
     fig_idx = plot_tt_correlation(
         df=working_df,
         row_label='original_tt',
@@ -3979,9 +3993,7 @@ df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
-# if (create_plots and residual_plots):
-if create_essential_plots or (create_plots and residual_plots):
-# if create_very_essential_plots or create_essential_plots or (create_plots and residual_plots):
+if create_plots:
     
     # Alternative method --------------------------------------------------------------------------------------------
     residual_columns = [
@@ -4029,9 +4041,8 @@ if create_essential_plots or (create_plots and residual_plots):
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
-# if (create_plots and residual_plots):
-# if create_essential_plots or (create_plots and residual_plots):
-if create_very_essential_plots or create_essential_plots or (create_plots and residual_plots):
+
+if create_plots or create_essential_plots:
     
     df_filtered = df_plot_ancillary.copy()
     # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
@@ -4090,6 +4101,8 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
         local_max = h.max()
         cb = fig.colorbar(c, ax=ax, pad=0.1)
         cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
+        # Put as title of the subplot the definitive_tt value
+        ax.set_title(f'Plane combination (definitive) {tt_val}', fontsize=10)
 
     plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
@@ -4104,9 +4117,9 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
     plt.close()
 
 
-# if (create_plots and residual_plots):
-# if create_essential_plots or (create_plots and residual_plots):
-if create_very_essential_plots or create_essential_plots or (create_plots and residual_plots):
+
+
+if create_plots:
     
     df_filtered = df_plot_ancillary.copy()
     # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
@@ -4182,9 +4195,7 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
 
 
 
-# if create_plots:
-# if create_plots or create_essential_plots:
-if create_plots or create_very_essential_plots or create_essential_plots:
+if create_plots:
 
     def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=40):
         
@@ -4495,64 +4506,63 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     #         plot_list
     #     )
     
-    residue_plots = False
-    if residue_plots:
-        for filters, title in df_cases_2:
-            relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-            relevant_residues_alt_tsum = [f"alt_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-            relevant_residues_ext_tsum = [f"ext_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-            
-            columns_of_interest = relevant_residues_tsum + relevant_residues_alt_tsum + relevant_residues_ext_tsum
-            
-            fig_idx = plot_hexbin_matrix(
-                df_plot_ancillary,
-                columns_of_interest,
-                filters,
-                title,
-                save_plots,
-                show_plots,
-                base_directories,
-                fig_idx,
-                plot_list
-            )
+    
+    for filters, title in df_cases_2:
+        relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_alt_tsum = [f"alt_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_ext_tsum = [f"ext_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
         
-        for filters, title in df_cases_2:
-            relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-            relevant_residues_alt_tdif = [f"alt_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-            relevant_residues_ext_tdif = [f"ext_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-            
-            columns_of_interest = relevant_residues_tdif + relevant_residues_alt_tdif + relevant_residues_ext_tdif
-            
-            fig_idx = plot_hexbin_matrix(
-                df_plot_ancillary,
-                columns_of_interest,
-                filters,
-                title,
-                save_plots,
-                show_plots,
-                base_directories,
-                fig_idx,
-                plot_list
-            )
+        columns_of_interest = relevant_residues_tsum + relevant_residues_alt_tsum + relevant_residues_ext_tsum
         
-        for filters, title in df_cases_2:
-            relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-            relevant_residues_alt_ystr = [f"alt_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-            relevant_residues_ext_ystr = [f"ext_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-            
-            columns_of_interest = relevant_residues_ystr + relevant_residues_alt_ystr + relevant_residues_ext_ystr
-            
-            fig_idx = plot_hexbin_matrix(
-                df_plot_ancillary,
-                columns_of_interest,
-                filters,
-                title,
-                save_plots,
-                show_plots,
-                base_directories,
-                fig_idx,
-                plot_list
-            )
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            columns_of_interest,
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
+    
+    for filters, title in df_cases_2:
+        relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_alt_tdif = [f"alt_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_ext_tdif = [f"ext_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+        
+        columns_of_interest = relevant_residues_tdif + relevant_residues_alt_tdif + relevant_residues_ext_tdif
+        
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            columns_of_interest,
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
+    
+    for filters, title in df_cases_2:
+        relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_alt_ystr = [f"alt_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+        relevant_residues_ext_ystr = [f"ext_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+        
+        columns_of_interest = relevant_residues_ystr + relevant_residues_alt_ystr + relevant_residues_ext_ystr
+        
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            columns_of_interest,
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
     
     
     # Comparison with alternative fitting -------------------------------------------------------------------
@@ -4632,6 +4642,21 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             plot_list
         )
     
+    # A pure theta vs phi map
+    plot_col = ['theta', 'phi']
+    for filters, title in df_cases_2:
+        fig_idx = plot_hexbin_matrix(
+            df_plot_ancillary,
+            plot_col,
+            filters,
+            title,
+            save_plots,
+            show_plots,
+            base_directories,
+            fig_idx,
+            plot_list
+        )
+    
     
     # df_plot_ancillary_conv = df_plot_ancillary[df_plot_ancillary['converged'] == 1].copy()
     # # Comparison with alternative fitting -------------------------------------------------------------------
@@ -4668,9 +4693,8 @@ if create_plots or create_very_essential_plots or create_essential_plots:
 # ------------------------------------------------------------------------------------------------------
 
 
-# if create_plots or create_essential_plots:
-# if create_plots:
-if create_plots or create_essential_plots or create_very_essential_plots:
+
+if create_plots:
     df_filtered = df_plot_ancillary.copy()
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
     colors = plt.cm.tab10.colors
@@ -4695,7 +4719,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
         if row_idx == 0:
             ax.legend(title='definitive_tt', fontsize='small')
 
-    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Processed TT Type', fontsize=15)
+    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Definitive TT Type', fontsize=15)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
         final_filename = f'{fig_idx}_theta_alt_theta_zoom_definitive_tt.png'
@@ -4708,9 +4732,9 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     plt.close()
 
 
-# if create_plots or create_essential_plots:
-# if create_plots:
-if create_plots or create_essential_plots or create_very_essential_plots:
+
+
+if create_plots:
     df_filtered = df_plot_ancillary.copy()
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
     colors = plt.cm.tab10.colors
@@ -4735,7 +4759,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
         if row_idx == 0:
             ax.legend(title='tracking_tt', fontsize='small')
 
-    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Processed TT Type', fontsize=15)
+    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Tracking TT Type', fontsize=15)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
         final_filename = f'{fig_idx}_theta_alt_theta_zoom_tracking_tt.png'
@@ -4757,8 +4781,8 @@ print(f"Data purity is {data_purity:.1f}%")
 
 global_variables['purity_of_data_percentage'] = data_purity
 
-if create_plots or create_essential_plots:
-# if create_plots:
+if create_plots:
+
     column_chosen = "definitive_tt"
     plot_ancillary_df = definitive_df.copy()
     
@@ -4829,8 +4853,8 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
-if create_plots or create_essential_plots:
-# if create_plots:
+if create_plots:
+
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12))
     colors = plt.colormaps['tab10']
@@ -4942,8 +4966,8 @@ if self_trigger:
 
 # Charge checking --------------------------------------------------------------------------------------------------------
 if self_trigger:
-    if create_plots or create_essential_plots:
-    # if create_plots:
+    if create_plots:
+   
         fig, axs = plt.subplots(4, 4, figsize=(18, 12))
         for i in range(1, 5):
             for j in range(1, 5):
@@ -4997,8 +5021,8 @@ if self_trigger:
 
 
 if self_trigger:
-    if create_plots or create_essential_plots:
-    # if create_plots:
+    if create_plots:
+   
         fig, axs = plt.subplots(4, 4, figsize=(18, 12))
         for i in range(1, 5):
             for j in range(1, 5):
@@ -5182,6 +5206,7 @@ _update_pipeline_csv_for_list_event()
 # -----------------------------------------------------------------------------
 
 if create_pdf:
+    print(f"Creating PDF with all plots in {save_pdf_path}...")
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:

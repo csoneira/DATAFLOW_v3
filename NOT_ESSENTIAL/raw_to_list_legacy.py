@@ -118,7 +118,7 @@ from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -409,7 +409,7 @@ else:
 import os
 import yaml
 user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config.yaml")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
@@ -548,8 +548,8 @@ charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
 create_plots = config["create_plots"]
-create_plots_fast = config["create_plots_fast"]
-create_plots_debug = config["create_plots_debug"]
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -1211,7 +1211,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     if r_squared < 0.5:
         print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
     
-    # if create_plots or create_essential_plots:
+   
     if create_plots:
         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
         y_fit = polynomial(x_fit, *coeffs)
@@ -1955,8 +1955,8 @@ if self_trigger:
     working_st_df = create_original_tt(working_st_df)
     working_st_df['original_tt'] = working_st_df['original_tt'].apply(builtins.int)
 
-# if create_plots:
-# if create_plots or create_essential_plots:
+:
+
 if create_plots or create_very_essential_plots or create_essential_plots:
     event_counts = working_df['original_tt'].value_counts()
 
@@ -1981,7 +1981,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
 
 if self_trigger:
     if create_essential_plots or create_plots:
-    # if create_plots:
+   
         event_counts = working_st_df['original_tt'].value_counts()
 
         plt.figure(figsize=(10, 6))
@@ -2007,7 +2007,7 @@ if self_trigger:
 # New channel-wise plot -------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# if create_plots or create_essential_plots:
+
 if create_plots:
     # Create the grand figure for T values
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2090,7 +2090,7 @@ if create_plots:
 
 if self_trigger:
     if create_plots or create_essential_plots:
-    # if create_plots:
+   
         # Create the grand figure for T values
         fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_T = axes_T.flatten()
@@ -2263,7 +2263,7 @@ if self_trigger:
 # New channel-wise plot -------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# if create_plots or create_essential_plots:
+
 if create_plots:
     # Create the grand figure for T values
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2341,7 +2341,7 @@ if create_plots:
 
 
 if create_plots or create_essential_plots:
-# if create_plots:
+:
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_TQ = axes_TQ.flatten()
@@ -2401,7 +2401,7 @@ if create_plots or create_essential_plots:
 
 if self_trigger:
     if create_plots or create_essential_plots:
-    # if create_plots:
+   
         # Initialize figure and axes for scatter plot of Time vs Charge
         fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_TQ = axes_TQ.flatten()
@@ -2504,7 +2504,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
+   
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
@@ -2553,7 +2553,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
+   
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
@@ -2634,7 +2634,7 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
 
 # Plot histograms of all the pedestal substractions
 if validate_charge_pedestal_calibration:
-    # if create_plots or create_essential_plots:
+   
     if create_plots:
         # Create the grand figure for Q values
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2675,7 +2675,7 @@ if validate_charge_pedestal_calibration:
         
         
     if create_plots or create_essential_plots:
-    # if create_plots:
+   
         # ZOOOOOOOOOOOOOOOOOOOM ------------------------------------------------
         # Create the grand figure for Q values
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2721,7 +2721,7 @@ if validate_charge_pedestal_calibration:
     
     
     if create_plots or create_essential_plots:
-    # if create_plots:
+   
         # ZOOOOOOOOOOOOOM ------------------------------------------------
         # Create the grand figure for Q values
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2907,7 +2907,7 @@ if self_trigger:
     # Plot histograms of all the pedestal substractions
     validate_charge_pedestal_calibration = True
     if validate_charge_pedestal_calibration:
-        # if create_plots or create_essential_plots:
+       
         if create_plots:
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2948,7 +2948,7 @@ if self_trigger:
         
         
         if create_plots or create_essential_plots:
-        # if create_plots:
+       
             # ZOOOOOOOOOOOOOOOOOOOM ------------------------------------------------
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2994,7 +2994,7 @@ if self_trigger:
     
     
         if create_plots or create_essential_plots:
-        # if create_plots:
+       
             # ZOOOOOOOOOOOOOM ------------------------------------------------
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -3071,7 +3071,7 @@ if validate_pos_cal:
             mask = pos_test_copy[f'{key}_diff_{j+1}'] != 0
             pos_test.loc[mask, f'{key}_diff_{j+1}'] -= Tdiff_cal[i][j]
 
-    # if create_plots:
+   
     if create_essential_plots or create_plots:
         # Create the grand figure for Q values
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -3147,7 +3147,7 @@ if self_trigger:
                 mask = pos_test_copy[f'{key}_diff_{j+1}'] != 0
                 pos_test.loc[mask, f'{key}_diff_{j+1}'] -= Tdiff_cal_ST[i][j]
 
-        # if create_plots:
+       
         if create_essential_plots or create_plots:
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -3241,7 +3241,7 @@ if self_trigger:
 
         working_st_df = pd.concat([working_st_df, pd.DataFrame(new_cols, index=working_st_df.index)], axis=1)
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -3307,7 +3307,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
+   
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
@@ -3356,7 +3356,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
+   
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
@@ -3401,7 +3401,7 @@ for col in working_df.columns:
         working_df[col] = np.where((working_df[col] > Q_diff_pre_cal_threshold) | (working_df[col] < -Q_diff_pre_cal_threshold), 0, working_df[col])
 
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -3533,7 +3533,7 @@ if self_trigger:
             working_st_df[col] = np.where((working_st_df[col] > Q_diff_cal_threshold) | (working_st_df[col] < -Q_diff_cal_threshold), 0, working_st_df[col])
 
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -3659,7 +3659,7 @@ if self_trigger:
             working_st_df[col] = np.where(np.abs(working_st_df[col]) < Q_diff_cal_threshold_FB, working_st_df[col], 0)
 
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -3771,7 +3771,7 @@ if self_trigger:
 
 
 if create_essential_plots or create_plots:
-# if create_plots:
+:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
     plot_df = working_df.copy()
@@ -3824,7 +3824,7 @@ if create_essential_plots or create_plots:
 
 if self_trigger:
     if create_essential_plots or create_plots:
-    # if create_plots:
+   
 
         # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
         plot_df = working_st_df.copy()
@@ -3966,7 +3966,7 @@ if slewing_correction:
     # dx vs Time Differences
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
 
         pair_labels = [
@@ -4047,7 +4047,7 @@ if slewing_correction:
     # dx vs Travel Time
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
         pair_labels = [
             (p1, s1, p2, s2)
@@ -4120,7 +4120,7 @@ if slewing_correction:
     # Slewing histograms
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
         
         pair_labels = [
@@ -4198,7 +4198,7 @@ if slewing_correction:
     # 3D Slewing Observables
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
         
         pair_labels = [
@@ -4383,7 +4383,7 @@ if slewing_correction:
     # 3D Slewing with fit projections
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
 
         pair_labels = [
@@ -4501,7 +4501,7 @@ if slewing_correction:
     # FIT VALIDATION with y = x
     # -------------------------------------------------------------------
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
 
         pair_labels = [
@@ -4982,7 +4982,7 @@ if time_calibration:
         ]
 
         if create_plots:
-        # if create_plots or create_essential_plots:
+       
         
             # Convert data to numpy arrays and filter
             pos_x = np.array(pos_x)
@@ -5356,7 +5356,7 @@ if crosstalk_removal_and_recalibration:
     matrix = np.array(values).reshape(4, 4)
     print(matrix, '\n')
     
-    # if create_plots:
+   
     if create_plots or create_essential_plots:
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
@@ -5449,7 +5449,7 @@ if crosstalk_removal_and_recalibration:
     
     
     if create_plots or create_essential_plots:
-    # if create_plots:
+   
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
 
@@ -5506,7 +5506,7 @@ if crosstalk_removal_and_recalibration:
                 working_st_df.loc[mask, f'Q{key}_Q_sum_{j+1}'] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
 
 
-    # if create_plots or create_essential_plots:
+   
     if create_plots:
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
@@ -5585,7 +5585,7 @@ if slewing_correction:
     print("----------------------- Slewing correction 2/2 -----------------------")
     print("----------------------------------------------------------------------")
     
-    # if create_essential_plots or create_plots:
+    
     if create_plots:
         
         plt.figure(figsize=(8, 5))
@@ -5886,7 +5886,7 @@ for plane in range(1, 5):
 
 
 if create_essential_plots or create_plots:
-# if create_plots:
+:
     fig, axs = plt.subplots(4, 4, figsize=(20, 16))
     fig.suptitle("Double Gaussian Fits for $T_\\mathrm{sum}$ Distributions", fontsize=16)
 
@@ -6018,7 +6018,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
+   
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
@@ -6067,7 +6067,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-    # if create_plots:
+   
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
@@ -6093,7 +6093,7 @@ if time_window_filtering:
 
 
     if create_plots:
-    # if create_essential_plots or create_plots:
+    
         # Identify all _T_sum_ columns
         T_sum_columns = working_df.filter(regex='_T_sum_').columns
         replaced_count = 0  # Global counter
@@ -6242,7 +6242,7 @@ print("Active strips per plane calculated.")
 print(working_df[['active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4']].head())
 
 if create_essential_plots or create_plots:
-# if create_plots:
+:
     fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 12), sharex=True, sharey=True)
     colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red']
     y_max = 0
@@ -6292,7 +6292,7 @@ print("----------------- Some more tests (multi-strip data) -----------------")
 print("----------------------------------------------------------------------")
 
 if create_plots:
-# if create_plots or create_essential_plots:
+
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
         print(f"\n--- Plane {i_plane} ---")
@@ -6400,9 +6400,9 @@ if create_plots:
                 plt.close()
 
 
-# if create_plots:
+:
 if create_plots or create_essential_plots:
-# if create_plots or create_very_essential_plots or create_essential_plots:
+ or create_very_essential_plots or create_essential_plots:
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
@@ -6454,9 +6454,9 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
-# if create_plots:
+:
 if create_plots or create_essential_plots:
-# if create_plots or create_very_essential_plots or create_essential_plots:
+ or create_very_essential_plots or create_essential_plots:
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
@@ -6669,7 +6669,7 @@ if y_new_method:
 
 if create_essential_plots or create_plots:
 # if create_very_essential_plots or create_essential_plots or create_plots:
-# if create_plots:
+:
     for posfiltered_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
         mask = working_df['posfiltered_tt'] == posfiltered_tt
         filtered_df = working_df[mask].copy()  # Work on a copy for fitting
@@ -6707,7 +6707,7 @@ print("------------ Last comprobation to the per-strip variables ------------")
 print("----------------------------------------------------------------------")
 
 if create_plots or create_essential_plots:
-# if create_plots:
+:
 
     for i_plane in range(1, 5):
         
@@ -6767,7 +6767,7 @@ if create_plots or create_essential_plots:
 
 if self_trigger:
     if create_plots or create_essential_plots:
-    # if create_plots:
+   
 
         for i_plane in range(1, 5):
             
@@ -6876,7 +6876,7 @@ for i_plane in range(1, 5):
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
 
 
-# if create_essential_plots or create_plots:
+
 if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
@@ -7012,7 +7012,7 @@ if stratos_save:
 
 # Same for hexbin
 if create_plots or create_essential_plots:
-# if create_plots:
+:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -7244,7 +7244,7 @@ def is_small_nonzero(x):
     return isinstance(x, (int, float)) and x != 0 and abs(x) < eps
 
 if create_plots:
-# if create_essential_plots or create_plots:
+
     # Flatten all numeric values except 0
     flat_values = working_df.select_dtypes(include=[np.number]).values.ravel()
     flat_values = flat_values[flat_values != 0]
@@ -7853,8 +7853,8 @@ print("----------------------------------------------------------------------")
 print("------------------ TimTrack convergence comprobation -----------------")
 print("----------------------------------------------------------------------")
 
-# if create_plots
-# if create_plots or create_essential_plots:
+
+
 if create_plots or create_essential_plots or create_very_essential_plots:
 
     df_filtered = working_df.copy()
@@ -7912,8 +7912,8 @@ print("----------------------------------------------------------------------")
 
 working_df['delta_s'] = working_df['alt_s'] - working_df['s']  # Calculate the difference from the speed of light
 
-# if create_plots
-# if create_plots or create_essential_plots:
+
+
 if create_plots or create_essential_plots or create_very_essential_plots:
     print("Plotting residuals of alt_s - s for each original_tt to processed_tt case...")
     
@@ -8168,7 +8168,7 @@ if time_window_fitting:
         global_variables[f'sigmoid_width_{definitive_tt}'] = tau_fit
         global_variables[f'background_slope_{definitive_tt}'] = B_fit
 
-        # if create_plots:
+       
         if create_essential_plots or create_plots:
             fig, ax = plt.subplots(figsize=(10, 6))
             ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
@@ -8604,8 +8604,8 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
 
 
 
-# if create_plots:
-# if create_plots or create_essential_plots:
+:
+
 if create_plots or create_very_essential_plots or create_essential_plots:
 
     def plot_hexbin_matrix(df, columns_of_interest, filter_conditions, title, save_plots, show_plots, base_directories, fig_idx, plot_list, num_bins=40):
@@ -9090,8 +9090,8 @@ if create_plots or create_very_essential_plots or create_essential_plots:
 # ------------------------------------------------------------------------------------------------------
 
 
-# if create_plots or create_essential_plots:
-# if create_plots:
+
+:
 if create_plots or create_essential_plots or create_very_essential_plots:
     df_filtered = df_plot_ancillary.copy()
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
@@ -9130,8 +9130,8 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     plt.close()
 
 
-# if create_plots or create_essential_plots:
-# if create_plots:
+
+:
 if create_plots or create_essential_plots or create_very_essential_plots:
     df_filtered = df_plot_ancillary.copy()
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
@@ -9180,7 +9180,7 @@ print(f"Data purity is {data_purity:.1f}%")
 global_variables['purity_of_data_percentage'] = data_purity
 
 if create_plots or create_essential_plots:
-# if create_plots:
+:
     column_chosen = "definitive_tt"
     plot_ancillary_df = definitive_df.copy()
     
@@ -9252,7 +9252,7 @@ if create_plots or create_essential_plots:
 
 
 if create_plots or create_essential_plots:
-# if create_plots:
+:
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12))
     colors = plt.colormaps['tab10']
@@ -9370,7 +9370,7 @@ if self_trigger:
 # Charge checking --------------------------------------------------------------------------------------------------------
 if self_trigger:
     if create_plots or create_essential_plots:
-    # if create_plots:
+   
         fig, axs = plt.subplots(4, 4, figsize=(18, 12))
         for i in range(1, 5):
             for j in range(1, 5):
@@ -9425,7 +9425,7 @@ if self_trigger:
 
 if self_trigger:
     if create_plots or create_essential_plots:
-    # if create_plots:
+   
         fig, axs = plt.subplots(4, 4, figsize=(18, 12))
         for i in range(1, 5):
             for j in range(1, 5):

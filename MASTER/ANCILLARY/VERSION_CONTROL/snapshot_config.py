@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Persist snapshots of the main config.yaml when it changes."""
+"""Persist snapshots of the main config_global.yaml when it changes."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ start_timer(__file__)
 home_directory = Path(os.environ.get("HOME", os.path.expanduser("~")))
 
 # Define paths relative to the home directory
-CONFIG_PATH = home_directory / "DATAFLOW_v3" / "MASTER" / "config.yaml"
+CONFIG_PATH = home_directory / "DATAFLOW_v3" / "MASTER" / "config_global.yaml"
 SNAPSHOT_DIR = home_directory / "DATAFLOW_v3" / "EXECUTION_LOGS" / "CONFIG_FILES"
 
 # Test the paths
