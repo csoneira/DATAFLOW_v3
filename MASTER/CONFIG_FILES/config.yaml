@@ -453,12 +453,12 @@ run_jupyter_notebook: false
 remove_outliers: true
 
 # Plot settings
-create_plots: false
-create_essential_plots: false
-create_very_essential_plots: false
-save_plots: false
-create_pdf: false
-force_replacement: false  # Creates a new datafile even if there is already one that looks complete
+create_plots: true
+create_essential_plots: true
+create_very_essential_plots: true
+save_plots: true
+create_pdf: true
+force_replacement: true  # Creates a new datafile even if there is already one that looks complete
 show_plots: false
 
 # Angular region selection
@@ -595,9 +595,9 @@ end_date_filter: "2025-12-31"
 # Aesthetic -------------------------------------
 show_plots: false
 save_plots: true
-create_plots: false
-create_essential_plots: false
-create_very_essential_plots: false
+create_plots: true
+create_essential_plots: true
+create_very_essential_plots: true
 show_errorbar: false
 
 # Execution -------------------------------------

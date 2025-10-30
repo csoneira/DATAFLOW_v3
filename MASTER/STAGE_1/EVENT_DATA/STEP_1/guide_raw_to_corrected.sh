@@ -69,31 +69,31 @@ current_pid=$$
 # Get all running instances of the script *with the same argument*, but exclude the current process
 # for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | awk '{print $1}'); do
 
-# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
-#     if [[ "$pid" != "$current_pid" ]]; then
-#         cmdline=$(ps -p "$pid" -o args=)
-#         # echo "$(date) - Found running process: PID $pid - $cmdline"
-#         if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
-#             echo "------------------------------------------------------"
-#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-#             echo "------------------------------------------------------"
-#             exit 1
-#         fi
-#     fi
-# done
-
 for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
     if [[ "$pid" != "$current_pid" ]]; then
         cmdline=$(ps -p "$pid" -o args=)
         # echo "$(date) - Found running process: PID $pid - $cmdline"
-        if [[ "$cmdline" == *"$script_name"* ]]; then
+        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
             echo "------------------------------------------------------"
-            echo "$(date): The script $script_name is already running (PID: $pid). Exiting."
+            echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
             echo "------------------------------------------------------"
             exit 1
         fi
     fi
 done
+
+# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
+#     if [[ "$pid" != "$current_pid" ]]; then
+#         cmdline=$(ps -p "$pid" -o args=)
+#         # echo "$(date) - Found running process: PID $pid - $cmdline"
+#         if [[ "$cmdline" == *"$script_name"* ]]; then
+#             echo "------------------------------------------------------"
+#             echo "$(date): The script $script_name is already running (PID: $pid). Exiting."
+#             echo "------------------------------------------------------"
+#             exit 1
+#         fi
+#     fi
+# done
 
 # If no duplicate process is found, continue
 echo "$(date) - No running instance found. Proceeding..."
@@ -156,11 +156,25 @@ trap 'finish $?' EXIT
 # mingo_direction="mingo0$station"
 
 TASK_SCRIPTS=(
-  "$SCRIPT_DIR/TASK_1/raw_to_clean.py"
-  "$SCRIPT_DIR/TASK_2/clean_to_cal.py"
-  "$SCRIPT_DIR/TASK_3/cal_to_list.py"
-  "$SCRIPT_DIR/TASK_4/list_to_fit.py"
+  "$SCRIPT_DIR/TASK_1/script_1_raw_to_clean.py"
+  "$SCRIPT_DIR/TASK_2/script_2_clean_to_cal.py"
+  "$SCRIPT_DIR/TASK_3/script_3_cal_to_list.py"
+  "$SCRIPT_DIR/TASK_4/script_4_list_to_fit.py"
+  "$SCRIPT_DIR/TASK_5/script_5_fit_to_corr.py"
 )
+
+is_task_running() {
+  local script_path="$1"
+  while IFS= read -r line; do
+    # Each line contains "PID COMMAND"; we only need the command portion.
+    local cmd="${line#* }"
+    if [[ "$cmd" == *"$script_path"* && "$cmd" == *" $station"* ]]; then
+      echo "$line"
+      return 0
+    fi
+  done < <(ps -eo pid=,args=)
+  return 1
+}
 
 echo '------------------------------------------------------'
 echo '------------------------------------------------------'
@@ -170,6 +184,13 @@ for task_script in "${TASK_SCRIPTS[@]}"; do
     echo "Warning: task script $task_script not found or not executable. Skipping."
     continue
   fi
+
+  if running_line=$(is_task_running "$task_script"); then
+    echo "Skipping $(basename "$task_script") because it is already running: $running_line"
+    echo '------------------------------------------------------'
+    continue
+  fi
+
   echo "Running $(basename "$task_script")..."
   if ! python3 -u "$task_script" "$station"; then
     echo "Task $(basename "$task_script") failed; aborting pipeline."

@@ -40,7 +40,10 @@ task_number = 4
 # print(f"File basename (no extension): {basename_no_ext}")
 
 
+from datetime import datetime
 
+# I want to chrono the execution time of the script
+start_execution_time_counting = datetime.now()
 
 
 # -----------------------------------------------------------------------------
@@ -133,6 +136,38 @@ home_path = config["home_path"]
 
 
 
+
+
+def save_execution_metadata(home_dir: str, station_id: str, task_id: int, row: Dict[str, object]) -> Path:
+    """Append the execution metadata row to the per-task CSV."""
+    metadata_dir = (
+        Path(home_dir)
+        / "DATAFLOW_v3"
+        / "STATIONS"
+        / f"MINGO0{station_id}"
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / f"TASK_{task_id}"
+        / "METADATA"
+    )
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = metadata_dir / "execution_metadata.csv"
+    file_exists = metadata_path.exists()
+    with metadata_path.open("a", newline="") as csvfile:
+        writer = csv.DictWriter(
+            csvfile,
+            fieldnames=[
+                "filename_base",
+                "execution_timestamp",
+                "data_purity_percentage",
+                "total_execution_time_minutes",
+            ],
+        )
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+    return metadata_path
 
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
@@ -307,6 +342,7 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
+raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 if task_number == 1:
     raw_directory = "RAW"
 else:
@@ -316,7 +352,6 @@ if task_number == 5:
 else:
     output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
 raw_working_directory = os.path.join(base_directory, raw_directory)
-raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
 # /home/mingo/DATAFLOW_v3/STATIONS/MINGO01/STAGE_1/EVENT_DATA/STEP_1/TASK_1/OUTPUT_FILES
 raw_working_directory = os.path.join(base_directory, "STEP_1/TASK_3/OUTPUT_FILES")
@@ -750,8 +785,6 @@ original_number_of_events = len(working_df)
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# Store the current time at the start. To time the execution
-start_execution_time_counting = datetime.now()
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -1443,8 +1476,6 @@ home_path = config["home_path"]
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# Store the current time at the start. To time the execution
-start_execution_time_counting = datetime.now()
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -2048,7 +2079,6 @@ self_trigger = False
 
 
 # Store the current time at the start. To time the execution
-start_execution_time_counting = datetime.now()
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -2130,6 +2160,13 @@ if exists_input_file:
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
+
+
+# If any of the z_positions is NaN, use default values
+if np.isnan(z_positions).any():
+    print("Error: Incomplete z_positions in the selected configuration. Using default z_positions.")
+    z_positions = np.array([0, 150, 300, 450])  # In mm
+
 
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
@@ -2679,44 +2716,6 @@ global_variables = {
     'old_timing_method': old_timing_method*1,
 }
 
-
-# -------------------------------------------------------------------------------
-# ------------ Input file and data managing to select configuration -------------
-# -------------------------------------------------------------------------------
-
-if exists_input_file:
-    # Ensure `start` and `end` columns are in datetime format
-    input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
-    matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
-    print(matching_confs)
-    
-    if not matching_confs.empty:
-        if len(matching_confs) > 1:
-            print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
-        selected_conf = matching_confs.iloc[0]
-        print(f"Selected configuration: {selected_conf['conf']}")
-        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
-        found_matching_conf = True
-        print(selected_conf['conf'])
-    else:
-        print("Error: No matching configuration found for the given date range. Using default z_positions.")
-        found_matching_conf = False
-        z_positions = np.array([0, 150, 300, 450])  # In mm
-else:
-    print("Error: No input file. Using default z_positions.")
-    z_positions = np.array([0, 150, 300, 450])  # In mm
-
-# Print the resulting z_positions
-z_positions = z_positions - z_positions[0]
-print(f"Z positions: {z_positions}")
-
-# Save the z_positions in the metadata file
-global_variables['z_P1'] =  z_positions[0]
-global_variables['z_P2'] =  z_positions[1]
-global_variables['z_P3'] =  z_positions[2]
-global_variables['z_P4'] =  z_positions[3]
 
 
 
@@ -5353,6 +5352,37 @@ print(f"Data purity is {data_purity:.2f}%")
 global_variables['purity_of_data_percentage'] = data_purity
 
 
+# End of the execution time
+end_time_execution = datetime.now()
+execution_time = end_time_execution - start_execution_time_counting
+# In minutes
+execution_time_minutes = execution_time.total_seconds() / 60
+print(f"Total execution time: {execution_time_minutes:.2f} minutes")
+
+# To save as metadata
+filename_base = basename_no_ext
+execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
+data_purity_percentage = data_purity
+total_execution_time_minutes = execution_time_minutes
+
+print("----------\nMetadata to be saved:")
+print(f"Filename base: {filename_base}")
+print(f"Execution timestamp: {execution_timestamp}")
+print(f"Data purity percentage: {data_purity_percentage:.2f}%")
+print(f"Total execution time: {total_execution_time_minutes:.2f} minutes\n----------")
+
+metadata_csv_path = save_execution_metadata(
+    home_path,
+    station,
+    task_number,
+    {
+        "filename_base": filename_base,
+        "execution_timestamp": execution_timestamp,
+        "data_purity_percentage": round(float(data_purity_percentage), 4),
+        "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+    },
+)
+print(f"Metadata CSV updated at: {metadata_csv_path}")
 
 # Save to HDF5 file
 reduced_df.to_hdf(OUT_PATH, key=KEY, mode="w", format="table")

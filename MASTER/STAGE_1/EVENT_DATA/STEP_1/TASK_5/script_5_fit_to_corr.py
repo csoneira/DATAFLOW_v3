@@ -37,7 +37,10 @@ task_number = 5
 # print(f"File basename (no extension): {basename_no_ext}")
 
 
+from datetime import datetime
 
+# I want to chrono the execution time of the script
+start_execution_time_counting = datetime.now()
 
 
 # -----------------------------------------------------------------------------
@@ -168,6 +171,38 @@ home_path = config["home_path"]
 
 
 
+def save_execution_metadata(home_dir: str, station_id: str, task_id: int, row: Dict[str, object]) -> Path:
+    """Append the execution metadata row to the per-task CSV."""
+    metadata_dir = (
+        Path(home_dir)
+        / "DATAFLOW_v3"
+        / "STATIONS"
+        / f"MINGO0{station_id}"
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / f"TASK_{task_id}"
+        / "METADATA"
+    )
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = metadata_dir / "execution_metadata.csv"
+    file_exists = metadata_path.exists()
+    with metadata_path.open("a", newline="") as csvfile:
+        writer = csv.DictWriter(
+            csvfile,
+            fieldnames=[
+                "filename_base",
+                "execution_timestamp",
+                "data_purity_percentage",
+                "total_execution_time_minutes",
+            ],
+        )
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+    return metadata_path
+
+
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
@@ -208,6 +243,7 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
+raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 if task_number == 1:
     raw_directory = "RAW"
 else:
@@ -217,7 +253,6 @@ if task_number == 5:
 else:
     output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
 raw_working_directory = os.path.join(base_directory, raw_directory)
-raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
 # /home/mingo/DATAFLOW_v3/STATIONS/MINGO01/STAGE_1/EVENT_DATA/STEP_1/TASK_1/OUTPUT_FILES
 raw_working_directory = os.path.join(base_directory, "STEP_1/TASK_4/OUTPUT_FILES")
@@ -661,8 +696,6 @@ original_number_of_events = len(working_df)
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# Store the current time at the start. To time the execution
-start_execution_time_counting = datetime.now()
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -1354,8 +1387,6 @@ home_path = config["home_path"]
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# Store the current time at the start. To time the execution
-start_execution_time_counting = datetime.now()
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -1957,9 +1988,6 @@ else:
 
 self_trigger = False
 
-
-# Store the current time at the start. To time the execution
-start_execution_time_counting = datetime.now()
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -2647,7 +2675,7 @@ theta_boundaries = config["theta_boundaries"]
 region_layout = config["region_layout"]
 
 
-correct_angle = True
+correct_angle = False
 
 df = working_df.copy()
 main_df = working_df.copy()
@@ -3232,6 +3260,46 @@ if 'datetime' in working_df.columns:
     working_df.rename(columns={'datetime': 'Time'}, inplace=True)
 else:
     print("Column 'datetime' not found in DataFrame!")
+
+
+
+
+
+
+# End of the execution time
+end_time_execution = datetime.now()
+execution_time = end_time_execution - start_execution_time_counting
+# In minutes
+execution_time_minutes = execution_time.total_seconds() / 60
+print(f"Total execution time: {execution_time_minutes:.2f} minutes")
+
+# To save as metadata
+filename_base = basename_no_ext
+execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
+data_purity_percentage = data_purity
+total_execution_time_minutes = execution_time_minutes
+
+print("----------\nMetadata to be saved:")
+print(f"Filename base: {filename_base}")
+print(f"Execution timestamp: {execution_timestamp}")
+print(f"Data purity percentage: {data_purity_percentage:.2f}%")
+print(f"Total execution time: {total_execution_time_minutes:.2f} minutes\n----------")
+
+
+
+
+metadata_csv_path = save_execution_metadata(
+    home_path,
+    station,
+    task_number,
+    {
+        "filename_base": filename_base,
+        "execution_timestamp": execution_timestamp,
+        "data_purity_percentage": round(float(data_purity_percentage), 4),
+        "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+    },
+)
+print(f"Metadata CSV updated at: {metadata_csv_path}")
 
 
 # Save to HDF5 file
