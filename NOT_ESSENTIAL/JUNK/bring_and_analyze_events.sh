@@ -91,8 +91,8 @@ station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
 base_working_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station/STAGE_1/EVENT_DATA"
 
 # Define directories
-local_destination="$base_working_directory/RAW"
-storage_directory="$base_working_directory/RAW_TO_LIST"
+local_destination="$base_working_directory/STAGE_0_to_1"
+storage_directory="$base_working_directory/STAGE_0_to_1_TO_LIST"
 
 # Additional paths
 mingo_direction="mingo0$station"

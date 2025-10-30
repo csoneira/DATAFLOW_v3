@@ -27,7 +27,7 @@ print("\n\n")
 
 
 print("----------------------------------------------------------------------")
-print("-------------------- RAW TO LIST SCRIPT IS STARTING ------------------")
+print("-------------------- STAGE_0_to_1 TO LIST SCRIPT IS STARTING ------------------")
 print("----------------------------------------------------------------------")
 
 
@@ -175,8 +175,8 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
-raw_working_directory = os.path.join(base_directory, "RAW")
-raw_to_list_working_directory = os.path.join(base_directory, "RAW_TO_LIST")
+raw_working_directory = os.path.join(base_directory, "STAGE_0_to_1")
+raw_to_list_working_directory = os.path.join(base_directory, "STAGE_0_to_1_TO_LIST")
 
 # Define directory paths relative to base_directory
 base_directories = {
@@ -197,10 +197,10 @@ base_directories = {
     "rejected_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/REJECTED_FILES"),
     "temp_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TEMP_FILES"),
     
-    "unprocessed_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/UNPROCESSED_DIRECTORY"),
-    "error_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/ERROR_DIRECTORY"),
-    "processing_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/PROCESSING_DIRECTORY"),
-    "completed_directory": os.path.join(raw_to_list_working_directory, "RAW_TO_LIST_FILES/COMPLETED_DIRECTORY"),
+    "unprocessed_directory": os.path.join(raw_to_list_working_directory, "STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED_DIRECTORY"),
+    "error_directory": os.path.join(raw_to_list_working_directory, "STAGE_0_to_1_TO_LIST_FILES/ERROR_DIRECTORY"),
+    "processing_directory": os.path.join(raw_to_list_working_directory, "STAGE_0_to_1_TO_LIST_FILES/PROCESSING_DIRECTORY"),
+    "completed_directory": os.path.join(raw_to_list_working_directory, "STAGE_0_to_1_TO_LIST_FILES/COMPLETED_DIRECTORY"),
     
     "raw_directory": os.path.join(raw_working_directory, "."),
 }
@@ -213,7 +213,7 @@ csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
 status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 status_timestamp = append_status_row(status_csv_path)
 
-# Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
+# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -342,7 +342,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             os.utime(empty_destination_path, (now, now))
 
 
-# Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
+# Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))

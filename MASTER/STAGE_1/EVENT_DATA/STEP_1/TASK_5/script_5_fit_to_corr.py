@@ -85,6 +85,7 @@ from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable, List, Optional, Union
 from pathlib import Path
+from ast import literal_eval
 
 
 # Scientific Computing
@@ -207,6 +208,39 @@ if station not in ["1", "2", "3", "4"]:
 set_station(station)
 config = update_config_with_parameters(config, parameter_config_file_path, station)
 
+
+def _coerce_numeric_sequence(raw_value, caster):
+    """Return a list of numbers parsed from *raw_value*."""
+    if isinstance(raw_value, (list, tuple, np.ndarray)):
+        result: List[float] = []
+        for item in raw_value:
+            result.extend(_coerce_numeric_sequence(item, caster))
+        return result
+    if isinstance(raw_value, str):
+        cleaned = raw_value.strip()
+        if not cleaned:
+            return []
+        try:
+            parsed = literal_eval(cleaned)
+        except (ValueError, SyntaxError):
+            cleaned = cleaned.replace("[", " ").replace("]", " ")
+            tokens = [tok for tok in re.split(r"[;,\\s]+", cleaned) if tok]
+            result = []
+            for tok in tokens:
+                try:
+                    result.append(caster(tok))
+                except (ValueError, TypeError):
+                    continue
+            return result
+        else:
+            return _coerce_numeric_sequence(parsed, caster)
+    if np.isscalar(raw_value):
+        try:
+            return [caster(raw_value)]
+        except (ValueError, TypeError):
+            return []
+    return []
+
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
     user_file_selection = True
@@ -224,7 +258,7 @@ station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}"
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 if task_number == 1:
-    raw_directory = "RAW"
+    raw_directory = "STAGE_0_to_1"
 else:
     raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
 if task_number == 5:
@@ -247,10 +281,6 @@ base_directories = {
     "pdf_directory": os.path.join(raw_to_list_working_directory, "PLOTS/PDF_DIRECTORY"),
     "base_figure_directory": os.path.join(raw_to_list_working_directory, "PLOTS/FIGURE_DIRECTORY"),
     "figure_directory": os.path.join(raw_to_list_working_directory, f"PLOTS/FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
-    
-    "list_events_directory": os.path.join(base_directory, "LIST_EVENTS_DIRECTORY"),
-    # "full_list_events_directory": os.path.join(base_directory, "FULL_LIST_EVENTS_DIRECTORY"),
-    
     "ancillary_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY"),
     
     "empty_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/EMPTY_FILES"),
@@ -274,7 +304,7 @@ csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
 status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 status_timestamp = append_status_row(status_csv_path)
 
-# Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
+# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -345,7 +375,7 @@ csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
 status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 status_timestamp = append_status_row(status_csv_path)
 
-# Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
+# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -439,7 +469,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             os.utime(empty_destination_path, (now, now))
 
 
-# Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
+# Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
@@ -1216,27 +1246,6 @@ global_variables = {
 
 
 
-save_filename_suffix = "0"
-
-print("----------------------------------------------------------------------")
-print("----------------------------------------------------------------------")
-print(f"------------- Starting date is {save_filename_suffix} -------------------") # This is longer so it displays nicely
-print("----------------------------------------------------------------------")
-print("----------------------------------------------------------------------")
-
-# Defining the directories that will store the data
-save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
-save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
-
-if create_plots == False:
-    if create_essential_plots == True:
-        save_pdf_filename = "essential_" + save_pdf_filename
-
-save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
-
-
-
 
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 
@@ -1912,8 +1921,6 @@ save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace(
 
 
 
-
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print(f"------------- Starting date is {save_filename_suffix} -------------------") # This is longer so it displays nicely
@@ -1925,7 +1932,13 @@ save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
 
+if create_plots == False:
+    if create_essential_plots == True:
+        save_pdf_filename = "essential_" + save_pdf_filename
+
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
+
+
 
 
 
@@ -2411,8 +2424,6 @@ if debug_mode:
     limit_number = limit_number_debug
 
 
-create_plots = True
-create_pdf = True
 
 if debug_mode:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
@@ -2562,8 +2573,34 @@ if raw_data_len == 0 and not self_trigger:
     sys.exit(1)
 
 
-theta_boundaries = config["theta_boundaries"]
-region_layout = config["region_layout"]
+theta_boundaries_raw = config.get("theta_boundaries", [])
+region_layout_raw = config.get("region_layout", [])
+
+theta_boundaries = _coerce_numeric_sequence(theta_boundaries_raw, float)
+theta_values = []
+for b in theta_boundaries:
+    if isinstance(b, (int, float)) and np.isfinite(b):
+        b_float = float(b)
+        if 0 <= b_float <= 90 and b_float not in theta_values:
+            theta_values.append(b_float)
+theta_boundaries = theta_values
+
+region_layout = _coerce_numeric_sequence(region_layout_raw, int)
+region_layout = [max(1, int(abs(n))) for n in region_layout if isinstance(n, (int, float))]
+
+expected_regions = len(theta_boundaries) + 1
+if not region_layout:
+    region_layout = [1] * expected_regions
+elif len(region_layout) < expected_regions:
+    region_layout = region_layout + [region_layout[-1]] * (expected_regions - len(region_layout))
+elif len(region_layout) > expected_regions:
+    region_layout = region_layout[:expected_regions]
+
+if not theta_boundaries:
+    theta_boundaries = []
+
+
+print(f"Theta boundaries (degrees): {theta_boundaries}")
 
 
 correct_angle = False
@@ -2574,67 +2611,73 @@ main_df['Theta_fit'] = main_df['theta']
 main_df['Phi_fit'] = main_df['phi']
 
 
-draw_angular_regions = True
-if draw_angular_regions:
+
+def plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout, theta_right_limit=np.pi / 2.5):
+
+    # Only use boundaries below or equal to theta_right_limit
+    max_deg = np.degrees(theta_right_filter)
+    valid_boundaries = [b for b in theta_boundaries if b <= max_deg]
+    all_bounds = [0] + valid_boundaries + [max_deg]
+    radii = [np.radians(b) for b in all_bounds]
+
+    # Draw concentric circles (excluding outermost edge)
+    for r in radii[1:-1]:
+        ax.plot(np.linspace(0, 2 * np.pi, 1000), [r] * 1000, color='white', linestyle='--', linewidth=3)
+
+    # Draw radial lines within each ring
+    for i, (r0, r1, n_phi) in enumerate(zip(radii[:-1], radii[1:], region_layout[:len(radii)-1])):
+        if n_phi <= 1:
+            continue
+        delta_phi = 2 * np.pi / n_phi
+        for j in range(n_phi):
+            phi = j * delta_phi
+            ax.plot([phi, phi], [r0, r1], color='white', linestyle='--', linewidth=3)
+
+
+
+def classify_region_flexible(row, theta_boundaries, region_layout):
+    theta = row['theta'] * 180 / np.pi
+    phi = (row['phi'] * 180 / np.pi + row.get('phi_north', 0)) % 360
+    phi = ((phi + 180) % 360) - 180  # map to [-180, 180)
+
+    # Build region bins: [0, t1), [t1, t2), ..., [tn, 90]
+    all_bounds = [0] + theta_boundaries + [90]
+    for i, (tmin, tmax) in enumerate(zip(all_bounds[:-1], all_bounds[1:])):
+        if tmin <= theta < tmax or (i == len(region_layout) - 1 and theta == 90):
+            n_phi = region_layout[i]
+            if n_phi == 1:
+                return f'R{i}.0'
+            else:
+                bin_width = 360 / n_phi
+                idx = int((phi + 180) // bin_width) % n_phi
+                return f'R{i}.{idx}'
+        
+    return 'None'
+
+
+# Input parameters
+theta_right_limit = np.pi / 2.5
+
+# Compute angular boundaries
+max_deg = np.degrees(theta_right_limit)
+valid_boundaries = [b for b in theta_boundaries if b <= max_deg]
+all_bounds_deg = [0] + valid_boundaries + [max_deg]
+radii = np.radians(all_bounds_deg)
+
+
+print(f"Plots are: {create_plots}")
+
+
+
+if create_plots:
     
     print("----------------------- Drawing angular regions ----------------------")
     
-    def plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout, theta_right_limit=np.pi / 2.5):
-
-        # Only use boundaries below or equal to theta_right_limit
-        max_deg = np.degrees(theta_right_filter)
-        valid_boundaries = [b for b in theta_boundaries if b <= max_deg]
-        all_bounds = [0] + valid_boundaries + [max_deg]
-        radii = [np.radians(b) for b in all_bounds]
-
-        # Draw concentric circles (excluding outermost edge)
-        for r in radii[1:-1]:
-            ax.plot(np.linspace(0, 2 * np.pi, 1000), [r] * 1000, color='white', linestyle='--', linewidth=3)
-
-        # Draw radial lines within each ring
-        for i, (r0, r1, n_phi) in enumerate(zip(radii[:-1], radii[1:], region_layout[:len(radii)-1])):
-            if n_phi <= 1:
-                continue
-            delta_phi = 2 * np.pi / n_phi
-            for j in range(n_phi):
-                phi = j * delta_phi
-                ax.plot([phi, phi], [r0, r1], color='white', linestyle='--', linewidth=3)
-
-
-    def classify_region_flexible(row, theta_boundaries, region_layout):
-        theta = row['theta'] * 180 / np.pi
-        phi = (row['phi'] * 180 / np.pi + row.get('phi_north', 0)) % 360
-        phi = ((phi + 180) % 360) - 180  # map to [-180, 180)
-
-        # Build region bins: [0, t1), [t1, t2), ..., [tn, 90]
-        all_bounds = [0] + theta_boundaries + [90]
-        for i, (tmin, tmax) in enumerate(zip(all_bounds[:-1], all_bounds[1:])):
-            if tmin <= theta < tmax or (i == len(region_layout) - 1 and theta == 90):
-                n_phi = region_layout[i]
-                if n_phi == 1:
-                    return f'R{i}.0'
-                else:
-                    bin_width = 360 / n_phi
-                    idx = int((phi + 180) // bin_width) % n_phi
-                    return f'R{i}.{idx}'
-            
-        return 'None'
-
-    # Input parameters
-    theta_right_limit = np.pi / 2.5
-
-    # Compute angular boundaries
-    max_deg = np.degrees(theta_right_limit)
-    valid_boundaries = [b for b in theta_boundaries if b <= max_deg]
-    all_bounds_deg = [0] + valid_boundaries + [max_deg]
-    radii = np.radians(all_bounds_deg)
-
     # Initialize plot
     fig, ax = plt.subplots(subplot_kw={'polar': True}, figsize=(8, 8))
     ax.set_facecolor(plt.cm.viridis(0.0))
     ax.set_title("Region Labels for Specified Angular Segmentation", color='white')
     ax.set_theta_zero_location('N')
-
 
     # Draw concentric θ boundaries (including outermost)
     for r in radii[1:]:
@@ -2689,12 +2732,13 @@ if draw_angular_regions:
     plt.close()
 
 
-df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundaries, region_layout), axis=1)
-print(df['region'].value_counts())
+
 
 #%%
 
-if create_essential_plots or create_plots:
+
+
+if create_plots:
     
     print("-------------------------- Angular plots -----------------------------")
         
@@ -2718,7 +2762,7 @@ if create_essential_plots or create_plots:
         row_idx, col_idx = divmod(idx, ncols)
         ax = axes[row_idx][col_idx]
             
-        df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
+        df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
         theta_vals = df_tt['theta'].dropna()
         phi_vals = df_tt['phi'].dropna()
 
@@ -2727,7 +2771,7 @@ if create_essential_plots or create_plots:
             continue
         
         h = ax.hist2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins], cmap='viridis', norm=None, cmin=0, cmax=None)
-        ax.set_title(f'processed_tt = {tt_val}')
+        ax.set_title(f'definitive_tt = {tt_val}')
         ax.set_xlabel(r'$\theta$ [rad]')
         ax.set_ylabel(r'$\phi$ [rad]')
         ax.grid(True)
@@ -2736,11 +2780,11 @@ if create_essential_plots or create_plots:
 
         fig.colorbar(h[3], ax=ax, label='Counts')
 
-    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each processed_tt Type', fontsize=16)
+    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
     if save_plots:
-        final_filename = f'{fig_idx}_theta_phi_processed_tt_2D.png'
+        final_filename = f'{fig_idx}_theta_phi_definitive_tt_2D.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -2750,7 +2794,9 @@ if create_essential_plots or create_plots:
         plt.show()
     plt.close()
     
-    # ---------------------------------------------------------------------------------
+    
+
+if create_plots or create_essential_plots:
     
     theta_left_filter = 0
     theta_right_filter = np.pi / 2.5
@@ -2830,7 +2876,7 @@ if create_essential_plots or create_plots:
         cb = fig.colorbar(c, ax=ax, pad=0.1)
         cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
 
-    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
+    plt.suptitle(r'PRE-CORRECTION. 2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
         final_filename = f'{fig_idx}_polar_theta_phi_definitive_tt_2D_detail.png'
@@ -2845,13 +2891,18 @@ if create_essential_plots or create_plots:
 
 
 
-    # ---------------------------------------------------------------
-    # 1. Build absolute path and sanity-check
-    # ---------------------------------------------------------------
-    hdf_path = os.path.join(angular_corr_directory, "likelihood_matrices.h5")
-    if not os.path.isfile(hdf_path):
-        print(f"HDF5 file not found: {hdf_path}")
-        correct_angle = False
+
+
+# ---------------------------------------------------------------
+# 1. Build absolute path and sanity-check
+# ---------------------------------------------------------------
+hdf_path = os.path.join(angular_corr_directory, "likelihood_matrices.h5")
+if not os.path.isfile(hdf_path):
+    print(f"HDF5 file not found: {hdf_path}")
+    correct_angle = False
+
+
+
 
 
 if correct_angle:
@@ -2968,8 +3019,6 @@ if correct_angle:
         df_out["Phi_pred"] = phi_pred
         return df_out
 
-    #%%
-
     print(main_df.columns.to_list())
 
     #%%
@@ -2984,8 +3033,11 @@ if correct_angle:
 
     df = df_pred.copy()
     
+    df['theta'] = df['Theta_pred']
+    df['phi'] = df['Phi_pred']
+    
     # Plotting corrected vs measured angles
-    if create_essential_plots or create_plots:    
+    if create_plots:
         VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '23', '24', '34']
         tt_lists = [ VALID_MEASURED_TYPES ]
         
@@ -3035,11 +3087,121 @@ if correct_angle:
                 plt.show()
             plt.close()
 
-
 else:
     print("Angle correction is disabled.")
     df['Theta_pred'] = main_df['Theta_fit']
     df['Phi_pred'] = main_df['Phi_fit']
+    
+    df['theta'] = df['Theta_pred']
+    df['phi'] = df['Phi_pred']
+
+
+
+
+if create_plots or create_essential_plots:
+    
+    theta_left_filter = 0
+    theta_right_filter = np.pi / 2.5
+        
+    phi_left_filter = -np.pi
+    phi_right_filter = np.pi
+        
+    df_filtered = df.copy()
+    # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
+    
+    # tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
+    tt_values = [23, 123, 234, 1234]
+    
+    n_tt = len(tt_values)
+    ncols = 2
+    nrows = (n_tt + 1) // ncols
+        
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
+    phi_nbins = 70
+    # theta_nbins = int(round(phi_nbins / 2) + 1)
+    theta_nbins = 40
+    theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
+    phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
+    colors = plt.cm.turbo
+
+    # Select theta/phi range (optional filtering)
+    theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
+    phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
+    
+    vmax_global = df_filtered.groupby('definitive_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
+    
+    for idx, tt_val in enumerate(tt_values):
+        row_idx, col_idx = divmod(idx, ncols)
+        ax = axes[row_idx][col_idx]
+
+        df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
+        theta_vals = df_tt['theta'].dropna()
+        phi_vals = df_tt['phi'].dropna()
+
+        # Apply range filtering
+        # Apply range filtering
+        df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val].copy()
+        mask = (
+            (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
+            (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
+        )
+        df_tt = df_tt[mask]
+
+        theta_vals = df_tt['theta']
+        phi_vals   = df_tt['phi']
+
+        if len(theta_vals) < 10 or len(phi_vals) < 10:
+            ax.set_visible(False)
+            continue
+
+        # Polar plot settings
+        fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
+        ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
+        axes[row_idx][col_idx] = ax  # update reference for consistency
+
+        ax.set_facecolor(colors(0.0))  # darkest background in colormap
+        ax.set_title(f'definitive_tt = {tt_val}', fontsize=14)
+            
+        plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout)
+            
+        # Limit in radius in theta_right_filter
+        ax.set_ylim(0, theta_right_filter)
+            
+        # 2D histogram: use phi as angle, theta as radius
+        h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
+        r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
+        phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+        # R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
+        R, PHI = np.meshgrid(r_edges, phi_edges, indexing='ij')
+        c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
+        local_max = h.max()
+        cb = fig.colorbar(c, ax=ax, pad=0.1)
+        cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
+
+    plt.suptitle(rf'FINAL. Correction = {correct_angle}. 2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    if save_plots:
+        final_filename = f'{fig_idx}_polar_theta_phi_definitive_tt_2D_detail.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+
+
+
+
+
+
+df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundaries, region_layout), axis=1)
+print(df['region'].value_counts())
+
+
+
+
+
 
 
 

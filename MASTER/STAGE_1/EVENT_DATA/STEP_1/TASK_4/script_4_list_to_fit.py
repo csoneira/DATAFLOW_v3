@@ -352,7 +352,7 @@ station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}"
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 if task_number == 1:
-    raw_directory = "RAW"
+    raw_directory = "STAGE_0_to_1"
 else:
     raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
 if task_number == 5:
@@ -399,7 +399,7 @@ csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
 status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 status_timestamp = append_status_row(status_csv_path)
 
-# Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
+# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -470,7 +470,7 @@ csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
 status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 status_timestamp = append_status_row(status_csv_path)
 
-# Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
+# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -564,7 +564,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             os.utime(empty_destination_path, (now, now))
 
 
-# Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
+# Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
@@ -4940,8 +4940,10 @@ def round_to_4_significant_digits(x):
         return x
 
 print("Rounding the dataframe values.") 
-for col in definitive_df.select_dtypes(include=[np.number]).columns:
-    definitive_df.loc[:, col] = definitive_df[col].apply(round_to_4_significant_digits)
+for col in definitive_df.select_dtypes(include=[np.floating]).columns:
+    original_dtype = definitive_df[col].dtype
+    rounded_series = definitive_df[col].apply(round_to_4_significant_digits)
+    definitive_df.loc[:, col] = rounded_series.astype(original_dtype, copy=False)
 
 
 

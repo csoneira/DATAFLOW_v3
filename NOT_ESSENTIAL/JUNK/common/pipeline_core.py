@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Shared stage logic for STEP_1 RAW→LIST conversion.
+Shared stage logic for STEP_1 STAGE_0_to_1→LIST conversion.
 
 The functions defined here are refactored and trimmed versions of the logic
 originally present in the monolithic raw_to_list.py script. They operate on

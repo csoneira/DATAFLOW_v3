@@ -2,13 +2,17 @@
 # ---------------------------------------------------------------------------
 # bring_reprocessing_files.sh
 #   Fetch HLD data from backuplip, writing
-#     * *.hld.tar.gz or *.hld-tar-gz  → STAGE_0/COMPRESSED_HLDS
-#     * *.hld                         → STAGE_0/UNCOMPRESSED_HLDS
+#     * *.hld.tar.gz or *.hld-tar-gz  → STAGE_0/REPROCESSING/INPUT_FILES/COMPRESSED_HLDS
+#     * *.hld                         → STAGE_0/REPROCESSING/INPUT_FILES/UNCOMPRESSED_HLDS
 # ---------------------------------------------------------------------------
 
 set -e  # Exit on command failure
 set -u  # Error on undefined variables
 set -o pipefail  # Fail on any part of a pipeline
+
+log_info() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_DIR="$SCRIPT_DIR"
@@ -18,19 +22,19 @@ done
 STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
 STATUS_TIMESTAMP=""
 
-finish() {
-  local exit_code="$1"
-  if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
-    python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
-  fi
-}
-trap 'finish $?' EXIT
+# finish() {
+#   local exit_code="$1"
+#   if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
+#     python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
+#   fi
+# }
+# trap 'finish $?' EXIT
 
 ##############################################################################
 # Parse arguments
 ##############################################################################
 usage() {
-  echo "Usage: $0 <station> YYMMDD YYMMDD | --random|-r"
+  echo "Usage: $0 <station> YYMMDD YYMMDD | --random/-r"
   exit 1
 }
 
@@ -41,7 +45,7 @@ Fetches HLD data from backuplip into the STAGE_0 buffers for a station.
 
 Usage:
   bring_reprocessing_files.sh <station> YYMMDD YYMMDD
-  bring_reprocessing_files.sh <station> --random | -r
+  bring_reprocessing_files.sh <station> --random/-r
 
 Options:
   -h, --help    Show this help message and exit.
@@ -82,16 +86,22 @@ esac
 ##############################################################################
 # Target directories
 ##############################################################################
-base_dir="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/STAGE_0"
-compressed_directory="${base_dir}/COMPRESSED_HLDS"
-uncompressed_directory="${base_dir}/UNCOMPRESSED_HLDS"
-mkdir -p "$compressed_directory" "$uncompressed_directory"
+station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}"
+reprocessing_directory="${station_directory}/STAGE_0/REPROCESSING"
+input_directory="${reprocessing_directory}/INPUT_FILES"
+compressed_directory="${input_directory}/COMPRESSED_HLDS"
+uncompressed_directory="${input_directory}/UNCOMPRESSED_HLDS"
+metadata_directory="${reprocessing_directory}/METADATA"
+mkdir -p "$compressed_directory" "$uncompressed_directory" "$metadata_directory"
 
-STATUS_CSV="${base_dir}/bring_reprocessing_files_status.csv"
-if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
-  echo "Warning: unable to record status in $STATUS_CSV" >&2
-  STATUS_TIMESTAMP=""
-fi
+brought_csv="${metadata_directory}/hld_files_brought.csv"
+brought_csv_header="hld_name,bring_timesamp"
+
+# STATUS_CSV="${metadata_directory}/bring_reprocessing_files_status.csv"
+# if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
+#   echo "Warning: unable to record status in $STATUS_CSV" >&2
+#   STATUS_TIMESTAMP=""
+# fi
 
 remote_dir="/local/experiments/MINGOS/MINGO0${station}/"
 remote_user="rpcuser"
@@ -100,23 +110,36 @@ csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_date,list_ev_name,list_ev_add_date,acc_name,acc_add_date,merge_add_date"
 
 # Snapshot existing archives to detect fresh downloads after rsync completes
-tmp_before=$(mktemp)
+tmp_before_compressed=$(mktemp)
+tmp_before_uncompressed=$(mktemp)
 tmp_remote=$(mktemp)
 tmp_remote_sorted=""
-tmp_after=""
-tmp_new=""
+tmp_after_compressed=""
+tmp_after_uncompressed=""
+tmp_new_compressed=""
+tmp_new_uncompressed=""
 compressed_list_file=""
 uncompressed_list_file=""
+new_downloads_file=""
 
 cleanup() {
-  rm -f "$tmp_before" "$tmp_remote"
+  rm -f "$tmp_before_compressed" "$tmp_before_uncompressed" "$tmp_remote"
   [[ -n "$tmp_remote_sorted" ]] && rm -f "$tmp_remote_sorted"
-  [[ -n "$tmp_after" ]] && rm -f "$tmp_after"
-  [[ -n "$tmp_new" ]] && rm -f "$tmp_new"
+  [[ -n "$tmp_after_compressed" ]] && rm -f "$tmp_after_compressed"
+  [[ -n "$tmp_after_uncompressed" ]] && rm -f "$tmp_after_uncompressed"
+  [[ -n "$tmp_new_compressed" ]] && rm -f "$tmp_new_compressed"
+  [[ -n "$tmp_new_uncompressed" ]] && rm -f "$tmp_new_uncompressed"
   [[ -n "$compressed_list_file" ]] && rm -f "$compressed_list_file"
   [[ -n "$uncompressed_list_file" ]] && rm -f "$uncompressed_list_file"
+  [[ -n "$new_downloads_file" ]] && rm -f "$new_downloads_file"
 }
 trap cleanup EXIT
+
+ensure_brought_csv() {
+  if [[ ! -f "$brought_csv" || ! -s "$brought_csv" ]]; then
+    printf '%s\n' "$brought_csv_header" > "$brought_csv"
+  fi
+}
 
 ensure_csv() {
   if [[ ! -f "$csv_path" ]]; then
@@ -214,7 +237,7 @@ build_target_days() {
   start_epoch=$(date -d "20${start_ymd:0:2}-${start_ymd:2:2}-${start_ymd:4:2}" +%s)
   end_epoch=$(date -d "20${end_ymd:0:2}-${end_ymd:2:2}-${end_ymd:4:2}" +%s)
   if (( start_epoch > end_epoch )); then
-    echo "Error: start date ${start_ymd} is after end date ${end_ymd}" >&2
+    log_info "Error: start date ${start_ymd} is after end date ${end_ymd}" >&2
     return 1
   fi
 
@@ -238,7 +261,9 @@ build_target_days() {
   return 0
 }
 
-ensure_csv
+# ensure_csv
+
+# log_info "CSV initialized at ${csv_path}"
 
 declare -A csv_rows=()
 declare -A downloaded_bases=()
@@ -256,25 +281,31 @@ if [[ -s "$csv_path" ]]; then
     done
   } < "$csv_path"
 fi
+log_info "Loaded CSV rows: total=${#csv_rows[@]}, with local copies=${#downloaded_bases[@]}"
 
 declare -A local_files=()
 while IFS= read -r local_entry; do
   [[ -z "$local_entry" ]] && continue
   local_files["$local_entry"]=1
-done < <(find "$base_dir" -type f -name '*.hld*' -printf '%f\n')
+done < <(find "$input_directory" -type f -name '*.hld*' -printf '%f\n')
+log_info "Local HLD files currently buffered: ${#local_files[@]}"
 
 declare -A base_to_doy=()
 declare -A base_compressed_files=()
 declare -A base_uncompressed_files=()
 
+log_info "Listing remote files from ${remote_user}@backuplip:${remote_dir} ..."
+
 if ssh -o BatchMode=yes "${remote_user}@backuplip" "cd ${remote_dir} && ls -1" > "$tmp_remote" 2>/dev/null; then
-  :
+  log_info "Remote listing retrieved."
 else
-  echo "Warning: unable to list remote directory ${remote_user}@backuplip:${remote_dir}" >&2
+  log_info "Warning: unable to list remote directory ${remote_user}@backuplip:${remote_dir}" >&2
 fi
 
 tmp_remote_sorted=$(mktemp)
 sort -u "$tmp_remote" > "$tmp_remote_sorted"
+remote_entry_count=$(wc -l < "$tmp_remote_sorted" | tr -d '[:space:]')
+log_info "Remote entries discovered: ${remote_entry_count}"
 
 while IFS= read -r remote_entry; do
   remote_entry=${remote_entry//$'\r'/}
@@ -306,9 +337,11 @@ while IFS= read -r remote_entry; do
     continue
   fi
   start_value=$(compute_start_date "$base")
-  printf '%s,%s,%s,,,,,,,\n' "$base" "$start_value" "$csv_timestamp" >> "$csv_path"
+  # printf '%s,%s,%s,,,,,,,\n' "$base" "$start_value" "$csv_timestamp" >> "$csv_path"
   csv_rows["$base"]=1
 done < "$tmp_remote_sorted"
+
+log_info "Remote parsing complete: bases=${#base_to_doy[@]} compressed_candidates=${#base_compressed_files[@]} uncompressed_candidates=${#base_uncompressed_files[@]}"
 
 declare -A pending_doys=()
 for base in "${!base_to_doy[@]}"; do
@@ -318,6 +351,7 @@ for base in "${!base_to_doy[@]}"; do
   fi
   pending_doys["${base_to_doy["$base"]}"]=1
 done
+log_info "Pending DOYs not yet downloaded: ${#pending_doys[@]}"
 
 start=""
 end=""
@@ -334,34 +368,35 @@ if $random_mode; then
     done | sort -u
   )
   if (( ${#candidate_doys[@]} == 0 )); then
-    echo "No pending HLD days eligible for random selection." >&2
+    log_info "No pending HLD days eligible for random selection." >&2
     exit 0
   fi
   selected_doy=$(printf '%s\n' "${candidate_doys[@]}" | shuf -n1)
   selected_ymd=$(doy_to_ymd "$selected_doy")
   if [[ -z "$selected_ymd" ]]; then
-    echo "Failed to convert DOY ${selected_doy} to date." >&2
+    log_info "Failed to convert DOY ${selected_doy} to date." >&2
     exit 1
   fi
   start="$selected_ymd"
   end="$selected_ymd"
-  echo "Random day selected: $selected_ymd"
+  log_info "Random day selected: $selected_ymd"
 else
   start="$start_arg"
   end="$end_arg"
 fi
 
 if [[ ! $start =~ ^[0-9]{6}$ || ! $end =~ ^[0-9]{6}$ ]]; then
-  echo "Dates must be provided as YYMMDD; received start=${start} end=${end}" >&2
+  log_info "Dates must be provided as YYMMDD; received start=${start} end=${end}" >&2
   exit 1
 fi
 
 if ! build_target_days "$start" "$end"; then
   exit 1
 fi
+log_info "Requested range ${start}-${end} produced ${#target_doys[@]} target day(s)"
 
 if (( ${#target_doys[@]} == 0 )); then
-  echo "No target days found in the requested range (${start}-${end})." >&2
+  log_info "No target days found in the requested range (${start}-${end})." >&2
   exit 0
 fi
 
@@ -416,17 +451,21 @@ if [[ -s "$uncompressed_list_file" ]]; then
 fi
 
 if [[ "$start_label" == "$end_label" ]]; then
-  echo "Fetching HLD files for MINGO0${station} on ${start_label} (DOY ${start_DOY})"
+  log_info "Fetching HLD files for MINGO0${station} on ${start_label} (DOY ${start_DOY})"
 else
-  echo "Fetching HLD files for MINGO0${station} from ${start_label} to ${end_label} (DOY ${start_DOY}-${end_DOY})"
+  log_info "Fetching HLD files for MINGO0${station} from ${start_label} to ${end_label} (DOY ${start_DOY}-${end_DOY})"
 fi
-echo "  Planned compressed downloads : $compressed_count"
-echo "  Planned uncompressed downloads: $uncompressed_count"
-echo
+log_info "  Planned compressed downloads : $compressed_count"
+log_info "  Planned uncompressed downloads: $uncompressed_count"
+log_info ""
 
 find "$compressed_directory" -maxdepth 1 -type f \
   \( -name '*.hld*.tar.gz' -o -name '*.hld-tar-gz' \) \
-  -printf '%f\n' | sort -u > "$tmp_before"
+  -printf '%f\n' | sort -u > "$tmp_before_compressed"
+
+find "$uncompressed_directory" -maxdepth 1 -type f \
+  -name '*.hld' \
+  -printf '%f\n' | sort -u > "$tmp_before_uncompressed"
 
 if [[ -s "$compressed_list_file" ]]; then
   echo "Starting compressed transfers..."
@@ -476,49 +515,68 @@ if (( compressed_count == 0 && uncompressed_count == 0 )); then
   echo "No files matched the requested range; nothing to transfer."
 fi
 
-tmp_after=$(mktemp)
+tmp_after_compressed=$(mktemp)
 find "$compressed_directory" -maxdepth 1 -type f \
   \( -name '*.hld*.tar.gz' -o -name '*.hld-tar-gz' \) \
-  -printf '%f\n' | sort -u > "$tmp_after"
+  -printf '%f\n' | sort -u > "$tmp_after_compressed"
 
-tmp_new=$(mktemp)
-comm -13 "$tmp_before" "$tmp_after" > "$tmp_new"
+tmp_after_uncompressed=$(mktemp)
+find "$uncompressed_directory" -maxdepth 1 -type f \
+  -name '*.hld' \
+  -printf '%f\n' | sort -u > "$tmp_after_uncompressed"
 
-if [[ -s "$tmp_new" ]]; then
-  awk -F',' -v OFS=',' -v newlist="$tmp_new" -v ts="$csv_timestamp" '
-    function canonical(name) {
-      gsub(/\r/, "", name)
-      sub(/\.hld\.tar\.gz$/, "", name)
-      sub(/\.hld-tar-gz$/, "", name)
-      sub(/\.tar\.gz$/, "", name)
-      sub(/\.hld$/, "", name)
-      sub(/\.dat$/, "", name)
-      return name
-    }
-    BEGIN {
-      while ((getline line < newlist) > 0) {
-        line = canonical(line)
-        if (line != "") {
-          new[line] = 1
-        }
-      }
-      close(newlist)
-    }
-    NR == 1 { print; next }
-    {
-      key = canonical($1)
-      if (key in new) {
-        if ($4 == "") {
-          $4 = ts
-        }
-        if ($5 == "") {
-          $5 = ts
-        }
-      }
-      print
-    }
-  ' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
+tmp_new_compressed=$(mktemp)
+comm -13 "$tmp_before_compressed" "$tmp_after_compressed" > "$tmp_new_compressed"
+
+tmp_new_uncompressed=$(mktemp)
+comm -13 "$tmp_before_uncompressed" "$tmp_after_uncompressed" > "$tmp_new_uncompressed"
+
+if [[ -s "$tmp_new_compressed" || -s "$tmp_new_uncompressed" ]]; then
+  new_downloads_file=$(mktemp)
+  [[ -s "$tmp_new_compressed" ]] && cat "$tmp_new_compressed" >> "$new_downloads_file"
+  [[ -s "$tmp_new_uncompressed" ]] && cat "$tmp_new_uncompressed" >> "$new_downloads_file"
+  ensure_brought_csv
+  while IFS= read -r brought_file; do
+    [[ -z "$brought_file" ]] && continue
+    printf '%s,%s\n' "$brought_file" "$csv_timestamp" >> "$brought_csv"
+  done < "$new_downloads_file"
 fi
+
+# if [[ -s "$tmp_new" ]]; then
+#   awk -F',' -v OFS=',' -v newlist="$tmp_new" -v ts="$csv_timestamp" '
+#     function canonical(name) {
+#       gsub(/\r/, "", name)
+#       sub(/\.hld\.tar\.gz$/, "", name)
+#       sub(/\.hld-tar-gz$/, "", name)
+#       sub(/\.tar\.gz$/, "", name)
+#       sub(/\.hld$/, "", name)
+#       sub(/\.dat$/, "", name)
+#       return name
+#     }
+#     BEGIN {
+#       while ((getline line < newlist) > 0) {
+#         line = canonical(line)
+#         if (line != "") {
+#           new[line] = 1
+#         }
+#       }
+#       close(newlist)
+#     }
+#     NR == 1 { print; next }
+#     {
+#       key = canonical($1)
+#       if (key in new) {
+#         if ($4 == "") {
+#           $4 = ts
+#         }
+#         if ($5 == "") {
+#           $5 = ts
+#         }
+#       }
+#       print
+#     }
+#   ' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
+# fi
 
 echo
 echo '------------------------------------------------------'

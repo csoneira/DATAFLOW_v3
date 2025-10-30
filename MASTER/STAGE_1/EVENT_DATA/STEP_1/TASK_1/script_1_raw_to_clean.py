@@ -31,7 +31,7 @@ task_number = 1
 
 
 print("----------------------------------------------------------------------")
-print("-------------------- RAW TO LIST CLEAN IS STARTING -------------------")
+print("-------------------- STAGE_0_to_1 TO LIST CLEAN IS STARTING -------------------")
 print("----------------------------------------------------------------------")
 
 
@@ -221,15 +221,20 @@ home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
+
 if task_number == 1:
-    raw_directory = "RAW"
+    raw_directory = "STAGE_0_to_1"
+    raw_working_directory = os.path.join(station_directory, raw_directory)
+    
 else:
     raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
+    raw_working_directory = os.path.join(base_directory, raw_directory)
+
 if task_number == 5:
     output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
 else:
     output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
-raw_working_directory = os.path.join(base_directory, raw_directory)
+
 
 # Define directory paths relative to base_directory
 base_directories = {
@@ -262,10 +267,10 @@ for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
 csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
-status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
-status_timestamp = append_status_row(status_csv_path)
+# status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
+# status_timestamp = append_status_row(status_csv_path)
 
-# Move files from RAW to RAW_TO_LIST/FILES/UNPROCESSED,
+# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -358,7 +363,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             os.utime(empty_destination_path, (now, now))
 
 
-# Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
+# Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
@@ -1607,6 +1612,7 @@ else:
 
 # This is for all cases
 file_path = processing_file_path
+print(f"File to be processed, complete original path: {file_path}")
 the_filename = os.path.basename(file_path)
 print(f"File to process: {the_filename}")
 basename_no_ext, file_extension = os.path.splitext(the_filename)

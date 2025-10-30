@@ -121,8 +121,7 @@ finish() {
 trap 'finish $?' EXIT
 
 # Define directories
-local_destination="$base_working_directory/RAW"
-storage_directory="$base_working_directory/RAW_TO_LIST"
+local_destination="$base_working_directory/STAGE_0_to_1"
 
 # Additional paths
 mingo_direction="mingo0$station"
@@ -136,7 +135,6 @@ exclude_list_file="$base_working_directory/tmp/exclude_list.txt"
 mkdir -p "$station_directory"
 mkdir -p "$base_working_directory/tmp"
 mkdir -p "$local_destination"
-mkdir -p "$storage_directory"
 
 echo '------------------------------------------------------'
 echo '------------------------------------------------------'

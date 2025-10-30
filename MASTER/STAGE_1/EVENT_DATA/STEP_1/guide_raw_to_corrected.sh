@@ -7,7 +7,7 @@
 if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
   cat <<'EOF'
 raw_to_list_events.sh
-Launches the RAW-to-LIST processing stage for a single station.
+Launches the STAGE_0_to_1-to-LIST processing stage for a single station.
 
 Usage:
   raw_to_list_events.sh <station>
@@ -15,7 +15,7 @@ Usage:
 Options:
   -h, --help    Show this help message and exit.
 
-The script schedules the RAW→LIST pipeline for the given station (1-4),
+The script schedules the STAGE_0_to_1→LIST pipeline for the given station (1-4),
 ensuring only one instance runs concurrently per station and updates status
 tracking as files move through the queue.
 EOF
@@ -149,8 +149,8 @@ finish() {
 trap 'finish $?' EXIT
 
 # # Define directories
-# local_destination="$base_working_directory/RAW"
-# storage_directory="$base_working_directory/RAW_TO_LIST"
+# local_destination="$base_working_directory/STAGE_0_to_1"
+# storage_directory="$base_working_directory/STAGE_0_to_1_TO_LIST"
 
 # # Additional paths
 # mingo_direction="mingo0$station"

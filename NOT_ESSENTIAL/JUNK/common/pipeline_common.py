@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Shared helpers for STEP_1 RAW→LIST tasks (lightweight, minimal coupling)."""
+"""Shared helpers for STEP_1 STAGE_0_to_1→LIST tasks (lightweight, minimal coupling)."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def resolve_station_paths(station: str) -> StationPaths:
     station_id = f"MINGO0{station}"
     base = Path.home() / "DATAFLOW_v3" / "STATIONS" / station_id / "STAGE_1" / "EVENT_DATA"
     step_dir = base / "STEP_1"
-    raw_dir = base / "RAW"
+    raw_dir = base / "STAGE_0_to_1"
     task_dirs = {
         "TASK_1": step_dir / "TASK_1",
         "TASK_2": step_dir / "TASK_2",

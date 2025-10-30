@@ -7,7 +7,7 @@
 if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
   cat <<'EOF'
 bring_data_and_config_files.sh
-Synchronises RAW event data and configuration files from stations into STAGE_1.
+Synchronises STAGE_0_to_1 event data and configuration files from stations into STAGE_0_to_1.
 
 Usage:
   bring_data_and_config_files.sh <station>
@@ -99,155 +99,130 @@ echo "------------------------------------------------------"
 
 dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
 
-# Define base working directory
-station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
-base_working_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station/STAGE_1/EVENT_DATA"
-csv_path="$station_directory/database_status_${station}.csv"
-csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_date,list_ev_name,list_ev_add_date,acc_name,acc_add_date,merge_add_date"
-csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-
-mkdir -p "$base_working_directory"
-STATUS_CSV="$base_working_directory/bring_data_and_config_files_status.csv"
-if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
-  echo "Warning: unable to record status in $STATUS_CSV" >&2
-  STATUS_TIMESTAMP=""
-fi
-
-# Define directories
-local_destination="$base_working_directory/RAW"
-storage_directory="$base_working_directory/RAW_TO_LIST"
-
 # Additional paths
 mingo_direction="mingo0$station"
 
-exclude_list_file="$base_working_directory/tmp/exclude_list.txt"
-csv_exclude_file=""
+station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
+stage0_directory="$station_directory/STAGE_0/NEW_FILES"
+stage0_to_1_directory="$station_directory/STAGE_0_to_1"
+metadata_directory="$stage0_directory/METADATA"
+raw_directory="$stage0_to_1_directory"
+
+mkdir -p "$station_directory" "$stage0_directory" "$stage0_to_1_directory" "$metadata_directory"
+
+# STATUS_CSV="$metadata_directory/bring_data_and_config_files_status.csv"
+# if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
+#   echo "Warning: unable to record status in $STATUS_CSV" >&2
+#   STATUS_TIMESTAMP=""
+# fi
+
+log_csv="$metadata_directory/raw_files_brought.csv"
+log_csv_header="filename,bring_timestamp"
+run_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+
 before_list=""
 after_list=""
 new_list=""
+rsync_file_list=""
 
 cleanup() {
-  rm -f "$exclude_list_file" "$csv_exclude_file" "$before_list" "$after_list" "$new_list"
+  for tmp in "$before_list" "$after_list" "$new_list" "$rsync_file_list"; do
+    [[ -n "$tmp" ]] && rm -f "$tmp"
+  done
 }
 
-finish() {
-  local exit_code="$1"
-  cleanup
-  if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
-    python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
-  fi
-}
+# finish() {
+#   local exit_code="$1"
+#   cleanup
+#   if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
+#     python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
+#   fi
+# }
 
 trap 'finish $?' EXIT
 
-ensure_csv() {
-  if [[ ! -f "$csv_path" ]]; then
-    printf '%s\n' "$csv_header" > "$csv_path"
-  elif [[ ! -s "$csv_path" ]]; then
-    printf '%s\n' "$csv_header" > "$csv_path"
+ensure_log_csv() {
+  if [[ ! -f "$log_csv" ]]; then
+    printf '%s\n' "$log_csv_header" > "$log_csv"
+  elif [[ ! -s "$log_csv" ]]; then
+    printf '%s\n' "$log_csv_header" > "$log_csv"
   else
     local current_header
-    current_header=$(head -n1 "$csv_path")
-    if [[ "$current_header" != "$csv_header" ]]; then
+    current_header=$(head -n1 "$log_csv")
+    if [[ "$current_header" != "$log_csv_header" ]]; then
       local upgrade_tmp
       upgrade_tmp=$(mktemp)
-      {
-        printf '%s\n' "$csv_header"
-        tail -n +2 "$csv_path" | awk -F',' -v OFS=',' '{ while (NF < 10) { $(NF+1)="" } if (NF > 10) { NF=10 } print }'
-      } > "$upgrade_tmp"
-      mv "$upgrade_tmp" "$csv_path"
+      printf '%s\n' "$log_csv_header" > "$upgrade_tmp"
+      tail -n +2 "$log_csv" >> "$upgrade_tmp"
+      mv "$upgrade_tmp" "$log_csv"
     fi
   fi
 }
 
-strip_suffix() {
-  local name="$1"
-  name=${name%.dat}
-  name=${name%.hld.tar.gz}
-  name=${name%.hld-tar-gz}
-  name=${name%.hld}
-  printf '%s' "$name"
-}
-
-compute_start_date() {
-  local base="$1"
-  if [[ $base =~ ([0-9]{11})$ ]]; then
-    local digits=${BASH_REMATCH[1]}
-    local yy=${digits:0:2}
-    local doy=${digits:2:3}
-    local hhmmss=${digits:5:6}
-    local hh=${hhmmss:0:2}
-    local mm=${hhmmss:2:2}
-    local ss=${hhmmss:4:2}
-    local year=$((2000 + 10#$yy))
-    local offset=$((10#$doy - 1))
-    (( offset < 0 )) && offset=0
-    date -d "${year}-01-01 +${offset} days ${hh}:${mm}:${ss}" '+%Y-%m-%d_%H.%M.%S' 2>/dev/null || printf ''
-  else
-    printf ''
-  fi
-}
-
-ensure_csv
-
-declare -A csv_rows=()
-if [[ -s "$csv_path" ]]; then
-  while IFS=',' read -r base _; do
-    [[ -z "$base" || "$base" == "basename" ]] && continue
-    base=${base//$'\r'/}
-    csv_rows["$base"]=1
-  done < "$csv_path"
-fi
-
-append_row_if_missing() {
-  local base="$1"
-  local dat_date="$2"
-  [[ -z "$base" ]] && return
-  if [[ -n ${csv_rows["$base"]+_} ]]; then
+declare -A logged_files=()
+load_logged_files() {
+  if [[ ! -s "$log_csv" ]]; then
     return
   fi
-  local start_value
-  start_value=$(compute_start_date "$base")
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
-    "$base" "$start_value" "" "" "$dat_date" "" "" "" "" "" >> "$csv_path"
-  csv_rows["$base"]=1
+  while IFS=',' read -r filename _; do
+    filename=${filename//$'\r'/}
+    [[ -z "$filename" || "$filename" == "filename" ]] && continue
+    logged_files["$filename"]=1
+  done < "$log_csv"
 }
 
-csv_exclude_file=$(mktemp)
-if [[ -s "$csv_path" ]]; then
-  awk -F',' 'NR>1 && $5 != "" {gsub(/\r/,"",$1); if ($1!="") print $1".dat"}' "$csv_path" >> "$csv_exclude_file"
-fi
+register_brought_file() {
+  local filename="$1"
+  [[ -z "$filename" ]] && return
+  if [[ -n ${logged_files["$filename"]+_} ]]; then
+    return
+  fi
+  printf '%s,%s\n' "$filename" "$run_timestamp" >> "$log_csv"
+  logged_files["$filename"]=1
+}
 
-# Create necessary directories
-mkdir -p "$station_directory"
-mkdir -p "$base_working_directory/tmp"
-mkdir -p "$local_destination"
-mkdir -p "$storage_directory"
-
-printf '' > "$exclude_list_file"
-if [[ -s "$csv_exclude_file" ]]; then
-  cat "$csv_exclude_file" >> "$exclude_list_file"
-fi
-find "$storage_directory" -type f -name '*.dat' -printf '%f\n' >> "$exclude_list_file"
-find "$local_destination" -maxdepth 1 -type f -name '*.dat' -printf '%f\n' >> "$exclude_list_file"
-sort -u "$exclude_list_file" -o "$exclude_list_file"
-
+ensure_log_csv
+load_logged_files
 
 # Fetch all data
-echo "Fetching data from $mingo_direction to $local_destination, excluding already processed files..."
-
+echo "Fetching data from $mingo_direction to $raw_directory..."
 echo '------------------------------------------------------'
 
 before_list=$(mktemp)
-find "$local_destination" -maxdepth 1 -type f -name '*.dat' -printf '%f\n' | sort -u > "$before_list"
+# Strictly match files ending in .dat (not .dat*)
+find "$raw_directory" -maxdepth 1 -type f \
+  -regextype posix-extended -regex '.*/[^/]+\.dat$' \
+  -printf '%f\n' | sort -u > "$before_list"
 
 echo "Files currently available on $mingo_direction:"
-ssh "$mingo_direction" "ls -lh $dat_files_directory"/*.dat
+remote_list_cmd=$(printf 'cd %q && find . -maxdepth 1 -type f -regextype posix-extended -regex %s -printf %s | sort' \
+  "$dat_files_directory" "'.*/[^/]+\\.dat$'" "'%P\n'")
+ssh "$mingo_direction" "$remote_list_cmd" 2>/dev/null || echo "No .dat files found or listing unavailable."
 
-rsync -avz --exclude-from="$exclude_list_file" "$mingo_direction:$dat_files_directory"/*.dat "$local_destination"
+rsync_file_list=$(mktemp)
+remote_find_cmd=$(printf 'cd %q && find . -maxdepth 1 -type f -regextype posix-extended -regex %s -printf %s' \
+  "$dat_files_directory" "'.*/[^/]+\\.dat$'" "'%P\0'")
+if ssh "$mingo_direction" "$remote_find_cmd" > "$rsync_file_list"; then
+  if [[ -s "$rsync_file_list" ]]; then
+    rsync -avz --ignore-existing \
+      --files-from="$rsync_file_list" \
+      --from0 \
+      "$mingo_direction:$dat_files_directory/" \
+      "$raw_directory/" || {
+      echo "Warning: rsync encountered an error while fetching data." >&2
+    }
+  else
+    echo "No .dat files found to transfer."
+  fi
+else
+  echo "Warning: unable to build .dat file list from remote host." >&2
+fi
 
 after_list=$(mktemp)
-find "$local_destination" -maxdepth 1 -type f -name '*.dat' -printf '%f\n' | sort -u > "$after_list"
+# Strictly match files ending in .dat (not .dat*)
+find "$raw_directory" -maxdepth 1 -type f \
+  -regextype posix-extended -regex '.*/[^/]+\.dat$' \
+  -printf '%f\n' | sort -u > "$after_list"
 
 new_list=$(mktemp)
 comm -13 "$before_list" "$after_list" > "$new_list"
@@ -256,38 +231,12 @@ if [[ -s "$new_list" ]]; then
   while IFS= read -r dat_entry; do
     dat_entry=${dat_entry//$'\r'/}
     [[ -z "$dat_entry" ]] && continue
-    dat_base=$(strip_suffix "$dat_entry")
-    append_row_if_missing "$dat_base" "$csv_timestamp"
+    register_brought_file "$dat_entry"
   done < "$new_list"
-
-  awk -F',' -v OFS=',' -v list="$new_list" -v ts="$csv_timestamp" '
-    function canonical(name) {
-      gsub(/\r/, "", name)
-      sub(/\.hld\.tar\.gz$/, "", name)
-      sub(/\.hld-tar-gz$/, "", name)
-      sub(/\.tar\.gz$/, "", name)
-      sub(/\.hld$/, "", name)
-      sub(/\.dat$/, "", name)
-      return name
-    }
-    BEGIN {
-      while ((getline line < list) > 0) {
-        line = canonical(line)
-        if (line != "") {
-          seen[line] = 1
-        }
-      }
-      close(list)
-    }
-    NR == 1 { print; next }
-    {
-      base = canonical($1)
-      if (base in seen) {
-        $5 = ts
-      }
-      print
-    }
-  ' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
+  new_count=$(grep -c '' "$new_list")
+  echo "Registered $new_count new file(s) in $log_csv."
+else
+  echo "No new files transferred."
 fi
 
 

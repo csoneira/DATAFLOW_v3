@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import csv
+import re
 from ast import literal_eval
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
 def _parse_value(raw_value: str) -> Any:
@@ -15,8 +16,28 @@ def _parse_value(raw_value: str) -> Any:
     if lower_value in {"true", "false"}:
         return lower_value == "true"
     try:
-        return literal_eval(value)
+        parsed = literal_eval(value)
+        return parsed
     except (ValueError, SyntaxError):
+        bracket_stripped = value.strip()
+        if bracket_stripped.startswith("[") and bracket_stripped.endswith("]"):
+            inner = bracket_stripped[1:-1].strip()
+            if not inner:
+                return []
+            tokens = [tok for tok in re.split(r"[\s,;]+", inner) if tok]
+            parsed_tokens: List[Any] = []
+            for token in tokens:
+                try:
+                    parsed_tokens.append(literal_eval(token))
+                except (ValueError, SyntaxError):
+                    try:
+                        if "." in token or token.lower().startswith(("nan", "inf", "-")):
+                            parsed_tokens.append(float(token))
+                        else:
+                            parsed_tokens.append(int(token))
+                    except ValueError:
+                        parsed_tokens.append(token)
+            return parsed_tokens
         return value
 
 
@@ -67,4 +88,3 @@ def update_config_with_parameters(
     overrides = load_parameter_overrides(csv_path, station)
     config.update(overrides)
     return config
-

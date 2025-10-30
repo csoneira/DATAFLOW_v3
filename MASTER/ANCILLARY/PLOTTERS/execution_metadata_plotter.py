@@ -88,6 +88,17 @@ def plot_station(
     station: str, dataframes: Iterable[pd.DataFrame], pdf: PdfPages
 ) -> None:
     """Render a page with five subplots for one station."""
+    dataframes = list(dataframes)
+
+    median_minutes = []
+    for df in dataframes:
+        if df.empty:
+            continue
+        median_value = df["total_execution_time_minutes"].median()
+        if pd.notna(median_value):
+            median_minutes.append(median_value)
+    total_median_minutes = float(sum(median_minutes))
+
     current_time = datetime.now()
     fig, axes = plt.subplots(
         len(TASK_IDS),
@@ -96,7 +107,13 @@ def plot_station(
         sharex=True,
         constrained_layout=True,
     )
-    fig.suptitle(f"MINGO0{station} – Stage 1 Execution Metadata", fontsize=14)
+    fig.suptitle(
+        (
+            f"MINGO0{station} – Stage 1 Execution Metadata "
+            f"(Total median minutes/file: {total_median_minutes:.2f})"
+        ),
+        fontsize=14,
+    )
 
     if len(TASK_IDS) == 1:
         axes = [axes]  # type: ignore[list-item]
@@ -134,6 +151,7 @@ def plot_station(
             x,
             df["total_execution_time_minutes"],
             marker="o",
+            markersize=4,
             linestyle="-",
             color="tab:blue",
             label="Execution time (min)",
@@ -143,7 +161,8 @@ def plot_station(
         purity_line, = ax_second.plot(
             x,
             df["data_purity_percentage"],
-            marker="s",
+            marker="x",
+            markersize=4,
             linestyle="--",
             color="tab:red",
             label="Data purity (%)",

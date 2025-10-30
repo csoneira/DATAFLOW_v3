@@ -275,7 +275,12 @@ base_directories = {
 }
 
 # Create ALL directories if they don't already exist
-for directory in base_directories.values():
+directories_to_create = {
+    key: path
+    for key, path in base_directories.items()
+    if key not in {"list_events_directory"}
+}
+for directory in directories_to_create.values():
     os.makedirs(directory, exist_ok=True)
 
 # Path to big_event_data.csv
@@ -315,7 +320,7 @@ if files:  # Check if the directory contains any files
 #             print(f"Moved: {filename}")
 
 
-# Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
+# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -325,7 +330,10 @@ processing_directory = base_directories["processing_directory"]
 error_directory = base_directories["error_directory"]
 completed_directory = base_directories["completed_directory"]
 
-list_event_files = set(os.listdir(list_events_directory))
+if os.path.isdir(list_events_directory):
+    list_event_files = set(os.listdir(list_events_directory))
+else:
+    list_event_files = set()
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))

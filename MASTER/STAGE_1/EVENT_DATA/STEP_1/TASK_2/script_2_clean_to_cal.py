@@ -250,7 +250,7 @@ station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}"
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 if task_number == 1:
-    raw_directory = "RAW"
+    raw_directory = "STAGE_0_to_1"
 else:
     raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
 if task_number == 5:
@@ -297,7 +297,7 @@ csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
 status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 status_timestamp = append_status_row(status_csv_path)
 
-# Move files from RAW to RAW_TO_LIST/RAW_TO_LIST_FILES/UNPROCESSED,
+# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -391,7 +391,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             os.utime(empty_destination_path, (now, now))
 
 
-# Files to move: in RAW but not in UNPROCESSED, PROCESSING, or COMPLETED
+# Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
@@ -5269,7 +5269,7 @@ if crosstalk_removal_and_recalibration:
         working_st_df = working_st_df.copy()
     
     
-    if create_plots:
+    if create_plots or create_essential_plots:
     
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
@@ -5531,7 +5531,7 @@ if slewing_correction:
 
 
 
-if create_plots:
+if create_plots or create_essential_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
     plot_df = working_df.copy()

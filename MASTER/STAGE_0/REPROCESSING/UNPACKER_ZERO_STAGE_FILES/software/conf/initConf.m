@@ -24,7 +24,7 @@ else
     HOSTNAME    = 1;
     SYSTEMNAME  = env_system;
     % Software location
-    HOME        = '/home/mingo/DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/';
+    HOME        = '/home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/'; # <--------------------------------------------
     % System data structure
     SYS         = [HOME 'system/'];
     INTERPRETER = 'octave';
