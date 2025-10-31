@@ -30,7 +30,7 @@ def load_metadata_csv(station: str, task_id: int) -> pd.DataFrame:
         / "STEP_1"
         / f"TASK_{task_id}"
         / "METADATA"
-        / "execution_metadata.csv"
+        / f"step_{task_id}_metadata_execution.csv"
     )
     if not metadata_csv.exists():
         return pd.DataFrame()

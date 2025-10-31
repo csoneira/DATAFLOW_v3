@@ -687,16 +687,11 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
+# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
+# 0 -> regular analysis
+# 1 -> repeated, careful analysis
 global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
+    'analysis_mode': 0,
 }
 
 
@@ -771,6 +766,7 @@ self_trigger = False
 
 
 
+
 print("Creating the necessary directories...")
 
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
@@ -780,20 +776,22 @@ home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
+
+metadata_directory = os.path.join(raw_to_list_working_directory, "METADATA")
+
 if task_number == 1:
     raw_directory = "STAGE_0_to_1"
+    raw_working_directory = os.path.join(station_directory, raw_directory)
+    
 else:
     raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
+    raw_working_directory = os.path.join(base_directory, raw_directory)
+
 if task_number == 5:
     output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
 else:
     output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
-raw_working_directory = os.path.join(base_directory, raw_directory)
 
-# /home/mingo/DATAFLOW_v3/STATIONS/MINGO01/STAGE_1/EVENT_DATA/STEP_1/TASK_1/OUTPUT_FILES
-raw_working_directory = os.path.join(base_directory, "STEP_1/TASK_2/OUTPUT_FILES")
-
-raw_to_list_working_directory = os.path.join(base_directory, "STEP_1/TASK_3/")
 
 # Define directory paths relative to base_directory
 base_directories = {
@@ -815,18 +813,23 @@ base_directories = {
     "error_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/ERROR_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
-    "output_directory": os.path.join(raw_to_list_working_directory, "OUTPUT_FILES"),
     
+    "output_directory": os.path.join(raw_to_list_working_directory, "OUTPUT_FILES"),
+
     "raw_directory": os.path.join(raw_working_directory, "."),
+    
+    "metadata_directory": metadata_directory,
 }
 
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
-status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
-status_timestamp = append_status_row(status_csv_path)
+csv_path = os.path.join(metadata_directory, f"step_{task_number}_metadata_execution.csv")
+csv_path_specific = os.path.join(metadata_directory, f"step_{task_number}_metadata_specific.csv")
+
+# status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
+# status_timestamp = append_status_row(status_csv_path)
 
 # Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
@@ -951,34 +954,20 @@ home_path = config["home_path"]
 
 
 
-
-def save_execution_metadata(home_dir: str, station_id: str, task_id: int, row: Dict[str, object]) -> Path:
+def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
     """Append the execution metadata row to the per-task CSV."""
-    metadata_dir = (
-        Path(home_dir)
-        / "DATAFLOW_v3"
-        / "STATIONS"
-        / f"MINGO0{station_id}"
-        / "STAGE_1"
-        / "EVENT_DATA"
-        / "STEP_1"
-        / f"TASK_{task_id}"
-        / "METADATA"
-    )
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    metadata_path = metadata_dir / "execution_metadata.csv"
+    metadata_path = Path(metadata_path)
+    fieldnames = list(row.keys())
     file_exists = metadata_path.exists()
+    write_header = not file_exists
+    if file_exists:
+        try:
+            write_header = metadata_path.stat().st_size == 0
+        except OSError:
+            write_header = True
     with metadata_path.open("a", newline="") as csvfile:
-        writer = csv.DictWriter(
-            csvfile,
-            fieldnames=[
-                "filename_base",
-                "execution_timestamp",
-                "data_purity_percentage",
-                "total_execution_time_minutes",
-            ],
-        )
-        if not file_exists:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if write_header:
             writer.writeheader()
         writer.writerow(row)
     return metadata_path
@@ -2170,9 +2159,8 @@ for directory in base_directories.values():
 
 
 
-csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
-status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
-status_timestamp = append_status_row(status_csv_path)
+# status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
+# status_timestamp = append_status_row(status_csv_path)
 
 # Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
@@ -2480,7 +2468,7 @@ import sys
 KEY = "df"
 
 # Load dataframe
-working_df = pd.read_hdf(file_path, key=KEY)
+working_df = pd.read_parquet(file_path, engine="pyarrow")
 print(f"Cleaned dataframe reloaded from: {file_path}")
 
 original_number_of_events = len(working_df)
@@ -3604,16 +3592,25 @@ execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
 
-print("----------\nMetadata to be saved:")
+print("----------\nExecution metadata to be saved:")
 print(f"Filename base: {filename_base}")
 print(f"Execution timestamp: {execution_timestamp}")
 print(f"Data purity percentage: {data_purity_percentage:.2f}%")
 print(f"Total execution time: {total_execution_time_minutes:.2f} minutes\n----------")
 
-metadata_csv_path = save_execution_metadata(
-    home_path,
-    station,
-    task_number,
+
+# -------------------------------------------------------------------------------
+# Execution metadata ------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
+print("----------\nExecution metadata to be saved:")
+print(f"Filename base: {filename_base}")
+print(f"Execution timestamp: {execution_timestamp}")
+print(f"Data purity percentage: {data_purity_percentage:.2f}%")
+print(f"Total execution time: {total_execution_time_minutes:.2f} minutes\n----------")
+
+metadata_execution_csv_path = save_metadata(
+    csv_path,
     {
         "filename_base": filename_base,
         "execution_timestamp": execution_timestamp,
@@ -3621,11 +3618,37 @@ metadata_csv_path = save_execution_metadata(
         "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
     },
 )
-print(f"Metadata CSV updated at: {metadata_csv_path}")
+print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
+
+
+# -------------------------------------------------------------------------------
+# Specific metadata ------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
+global_variables["filename_base"] = filename_base
+global_variables["execution_timestamp"] = execution_timestamp
+
+# Print completely global_variables
+print("----------\nAll global variables to be saved:")
+for key, value in global_variables.items():
+    print(f"{key}: {value}")
+print("----------\n")
+
+print("----------\nSpecific metadata to be saved:")
+print(f"Filename base: {filename_base}")
+print(f"Execution timestamp: {execution_timestamp}")
+print(f"------------- Any other variable interesting -------------")
+print("\n----------")
+
+metadata_specific_csv_path = save_metadata(
+    csv_path_specific,
+    global_variables,
+)
+print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
 
 # Save to HDF5 file
-working_df.to_hdf(OUT_PATH, key=KEY, mode="w", format="table")
+working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Listed dataframe saved to: {OUT_PATH}")
 
 

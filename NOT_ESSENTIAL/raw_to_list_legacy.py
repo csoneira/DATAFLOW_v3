@@ -209,7 +209,8 @@ base_directories = {
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
+csv_path = os.path.join(metadata_directory, f"step_{task_number}_metadata_execution.csv")
+csv_path_specific = os.path.join(metadata_directory, f"step_{task_number}_metadata_specific.csv")
 status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 status_timestamp = append_status_row(status_csv_path)
 
@@ -1955,7 +1956,6 @@ if self_trigger:
     working_st_df = create_original_tt(working_st_df)
     working_st_df['original_tt'] = working_st_df['original_tt'].apply(builtins.int)
 
-:
 
 if create_plots or create_very_essential_plots or create_essential_plots:
     event_counts = working_df['original_tt'].value_counts()
@@ -2341,7 +2341,7 @@ if create_plots:
 
 
 if create_plots or create_essential_plots:
-:
+
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_TQ = axes_TQ.flatten()
@@ -3771,7 +3771,7 @@ if self_trigger:
 
 
 if create_essential_plots or create_plots:
-:
+
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
     plot_df = working_df.copy()
@@ -5886,7 +5886,7 @@ for plane in range(1, 5):
 
 
 if create_essential_plots or create_plots:
-:
+
     fig, axs = plt.subplots(4, 4, figsize=(20, 16))
     fig.suptitle("Double Gaussian Fits for $T_\\mathrm{sum}$ Distributions", fontsize=16)
 
@@ -6242,7 +6242,7 @@ print("Active strips per plane calculated.")
 print(working_df[['active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4']].head())
 
 if create_essential_plots or create_plots:
-:
+
     fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 12), sharex=True, sharey=True)
     colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red']
     y_max = 0
@@ -6400,9 +6400,8 @@ if create_plots:
                 plt.close()
 
 
-:
+
 if create_plots or create_essential_plots:
- or create_very_essential_plots or create_essential_plots:
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
@@ -6454,9 +6453,7 @@ if create_plots or create_essential_plots:
     plt.close()
 
 
-:
 if create_plots or create_essential_plots:
- or create_very_essential_plots or create_essential_plots:
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
@@ -6669,7 +6666,6 @@ if y_new_method:
 
 if create_essential_plots or create_plots:
 # if create_very_essential_plots or create_essential_plots or create_plots:
-:
     for posfiltered_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
         mask = working_df['posfiltered_tt'] == posfiltered_tt
         filtered_df = working_df[mask].copy()  # Work on a copy for fitting
@@ -6707,7 +6703,7 @@ print("------------ Last comprobation to the per-strip variables ------------")
 print("----------------------------------------------------------------------")
 
 if create_plots or create_essential_plots:
-:
+
 
     for i_plane in range(1, 5):
         
@@ -7012,7 +7008,6 @@ if stratos_save:
 
 # Same for hexbin
 if create_plots or create_essential_plots:
-:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -8604,7 +8599,6 @@ if create_very_essential_plots or create_essential_plots or (create_plots and re
 
 
 
-:
 
 if create_plots or create_very_essential_plots or create_essential_plots:
 
@@ -9091,7 +9085,6 @@ if create_plots or create_very_essential_plots or create_essential_plots:
 
 
 
-:
 if create_plots or create_essential_plots or create_very_essential_plots:
     df_filtered = df_plot_ancillary.copy()
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
@@ -9131,7 +9124,6 @@ if create_plots or create_essential_plots or create_very_essential_plots:
 
 
 
-:
 if create_plots or create_essential_plots or create_very_essential_plots:
     df_filtered = df_plot_ancillary.copy()
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
@@ -9180,7 +9172,7 @@ print(f"Data purity is {data_purity:.1f}%")
 global_variables['purity_of_data_percentage'] = data_purity
 
 if create_plots or create_essential_plots:
-:
+
     column_chosen = "definitive_tt"
     plot_ancillary_df = definitive_df.copy()
     
@@ -9252,7 +9244,6 @@ if create_plots or create_essential_plots:
 
 
 if create_plots or create_essential_plots:
-:
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12))
     colors = plt.colormaps['tab10']

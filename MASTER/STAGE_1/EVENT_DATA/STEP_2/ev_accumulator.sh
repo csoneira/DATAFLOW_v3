@@ -39,7 +39,7 @@ while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]];
 done
 STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
 STATUS_TIMESTAMP=""
-STATUS_CSV=""
+# STATUS_CSV=""
 
 # If $1 is not 1, 2, 3, 4, exit
 if [[ ! "$station" =~ ^[1-4]$ ]]; then
@@ -105,18 +105,18 @@ station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
 base_working_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station/STAGE_1/EVENT_DATA"
 
 mkdir -p "$base_working_directory"
-STATUS_CSV="$base_working_directory/ev_accumulator_status.csv"
-if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
-  echo "Warning: unable to record status in $STATUS_CSV" >&2
-  STATUS_TIMESTAMP=""
-fi
+# STATUS_CSV="$base_working_directory/ev_accumulator_status.csv"
+# if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
+#   echo "Warning: unable to record status in $STATUS_CSV" >&2
+#   STATUS_TIMESTAMP=""
+# fi
 
-finish() {
-  local exit_code="$1"
-  if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
-    python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
-  fi
-}
+# finish() {
+#   local exit_code="$1"
+#   if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
+#     python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
+#   fi
+# }
 
 trap 'finish $?' EXIT
 
@@ -142,6 +142,8 @@ echo '------------------------------------------------------'
 # Process the data: event_accumulator.py
 echo "Processing list files with Python script (event_accumulator.py)..."
 python3 -u "$event_accumulator_directory" "$station"
+
+rm -r "$base_working_directory/tmp"
 
 echo '------------------------------------------------------'
 echo "ev_accumulator.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"

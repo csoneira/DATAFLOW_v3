@@ -144,34 +144,20 @@ home_path = config["home_path"]
 
 
 
-
-def save_execution_metadata(home_dir: str, station_id: str, task_id: int, row: Dict[str, object]) -> Path:
+def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
     """Append the execution metadata row to the per-task CSV."""
-    metadata_dir = (
-        Path(home_dir)
-        / "DATAFLOW_v3"
-        / "STATIONS"
-        / f"MINGO0{station_id}"
-        / "STAGE_1"
-        / "EVENT_DATA"
-        / "STEP_1"
-        / f"TASK_{task_id}"
-        / "METADATA"
-    )
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    metadata_path = metadata_dir / "execution_metadata.csv"
+    metadata_path = Path(metadata_path)
+    fieldnames = list(row.keys())
     file_exists = metadata_path.exists()
+    write_header = not file_exists
+    if file_exists:
+        try:
+            write_header = metadata_path.stat().st_size == 0
+        except OSError:
+            write_header = True
     with metadata_path.open("a", newline="") as csvfile:
-        writer = csv.DictWriter(
-            csvfile,
-            fieldnames=[
-                "filename_base",
-                "execution_timestamp",
-                "data_purity_percentage",
-                "total_execution_time_minutes",
-            ],
-        )
-        if not file_exists:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if write_header:
             writer.writeheader()
         writer.writerow(row)
     return metadata_path
@@ -351,6 +337,9 @@ home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
+
+metadata_directory = os.path.join(raw_to_list_working_directory, "METADATA")
+
 if task_number == 1:
     raw_directory = "STAGE_0_to_1"
 else:
@@ -389,15 +378,19 @@ base_directories = {
     "output_directory": os.path.join(raw_to_list_working_directory, "OUTPUT_FILES"),
     
     "raw_directory": os.path.join(raw_working_directory, "."),
+    
+    "metadata_directory": metadata_directory,
 }
 
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
-status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
-status_timestamp = append_status_row(status_csv_path)
+csv_path = os.path.join(metadata_directory, f"step_{task_number}_metadata_execution.csv")
+csv_path_specific = os.path.join(metadata_directory, f"step_{task_number}_metadata_specific.csv")
+
+# status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
+# status_timestamp = append_status_row(status_csv_path)
 
 # Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
@@ -466,9 +459,8 @@ for directory in base_directories.values():
 
 
 
-csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
-status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
-status_timestamp = append_status_row(status_csv_path)
+# status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
+# status_timestamp = append_status_row(status_csv_path)
 
 # Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
@@ -777,7 +769,7 @@ import sys
 KEY = "df"
 
 # Load dataframe
-working_df = pd.read_hdf(file_path, key=KEY)
+working_df = pd.read_parquet(file_path, engine="pyarrow")
 print(f"Listed dataframe reloaded from: {file_path}")
 
 
@@ -5109,95 +5101,95 @@ def _pipeline_compute_start_timestamp(base: str) -> str:
     return ''
 
 
-def _update_pipeline_csv_for_list_event() -> None:
-    csv_headers = [
-        'basename',
-        'start_date',
-        'hld_remote_add_date',
-        'hld_local_add_date',
-        'dat_add_date',
-        'list_ev_name',
-        'list_ev_add_date',
-        'acc_name',
-        'acc_add_date',
-        'merge_add_date',
-    ]
+# def _update_pipeline_csv_for_list_event() -> None:
+#     csv_headers = [
+#         'basename',
+#         'start_date',
+#         'hld_remote_add_date',
+#         'hld_local_add_date',
+#         'dat_add_date',
+#         'list_ev_name',
+#         'list_ev_add_date',
+#         'acc_name',
+#         'acc_add_date',
+#         'merge_add_date',
+#     ]
 
-    station_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
-    csv_path = station_dir / f'database_status_{station}.csv'
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    if not csv_path.exists():
-        with csv_path.open('w', newline='') as handle:
-            writer = csv.writer(handle)
-            writer.writerow(csv_headers)
+#     station_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
+#     csv_path = station_dir / f'database_status_{station}.csv'
+#     csv_path.parent.mkdir(parents=True, exist_ok=True)
+#     if not csv_path.exists():
+#         with csv_path.open('w', newline='') as handle:
+#             writer = csv.writer(handle)
+#             writer.writerow(csv_headers)
 
-    base_name = _pipeline_strip_suffix(os.path.basename(the_filename))
-    list_event_name = save_filename
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    start_value = _pipeline_compute_start_timestamp(base_name)
+#     base_name = _pipeline_strip_suffix(os.path.basename(the_filename))
+#     list_event_name = save_filename
+#     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+#     start_value = _pipeline_compute_start_timestamp(base_name)
 
-    rows: List[dict[str, str]] = []
-    with csv_path.open('r', newline='') as handle:
-        reader = csv.DictReader(handle)
-        rows.extend(reader)
+#     rows: List[dict[str, str]] = []
+#     with csv_path.open('r', newline='') as handle:
+#         reader = csv.DictReader(handle)
+#         rows.extend(reader)
 
-    found = False
-    for row in rows:
-        if row.get('basename', '') == base_name:
-            found = True
-            if not row.get('start_date') and start_value:
-                row['start_date'] = start_value
-            row['list_ev_name'] = list_event_name
-            row['list_ev_add_date'] = timestamp
-            break
+#     found = False
+#     for row in rows:
+#         if row.get('basename', '') == base_name:
+#             found = True
+#             if not row.get('start_date') and start_value:
+#                 row['start_date'] = start_value
+#             row['list_ev_name'] = list_event_name
+#             row['list_ev_add_date'] = timestamp
+#             break
 
-    if not found:
-        new_row = {header: '' for header in csv_headers}
-        new_row['basename'] = base_name
-        if start_value:
-            new_row['start_date'] = start_value
-        new_row['list_ev_name'] = list_event_name
-        new_row['list_ev_add_date'] = timestamp
-        rows.append(new_row)
+#     if not found:
+#         new_row = {header: '' for header in csv_headers}
+#         new_row['basename'] = base_name
+#         if start_value:
+#             new_row['start_date'] = start_value
+#         new_row['list_ev_name'] = list_event_name
+#         new_row['list_ev_add_date'] = timestamp
+#         rows.append(new_row)
 
-    # Ensure existing list events on disk are reflected in the CSV
-    list_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}' / 'STAGE_1' / 'EVENT_DATA' / 'LIST_EVENTS_DIRECTORY'
-    existing_names = {row.get('list_ev_name', '') for row in rows}
+#     # Ensure existing list events on disk are reflected in the CSV
+#     list_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}' / 'STAGE_1' / 'EVENT_DATA' / 'LIST_EVENTS_DIRECTORY'
+#     existing_names = {row.get('list_ev_name', '') for row in rows}
 
-    if list_dir.exists():
-        for list_path in sorted(list_dir.glob('list_events_*.txt')):
-            list_name = list_path.name
-            if list_name in existing_names:
-                continue
+#     if list_dir.exists():
+#         for list_path in sorted(list_dir.glob('list_events_*.txt')):
+#             list_name = list_path.name
+#             if list_name in existing_names:
+#                 continue
 
-            derived_base = _pipeline_strip_suffix(list_name)
-            derived_start = ''
-            stem = Path(list_name).stem
-            if stem.startswith('list_events_'):
-                stamp = stem[len('list_events_'):]
-                try:
-                    dt = datetime.strptime(stamp, '%Y.%m.%d_%H.%M.%S')
-                    derived_start = dt.strftime('%Y-%m-%d_%H.%M.%S')
-                except ValueError:
-                    derived_start = ''
+#             derived_base = _pipeline_strip_suffix(list_name)
+#             derived_start = ''
+#             stem = Path(list_name).stem
+#             if stem.startswith('list_events_'):
+#                 stamp = stem[len('list_events_'):]
+#                 try:
+#                     dt = datetime.strptime(stamp, '%Y.%m.%d_%H.%M.%S')
+#                     derived_start = dt.strftime('%Y-%m-%d_%H.%M.%S')
+#                 except ValueError:
+#                     derived_start = ''
 
-            add_timestamp = datetime.fromtimestamp(list_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-            filler = {header: '' for header in csv_headers}
-            filler['basename'] = derived_base
-            if derived_start:
-                filler['start_date'] = derived_start
-            filler['list_ev_name'] = list_name
-            filler['list_ev_add_date'] = add_timestamp
-            rows.append(filler)
-            existing_names.add(list_name)
+#             add_timestamp = datetime.fromtimestamp(list_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+#             filler = {header: '' for header in csv_headers}
+#             filler['basename'] = derived_base
+#             if derived_start:
+#                 filler['start_date'] = derived_start
+#             filler['list_ev_name'] = list_name
+#             filler['list_ev_add_date'] = add_timestamp
+#             rows.append(filler)
+#             existing_names.add(list_name)
 
-    with csv_path.open('w', newline='') as handle:
-        writer = csv.DictWriter(handle, fieldnames=csv_headers)
-        writer.writeheader()
-        writer.writerows(rows)
+#     with csv_path.open('w', newline='') as handle:
+#         writer = csv.DictWriter(handle, fieldnames=csv_headers)
+#         writer.writeheader()
+#         writer.writerows(rows)
 
 
-_update_pipeline_csv_for_list_event()
+# _update_pipeline_csv_for_list_event()
 
 
 
@@ -5266,7 +5258,7 @@ end_execution_time_counting = datetime.now()
 time_taken = (end_execution_time_counting - start_execution_time_counting).total_seconds() / 60
 print(f"Time taken for the whole execution: {time_taken:.2f} minutes")
 
-mark_status_complete(status_csv_path, status_timestamp)
+# mark_status_complete(status_csv_path, status_timestamp)
 
 print("----------------------------------------------------------------------")
 print("------------------- Finished list_events creation --------------------")
@@ -5392,16 +5384,19 @@ execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
 
-print("----------\nMetadata to be saved:")
+
+# -------------------------------------------------------------------------------
+# Execution metadata ------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
+print("----------\nExecution metadata to be saved:")
 print(f"Filename base: {filename_base}")
 print(f"Execution timestamp: {execution_timestamp}")
 print(f"Data purity percentage: {data_purity_percentage:.2f}%")
 print(f"Total execution time: {total_execution_time_minutes:.2f} minutes\n----------")
 
-metadata_csv_path = save_execution_metadata(
-    home_path,
-    station,
-    task_number,
+metadata_execution_csv_path = save_metadata(
+    csv_path,
     {
         "filename_base": filename_base,
         "execution_timestamp": execution_timestamp,
@@ -5409,8 +5404,48 @@ metadata_csv_path = save_execution_metadata(
         "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
     },
 )
-print(f"Metadata CSV updated at: {metadata_csv_path}")
+print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
+
+
+# -------------------------------------------------------------------------------
+# Specific metadata ------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
+global_variables["filename_base"] = filename_base
+global_variables["execution_timestamp"] = execution_timestamp
+
+# Print completely global_variables
+print("----------\nAll global variables to be saved:")
+for key, value in global_variables.items():
+    print(f"{key}: {value}")
+print("----------\n")
+
+print("----------\nSpecific metadata to be saved:")
+print(f"Filename base: {filename_base}")
+print(f"Execution timestamp: {execution_timestamp}")
+print(f"------------- Any other variable interesting -------------")
+print("\n----------")
+
+metadata_specific_csv_path = save_metadata(
+    csv_path_specific,
+    global_variables,
+)
+print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
 # Save to HDF5 file
-reduced_df.to_hdf(OUT_PATH, key=KEY, mode="w", format="table")
+
+working_df = reduced_df
+working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Listed dataframe saved to: {OUT_PATH}")
+
+# Move the original datafile to COMPLETED -------------------------------------
+print("Moving file to COMPLETED directory...")
+
+if user_file_selection == False:
+    shutil.move(file_path, completed_file_path)
+    now = time.time()
+    os.utime(completed_file_path, (now, now))
+    print("************************************************************")
+    print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
+    print("************************************************************")
+

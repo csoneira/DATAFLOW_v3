@@ -139,33 +139,20 @@ except NameError:
     pass
 home_path = config["home_path"]
 
-def save_execution_metadata(home_dir: str, station_id: str, task_id: int, row: Dict[str, object]) -> Path:
+def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
     """Append the execution metadata row to the per-task CSV."""
-    metadata_dir = (
-        Path(home_dir)
-        / "DATAFLOW_v3"
-        / "STATIONS"
-        / f"MINGO0{station_id}"
-        / "STAGE_1"
-        / "EVENT_DATA"
-        / "STEP_1"
-        / f"TASK_{task_id}"
-        / "METADATA"
-    )
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    metadata_path = metadata_dir / "execution_metadata.csv"
+    metadata_path = Path(metadata_path)
+    fieldnames = list(row.keys())
     file_exists = metadata_path.exists()
+    write_header = not file_exists
+    if file_exists:
+        try:
+            write_header = metadata_path.stat().st_size == 0
+        except OSError:
+            write_header = True
     with metadata_path.open("a", newline="") as csvfile:
-        writer = csv.DictWriter(
-            csvfile,
-            fieldnames=[
-                "filename_base",
-                "execution_timestamp",
-                "data_purity_percentage",
-                "total_execution_time_minutes",
-            ],
-        )
-        if not file_exists:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if write_header:
             writer.writeheader()
         writer.writerow(row)
     return metadata_path
@@ -222,6 +209,8 @@ station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}"
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
+metadata_directory = os.path.join(raw_to_list_working_directory, "METADATA")
+
 if task_number == 1:
     raw_directory = "STAGE_0_to_1"
     raw_working_directory = os.path.join(station_directory, raw_directory)
@@ -260,13 +249,17 @@ base_directories = {
     "output_directory": os.path.join(raw_to_list_working_directory, "OUTPUT_FILES"),
 
     "raw_directory": os.path.join(raw_working_directory, "."),
+    
+    "metadata_directory": metadata_directory,
 }
 
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(base_directory, "raw_to_list_metadata.csv")
+csv_path = os.path.join(metadata_directory, f"step_{task_number}_metadata_execution.csv")
+csv_path_specific = os.path.join(metadata_directory, f"step_{task_number}_metadata_specific.csv")
+
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
 
@@ -937,16 +930,12 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
+
+# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
+# 0 -> regular analysis
+# 1 -> repeated, careful analysis
 global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
+    'analysis_mode': 0,
 }
 
 
@@ -1619,15 +1608,24 @@ basename_no_ext, file_extension = os.path.splitext(the_filename)
 print(f"File basename (no extension): {basename_no_ext}")
 
 analysis_date = datetime.now().strftime("%Y-%m-%d")
-print(f"Analysis date and time: {analysis_date}")
+# print(f"Analysis date and time: {analysis_date}")
 
 # Modify the time of the processing file to the current time so it looks fresh
 now = time.time()
 os.utime(processing_file_path, (now, now))
 
 # Check the station number in the datafile
+# It might be that the data header is, instead of mi01: minI, which is the same, in that
+# case consider minI as mi01
 try:
-    file_station_number = int(file_name[3])  # 4th character (index 3)
+    station_label = file_name[3]  # 4th character (index 3)
+    print(f'File station number is: {station_label}')
+    
+    if station_label == "I":
+        print("Station label is 'I', interpreting as station 1.")
+        station_label = int(1)
+
+    file_station_number = int(station_label)  # 4th character (index 3)
     if file_station_number != int(station):
         print(f'File station number is: {file_station_number}, it does not match.')
         # Move the file to the ERROR directory
@@ -1770,7 +1768,7 @@ print(f"Processed file has {written_lines} lines.")
 valid_lines_in_dat_file = written_lines/read_lines * 100
 print(f"--> A {valid_lines_in_dat_file:.2f}% of the lines were valid.\n")
 
-global_variables['valid_lines_in_dat_file'] =  valid_lines_in_dat_file
+global_variables['valid_lines_in_binary_file_percentage'] =  valid_lines_in_dat_file
 
 # Assign name to the columns
 read_df.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, 71)]
@@ -1859,11 +1857,6 @@ else:
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
 
-# Save the z_positions in the metadata file
-global_variables['z_P1'] =  z_positions[0]
-global_variables['z_P2'] =  z_positions[1]
-global_variables['z_P3'] =  z_positions[2]
-global_variables['z_P4'] =  z_positions[3]
 
 
 print("----------------------------------------------------------------------")
@@ -1963,7 +1956,7 @@ for key, idx_range in column_indices.items():
     for i in range(1, len(idx_range) + 1):
         colname = f"{key}_{i}"
         count = (working_df[colname] != 0).sum()
-        global_var_name = f"{key}_{i}_entries"
+        global_var_name = f"{key}_{i}_entries_original"
         global_variables[global_var_name] = count
 
 
@@ -2686,10 +2679,31 @@ print(f"Original number of events in the dataframe: {original_number_of_events}"
 final_number_of_events = len(working_df)
 print(f"Final number of events in the dataframe: {final_number_of_events}")
 
+
+
+
+# ----------------------------------------------------------------------------------
+# Count the number of non-zero entries per channel in the whole dataframe ----------
+# ----------------------------------------------------------------------------------
+
+# Count per each column the number of non-zero entries and save it in a column of
+# global_variables called TX_F_Y_entries or TX_B_Y_entries
+
+# Count for main dataframe (non-self-trigger)
+for key, idx_range in column_indices.items():
+    for i in range(1, len(idx_range) + 1):
+        colname = f"{key}_{i}"
+        count = (working_df[colname] != 0).sum()
+        global_var_name = f"{key}_{i}_entries_final"
+        global_variables[global_var_name] = count
+
+
+
+
+
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
 print(f"Data purity is {data_purity:.2f}%")
-global_variables['purity_of_data_percentage'] = data_purity
 
 
 # End of the execution time
@@ -2705,16 +2719,20 @@ execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
 
-print("----------\nMetadata to be saved:")
+
+
+# -------------------------------------------------------------------------------
+# Execution metadata ------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
+print("----------\nExecution metadata to be saved:")
 print(f"Filename base: {filename_base}")
 print(f"Execution timestamp: {execution_timestamp}")
 print(f"Data purity percentage: {data_purity_percentage:.2f}%")
 print(f"Total execution time: {total_execution_time_minutes:.2f} minutes\n----------")
 
-metadata_csv_path = save_execution_metadata(
-    home_path,
-    station,
-    task_number,
+metadata_execution_csv_path = save_metadata(
+    csv_path,
     {
         "filename_base": filename_base,
         "execution_timestamp": execution_timestamp,
@@ -2722,12 +2740,39 @@ metadata_csv_path = save_execution_metadata(
         "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
     },
 )
-print(f"Metadata CSV updated at: {metadata_csv_path}")
+print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
+
+
+# -------------------------------------------------------------------------------
+# Specific metadata ------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
+global_variables["filename_base"] = filename_base
+global_variables["execution_timestamp"] = execution_timestamp
+
+# Print completely global_variables
+print("----------\nAll global variables to be saved:")
+for key, value in global_variables.items():
+    print(f"{key}: {value}")
+print("----------\n")
+
+print("----------\nSpecific metadata to be saved:")
+print(f"Filename base: {filename_base}")
+print(f"Execution timestamp: {execution_timestamp}")
+print(f"------------- Any other variable interesting -------------")
+print("\n----------")
+
+metadata_specific_csv_path = save_metadata(
+    csv_path_specific,
+    global_variables,
+)
+print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
+
 
 
 
 # Save to HDF5 file
-working_df.to_hdf(OUT_PATH, key=KEY, mode="w", format="table")
+working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Cleaned dataframe saved to: {OUT_PATH}")
 
 
