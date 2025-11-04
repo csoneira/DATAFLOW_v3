@@ -26,12 +26,37 @@ print("  | |                                                                    
 print("\n\n")
 
 
+
+
+
+import sys
+from pathlib import Path
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+
+
 # -----------------------------------------------------------------------------
 # ------------------------------- Imports -------------------------------------
 # -----------------------------------------------------------------------------
 
+import warnings
+
 # ----------------------------- Standard Library -----------------------------
 import os
+import re
 import sys
 import math
 import random
@@ -85,7 +110,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
@@ -96,6 +120,48 @@ with open(config_file_path, "r") as config_file:
 home_path = config["home_path"]
 
 
+def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
+    """Append a metadata row to the provided CSV path."""
+    metadata_path = Path(metadata_path)
+    fieldnames = list(row.keys())
+    file_exists = metadata_path.exists()
+    write_header = not file_exists
+    if file_exists:
+        try:
+            write_header = metadata_path.stat().st_size == 0
+        except OSError:
+            write_header = True
+    with metadata_path.open("a", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+    return metadata_path
+
+# Image Processing
+from PIL import Image
+
+# Progress Bar
+from tqdm import tqdm
+
+# Warning Filters
+warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
+
+import yaml
+
+start_timer(__file__)
+user_home = os.path.expanduser("~")
+config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
+parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
+print(f"Using config file: {config_file_path}")
+with open(config_file_path, "r") as config_file:
+    config = yaml.safe_load(config_file)
+try:
+    config = update_config_with_parameters(config, parameter_config_file_path, station)
+except NameError:
+    pass
+home_path = config["home_path"]
+
 # General Settings
 correct_angle = config["correct_angle"]
 last_file_test = config["last_file_test"]
@@ -105,15 +171,15 @@ run_jupyter_notebook = config["run_jupyter_notebook"]
 remove_outliers = config["remove_outliers"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-create_very_essential_plots = config["create_very_essential_plots"]
+# create_very_essential_plots = config["create_very_essential_plots"]
 save_plots = config["save_plots"]
 create_pdf = config["create_pdf"]
 force_replacement = config["force_replacement"]
 show_plots = config["show_plots"]
 
 # Angular Region Selection
-theta_boundaries = config["theta_boundaries"]
-region_layout = config["region_layout"]
+# theta_boundaries = config["theta_boundaries"]
+# region_layout = config["region_layout"]
 
 # Particular Analysis Settings
 side_calculations = config["side_calculations"]
@@ -164,7 +230,7 @@ print("----------------------------------------------------------------------")
 
 # Load calibration
 home_path = config["home_path"]
-tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/tot_to_charge_calibration.csv"
+tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv"
 FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
 FEE_calibration = {
     "Width": FEE_calibration_df['Width'].tolist(),
@@ -247,16 +313,22 @@ plot_list = []
 
 config_files_directory = os.path.expanduser(f"~/DATAFLOW_v3/CONFIG_FILES/")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
-working_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
+base_event_directory = os.path.join(station_directory, "STAGE_1", "EVENT_DATA")
+step1_to_2_directory = os.path.join(base_event_directory, "STEP_1_TO_2_OUTPUT")
+working_directory = os.path.join(base_event_directory, "STEP_2")
 acc_working_directory = os.path.join(working_directory, "LIST_TO_ACC")
+metadata_directory = os.path.join(working_directory, "METADATA")
 
+os.makedirs(working_directory, exist_ok=True)
+os.makedirs(metadata_directory, exist_ok=True)
+
+csv_execution_metadata_path = os.path.join(metadata_directory, "step_2_metadata_execution.csv")
+csv_specific_metadata_path = os.path.join(metadata_directory, "step_2_metadata_specific.csv")
 csv_path = os.path.join(working_directory, "event_accumulator_metadata.csv")
-status_csv_path = os.path.join(working_directory, "event_accumulator_status.csv")
-status_timestamp = append_status_row(status_csv_path)
 
 # Define subdirectories relative to the working directory
 base_directories = {
-    "list_events_directory": os.path.join(working_directory, "LIST_EVENTS_DIRECTORY"),
+    "list_events_directory": step1_to_2_directory,
     
     "base_plots_directory": os.path.join(acc_working_directory, "PLOTS"),
     
@@ -294,6 +366,72 @@ if files:  # Check if the directory contains any files
     print("Removing all files in the figure_directory...")
     for file in files:
         os.remove(os.path.join(figure_directory, file))
+
+
+
+
+
+def _coerce_numeric_sequence(raw_value, caster):
+    """Return a list of numbers parsed from *raw_value*."""
+    if isinstance(raw_value, (list, tuple, np.ndarray)):
+        result: List[float] = []
+        for item in raw_value:
+            result.extend(_coerce_numeric_sequence(item, caster))
+        return result
+    if isinstance(raw_value, str):
+        cleaned = raw_value.strip()
+        if not cleaned:
+            return []
+        try:
+            parsed = literal_eval(cleaned)
+        except (ValueError, SyntaxError):
+            cleaned = cleaned.replace("[", " ").replace("]", " ")
+            tokens = [tok for tok in re.split(r"[;,\\s]+", cleaned) if tok]
+            result = []
+            for tok in tokens:
+                try:
+                    result.append(caster(tok))
+                except (ValueError, TypeError):
+                    continue
+            return result
+        else:
+            return _coerce_numeric_sequence(parsed, caster)
+    if np.isscalar(raw_value):
+        try:
+            return [caster(raw_value)]
+        except (ValueError, TypeError):
+            return []
+    return []
+
+
+theta_boundaries_raw = config.get("theta_boundaries", [])
+region_layout_raw = config.get("region_layout", [])
+
+theta_boundaries = _coerce_numeric_sequence(theta_boundaries_raw, float)
+theta_values = []
+for b in theta_boundaries:
+    if isinstance(b, (int, float)) and np.isfinite(b):
+        b_float = float(b)
+        if 0 <= b_float <= 90 and b_float not in theta_values:
+            theta_values.append(b_float)
+theta_boundaries = theta_values
+
+region_layout = _coerce_numeric_sequence(region_layout_raw, int)
+region_layout = [max(1, int(abs(n))) for n in region_layout if isinstance(n, (int, float))]
+
+expected_regions = len(theta_boundaries) + 1
+if not region_layout:
+    region_layout = [1] * expected_regions
+elif len(region_layout) < expected_regions:
+    region_layout = region_layout + [region_layout[-1]] * (expected_regions - len(region_layout))
+elif len(region_layout) > expected_regions:
+    region_layout = region_layout[:expected_regions]
+
+if not theta_boundaries:
+    theta_boundaries = []
+
+
+print(f"Theta boundaries (degrees): {theta_boundaries}")
 
 
 # --------------------------------------------------------------------------------------------
@@ -487,9 +625,25 @@ file_path = processing_file_path
 now = time.time()
 os.utime(processing_file_path, (now, now))
 
-df = pd.read_csv(file_path, sep=',')
+
+
+import glob
+import pandas as pd
+import random
+import os
+import sys
+
+KEY = "df"
+
+# Load dataframe
+df = pd.read_parquet(file_path, engine="pyarrow")
+initial_event_count = len(df)
+final_event_count = initial_event_count
+print(f"Listed dataframe reloaded from: {file_path}")
+
+
 df['Time'] = pd.to_datetime(df['Time'], errors='coerce') # Added errors='coerce' to handle NaT values
-print(f"Number of events in the file: {len(df)}")
+print(f"Number of events in the file: {initial_event_count}")
 
 min_time_original = df['Time'].min()
 max_time_original = df['Time'].max()
@@ -506,12 +660,43 @@ if multiple_files:
     time_tolerance = timedelta(minutes=time_tolerance_in_minutes)
     
     # Extract timestamp from filename
-    def extract_datetime_from_filename(name):
+    def extract_datetime_from_filename(name: str) -> Optional[datetime]:
+        """
+        Parse a timestamp from a pipeline filename.
+
+        Supports the legacy pattern (..._YYYY.MM.DD_HH.MM.SS.ext) and the newer
+        MINGO convention where the basename embeds YYJJJHHMMSS, e.g.
+        corrected_mi0124176060611.parquet.
+        """
+        stem = Path(name).stem
+
+        # First, try the legacy explicit timestamp.
         try:
-            parts = name.split('_')
-            dt_str = parts[2] + '_' + parts[3].replace('.txt', '')
-            return datetime.strptime(dt_str, "%Y.%m.%d_%H.%M.%S")
+            parts = stem.split("_")
+            if len(parts) >= 4:
+                dt_str = parts[-2] + "_" + parts[-1]
+                return datetime.strptime(dt_str, "%Y.%m.%d_%H.%M.%S")
         except Exception:
+            pass
+
+        # Fallback to the YYJJJHHMMSS encoding (after optional prefix removal).
+        cleaned = re.sub(r"^(listed|cleaned|calibrated|fitted|corrected|accumulated)_", "", stem)
+        match = re.search(r"(mi0\d)(\d{11})$", cleaned, re.IGNORECASE)
+        if not match:
+            return None
+
+        digits = match.group(2)
+        try:
+            yy = int(digits[0:2])
+            doy = int(digits[2:5])
+            hh = int(digits[5:7])
+            mm_val = int(digits[7:9])
+            ss = int(digits[9:11])
+
+            year = 2000 + yy
+            base_date = datetime(year, 1, 1) + timedelta(days=doy - 1)
+            return base_date.replace(hour=hh, minute=mm_val, second=ss)
+        except ValueError:
             return None
 
     reference_filename = os.path.basename(file_path)
@@ -3794,7 +3979,7 @@ if side_calculations:
         print(induction_section_df)
         
         # Load the LUT
-        lut_file = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/lut.csv"
+        lut_file = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/INDUCTION_SECTION/induction_section_lut.csv"
         lut_df = pd.read_csv(lut_file)
 
         # Initialize a list to store the best induction section values for each plane
@@ -4974,124 +5159,14 @@ pivoted.columns = [f"{tt}_{region}" for tt, region in pivoted.columns]
 pivoted['events'] = pivoted.sum(axis=1)
 pivoted = pivoted.reset_index()
 
+final_event_count = len(df)
+
 # --- 7. Save to disk ---
 pivoted.to_csv(save_path, index=False, sep=',', float_format='%.5g')
 print(f"Accumulated columns datafile saved in {save_filename}. Path is {save_path}")
 
 
-# -----------------------------------------------------------------------------
-# Update pipeline status CSV with accumulation metadata
-# -----------------------------------------------------------------------------
-def _pipeline_strip_suffix(name: str) -> str:
-    for suffix in ('.txt', '.csv', '.dat', '.hld.tar.gz', '.hld-tar-gz', '.hld'):
-        if name.endswith(suffix):
-            return name[: -len(suffix)]
-    return name
-
-
-def _pipeline_compute_start_timestamp(base: str) -> str:
-    digits = base[-11:]
-    if len(digits) == 11 and digits.isdigit():
-        yy = int(digits[:2])
-        doy = int(digits[2:5])
-        hh = int(digits[5:7])
-        mm = int(digits[7:9])
-        ss = int(digits[9:11])
-        year = 2000 + yy
-        try:
-            dt = datetime(year, 1, 1) + timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
-            return dt.strftime('%Y-%m-%d_%H.%M.%S')
-        except ValueError:
-            return ''
-    return ''
-
-
-# def _update_pipeline_csv_for_accumulation() -> None:
-#     csv_headers = [
-#         'basename',
-#         'start_date',
-#         'hld_remote_add_date',
-#         'hld_local_add_date',
-#         'dat_add_date',
-#         'list_ev_name',
-#         'list_ev_add_date',
-#         'acc_name',
-#         'acc_add_date',
-#         'merge_add_date',
-#     ]
-
-#     station_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
-#     csv_path = station_dir / f'database_status_{station}.csv'
-#     csv_path.parent.mkdir(parents=True, exist_ok=True)
-#     if not csv_path.exists():
-#         with csv_path.open('w', newline='') as handle:
-#             csv.writer(handle).writerow(csv_headers)
-
-#     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-#     acc_filename = save_filename
-#     list_event_set = {Path(name).name for name in used_files_names}
-
-#     rows: list[dict[str, str]] = []
-#     with csv_path.open('r', newline='') as handle:
-#         reader = csv.DictReader(handle)
-#         rows.extend(reader)
-
-#     updated = False
-#     for row in rows:
-#         list_ev_name = row.get('list_ev_name', '')
-#         if list_ev_name in list_event_set:
-#             if not row.get('start_date'):
-#                 base_name = row.get('basename', '')
-#                 if base_name:
-#                     start_value = _pipeline_compute_start_timestamp(base_name)
-#                     if start_value:
-#                         row['start_date'] = start_value
-#             row['acc_name'] = acc_filename
-#             row['acc_add_date'] = timestamp
-#             updated = True
-
-#     # Ensure ACC files on disk are represented
-#     acc_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}' / 'STAGE_1' / 'EVENT_DATA' / 'ACC_EVENTS_DIRECTORY'
-#     existing_acc_names = {row.get('acc_name', '') for row in rows}
-#     if acc_dir.exists():
-#         for acc_path in sorted(acc_dir.glob('accumulated_events_*.csv')):
-#             acc_name = acc_path.name
-#             if acc_name in existing_acc_names:
-#                 continue
-
-#             stem = acc_path.stem
-#             derived_base = _pipeline_strip_suffix(acc_name)
-#             derived_start = ''
-#             if stem.startswith('accumulated_events_'):
-#                 stamp = stem[len('accumulated_events_'):]
-#                 try:
-#                     dt = datetime.strptime(stamp, '%y-%m-%d_%H.%M.%S')
-#                     derived_start = dt.strftime('%Y-%m-%d_%H.%M.%S')
-#                 except ValueError:
-#                     derived_start = ''
-
-#             add_timestamp = datetime.fromtimestamp(acc_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-#             filler = {header: '' for header in csv_headers}
-#             filler['basename'] = derived_base
-#             if derived_start:
-#                 filler['start_date'] = derived_start
-#             filler['acc_name'] = acc_name
-#             filler['acc_add_date'] = add_timestamp
-#             rows.append(filler)
-#             existing_acc_names.add(acc_name)
-#             updated = True
-
-#     if updated:
-#         with csv_path.open('w', newline='') as handle:
-#             writer = csv.DictWriter(handle, fieldnames=csv_headers)
-#             writer.writeheader()
-#             writer.writerows(rows)
-
-
-# _update_pipeline_csv_for_accumulation()
-
 #%%
-
 # Move the original file in file_path to completed_directory
 print("Moving file to COMPLETED directory...")
 shutil.move(file_path, completed_file_path)
@@ -5101,6 +5176,45 @@ os.utime(completed_file_path, (now, now))
 
 print(f"File moved to: {completed_file_path}")
 
+# -----------------------------------------------------------------------------
+# Record execution metadata
+# -----------------------------------------------------------------------------
+end_time_execution = datetime.now()
+execution_time_delta = end_time_execution - start_execution_time_counting
+total_execution_time_minutes = execution_time_delta.total_seconds() / 60
+execution_timestamp = end_time_execution.strftime("%Y-%m-%d_%H.%M.%S")
+
+if initial_event_count > 0:
+    data_purity_percentage = 100.0 * final_event_count / initial_event_count
+else:
+    data_purity_percentage = 0.0
+
+filename_base = Path(file_path).stem
+
+print("----------")
+print("Execution metadata to be saved:")
+print(f"Filename base: {filename_base}")
+print(f"Execution timestamp: {execution_timestamp}")
+print(f"Data purity percentage: {data_purity_percentage:.2f}%")
+print(f"Total execution time: {total_execution_time_minutes:.2f} minutes")
+print("----------")
+
+execution_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "data_purity_percentage": round(float(data_purity_percentage), 4),
+    "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+}
+save_metadata(csv_execution_metadata_path, execution_row)
+print(f"Metadata (execution) CSV updated at: {csv_execution_metadata_path}")
+
+global_variables["filename_base"] = filename_base
+global_variables["execution_timestamp"] = execution_timestamp
+global_variables["data_purity_percentage"] = round(float(data_purity_percentage), 4)
+global_variables["total_execution_time_minutes"] = round(float(total_execution_time_minutes), 4)
+global_variables["initial_event_count"] = int(initial_event_count)
+global_variables["final_event_count"] = int(final_event_count)
+global_variables["used_files"] = ";".join(used_files_names)
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -5220,6 +5334,9 @@ metadata_df = metadata_df[['Start_Time', 'End_Time'] + [col for col in metadata_
 metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
 print(f'{csv_path} updated with the calibration summary.')
 
+save_metadata(csv_specific_metadata_path, global_variables)
+print(f"Metadata (specific) CSV updated at: {csv_specific_metadata_path}")
+
 
 print("----------------------------------------------------------------------")
 print("--------------------------- Saving the PDF ---------------------------")
@@ -5257,7 +5374,5 @@ if os.path.exists(figure_directory):
         shutil.rmtree(figure_directory)
     except OSError as exc:
         print(f"Warning: could not delete {figure_directory}: {exc}")
-
-mark_status_complete(status_csv_path, status_timestamp)
 
 print("event_accumulator.py finished.\n\n")

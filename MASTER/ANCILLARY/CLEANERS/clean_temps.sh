@@ -24,19 +24,70 @@ if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
   exit 0
 fi
 
-TARGETS=(
-  "$HOME/DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/varData/tmp_mi0*"
-  "$HOME/SAFE_DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/varData/tmp_mi0*"
-  "$HOME/DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat/removed/*"
-  "$HOME/SAFE_DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat/removed/*"
-  "$HOME/DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci/removed/*"
-  "$HOME/SAFE_DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci/removed/*"
-  "$HOME/DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/varData/*"
-  "$HOME/SAFE_DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/varData/*"
-  "$HOME/DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat/done/*"
-  "$HOME/SAFE_DATAFLOW_v3/MASTER/STAGE_0/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat/done/*"
+ROOTS=(
+  "$HOME/DATAFLOW_v3"
+  "$HOME/SAFE_DATAFLOW_v3"
 )
 
-for pattern in "${TARGETS[@]}"; do
-  rm -rf $pattern
+RELATIVE_TARGETS=(
+  "varData/tmp_mi0*"
+  "rawData/dat/removed/*"
+  "asci/removed/*"
+  "varData/*"
+  "rawData/dat/done/*"
+)
+
+declare -a TARGET_PATTERNS=()
+declare -A SEEN_BASES=()
+
+# Discover every daqData root (MASTER tree plus per-station mirrors) so the
+# cleaner stays in sync with the new directory layout without hard-coding paths.
+collect_bases() {
+  local root="$1"
+  [[ -d "$root" ]] || return 0
+
+  while IFS= read -r -d '' match; do
+    local base_dir
+    base_dir="$(dirname "$match")"
+    [[ -n ${SEEN_BASES["$base_dir"]:-} ]] && continue
+    SEEN_BASES["$base_dir"]=1
+    for rel in "${RELATIVE_TARGETS[@]}"; do
+      TARGET_PATTERNS+=("$base_dir/$rel")
+    done
+  done < <(find "$root" -type d -name 'varData' -print0 2>/dev/null)
+
+  while IFS= read -r -d '' match; do
+    local base_dir
+    base_dir="$(dirname "$match")"
+    [[ -n ${SEEN_BASES["$base_dir"]:-} ]] && continue
+    SEEN_BASES["$base_dir"]=1
+    for rel in "${RELATIVE_TARGETS[@]}"; do
+      TARGET_PATTERNS+=("$base_dir/$rel")
+    done
+  done < <(find "$root" -type d -path '*/rawData' -print0 2>/dev/null)
+}
+
+for root in "${ROOTS[@]}"; do
+  collect_bases "$root"
 done
+
+if ((${#TARGET_PATTERNS[@]} == 0)); then
+  echo "No Stage_0 data buffers found under DATAFLOW_v3 or SAFE_DATAFLOW_v3."
+  exit 0
+fi
+
+removed_any=false
+for pattern in "${TARGET_PATTERNS[@]}"; do
+  matches=($pattern)
+  (( ${#matches[@]} == 0 )) && continue
+  for match in "${matches[@]}"; do
+    [[ -e "$match" ]] || continue
+    echo "Removing: $match"
+    rm -rf -- "$match"
+    removed_any=true
+  done
+done
+
+if ! $removed_any; then
+  echo "No temporary files found to delete."
+fi

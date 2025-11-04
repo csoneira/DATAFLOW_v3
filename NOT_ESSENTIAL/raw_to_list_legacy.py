@@ -209,8 +209,8 @@ base_directories = {
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(metadata_directory, f"step_{task_number}_metadata_execution.csv")
-csv_path_specific = os.path.join(metadata_directory, f"step_{task_number}_metadata_specific.csv")
+csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
+csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 status_timestamp = append_status_row(status_csv_path)
 
@@ -417,7 +417,7 @@ with open(config_file_path, "r") as config_file:
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -2774,7 +2774,7 @@ if calibrate_charge_ns_to_fc:
 
     # Load calibration
     home_path = config["home_path"]
-    tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/tot_to_charge_calibration.csv"
+    tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv"
     FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
     FEE_calibration = {
         "Width": FEE_calibration_df['Width'].tolist(),

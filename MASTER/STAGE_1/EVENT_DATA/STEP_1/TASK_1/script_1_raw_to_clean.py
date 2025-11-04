@@ -5,9 +5,14 @@
 from __future__ import annotations
 
 """
-Created on Thu Jun 20 09:15:33 2024
+Stage 1 Task 1 (RAW→CLEAN) driver.
 
-@author: csoneira@ucm.es
+The script pulls the next available STAGE_0_to_1 acquisition, applies the full
+raw cleaning chain (baseline removal, channel checks, derived quantities, and
+pre-selection cuts), and persists the cleaned dataframe for downstream tasks.
+Along the way it maintains the station staging directories, generates QA plots,
+tracks execution metadata, and emits run-level summaries consumed by the rest
+of the Stage 1 event workflow.
 """
 
 
@@ -138,6 +143,7 @@ try:
 except NameError:
     pass
 home_path = config["home_path"]
+REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
 
 def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
     """Append the execution metadata row to the per-task CSV."""
@@ -246,7 +252,7 @@ base_directories = {
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
     
-    "output_directory": os.path.join(raw_to_list_working_directory, "OUTPUT_FILES"),
+    "output_directory": output_location,
 
     "raw_directory": os.path.join(raw_working_directory, "."),
     
@@ -257,8 +263,8 @@ base_directories = {
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(metadata_directory, f"step_{task_number}_metadata_execution.csv")
-csv_path_specific = os.path.join(metadata_directory, f"step_{task_number}_metadata_specific.csv")
+csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
+csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
@@ -429,7 +435,7 @@ home_path = config["home_path"]
 config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -937,6 +943,25 @@ Q_clip_max_ST = Q_clip_max_ST
 global_variables = {
     'analysis_mode': 0,
 }
+
+reprocessing_parameters = pd.DataFrame()
+
+
+def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
+    """Return matching reprocessing parameters for *basename* or an empty frame."""
+    station_str = str(station_id).zfill(2)
+    table_path = REFERENCE_TABLES_DIR / f"reprocess_files_station_{station_str}_task_{task_id}.csv"
+    if not table_path.exists():
+        return pd.DataFrame()
+    try:
+        table_df = pd.read_csv(table_path)
+    except Exception as exc:
+        print(f"Warning: unable to read reprocessing table {table_path}: {exc}")
+        return pd.DataFrame()
+    if "filename_base" not in table_df.columns:
+        return pd.DataFrame()
+    matches = table_df[table_df["filename_base"] == basename]
+    return matches.reset_index(drop=True)
 
 
 # -----------------------------------------------------------------------------
@@ -1607,6 +1632,17 @@ print(f"File to process: {the_filename}")
 basename_no_ext, file_extension = os.path.splitext(the_filename)
 print(f"File basename (no extension): {basename_no_ext}")
 
+reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
+if not reprocessing_parameters.empty:
+    global_variables["analysis_mode"] = 1
+    print("Reprocessing parameters found for this file. Setting analysis_mode to 1.")
+    # Print only non-NaN entries from the reprocessing table
+    non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
+    if non_nan.empty:
+        print("Reprocessing parameters found but all values are NaN.")
+    else:
+        print(non_nan.to_string(index=False))
+
 analysis_date = datetime.now().strftime("%Y-%m-%d")
 # print(f"Analysis date and time: {analysis_date}")
 
@@ -1852,6 +1888,15 @@ if exists_input_file:
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
+
+
+
+# If any of the z_positions is NaN, use default values
+if np.isnan(z_positions).any():
+    print("Error: Incomplete z_positions in the selected configuration. Using default z_positions.")
+    z_positions = np.array([0, 150, 300, 450])  # In mm
+
+
 
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
@@ -2616,7 +2661,7 @@ if os.path.exists(temp_file):
 # -----------------------------------------------------------------------------
 
 if create_pdf:
-    print(f"Creating PDF with all plots in {save_pdf_path}...")
+    print(f"Creating PDF with all plots in {save_pdf_path}")
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:
@@ -2647,7 +2692,7 @@ if create_pdf:
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/
 os.makedirs(f"{output_directory}", exist_ok=True)
-OUT_PATH = f"{output_directory}/cleaned_{basename_no_ext}.h5"
+OUT_PATH = f"{output_directory}/cleaned_{basename_no_ext}.parquet"
 KEY = "df"  # HDF5 key name
 
 # Ensure output directory exists

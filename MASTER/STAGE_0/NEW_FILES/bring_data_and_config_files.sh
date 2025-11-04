@@ -139,7 +139,7 @@ cleanup() {
 #   fi
 # }
 
-trap 'finish $?' EXIT
+# trap 'finish $?' EXIT
 
 ensure_log_csv() {
   if [[ ! -f "$log_csv" ]]; then

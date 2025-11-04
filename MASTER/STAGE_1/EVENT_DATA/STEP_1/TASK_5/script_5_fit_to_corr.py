@@ -5,9 +5,13 @@
 from __future__ import annotations
 
 """
-Created on Thu Jun 20 09:15:33 2024
+Stage 1 Task 5 (FIT→CORR) finalisation stage.
 
-@author: csoneira@ucm.es
+Consumes the fit outputs from Task 4, applies the derived corrections to the
+event lists, validates the corrected distributions, and emits the Stage 1
+deliverables that feed Stage 2. The script oversees QA plotting, execution
+metadata tracking, and file lifecycle management so the pipeline finishes with
+a coherent, traceable set of corrected datasets per station.
 """
 
 task_number = 5
@@ -41,8 +45,8 @@ from datetime import datetime
 # import os
 # import sys
 
-# # Pick a random file in "/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/cleaned_<file>.h5"
-# IN_PATH = glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.h5")[random.randint(0, len(glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.h5")) - 1)]
+# # Pick a random file in "/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/cleaned_<file>.parquet"
+# IN_PATH = glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.parquet")[random.randint(0, len(glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.parquet")) - 1)]
 # KEY = "df"
 
 # # Load dataframe
@@ -58,9 +62,6 @@ from datetime import datetime
 # basename_no_ext = os.path.splitext(os.path.basename(IN_PATH))[0].replace("listed_", "")
 # print(f"File basename (no extension): {basename_no_ext}")
 
-
-# I want to chrono the execution time of the script
-start_execution_time_counting = datetime.now()
 
 
 # -----------------------------------------------------------------------------
@@ -145,6 +146,7 @@ try:
 except NameError:
     pass
 home_path = config["home_path"]
+REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
 
 
 
@@ -280,7 +282,7 @@ base_directories = {
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
     
-    "output_directory": os.path.join(raw_to_list_working_directory, "OUTPUT_FILES"),
+    "output_directory": output_location,
 
     "raw_directory": os.path.join(raw_working_directory, "."),
     
@@ -291,8 +293,8 @@ base_directories = {
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(metadata_directory, f"step_{task_number}_metadata_execution.csv")
-csv_path_specific = os.path.join(metadata_directory, f"step_{task_number}_metadata_specific.csv")
+csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
+csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
@@ -628,7 +630,7 @@ print(f"File to process: {the_filename}")
 
 basename_no_ext, file_extension = os.path.splitext(the_filename)
 # Take basename of IN_PATH without extension and witouth the 'listed_' prefix
-basename_no_ext = the_filename.replace("fitted_", "").replace(".h5", "")
+basename_no_ext = the_filename.replace("fitted_", "").replace(".parquet", "")
 
 print(f"File basename (no extension): {basename_no_ext}")
 
@@ -697,6 +699,8 @@ original_number_of_events = len(working_df)
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+# I want to chrono the execution time of the script
+start_execution_time_counting = datetime.now()
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -716,7 +720,7 @@ except NameError:
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -1223,18 +1227,6 @@ T_clip_min_ST = T_clip_min_ST
 T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
-
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
 
 
 
@@ -1291,7 +1283,7 @@ except NameError:
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -1794,17 +1786,6 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
 
 
 
@@ -1882,17 +1863,6 @@ self_trigger = False
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
 
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
 
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
@@ -1933,6 +1903,31 @@ save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filenam
 
 
 
+# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
+# 0 -> regular analysis
+# 1 -> repeated, careful analysis
+global_variables = {
+    'analysis_mode': 0,
+}
+
+reprocessing_parameters = pd.DataFrame()
+
+
+def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
+    """Return matching reprocessing parameters for *basename* or an empty frame."""
+    station_str = str(station_id).zfill(2)
+    table_path = REFERENCE_TABLES_DIR / f"reprocess_files_station_{station_str}_task_{task_id}.csv"
+    if not table_path.exists():
+        return pd.DataFrame()
+    try:
+        table_df = pd.read_csv(table_path)
+    except Exception as exc:
+        print(f"Warning: unable to read reprocessing table {table_path}: {exc}")
+        return pd.DataFrame()
+    if "filename_base" not in table_df.columns:
+        return pd.DataFrame()
+    matches = table_df[table_df["filename_base"] == basename]
+    return matches.reset_index(drop=True)
 
 
 # -------------------------------------------------------------------------------
@@ -1962,6 +1957,13 @@ if exists_input_file:
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
+
+
+# If any of the z_positions is NaN, use default values
+if np.isnan(z_positions).any():
+    print("Error: Incomplete z_positions in the selected configuration. Using default z_positions.")
+    z_positions = np.array([0, 150, 300, 450])  # In mm
+
 
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
@@ -1995,7 +1997,7 @@ except NameError:
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -2504,17 +2506,23 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
+
+
+
+reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
+if not reprocessing_parameters.empty:
+    global_variables["analysis_mode"] = 1
+    print("Reprocessing parameters found for this file. Setting analysis_mode to 1.")
+    # Print only non-NaN entries from the reprocessing table
+    non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
+    if non_nan.empty:
+        print("Reprocessing parameters found but all values are NaN.")
+    else:
+        print(non_nan.to_string(index=False))
+
+
+# I want to chrono the execution time of the script
+start_execution_time_counting = datetime.now()
 
 
 # -------------------------------------------------------------------------------
@@ -2888,7 +2896,7 @@ if create_plots or create_essential_plots:
 # ---------------------------------------------------------------
 # 1. Build absolute path and sanity-check
 # ---------------------------------------------------------------
-hdf_path = os.path.join(angular_corr_directory, "likelihood_matrices.h5")
+hdf_path = os.path.join(angular_corr_directory, "likelihood_matrices.parquet")
 if not os.path.isfile(hdf_path):
     print(f"HDF5 file not found: {hdf_path}")
     correct_angle = False
@@ -3209,7 +3217,7 @@ working_df = df.copy()
 # -----------------------------------------------------------------------------
 
 if create_pdf:
-    print(f"Creating PDF with all plots in {save_pdf_path}...")
+    print(f"Creating PDF with all plots in {save_pdf_path}")
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:
@@ -3241,7 +3249,7 @@ if create_pdf:
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/
 os.makedirs(f"{output_directory}", exist_ok=True)
-OUT_PATH = f"{output_directory}/corrected_{basename_no_ext}.h5"
+OUT_PATH = f"{output_directory}/corrected_{basename_no_ext}.parquet"
 KEY = "df"  # HDF5 key name
 
 # Ensure output directory exists
@@ -3324,6 +3332,7 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
+
 
 
 # -------------------------------------------------------------------------------

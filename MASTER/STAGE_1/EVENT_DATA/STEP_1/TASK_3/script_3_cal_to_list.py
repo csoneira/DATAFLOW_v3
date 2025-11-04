@@ -5,9 +5,13 @@
 from __future__ import annotations
 
 """
-Created on Thu Jun 20 09:15:33 2024
+Stage 1 Task 3 (CAL→LIST) transformation.
 
-@author: csoneira@ucm.es
+Takes the calibrated event sample from Task 2, builds the per-hit LIST-level
+representation (timing, charge, geometry groupings), applies physics-driven
+selection and quality filters, and exports the structured list data required
+for the fitting stages. It also manages plotting artefacts, metadata logs, and
+file movements so subsequent tasks receive consistent inputs.
 """
 
 task_number = 3
@@ -41,8 +45,8 @@ from datetime import datetime
 # import os
 # import sys
 
-# # Pick a random file in "/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/cleaned_<file>.h5"
-# IN_PATH = glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_2/DONE/calibrated_*.h5")[random.randint(0, len(glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_2/DONE/calibrated_*.h5")) - 1)]
+# # Pick a random file in "/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/cleaned_<file>.parquet"
+# IN_PATH = glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_2/DONE/calibrated_*.parquet")[random.randint(0, len(glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_2/DONE/calibrated_*.parquet")) - 1)]
 # KEY = "df"
 
 # # Load dataframe
@@ -171,6 +175,7 @@ if station not in ["1", "2", "3", "4"]:
 set_station(station)
 config = update_config_with_parameters(config, parameter_config_file_path, station)
 home_path = config["home_path"]
+REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
 
 
 # -----------------------------------------------------------------------------
@@ -196,7 +201,7 @@ except NameError:
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -694,6 +699,25 @@ global_variables = {
     'analysis_mode': 0,
 }
 
+reprocessing_parameters = pd.DataFrame()
+
+
+def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
+    """Return matching reprocessing parameters for *basename* or an empty frame."""
+    station_str = str(station_id).zfill(2)
+    table_path = REFERENCE_TABLES_DIR / f"reprocess_files_station_{station_str}_task_{task_id}.csv"
+    if not table_path.exists():
+        return pd.DataFrame()
+    try:
+        table_df = pd.read_csv(table_path)
+    except Exception as exc:
+        print(f"Warning: unable to read reprocessing table {table_path}: {exc}")
+        return pd.DataFrame()
+    if "filename_base" not in table_df.columns:
+        return pd.DataFrame()
+    matches = table_df[table_df["filename_base"] == basename]
+    return matches.reset_index(drop=True)
+
 
 
 
@@ -814,7 +838,7 @@ base_directories = {
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
     
-    "output_directory": os.path.join(raw_to_list_working_directory, "OUTPUT_FILES"),
+    "output_directory": output_location,
 
     "raw_directory": os.path.join(raw_working_directory, "."),
     
@@ -825,8 +849,8 @@ base_directories = {
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(metadata_directory, f"step_{task_number}_metadata_execution.csv")
-csv_path_specific = os.path.join(metadata_directory, f"step_{task_number}_metadata_specific.csv")
+csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
+csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
@@ -984,7 +1008,7 @@ execution_time = str(start_execution_time_counting).split('.')[0]  # Remove micr
 print("Execution time is:", execution_time)
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -1475,20 +1499,6 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
-
-
-
 
 
 
@@ -1565,18 +1575,6 @@ self_trigger = False
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
 
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
-
 
 
 
@@ -1603,7 +1601,7 @@ except NameError:
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -2100,18 +2098,6 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
-
 
 
 
@@ -2423,9 +2409,20 @@ print(f"File to process: {the_filename}")
 
 basename_no_ext, file_extension = os.path.splitext(the_filename)
 # Take basename of IN_PATH without extension and witouth the 'calibrated_' prefix
-basename_no_ext = the_filename.replace("calibrated_", "").replace(".h5", "")
+basename_no_ext = the_filename.replace("calibrated_", "").replace(".parquet", "")
 
 print(f"File basename (no extension): {basename_no_ext}")
+
+reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
+if not reprocessing_parameters.empty:
+    global_variables["analysis_mode"] = 1
+    print("Reprocessing parameters found for this file. Setting analysis_mode to 1.")
+    # Print only non-NaN entries from the reprocessing table
+    non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
+    if non_nan.empty:
+        print("Reprocessing parameters found but all values are NaN.")
+    else:
+        print(non_nan.to_string(index=False))
 
 
 analysis_date = datetime.now().strftime("%Y-%m-%d")
@@ -2545,15 +2542,16 @@ else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
 
+
+# If any of the z_positions is NaN, use default values
+if np.isnan(z_positions).any():
+    print("Error: Incomplete z_positions in the selected configuration. Using default z_positions.")
+    z_positions = np.array([0, 150, 300, 450])  # In mm
+
+
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
-
-# Save the z_positions in the metadata file
-global_variables['z_P1'] =  z_positions[0]
-global_variables['z_P2'] =  z_positions[1]
-global_variables['z_P3'] =  z_positions[2]
-global_variables['z_P4'] =  z_positions[3]
 
 
 
@@ -2588,12 +2586,6 @@ else:
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
-
-# Save the z_positions in the metadata file
-global_variables['z_P1'] =  z_positions[0]
-global_variables['z_P2'] =  z_positions[1]
-global_variables['z_P3'] =  z_positions[2]
-global_variables['z_P4'] =  z_positions[3]
 
 
 
@@ -3168,8 +3160,7 @@ if create_plots or create_essential_plots:
 
 if self_trigger:
     if create_plots:
-   
-
+        
         for i_plane in range(1, 5):
             
             fig, axes = plt.subplots(4, 6, figsize=(30, 20))
@@ -3472,8 +3463,88 @@ if create_plots or create_essential_plots:
 
 
 
+
+# # Hexbin + histogram "pairgrid" per plane
+# if create_plots or create_essential_plots:
+
+#     for i_plane in range(1, 5):
+#         # Column names
+#         t_sum_col  = f'P{i_plane}_T_sum_final'
+#         t_diff_col = f'P{i_plane}_T_diff_final'
+#         q_sum_col  = f'P{i_plane}_Q_sum_final'
+#         q_diff_col = f'P{i_plane}_Q_diff_final'
+#         y_col      = f'P{i_plane}_Y_final'
+
+#         cols = [t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]
+
+#         # Keep only valid rows (non-zero) and enforce q_sum < 150
+#         valid_rows = (working_df[cols]
+#                       .replace(0, np.nan)
+#                       .dropna())
+#         cond = valid_rows[q_sum_col] < 150
+#         fr = valid_rows.loc[cond, cols]  # filtered rows, ordered as in cols
+
+#         # Prepare data as a dict: {col_name: Series}
+#         data = {c: fr[c] for c in cols}
+#         n = len(cols)
+
+#         # One figure per plane
+#         fig, axes = plt.subplots(n, n, figsize=(4*n, 4*n), squeeze=False)
+
+#         for i in range(n):
+#             for j in range(n):
+#                 ax = axes[i, j]
+
+#                 if i == j:
+#                     # Diagonal: histogram of the variable
+#                     ax.hist(data[cols[i]].dropna(), bins='auto')
+#                     ax.set_ylabel('Count' if j == 0 else '')
+#                 elif i > j:
+#                     # Lower triangle: hexbin of (x=cols[j], y=cols[i])
+#                     x = data[cols[j]]
+#                     yv = data[cols[i]]
+#                     hb = ax.hexbin(x, yv, gridsize=50, cmap='turbo')
+#                 else:
+#                     # Upper triangle: blank
+#                     ax.axis('off')
+
+#                 # Axis labels only on outer edges to reduce clutter
+#                 if i == n - 1:  # bottom row
+#                     ax.set_xlabel(cols[j])
+#                 else:
+#                     ax.set_xlabel('')
+#                 if j == 0:      # left column
+#                     ax.set_ylabel(cols[i] if i != j else ax.get_ylabel())
+#                 else:
+#                     if i != j:  # avoid clearing "Count" set above on diagonal
+#                         ax.set_ylabel('')
+
+#         # Put column headers on the (blank) top row to identify columns
+#         for j in range(n):
+#             axes[0, j].set_title(cols[j], fontsize=12)
+
+#         plt.tight_layout()
+#         plt.subplots_adjust(top=0.93)
+#         plt.suptitle(f'P{i_plane}: Pairwise Hexbins (lower) + Histograms (diagonal), filtered (Q_sum < 150)', fontsize=16)
+
+#         if save_plots:
+#             name_of_file = f'P{i_plane}_pairgrid_hexbin_hist_filtered'
+#             final_filename = f'{fig_idx}_{name_of_file}.png'
+#             fig_idx += 1
+#             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#             plot_list.append(save_fig_path)
+#             plt.savefig(save_fig_path, format='png', dpi=150)
+
+#         if show_plots:
+#             plt.show()
+
+#         plt.close(fig)
+
+
+
+
 if create_pdf:
-    print(f"Creating PDF with all plots in {save_pdf_path}...")
+    print(f"Creating PDF with all plots in {save_pdf_path}")
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:
@@ -3505,7 +3576,7 @@ if create_pdf:
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/
 os.makedirs(f"{output_directory}", exist_ok=True)
-OUT_PATH = f"{output_directory}/listed_{basename_no_ext}.h5"
+OUT_PATH = f"{output_directory}/listed_{basename_no_ext}.parquet"
 KEY = "df"  # HDF5 key name
 
 # Ensure output directory exists
@@ -3575,7 +3646,6 @@ print(f"Final number of events in the dataframe: {final_number_of_events}")
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
 print(f"Data purity is {data_purity:.2f}%")
-global_variables['purity_of_data_percentage'] = data_purity
 
 
 
@@ -3591,6 +3661,7 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
+
 
 print("----------\nExecution metadata to be saved:")
 print(f"Filename base: {filename_base}")

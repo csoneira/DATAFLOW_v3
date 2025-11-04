@@ -5,9 +5,14 @@
 from __future__ import annotations
 
 """
-Created on Thu Jun 20 09:15:33 2024
+Stage 1 Task 4 (LIST→FIT) preparation workflow.
 
-@author: csoneira@ucm.es
+Ingests the LIST-format events from Task 3, assembles the inputs used by the
+timing/charge fitting routines (feature engineering, binning, sanity checks),
+executes the intermediate analyses that characterise detector response, and
+writes the fit-ready artefacts. Execution metadata, diagnostic plots, and
+directory bookkeeping are kept in sync so the pipeline can hand off cleanly to
+the correction stage.
 """
 
 
@@ -43,8 +48,8 @@ from datetime import datetime
 # import os
 # import sys
 
-# # Pick a random file in "/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/cleaned_<file>.h5"
-# IN_PATH = glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.h5")[random.randint(0, len(glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.h5")) - 1)]
+# # Pick a random file in "/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/cleaned_<file>.parquet"
+# IN_PATH = glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.parquet")[random.randint(0, len(glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.parquet")) - 1)]
 # KEY = "df"
 
 # # Load dataframe
@@ -140,6 +145,7 @@ try:
 except NameError:
     pass
 home_path = config["home_path"]
+REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
 
 
 
@@ -375,7 +381,7 @@ base_directories = {
     "error_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/ERROR_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
-    "output_directory": os.path.join(raw_to_list_working_directory, "OUTPUT_FILES"),
+    "output_directory": output_location,
     
     "raw_directory": os.path.join(raw_working_directory, "."),
     
@@ -386,8 +392,8 @@ base_directories = {
 for directory in base_directories.values():
     os.makedirs(directory, exist_ok=True)
 
-csv_path = os.path.join(metadata_directory, f"step_{task_number}_metadata_execution.csv")
-csv_path_specific = os.path.join(metadata_directory, f"step_{task_number}_metadata_specific.csv")
+csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
+csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
@@ -723,7 +729,7 @@ print(f"File to process: {the_filename}")
 
 basename_no_ext, file_extension = os.path.splitext(the_filename)
 # Take basename of IN_PATH without extension and witouth the 'listed_' prefix
-basename_no_ext = the_filename.replace("listed_", "").replace(".h5", "")
+basename_no_ext = the_filename.replace("listed_", "").replace(".parquet", "")
 
 print(f"File basename (no extension): {basename_no_ext}")
 
@@ -805,7 +811,7 @@ except NameError:
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -1313,21 +1319,48 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
+# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
+# 0 -> regular analysis
+# 1 -> repeated, careful analysis
 global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
+    'analysis_mode': 0,
     'unc_y': anc_sy,
     'unc_tsum': anc_sts,
     'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
 }
 
+reprocessing_parameters = pd.DataFrame()
+
+
+def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
+    """Return matching reprocessing parameters for *basename* or an empty frame."""
+    station_str = str(station_id).zfill(2)
+    table_path = REFERENCE_TABLES_DIR / f"reprocess_files_station_{station_str}_task_{task_id}.csv"
+    if not table_path.exists():
+        return pd.DataFrame()
+    try:
+        table_df = pd.read_csv(table_path)
+    except Exception as exc:
+        print(f"Warning: unable to read reprocessing table {table_path}: {exc}")
+        return pd.DataFrame()
+    if "filename_base" not in table_df.columns:
+        return pd.DataFrame()
+    matches = table_df[table_df["filename_base"] == basename]
+    return matches.reset_index(drop=True)
 
 
 
+
+reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
+if not reprocessing_parameters.empty:
+    global_variables["analysis_mode"] = 1
+    print("Reprocessing parameters found for this file. Setting analysis_mode to 1.")
+    # Print only non-NaN entries from the reprocessing table
+    non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
+    if non_nan.empty:
+        print("Reprocessing parameters found but all values are NaN.")
+    else:
+        print(non_nan.to_string(index=False))
 
 
 
@@ -1489,7 +1522,7 @@ except NameError:
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -1992,18 +2025,6 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
-
 
 
 
@@ -2082,17 +2103,6 @@ self_trigger = False
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
 
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
 
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
@@ -2204,7 +2214,7 @@ except NameError:
 home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
@@ -2708,19 +2718,6 @@ T_clip_min_ST = T_clip_min_ST
 T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
-
-global_variables = {
-    'execution_time': execution_time,
-    'CRT_avg': 0,
-    'one_side_events': 0,
-    'purity_of_data_percentage': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-    'time_window_filtering': time_window_filtering*1,
-    'old_timing_method': old_timing_method*1,
-}
-
 
 
 
@@ -4771,7 +4768,6 @@ print("----------------------------------------------------------------------")
 data_purity = len(definitive_df) / raw_data_len*100
 print(f"Data purity is {data_purity:.1f}%")
 
-global_variables['purity_of_data_percentage'] = data_purity
 
 if create_plots:
 
@@ -5200,7 +5196,7 @@ def _pipeline_compute_start_timestamp(base: str) -> str:
 # -----------------------------------------------------------------------------
 
 if create_pdf:
-    print(f"Creating PDF with all plots in {save_pdf_path}...")
+    print(f"Creating PDF with all plots in {save_pdf_path}")
     if len(plot_list) > 0:
         with PdfPages(save_pdf_path) as pdf:
             if plot_list:
@@ -5297,7 +5293,7 @@ reduced_df = definitive_df[columns_to_keep]
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/
 os.makedirs(f"{output_directory}", exist_ok=True)
-OUT_PATH = f"{output_directory}/fitted_{basename_no_ext}.h5"
+OUT_PATH = f"{output_directory}/fitted_{basename_no_ext}.parquet"
 KEY = "df"  # HDF5 key name
 
 # Ensure output directory exists
@@ -5368,8 +5364,6 @@ print(f"Final number of events in the dataframe: {final_number_of_events}")
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
 print(f"Data purity is {data_purity:.2f}%")
-global_variables['purity_of_data_percentage'] = data_purity
-
 
 # End of the execution time
 end_time_execution = datetime.now()
@@ -5383,6 +5377,7 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
+
 
 
 # -------------------------------------------------------------------------------
@@ -5448,4 +5443,3 @@ if user_file_selection == False:
     print("************************************************************")
     print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
     print("************************************************************")
-

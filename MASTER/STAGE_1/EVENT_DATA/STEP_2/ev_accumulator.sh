@@ -102,9 +102,14 @@ dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/a
 
 # Define base working directory
 station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
-base_working_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station/STAGE_1/EVENT_DATA"
+base_event_directory="$station_directory/STAGE_1/EVENT_DATA"
+input_directory="$base_event_directory/STEP_1_TO_2_OUTPUT"
+base_working_directory="$base_event_directory/STEP_2"
 
 mkdir -p "$base_working_directory"
+mkdir -p "$input_directory"
+echo "Source (STEP_1_TO_2_OUTPUT): $input_directory"
+echo "Working directory (STEP_2): $base_working_directory"
 # STATUS_CSV="$base_working_directory/ev_accumulator_status.csv"
 # if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
 #   echo "Warning: unable to record status in $STATUS_CSV" >&2
@@ -118,23 +123,18 @@ mkdir -p "$base_working_directory"
 #   fi
 # }
 
-trap 'finish $?' EXIT
-
-# Define directories
-local_destination="$base_working_directory/STAGE_0_to_1"
+# trap 'finish $?' EXIT
 
 # Additional paths
 mingo_direction="mingo0$station"
 
-raw_to_list_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/Backbone/raw_to_list.py"
-event_accumulator_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/Backbone/event_accumulator.py"
+event_accumulator_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/event_accumulator.py"
 
 exclude_list_file="$base_working_directory/tmp/exclude_list.txt"
 
 # Create necessary directories
 mkdir -p "$station_directory"
 mkdir -p "$base_working_directory/tmp"
-mkdir -p "$local_destination"
 
 echo '------------------------------------------------------'
 echo '------------------------------------------------------'

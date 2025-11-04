@@ -3,7 +3,7 @@
 # m h dom mon dow command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Update time is 20:05
+# Update time is 14:03
 
 # Replace current crontab with the contents of /home/mingo/DATAFLOW_v3/add_to_crontab.info
 * * * * * /usr/bin/crontab /home/mingo/DATAFLOW_v3/add_to_crontab.info
@@ -20,7 +20,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 0 * * * * /bin/cp /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/.cdsapirc /home/mingo/.cdsapirc
 
 # Save snapshot of the config file
-0 * * * * python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/VERSION_CONTROL/snapshot_config.py
+0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/VERSION_CONTROL/snapshot_config.py
 
 # -----------
 # NMDB update
@@ -94,10 +94,17 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 0 7 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/copernicus.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_4.log 2>&1
 
 # STAGE_1 - EVENT_DATA - RAW_TO_CORR -----------------------------------------
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_1.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_2.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_3.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/raw_to_list_events_4.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_1.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_2.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_3.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_4.log 2>&1
+
+# LAST TASK WHICH DOES NOT QUITE GET EXEUTED IN THE CRONTAB I DONT KNOW WHY
+* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_1.log 2>&1
+* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_2.log 2>&1
+* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_3.log 2>&1
+* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_4.log 2>&1
+
 
 # STAGE_1 - EVENT_DATA - EVENT_ACCUMULATOR -----------------------------------
 */5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/ev_accumulator.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_1.log 2>&1
@@ -141,6 +148,6 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 1 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/pipeline_data_status_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
 
 # RAW_TO_CORR PIPELINE PLOTTER
-1 0 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/execution_metadata_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/execution_metadata_plotter.log 2>&1
+0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/execution_metadata_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/execution_metadata_plotter.log 2>&1
 
 # LAST MOD

@@ -552,7 +552,7 @@ for measured_type in measured_types:
     measured_rates[measured_type] = measured_events / total_time_seconds / total_generated_rate if total_time_seconds > 0 else 0
 
 # Fixed path to output file
-rates_LUT_filename = Path(f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION/rates_LUT.csv")
+rates_LUT_filename = Path(f"{home_path}/DATAFLOW_v3/TESTS/SIMULATION/rates_INDUCTION_SECTION/induction_section_lut.csv")
 write_header = not rates_LUT_filename.exists()
 
 with open(rates_LUT_filename, 'a') as f:
