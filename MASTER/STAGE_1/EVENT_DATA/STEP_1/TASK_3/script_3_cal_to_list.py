@@ -36,6 +36,7 @@ from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 from MASTER.common.status_csv import append_status_row, mark_status_complete
+from MASTER.common.reprocessing_utils import get_reprocessing_value
 
 from datetime import datetime
 
@@ -979,21 +980,44 @@ home_path = config["home_path"]
 
 
 def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
-    """Append the execution metadata row to the per-task CSV."""
+    """Append *row* to *metadata_path*, preserving all existing columns."""
     metadata_path = Path(metadata_path)
-    fieldnames = list(row.keys())
-    file_exists = metadata_path.exists()
-    write_header = not file_exists
-    if file_exists:
-        try:
-            write_header = metadata_path.stat().st_size == 0
-        except OSError:
-            write_header = True
-    with metadata_path.open("a", newline="") as csvfile:
+    rows: List[Dict[str, object]] = []
+    fieldnames: List[str] = []
+
+    def _normalise(raw: Dict[str, object]) -> Dict[str, object]:
+        return {key: value for key, value in raw.items() if key is not None}
+
+    if metadata_path.exists() and metadata_path.stat().st_size > 0:
+        with metadata_path.open("r", newline="") as csvfile:
+            reader = csv.DictReader(csvfile)
+            fieldnames = list(reader.fieldnames or [])
+            rows.extend(_normalise(existing) for existing in reader)
+
+    rows.append(_normalise(dict(row)))
+
+    seen = set(fieldnames)
+    for item in rows:
+        for key in item.keys():
+            if key not in seen:
+                fieldnames.append(key)
+                seen.add(key)
+
+    with metadata_path.open("w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if write_header:
-            writer.writeheader()
-        writer.writerow(row)
+        writer.writeheader()
+        for item in rows:
+            formatted = {}
+            for key in fieldnames:
+                value = item.get(key, "")
+                if value is None or (isinstance(value, float) and math.isnan(value)):
+                    formatted[key] = ""
+                elif isinstance(value, (list, dict, np.ndarray)):
+                    formatted[key] = str(value)
+                else:
+                    formatted[key] = value
+            writer.writerow(formatted)
+
     return metadata_path
 
 
@@ -2413,6 +2437,8 @@ basename_no_ext = the_filename.replace("calibrated_", "").replace(".parquet", ""
 
 print(f"File basename (no extension): {basename_no_ext}")
 
+reprocessing_values: dict[str, object] = {}
+
 reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
 if not reprocessing_parameters.empty:
     global_variables["analysis_mode"] = 1
@@ -2421,8 +2447,20 @@ if not reprocessing_parameters.empty:
     non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
     if non_nan.empty:
         print("Reprocessing parameters found but all values are NaN.")
+        columns_with_values: list[str] = []
     else:
         print(non_nan.to_string(index=False))
+        columns_with_values = list(non_nan.columns)
+
+    reprocessing_values = {
+        column: get_reprocessing_value(reprocessing_parameters, column)
+        for column in columns_with_values
+    }
+    reprocessing_values = {
+        key: value for key, value in reprocessing_values.items() if value is not None
+    }
+
+
 
 
 analysis_date = datetime.now().strftime("%Y-%m-%d")

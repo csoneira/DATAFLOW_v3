@@ -488,7 +488,7 @@ def main():
     print(df1['hv_HVneg'].describe())
     
     # Generate figures
-    fig_hv = figure1(df1, df2, df3, df4)                 # HV voltage plots
+    # fig_hv = figure1(df1, df2, df3, df4)                 # HV voltage plots
     fig_hv_on = figure2(df1, df2, df3, df4)                 # HV voltage plots
 
     # You can optionally still generate these for station 1 if you want
@@ -497,7 +497,7 @@ def main():
 
     # Collect figures
     figs = [
-        fig_hv,
+        # fig_hv,
         fig_hv_on,
         # Add more here
     ]
@@ -508,7 +508,7 @@ def main():
     import matplotlib.image as mpimg
 
     if args.save:
-        outdir = Path(f"{home_path}/DATAFLOW_v3/STATIONS/")
+        outdir = Path(f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/")
         outdir.mkdir(parents=True, exist_ok=True)
         fig_dir = outdir / "figures"
         fig_dir.mkdir(parents=True, exist_ok=True)
@@ -522,7 +522,7 @@ def main():
             plt.close(fig)  # Optionally free memory
 
         # Save all PNGs into a rasterized PDF
-        pdf_path = outdir / "summary.pdf"
+        pdf_path = outdir / "metadata_network_plotter_summary.pdf"
         with PdfPages(pdf_path) as pdf:
             for png_path in png_paths:
                 img = mpimg.imread(png_path)

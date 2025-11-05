@@ -15,7 +15,8 @@ Options:
   -h, --help    Show this help message and exit.
 
 The script fetches data using URLs listed in address.conf, replaces the last
-100 days within nmdb_combined.csv, and logs the outcome under STAGE_3.
+100 days within nmdb_combined.csv, compresses the result to nmdb_combined.csv.gz,
+and logs the outcome under STAGE_3.
 EOF
     exit 0
 fi
@@ -23,10 +24,22 @@ fi
 # ==== CONFIGURATION ====
 BASE_DIR="$HOME/DATAFLOW_v3/MASTER/STAGE_3"
 CSV_FILE="$BASE_DIR/nmdb_combined.csv"
+ARCHIVE_FILE="$CSV_FILE.gz"
+ARCHIVE_TMP="$ARCHIVE_FILE.tmp"
 TMP_FILE="$BASE_DIR/nmdb_tmp.csv"
 ADDRESS_FILE="$BASE_DIR/address.conf"
 
 mkdir -p "$BASE_DIR"
+rm -f "$ARCHIVE_TMP"
+rm -f "$CSV_FILE.tmp"
+
+# ==== RESTORE EXISTING ARCHIVE (IF ANY) ====
+if [[ -f "$ARCHIVE_FILE" ]]; then
+    if ! gunzip -c "$ARCHIVE_FILE" > "$CSV_FILE"; then
+        echo "[ERROR] Failed to decompress existing archive: $(date)" >> "$BASE_DIR/update_error.log"
+        exit 1
+    fi
+fi
 
 # ==== DOWNLOAD DATA ====
 wget -np -q -O "$TMP_FILE" -i "$ADDRESS_FILE"
@@ -40,7 +53,10 @@ fi
 # ==== INITIALIZE CSV IF NOT EXISTS ====
 if [[ ! -f "$CSV_FILE" ]]; then
     mv "$TMP_FILE" "$CSV_FILE"
-    echo "[INFO] CSV initialized: $(date)" >> "$BASE_DIR/update_log.txt"
+    gzip -c "$CSV_FILE" > "$ARCHIVE_TMP"
+    mv "$ARCHIVE_TMP" "$ARCHIVE_FILE"
+    rm -f "$CSV_FILE"
+    echo "[INFO] CSV archive initialized: $(date)" >> "$BASE_DIR/update_log.txt"
     exit 0
 fi
 
@@ -61,4 +77,12 @@ awk '($1 !~ /^#/) && NF > 1' "$TMP_FILE" >> "$CSV_FILE.tmp"
 mv "$CSV_FILE.tmp" "$CSV_FILE"
 rm -f "$TMP_FILE"
 
-echo "[INFO] CSV updated with last 100 days replaced: $(date)" >> "$BASE_DIR/update_log.txt"
+if ! gzip -c "$CSV_FILE" > "$ARCHIVE_TMP"; then
+    echo "[ERROR] Failed to compress updated CSV: $(date)" >> "$BASE_DIR/update_error.log"
+    exit 1
+fi
+
+mv "$ARCHIVE_TMP" "$ARCHIVE_FILE"
+rm -f "$CSV_FILE"
+
+echo "[INFO] CSV archive updated with last 100 days replaced: $(date)" >> "$BASE_DIR/update_log.txt"

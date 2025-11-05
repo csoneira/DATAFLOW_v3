@@ -57,6 +57,14 @@ T = TypeVar("T")
 
 def extract_datetime_from_basename(basename: str) -> Optional[datetime]:
     stem = Path(basename).stem
+
+    # Direct timestamp format e.g. 2025-10-31_15.40.15
+    if len(stem) >= 19:
+        try:
+            return datetime.strptime(stem, "%Y-%m-%d_%H.%M.%S")
+        except ValueError:
+            pass
+
     match = FILENAME_TIMESTAMP_PATTERN.search(stem)
     if not match:
         return None
@@ -103,6 +111,9 @@ def load_metadata(station: str, task_id: int) -> pd.DataFrame:
         df["execution_timestamp"] = pd.to_datetime(
             df["execution_timestamp"], format=TIMESTAMP_FMT, errors="coerce"
         )
+    else:
+        df["execution_timestamp"] = pd.NaT
+
     filename_series = df.get("filename_base")
     if filename_series is not None:
         file_ts = filename_series.map(
@@ -113,6 +124,12 @@ def load_metadata(station: str, task_id: int) -> pd.DataFrame:
         df["file_timestamp"] = pd.to_datetime(file_ts, errors="coerce")
     else:
         df["file_timestamp"] = pd.NaT
+
+    missing_exec = df["execution_timestamp"].isna()
+    if missing_exec.any():
+        df.loc[missing_exec, "execution_timestamp"] = df.loc[
+            missing_exec, "file_timestamp"
+        ]
 
     df = expand_coeff_columns(df)
     return df
@@ -441,6 +458,11 @@ def plot_task_metadata(
     time_bounds = compute_time_bounds(df_plot, x_column)
     formatter = mdates.DateFormatter("%Y-%m-%d\n%H:%M:%S")
 
+    analysis_mode_available = "analysis_mode" in df_plot.columns
+    mode1_marker = "x"
+    mode1_color = "tab:red"
+    mode1_markersize = 4
+
     for page_index, plot_groups in enumerate(layout, start=1):
         n_rows = len(plot_groups)
         fig_height = max(layout_cfg.height_per_plot * n_rows, 3.0)
@@ -468,20 +490,53 @@ def plot_task_metadata(
             for column in columns:
                 if column not in df_plot:
                     continue
-                subset = df_plot[[x_column, column]].dropna()
+                subset_columns = [x_column, column]
+                if analysis_mode_available:
+                    subset_columns.append("analysis_mode")
+                subset = df_plot[subset_columns].dropna(subset=[x_column, column])
                 if subset.empty:
                     continue
                 subset = subset.sort_values(by=x_column)
-                ax.plot(
+                line, = ax.plot(
                     subset[x_column],
                     subset[column],
-                    marker="o",
-                    markersize=2,
                     linewidth=1.0,
-                    alpha=0.8,
+                    alpha=0.7,
                     label=column,
                 )
+                base_color = line.get_color()
                 plotted = True
+
+                if analysis_mode_available:
+                    mode1_mask = subset["analysis_mode"] == 1
+                    subset_mode1 = subset[mode1_mask]
+                    subset_mode0 = subset[~mode1_mask]
+                else:
+                    subset_mode0 = subset
+                    subset_mode1 = pd.DataFrame(columns=subset.columns)
+
+                if not subset_mode0.empty:
+                    ax.plot(
+                        subset_mode0[x_column],
+                        subset_mode0[column],
+                        linestyle="none",
+                        marker="o",
+                        markersize=2,
+                        color=base_color,
+                        alpha=0.9,
+                    )
+
+                if not subset_mode1.empty:
+                    ax.plot(
+                        subset_mode1[x_column],
+                        subset_mode1[column],
+                        linestyle="none",
+                        marker=mode1_marker,
+                        markersize=mode1_markersize,
+                        color=mode1_color,
+                        alpha=0.9,
+                    )
+
                 legend_labels.append(column)
 
             ax.grid(True, axis="y", alpha=0.3)

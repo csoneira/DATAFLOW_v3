@@ -139,7 +139,7 @@ def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
         max(streamer_x - x_axis_min, 0.0),
         max(streamer_y - y_bottom, 0.0),
         facecolor=streamer_color,
-        alpha=0.08,
+        alpha=0.15,
         edgecolor="none",
         zorder=0,
     )
@@ -150,7 +150,7 @@ def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
         max(crosstalk_x - x_axis_min, 0.0),
         max(crosstalk_y - y_bottom, 0.0),
         facecolor=crosstalk_color,
-        alpha=0.12,
+        alpha=0.15,
         edgecolor="none",
         zorder=1,
     )

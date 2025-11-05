@@ -38,6 +38,7 @@ from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 from MASTER.common.status_csv import append_status_row, mark_status_complete
+from MASTER.common.reprocessing_utils import get_reprocessing_value
 
 from datetime import datetime
 
@@ -146,21 +147,44 @@ REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILE
 
 
 def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
-    """Append the execution metadata row to the per-task CSV."""
+    """Append *row* to *metadata_path*, preserving all existing columns."""
     metadata_path = Path(metadata_path)
-    fieldnames = list(row.keys())
-    file_exists = metadata_path.exists()
-    write_header = not file_exists
-    if file_exists:
-        try:
-            write_header = metadata_path.stat().st_size == 0
-        except OSError:
-            write_header = True
-    with metadata_path.open("a", newline="") as csvfile:
+    rows: List[Dict[str, object]] = []
+    fieldnames: List[str] = []
+
+    def _normalise(raw: Dict[str, object]) -> Dict[str, object]:
+        return {key: value for key, value in raw.items() if key is not None}
+
+    if metadata_path.exists() and metadata_path.stat().st_size > 0:
+        with metadata_path.open("r", newline="") as csvfile:
+            reader = csv.DictReader(csvfile)
+            fieldnames = list(reader.fieldnames or [])
+            rows.extend(_normalise(existing) for existing in reader)
+
+    rows.append(_normalise(dict(row)))
+
+    seen = set(fieldnames)
+    for item in rows:
+        for key in item.keys():
+            if key not in seen:
+                fieldnames.append(key)
+                seen.add(key)
+
+    with metadata_path.open("w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if write_header:
-            writer.writeheader()
-        writer.writerow(row)
+        writer.writeheader()
+        for item in rows:
+            formatted = {}
+            for key in fieldnames:
+                value = item.get(key, "")
+                if value is None or (isinstance(value, float) and math.isnan(value)):
+                    formatted[key] = ""
+                elif isinstance(value, (list, dict, np.ndarray)):
+                    formatted[key] = str(value)
+                else:
+                    formatted[key] = value
+            writer.writerow(formatted)
+
     return metadata_path
 
 
@@ -968,6 +992,7 @@ global_variables = {
 
 reprocessing_parameters = pd.DataFrame()
 
+reprocessing_values: dict[str, object] = {}
 
 def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
     """Return matching reprocessing parameters for *basename* or an empty frame."""
@@ -1002,7 +1027,6 @@ def _format_value_for_print(value: object) -> object:
 def _format_dict_for_print(data: dict) -> dict:
     """Return *data* with NumPy containers converted to native Python types."""
     return {key: _format_value_for_print(value) for key, value in data.items()}
-
 
 
 
@@ -1179,6 +1203,7 @@ if not reprocessing_parameters.empty:
     non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
     if non_nan.empty:
         print("Reprocessing parameters found but all values are NaN.")
+        columns_with_values: list[str] = []
     else:
         print(non_nan.to_string(index=False))
         
@@ -1186,6 +1211,17 @@ if not reprocessing_parameters.empty:
         reprocessing_columns_file_path = os.path.join(base_directories["output_directory"], f"DEBUGGING_reprocessing_columns_station_{station}_task_{task_number}.txt")
         with open(reprocessing_columns_file_path, "a") as col_file:
             col_file.write(", ".join(non_nan.columns) + "\n")
+        columns_with_values = list(non_nan.columns)
+
+    reprocessing_values = {
+        column: get_reprocessing_value(reprocessing_parameters, column)
+        for column in columns_with_values
+    }
+    reprocessing_values = {
+        key: value for key, value in reprocessing_values.items() if value is not None
+    }
+
+
 
 
 analysis_date = datetime.now().strftime("%Y-%m-%d")
@@ -2414,12 +2450,16 @@ QB_pedestal = np.array(QB_pedestal)
 if global_variables["analysis_mode"] == 1:
     for M in [1, 2, 3, 4]:
         for s in [1, 2, 3, 4]:
-            if reprocessing_parameters[f"P{M}_s{s}_Q_F_smoothed"]:
+            qf_key = f"P{M}_s{s}_Q_F_smoothed"
+            qf_value = get_reprocessing_value(reprocessing_parameters, qf_key)
+            if qf_value is not None:
                 print("Using smoothed Q_F pedestal for P",M,"s",s)
-                QF_pedestal[M-1][s-1] = reprocessing_parameters[f"P{M}_s{s}_Q_F_smoothed"]
-            if reprocessing_parameters[f"P{M}_s{s}_Q_B_smoothed"]:
+                QF_pedestal[M-1][s-1] = qf_value
+            qb_key = f"P{M}_s{s}_Q_B_smoothed"
+            qb_value = get_reprocessing_value(reprocessing_parameters, qb_key)
+            if qb_value is not None:
                 print("Using smoothed Q_B pedestal for P",M,"s",s)
-                QB_pedestal[M-1][s-1] = reprocessing_parameters[f"P{M}_s{s}_Q_B_smoothed"]
+                QB_pedestal[M-1][s-1] = qb_value
 
 
 print("\nFront Charge Pedestal:")
@@ -2872,9 +2912,11 @@ Tdiff_cal = np.array(Tdiff_cal)
 if global_variables["analysis_mode"] == 1:
     for M in [1, 2, 3, 4]:
         for s in [1, 2, 3, 4]:
-            if reprocessing_parameters[f"P{M}_s{s}_T_dif_smoothed"]:
+            tdif_key = f"P{M}_s{s}_T_dif_smoothed"
+            tdif_value = get_reprocessing_value(reprocessing_parameters, tdif_key)
+            if tdif_value is not None:
                 print("Using smoothed T_diff for P",M,"s",s)
-                Tdiff_cal[M-1][s-1] = reprocessing_parameters[f"P{M}_s{s}_T_dif_smoothed"]
+                Tdiff_cal[M-1][s-1] = tdif_value
 
 
 print("\nTime diff. offset:")
@@ -2957,9 +2999,11 @@ if self_trigger:
     if global_variables["analysis_mode"] == 1:
         for M in [1, 2, 3, 4]:
             for s in [1, 2, 3, 4]:
-                if reprocessing_parameters[f"P{M}_s{s}_T_dif_smoothed"]:
+                tdif_key = f"P{M}_s{s}_T_dif_smoothed"
+                tdif_value = get_reprocessing_value(reprocessing_parameters, tdif_key)
+                if tdif_value is not None:
                     print("Using smoothed T_diff for P",M,"s",s)
-                    Tdiff_cal_ST[M-1][s-1] = reprocessing_parameters[f"P{M}_s{s}_T_dif_smoothed"]
+                    Tdiff_cal_ST[M-1][s-1] = tdif_value
     
     print("\nSELF TRIGGER Time diff. offset:")
     print(Tdiff_cal_ST, "\n")
@@ -3458,9 +3502,11 @@ if charge_front_back:
             
             if global_variables["analysis_mode"] == 1:
                 for index in [0, 1, 2, 3, 4, 5, 6]:
-                    if reprocessing_parameters[f"P{key}_s{i+1}_Q_FB_coeffs[{index}]_smoothed"]:
+                    coeff_key = f"P{key}_s{i+1}_Q_FB_coeffs[{index}]_smoothed"
+                    coeff_value = get_reprocessing_value(reprocessing_parameters, coeff_key)
+                    if coeff_value is not None:
                         print("Using smoothed Q_FB_coeffs for P",key,"s",i+1,"index",index)
-                        coeffs[index] = reprocessing_parameters[f"P{key}_s{i+1}_Q_FB_coeffs[{index}]_smoothed"]
+                        coeffs[index] = coeff_value
 
             
             corrected_diff = Q_diff_adjusted - polynomial(Q_sum_adjusted, *coeffs)
@@ -5041,11 +5087,13 @@ else:
 Tsum_cal = [list(calibration_times[i]) for i in range(len(calibration_times))]
 
 if global_variables["analysis_mode"] == 1:
-        for M in [1, 2, 3, 4]:
-            for s in [1, 2, 3, 4]:
-                if reprocessing_parameters[f"P{M}_s{s}_T_sum_smoothed"]:
-                    print("Using smoothed T_sum for P",M,"s",s)
-                    Tsum_cal[M-1][s-1] = reprocessing_parameters[f"P{M}_s{s}_T_sum_smoothed"]
+    for M in [1, 2, 3, 4]:
+        for s in [1, 2, 3, 4]:
+            tsum_key = f"P{M}_s{s}_T_sum_smoothed"
+            tsum_value = get_reprocessing_value(reprocessing_parameters, tsum_key)
+            if tsum_value is not None:
+                print("Using smoothed T_sum for P",M,"s",s)
+                Tsum_cal[M-1][s-1] = tsum_value
 
 print("Final calibration in times used:", _format_value_for_print(Tsum_cal))
 
@@ -5162,12 +5210,16 @@ if crosstalk_removal_and_recalibration:
     if global_variables["analysis_mode"] == 1:
         for M in [1, 2, 3, 4]:
             for s in [1, 2, 3, 4]:
-                if reprocessing_parameters[f"P{M}_s{s}_crstlk_limit_smoothed"]:
+                limit_key = f"P{M}_s{s}_crstlk_limit_smoothed"
+                limit_value = get_reprocessing_value(reprocessing_parameters, limit_key)
+                if limit_value is not None:
                     print("Using smoothed crosstalk limit for P",M,"s",s)
-                    crosstalk_limits[M-1][s-1] = reprocessing_parameters[f"P{M}_s{s}_crstlk_limit_smoothed"]
-                if reprocessing_parameters[f"P{M}_s{s}_crstlk_pedestal_smoothed"]:
+                    crosstalk_limits[f'crstlk_limit_P{M}s{s}'] = limit_value
+                pedestal_key = f"P{M}_s{s}_crstlk_pedestal_smoothed"
+                pedestal_value = get_reprocessing_value(reprocessing_parameters, pedestal_key)
+                if pedestal_value is not None:
                     print("Using smoothed crosstalk pedestal for P",M,"s",s)
-                    crosstalk_pedestal[M-1][s-1] = reprocessing_parameters[f"P{M}_s{s}_crstlk_pedestal_smoothed"]
+                    crosstalk_pedestal[f'crstlk_pedestal_P{M}s{s}'] = pedestal_value
 
 
 

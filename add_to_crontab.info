@@ -14,13 +14,17 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 #*/5 * * * * export RPCSYSTEM=mingo01;export RPCRUNMODE=oneRun;/home/mingo/gate/bin/unpack.sh
 
 # Save copy the core files
-0 5 * * * rsync -av --exclude="STATIONS" --exclude=".git" --exclude=".gitignore" /home/mingo/DATAFLOW_v3/ /home/mingo/SAFE_DATAFLOW_v3/
+0 5 * * * rsync -av --exclude="STATIONS" --exclude=".git" --exclude=".gitignore" --exclude="EXECUTION_LOGS" /home/mingo/DATAFLOW_v3/ /home/mingo/SAFE_DATAFLOW_v3/
 
 # Setup Copernicus API codes
 0 * * * * /bin/cp /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/.cdsapirc /home/mingo/.cdsapirc
 
 # Save snapshot of the config file
 0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/VERSION_CONTROL/snapshot_config.py
+
+# Clean files if storage in /home is larger than 50% (force with --force)
+0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh
+
 
 # -----------
 # NMDB update
