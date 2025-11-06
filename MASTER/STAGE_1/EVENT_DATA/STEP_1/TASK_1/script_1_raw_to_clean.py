@@ -389,6 +389,12 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
 
 # Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
+
+# Take only in raw_files those in raw_directory that are strictly ending in *.dat
+raw_files = {f for f in raw_files if f.lower().endswith('.dat')}
+
+print("dat files are:", raw_files)
+
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))

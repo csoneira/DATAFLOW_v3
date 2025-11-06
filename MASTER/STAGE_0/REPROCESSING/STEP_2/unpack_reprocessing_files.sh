@@ -118,19 +118,30 @@ echo "------------------------------------------------------"
 # --------------------------------------------------------------------------------------------
 
 station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}"
-reprocessing_directory="${station_directory}/STAGE_0/REPROCESSING"
+reprocessing_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_2"
+step_1_output_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_1/OUTPUT_FILES"
+step_1_output_compressed="${step_1_output_directory}/COMPRESSED_HLDS"
+step_1_output_uncompressed="${step_1_output_directory}/UNCOMPRESSED_HLDS"
 input_directory="${reprocessing_directory}/INPUT_FILES"
-compressed_directory="${input_directory}/COMPRESSED_HLDS"
-uncompressed_directory="${input_directory}/UNCOMPRESSED_HLDS"
+unprocessed_uncompressed="${input_directory}/UNPROCESSED"
+completed_uncompressed="${input_directory}/COMPLETED"
+processing_directory="${input_directory}/PROCESSING"
+error_directory="${input_directory}/ERROR"
 metadata_directory="${reprocessing_directory}/METADATA"
 stage0_to_1_directory="${station_directory}/STAGE_0_to_1"
 
-mkdir -p "$compressed_directory" "$uncompressed_directory" "$metadata_directory" "$stage0_to_1_directory"
+mkdir -p \
+    "$unprocessed_uncompressed" \
+    "$completed_uncompressed" \
+    "$processing_directory" \
+    "$error_directory" \
+    "$metadata_directory" \
+    "$stage0_to_1_directory"
 
 dat_unpacked_csv="${metadata_directory}/dat_files_unpacked.csv"
 dat_unpacked_header="dat_name,execution_timestamp,execution_duration_s"
 
-csv_path="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/database_status_${station}.csv"
+# csv_path="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/database_status_${station}.csv"
 csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_date,list_ev_name,list_ev_add_date,acc_name,acc_add_date,merge_add_date"
 
 ensure_dat_unpacked_csv() {
@@ -139,25 +150,25 @@ ensure_dat_unpacked_csv() {
     fi
 }
 
-ensure_csv() {
-    if [[ ! -f "$csv_path" ]]; then
-        printf '%s\n' "$csv_header" > "$csv_path"
-    elif [[ ! -s "$csv_path" ]]; then
-        printf '%s\n' "$csv_header" > "$csv_path"
-    else
-        local current_header
-        current_header=$(head -n1 "$csv_path")
-        if [[ "$current_header" != "$csv_header" ]]; then
-            local upgrade_tmp
-            upgrade_tmp=$(mktemp)
-            {
-                printf '%s\n' "$csv_header"
-                tail -n +2 "$csv_path" | awk -F',' -v OFS=',' '{ while (NF < 10) { $(NF+1)="" } if (NF > 10) { NF=10 } print }'
-            } > "$upgrade_tmp"
-            mv "$upgrade_tmp" "$csv_path"
-        fi
-    fi
-}
+# ensure_csv() {
+#     if [[ ! -f "$csv_path" ]]; then
+#         printf '%s\n' "$csv_header" > "$csv_path"
+#     elif [[ ! -s "$csv_path" ]]; then
+#         printf '%s\n' "$csv_header" > "$csv_path"
+#     else
+#         local current_header
+#         current_header=$(head -n1 "$csv_path")
+#         if [[ "$current_header" != "$csv_header" ]]; then
+#             local upgrade_tmp
+#             upgrade_tmp=$(mktemp)
+#             {
+#                 printf '%s\n' "$csv_header"
+#                 tail -n +2 "$csv_path" | awk -F',' -v OFS=',' '{ while (NF < 10) { $(NF+1)="" } if (NF > 10) { NF=10 } print }'
+#             } > "$upgrade_tmp"
+#             mv "$upgrade_tmp" "$csv_path"
+#         fi
+#     fi
+# }
 
 ensure_csv
 
@@ -201,20 +212,58 @@ if [[ -s "$csv_path" ]]; then
     done < "$csv_path"
 fi
 
-append_row_if_missing() {
-    local base="$1"
-    local remote_date="$2"
-    local local_date="$3"
-    local dat_date="$4"
-    [[ -z "$base" ]] && return
-    if [[ -n ${csv_rows["$base"]+_} ]]; then
-        return
+# append_row_if_missing() {
+#     local base="$1"
+#     local remote_date="$2"
+#     local local_date="$3"
+#     local dat_date="$4"
+#     [[ -z "$base" ]] && return
+#     if [[ -n ${csv_rows["$base"]+_} ]]; then
+#         return
+#     fi
+#     local start_value
+#     start_value=$(compute_start_date "$base")
+#     printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+#         "$base" "$start_value" "$remote_date" "$local_date" "$dat_date" "" "" "" "" "" >> "$csv_path"
+#     csv_rows["$base"]=1
+# }
+
+move_step1_outputs_to_unprocessed() {
+    local moved_any=false
+    shopt -s nullglob
+
+    if [[ -d "$step_1_output_compressed" ]]; then
+        for archive in "$step_1_output_compressed"/*.tar.gz "$step_1_output_compressed"/*.hld-tar-gz; do
+            [[ -e "$archive" ]] || continue
+            echo "Extracting $(basename "$archive") into UNPROCESSED..."
+            if tar -xvzf "$archive" --strip-components=3 -C "$unprocessed_uncompressed"; then
+                moved_any=true
+                rm -f "$archive"
+            else
+                echo "Warning: failed to extract $(basename "$archive")." >&2
+            fi
+        done
     fi
-    local start_value
-    start_value=$(compute_start_date "$base")
-    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
-        "$base" "$start_value" "$remote_date" "$local_date" "$dat_date" "" "" "" "" "" >> "$csv_path"
-    csv_rows["$base"]=1
+
+    if [[ -d "$step_1_output_uncompressed" ]]; then
+        for file in "$step_1_output_uncompressed"/*.hld "$step_1_output_uncompressed"/*.HLD; do
+            [[ -e "$file" ]] || continue
+            local target
+            target="$unprocessed_uncompressed/$(basename "$file")"
+            if [[ -e "$target" ]]; then
+                echo "Skipping $(basename "$file") — already present in UNPROCESSED."
+                continue
+            fi
+            mv "$file" "$target"
+            moved_any=true
+        done
+    fi
+
+    shopt -u nullglob
+
+    if $moved_any; then
+        echo "Moved STEP_1 outputs into UNPROCESSED queue."
+    fi
 }
 
 hld_input_directory=$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat # <--------------------------------------------
@@ -231,32 +280,47 @@ process_single_hld() {
     csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 
     echo "Creating necessary directories..."
-    mkdir -p "$uncompressed_directory" "$dest_directory"
+    mkdir -p \
+        "$unprocessed_uncompressed" \
+        "$completed_uncompressed" \
+        "$processing_directory" \
+        "$error_directory" \
+        "$dest_directory" \
+        "$hld_input_directory" \
+        "$asci_output_directory"
+
+    move_step1_outputs_to_unprocessed
 
     echo ""
-    echo "Unpacking HLD tarballs and removing archives..."
+    echo "Ready to process uncompressed HLD files from UNPROCESSED..."
+
     shopt -s nullglob
-    for file in "$compressed_directory"/*.tar.gz; do
-        [ -e "$file" ] || continue
-        if tar -xvzf "$file" --strip-components=3 -C "$uncompressed_directory"; then
-            echo "Successfully untared $file"
-            local last_untared_file
-            last_untared_file=$(ls -t "$uncompressed_directory"/*.hld 2>/dev/null | head -n 1)
-            if [[ -n "$last_untared_file" ]]; then
-                touch "$last_untared_file"
-                echo "Updated modification date for $last_untared_file"
-            fi
-            rm "$file"
-        else
-            echo "Warning: Failed to unpack $file" >&2
-        fi
-    done
+    local -a stale_processing=("$processing_directory"/*.hld "$processing_directory"/*.HLD)
+    if (( ${#stale_processing[@]} > 0 )); then
+        echo "Found file(s) already in PROCESSING; moving them to ERROR."
+        for stale in "${stale_processing[@]}"; do
+            [[ -e "$stale" ]] || continue
+            local stale_name
+            stale_name=$(basename "$stale")
+            mv "$stale" "$error_directory/$stale_name"
+            echo "  -> $stale_name moved to ERROR."
+        done
+    fi
     shopt -u nullglob
 
     if [ -d "$hld_input_directory" ]; then
-        echo "Moving existing HLD files to removed directory..."
-        mkdir -p "$hld_input_directory/removed"
-        mv "$hld_input_directory"/*.hld* "$hld_input_directory/removed/" 2>/dev/null
+        echo "Clearing leftover HLD files from unpacker input..."
+        shopt -s nullglob
+        for leftover in "$hld_input_directory"/*.hld*; do
+            [[ -e "$leftover" ]] || continue
+            local name
+            name=$(basename "$leftover")
+            if [[ -e "$completed_uncompressed/$name" ]]; then
+                rm -f "$completed_uncompressed/$name"
+            fi
+            mv "$leftover" "$completed_uncompressed/$name"
+        done
+        shopt -u nullglob
     fi
 
     if [ -d "$asci_output_directory" ]; then
@@ -267,44 +331,78 @@ process_single_hld() {
 
     echo "Selecting one HLD file to unpack..."
     shopt -s nullglob
-    local hld_files=("$uncompressed_directory"/*.hld)
+    local -a candidate_files=("$unprocessed_uncompressed"/*.hld "$unprocessed_uncompressed"/*.HLD)
+    local source_stage="UNPROCESSED"
+
+    if (( ${#candidate_files[@]} == 0 )); then
+        echo "UNPROCESSED is empty; checking PROCESSING."
+        local -a processing_candidates=("$processing_directory"/*.hld "$processing_directory"/*.HLD)
+        if (( ${#processing_candidates[@]} > 0 )); then
+            for proc in "${processing_candidates[@]}"; do
+                [[ -e "$proc" ]] || continue
+                local proc_name
+                proc_name=$(basename "$proc")
+                echo "  -> Found $proc_name in PROCESSING; moving to ERROR."
+                mv "$proc" "$error_directory/$proc_name"
+            done
+        fi
+        echo "UNPROCESSED and PROCESSING are empty so we are done for now."
+        # candidate_files=("$completed_uncompressed"/*.hld "$completed_uncompressed"/*.HLD)
+        # candidate_files=("$completed_uncompressed"/*.hld "$completed_uncompressed"/*.HLD)
+        # source_stage="COMPLETED"
+    fi
     shopt -u nullglob
 
-    if [ ${#hld_files[@]} -eq 0 ]; then
-        echo "No HLD files found in $uncompressed_directory"
+    if (( ${#candidate_files[@]} == 0 )); then
+        echo "No HLD files available in UNPROCESSED or PROCESSING."
         return 1
     fi
 
     local selected_file
     if [ "$random_file" = true ]; then
-        selected_file="${hld_files[RANDOM % ${#hld_files[@]}]}"
+        selected_file="${candidate_files[RANDOM % ${#candidate_files[@]}]}"
     else
         local -a sorted=()
-        IFS=$'\n' sorted=($(sort <<<"${hld_files[*]}"))
+        IFS=$'\n' sorted=($(printf '%s\n' "${candidate_files[@]}" | sort -u))
         unset IFS
         selected_file="${sorted[0]}"
     fi
 
-    echo "Selected HLD file: $(basename "$selected_file")"
+    echo "Selected HLD file: $(basename "$selected_file") [source: $source_stage]"
 
     local selected_base
     selected_base=$(basename "${selected_file%.hld}")
-    append_row_if_missing "$selected_base" "" "$csv_timestamp" ""
+    # append_row_if_missing "$selected_base" "" "$csv_timestamp" ""
 
-    awk -F',' -v OFS=',' -v key="$selected_base" -v ts="$csv_timestamp" '
-        NR == 1 { print; next }
-        {
-            if ($1 == key && $4 == "") {
-                $4 = ts
-            }
-            print
-        }
-    ' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
-
-    mv "$selected_file" "$hld_input_directory/"
+    # awk -F',' -v OFS=',' -v key="$selected_base" -v ts="$csv_timestamp" '
+    #     NR == 1 { print; next }
+    #     {
+    #         if ($1 == key && $4 == "") {
+    #             $4 = ts
+    #         }
+    #         print
+    #     }
+    # ' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
 
     local filename name_no_ext prefix ss ss_val ss_new new_filename
     filename=$(basename "$selected_file")
+    local processing_path="$processing_directory/$filename"
+
+    if [[ -e "$processing_path" ]]; then
+        echo "Warning: $filename already existed in PROCESSING; moving old copy to ERROR."
+        mv "$processing_path" "$error_directory/$filename"
+    fi
+
+    if ! mv "$selected_file" "$processing_path"; then
+        echo "Warning: failed to move $filename into PROCESSING." >&2
+        return 1
+    fi
+
+    if ! cp "$processing_path" "$hld_input_directory/$filename"; then
+        echo "Warning: failed to copy $filename into unpacker input directory." >&2
+        return 1
+    fi
+
     name_no_ext="${filename%.hld}"
     prefix="${name_no_ext:0:${#name_no_ext}-2}"
     ss="${name_no_ext: -2}"
@@ -377,69 +475,90 @@ process_single_hld() {
             [[ -z "$dat_entry" ]] && continue
             local dat_base
             dat_base=$(strip_suffix "$dat_entry")
-            append_row_if_missing "$dat_base" "" "$csv_timestamp" "$csv_timestamp"
+            # append_row_if_missing "$dat_base" "" "$csv_timestamp" "$csv_timestamp"
         done < "$stage0_after"
     fi
 
-    if [[ -s "$stage0_after" || -s "$stage0_new" ]]; then
-        awk -F',' -v OFS=',' -v all="$stage0_after" -v new="$stage0_new" -v ts="$csv_timestamp" '
-            function canonical(name) {
-                gsub(/\r/, "", name)
-                sub(/\.hld\.tar\.gz$/, "", name)
-                sub(/\.hld-tar-gz$/, "", name)
-                sub(/\.tar\.gz$/, "", name)
-                sub(/\.hld$/, "", name)
-                sub(/\.dat$/, "", name)
-                return name
-            }
-            BEGIN {
-                if (all != "") {
-                    while ((getline line < all) > 0) {
-                        if (line == "") { continue }
-                        roots_all[canonical(line)] = 1
-                    }
-                    close(all)
-                }
-                if (new != "") {
-                    while ((getline line < new) > 0) {
-                        if (line == "") { continue }
-                        roots_new[canonical(line)] = 1
-                    }
-                    close(new)
-                }
-            }
-            NR == 1 { print; next }
-            {
-                base = canonical($1)
-                if (base == "") {
-                    print
-                    next
-                }
-                if (base in roots_new) {
-                    if ($4 == "") {
-                        $4 = ts
-                    }
-                    $5 = ts
-                } else if (base in roots_all) {
-                    if ($4 == "") {
-                        $4 = ts
-                    }
-                    if ($5 == "") {
-                        $5 = ts
-                    }
-                }
-                print
-            }
-        ' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
-    fi
+    # if [[ -s "$stage0_after" || -s "$stage0_new" ]]; then
+    #     awk -F',' -v OFS=',' -v all="$stage0_after" -v new="$stage0_new" -v ts="$csv_timestamp" '
+    #         function canonical(name) {
+    #             gsub(/\r/, "", name)
+    #             sub(/\.hld\.tar\.gz$/, "", name)
+    #             sub(/\.hld-tar-gz$/, "", name)
+    #             sub(/\.tar\.gz$/, "", name)
+    #             sub(/\.hld$/, "", name)
+    #             sub(/\.dat$/, "", name)
+    #             return name
+    #         }
+    #         BEGIN {
+    #             if (all != "") {
+    #                 while ((getline line < all) > 0) {
+    #                     if (line == "") { continue }
+    #                     roots_all[canonical(line)] = 1
+    #                 }
+    #                 close(all)
+    #             }
+    #             if (new != "") {
+    #                 while ((getline line < new) > 0) {
+    #                     if (line == "") { continue }
+    #                     roots_new[canonical(line)] = 1
+    #                 }
+    #                 close(new)
+    #             }
+    #         }
+    #         NR == 1 { print; next }
+    #         {
+    #             base = canonical($1)
+    #             if (base == "") {
+    #                 print
+    #                 next
+    #             }
+    #             if (base in roots_new) {
+    #                 if ($4 == "") {
+    #                     $4 = ts
+    #                 }
+    #                 $5 = ts
+    #             } else if (base in roots_all) {
+    #                 if ($4 == "") {
+    #                     $4 = ts
+    #                 }
+    #                 if ($5 == "") {
+    #                     $5 = ts
+    #                 }
+    #             }
+    #             print
+    #         }
+    #     ' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
+    # fi
 
     rm -f "$stage0_before" "$stage0_after" "$stage0_new"
 
     if [ -d "$hld_input_directory" ]; then
-        echo "Moving existing HLD files to removed directory..."
-        mkdir -p "$hld_input_directory/removed"
-        mv "$hld_input_directory"/*.hld* "$hld_input_directory/removed/" 2>/dev/null
+        echo "Archiving processed HLD files into COMPLETED..."
+        shopt -s nullglob
+        for processed in "$hld_input_directory"/*.hld*; do
+            [[ -e "$processed" ]] || continue
+            local name
+            name=$(basename "$processed")
+            if [[ -e "$completed_uncompressed/$name" ]]; then
+                rm -f "$completed_uncompressed/$name"
+            fi
+            mv "$processed" "$completed_uncompressed/$name"
+        done
+        shopt -u nullglob
     fi
+
+    shopt -s nullglob
+    for processed in "$processing_directory"/*.hld "$processing_directory"/*.HLD; do
+        [[ -e "$processed" ]] || continue
+        local name
+        name=$(basename "$processed")
+        if [[ -e "$completed_uncompressed/$name" ]]; then
+            rm -f "$completed_uncompressed/$name"
+        fi
+        mv "$processed" "$completed_uncompressed/$name"
+    done
+    shopt -u nullglob
 
     if [ -d "$asci_output_directory" ]; then
         echo "Moving existing dat files to removed directory..."
@@ -450,8 +569,12 @@ process_single_hld() {
     local BASE_ROOT SUBDIRS
     BASE_ROOT="$HOME/DATAFLOW_v3/STATIONS"
     SUBDIRS=(
-        "STAGE_0/REPROCESSING/INPUT_FILES/COMPRESSED_HLDS"
-        "STAGE_0/REPROCESSING/INPUT_FILES/UNCOMPRESSED_HLDS"
+        "STAGE_0/REPROCESSING/STEP_1/OUTPUT_FILES/COMPRESSED_HLDS"
+        "STAGE_0/REPROCESSING/STEP_1/OUTPUT_FILES/UNCOMPRESSED_HLDS"
+        "STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/UNPROCESSED"
+        "STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/COMPLETED"
+        "STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/PROCESSING"
+        "STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/ERROR"
         "STAGE_0_to_1"
     )
 

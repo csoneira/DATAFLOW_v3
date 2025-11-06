@@ -23,6 +23,7 @@ TIMESTAMP_FMT = "%Y-%m-%d_%H.%M.%S"
 FILENAME_TIMESTAMP_PATTERN = re.compile(r"mi0\d(\d{11})$", re.IGNORECASE)
 CLI_DESCRIPTION = "Generate Stage 1 execution metadata plots."
 
+minutes_upper_limit = 5
 
 def extract_datetime_from_basename(basename: str) -> Optional[datetime]:
     stem = Path(basename).stem
@@ -48,18 +49,8 @@ def extract_datetime_from_basename(basename: str) -> Optional[datetime]:
     return base_date.replace(hour=hour, minute=minute, second=second)
 
 
-def load_metadata_csv(station: str, task_id: int) -> pd.DataFrame:
-    """Load metadata CSV for a given station/task pair."""
-    metadata_csv = (
-        BASE_PATH
-        / f"MINGO0{station}"
-        / "STAGE_1"
-        / "EVENT_DATA"
-        / "STEP_1"
-        / f"TASK_{task_id}"
-        / "METADATA"
-        / f"task_{task_id}_metadata_execution.csv"
-    )
+def _load_metadata_csv_from_path(metadata_csv: Path) -> pd.DataFrame:
+    """Load and normalize a metadata CSV."""
     if not metadata_csv.exists():
         return pd.DataFrame()
 
@@ -102,18 +93,53 @@ def load_metadata_csv(station: str, task_id: int) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def load_metadata_csv(station: str, task_id: int) -> pd.DataFrame:
+    """Load metadata CSV for a given station/task pair."""
+    metadata_csv = (
+        BASE_PATH
+        / f"MINGO0{station}"
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / f"TASK_{task_id}"
+        / "METADATA"
+        / f"task_{task_id}_metadata_execution.csv"
+    )
+    return _load_metadata_csv_from_path(metadata_csv)
+
+
+def load_step2_metadata_csv(station: str) -> pd.DataFrame:
+    """Load step 2 metadata CSV for a given station."""
+    metadata_csv = (
+        BASE_PATH
+        / f"MINGO0{station}"
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_2"
+        / "METADATA"
+        / "step_2_metadata_execution.csv"
+    )
+    return _load_metadata_csv_from_path(metadata_csv)
+
+
 def ensure_output_directory(path: Path) -> None:
     """Ensure the directory for the output file exists."""
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def build_station_pages() -> Dict[str, List[pd.DataFrame]]:
+def build_station_pages(
+    include_step2: bool,
+) -> Dict[str, List[Tuple[str, pd.DataFrame]]]:
     """Collect metadata DataFrames for each station."""
-    station_data: Dict[str, List[pd.DataFrame]] = {}
+    station_data: Dict[str, List[Tuple[str, pd.DataFrame]]] = {}
     for station in STATIONS:
-        station_data[station] = [
-            load_metadata_csv(station, task_id) for task_id in TASK_IDS
+        datasets: List[Tuple[str, pd.DataFrame]] = [
+            (f"TASK_{task_id}", load_metadata_csv(station, task_id))
+            for task_id in TASK_IDS
         ]
+        if include_step2:
+            datasets.append(("STEP_2", load_step2_metadata_csv(station)))
+        station_data[station] = datasets
     return station_data
 
 
@@ -140,6 +166,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Restrict the x-axis to the last hour ending at the current time.",
     )
+    parser.add_argument(
+        "--include-step2",
+        action="store_true",
+        help="Include Stage 1 Step 2 execution metadata in the plots.",
+    )
     return parser
 
 
@@ -158,14 +189,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def compute_time_bounds(
-    station_pages: Dict[str, List[pd.DataFrame]], use_real_date: bool
+    station_pages: Dict[str, List[Tuple[str, pd.DataFrame]]], use_real_date: bool
 ) -> Optional[Tuple[datetime, datetime]]:
     minima: List[datetime] = []
     maxima: List[datetime] = []
     column = "file_timestamp" if use_real_date else "execution_timestamp"
 
-    for dataframes in station_pages.values():
-        for df in dataframes:
+    for datasets in station_pages.values():
+        for _, df in datasets:
             if df.empty or column not in df:
                 continue
             series = df[column].dropna()
@@ -232,19 +263,21 @@ def resolve_output_path(use_real_date: bool, zoom: bool) -> Path:
 
 def plot_station(
     station: str,
-    dataframes: Iterable[pd.DataFrame],
+    station_datasets: Iterable[Tuple[str, pd.DataFrame]],
     pdf: PdfPages,
     use_real_date: bool,
     time_bounds: Optional[Tuple[datetime, datetime]],
     month_markers: Iterable[datetime],
     current_time: datetime,
 ) -> None:
-    """Render a page with five subplots for one station."""
-    dataframes = list(dataframes)
+    """Render a page with execution metadata subplots for one station."""
+    station_datasets = list(station_datasets)
     month_markers = list(month_markers)
+    current_time_str_full = current_time.strftime("%Y-%m-%d %H:%M:%S")
+    current_time_str_time_only = current_time.strftime("%H:%M:%S")
 
     median_minutes = []
-    for df in dataframes:
+    for _, df in station_datasets:
         if df.empty:
             continue
         median_value = df["total_execution_time_minutes"].median()
@@ -252,8 +285,9 @@ def plot_station(
             median_minutes.append(median_value)
     total_median_minutes = float(sum(median_minutes))
 
+    num_panels = len(station_datasets)
     fig, axes = plt.subplots(
-        len(TASK_IDS),
+        num_panels,
         1,
         figsize=(11, 8.5),
         sharex=True,
@@ -262,12 +296,13 @@ def plot_station(
     fig.suptitle(
         (
             f"MINGO0{station} – Stage 1 Execution Metadata "
-            f"(Total median minutes/file: {total_median_minutes:.2f})"
+            f"(Total median minutes/file: {total_median_minutes:.2f}) "
+            f"Current: {current_time_str_full}"
         ),
         fontsize=14,
     )
 
-    if len(TASK_IDS) == 1:
+    if num_panels == 1:
         axes = [axes]  # type: ignore[list-item]
 
     xlim: Optional[Tuple[datetime, datetime]] = None
@@ -285,11 +320,11 @@ def plot_station(
     else:
         markers_to_use = month_markers
 
-    for ax, task_id, df in zip(axes, TASK_IDS, dataframes):
-        ax.set_title(f"TASK_{task_id}")
+    for ax, (label, df) in zip(axes, station_datasets):
+        ax.set_title(label)
         ax.set_ylabel("Exec Time (min)")
         ax.grid(True, axis="y", alpha=0.3)
-        ax.set_ylim(0, 2)
+        ax.set_ylim(0, minutes_upper_limit)
         ax.yaxis.label.set_color("tab:blue")
         ax.tick_params(axis="y", colors="tab:blue")
 
@@ -299,6 +334,19 @@ def plot_station(
             linestyle="--",
             linewidth=1.0,
             label="Current time",
+        )
+
+        ax.annotate(
+            current_time_str_time_only,
+            xy=(current_time, ax.get_ylim()[1]),
+            xycoords=("data", "data"),
+            xytext=(15, -20),
+            textcoords="offset points",
+            rotation=90,
+            va="top",
+            ha="center",
+            color="green",
+            fontsize=10,
         )
 
         for marker in markers_to_use:
@@ -321,7 +369,7 @@ def plot_station(
                 fontsize=10,
                 color="dimgray",
             )
-            ax.set_ylim(0, 2)
+            ax.set_ylim(0, minutes_upper_limit)
             ax.legend([now_line], [now_line.get_label()], loc="upper left")
             continue
 
@@ -345,7 +393,7 @@ def plot_station(
                 fontsize=10,
                 color="dimgray",
             )
-            ax.set_ylim(0, 2)
+            ax.set_ylim(0, minutes_upper_limit)
             ax.legend([now_line], [now_line.get_label()], loc="upper left")
             continue
 
@@ -396,7 +444,7 @@ def plot_station(
 
 def main() -> None:
     args = parse_args()
-    station_pages = build_station_pages()
+    station_pages = build_station_pages(include_step2=args.include_step2)
     current_time = datetime.now()
     if args.zoom:
         time_bounds: Optional[Tuple[datetime, datetime]] = (
@@ -413,10 +461,10 @@ def main() -> None:
     ensure_output_directory(output_path)
 
     with PdfPages(output_path) as pdf:
-        for station, dfs in station_pages.items():
+        for station, datasets in station_pages.items():
             plot_station(
                 station,
-                dfs,
+                datasets,
                 pdf,
                 use_real_date=args.real_date,
                 time_bounds=time_bounds,

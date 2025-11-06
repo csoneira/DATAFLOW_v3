@@ -21,6 +21,8 @@ STATIONS/
 *.zip
 *.rar
 *.7z
+*.csv.gz
+*.gz
 
 # Ignore raw data files
 *.dat*

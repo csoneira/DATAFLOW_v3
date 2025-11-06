@@ -429,7 +429,8 @@ def main() -> int:
             completed_files = sorted(completed_day_dir.glob("*.csv"))
 
         output_filename = f"event_data_{day:%Y_%m_%d}.csv"
-        output_path = task2_output_root / output_filename
+        output_parent = task2_output_root / year / month
+        output_path = output_parent / output_filename
         output_for_merge: Path | None = None
 
         if unprocessed_files and output_path.exists():
@@ -499,13 +500,16 @@ def main() -> int:
         exec_date_header = format_header_values(exec_dates)
 
         output_filename = f"event_data_{day:%Y_%m_%d}.csv"
-        output_path = task2_output_root / output_filename
+        output_parent = task2_output_root / year / month
+        output_path = output_parent / output_filename
 
         if args.dry_run:
             print(f"  [dry-run] would write {output_path}")
             print(f"           # source_basenames={basename_header}")
             print(f"           # execution_date={exec_date_header}")
             continue
+
+        output_parent.mkdir(parents=True, exist_ok=True)
 
         with output_path.open("w", encoding="utf-8", newline="") as handle:
             handle.write(f"# source_basenames={basename_header}\n")
