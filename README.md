@@ -33,7 +33,7 @@ Each station mirrors the same directory tree under `STATIONS/<ID>/` so that scri
 MASTER/
 ├── STAGE_0/                 # Unpacking, deduplication, housekeeping
 ├── STAGE_1/
-│   ├── EVENT_DATA/             # RAW→LIST→ACC converters and their helpers
+│   ├── EVENT_DATA/             # RAW-->LIST-->ACC converters and their helpers
 │   ├── LAB_LOGS/               # Logbook ingestion and cleaning scripts
 │   └── COPERNICUS/             # ERA5 download and wrangling utilities
 └── STAGE_2/               # Corrections + unified table builder
@@ -55,7 +55,7 @@ Use `top_large_dirs.sh` to inspect disk usage and the `clean_*.sh` utilities to 
 
 - Linux host with passwordless SSH access to each miniTRASGO station (`mingo0X`).
 - Python 3.9+ with the scientific stack listed in `requirements.list` (install via `pip install -r requirements.list`).
-- Copernicus Climate Data Store account and configured `~/.cdsapirc` credentials for ERA5 downloads.
+- Copernicus Climate Data Store account and configured `~/DATAFLOW_v3/MASTER/CONFIG_FILES/COPERNICUS/.cdsapirc` credentials for ERA5 downloads.
 - Cron and tmux available on the processing node.
 
 ### Initial setup
@@ -75,7 +75,7 @@ Use `top_large_dirs.sh` to inspect disk usage and the `clean_*.sh` utilities to 
 ### Outputs
 
 - **Unified CSV/Parquet tables** under `GRAFANA_DATA/` or `MASTER/STAGE_2/` for visualization and archival analysis.
-- **Diagnostic plots** generated during the RAW→LIST transformation, saved under each station’s `STAGE_1/EVENT_DATA/PLOTS/` subtree.
+- **Diagnostic plots** generated during the RAW-->LIST transformation, saved under each station’s `STAGE_1/EVENT_DATA/PLOTS/` subtree.
 - **Intermediate artefacts** for auditability (raw lab logs, cleaned aggregates, Copernicus NetCDF downloads) maintained per station.
 
 ## Contributing

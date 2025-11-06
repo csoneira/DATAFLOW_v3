@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 """
-Stage 1 Task 5 (FIT→CORR) finalisation stage.
+Stage 1 Task 5 (FIT-->CORR) finalisation stage.
 
 Consumes the fit outputs from Task 4, applies the derived corrections to the
 event lists, validates the corrected distributions, and emits the Stage 1
@@ -266,6 +266,7 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 # Define base working directory
 home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
+config_file_directory = os.path.expanduser(f"~/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
@@ -518,7 +519,7 @@ if files:  # Check if the directory contains any files
         os.remove(os.path.join(figure_directory, file))
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
@@ -1258,7 +1259,7 @@ Q_clip_max_ST = Q_clip_max_ST
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
@@ -1853,7 +1854,7 @@ else:
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
@@ -2637,6 +2638,7 @@ print(f"Theta boundaries (degrees): {theta_boundaries}")
 
 
 correct_angle = False
+global_variables['correct_angle'] = correct_angle
 
 df = working_df.copy()
 main_df = working_df.copy()

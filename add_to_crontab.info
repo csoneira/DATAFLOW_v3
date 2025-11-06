@@ -3,7 +3,7 @@
 # m h dom mon dow command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Update time is 14:03
+# Update time is 10:33d
 
 # Replace current crontab with the contents of /home/mingo/DATAFLOW_v3/add_to_crontab.info
 * * * * * /usr/bin/crontab /home/mingo/DATAFLOW_v3/add_to_crontab.info
@@ -11,25 +11,24 @@
 SHELL=/bin/bash
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 
-#*/5 * * * * export RPCSYSTEM=mingo01;export RPCRUNMODE=oneRun;/home/mingo/gate/bin/unpack.sh
-
 # Save copy the core files
 0 5 * * * rsync -av --exclude="STATIONS" --exclude=".git" --exclude=".gitignore" --exclude="EXECUTION_LOGS" /home/mingo/DATAFLOW_v3/ /home/mingo/SAFE_DATAFLOW_v3/
 
 # Setup Copernicus API codes
-0 * * * * /bin/cp /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/.cdsapirc /home/mingo/.cdsapirc
+0 * * * * /bin/cp /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/COPERNICUS/.cdsapirc /home/mingo/.cdsapirc
 
 # Save snapshot of the config file
-0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/VERSION_CONTROL/snapshot_config.py
+0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/VERSION_CONTROL/snapshot_config.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_snapshot_config.log 2>&1
 
 # Clean files if storage in /home is larger than 50% (force with --force)
-0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh
+0 1 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_clean_dataflow.log 2>&1
+0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh --select temps --force >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_temps_clean_dataflow.log 2>&1
 
 
 # -----------
 # NMDB update
 # -----------
-0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/update_log.txt 2>&1
+0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_nmdb_retrieval.log 2>&1
 
 # -----------------
 # Grafana splitting
@@ -84,7 +83,6 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 30 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_3.log 2>&1
 40 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_4.log 2>&1
 
-
 # STAGE_1 - LOG --------------------------------------------------------------
 15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/log_bring_and_clean.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_1.log 2>&1
 25 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/log_bring_and_clean.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_and_clean_2.log 2>&1
@@ -103,30 +101,41 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_3.log 2>&1
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_4.log 2>&1
 
-# LAST TASK WHICH DOES NOT QUITE GET EXEUTED IN THE CRONTAB I DONT KNOW WHY
-* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_1.log 2>&1
-* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_2.log 2>&1
-* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_3.log 2>&1
-* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_4.log 2>&1
+# # LAST TASK WHICH DOES NOT QUITE GET EXEUTED IN THE CRONTAB I DONT KNOW WHY
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_1.log 2>&1
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_2.log 2>&1
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_3.log 2>&1
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_4.log 2>&1
 
+# STAGE_1 - EVENT_DATA - ACCUMULATOR -----------------------------------
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_1.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_2.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_3.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_4.log 2>&1
 
-# STAGE_1 - EVENT_DATA - EVENT_ACCUMULATOR -----------------------------------
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/ev_accumulator.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_1.log 2>&1
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/ev_accumulator.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_2.log 2>&1
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/ev_accumulator.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_3.log 2>&1
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/ev_accumulator.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_4.log 2>&1
+# # STAGE_1 - EVENT_DATA - ACCUMULATED JOINER ----------------------------------
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/accumulated_joiner.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_joiner_1.log 2>&1
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/accumulated_joiner.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_joiner_2.log 2>&1
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/accumulated_joiner.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_joiner_3.log 2>&1
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/accumulated_joiner.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_joiner_4.log 2>&1
 
-# STAGE_1 - EVENT_DATA - BIG EVENT FILE JOINER -------------------------------
-11 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_1.log 2>&1
-22 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_2.log 2>&1
-37 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_3.log 2>&1
-52 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_4.log 2>&1
+# # STAGE_1 - EVENT_DATA - ACCUMULATED CHECK -----------------------------------
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_4/accumulated_check.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_check_1.log 2>&1
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_4/accumulated_check.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_check_2.log 2>&1
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_4/accumulated_check.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_check_3.log 2>&1
+# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_4/accumulated_check.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_check_4.log 2>&1
 
-# STAGE_2 - MERGE INTO LARGE TABLE ------------------------------------------
-10 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_1.log 2>&1
-15 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_2.log 2>&1
-30 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_3.log 2>&1
-45 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_4.log 2>&1
+# # STAGE_1 - EVENT_DATA - BIG EVENT FILE JOINER -------------------------------
+# 11 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_1.log 2>&1
+# 22 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_2.log 2>&1
+# 37 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_3.log 2>&1
+# 52 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/big_event_file_joiner.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/big_event_file_joiner_4.log 2>&1
+
+# # STAGE_2 - MERGE INTO LARGE TABLE ------------------------------------------
+# 10 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_1.log 2>&1
+# 15 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_2.log 2>&1
+# 30 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_3.log 2>&1
+# 45 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/merge_into_large_table.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/merge_large_table_4.log 2>&1
 
 # STAGE_2 - CORRECTOR -------------------------------------------------------
 # */31 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_2/corrector.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/corrector_1.log 2>&1
@@ -140,18 +149,16 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # --------------------------------------------------------------------------------
 
 # METADATA PLOTTER ------------------------------------
-*/30 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_plotter.py 1 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_plotter_1.log 2>&1
-*/30 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_plotter.py 2 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_plotter_2.log 2>&1
-*/30 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_plotter.py 3 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_plotter_3.log 2>&1
-*/30 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_plotter.py 4 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_plotter_4.log 2>&1
+0 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_plotter.py 1 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_plotter_1.log 2>&1
+0 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_plotter.py 2 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_plotter_2.log 2>&1
+0 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_plotter.py 3 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_plotter_3.log 2>&1
+0 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_plotter.py 4 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_plotter_4.log 2>&1
 
 # NETWORK PLOTTER ------------------------------------
-0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_network_plotter.py 1 --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_network_plotter.log 2>&1
+0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/metadata_network_plotter.py --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_network_plotter.log 2>&1
 
 # PIPELINE PLOTTER
 1 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/pipeline_data_status_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
 
 # RAW_TO_CORR PIPELINE PLOTTER
 0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/execution_metadata_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/execution_metadata_plotter.log 2>&1
-
-# LAST MOD

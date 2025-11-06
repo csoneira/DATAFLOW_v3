@@ -214,14 +214,20 @@ def compute_month_markers(
     return markers
 
 
-def resolve_output_path(use_real_date: bool) -> Path:
+def resolve_output_path(use_real_date: bool, zoom: bool) -> Path:
     filename = OUTPUT_FILENAME
     if use_real_date:
         if filename.lower().endswith(".pdf"):
             filename = f"{filename[:-4]}_real_time.pdf"
         else:
             filename = f"{filename}_real_time"
-    return Path(__file__).resolve().parent / filename
+    if zoom:
+        if filename.lower().endswith(".pdf"):
+            filename = f"{filename[:-4]}_zoomed.pdf"
+        else:
+            filename = f"{filename}_zoomed"
+    OUTPUT_DIR = Path.home() / "DATAFLOW_v3" / "MASTER" / "ANCILLARY" / "PLOTTERS" / "METADATA" / "EXECUTION" / "PLOTS"
+    return OUTPUT_DIR / filename
 
 
 def plot_station(
@@ -283,7 +289,7 @@ def plot_station(
         ax.set_title(f"TASK_{task_id}")
         ax.set_ylabel("Exec Time (min)")
         ax.grid(True, axis="y", alpha=0.3)
-        ax.set_ylim(0, 1.5)
+        ax.set_ylim(0, 2)
         ax.yaxis.label.set_color("tab:blue")
         ax.tick_params(axis="y", colors="tab:blue")
 
@@ -315,7 +321,7 @@ def plot_station(
                 fontsize=10,
                 color="dimgray",
             )
-            ax.set_ylim(0, 1.5)
+            ax.set_ylim(0, 2)
             ax.legend([now_line], [now_line.get_label()], loc="upper left")
             continue
 
@@ -339,7 +345,7 @@ def plot_station(
                 fontsize=10,
                 color="dimgray",
             )
-            ax.set_ylim(0, 1.5)
+            ax.set_ylim(0, 2)
             ax.legend([now_line], [now_line.get_label()], loc="upper left")
             continue
 
@@ -352,7 +358,7 @@ def plot_station(
             x,
             df_plot["total_execution_time_minutes"],
             marker="o",
-            markersize=1.5,
+            markersize=2,
             linestyle="-",
             color="tab:blue",
             label="Execution time (min)",
@@ -364,7 +370,7 @@ def plot_station(
             x,
             df_plot["data_purity_percentage"],
             marker="x",
-            markersize=1.5,
+            markersize=2,
             linestyle="--",
             color="tab:red",
             label="Data purity (%)",
@@ -403,7 +409,7 @@ def main() -> None:
         )
     month_markers = compute_month_markers(time_bounds)
 
-    output_path = resolve_output_path(args.real_date)
+    output_path = resolve_output_path(args.real_date, args.zoom)
     ensure_output_directory(output_path)
 
     with PdfPages(output_path) as pdf:

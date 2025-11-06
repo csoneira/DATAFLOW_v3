@@ -18,7 +18,7 @@ home_path = config["home_path"]
 #  • Robust against     – meridian (±180 °) crossings
 #                        – clockwise ring orientation
 #                        – self‑intersection artefacts
-#  • Projection‑agnostic geometry → can be reused on any map / globe.
+#  • Projection‑agnostic geometry --> can be reused on any map / globe.
 #  • Renders on a Mercator map with Cartopy; change `projection = …`
 #    to visualise in Orthographic, Mollweide, etc.
 # ------------------------------------------------------------------

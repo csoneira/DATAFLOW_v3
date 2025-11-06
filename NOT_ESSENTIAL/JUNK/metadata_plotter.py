@@ -75,7 +75,7 @@ def _read_csv(csv_path: Path) -> pd.DataFrame:
 
 def read_station_metadata(station: int) -> tuple[pd.DataFrame, pd.DataFrame]:
       """
-      Return two dataframes: (raw_to_list_metadata, event_accumulator_metadata).
+      Return two dataframes: (raw_to_list_metadata, corrected_to_accumulated_metadata).
       """
       if station not in (1, 2, 3, 4):
           raise ValueError("station must be 1, 2, 3 or 4")
@@ -89,7 +89,7 @@ def read_station_metadata(station: int) -> tuple[pd.DataFrame, pd.DataFrame]:
       )
 
       df_cal = _read_csv(base / "raw_to_list_metadata.csv")
-      df_evt = _read_csv(base / "event_accumulator_metadata.csv")
+      df_evt = _read_csv(base / "corrected_to_accumulated_metadata.csv")
       return df_cal, df_evt
 
 # -----------------------------------------------------------------------------#
@@ -158,7 +158,7 @@ def figure3(df: pd.DataFrame):
             ax = axs[r, c]
             for v, color in zip(vars_, colors):
                 col = f"T{p}_{v.split('_')[0]}_{s}_entries" if v.startswith("T") else f"Q{p}_{v.split('_')[1]}_{s}_entries"
-                # Correct mapping: e.g. v = "T_F"  → "T{plane}_F_{strip}_entries"
+                # Correct mapping: e.g. v = "T_F"  --> "T{plane}_F_{strip}_entries"
                 if v.startswith("T"):
                     col = f"T{p}_{v.split('_')[1]}_{s}_entries"
                 else:
@@ -216,7 +216,7 @@ def figure3_1(df: pd.DataFrame):
         for c, s in enumerate(strips):
             ax = axs[r, c]
             for v, color in zip(vars_, colors):
-                # Map logical name → column name in the CSV
+                # Map logical name --> column name in the CSV
                 prefix, side = v.split("_")            # e.g. T, F
                 col = f"{prefix}{p}_{side}_{s}_entries"
                 # print(f"Processing column: {col}")
@@ -400,7 +400,7 @@ def figure5_1(df: pd.DataFrame):
 
 
 # -------------------------------------------------------------------------- #
-# Figures 6–10  (event_accumulator_metadata)
+# Figures 6–10  (corrected_to_accumulated_metadata)
 # -------------------------------------------------------------------------- #
 def figure6(df: pd.DataFrame):
       """
@@ -615,8 +615,8 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
     for start, end in periods_cal:
         axs[0].axvspan(start, end, facecolor='green', edgecolor='none', alpha=0.5)
 
-    # Bottom plot: event_accumulator_metadata
-    axs[1].set_title("Analyzed periods: event_accumulator_metadata")
+    # Bottom plot: corrected_to_accumulated_metadata
+    axs[1].set_title("Analyzed periods: corrected_to_accumulated_metadata")
     axs[1].set_ylim(0, 1)
     axs[1].set_yticks([])
     axs[1].set_ylabel("Analyzed")
@@ -639,7 +639,7 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
 # -----------------------------------------------------------------------------#
 
 def _exec_colour_dict(df: pd.DataFrame, cmap_name: str = "turbo") -> dict:
-    """Return {Start_Time → RGBA} based on execution_time rank (ascending)."""
+    """Return {Start_Time --> RGBA} based on execution_time rank (ascending)."""
     if "execution_time" not in df.columns:
         raise KeyError("'execution_time' column not found")
     exec_time = pd.to_datetime(df["execution_time"], errors="coerce")
@@ -683,13 +683,13 @@ def figure_exec_bands_dual(df_cal: pd.DataFrame,
     sm = cm.ScalarMappable(cmap=cmap_cal, norm=norm_cal)
     sm.set_array([])
     fig.colorbar(sm, ax=ax, orientation="horizontal", pad=0.25,
-                 label="Execution-time rank (old → new)")
+                 label="Execution-time rank (old --> new)")
 
     _apply_time_axis(ax)
 
-    # ------------ bottom panel : event_accumulator_metadata ------------------
+    # ------------ bottom panel : corrected_to_accumulated_metadata ------------------
     ax = axs[1]
-    ax.set_title("Execution order: event_accumulator_metadata")
+    ax.set_title("Execution order: corrected_to_accumulated_metadata")
     ax.set_ylim(0, 1)
     ax.set_yticks([])
     ax.set_ylabel("Files")
@@ -708,7 +708,7 @@ def figure_exec_bands_dual(df_cal: pd.DataFrame,
     sm = cm.ScalarMappable(cmap=cmap_evt, norm=norm_evt)
     sm.set_array([])
     fig.colorbar(sm, ax=ax, orientation="horizontal", pad=0.25,
-                 label="Execution-time rank (old → new)")
+                 label="Execution-time rank (old --> new)")
 
     _apply_time_axis(ax)
 

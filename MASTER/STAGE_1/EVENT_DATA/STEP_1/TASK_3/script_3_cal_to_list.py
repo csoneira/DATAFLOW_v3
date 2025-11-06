@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 """
-Stage 1 Task 3 (CAL→LIST) transformation.
+Stage 1 Task 3 (CAL-->LIST) transformation.
 
 Takes the calibrated event sample from Task 2, builds the per-hit LIST-level
 representation (timing, charge, geometry groupings), applies physics-driven
@@ -757,9 +757,10 @@ else:
 
 
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
+config_file_directory = os.path.expanduser(f"~/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}")
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
@@ -1563,7 +1564,7 @@ else:
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
@@ -2297,7 +2298,7 @@ if files:  # Check if the directory contains any files
         os.remove(os.path.join(figure_directory, file))
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)

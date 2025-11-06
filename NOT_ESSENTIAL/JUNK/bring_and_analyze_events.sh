@@ -98,7 +98,7 @@ storage_directory="$base_working_directory/STAGE_0_to_1_TO_LIST"
 mingo_direction="mingo0$station"
 
 raw_to_list_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/Backbone/raw_to_list.py"
-event_accumulator_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/Backbone/event_accumulator.py"
+corrected_to_accumulated_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/Backbone/corrected_to_accumulated.py"
 
 exclude_list_file="$base_working_directory/tmp/exclude_list.txt"
 
@@ -184,9 +184,9 @@ echo '------------------------------------------------------'
 echo "Processing .dat files with Python script (raw_to_list.py)..."
 python3 "$raw_to_list_directory" "$station"
 
-# Process the data: event_accumulator.py
-echo "Processing list files with Python script (event_accumulator.py)..."
-python3 "$event_accumulator_directory" "$station"
+# Process the data: corrected_to_accumulated.py
+echo "Processing list files with Python script (corrected_to_accumulated.py)..."
+python3 "$corrected_to_accumulated_directory" "$station"
 
 echo '------------------------------------------------------'
 echo "bring_and_analyze_events.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"

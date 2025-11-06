@@ -221,6 +221,7 @@ global_variables['recalculate_pressure_coeff'] = recalculate_pressure_coeff
 # Define the base folder and file paths
 grafana_directory = os.path.expanduser(f"~/DATAFLOW_v3/GRAFANA_DATA")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
+config_file_directory = os.path.expanduser(f"~/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}")
 base_folder = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_2")
 filepath = f"{base_folder}/total_data_table.csv"
 save_filename = f"{base_folder}/large_corrected_table.csv"
@@ -1145,7 +1146,7 @@ if len(data_df) == 0:
 
 
 # Define input file path -------------------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 if os.path.exists(input_file_config_path):
     input_file = pd.read_csv(input_file_config_path, skiprows=1, decimal = ",")
     print("Input configuration file found.")
@@ -2315,7 +2316,7 @@ for case in processing_regions:
         # Efficiencies – every term corresponds to one counted coincidence pattern
         # ─────────────────────────────────────────────────────────────────────────────
 
-        # 1234 detector  →  patterns 1234, 124, 134, 14
+        # 1234 detector  -->  patterns 1234, 124, 134, 14
         data_df['detector_1234_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + e1 *  e2 * (1 - e3) * e4                   # 124
@@ -2323,7 +2324,7 @@ for case in processing_regions:
             + e1 * (1 - e2) * (1 - e3) * e4              # 14
         )
 
-        # 123 detector   →  patterns 1234, 123, 124, 134, 13, 14
+        # 123 detector   -->  patterns 1234, 123, 124, 134, 13, 14
         data_df['detector_123_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + e1 *  e2 *  e3 * (1 - e4)                  # 123
@@ -2333,7 +2334,7 @@ for case in processing_regions:
             + e1 * (1 - e2) * (1 - e3) * e4              # 14
         )
 
-        # 234 detector   →  patterns 1234, 234, 124, 134, 24, 14
+        # 234 detector   -->  patterns 1234, 234, 124, 134, 24, 14
         data_df['detector_234_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + (1 - e1) * e2 *  e3 *  e4                  # 234
@@ -2343,7 +2344,7 @@ for case in processing_regions:
             + e1 * (1 - e2) * (1 - e3) * e4              # 14
         )
 
-        # 12 detector    →  patterns 1234, 123, 124, 134, 13, 14, 12
+        # 12 detector    -->  patterns 1234, 123, 124, 134, 13, 14, 12
         data_df['detector_12_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + e1 *  e2 *  e3 * (1 - e4)                  # 123
@@ -2354,7 +2355,7 @@ for case in processing_regions:
             + e1 *  e2 * (1 - e3) * (1 - e4)             # 12
         )
 
-        # 23 detector    →  patterns 1234, 234, 23, 124, 24, 13, 134, 14
+        # 23 detector    -->  patterns 1234, 234, 23, 124, 24, 13, 134, 14
         data_df['detector_23_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + (1 - e1) * e2 *  e3 *  e4                  # 234
@@ -2366,7 +2367,7 @@ for case in processing_regions:
             + e1 * (1 - e2) * (1 - e3) * e4              # 14
         )
 
-        # 34 detector    →  patterns 1234, 234, 124, 134, 34, 24, 14
+        # 34 detector    -->  patterns 1234, 234, 124, 134, 34, 24, 14
         data_df['detector_34_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + (1 - e1) * e2 *  e3 *  e4                  # 234
@@ -2776,7 +2777,7 @@ for case in processing_regions:
         # --------------------------------------------------------------------------
         
         
-         or create_essential_plots or create_very_essential_plots:
+        
         if create_plots or create_essential_plots or create_very_essential_plots:
             fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(17, 14), sharex=True)
             for i in range(1, 5):  # Loop from 1 to 4
@@ -2871,7 +2872,7 @@ for case in processing_regions:
         # Efficiencies – every term corresponds to one counted coincidence pattern
         # ─────────────────────────────────────────────────────────────────────────────
 
-        # 1234 detector  →  patterns 1234, 124, 134, 14
+        # 1234 detector  -->  patterns 1234, 124, 134, 14
         data_df['detector_1234_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + e1 *  e2 * (1 - e3) * e4                   # 124
@@ -2879,7 +2880,7 @@ for case in processing_regions:
             + e1 * (1 - e2) * (1 - e3) * e4              # 14
         )
 
-        # 123 detector   →  patterns 1234, 123, 124, 134, 13, 14
+        # 123 detector   -->  patterns 1234, 123, 124, 134, 13, 14
         data_df['detector_123_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + e1 *  e2 *  e3 * (1 - e4)                  # 123
@@ -2889,7 +2890,7 @@ for case in processing_regions:
             + e1 * (1 - e2) * (1 - e3) * e4              # 14
         )
 
-        # 234 detector   →  patterns 1234, 234, 124, 134, 24, 14
+        # 234 detector   -->  patterns 1234, 234, 124, 134, 24, 14
         data_df['detector_234_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + (1 - e1) * e2 *  e3 *  e4                  # 234
@@ -2899,7 +2900,7 @@ for case in processing_regions:
             + e1 * (1 - e2) * (1 - e3) * e4              # 14
         )
 
-        # 12 detector    →  patterns 1234, 123, 124, 134, 13, 14, 12
+        # 12 detector    -->  patterns 1234, 123, 124, 134, 13, 14, 12
         data_df['detector_12_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + e1 *  e2 *  e3 * (1 - e4)                  # 123
@@ -2910,7 +2911,7 @@ for case in processing_regions:
             + e1 *  e2 * (1 - e3) * (1 - e4)             # 12
         )
 
-        # 23 detector    →  patterns 1234, 234, 23, 124, 24, 13, 134, 14
+        # 23 detector    -->  patterns 1234, 234, 23, 124, 24, 13, 134, 14
         data_df['detector_23_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + (1 - e1) * e2 *  e3 *  e4                  # 234
@@ -2922,7 +2923,7 @@ for case in processing_regions:
             + e1 * (1 - e2) * (1 - e3) * e4              # 14
         )
 
-        # 34 detector    →  patterns 1234, 234, 124, 134, 34, 24, 14
+        # 34 detector    -->  patterns 1234, 234, 124, 134, 34, 24, 14
         data_df['detector_34_eff'] = (
               e1 *  e2 *  e3 *  e4                       # 1234
             + (1 - e1) * e2 *  e3 *  e4                  # 234

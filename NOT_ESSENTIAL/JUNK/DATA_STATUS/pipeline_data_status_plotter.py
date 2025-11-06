@@ -180,7 +180,8 @@ def plot_station(station: str, output_dir: Path, global_min: datetime | None, gl
 
 
 def main() -> None:
-    output_dir = REPO_ROOT / "STATIONS"
+    # /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS
+    output_dir = REPO_ROOT / "MASTER" / "ANCILLARY" / "PLOTTERS"
     pdf_path = output_dir / "pipeline_data_status.pdf"
 
     figures: List[plt.Figure] = []

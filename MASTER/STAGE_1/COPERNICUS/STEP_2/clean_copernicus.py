@@ -1,0 +1,1 @@
+# A future script to clean and plot the Copernicus data could be placed here

@@ -479,7 +479,7 @@ process_single_hld() {
                 file_station=${filename:2:2}
                 if [[ "$file_station" != "$station_id" ]]; then
                     target_dir="${BASE_ROOT}/MINGO${file_station}/${subdir}"
-                    echo "→ Moving $filename from MINGO${station_id}/${subdir} to MINGO${file_station}/${subdir}"
+                    echo "--> Moving $filename from MINGO${station_id}/${subdir} to MINGO${file_station}/${subdir}"
                     mkdir -p "$target_dir"
                     mv "$file" "$target_dir/"
                 fi

@@ -252,7 +252,7 @@ completed_files = set(os.listdir(completed_directory))
 
 # seen = set()
 # for d in LEVELS:
-#     d = Path(d)                     # ← convert string → Path each iteration
+#     d = Path(d)                     # ← convert string --> Path each iteration
 #     if not d.exists():
 #         continue
 #     current_files = {p.name for p in d.iterdir() if p.is_file()}
@@ -374,7 +374,7 @@ if files:  # Check if the directory contains any files
         os.remove(os.path.join(figure_directory, file))
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)

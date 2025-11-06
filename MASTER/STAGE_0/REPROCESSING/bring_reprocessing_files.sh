@@ -2,8 +2,8 @@
 # ---------------------------------------------------------------------------
 # bring_reprocessing_files.sh
 #   Fetch HLD data from backuplip, writing
-#     * *.hld.tar.gz or *.hld-tar-gz  → STAGE_0/REPROCESSING/INPUT_FILES/COMPRESSED_HLDS
-#     * *.hld                         → STAGE_0/REPROCESSING/INPUT_FILES/UNCOMPRESSED_HLDS
+#     * *.hld.tar.gz or *.hld-tar-gz  --> STAGE_0/REPROCESSING/INPUT_FILES/COMPRESSED_HLDS
+#     * *.hld                         --> STAGE_0/REPROCESSING/INPUT_FILES/UNCOMPRESSED_HLDS
 # ---------------------------------------------------------------------------
 
 set -e  # Exit on command failure
@@ -139,6 +139,18 @@ ensure_brought_csv() {
   if [[ ! -f "$brought_csv" || ! -s "$brought_csv" ]]; then
     printf '%s\n' "$brought_csv_header" > "$brought_csv"
   fi
+}
+
+declare -A brought_hld_records=()
+load_brought_hld_records() {
+  if [[ ! -s "$brought_csv" ]]; then
+    return
+  fi
+  while IFS=',' read -r hld_name _; do
+    hld_name=${hld_name//$'\r'/}
+    [[ -z "$hld_name" || "$hld_name" == "hld_name" ]] && continue
+    brought_hld_records["$hld_name"]=1
+  done < "$brought_csv"
 }
 
 ensure_csv() {
@@ -290,6 +302,9 @@ while IFS= read -r local_entry; do
 done < <(find "$input_directory" -type f -name '*.hld*' -printf '%f\n')
 log_info "Local HLD files currently buffered: ${#local_files[@]}"
 
+ensure_brought_csv
+load_brought_hld_records
+
 declare -A base_to_doy=()
 declare -A base_compressed_files=()
 declare -A base_uncompressed_files=()
@@ -417,6 +432,9 @@ for base in "${!base_to_doy[@]}"; do
   if [[ -n ${base_compressed_files["$base"]+_} ]]; then
     while IFS= read -r filename; do
       [[ -z "$filename" ]] && continue
+      if [[ -n ${brought_hld_records["$filename"]+_} ]]; then
+        continue
+      fi
       if [[ -n ${local_files["$filename"]+_} ]]; then
         continue
       fi
@@ -426,6 +444,9 @@ for base in "${!base_to_doy[@]}"; do
   if [[ -n ${base_uncompressed_files["$base"]+_} ]]; then
     while IFS= read -r filename; do
       [[ -z "$filename" ]] && continue
+      if [[ -n ${brought_hld_records["$filename"]+_} ]]; then
+        continue
+      fi
       if [[ -n ${local_files["$filename"]+_} ]]; then
         continue
       fi

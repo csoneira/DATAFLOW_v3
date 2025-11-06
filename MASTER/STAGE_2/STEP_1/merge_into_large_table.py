@@ -116,7 +116,7 @@ for file_path in file_paths:
         header = f.readline().strip().split(',')
         n_cols = len(header)
     file_size = os.path.getsize(file_path) / (1024**2)
-    print(f"  {os.path.basename(file_path):<30}  →  columns = {n_cols:<4}  size = {file_size:6.2f} MB")
+    print(f"  {os.path.basename(file_path):<30}  -->  columns = {n_cols:<4}  size = {file_size:6.2f} MB")
 
 # -----------------------------------------------------------------------------
 # CSV aggregation

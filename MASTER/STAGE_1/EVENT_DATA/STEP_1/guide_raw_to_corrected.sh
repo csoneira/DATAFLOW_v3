@@ -15,7 +15,7 @@ Usage:
 Options:
   -h, --help    Show this help message and exit.
 
-The script schedules the STAGE_0_to_1→LIST pipeline for the given station (1-4),
+The script schedules the STAGE_0_to_1-LIST pipeline for the given station (1-4),
 ensuring only one instance runs concurrently per station and updates status
 tracking as files move through the queue.
 EOF
@@ -61,63 +61,24 @@ script_name=$(basename "$0")
 script_args="$*"
 current_pid=$$
 
-# Debug: Check for running processes
-# echo "$(date) - Checking for existing processes of $script_name with args $script_args"
-# ps -eo pid,cmd | grep "[b]ash .*/$script_name"
-
-
-# Get all running instances of the script *with the same argument*, but exclude the current process
-# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | awk '{print $1}'); do
-
-for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
+existing_instances=()
+while IFS= read -r pid; do
     if [[ "$pid" != "$current_pid" ]]; then
         cmdline=$(ps -p "$pid" -o args=)
-        # echo "$(date) - Found running process: PID $pid - $cmdline"
         if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
-            echo "------------------------------------------------------"
-            echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-            echo "------------------------------------------------------"
-            exit 1
+            existing_instances+=("$pid")
         fi
     fi
-done
+done < <(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}')
 
-# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
-#     if [[ "$pid" != "$current_pid" ]]; then
-#         cmdline=$(ps -p "$pid" -o args=)
-#         # echo "$(date) - Found running process: PID $pid - $cmdline"
-#         if [[ "$cmdline" == *"$script_name"* ]]; then
-#             echo "------------------------------------------------------"
-#             echo "$(date): The script $script_name is already running (PID: $pid). Exiting."
-#             echo "------------------------------------------------------"
-#             exit 1
-#         fi
-#     fi
-# done
+if (( ${#existing_instances[@]} > 0 )); then
+    echo "------------------------------------------------------"
+    echo "$(date): Detected running instance(s) of $script_name with arguments '$script_args' (PID(s): ${existing_instances[*]})."
+    echo "Continuing; busy task scripts will be skipped if already running."
+else
+    echo "$(date) - No running instance found. Proceeding..."
+fi
 
-# If no duplicate process is found, continue
-echo "$(date) - No running instance found. Proceeding..."
-
-# Variables
-# script_name=$(basename "$0")
-# script_args="$*"
-# current_pid=$$
-
-# # Get all running instances of the script (excluding itself)
-# # for pid in $(pgrep -f "bash .*/$script_name $script_args"); do
-# for pid in $(pgrep -f "bash .*/$script_name $script_args" | grep -v $$); do
-#     if [ "$pid" != "$current_pid" ]; then
-#         cmdline=$(ps -p "$pid" -o args=)
-#         if [[ "$cmdline" == *"$script_name"* && "$cmdline" == *"$script_args"* ]]; then
-#             echo "------------------------------------------------------"
-#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-#             echo "------------------------------------------------------"
-#             exit 1
-#         fi
-#     fi
-# done
-
-# If no duplicate process is found, continue
 echo "------------------------------------------------------"
 echo "raw_to_list_events.sh started on: $(date)"
 echo "Station: $script_args"
@@ -147,10 +108,6 @@ mkdir -p "$base_working_directory"
 # }
 
 # trap 'finish $?' EXIT
-
-# # Define directories
-# local_destination="$base_working_directory/STAGE_0_to_1"
-# storage_directory="$base_working_directory/STAGE_0_to_1_TO_LIST"
 
 # # Additional paths
 # mingo_direction="mingo0$station"

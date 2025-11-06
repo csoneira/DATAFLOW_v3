@@ -12,15 +12,15 @@ BASE="$HOME/DATAFLOW_v3/STATIONS"
 
 FILES=(
   "STAGE_1/EVENT_DATA/raw_to_list_metadata.csv"
-  "STAGE_1/EVENT_DATA/event_accumulator_metadata.csv"
+  "STAGE_1/EVENT_DATA/corrected_to_accumulated_metadata.csv"
   "STAGE_1/EVENT_DATA/big_event_data.csv"
   "STAGE_1/LAB_LOGS/big_log_lab_data.csv"
   "STAGE_1/COPERNICUS/big_copernicus_data.csv"
   "STAGE_2/total_data_table.csv"
 )
 
-FRESH_SEC=300       # < 5 min     → green
-STALE_SEC=3600      # > 60 min    → orange
+FRESH_SEC=300       # < 5 min     --> green
+STALE_SEC=3600      # > 60 min    --> orange
 
 ##############################################################################
 # ANSI colour definitions (can be disabled with --no-color)

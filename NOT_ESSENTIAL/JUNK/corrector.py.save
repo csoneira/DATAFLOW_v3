@@ -145,7 +145,7 @@ print('File loaded successfully.')
 
 
 # Define input file path -----------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     # It is a csv

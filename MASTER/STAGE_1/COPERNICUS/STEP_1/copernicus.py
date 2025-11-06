@@ -136,8 +136,8 @@ else:
 
 working_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/COPERNICUS")
 
-status_csv_path = os.path.join(working_directory, "copernicus_status.csv")
-status_timestamp = append_status_row(status_csv_path)
+# status_csv_path = os.path.join(working_directory, "copernicus_status.csv")
+# status_timestamp = append_status_row(status_csv_path)
 
 # Define subdirectories relative to the working directory
 base_directories = { "copernicus_directory": os.path.join(working_directory, "COPERNICUS_DATA"), }
@@ -255,7 +255,7 @@ print(f'Request split into {len(blocks)} block(s) of ≤ {MAX_WEEKS} weeks each.
 # Print the duration of the blocks
 for b_start, b_end in blocks:
     duration = (b_end - b_start).days + 1  # inclusive
-    print(f'Block {b_start:%Y-%m-%d} → {b_end:%Y-%m-%d} ({duration} days)')
+    print(f'Block {b_start:%Y-%m-%d} --> {b_end:%Y-%m-%d} ({duration} days)')
 
 
 frames_ground      : list[pd.DataFrame] = []
@@ -266,7 +266,7 @@ c = cdsapi.Client()                       # initialise once
 
 for b_start, b_end in blocks:
     print('\n--------------------------------------------------------------')
-    print(f'\nBlock {b_start:%Y-%m-%d} → {b_end:%Y-%m-%d}')
+    print(f'\nBlock {b_start:%Y-%m-%d} --> {b_end:%Y-%m-%d}')
 
     date_range = pd.date_range(b_start, b_end)
     years  = list(date_range.year.astype(str).unique())
@@ -373,4 +373,4 @@ print('------------------------------------------------------')
 print(f"copernicus.py (Copernicus) completed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print('------------------------------------------------------')
 
-mark_status_complete(status_csv_path, status_timestamp)
+# mark_status_complete(status_csv_path, status_timestamp)

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 """
-Stage 1 Task 1 (RAW→CLEAN) driver.
+Stage 1 Task 1 (RAW-->CLEAN) driver.
 
 The script pulls the next available STAGE_0_to_1 acquisition, applies the full
 raw cleaning chain (baseline removal, channel checks, derived quantities, and
@@ -239,6 +239,7 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 # Define base working directory
 home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
+config_file_directory = os.path.expanduser(f"~/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
@@ -296,9 +297,6 @@ csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metada
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
 
-# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/FILES/UNPROCESSED,
-# ensuring that only files not already in UNPROCESSED, PROCESSING,
-# or COMPLETED are moved:
 
 raw_directory = base_directories["raw_directory"]
 unprocessed_directory = base_directories["unprocessed_directory"]
@@ -420,7 +418,8 @@ if files:  # Check if the directory contains any files
         os.remove(os.path.join(figure_directory, file))
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
+print(input_file_config_path)
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
@@ -2804,7 +2803,7 @@ data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
 
 
-
+ 
 # -------------------------------------------------------------------------------
 # Execution metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------

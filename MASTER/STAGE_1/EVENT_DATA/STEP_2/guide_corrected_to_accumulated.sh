@@ -7,7 +7,7 @@
 if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
   cat <<'EOF'
 ev_accumulator.sh
-Runs the LIST→ACC stage, aggregating calibrated events for a specified station.
+Runs the LIST-->ACC stage, aggregating calibrated events for a specified station.
 
 Usage:
   ev_accumulator.sh <station>
@@ -59,31 +59,31 @@ current_pid=$$
 
 # Debug: Check for running processes
 
-# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
-#     if [[ "$pid" != "$current_pid" ]]; then
-#         cmdline=$(ps -p "$pid" -o args=)
-#         # echo "$(date) - Found running process: PID $pid - $cmdline"
-#         if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
-#             echo "------------------------------------------------------"
-#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-#             echo "------------------------------------------------------"
-#             exit 1
-#         fi
-#     fi
-# done
-
 for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
     if [[ "$pid" != "$current_pid" ]]; then
         cmdline=$(ps -p "$pid" -o args=)
         # echo "$(date) - Found running process: PID $pid - $cmdline"
-        if [[ "$cmdline" == *"$script_name"* ]]; then
+        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
             echo "------------------------------------------------------"
-            echo "$(date): The script $script_name is already running (PID: $pid). Exiting."
+            echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
             echo "------------------------------------------------------"
             exit 1
         fi
     fi
 done
+
+# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
+#     if [[ "$pid" != "$current_pid" ]]; then
+#         cmdline=$(ps -p "$pid" -o args=)
+#         # echo "$(date) - Found running process: PID $pid - $cmdline"
+#         if [[ "$cmdline" == *"$script_name"* ]]; then
+#             echo "------------------------------------------------------"
+#             echo "$(date): The script $script_name is already running (PID: $pid). Exiting."
+#             echo "------------------------------------------------------"
+#             exit 1
+#         fi
+#     fi
+# done
 
 # If no duplicate process is found, continue
 echo "$(date) - No running instance found. Proceeding..."
@@ -128,22 +128,22 @@ echo "Working directory (STEP_2): $base_working_directory"
 # Additional paths
 mingo_direction="mingo0$station"
 
-event_accumulator_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/event_accumulator.py"
+corrected_to_accumulated_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py"
 
-exclude_list_file="$base_working_directory/tmp/exclude_list.txt"
+# exclude_list_file="$base_working_directory/tmp/exclude_list.txt"
 
 # Create necessary directories
 mkdir -p "$station_directory"
-mkdir -p "$base_working_directory/tmp"
+# mkdir -p "$base_working_directory/tmp"
 
 echo '------------------------------------------------------'
 echo '------------------------------------------------------'
 
-# Process the data: event_accumulator.py
-echo "Processing list files with Python script (event_accumulator.py)..."
-python3 -u "$event_accumulator_directory" "$station"
+# Process the data: corrected_to_accumulated.py
+echo "Processing list files with Python script (corrected_to_accumulated.py)..."
+python3 -u "$corrected_to_accumulated_directory" "$station"
 
-rm -r "$base_working_directory/tmp"
+# rm -r "$base_working_directory/tmp"
 
 echo '------------------------------------------------------'
 echo "ev_accumulator.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"

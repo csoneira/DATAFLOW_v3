@@ -371,7 +371,8 @@ def resolve_output_filename(
     )
     suffix = "_real_time" if use_real_date else ""
     filename = f"{OUTPUT_FILENAME_BASENAME}{station_fragment}{task_fragment}{suffix}.pdf"
-    return Path(__file__).resolve().parent / filename
+    OUTPUT_DIR = Path.home() / "DATAFLOW_v3" / "MASTER" / "ANCILLARY" / "PLOTTERS" / "METADATA" / "SPECIFIC" / "PLOTS"
+    return OUTPUT_DIR / filename
 
 
 def compute_time_bounds(df: pd.DataFrame, column: str) -> Optional[Tuple[datetime, datetime]]:

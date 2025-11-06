@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 """
-Stage 1 Task 4 (LIST→FIT) preparation workflow.
+Stage 1 Task 4 (LIST-->FIT) preparation workflow.
 
 Ingests the LIST-format events from Task 3, assembles the inputs used by the
 timing/charge fitting routines (feature engineering, binning, sanity checks),
@@ -365,6 +365,7 @@ date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 # Define base working directory
 home_directory = os.path.expanduser(f"~")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
+config_file_directory = os.path.expanduser(f"~/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}")
 base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
@@ -617,7 +618,7 @@ if files:  # Check if the directory contains any files
         os.remove(os.path.join(figure_directory, file))
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
@@ -1401,7 +1402,7 @@ if not reprocessing_parameters.empty:
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
@@ -2101,7 +2102,7 @@ else:
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
 
 # Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)

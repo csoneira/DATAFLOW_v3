@@ -99,7 +99,7 @@ label_for_type() {
   case "$1" in
     temps) echo "temps";;
     plots) echo "plots";;
-    completed) echo "completed directories";;
+    completed) echo "completed/error directories";;
     cronlogs) echo "cron logs";;
     *) echo "$1";;
   esac
@@ -121,8 +121,12 @@ clean_completed() {
     dirs+=("$dir")
   done < <(find "$STATIONS_BASE" -type d -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/COMPLETED_DIRECTORY' -print0 2>/dev/null)
 
+  while IFS= read -r -d '' dir; do
+    dirs+=("$dir")
+  done < <(find "$STATIONS_BASE" -type d -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/ERROR_DIRECTORY' -print0 2>/dev/null)
+
   if (( ${#dirs[@]} == 0 )); then
-    echo "No COMPLETED_DIRECTORY directories found."
+    echo "No COMPLETED_DIRECTORY or ERROR_DIRECTORY directories found."
     TYPE_BEFORE["$type"]=0
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
@@ -138,7 +142,7 @@ clean_completed() {
     before=$(du -sb "$dir" | awk '{print $1}')
     total_before=$((total_before + before))
 
-    echo "→ Cleaning $dir"
+    echo "--> Cleaning $dir"
     chmod -R u+w "$dir" >/dev/null 2>&1 || true
     find "$dir" -mindepth 1 -delete
 
@@ -154,7 +158,7 @@ clean_completed() {
   TYPE_FREED["$type"]=$freed
   TYPE_COUNTS["$type"]=${#dirs[@]}
 
-  echo "Completed directories cleaned: ${#dirs[@]}"
+  echo "Completed/Error directories cleaned: ${#dirs[@]}"
   echo "   Size before: $(format_bytes "$total_before")"
   echo "   Size after:  $(format_bytes "$total_after")"
   echo "   Freed:       $(format_bytes "$freed")"
@@ -177,7 +181,7 @@ clean_cronlogs() {
   before=$(du -sb "$dir" | awk '{print $1}')
   count=$(find "$dir" -mindepth 1 -print | wc -l | awk '{print $1}')
 
-  echo "→ Cleaning $dir"
+  echo "--> Cleaning $dir"
   chmod -R u+w "$dir" >/dev/null 2>&1 || true
   find "$dir" -mindepth 1 -delete
 
@@ -228,7 +232,7 @@ clean_plots() {
     before=$(du -sb "$dir" | awk '{print $1}')
     total_before=$((total_before + before))
 
-    echo "→ Cleaning $dir"
+    echo "--> Cleaning $dir"
     chmod -R u+w "$dir" >/dev/null 2>&1 || true
     find "$dir" -mindepth 1 -delete
 
@@ -322,7 +326,7 @@ clean_temps() {
       local before after delta
       before=$(du -sb "$match" | awk '{print $1}')
       total_before=$((total_before + before))
-      echo "→ Removing $match"
+      echo "--> Removing $match"
       chmod -R u+w "$match" >/dev/null 2>&1 || true
       if ! rm -rf -- "$match"; then
         echo "   Warning: unable to remove $match (check permissions)" >&2

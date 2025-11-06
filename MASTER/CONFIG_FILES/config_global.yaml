@@ -244,8 +244,8 @@ crosstalk_probability: true
 n_study_fit: false
 topology_plots: false
 
-# Configuration for multiple files in event_accumulator
-cluster_of_files: 7  # Adjust as needed
+# Configuration for multiple files in corrected_to_accumulated
+cluster_of_files: 0  # Adjust as needed
 time_window_in_hours: 10  # Time window in hours to look for files
 time_tolerance_in_minutes: 10  # Tolerance in minutes for overlapping time ranges
 

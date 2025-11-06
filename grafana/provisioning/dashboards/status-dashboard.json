@@ -806,7 +806,7 @@
     },
     {
       "id": 5,
-      "title": "event_accumulator",
+      "title": "corrected_to_accumulated",
       "type": "timeseries",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -820,7 +820,7 @@
           "method": "GET",
           "parser": "backend",
           "source": "url",
-          "url": "http://localhost:8050/status_timeseries.csv?script=event_accumulator&station=1",
+          "url": "http://localhost:8050/status_timeseries.csv?script=corrected_to_accumulated&station=1",
           "url_options": {
             "method": "GET",
             "data": "",
@@ -854,7 +854,7 @@
           "method": "GET",
           "parser": "backend",
           "source": "url",
-          "url": "http://localhost:8050/status_timeseries.csv?script=event_accumulator&station=2",
+          "url": "http://localhost:8050/status_timeseries.csv?script=corrected_to_accumulated&station=2",
           "url_options": {
             "method": "GET",
             "data": "",
@@ -888,7 +888,7 @@
           "method": "GET",
           "parser": "backend",
           "source": "url",
-          "url": "http://localhost:8050/status_timeseries.csv?script=event_accumulator&station=3",
+          "url": "http://localhost:8050/status_timeseries.csv?script=corrected_to_accumulated&station=3",
           "url_options": {
             "method": "GET",
             "data": "",
@@ -922,7 +922,7 @@
           "method": "GET",
           "parser": "backend",
           "source": "url",
-          "url": "http://localhost:8050/status_timeseries.csv?script=event_accumulator&station=4",
+          "url": "http://localhost:8050/status_timeseries.csv?script=corrected_to_accumulated&station=4",
           "url_options": {
             "method": "GET",
             "data": "",

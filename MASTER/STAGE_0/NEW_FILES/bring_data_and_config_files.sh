@@ -103,12 +103,13 @@ dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/a
 mingo_direction="mingo0$station"
 
 station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
+config_file_directory="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_$station"
 stage0_directory="$station_directory/STAGE_0/NEW_FILES"
 stage0_to_1_directory="$station_directory/STAGE_0_to_1"
 metadata_directory="$stage0_directory/METADATA"
 raw_directory="$stage0_to_1_directory"
 
-mkdir -p "$station_directory" "$stage0_directory" "$stage0_to_1_directory" "$metadata_directory"
+mkdir -p "$station_directory" "$stage0_directory" "$stage0_to_1_directory" "$metadata_directory" "$config_file_directory"
 
 # STATUS_CSV="$metadata_directory/bring_data_and_config_files_status.csv"
 # if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
@@ -124,9 +125,10 @@ before_list=""
 after_list=""
 new_list=""
 rsync_file_list=""
+filtered_rsync_file_list=""
 
 cleanup() {
-  for tmp in "$before_list" "$after_list" "$new_list" "$rsync_file_list"; do
+  for tmp in "$before_list" "$after_list" "$new_list" "$rsync_file_list" "$filtered_rsync_file_list"; do
     [[ -n "$tmp" ]] && rm -f "$tmp"
   done
 }
@@ -200,17 +202,33 @@ remote_list_cmd=$(printf 'cd %q && find . -maxdepth 1 -type f -regextype posix-e
 ssh "$mingo_direction" "$remote_list_cmd" 2>/dev/null || echo "No .dat files found or listing unavailable."
 
 rsync_file_list=$(mktemp)
+filtered_rsync_file_list=$(mktemp)
 remote_find_cmd=$(printf 'cd %q && find . -maxdepth 1 -type f -regextype posix-extended -regex %s -printf %s' \
   "$dat_files_directory" "'.*/[^/]+\\.dat$'" "'%P\0'")
 if ssh "$mingo_direction" "$remote_find_cmd" > "$rsync_file_list"; then
   if [[ -s "$rsync_file_list" ]]; then
-    rsync -avz --ignore-existing \
-      --files-from="$rsync_file_list" \
-      --from0 \
-      "$mingo_direction:$dat_files_directory/" \
-      "$raw_directory/" || {
-      echo "Warning: rsync encountered an error while fetching data." >&2
-    }
+    : > "$filtered_rsync_file_list"
+    while IFS= read -r -d '' candidate; do
+      candidate=${candidate//$'\r'/}
+      candidate=${candidate#./}
+      [[ -z "$candidate" ]] && continue
+      if [[ -n ${logged_files["$candidate"]+_} ]]; then
+        continue
+      fi
+      printf '%s\0' "$candidate" >> "$filtered_rsync_file_list"
+    done < "$rsync_file_list"
+
+    if [[ -s "$filtered_rsync_file_list" ]]; then
+      if ! rsync -avz --ignore-existing \
+        --files-from="$filtered_rsync_file_list" \
+        --from0 \
+        "$mingo_direction:$dat_files_directory/" \
+        "$raw_directory/"; then
+        echo "Warning: rsync encountered an error while fetching data." >&2
+      fi
+    else
+      echo "No .dat files eligible for transfer after excluding logged entries."
+    fi
   else
     echo "No .dat files found to transfer."
   fi
@@ -276,7 +294,7 @@ echo $SHEET_ID
 echo $GID
 
 # Define output file path
-OUTPUT_FILE="$station_directory/input_file_mingo0${station}.csv"
+OUTPUT_FILE="$config_file_directory/input_file_mingo0${station}.csv"
 
 # Download the file using wget with minimal console output
 echo "Downloading logbook for Station $station..."

@@ -84,7 +84,7 @@ def read_station_metadata(station: int = 1) -> tuple[pd.DataFrame, pd.DataFrame,
           if path.exists():
               return _read_csv(path)
           else:
-              print(f"Warning: File not found → {path}")
+              print(f"Warning: File not found --> {path}")
               return pd.DataFrame()
 
       base = Path(f"{home_path}/DATAFLOW_v3/STATIONS")
@@ -141,8 +141,8 @@ def figure1(df1, df2, df3, df4):
             ax.set_axis_off()
             continue
 
-        df_valid['hv_HVneg'].plot(ax=ax, lw=0, marker='.', markersize=2, label="HV-")
-        ax.set_ylabel("HV- (V)")
+        df_valid['hv_HVneg'].plot(ax=ax, lw=0, marker='.', markersize=2, label=" HV")
+        ax.set_ylabel("HV (kV)")
         ax.set_title(title)
         ax.grid(True, linestyle=":", linewidth=0.4)
         
@@ -164,15 +164,15 @@ import pandas as pd
 import matplotlib.dates as mdates
 
 # ------------------------------------------------------------------
-# Map: 0 → red   (bad or NaN)     | 1 → orange (intermediate)
-#      2 → green (good ≥ THR)     | customise THR as required
+# Map: 0 --> red   (bad or NaN)     | 1 --> orange (intermediate)
+#      2 --> green (good ≥ THR)     | customise THR as required
 # ------------------------------------------------------------------
 def hv_state_segments(index, hv, thr, max_gap=20):
     """
     Segment classification:
-        0 = red     → NaN or below threshold
-        1 = orange  → intermediate
-        2 = green   → ≥ threshold
+        0 = red     --> NaN or below threshold
+        1 = orange  --> intermediate
+        2 = green   --> ≥ threshold
 
     Parameters
     ----------
@@ -199,7 +199,7 @@ def hv_state_segments(index, hv, thr, max_gap=20):
                 raw_state[s:e] = raw_state[s-1] if s > 0 else 0
                 mask_nan[s:e]  = False
 
-    # Final state vector: remaining NaNs → 0 (red)
+    # Final state vector: remaining NaNs --> 0 (red)
     state = np.where(mask_nan, 0, raw_state)
 
     # Locate state transitions
@@ -275,7 +275,7 @@ def figure2(df1, df2, df3, df4, thr=3.0):
         
         span_background_from_segments(ax, seg, hv.min(), hv.max())
 
-        ax.set_ylabel("HV‑ (V)")
+        ax.set_ylabel("HV (kV)")
         ax.set_title(title)
         ax.grid(True, linestyle=":", linewidth=0.4)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y‑%m‑%d\n%H:%M"))
@@ -349,8 +349,8 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
     for start, end in periods_cal:
         axs[0].axvspan(start, end, facecolor='green', edgecolor='none', alpha=0.5)
 
-    # Bottom plot: event_accumulator_metadata
-    axs[1].set_title("Analyzed periods: event_accumulator_metadata")
+    # Bottom plot: corrected_to_accumulated_metadata
+    axs[1].set_title("Analyzed periods: corrected_to_accumulated_metadata")
     axs[1].set_ylim(0, 1)
     axs[1].set_yticks([])
     axs[1].set_ylabel("Analyzed")
@@ -376,7 +376,7 @@ def plot_data_coverage(df_cal: pd.DataFrame, df_evt: pd.DataFrame):
 # -----------------------------------------------------------------------------#
 
 def _exec_colour_dict(df: pd.DataFrame, cmap_name: str = "turbo") -> dict:
-    """Return {Time → RGBA} based on execution_time rank (ascending)."""
+    """Return {Time --> RGBA} based on execution_time rank (ascending)."""
     if "execution_time" not in df.columns:
         raise KeyError("'execution_time' column not found")
     exec_time = pd.to_datetime(df["execution_time"], errors="coerce")
@@ -424,13 +424,13 @@ def figure_exec_bands_dual(df_cal: pd.DataFrame,
     sm = cm.ScalarMappable(cmap=cmap_cal, norm=norm_cal)
     sm.set_array([])
     fig.colorbar(sm, ax=ax, orientation="horizontal", pad=0.25,
-                 label="Execution-time rank (old → new)")
+                 label="Execution-time rank (old --> new)")
 
     _apply_time_axis(ax)
 
-    # ------------ bottom panel : event_accumulator_metadata ------------------
+    # ------------ bottom panel : corrected_to_accumulated_metadata ------------------
     ax = axs[1]
-    ax.set_title("Execution order: event_accumulator_metadata")
+    ax.set_title("Execution order: corrected_to_accumulated_metadata")
     ax.set_ylim(0, 1)
     ax.set_yticks([])
     ax.set_ylabel("Files")
@@ -453,7 +453,7 @@ def figure_exec_bands_dual(df_cal: pd.DataFrame,
     sm = cm.ScalarMappable(cmap=cmap_evt, norm=norm_evt)
     sm.set_array([])
     fig.colorbar(sm, ax=ax, orientation="horizontal", pad=0.25,
-                 label="Execution-time rank (old → new)")
+                 label="Execution-time rank (old --> new)")
 
     _apply_time_axis(ax)
 
@@ -508,7 +508,7 @@ def main():
     import matplotlib.image as mpimg
 
     if args.save:
-        outdir = Path(f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/")
+        outdir = Path(f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/HIGH_VOLTAGE/PLOTS")
         outdir.mkdir(parents=True, exist_ok=True)
         fig_dir = outdir / "figures"
         fig_dir.mkdir(parents=True, exist_ok=True)
@@ -522,7 +522,7 @@ def main():
             plt.close(fig)  # Optionally free memory
 
         # Save all PNGs into a rasterized PDF
-        pdf_path = outdir / "metadata_network_plotter_summary.pdf"
+        pdf_path = outdir / "high_voltage_network_summary.pdf"
         with PdfPages(pdf_path) as pdf:
             for png_path in png_paths:
                 img = mpimg.imread(png_path)

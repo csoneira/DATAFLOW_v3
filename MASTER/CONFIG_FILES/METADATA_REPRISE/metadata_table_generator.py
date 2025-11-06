@@ -299,6 +299,17 @@ def plot_column(
         linewidth=0.9,
         label="Smoothed",
     )
+    smoothed_values = result.smoothed.dropna().to_numpy()
+    if smoothed_values.size:
+        sm_min = float(np.nanmin(smoothed_values))
+        sm_max = float(np.nanmax(smoothed_values))
+        if np.isfinite(sm_min) and np.isfinite(sm_max):
+            if sm_min == sm_max:
+                padding = 1.0 if sm_min == 0 else abs(sm_min) * 0.05
+                ax_series.set_ylim(sm_min - padding, sm_max + padding)
+            else:
+                padding = 0.05 * (sm_max - sm_min)
+                ax_series.set_ylim(sm_min - padding, sm_max + padding)
     ax_series.set_ylabel(column)
     ax_series.set_title(f"{column} — station {station} task {task}")
     ax_series.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
@@ -319,11 +330,37 @@ def plot_column(
     ax_residual.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
 
     diffs = result.residuals.dropna().to_numpy()
-    ax_hist.hist(diffs, bins="auto", color="#2ca02c", alpha=0.75, orientation="horizontal")
+    if diffs.size:
+        counts, bin_edges = np.histogram(diffs, bins="auto")
+    else:
+        counts = np.zeros(1, dtype=int)
+        bin_edges = np.array([0.0, 1.0])
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    bin_widths = np.diff(bin_edges)
+    positive_mask = counts > 0
+    if positive_mask.any():
+        ax_hist.barh(
+            bin_centers[positive_mask],
+            counts[positive_mask],
+            height=bin_widths[positive_mask],
+            color="#2ca02c",
+            alpha=0.75,
+            align="center",
+        )
+        ax_hist.set_xscale("log")
+    else:
+        ax_hist.barh(
+            bin_centers,
+            counts,
+            height=bin_widths,
+            color="#2ca02c",
+            alpha=0.75,
+            align="center",
+        )
     ax_hist.axhline(0, color="k", linewidth=0.8)
     ax_hist.axhline(result.lower_quantile, color="red", linestyle="--", linewidth=1.0, label="1% quantile")
     ax_hist.axhline(result.upper_quantile, color="purple", linestyle="--", linewidth=1.0, label="99% quantile")
-    ax_hist.set_xlabel("Count")
+    ax_hist.set_xlabel("Count (log scale)" if positive_mask.any() else "Count")
     ax_hist.set_ylabel("Residual (original - smoothed)")
     ax_hist.legend(loc="lower right")
     ax_hist.grid(True, linestyle=":", linewidth=0.5, alpha=0.5)
@@ -465,8 +502,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--window",
         type=int,
-        default=41,
-        help="Rolling window size for the median filter (odd number, default: 41).",
+        default=7,
+        help="Rolling window size for the median filter (odd number, default: 7).",
     )
     parser.add_argument(
         "--basename-column",

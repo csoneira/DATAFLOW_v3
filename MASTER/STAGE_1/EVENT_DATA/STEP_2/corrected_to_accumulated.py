@@ -89,6 +89,8 @@ from scipy.special import gamma
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import interp1d, CubicSpline, RegularGridInterpolator
 from scipy.sparse import load_npz, csc_matrix
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 
 
@@ -137,6 +139,26 @@ def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
             writer.writeheader()
         writer.writerow(row)
     return metadata_path
+
+
+def normalise_basename(name: str) -> str:
+    """Strip pipeline prefixes/suffixes from *name* and return the core basename."""
+    if not name:
+        return name
+    base = Path(name).stem
+    prefixes = (
+        "cleaned_",
+        "calibrated_",
+        "fitted_",
+        "corrected_",
+        "accumulated_",
+        "listed_",
+    )
+    for prefix in prefixes:
+        if base.startswith(prefix):
+            base = base[len(prefix):]
+            break
+    return base
 
 # Image Processing
 from PIL import Image
@@ -223,7 +245,7 @@ time_to_min = config["time_to_min"]
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
-print("--------- Running event_accumulator.py -------------------------------")
+print("--------- Running corrected_to_accumulated.py -------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
@@ -301,7 +323,6 @@ print("Execution time is:", execution_time)
 
 global_variables = {}
 global_variables['execution_time'] = execution_time
-global_variables['correct_angle_with_lut'] = correct_angle
 
 
 print("----------------------------------------------------------------------")
@@ -313,10 +334,11 @@ plot_list = []
 
 config_files_directory = os.path.expanduser(f"~/DATAFLOW_v3/CONFIG_FILES/")
 station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
+config_file_directory = os.path.expanduser(f"~/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}")
 base_event_directory = os.path.join(station_directory, "STAGE_1", "EVENT_DATA")
 step1_to_2_directory = os.path.join(base_event_directory, "STEP_1_TO_2_OUTPUT")
 working_directory = os.path.join(base_event_directory, "STEP_2")
-acc_working_directory = os.path.join(working_directory, "LIST_TO_ACC")
+acc_working_directory = working_directory
 metadata_directory = os.path.join(working_directory, "METADATA")
 
 os.makedirs(working_directory, exist_ok=True)
@@ -324,7 +346,7 @@ os.makedirs(metadata_directory, exist_ok=True)
 
 csv_execution_metadata_path = os.path.join(metadata_directory, "step_2_metadata_execution.csv")
 csv_specific_metadata_path = os.path.join(metadata_directory, "step_2_metadata_specific.csv")
-csv_path = os.path.join(working_directory, "event_accumulator_metadata.csv")
+csv_path = os.path.join(working_directory, "corrected_to_accumulated_metadata.csv")
 
 # Define subdirectories relative to the working directory
 base_directories = {
@@ -336,14 +358,14 @@ base_directories = {
     "base_figure_directory": os.path.join(acc_working_directory, "PLOTS/FIGURE_DIRECTORY"),
     "figure_directory": os.path.join(acc_working_directory, f"PLOTS/FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
     
-    "unprocessed_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_UNPROCESSED"),
-    "processing_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_PROCESSING"),
-    "error_directory": os.path.join(acc_working_directory, "ACC_FILES/ERROR_DIRECTORY"),
-    "completed_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_COMPLETED"),
+    "unprocessed_directory": os.path.join(acc_working_directory, "INPUT_FILES/UNPROCESSED"),
+    "processing_directory": os.path.join(acc_working_directory, "INPUT_FILES/PROCESSING"),
+    "error_directory": os.path.join(acc_working_directory, "INPUT_FILES/ERROR_DIRECTORY"),
+    "completed_directory": os.path.join(acc_working_directory, "INPUT_FILES/COMPLETED"),
     
-    "acc_events_directory": os.path.join(working_directory, "ACC_EVENTS_DIRECTORY"),
-    # "full_acc_events_directory": os.path.join(working_directory, "FULL_ACC_EVENTS_DIRECTORY"),
-    "acc_rejected_directory": os.path.join(acc_working_directory, "ACC_FILES/ACC_REJECTED"),
+    "acc_events_directory": os.path.join(base_event_directory, "STEP_2_TO_3_OUTPUT"),
+    # "full_acc_events_directory": os.path.join(working_directory, "FULL_OUTPUT_FILES"),
+    "acc_rejected_directory": os.path.join(acc_working_directory, "INPUT_FILES/REJECTED"),
 }
 
 # Create ALL directories if they don't already exist
@@ -490,10 +512,10 @@ for file_name in files_to_copy:
     dest_path = os.path.join(unprocessed_directory, file_name)
     try:
         # Copy instead of move
-        shutil.copy(src_path, dest_path)
-        print(f"Copied {file_name} to UNPROCESSED directory.")
+        shutil.move(src_path, dest_path)
+        print(f"Moved {file_name} to UNPROCESSED directory.")
     except Exception as e:
-        print(f"Failed to copy {file_name}: {e}")
+        print(f"Failed to move {file_name}: {e}")
 
 
 # -----------------------------------------------------------------------------
@@ -621,6 +643,7 @@ else:
 
 # This is for all cases
 file_path = processing_file_path
+reference_filename = os.path.basename(file_path)
 
 now = time.time()
 os.utime(processing_file_path, (now, now))
@@ -651,67 +674,71 @@ valid_times = df['Time'].dropna()
 
 # ------------------------------------------------------------------------------------------
 
-used_files_names = [os.path.basename(file_path)]
+used_files_names = [reference_filename]
+
+
+def extract_datetime_from_filename(name: str) -> Optional[datetime]:
+    """Parse a timestamp from a pipeline filename."""
+    stem = Path(name).stem
+
+    # First, try the legacy explicit timestamp.
+    try:
+        parts = stem.split("_")
+        if len(parts) >= 4:
+            dt_str = parts[-2] + "_" + parts[-1]
+            return datetime.strptime(dt_str, "%Y.%m.%d_%H.%M.%S")
+    except Exception:
+        pass
+
+    # Fallback to the YYJJJHHMMSS encoding (after optional prefix removal).
+    cleaned = re.sub(r"^(listed|cleaned|calibrated|fitted|corrected|accumulated)_", "", stem, flags=re.IGNORECASE)
+    match = re.search(r"(mi0\d)(\d{11})$", cleaned, re.IGNORECASE)
+    if not match:
+        return None
+
+    digits = match.group(2)
+    try:
+        yy = int(digits[0:2])
+        doy = int(digits[2:5])
+        hh = int(digits[5:7])
+        mm_val = int(digits[7:9])
+        ss = int(digits[9:11])
+
+        year = 2000 + yy
+        base_date = datetime(year, 1, 1) + timedelta(days=doy - 1)
+        return base_date.replace(hour=hh, minute=mm_val, second=ss)
+    except ValueError:
+        return None
+
+
+def derive_central_basename(name: str) -> str:
+    """Return the pipeline-agnostic stem to be used as the central basename."""
+    stem = Path(name).stem
+    cleaned = re.sub(r"^(listed|cleaned|calibrated|fitted|corrected|accumulated)_", "", stem, flags=re.IGNORECASE)
+    return cleaned or stem
+
+
+reference_datetime = extract_datetime_from_filename(reference_filename)
+central_basename = derive_central_basename(reference_filename)
+if not central_basename:
+    central_basename = Path(reference_filename).stem
 
 # --- MULTIPLE FILES HANDLING ---
 if multiple_files:
-    
     time_window = timedelta(hours=time_window_in_hours)
     time_tolerance = timedelta(minutes=time_tolerance_in_minutes)
-    
-    # Extract timestamp from filename
-    def extract_datetime_from_filename(name: str) -> Optional[datetime]:
-        """
-        Parse a timestamp from a pipeline filename.
 
-        Supports the legacy pattern (..._YYYY.MM.DD_HH.MM.SS.ext) and the newer
-        MINGO convention where the basename embeds YYJJJHHMMSS, e.g.
-        corrected_mi0124176060611.parquet.
-        """
-        stem = Path(name).stem
-
-        # First, try the legacy explicit timestamp.
-        try:
-            parts = stem.split("_")
-            if len(parts) >= 4:
-                dt_str = parts[-2] + "_" + parts[-1]
-                return datetime.strptime(dt_str, "%Y.%m.%d_%H.%M.%S")
-        except Exception:
-            pass
-
-        # Fallback to the YYJJJHHMMSS encoding (after optional prefix removal).
-        cleaned = re.sub(r"^(listed|cleaned|calibrated|fitted|corrected|accumulated)_", "", stem)
-        match = re.search(r"(mi0\d)(\d{11})$", cleaned, re.IGNORECASE)
-        if not match:
-            return None
-
-        digits = match.group(2)
-        try:
-            yy = int(digits[0:2])
-            doy = int(digits[2:5])
-            hh = int(digits[5:7])
-            mm_val = int(digits[7:9])
-            ss = int(digits[9:11])
-
-            year = 2000 + yy
-            base_date = datetime(year, 1, 1) + timedelta(days=doy - 1)
-            return base_date.replace(hour=hh, minute=mm_val, second=ss)
-        except ValueError:
-            return None
-
-    reference_filename = os.path.basename(file_path)
-    reference_datetime = extract_datetime_from_filename(reference_filename)
     if reference_datetime is None:
         raise ValueError(f"Could not parse datetime from filename: {reference_filename}")
 
     # Directory of the file
     file_dir = os.path.dirname(file_path)
     all_files = sorted(os.listdir(file_dir))
-    
+
     print("Files in the directory of the datafile:")
     for fname in all_files:
         print(fname)
-    
+
     # Filter files within ±2h of reference time
     time_candidates = []
     for fname in all_files:
@@ -719,12 +746,12 @@ if multiple_files:
         if dt and abs(dt - reference_datetime) <= time_window:
             time_candidates.append((dt, fname))
     time_candidates.sort()
-    
+
     print(f"Found {len(time_candidates)} files within the time window of {time_window} around {reference_datetime}.")
     print("Time candidates:")
     for dt, fname in time_candidates:
         print(f"{dt} - {fname}")
-    
+
     # Load the closest files by timestamp
     merged_df = df.copy()
     used = 1  # already using one
@@ -797,7 +824,7 @@ print("Filename save suffix:", filename_save_suffix)
 # full_save_filename = f"full_accumulated_events_{filename_save_suffix}.csv"
 # full_save_path = os.path.join(base_directories["full_acc_events_directory"], full_save_filename)
 
-save_filename = f"accumulated_events_{filename_save_suffix}.csv"
+save_filename = f"accumulated_{central_basename}.csv"
 save_path = os.path.join(base_directories["acc_events_directory"], save_filename)
 
 save_pdf_filename = f"pdf_{filename_save_suffix}.pdf"
@@ -808,7 +835,7 @@ print("----------------------------------------------------------------------")
 print("------------------------ Input file reading --------------------------")
 print("----------------------------------------------------------------------")
 
-input_file_config_path = os.path.join(station_directory, f"input_file_mingo0{station}.csv")
+input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
 
 if os.path.exists(input_file_config_path):
     input_file = pd.read_csv(input_file_config_path, skiprows=1)
@@ -920,7 +947,7 @@ for col in df.columns:
 
 
 def _get_plane_columns(frame: pd.DataFrame) -> Dict[int, list[str]]:
-    """Return mapping plane → list of charge-sum columns present in *frame*."""
+    """Return mapping plane --> list of charge-sum columns present in *frame*."""
     return {
         plane: [
             col for col in frame.columns
@@ -2316,7 +2343,7 @@ if side_calculations:
         charge_cols = [col for col in merged_df.columns if col.startswith("Q_") and "s" in col]
         zero_above_limit(merged_df, charge_cols, streamer_limit)
 
-        columns_to_drop = ['Time','x', 'y', 'theta', 'phi']
+        columns_to_drop = ['Time','x', 'y', 'theta', 'phi', 'region']
         merged_df = merged_df.drop(columns=columns_to_drop)
 
         # For all the columns apply the calibration and not change the name of the columns
@@ -2466,7 +2493,7 @@ if side_calculations:
         charge_cols = [col for col in merged_df.columns if col.startswith("Q_") and "s" in col]
         zero_above_limit(merged_df, charge_cols, streamer_limit)
 
-        columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
+        columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi','region']
         merged_df = merged_df.drop(columns=columns_to_drop)
 
         # For all the columns apply the calibration and not change the name of the columns
@@ -2589,7 +2616,7 @@ if side_calculations:
         charge_cols = [col for col in merged_df.columns if col.startswith("Q_") and "s" in col]
         zero_above_limit(merged_df, charge_cols, streamer_limit)
 
-        columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi']
+        columns_to_drop = ['Time', 'x', 'y', 'theta', 'phi', 'region']
         merged_df = merged_df.drop(columns=columns_to_drop)
 
         # For all the columns apply the calibration and not change the name of the columns
@@ -3180,7 +3207,7 @@ if side_calculations:
 
         # For all the columns apply the calibration and not change the name of the columns
         for col in merged_df.columns:
-            if "processed_tt" in col:
+            if "processed_tt" in col or 'region' in col:
                 continue
             merged_df[col] = interpolate_fast_charge(merged_df[col])
 
@@ -3979,8 +4006,9 @@ if side_calculations:
         print(induction_section_df)
         
         # Load the LUT
-        lut_file = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/INDUCTION_SECTION/induction_section_lut.csv"
-        lut_df = pd.read_csv(lut_file)
+        # /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/INDUCTION_SECTION
+        induction_section_lut_file = f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/INDUCTION_SECTION/induction_section_lut.csv"
+        induction_section_lut_df = pd.read_csv(induction_section_lut_file)
 
         # Initialize a list to store the best induction section values for each plane
         best_induction_sections = []
@@ -3991,7 +4019,7 @@ if side_calculations:
             plane_data = plane_row[["cluster_size_1", "cluster_size_2", "cluster_size_3", "cluster_size_4"]].values
 
             # Calculate the difference between the plane data and each row in the LUT
-            differences = lut_df[["cluster_size_1", "cluster_size_2", "cluster_size_3", "cluster_size_4"]].values - plane_data
+            differences = induction_section_lut_df[["cluster_size_1", "cluster_size_2", "cluster_size_3", "cluster_size_4"]].values - plane_data
 
             # Compute the squared error for each row in the LUT
             squared_errors = np.sum(differences**2, axis=1)
@@ -4000,7 +4028,7 @@ if side_calculations:
             best_match_index = np.argmin(squared_errors)
 
             # Get the corresponding avalanche_width (induction section) from the LUT
-            best_induction_section = lut_df.loc[best_match_index, "avalanche_width"]
+            best_induction_section = induction_section_lut_df.loc[best_match_index, "avalanche_width"]
 
             # Append the result to the list
             best_induction_sections.append(best_induction_section)
@@ -4050,6 +4078,8 @@ if side_calculations:
 
         # For all the columns apply the calibration and not change the name of the columns
         for col in merged_df.columns:
+            if 'region' in col:
+                continue  # Skip region columns
             merged_df[col] = interpolate_fast_charge(merged_df[col])
 
         # Initialize dictionaries to store charge distributions
@@ -4104,6 +4134,8 @@ if side_calculations:
 
         # For all the columns apply the calibration and not change the name of the columns
         for col in merged_df.columns:
+            if 'region' in col:
+                continue
             merged_df[col] = interpolate_fast_charge(merged_df[col])
 
         # Initialize dictionaries to store charge distributions
@@ -4700,24 +4732,24 @@ if draw_angular_regions:
                 ax.plot([phi, phi], [r0, r1], color='white', linestyle='--', linewidth=3)
 
 
-    def classify_region_flexible(row, theta_boundaries, region_layout):
-        theta = row['theta'] * 180 / np.pi
-        phi = (row['phi'] * 180 / np.pi + row.get('phi_north', 0)) % 360
-        phi = ((phi + 180) % 360) - 180  # map to [-180, 180)
+    # def classify_region_flexible(row, theta_boundaries, region_layout):
+    #     theta = row['theta'] * 180 / np.pi
+    #     phi = (row['phi'] * 180 / np.pi + row.get('phi_north', 0)) % 360
+    #     phi = ((phi + 180) % 360) - 180  # map to [-180, 180)
 
-        # Build region bins: [0, t1), [t1, t2), ..., [tn, 90]
-        all_bounds = [0] + theta_boundaries + [90]
-        for i, (tmin, tmax) in enumerate(zip(all_bounds[:-1], all_bounds[1:])):
-            if tmin <= theta < tmax or (i == len(region_layout) - 1 and theta == 90):
-                n_phi = region_layout[i]
-                if n_phi == 1:
-                    return f'R{i}.0'
-                else:
-                    bin_width = 360 / n_phi
-                    idx = int((phi + 180) // bin_width) % n_phi
-                    return f'R{i}.{idx}'
+    #     # Build region bins: [0, t1), [t1, t2), ..., [tn, 90]
+    #     all_bounds = [0] + theta_boundaries + [90]
+    #     for i, (tmin, tmax) in enumerate(zip(all_bounds[:-1], all_bounds[1:])):
+    #         if tmin <= theta < tmax or (i == len(region_layout) - 1 and theta == 90):
+    #             n_phi = region_layout[i]
+    #             if n_phi == 1:
+    #                 return f'R{i}.0'
+    #             else:
+    #                 bin_width = 360 / n_phi
+    #                 idx = int((phi + 180) // bin_width) % n_phi
+    #                 return f'R{i}.{idx}'
             
-        return 'None'
+    #     return 'None'
 
     # Input parameters
     theta_right_limit = np.pi / 2.5
@@ -4788,12 +4820,14 @@ if draw_angular_regions:
     plt.close()
 
 
-df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundaries, region_layout), axis=1)
+# df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundaries, region_layout), axis=1)
+
+print("Region was already calculated in previous step.")
 print(df['region'].value_counts())
 
 #%%
 
-if create_essential_plots or create_very_essential_plots:
+if create_essential_plots:
     
     print("-------------------------- Angular plots -----------------------------")
         
@@ -5162,11 +5196,24 @@ pivoted = pivoted.reset_index()
 final_event_count = len(df)
 
 # --- 7. Save to disk ---
-pivoted.to_csv(save_path, index=False, sep=',', float_format='%.5g')
-print(f"Accumulated columns datafile saved in {save_filename}. Path is {save_path}")
+pivoted['Time'] = pivoted['Time'].astype('datetime64[ns]')
+for col in pivoted.columns:
+    if col != 'Time':
+        pivoted[col] = pivoted[col].astype('int32', errors='ignore')
+
+stripped_sources = [normalise_basename(name) for name in used_files_names]
+sources_comment = "# source_basenames=" + ";".join(stripped_sources)
+execution_comment = "# execution_date=" + execution_time
+
+with open(save_path, "w", newline="") as csvfile:
+    csvfile.write(f"{sources_comment}\n{execution_comment}\n")
+    pivoted.to_csv(csvfile, index=False, sep=',', float_format='%.5g')
+
+print(f"Accumulated CSV saved as {save_filename}. Path is {save_path}")
 
 
 #%%
+
 # Move the original file in file_path to completed_directory
 print("Moving file to COMPLETED directory...")
 shutil.move(file_path, completed_file_path)
@@ -5189,7 +5236,7 @@ if initial_event_count > 0:
 else:
     data_purity_percentage = 0.0
 
-filename_base = Path(file_path).stem
+filename_base = normalise_basename(Path(file_path).name)
 
 print("----------")
 print("Execution metadata to be saved:")
@@ -5209,12 +5256,6 @@ save_metadata(csv_execution_metadata_path, execution_row)
 print(f"Metadata (execution) CSV updated at: {csv_execution_metadata_path}")
 
 global_variables["filename_base"] = filename_base
-global_variables["execution_timestamp"] = execution_timestamp
-global_variables["data_purity_percentage"] = round(float(data_purity_percentage), 4)
-global_variables["total_execution_time_minutes"] = round(float(total_execution_time_minutes), 4)
-global_variables["initial_event_count"] = int(initial_event_count)
-global_variables["final_event_count"] = int(final_event_count)
-global_variables["used_files"] = ";".join(used_files_names)
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -5296,45 +5337,52 @@ if side_calculations:
             global_variables[f"{plane}_k"]  = float(k_avg)
 
 
-# Construct the new calibration row
-# Current time of the analysis
-new_row = {'Analysis_Date': analysis_date, 'Used_Files': used_files_names, 'Start_Time': start_time, 'End_Time': end_time}
+# # Construct the new calibration row
+# # Current time of the analysis
+# new_row = {'Analysis_Date': analysis_date, 'Used_Files': used_files_names, 'Start_Time': start_time, 'End_Time': end_time}
 
 
-# Add global variables (e.g., counts, sigmoid widths, slopes)
+# # Add global variables (e.g., counts, sigmoid widths, slopes)
+# for key, value in global_variables.items():
+#     new_row[key] = value
+
+# # Load or initialize metadata DataFrame
+# if os.path.exists(csv_path):
+#     metadata_df = pd.read_csv(csv_path, parse_dates=['Start_Time', 'End_Time'])
+# else:
+#     metadata_df = pd.DataFrame(columns=new_row.keys())
+
+# # Find full match in both Start_Time and End_Time
+# match = (
+#     (metadata_df['Start_Time'] == start_time) &
+#     (metadata_df['End_Time'] == end_time)
+# )
+# existing_row_index = metadata_df[match].index
+
+# if not existing_row_index.empty:
+#     metadata_df.loc[existing_row_index[0]] = new_row
+#     print(f"Updated existing calibration for time range: {start_time} to {end_time}")
+# else:
+#     metadata_df = pd.concat([metadata_df, pd.DataFrame([new_row])], ignore_index=True)
+#     print(f"Added new calibration for time range: {start_time} to {end_time}")
+
+# # Sort and save
+# metadata_df.sort_values(by='Start_Time', inplace=True)
+
+# # Put Start_Time and End_Time as first columns
+# metadata_df = metadata_df[['Start_Time', 'End_Time'] + [col for col in metadata_df.columns if col not in ['Start_Time', 'End_Time']]]
+
+# metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
+# print(f'{csv_path} updated with the calibration summary.')
+
+formatted_specific: Dict[str, object] = {}
 for key, value in global_variables.items():
-    new_row[key] = value
+    if isinstance(value, (float, np.floating)):
+        formatted_specific[key] = f"{float(value):.5f}"
+    else:
+        formatted_specific[key] = value
 
-# Load or initialize metadata DataFrame
-if os.path.exists(csv_path):
-    metadata_df = pd.read_csv(csv_path, parse_dates=['Start_Time', 'End_Time'])
-else:
-    metadata_df = pd.DataFrame(columns=new_row.keys())
-
-# Find full match in both Start_Time and End_Time
-match = (
-    (metadata_df['Start_Time'] == start_time) &
-    (metadata_df['End_Time'] == end_time)
-)
-existing_row_index = metadata_df[match].index
-
-if not existing_row_index.empty:
-    metadata_df.loc[existing_row_index[0]] = new_row
-    print(f"Updated existing calibration for time range: {start_time} to {end_time}")
-else:
-    metadata_df = pd.concat([metadata_df, pd.DataFrame([new_row])], ignore_index=True)
-    print(f"Added new calibration for time range: {start_time} to {end_time}")
-
-# Sort and save
-metadata_df.sort_values(by='Start_Time', inplace=True)
-
-# Put Start_Time and End_Time as first columns
-metadata_df = metadata_df[['Start_Time', 'End_Time'] + [col for col in metadata_df.columns if col not in ['Start_Time', 'End_Time']]]
-
-metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
-print(f'{csv_path} updated with the calibration summary.')
-
-save_metadata(csv_specific_metadata_path, global_variables)
+save_metadata(csv_specific_metadata_path, formatted_specific)
 print(f"Metadata (specific) CSV updated at: {csv_specific_metadata_path}")
 
 
@@ -5375,4 +5423,4 @@ if os.path.exists(figure_directory):
     except OSError as exc:
         print(f"Warning: could not delete {figure_directory}: {exc}")
 
-print("event_accumulator.py finished.\n\n")
+print("corrected_to_accumulated.py finished.\n\n")

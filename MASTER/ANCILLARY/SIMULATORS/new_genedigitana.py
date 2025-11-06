@@ -285,7 +285,7 @@ if read_file == False:
             'time': time_all
         })
 
-        print(f"Done. Total simulated: {total_simulated:,}, retained: {len(df):,} → efficiency: {len(df) / total_simulated:.3%}")
+        print(f"Done. Total simulated: {total_simulated:,}, retained: {len(df):,} --> efficiency: {len(df) / total_simulated:.3%}")
         return df
 
 
@@ -842,7 +842,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa
 
 # --- helper --------------------------------------------------------------
 def to_xyz(theta, phi):
-    """Map (theta, phi) → (x = sinθ·sinφ, y = sinθ·cosφ, z = cosθ)."""
+    """Map (theta, phi) --> (x = sinθ·sinφ, y = sinθ·cosφ, z = cosθ)."""
     return np.sin(theta) * np.sin(phi), np.sin(theta) * np.cos(phi), np.cos(theta)
 
 # --- coarse binning ------------------------------------------------------
@@ -1124,7 +1124,7 @@ for tt_group in groups:
 
 # u_idx = np.digitize(df["u_fit"], u_edges) - 1
 # v_idx = np.digitize(df["v_fit"], v_edges) - 1
-# df["bin"] = list(zip(u_idx, v_idx))               # tuple → hashable
+# df["bin"] = list(zip(u_idx, v_idx))               # tuple --> hashable
 
 # # ---------------------------------------------------------------------
 # # Empirical conditional distributions
@@ -1142,7 +1142,7 @@ for tt_group in groups:
 # def draw_pred(row):
 #     candidates = mapping.get((row["measured_type"], row["bin"]))
 #     if candidates is None or len(candidates) == 0:
-#         # empty cell → keep the fitted angles
+#         # empty cell --> keep the fitted angles
 #         return pd.Series(
 #             {"Theta_pred": row["Theta_fit"], "Phi_pred": row["Phi_fit"]}
 #         )
@@ -1366,7 +1366,7 @@ if only_angles_input:
             p = M[:, col_idx]
 
             s = p.sum()
-            if s == 0:                                     # empty column → uniform
+            if s == 0:                                     # empty column --> uniform
                 p = np.full_like(p, 1.0 / len(p))
             else:
                 p = p / s
@@ -1434,7 +1434,7 @@ if only_angles_input:
         if col_idx >= df_M.shape[1]:
             raise ValueError("bin_uv out of range")
 
-        # Probability vector → 2-D probability grid
+        # Probability vector --> 2-D probability grid
         P_vec = df_M.iloc[:, col_idx].to_numpy()       # length N²
         P_grid = P_vec.reshape(n_bins, n_bins)         # shape (u_gen_idx , v_gen_idx)
 
@@ -1718,7 +1718,7 @@ else:
 
         data = np.ones_like(row, dtype=np.int32)
 
-        # ---- create COO  →  CSC  -------------------------------------
+        # ---- create COO  -->  CSC  -------------------------------------
         kwargs = dict(dtype=np.float32)
         if "index_dtype" in inspect.signature(coo_matrix).parameters:
             kwargs["index_dtype"] = np.int32
@@ -1801,7 +1801,7 @@ else:
     # ---------- helpers -------------------------------------------------
     def flat4(iu: int, iv: int, ix: int, iy: int,
             n_uv: int, n_xy: int) -> int:
-        """(iu,iv,ix,iy) → ordinal in 0 … n_uv²·n_xy²-1"""
+        """(iu,iv,ix,iy) --> ordinal in 0 … n_uv²·n_xy²-1"""
         return ((iu * n_uv + iv) * n_xy + ix) * n_xy + iy
 
     def unflat4(k: int, n_uv: int, n_xy: int) -> tuple[int, int, int, int]:
@@ -1844,7 +1844,7 @@ else:
         start, end  = M.indptr[col], M.indptr[col + 1]
         rows, probs = M.indices[start:end], M.data[start:end]
 
-        # sentinel for empty column  → (None, None)
+        # sentinel for empty column  --> (None, None)
         if rows.size == 0:
             return None, None
 
@@ -1921,7 +1921,7 @@ else:
             else:
                 r   = rng.random()
                 idx = np.searchsorted(cdf, r, side="right")
-                if idx == rows.size:                 # r > cdf[-1]  →  clamp
+                if idx == rows.size:                 # r > cdf[-1]  -->  clamp
                     idx = rows.size - 1
                 g = rows[idx]
 

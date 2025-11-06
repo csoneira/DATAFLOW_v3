@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Shared helpers for STEP_1 STAGE_0_to_1→LIST tasks (lightweight, minimal coupling)."""
+"""Shared helpers for STEP_1 STAGE_0_to_1-->LIST tasks (lightweight, minimal coupling)."""
 
 from __future__ import annotations
 
