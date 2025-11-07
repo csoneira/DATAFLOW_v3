@@ -245,7 +245,7 @@ time_to_min = config["time_to_min"]
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
-print("--------- Running corrected_to_accumulated.py -------------------------------")
+print("--------- Running corrected_to_accumulated.py ------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
@@ -490,28 +490,59 @@ processing_directory = base_directories["processing_directory"]
 error_directory = base_directories["error_directory"]
 completed_directory = base_directories["completed_directory"]
 
-if os.path.isdir(list_events_directory):
-    list_event_files = set(os.listdir(list_events_directory))
-else:
-    list_event_files = set()
-unprocessed_files = set(os.listdir(unprocessed_directory))
-processing_files = set(os.listdir(processing_directory))
-completed_files = set(os.listdir(completed_directory))
 
-# Files to copy: in LIST but not in UNPROCESSED, PROCESSING, or COMPLETED
-files_to_copy = list_event_files - unprocessed_files - processing_files - completed_files
+def list_regular_files(directory_path):
+    """Return the set of regular files inside `directory_path`."""
+    if not os.path.isdir(directory_path):
+        return set()
+    entries = set()
+    try:
+        for name in os.listdir(directory_path):
+            full_path = os.path.join(directory_path, name)
+            if os.path.isfile(full_path):
+                entries.add(name)
+    except FileNotFoundError:
+        return set()
+    return entries
 
 
+list_event_files = list_regular_files(list_events_directory)
+unprocessed_files = list_regular_files(unprocessed_directory)
+processing_files = list_regular_files(processing_directory)
+completed_files = list_regular_files(completed_directory)
 
-# Copy files to UNPROCESSED
+existing_files = unprocessed_files | processing_files | completed_files
+duplicates_in_list = list_event_files & existing_files
 
-print(f"Copying {len(files_to_copy)} files to UNPROCESSED directory...")
+if duplicates_in_list:
+    print(f"Detected {len(duplicates_in_list)} duplicate files already queued or completed.")
 
-for file_name in files_to_copy:
+    for file_name in duplicates_in_list:
+        src_path = os.path.join(list_events_directory, file_name)
+        try:
+            os.remove(src_path)
+            print(f"Removed duplicate file from LIST_EVENTS: {file_name}")
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            print(f"Failed to remove {file_name}: {e}")
+
+# Files eligible to move: present only in LIST_EVENTS
+files_to_move = (list_event_files - duplicates_in_list) - existing_files
+
+
+# Move files to UNPROCESSED
+
+print(f"Moving {len(files_to_move)} files to UNPROCESSED directory...")
+
+for file_name in files_to_move:
     src_path = os.path.join(list_events_directory, file_name)
     dest_path = os.path.join(unprocessed_directory, file_name)
     try:
-        # Copy instead of move
+        # Skip if the file has been processed in the meantime
+        if os.path.basename(file_name) in existing_files:
+            print(f"Skipping {file_name}: now present in another queue.")
+            continue
         shutil.move(src_path, dest_path)
         print(f"Moved {file_name} to UNPROCESSED directory.")
     except Exception as e:

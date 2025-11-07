@@ -219,7 +219,7 @@ update_big_event_file: false
 
 multiple_files: true
 run_jupyter_notebook: false
-remove_outliers: true
+remove_outliers: false
 
 # Plot settings
 create_plots: false
@@ -231,16 +231,16 @@ show_plots: false
 
 
 # Particular analysis
-side_calculations: true
-eff_vs_charge: true
-eff_vs_angle_and_pos: true
+side_calculations: false
+eff_vs_charge: false
+eff_vs_angle_and_pos: false
 noise_vs_angle: false
-noise_2d: true
+noise_2d: false
 charge_vs_angle: false
-polya_fit: true
+polya_fit: false
 real_strip_case_study: false
-multiplicity_calculations: true
-crosstalk_probability: true
+multiplicity_calculations: false
+crosstalk_probability: false
 n_study_fit: false
 topology_plots: false
 

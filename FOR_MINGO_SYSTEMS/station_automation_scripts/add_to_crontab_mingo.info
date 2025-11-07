@@ -1,13 +1,23 @@
+# MINGO STATION CRONTAB
+
+# Edit this file to introduce tasks to be run by cron.
+# minute hour day_of_month month day_of_week command
+# Cron files sometimes require ending with a newline, and this case is.
+
+# Updated at 2025-11-07 12:13
 
 # --------------------------------------------------------------------------------------
 # Merging daq data and log files
 # --------------------------------------------------------------------------------------
 
+# Replace current crontab with the contents of ~/DATAFLOW_v3/add_to_crontab.info
+* * * * * crontab ~/station_automation_scripts/add_to_crontab_mingo.info
+
 # Define the base directory for scripts
 BASE_DIR=/home/rpcuser/station_automation_scripts
 
-# Replace current crontab with the contents of ~/DATAFLOW_v3/add_to_crontab.info
-* * * * * crontab ~/station_automation_scripts/add_to_crontab.info
+# Kill the tunnel automatically every night so it opens again automatically
+0 0 * * * /usr/bin/pkill -f 'autossh.*lipana' || true
 
 # Log files
 # Clean the current log files so the bot can read them easily
@@ -20,3 +30,63 @@ BASE_DIR=/home/rpcuser/station_automation_scripts
 35 2 * * * bash $BASE_DIR/daq_data_scripts/cron_join_last_day.sh
 # Compress the .dat files every night (to avoid conflicts)
 30 2 * * * bash $BASE_DIR/daq_data_scripts/cron_compress_and_clear.sh
+
+
+# --------------------------------------------------------------------------------------
+# ALREADY PRESENT
+# --------------------------------------------------------------------------------------
+
+# Start the DCS file retrieval
+@reboot sleep 60 && /media/externalDisk/gate/bin/dcs_om.sh
+
+# Internal BME
+*/15 * * * * /home/rpcuser/bin/i2c.py -b 1 --log /home/rpcuser/logs
+
+# External BME
+*/15 * * * * sleep 1; /home/rpcuser/bin/i2c.py -b 0      --log /home/rpcuser/logs
+
+# HV PS
+#* * * * * sleep 2; /home/rpcuser/bin/i2c.py -b 0 --hv --log /home/rpcuser/logs
+*/15 * * * * sleep 2; /home/rpcuser/bin/HV/hv -b 0 -l
+
+# FlowMeter
+*/15 * * * * sleep 3; /home/rpcuser/bin/flowmeter/bin/GetFlow 0 4
+
+# Odroid
+*/5 * * * * sleep 4; /home/rpcuser/gate/mingo01/daqScripts/octave/readOdroid.sh
+
+# SelfTrigger; 4 A.M.
+#0 4 * * *; /home/rpcuser/trbsoft/userscripts/trb/trigger/activateST.sh
+
+# keep remoteTunnelOpen
+* * * * * /home/rpcuser/gate/bin/keepRemoteTunnelOpen.sh
+
+# Backup to CESGA
+0 10 * * *  /home/rpcuser/bin/backupCesga.sh
+
+# Back up to backuplip
+#3 10 * * * /home/rpcuser/bin/backupLIP.sh
+
+# Flow calibration
+#31 * * * * /home/rpcuser/logs/madrid_flow_calibration.sh
+
+# Check flow and turn off HV if it is lower than 100
+#0 * * * * sleep 1; python3 /home/rpcuser/pythonScripts/checkFlow.py
+
+# The special log: TRB3 sc rates
+*/5 * * * *; /home/rpcuser/gate/python/log_CTSrates_multiProcessing.py -t 50 -p /home/rpcuser/logs/
+
+# Bot
+# Check if the bot is running and run it if it is not. Every minute
+* * * * * pgrep -f "[m]initrasgo_bot.py" > /dev/null || python3 $BASE_DIR/bot_scripts/minitrasgo_bot.py 1
+
+
+# --------------------------------------------------------------------------------------
+# Octave report related stuff
+# --------------------------------------------------------------------------------------
+
+*/15 * * * * export RPCSYSTEM=mingo01;export RPCRUNMODE=oneRun;/home/rpcuser/gate/bin/dcs_om.sh 
+*/10 * * * * export RPCSYSTEM=mingo01;export RPCRUNMODE=oneRun;/home/rpcuser/gate/bin/copyFiles.sh
+*/15 * * * * export RPCSYSTEM=mingo01;export RPCRUNMODE=oneRun;/home/rpcuser/gate/bin/unpack.sh
+*/30 * * * * export RPCSYSTEM=mingo01;export RPCRUNMODE=oneRun;/home/rpcuser/gate/bin/ana.sh
+1 5 * * * export RPCSYSTEM=mingo01;export RPCRUNMODE=oneRun;/home/rpcuser/gate/bin/createReport.sh
