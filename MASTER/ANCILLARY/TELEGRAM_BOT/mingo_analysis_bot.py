@@ -18,6 +18,8 @@ TOKEN_PATH = TELEGRAM_DIR / "API_TOKEN.txt"
 PIPELINE_PLOTS_DIR = (
     BASE_DIR / "MASTER" / "ANCILLARY" / "PLOTTERS" / "PIPELINE_TRACK_FILES" / "PLOTS"
 )
+PIPELINE_DEFAULT_PDF = PIPELINE_PLOTS_DIR / "station_output_file_counts.pdf"
+PIPELINE_COMPLETE_PDF = PIPELINE_PLOTS_DIR / "station_output_file_counts_complete.pdf"
 
 PDF_TARGETS = {
     "high_voltage_summary": {
@@ -74,6 +76,7 @@ HELP_TEXT = (
     "/execution_report_zoomed - execution metadata (zoomed)\n"
     "/execution_report_full - execution metadata (full report)\n"
     "/pipeline_latest - send the most recent pipeline tracker PDF\n"
+    "/pipeline_complete - send the complete pipeline tracker PDF\n"
 )
 
 
@@ -148,6 +151,24 @@ def handle_pipeline_latest(message):
     send_pdf(message.chat.id, latest, caption)
 
 
+@bot.message_handler(commands=["pipeline_complete"])
+def handle_pipeline_complete(message):
+    if not PIPELINE_COMPLETE_PDF.exists():
+        bot.send_message(
+            message.chat.id,
+            "Complete tracker PDF not found. Run file_tracker_plotter.py with --complete first."
+            f"\nExpected path: {PIPELINE_COMPLETE_PDF}",
+        )
+        return
+
+    mtime = datetime.fromtimestamp(PIPELINE_COMPLETE_PDF.stat().st_mtime)
+    caption = (
+        "Complete pipeline tracker (all directories)\n"
+        f"Generated: {mtime:%Y-%m-%d %H:%M}"
+    )
+    send_pdf(message.chat.id, PIPELINE_COMPLETE_PDF, caption)
+
+
 @bot.message_handler(func=lambda message: True, content_types=["text"])
 def handle_unknown_text(message):
     """Fallback handler: show the start/help message for any unrecognized text."""
@@ -157,7 +178,14 @@ def handle_unknown_text(message):
 
     known_commands = {f"/{cmd}" for cmd in PDF_TARGETS.keys()}
     known_commands.update(
-        {"/start", "/help", "/pipeline", "/pipeline_latest", "/pipeline_list"}
+        {
+            "/start",
+            "/help",
+            "/pipeline",
+            "/pipeline_latest",
+            "/pipeline_list",
+            "/pipeline_complete",
+        }
     )
 
     if message.text.split()[0] in known_commands:

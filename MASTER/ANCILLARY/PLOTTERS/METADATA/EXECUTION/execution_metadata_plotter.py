@@ -24,6 +24,8 @@ FILENAME_TIMESTAMP_PATTERN = re.compile(r"mi0\d(\d{11})$", re.IGNORECASE)
 CLI_DESCRIPTION = "Generate Stage 1 execution metadata plots."
 
 minutes_upper_limit = 5
+point_size = 3
+plot_linestyle = "None"
 
 def extract_datetime_from_basename(basename: str) -> Optional[datetime]:
     stem = Path(basename).stem
@@ -406,8 +408,8 @@ def plot_station(
             x,
             df_plot["total_execution_time_minutes"],
             marker="o",
-            markersize=2,
-            linestyle="-",
+            markersize=point_size,
+            linestyle=plot_linestyle,
             color="tab:blue",
             label="Execution time (min)",
             alpha=0.5,
@@ -418,8 +420,8 @@ def plot_station(
             x,
             df_plot["data_purity_percentage"],
             marker="x",
-            markersize=2,
-            linestyle="--",
+            markersize=point_size,
+            linestyle=plot_linestyle,
             color="tab:red",
             label="Data purity (%)",
             alpha=0.5,
