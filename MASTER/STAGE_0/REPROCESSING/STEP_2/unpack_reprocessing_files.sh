@@ -126,6 +126,22 @@ echo "------------------------------------------------------"
 echo "unpack_reprocessing_files.sh started on: $(date)"
 echo "Station: ${station_code} (loop_mode=$loop_mode)"
 echo "Running the script..."
+
+shared_lock_file="${MASTER_DIR}/STAGE_0/REPROCESSING/STEP_2/.unpack_shared.lock"
+exec {shared_lock_fd}> "$shared_lock_file"
+if ! flock -n "$shared_lock_fd"; then
+    echo "$(date) - Another station is using the shared unpacker input; waiting for lock..."
+    flock "$shared_lock_fd"
+fi
+echo "$(date) - Acquired shared unpacker lock."
+cleanup_shared_lock() {
+    if [[ -n ${shared_lock_fd:-} ]]; then
+        flock -u "$shared_lock_fd"
+        exec {shared_lock_fd}>&-
+    fi
+}
+trap cleanup_shared_lock EXIT
+
 echo "------------------------------------------------------"
 
 # --------------------------------------------------------------------------------------------
@@ -143,6 +159,7 @@ processing_directory="${input_directory}/PROCESSING"
 error_directory="${input_directory}/ERROR"
 metadata_directory="${reprocessing_directory}/METADATA"
 stage0_to_1_directory="${station_directory}/STAGE_0_to_1"
+csv_path="${station_directory}/database_status_${station_code}.csv"
 
 mkdir -p \
     "$unprocessed_uncompressed" \
@@ -164,25 +181,23 @@ ensure_dat_unpacked_csv() {
     fi
 }
 
-# ensure_csv() {
-#     if [[ ! -f "$csv_path" ]]; then
-#         printf '%s\n' "$csv_header" > "$csv_path"
-#     elif [[ ! -s "$csv_path" ]]; then
-#         printf '%s\n' "$csv_header" > "$csv_path"
-#     else
-#         local current_header
-#         current_header=$(head -n1 "$csv_path")
-#         if [[ "$current_header" != "$csv_header" ]]; then
-#             local upgrade_tmp
-#             upgrade_tmp=$(mktemp)
-#             {
-#                 printf '%s\n' "$csv_header"
-#                 tail -n +2 "$csv_path" | awk -F',' -v OFS=',' '{ while (NF < 10) { $(NF+1)="" } if (NF > 10) { NF=10 } print }'
-#             } > "$upgrade_tmp"
-#             mv "$upgrade_tmp" "$csv_path"
-#         fi
-#     fi
-# }
+ensure_csv() {
+    if [[ ! -f "$csv_path" || ! -s "$csv_path" ]]; then
+        printf '%s\n' "$csv_header" > "$csv_path"
+        return
+    fi
+    local current_header
+    current_header=$(head -n1 "$csv_path")
+    if [[ "$current_header" != "$csv_header" ]]; then
+        local upgrade_tmp
+        upgrade_tmp=$(mktemp)
+        {
+            printf '%s\n' "$csv_header"
+            tail -n +2 "$csv_path" | awk -F',' -v OFS=',' '{ while (NF < 10) { $(NF+1)="" } if (NF > 10) { NF=10 } print }'
+        } > "$upgrade_tmp"
+        mv "$upgrade_tmp" "$csv_path"
+    fi
+}
 
 ensure_csv
 

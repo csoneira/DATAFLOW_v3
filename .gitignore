@@ -86,3 +86,6 @@ node_modules/
 
 # Ignore Git merge conflict files
 *.orig
+
+# Runtime lock produced by STEP_2 unpacker serialization
+MASTER/STAGE_0/REPROCESSING/STEP_2/.unpack_shared.lock

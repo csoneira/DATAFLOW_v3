@@ -11,6 +11,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -156,7 +157,7 @@ def load_stage0_raw_metadata(station: str) -> pd.DataFrame:
         df["filename_base"].map(extract_datetime_from_basename),
         errors="coerce",
     )
-    df["total_execution_time_minutes"] = 0.0
+    df["total_execution_time_minutes"] = float("nan")
     df["data_purity_percentage"] = float("nan")
     df = df.dropna(subset=["execution_timestamp"]).sort_values(
         "execution_timestamp"
@@ -221,7 +222,7 @@ def load_stage0_step1_metadata(station: str) -> pd.DataFrame:
         df["filename_base"].map(extract_datetime_from_basename),
         errors="coerce",
     )
-    df["total_execution_time_minutes"] = 0.0
+    df["total_execution_time_minutes"] = float("nan")
     df["data_purity_percentage"] = float("nan")
     df = df.dropna(subset=["execution_timestamp"]).sort_values(
         "execution_timestamp"
@@ -476,16 +477,20 @@ def plot_station(
     for _, df in station_datasets:
         if df.empty:
             continue
-        median_value = df["total_execution_time_minutes"].median()
+        runtime_series = df["total_execution_time_minutes"].dropna()
+        if runtime_series.empty:
+            continue
+        median_value = runtime_series.median()
         if pd.notna(median_value):
             median_minutes.append(median_value)
     total_median_minutes = float(sum(median_minutes))
 
     num_panels = len(station_datasets)
+    fig_height = max(8.5, num_panels * 2.2)
     fig, axes = plt.subplots(
         num_panels,
         1,
-        figsize=(11, 8.5),
+        figsize=(11, fig_height),
         sharex=True,
         constrained_layout=True,
     )
@@ -521,7 +526,6 @@ def plot_station(
         ax.set_title(label)
         ax.set_ylabel("Exec Time (min)")
         ax.grid(True, axis="y", alpha=0.3)
-        ax.set_ylim(0, minutes_upper_limit)
         ax.yaxis.label.set_color("tab:blue")
         ax.tick_params(axis="y", colors="tab:blue")
 
@@ -533,19 +537,6 @@ def plot_station(
             label="Current time",
         )
 
-        ax.annotate(
-            current_time_str_time_only,
-            xy=(current_time, ax.get_ylim()[1]),
-            xycoords=("data", "data"),
-            xytext=(15, -20),
-            textcoords="offset points",
-            rotation=90,
-            va="top",
-            ha="center",
-            color="green",
-            fontsize=10,
-        )
-
         for marker in markers_to_use:
             ax.axvline(
                 marker,
@@ -555,7 +546,10 @@ def plot_station(
                 alpha=0.5,
             )
 
+        axis_upper = minutes_upper_limit
+
         if df.empty:
+            ax.set_ylim(0, axis_upper)
             ax.text(
                 0.5,
                 0.5,
@@ -566,7 +560,18 @@ def plot_station(
                 fontsize=10,
                 color="dimgray",
             )
-            ax.set_ylim(0, minutes_upper_limit)
+            ax.annotate(
+                current_time_str_time_only,
+                xy=(current_time, ax.get_ylim()[1]),
+                xycoords=("data", "data"),
+                xytext=(15, -20),
+                textcoords="offset points",
+                rotation=90,
+                va="top",
+                ha="center",
+                color="green",
+                fontsize=10,
+            )
             ax.legend([now_line], [now_line.get_label()], loc="upper left")
             continue
 
@@ -580,6 +585,7 @@ def plot_station(
             df_plot = df.sort_values("execution_timestamp")
 
         if df_plot.empty:
+            ax.set_ylim(0, axis_upper)
             ax.text(
                 0.5,
                 0.5,
@@ -590,45 +596,116 @@ def plot_station(
                 fontsize=10,
                 color="dimgray",
             )
-            ax.set_ylim(0, minutes_upper_limit)
+            ax.annotate(
+                current_time_str_time_only,
+                xy=(current_time, ax.get_ylim()[1]),
+                xycoords=("data", "data"),
+                xytext=(15, -20),
+                textcoords="offset points",
+                rotation=90,
+                va="top",
+                ha="center",
+                color="green",
+                fontsize=10,
+            )
             ax.legend([now_line], [now_line.get_label()], loc="upper left")
             continue
+
+        runtime_series = df_plot["total_execution_time_minutes"]
+        runtime_non_nan = runtime_series.dropna()
+        has_runtime_points = not runtime_non_nan.empty
+
+        if has_runtime_points:
+            runtime_max = runtime_non_nan.max()
+            if pd.notna(runtime_max):
+                axis_upper = max(axis_upper, float(runtime_max) * 1.15)
+
+        ax.set_ylim(0, axis_upper)
 
         x = (
             df_plot["file_timestamp"]
             if use_real_date
             else df_plot["execution_timestamp"]
         )
-        runtime_line, = ax.plot(
-            x,
-            df_plot["total_execution_time_minutes"],
-            marker="o",
-            markersize=point_size,
-            linestyle=plot_linestyle,
-            color="tab:blue",
-            label="Execution time (min)",
-            alpha=0.5,
-        )
 
-        ax_second = ax.twinx()
-        purity_line, = ax_second.plot(
-            x,
-            df_plot["data_purity_percentage"],
-            marker="x",
-            markersize=point_size,
-            linestyle=plot_linestyle,
-            color="tab:red",
-            label="Data purity (%)",
-            alpha=0.5,
-        )
-        ax_second.set_ylabel("Purity (%)")
-        ax_second.set_ylim(0, 105)
-        ax_second.yaxis.label.set_color("tab:red")
-        ax_second.tick_params(axis="y", colors="tab:red")
+        placeholder_runtime = False
+        if has_runtime_points:
+            y_runtime = runtime_series
+            runtime_label = "Execution time (min)"
+        else:
+            placeholder_runtime = True
+            midpoint = axis_upper / 2 if axis_upper > 0 else 0.5
+            y_runtime = pd.Series(midpoint, index=df_plot.index)
+            runtime_label = "Arrival marker (no runtime)"
 
-        handles = [runtime_line, purity_line, now_line]
-        labels = [h.get_label() for h in handles]
+        runtime_line = None
+        if not y_runtime.dropna().empty:
+            (runtime_line,) = ax.plot(
+                x,
+                y_runtime,
+                marker="o",
+                markersize=point_size,
+                linestyle=plot_linestyle,
+                color="tab:blue",
+                label=runtime_label,
+                alpha=0.5,
+            )
+
+        if placeholder_runtime:
+            ax.text(
+                0.01,
+                0.92,
+                "No execution time data",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                color="tab:blue",
+            )
+
+        purity_line = None
+        purity_series = df_plot["data_purity_percentage"]
+        if purity_series.notna().any():
+            ax_second = ax.twinx()
+            (purity_line,) = ax_second.plot(
+                x,
+                purity_series,
+                marker="x",
+                markersize=point_size,
+                linestyle=plot_linestyle,
+                color="tab:red",
+                label="Data purity (%)",
+                alpha=0.5,
+            )
+            ax_second.set_ylabel("Purity (%)")
+            ax_second.set_ylim(0, 105)
+            ax_second.yaxis.label.set_color("tab:red")
+            ax_second.tick_params(axis="y", colors="tab:red")
+
+        handles = []
+        labels = []
+        if runtime_line:
+            handles.append(runtime_line)
+            labels.append(runtime_line.get_label())
+        if purity_line:
+            handles.append(purity_line)
+            labels.append(purity_line.get_label())
+        handles.append(now_line)
+        labels.append(now_line.get_label())
         ax.legend(handles, labels, loc="upper left")
+
+        ax.annotate(
+            current_time_str_time_only,
+            xy=(current_time, ax.get_ylim()[1]),
+            xycoords=("data", "data"),
+            xytext=(15, -20),
+            textcoords="offset points",
+            rotation=90,
+            va="top",
+            ha="center",
+            color="green",
+            fontsize=10,
+        )
 
     axes[-1].set_xlabel("File timestamp" if use_real_date else "Execution timestamp")
     axes[-1].xaxis.set_major_formatter(
