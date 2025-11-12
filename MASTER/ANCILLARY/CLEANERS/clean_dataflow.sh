@@ -80,7 +80,7 @@ validate_threshold() {
     exit 1
   fi
   local formatted
-  if ! formatted=$(awk -v v="$value" 'BEGIN{if (v < 0 || v > 100) exit 1; printf "%.2f", v}'); then
+  if ! formatted=$(LC_ALL=C awk -v v="$value" 'BEGIN{if (v < 0 || v > 100) exit 1; printf "%.2f", v}'); then
     echo "Threshold must be between 0 and 100: $value" >&2
     exit 1
   fi
@@ -117,16 +117,32 @@ clean_completed() {
     return 0
   fi
 
-  while IFS= read -r -d '' dir; do
-    dirs+=("$dir")
-  done < <(find "$STATIONS_BASE" -type d -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/COMPLETED_DIRECTORY' -print0 2>/dev/null)
+  local -a patterns=(
+    '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/COMPLETED_DIRECTORY'
+    '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/ERROR_DIRECTORY'
+    '*/STAGE_1/EVENT_DATA/STEP_2/INPUT_FILES/COMPLETED'
+    '*/STAGE_1/EVENT_DATA/STEP_2/INPUT_FILES/ERROR_DIRECTORY'
+    '*/STAGE_1/EVENT_DATA/STEP_3/TASK_2/INPUT_FILES/COMPLETED'
+    '*/STAGE_1/LAB_LOGS/STEP_*/INPUT_FILES/COMPLETED'
+    '*/STAGE_1/LAB_LOGS/STEP_*/INPUT_FILES/ERROR*'
+    '*/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/COMPLETED'
+    '*/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/ERROR*'
+  )
 
-  while IFS= read -r -d '' dir; do
-    dirs+=("$dir")
-  done < <(find "$STATIONS_BASE" -type d -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/ERROR_DIRECTORY' -print0 2>/dev/null)
+  declare -A seen_dirs=()
+  for pattern in "${patterns[@]}"; do
+    while IFS= read -r -d '' dir; do
+      [[ -d "$dir" ]] || continue
+      if [[ -n ${seen_dirs["$dir"]:-} ]]; then
+        continue
+      fi
+      seen_dirs["$dir"]=1
+      dirs+=("$dir")
+    done < <(find "$STATIONS_BASE" -type d -path "$pattern" -print0 2>/dev/null)
+  done
 
   if (( ${#dirs[@]} == 0 )); then
-    echo "No COMPLETED_DIRECTORY or ERROR_DIRECTORY directories found."
+    echo "No completed or error directories found."
     TYPE_BEFORE["$type"]=0
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
@@ -445,15 +461,11 @@ else
   fi
 fi
 
-if [[ "$FORCE" == true ]]; then
-  SELECTED_TYPES=("${DEFAULT_SELECTION[@]}")
-fi
-
 echo "Selected cleanups: $(join_by ', ' "${SELECTED_TYPES[@]}")"
 echo "Disk usage before cleaning: $(disk_usage_summary)"
 
 if [[ "$FORCE" == true ]]; then
-  echo "Force flag enabled; cleaning all cleanup types and skipping disk usage threshold check."
+  echo "Force flag enabled; skipping disk usage threshold check."
 else
   usage_percent=$(disk_usage_percent)
   if [[ -z "$usage_percent" ]]; then
@@ -461,7 +473,7 @@ else
     exit 1
   fi
   echo "Threshold: ${THRESHOLD}%"
-  should_clean=$(awk -v usage="$usage_percent" -v threshold="$THRESHOLD" 'BEGIN{if (usage >= threshold) print 1; else print 0}')
+  should_clean=$(awk -v usage="$usage_percent" -v threshold="$THRESHOLD" 'BEGIN{usage+=0; threshold+=0; if (usage >= threshold) print 1; else print 0}')
   if [[ "$should_clean" -eq 0 ]]; then
     echo "Disk usage ${usage_percent}% is below the threshold (${THRESHOLD}%). Use --force to override."
     exit 0

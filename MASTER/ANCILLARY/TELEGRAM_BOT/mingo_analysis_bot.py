@@ -65,6 +65,16 @@ PDF_TARGETS = {
         / "execution_metadata_report.pdf",
         "description": "Execution metadata report (full)",
     },
+    "real_time_hv_exec": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "REAL_TIME_HV_AND_EXEC"
+        / "PLOTS"
+        / "real_time_hv_and_execution.pdf",
+        "description": "Real-time HV & execution PDF",
+    },
 }
 
 HELP_TEXT = (
@@ -75,6 +85,7 @@ HELP_TEXT = (
     "/execution_report_realtime - execution metadata (real time)\n"
     "/execution_report_zoomed - execution metadata (zoomed)\n"
     "/execution_report_full - execution metadata (full report)\n"
+    "/real_time_hv_exec - combined real-time HV and execution PDF\n"
     "/pipeline_latest - send the most recent pipeline tracker PDF\n"
     "/pipeline_complete - send the complete pipeline tracker PDF\n"
 )

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import math
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,7 +18,8 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 STATIONS_ROOT = REPO_ROOT / "STATIONS"
-CONFIG_PATH = Path(__file__).resolve().parent / "files_config.txt"
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "files_config.txt"
+COMPLETE_CONFIG_PATH = Path(__file__).resolve().parent / "files_config_complete.txt"
 PLOTS_DIR = Path(__file__).resolve().parent / "PLOTS"
 
 
@@ -230,9 +232,33 @@ def print_summary(station_stats: Sequence[Sequence[StationEntryStat]]) -> None:
         print()
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate pipeline file count plots per station."
+    )
+    parser.add_argument(
+        "-c",
+        "--complete",
+        action="store_true",
+        help=(
+            "Use files_config_complete.txt to inspect every pipeline directory "
+            "instead of the default subset."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    config_path = COMPLETE_CONFIG_PATH if args.complete else DEFAULT_CONFIG_PATH
+    output_filename = (
+        "station_output_file_counts_complete.pdf"
+        if args.complete
+        else "station_output_file_counts.pdf"
+    )
+
     try:
-        entries = load_pipeline_entries(CONFIG_PATH)
+        entries = load_pipeline_entries(config_path)
     except (FileNotFoundError, ValueError) as error:
         print(error)
         return
@@ -243,7 +269,7 @@ def main() -> None:
         return
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = PLOTS_DIR / f"station_output_file_counts.pdf"
+    output_path = PLOTS_DIR / output_filename
 
     plot_station_pages(station_stats, output_path)
     print_summary(station_stats)

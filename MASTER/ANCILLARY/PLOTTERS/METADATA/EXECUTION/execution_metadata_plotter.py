@@ -21,7 +21,7 @@ BASE_PATH = Path.home() / "DATAFLOW_v3" / "STATIONS"
 OUTPUT_FILENAME = "execution_metadata_report.pdf"
 TIMESTAMP_FMT = "%Y-%m-%d_%H.%M.%S"
 FILENAME_TIMESTAMP_PATTERN = re.compile(r"mi0\d(\d{11})$", re.IGNORECASE)
-CLI_DESCRIPTION = "Generate Stage 1 execution metadata plots."
+CLI_DESCRIPTION = "Generate Stage 0/1 execution metadata plots."
 
 minutes_upper_limit = 5
 point_size = 3
@@ -124,6 +124,174 @@ def load_step2_metadata_csv(station: str) -> pd.DataFrame:
     return _load_metadata_csv_from_path(metadata_csv)
 
 
+def load_stage0_raw_metadata(station: str) -> pd.DataFrame:
+    """Load Stage 0 raw file arrival metadata for a given station."""
+    metadata_csv = (
+        BASE_PATH
+        / f"MINGO0{station}"
+        / "STAGE_0"
+        / "NEW_FILES"
+        / "METADATA"
+        / "raw_files_brought.csv"
+    )
+    if not metadata_csv.exists():
+        return pd.DataFrame()
+
+    df = pd.read_csv(metadata_csv)
+    expected_columns = {"filename", "bring_timestamp"}
+    missing = expected_columns.difference(df.columns)
+    if missing:
+        print(
+            f"Warning: missing expected columns {missing} in {metadata_csv}; "
+            "skipping Stage 0 raw metadata entries."
+        )
+        return pd.DataFrame()
+
+    df = df.copy()
+    df["filename_base"] = df["filename"].astype(str)
+    df["execution_timestamp"] = pd.to_datetime(
+        df["bring_timestamp"], errors="coerce"
+    )
+    df["file_timestamp"] = pd.to_datetime(
+        df["filename_base"].map(extract_datetime_from_basename),
+        errors="coerce",
+    )
+    df["total_execution_time_minutes"] = 0.0
+    df["data_purity_percentage"] = float("nan")
+    df = df.dropna(subset=["execution_timestamp"]).sort_values(
+        "execution_timestamp"
+    )
+    return df[
+        [
+            "filename_base",
+            "execution_timestamp",
+            "file_timestamp",
+            "total_execution_time_minutes",
+            "data_purity_percentage",
+        ]
+    ].reset_index(drop=True)
+
+
+def load_stage0_step1_metadata(station: str) -> pd.DataFrame:
+    """Load Stage 0 reprocessing step 1 metadata for a given station."""
+    metadata_csv = (
+        BASE_PATH
+        / f"MINGO0{station}"
+        / "STAGE_0"
+        / "REPROCESSING"
+        / "STEP_1"
+        / "METADATA"
+        / "hld_files_brought.csv"
+    )
+    if not metadata_csv.exists():
+        return pd.DataFrame()
+
+    df = pd.read_csv(metadata_csv)
+    timestamp_col: Optional[str] = None
+    for candidate in ("bring_timestamp", "bring_timesamp"):
+        if candidate in df.columns:
+            timestamp_col = candidate
+            break
+
+    expected_columns = {"hld_name"}
+    if timestamp_col:
+        expected_columns.add(timestamp_col)
+
+    missing = expected_columns.difference(df.columns)
+    if missing:
+        print(
+            f"Warning: missing expected columns {missing} in {metadata_csv}; "
+            "skipping Stage 0 step 1 metadata entries."
+        )
+        return pd.DataFrame()
+
+    if not timestamp_col:
+        print(
+            "Warning: Stage 0 step 1 metadata missing bring_timestamp/bring_timesamp "
+            f"column in {metadata_csv}; skipping entries."
+        )
+        return pd.DataFrame()
+
+    df = df.copy()
+    df["filename_base"] = df["hld_name"].astype(str)
+    df["execution_timestamp"] = pd.to_datetime(
+        df[timestamp_col], errors="coerce"
+    )
+    df["file_timestamp"] = pd.to_datetime(
+        df["filename_base"].map(extract_datetime_from_basename),
+        errors="coerce",
+    )
+    df["total_execution_time_minutes"] = 0.0
+    df["data_purity_percentage"] = float("nan")
+    df = df.dropna(subset=["execution_timestamp"]).sort_values(
+        "execution_timestamp"
+    )
+    return df[
+        [
+            "filename_base",
+            "execution_timestamp",
+            "file_timestamp",
+            "total_execution_time_minutes",
+            "data_purity_percentage",
+        ]
+    ].reset_index(drop=True)
+
+
+def load_stage0_step2_metadata(station: str) -> pd.DataFrame:
+    """Load Stage 0 reprocessing step metadata for a given station."""
+    metadata_csv = (
+        BASE_PATH
+        / f"MINGO0{station}"
+        / "STAGE_0"
+        / "REPROCESSING"
+        / "STEP_2"
+        / "METADATA"
+        / "dat_files_unpacked.csv"
+    )
+    if not metadata_csv.exists():
+        return pd.DataFrame()
+
+    df = pd.read_csv(metadata_csv)
+    expected_columns = {
+        "dat_name",
+        "execution_timestamp",
+        "execution_duration_s",
+    }
+    missing = expected_columns.difference(df.columns)
+    if missing:
+        print(
+            f"Warning: missing expected columns {missing} in {metadata_csv}; "
+            "skipping Stage 0 reprocessing metadata entries."
+        )
+        return pd.DataFrame()
+
+    df = df.copy()
+    df["filename_base"] = df["dat_name"].astype(str)
+    df["execution_timestamp"] = pd.to_datetime(
+        df["execution_timestamp"], errors="coerce"
+    )
+    df["file_timestamp"] = pd.to_datetime(
+        df["filename_base"].map(extract_datetime_from_basename),
+        errors="coerce",
+    )
+    df["total_execution_time_minutes"] = pd.to_numeric(
+        df["execution_duration_s"], errors="coerce"
+    ).div(60)
+    df["data_purity_percentage"] = float("nan")
+    df = df.dropna(subset=["execution_timestamp"]).sort_values(
+        "execution_timestamp"
+    )
+    return df[
+        [
+            "filename_base",
+            "execution_timestamp",
+            "file_timestamp",
+            "total_execution_time_minutes",
+            "data_purity_percentage",
+        ]
+    ].reset_index(drop=True)
+
+
 def ensure_output_directory(path: Path) -> None:
     """Ensure the directory for the output file exists."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,14 +299,34 @@ def ensure_output_directory(path: Path) -> None:
 
 def build_station_pages(
     include_step2: bool,
+    include_stage0: bool,
 ) -> Dict[str, List[Tuple[str, pd.DataFrame]]]:
     """Collect metadata DataFrames for each station."""
     station_data: Dict[str, List[Tuple[str, pd.DataFrame]]] = {}
     for station in STATIONS:
-        datasets: List[Tuple[str, pd.DataFrame]] = [
+        datasets: List[Tuple[str, pd.DataFrame]] = []
+        if include_stage0:
+            datasets.extend(
+                [
+                    (
+                        "STAGE0_RAW_FILES",
+                        load_stage0_raw_metadata(station),
+                    ),
+                    (
+                        "STAGE0_REPROCESS_STEP_1",
+                        load_stage0_step1_metadata(station),
+                    ),
+                    (
+                        "STAGE0_REPROCESS_STEP_2",
+                        load_stage0_step2_metadata(station),
+                    ),
+                ]
+            )
+
+        datasets.extend(
             (f"TASK_{task_id}", load_metadata_csv(station, task_id))
             for task_id in TASK_IDS
-        ]
+        )
         if include_step2:
             datasets.append(("STEP_2", load_step2_metadata_csv(station)))
         station_data[station] = datasets
@@ -172,6 +360,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-step2",
         action="store_true",
         help="Include Stage 1 Step 2 execution metadata in the plots.",
+    )
+    parser.add_argument(
+        "--include-stage0",
+        action="store_true",
+        help="Prepend Stage 0 metadata (raw files and reprocessing) to each station page.",
     )
     return parser
 
@@ -274,6 +467,7 @@ def plot_station(
 ) -> None:
     """Render a page with execution metadata subplots for one station."""
     station_datasets = list(station_datasets)
+    has_stage0_data = any(label.startswith("STAGE0") for label, _ in station_datasets)
     month_markers = list(month_markers)
     current_time_str_full = current_time.strftime("%Y-%m-%d %H:%M:%S")
     current_time_str_time_only = current_time.strftime("%H:%M:%S")
@@ -297,7 +491,8 @@ def plot_station(
     )
     fig.suptitle(
         (
-            f"MINGO0{station} – Stage 1 Execution Metadata "
+            f"MINGO0{station} – "
+            f"{'Stage 0/1' if has_stage0_data else 'Stage 1'} Execution Metadata "
             f"(Total median minutes/file: {total_median_minutes:.2f}) "
             f"Current: {current_time_str_full}"
         ),
@@ -446,7 +641,9 @@ def plot_station(
 
 def main() -> None:
     args = parse_args()
-    station_pages = build_station_pages(include_step2=args.include_step2)
+    station_pages = build_station_pages(
+        include_step2=args.include_step2, include_stage0=args.include_stage0
+    )
     current_time = datetime.now()
     if args.zoom:
         time_bounds: Optional[Tuple[datetime, datetime]] = (

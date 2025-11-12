@@ -604,6 +604,7 @@ charge_front_back_debug = config["charge_front_back_debug"]
 create_plots = config["create_plots"]
 
 
+complete_reanalysis = config["complete_reanalysis"]
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -1120,17 +1121,20 @@ else:
             print(f"File moved to ERROR: {processing_file_path}")
 
         elif completed_files:
-            completed_files = sorted(completed_files)
-            file_name = completed_files[-1]
-            
-            # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-            processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-            
-            print(f"Reprocessing the last file in COMPLETED: {completed_file_path}")
-            print(f"Moving '{completed_file_path}' to PROCESSING...")
-            shutil.move(completed_file_path, processing_file_path)
-            print(f"File moved to PROCESSING: {processing_file_path}")
+            if complete_reanalysis:
+                completed_files = sorted(completed_files)
+                file_name = completed_files[-1]
+                
+                # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                
+                print(f"Reprocessing the last file in COMPLETED: {completed_file_path}")
+                print(f"Moving '{completed_file_path}' to PROCESSING...")
+                shutil.move(completed_file_path, processing_file_path)
+                print(f"File moved to PROCESSING: {processing_file_path}")
+            else:
+                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
 
         else:
             sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
@@ -1166,17 +1170,20 @@ else:
                 break
 
         elif completed_files:
-            print("Shuffling the files in COMPLETED...")
-            random.shuffle(completed_files)
-            for file_name in completed_files:
-                # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+            if complete_reanalysis:
+                print("Shuffling the files in COMPLETED...")
+                random.shuffle(completed_files)
+                for file_name in completed_files:
+                    # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                    completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                    processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
 
-                print(f"Moving '{file_name}' to PROCESSING...")
-                shutil.move(completed_file_path, processing_file_path)
-                print(f"File moved to PROCESSING: {processing_file_path}")
-                break
+                    print(f"Moving '{file_name}' to PROCESSING...")
+                    shutil.move(completed_file_path, processing_file_path)
+                    print(f"File moved to PROCESSING: {processing_file_path}")
+                    break
+            else:
+                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
 
         else:
             sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")

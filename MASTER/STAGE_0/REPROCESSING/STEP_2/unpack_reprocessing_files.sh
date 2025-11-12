@@ -36,6 +36,19 @@ original_args="$*"
 station=$1
 shift
 
+if [[ ! "$station" =~ ^[0-9]+$ ]]; then
+    echo "Station identifier must be a number between 1 and 4."
+    exit 1
+fi
+
+station=$((10#$station))
+if (( station < 1 || station > 4 )); then
+    echo "Station identifier must be between 1 and 4."
+    exit 1
+fi
+
+station_code=$(printf "%02d" "$station")
+
 loop_mode=false
 
 while (( $# > 0 )); do
@@ -111,13 +124,14 @@ echo "$(date) - No running instance found. Proceeding..."
 # If no duplicate process is found, continue
 echo "------------------------------------------------------"
 echo "unpack_reprocessing_files.sh started on: $(date)"
-echo "Station: $station (loop_mode=$loop_mode)"
+echo "Station: ${station_code} (loop_mode=$loop_mode)"
 echo "Running the script..."
 echo "------------------------------------------------------"
 
 # --------------------------------------------------------------------------------------------
 
-station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}"
+STATIONS_BASE="$HOME/DATAFLOW_v3/STATIONS"
+station_directory="${STATIONS_BASE}/MINGO${station_code}"
 reprocessing_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_2"
 step_1_output_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_1/OUTPUT_FILES"
 step_1_output_compressed="${step_1_output_directory}/COMPRESSED_HLDS"
@@ -201,6 +215,39 @@ compute_start_date() {
     else
         printf ''
     fi
+}
+
+extract_station_code_from_name() {
+    local artifact="${1##*/}"
+    local lowered="${artifact,,}"
+    if [[ "$lowered" =~ ^mini ]]; then
+        printf '01'
+        return 0
+    fi
+    if [[ "$lowered" =~ ^mi0([0-9]) ]]; then
+        local digit="${BASH_REMATCH[1]}"
+        case "$digit" in
+            1|2|3|4)
+                printf '%02d' "$digit"
+                return 0
+                ;;
+        esac
+    fi
+    return 1
+}
+
+relocate_artifact_to_station() {
+    local file_path="$1"
+    local target_code="$2"
+    local relative_subdir="$3"
+    if [[ -z "$file_path" || -z "$target_code" || -z "$relative_subdir" ]]; then
+        return 1
+    fi
+    local target_dir="${STATIONS_BASE}/MINGO${target_code}/${relative_subdir}"
+    mkdir -p "$target_dir"
+    local destination="${target_dir}/$(basename "$file_path")"
+    echo "--> Redirecting $(basename "$file_path") to ${target_dir}"
+    mv "$file_path" "$destination"
 }
 
 declare -A csv_rows=()
@@ -330,6 +377,7 @@ process_single_hld() {
     fi
 
     echo "Selecting one HLD file to unpack..."
+    local relocated_candidates=false
     shopt -s nullglob
     local -a candidate_files=("$unprocessed_uncompressed"/*.hld "$unprocessed_uncompressed"/*.HLD)
     local source_stage="UNPROCESSED"
@@ -353,7 +401,30 @@ process_single_hld() {
     fi
     shopt -u nullglob
 
+    if (( ${#candidate_files[@]} > 0 )); then
+        local -a filtered_candidates=()
+        local candidate
+        for candidate in "${candidate_files[@]}"; do
+            [[ -e "$candidate" ]] || continue
+            local candidate_station=""
+            candidate_station=$(extract_station_code_from_name "$candidate" 2>/dev/null || true)
+            if [[ -n "$candidate_station" && "$candidate_station" != "$station_code" ]]; then
+                if relocate_artifact_to_station "$candidate" "$candidate_station" "STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/UNPROCESSED"; then
+                    relocated_candidates=true
+                    continue
+                else
+                    echo "Warning: failed to relocate $(basename "$candidate") to station $candidate_station." >&2
+                fi
+            fi
+            filtered_candidates+=("$candidate")
+        done
+        candidate_files=("${filtered_candidates[@]}")
+    fi
+
     if (( ${#candidate_files[@]} == 0 )); then
+        if [[ "$relocated_candidates" == true ]]; then
+            echo "All HLD files in the queue belonged to other stations and were reassigned."
+        fi
         echo "No HLD files available in UNPROCESSED or PROCESSING."
         return 1
     fi
@@ -423,7 +494,7 @@ process_single_hld() {
     echo ""
     echo ""
     echo "Running unpacking..."
-    export RPCSYSTEM=mingo0$station
+    export RPCSYSTEM="mingo${station_code}"
     export RPCRUNMODE=oneRun
 
     "$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh"
@@ -440,18 +511,33 @@ process_single_hld() {
 
     for file in "$asci_output_directory"/*.dat; do
         [ -e "$file" ] || continue
-        local fname
+        local fname target_station_code destination_dir
         fname=$(basename "$file")
         touch "$file"
-        if [[ -e "$dest_directory/$fname" ]]; then
-            echo "Skipping $fname — already present in STAGE_0_to_1."
+        target_station_code=$(extract_station_code_from_name "$fname" 2>/dev/null || true)
+        destination_dir="$dest_directory"
+        if [[ -n "$target_station_code" && "$target_station_code" != "$station_code" ]]; then
+            destination_dir="${STATIONS_BASE}/MINGO${target_station_code}/STAGE_0_to_1"
+            echo "--> Redirecting $fname to ${destination_dir} (belongs to station ${target_station_code})."
+        fi
+        if [[ -e "$destination_dir/$fname" ]]; then
+            if [[ "$destination_dir" == "$dest_directory" ]]; then
+                echo "Skipping $fname — already present in STAGE_0_to_1."
+            else
+                echo "Skipping $fname — already present in ${destination_dir}."
+            fi
             continue
         fi
-        if mv "$file" "$dest_directory/$fname"; then
-            touch "$dest_directory/$fname"
-            echo "Moved $fname to STAGE_0_to_1."
+        mkdir -p "$destination_dir"
+        if mv "$file" "$destination_dir/$fname"; then
+            touch "$destination_dir/$fname"
+            if [[ "$destination_dir" == "$dest_directory" ]]; then
+                echo "Moved $fname to STAGE_0_to_1."
+            else
+                echo "Moved $fname to ${destination_dir}."
+            fi
         else
-            echo "Warning: failed to move $fname into STAGE_0_to_1." >&2
+            echo "Warning: failed to move $fname into ${destination_dir}." >&2
         fi
     done
 
@@ -567,7 +653,7 @@ process_single_hld() {
     fi
 
     local BASE_ROOT SUBDIRS
-    BASE_ROOT="$HOME/DATAFLOW_v3/STATIONS"
+    BASE_ROOT="$STATIONS_BASE"
     SUBDIRS=(
         "STAGE_0/REPROCESSING/STEP_1/OUTPUT_FILES/COMPRESSED_HLDS"
         "STAGE_0/REPROCESSING/STEP_1/OUTPUT_FILES/UNCOMPRESSED_HLDS"
