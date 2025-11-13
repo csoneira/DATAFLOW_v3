@@ -16,6 +16,12 @@ Options:
   -p, --preview   Print a formatted list of planned moves per directory.
   -n, --dry-run   Preview moves without moving any files (implies --preview).
   -h, --help      Show this help message and exit.
+
+Configuration:
+  When no BASE_DIR arguments are provided, directories listed in
+  move_completed_to_unprocessed_config.txt (same directory as this script)
+  are used. If the file is missing or matches nothing, the repository root
+  becomes the fallback base directory.
 EOF
 }
 
@@ -26,6 +32,62 @@ SKIP_PATTERNS=(
   "/home/mingo/DATAFLOW_v3/STATIONS/MINGO0*/STAGE_1/LAB_LOGS"
   "/home/mingo/DATAFLOW_v3/STATIONS/MINGO0*/STAGE_1/LAB_LOGS/*"
 )
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/move_completed_to_unprocessed_config.txt"
+DEFAULT_BASE="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
+declare -a CONFIG_PATTERNS=()
+declare -a CONFIG_BASE_DIRS=()
+
+load_config_base_dirs() {
+  [[ -f "$CONFIG_FILE" ]] || return
+
+  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    local line="$raw_line"
+    line="${line%%#*}"
+    line="${line%"${line##*[![:space:]]}"}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" ]] && continue
+    CONFIG_PATTERNS+=("$line")
+  done < "$CONFIG_FILE"
+
+  local pattern
+  for pattern in "${CONFIG_PATTERNS[@]}"; do
+    local matches=()
+    while IFS= read -r match; do
+      matches+=("$match")
+    done < <(compgen -G "$pattern" || true)
+
+    if ((${#matches[@]} == 0)); then
+      echo "Config pattern matched no directories: $pattern" >&2
+      continue
+    fi
+
+    local candidate
+    for candidate in "${matches[@]}"; do
+      if [[ -d "$candidate" ]]; then
+        CONFIG_BASE_DIRS+=("$candidate")
+      else
+        echo "Config match is not a directory, skipping: $candidate" >&2
+      fi
+    done
+  done
+
+  if ((${#CONFIG_BASE_DIRS[@]} > 1)); then
+    local -A seen=()
+    local -a unique=()
+    local dir
+    for dir in "${CONFIG_BASE_DIRS[@]}"; do
+      if [[ -n ${seen["$dir"]+_} ]]; then
+        continue
+      fi
+      seen["$dir"]=1
+      unique+=("$dir")
+    done
+    CONFIG_BASE_DIRS=("${unique[@]}")
+  fi
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,10 +121,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_BASE="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+load_config_base_dirs
 if ((${#BASE_DIRS[@]} == 0)); then
-  BASE_DIRS=("$DEFAULT_BASE")
+  if ((${#CONFIG_BASE_DIRS[@]} > 0)); then
+    BASE_DIRS=("${CONFIG_BASE_DIRS[@]}")
+    echo "Using ${#BASE_DIRS[@]} base director$( (( ${#BASE_DIRS[@]} == 1 )) && printf 'y' || printf 'ies') from config: $CONFIG_FILE"
+  else
+    BASE_DIRS=("$DEFAULT_BASE")
+  fi
 fi
 
 shopt -s nullglob dotglob

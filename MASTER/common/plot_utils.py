@@ -14,12 +14,16 @@ from typing import Iterable, Callable  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from matplotlib.artist import Artist  # noqa: E402
+from matplotlib.offsetbox import DrawingArea, TextArea, HPacker, VPacker  # noqa: E402
 
 __all__ = [
     "rasterize_figure",
     "pdf_save_rasterized_page",
     "save_rasterized_pdf",
 ]
+
+
+UNSUPPORTED_RASTER_TYPES = (TextArea, DrawingArea, HPacker, VPacker)
 
 
 def rasterize_figure(fig: plt.Figure, rasterized_predicate: Callable[[Artist], bool] | None = None) -> None:
@@ -36,10 +40,15 @@ def rasterize_figure(fig: plt.Figure, rasterized_predicate: Callable[[Artist], b
     """
 
     if rasterized_predicate is None:
-        rasterized_predicate = lambda artist: hasattr(artist, "set_rasterized")
+        rasterized_predicate = (
+            lambda artist: hasattr(artist, "set_rasterized")
+            and not isinstance(artist, UNSUPPORTED_RASTER_TYPES)
+        )
 
     for artist in fig.findobj(rasterized_predicate):
         try:
+            if isinstance(artist, UNSUPPORTED_RASTER_TYPES):
+                continue
             artist.set_rasterized(True)
         except Exception:
             continue

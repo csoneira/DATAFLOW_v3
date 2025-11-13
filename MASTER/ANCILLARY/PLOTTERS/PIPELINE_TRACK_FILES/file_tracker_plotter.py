@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Iterable, List, Sequence
 
 import matplotlib.patches as mpatches
@@ -15,8 +16,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = next(
+    (parent for parent in SCRIPT_PATH.parents if (parent / "MASTER").is_dir()),
+    Path.home() / "DATAFLOW_v3",
+)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+from MASTER.common.plot_utils import pdf_save_rasterized_page
+
+
 STATIONS_ROOT = REPO_ROOT / "STATIONS"
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "files_config.txt"
 COMPLETE_CONFIG_PATH = Path(__file__).resolve().parent / "files_config_complete.txt"
@@ -141,7 +151,7 @@ def plot_station_pages(station_stats: Sequence[Sequence[StationEntryStat]], outp
             if not stats:
                 continue
             fig = build_station_figure(stats, timestamp)
-            pdf.savefig(fig, bbox_inches="tight")
+            pdf_save_rasterized_page(pdf, fig, bbox_inches="tight")
             plt.close(fig)
 
 

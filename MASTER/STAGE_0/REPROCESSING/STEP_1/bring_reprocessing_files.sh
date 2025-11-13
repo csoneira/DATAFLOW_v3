@@ -36,9 +36,9 @@ STATUS_TIMESTAMP=""
 usage() {
   cat <<'EOF'
 Usage:
-  bring_reprocessing_files.sh <station> [--refresh-metadata|-m]
-  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] --random|-r
-  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] <start YYMMDD> <end YYMMDD>
+  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot]
+  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] --random|-r
+  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] <start YYMMDD> <end YYMMDD>
 
 Options:
   -h, --help            Show this help message and exit.
@@ -47,6 +47,10 @@ Options:
                         Refresh the metadata CSV with the latest list of basenames
                         from the remote host. Can be combined with --random or a
                         date range, or used alone.
+      --plot            Generate a histogram (PDF) of time differences between
+                        consecutive metadata entries in STEP_1/PLOTS. Can be run
+                        by itself using the existing metadata CSV or combined
+                        with other flags.
 EOF
   exit 1
 }
@@ -57,9 +61,9 @@ bring_reprocessing_files.sh
 Fetches HLD data from backuplip into the STAGE_0 buffers for a station.
 
 Usage:
-  bring_reprocessing_files.sh <station> [--refresh-metadata|-m]
-  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] --random/-r
-  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] YYMMDD YYMMDD
+  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot]
+  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] --random/-r
+  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] YYMMDD YYMMDD
 
 Options:
   -h, --help            Show this help message and exit.
@@ -68,6 +72,10 @@ Options:
                         Refresh the metadata CSV with the latest list of basenames
                         from the remote host. Can be combined with --random or a
                         date range, or used alone.
+      --plot            Generate a histogram (PDF) of time differences between
+                        consecutive metadata entries in STEP_1/PLOTS. Can be run
+                        by itself using the existing metadata CSV or combined
+                        with other flags.
 
 The random mode selects a pending day automatically; otherwise provide a
 start and end date in YYMMDD format for the desired range.
@@ -84,6 +92,7 @@ shift
 
 random_mode=false
 refresh_metadata=false
+plot_hist=false
 start_arg=""
 end_arg=""
 
@@ -91,6 +100,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --refresh-metadata|-m)
       refresh_metadata=true
+      shift
+      ;;
+    --plot)
+      plot_hist=true
       shift
       ;;
     --random|-r)
@@ -134,7 +147,7 @@ else
   fi
 fi
 
-if ! $refresh_metadata && ! $perform_download; then
+if ! $refresh_metadata && ! $perform_download && ! $plot_hist; then
   usage
 fi
 
@@ -148,7 +161,8 @@ output_directory="${reprocessing_directory}/OUTPUT_FILES"
 compressed_directory="${output_directory}/COMPRESSED_HLDS"
 uncompressed_directory="${output_directory}/UNCOMPRESSED_HLDS"
 metadata_directory="${reprocessing_directory}/METADATA"
-mkdir -p "$input_directory" "$compressed_directory" "$uncompressed_directory" "$metadata_directory"
+plots_directory="${reprocessing_directory}/PLOTS"
+mkdir -p "$input_directory" "$compressed_directory" "$uncompressed_directory" "$metadata_directory" "$plots_directory"
 
 brought_csv="${metadata_directory}/hld_files_brought.csv"
 brought_csv_header="hld_name,bring_timesamp"
@@ -247,6 +261,202 @@ basename_time_key() {
   fi
 }
 
+time_key_to_epoch() {
+  local key="$1"
+  if [[ ! $key =~ ^[0-9]{11}$ ]]; then
+    return 1
+  fi
+  local yy=${key:0:2}
+  local doy=${key:2:3}
+  local hh=${key:5:2}
+  local mm=${key:7:2}
+  local ss=${key:9:2}
+  local day_index=$((10#$doy - 1))
+  if (( day_index < 0 )); then
+    return 1
+  fi
+  date -d "20${yy}-01-01 +${day_index} days ${hh}:${mm}:${ss}" +%s 2>/dev/null
+}
+
+basename_to_epoch() {
+  local name="$1"
+  local key
+  key=$(basename_time_key "$name")
+  if [[ -z "$key" ]]; then
+    return 1
+  fi
+  time_key_to_epoch "$key"
+}
+
+filter_close_metadata_entries() {
+  local csv_file="$1"
+  if [[ ! -s "$csv_file" ]]; then
+    return 0
+  fi
+
+  local header
+  if ! header=$(head -n1 "$csv_file"); then
+    return 1
+  fi
+
+  local -a basenames=()
+  while IFS= read -r line; do
+    line=${line//$'\r'/}
+    [[ -z "$line" ]] && continue
+    basenames+=("$line")
+  done < <(tail -n +2 "$csv_file")
+
+  local total=${#basenames[@]}
+  if (( total == 0 )); then
+    return 0
+  fi
+
+  local -a keep_flags
+  keep_flags=()
+  for ((i = 0; i < total; i++)); do
+    keep_flags[i]=1
+  done
+
+  for ((i = 0; i < total - 1; i++)); do
+    local prev="${basenames[i]}"
+    local next="${basenames[i + 1]}"
+    [[ -z "$prev" || -z "$next" ]] && continue
+    local prev_epoch next_epoch
+    if ! prev_epoch=$(basename_to_epoch "$prev"); then
+      continue
+    fi
+    if ! next_epoch=$(basename_to_epoch "$next"); then
+      continue
+    fi
+    local delta=$((next_epoch - prev_epoch))
+    if (( delta >= 0 && delta < 600 )); then
+      keep_flags[i]=0
+    fi
+  done
+
+  local tmp_filtered
+  tmp_filtered=$(mktemp) || return 1
+  printf '%s\n' "$header" > "$tmp_filtered"
+  local removed=0
+  for ((i = 0; i < total; i++)); do
+    if (( keep_flags[i] == 1 )); then
+      printf '%s\n' "${basenames[i]}" >>"$tmp_filtered"
+    else
+      ((removed++))
+    fi
+  done
+
+  if (( removed > 0 )); then
+    mv "$tmp_filtered" "$csv_file"
+    log_info "Metadata filter removed ${removed} basename(s) closer than 10 minutes apart."
+  else
+    rm -f "$tmp_filtered"
+  fi
+}
+
+plot_metadata_time_deltas() {
+  local csv_file="$1"
+  local station_label="$2"
+  local plot_dir="$3"
+
+  if [[ ! -s "$csv_file" ]]; then
+    log_info "Metadata CSV ${csv_file} is empty; skipping histogram generation."
+    return 1
+  fi
+
+  mkdir -p "$plot_dir" || return 1
+  local plot_path="${plot_dir}/metadata_time_differences_${station_label}.pdf"
+
+  if PLOT_CSV="$csv_file" PLOT_PATH="$plot_path" STATION_LABEL="$station_label" python3 <<'PY'
+import csv
+import datetime as dt
+import os
+import re
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+csv_path = os.environ["PLOT_CSV"]
+plot_path = os.environ["PLOT_PATH"]
+station_label = os.environ.get("STATION_LABEL", "")
+
+basenames = []
+with open(csv_path, newline="") as handle:
+  reader = csv.reader(handle)
+  next(reader, None)
+  for row in reader:
+    if not row:
+      continue
+    base = row[0].strip()
+    if base:
+      basenames.append(base)
+
+pattern = re.compile(r"([0-9]{11})$")
+timestamps = []
+for base in basenames:
+  match = pattern.search(base)
+  if not match:
+    continue
+  key = match.group(1)
+  yy = int(key[0:2])
+  doy = int(key[2:5])
+  hh = int(key[5:7])
+  mm = int(key[7:9])
+  ss = int(key[9:11])
+  if doy < 1 or doy > 366:
+    continue
+  year = 2000 + yy
+  ts = dt.datetime(year, 1, 1) + dt.timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
+  timestamps.append(ts)
+
+timestamps.sort()
+
+title = f"Metadata time differences for {station_label}" if station_label else "Metadata time differences"
+
+def render_message(message: str) -> None:
+  fig, ax = plt.subplots(figsize=(8, 4.5))
+  ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12)
+  ax.set_axis_off()
+  fig.suptitle(title)
+  fig.tight_layout()
+  fig.savefig(plot_path, format="pdf")
+  plt.close(fig)
+
+if len(timestamps) < 2:
+  render_message("Not enough metadata entries\nto compute time differences.")
+else:
+  diffs = []
+  for idx in range(len(timestamps) - 1):
+    delta = timestamps[idx + 1] - timestamps[idx]
+    minutes = delta.total_seconds() / 60.0
+    if 0 <= minutes <= 120:
+      diffs.append(minutes)
+
+  if not diffs:
+    render_message("No metadata time differences\nwithin 0-120 minutes.")
+  else:
+    bins = "auto" if len(diffs) > 1 else 1
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(diffs, bins=bins, color="#1f77b4", edgecolor="black", alpha=0.8)
+    ax.set_xlim(0, 120)
+    ax.set_title(title)
+    ax.set_xlabel("Minutes between consecutive files (0-120)")
+    ax.set_ylabel("Count")
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(plot_path, format="pdf")
+    plt.close(fig)
+PY
+  then
+    log_info "Histogram of metadata time differences saved to ${plot_path}"
+    return 0
+  else
+    log_info "Failed to create metadata histogram at ${plot_path}" >&2
+    return 1
+  fi
+}
+
 ymd_to_epoch() {
   local ymd="$1"
   if [[ ! $ymd =~ ^[0-9]{6}$ ]]; then
@@ -310,6 +520,9 @@ refresh_metadata_csv() {
   } > "$tmp_csv"
   mv "$tmp_csv" "$csv_path"
   rm -f "$tmp_sorted"
+  if ! filter_close_metadata_entries "$csv_path"; then
+    log_info "Metadata CSV filter could not be applied; continuing with unfiltered entries."
+  fi
 
   log_info "Metadata CSV refreshed with ${#refreshed_bases[@]} basename(s)."
   return 0
@@ -345,8 +558,20 @@ if (( ${#metadata_basenames[@]} == 0 )); then
 fi
 log_info "Loaded ${#metadata_basenames[@]} basenames from metadata CSV."
 
+if $plot_hist; then
+  if (( ${#metadata_basenames[@]} < 2 )); then
+    log_info "Not enough metadata entries (need at least 2) to generate time-difference histogram."
+  else
+    plot_metadata_time_deltas "$csv_path" "MINGO0${station}" "$plots_directory" || true
+  fi
+fi
+
 if ! $perform_download; then
-  log_info "No download requested; exiting after metadata handling."
+  if $plot_hist; then
+    log_info "No download requested; plot-only run complete."
+  else
+    log_info "No download requested; exiting after metadata handling."
+  fi
   exit 0
 fi
 

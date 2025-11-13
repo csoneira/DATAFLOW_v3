@@ -7,6 +7,7 @@ import argparse
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+import sys
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import matplotlib.dates as mdates
@@ -14,6 +15,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = next(
+    (parent for parent in SCRIPT_PATH.parents if (parent / "MASTER").is_dir()),
+    Path.home() / "DATAFLOW_v3",
+)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from MASTER.common.plot_utils import pdf_save_rasterized_page
 
 
 STATIONS: Tuple[str, ...] = ("1", "2", "3", "4")
@@ -712,7 +723,7 @@ def plot_station(
         mdates.DateFormatter("%Y-%m-%d\n%H:%M:%S")
     )
     axes[-1].xaxis.set_tick_params(rotation=0)
-    pdf.savefig(fig, dpi=150)
+    pdf_save_rasterized_page(pdf, fig, dpi=150)
     plt.close(fig)
 
 

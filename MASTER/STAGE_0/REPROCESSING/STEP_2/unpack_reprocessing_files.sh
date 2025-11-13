@@ -159,7 +159,7 @@ processing_directory="${input_directory}/PROCESSING"
 error_directory="${input_directory}/ERROR"
 metadata_directory="${reprocessing_directory}/METADATA"
 stage0_to_1_directory="${station_directory}/STAGE_0_to_1"
-csv_path="${station_directory}/database_status_${station_code}.csv"
+# csv_path="${station_directory}/database_status_${station_code}.csv"
 
 mkdir -p \
     "$unprocessed_uncompressed" \
@@ -181,25 +181,25 @@ ensure_dat_unpacked_csv() {
     fi
 }
 
-ensure_csv() {
-    if [[ ! -f "$csv_path" || ! -s "$csv_path" ]]; then
-        printf '%s\n' "$csv_header" > "$csv_path"
-        return
-    fi
-    local current_header
-    current_header=$(head -n1 "$csv_path")
-    if [[ "$current_header" != "$csv_header" ]]; then
-        local upgrade_tmp
-        upgrade_tmp=$(mktemp)
-        {
-            printf '%s\n' "$csv_header"
-            tail -n +2 "$csv_path" | awk -F',' -v OFS=',' '{ while (NF < 10) { $(NF+1)="" } if (NF > 10) { NF=10 } print }'
-        } > "$upgrade_tmp"
-        mv "$upgrade_tmp" "$csv_path"
-    fi
-}
+# ensure_csv() {
+#     if [[ ! -f "$csv_path" || ! -s "$csv_path" ]]; then
+#         printf '%s\n' "$csv_header" > "$csv_path"
+#         return
+#     fi
+#     local current_header
+#     current_header=$(head -n1 "$csv_path")
+#     if [[ "$current_header" != "$csv_header" ]]; then
+#         local upgrade_tmp
+#         upgrade_tmp=$(mktemp)
+#         {
+#             printf '%s\n' "$csv_header"
+#             tail -n +2 "$csv_path" | awk -F',' -v OFS=',' '{ while (NF < 10) { $(NF+1)="" } if (NF > 10) { NF=10 } print }'
+#         } > "$upgrade_tmp"
+#         mv "$upgrade_tmp" "$csv_path"
+#     fi
+# }
 
-ensure_csv
+# ensure_csv
 
 strip_suffix() {
     local name="$1"
@@ -265,14 +265,14 @@ relocate_artifact_to_station() {
     mv "$file_path" "$destination"
 }
 
-declare -A csv_rows=()
-if [[ -s "$csv_path" ]]; then
-    while IFS=',' read -r existing_basename _; do
-        [[ -z "$existing_basename" || "$existing_basename" == "basename" ]] && continue
-        existing_basename=${existing_basename//$'\r'/}
-        csv_rows["$existing_basename"]=1
-    done < "$csv_path"
-fi
+# declare -A csv_rows=()
+# if [[ -s "$csv_path" ]]; then
+#     while IFS=',' read -r existing_basename _; do
+#         [[ -z "$existing_basename" || "$existing_basename" == "basename" ]] && continue
+#         existing_basename=${existing_basename//$'\r'/}
+#         csv_rows["$existing_basename"]=1
+#     done < "$csv_path"
+# fi
 
 # append_row_if_missing() {
 #     local base="$1"

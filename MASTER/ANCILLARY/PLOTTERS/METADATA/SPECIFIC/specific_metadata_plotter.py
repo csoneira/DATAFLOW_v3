@@ -11,12 +11,23 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+import sys
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, TypeVar
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = next(
+    (parent for parent in SCRIPT_PATH.parents if (parent / "MASTER").is_dir()),
+    Path.home() / "DATAFLOW_v3",
+)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from MASTER.common.plot_utils import pdf_save_rasterized_page
 
 
 STATIONS: Tuple[str, ...] = ("1", "2", "3", "4")
@@ -417,7 +428,7 @@ def plot_task_metadata(
             va="center",
             fontsize=10,
         )
-        pdf.savefig(fig, dpi=150)
+        pdf_save_rasterized_page(pdf, fig, dpi=150)
         plt.close(fig)
         return
 
@@ -442,7 +453,7 @@ def plot_task_metadata(
                 va="center",
                 fontsize=10,
             )
-            pdf.savefig(fig, dpi=150)
+            pdf_save_rasterized_page(pdf, fig, dpi=150)
             plt.close(fig)
             return
         df_plot = df.sort_values(by="file_timestamp")
@@ -572,7 +583,7 @@ def plot_task_metadata(
 
         fig.set_rasterized(True)
 
-        pdf.savefig(fig)
+        pdf_save_rasterized_page(pdf, fig)
         plt.close(fig)
 
 
@@ -695,7 +706,7 @@ def main() -> None:
                         va="center",
                         fontsize=10,
                     )
-                    pdf.savefig(fig, dpi=150)
+                    pdf_save_rasterized_page(pdf, fig, dpi=150)
                     plt.close(fig)
                     continue
 

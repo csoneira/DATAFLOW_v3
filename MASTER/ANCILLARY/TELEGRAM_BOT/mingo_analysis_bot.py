@@ -75,6 +75,16 @@ PDF_TARGETS = {
         / "real_time_hv_and_execution.pdf",
         "description": "Real-time HV & execution PDF",
     },
+    "online_file_count": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "ONLINE_FILE_COUNT"
+        / "PLOTS"
+        / "online_file_count_report.pdf",
+        "description": "Online file count report",
+    },
 }
 
 HELP_TEXT = (
@@ -86,6 +96,7 @@ HELP_TEXT = (
     "/execution_report_zoomed - execution metadata (zoomed)\n"
     "/execution_report_full - execution metadata (full report)\n"
     "/real_time_hv_exec - combined real-time HV and execution PDF\n"
+    "/online_file_count - online file count report\n"
     "/pipeline_latest - send the most recent pipeline tracker PDF\n"
     "/pipeline_complete - send the complete pipeline tracker PDF\n"
 )

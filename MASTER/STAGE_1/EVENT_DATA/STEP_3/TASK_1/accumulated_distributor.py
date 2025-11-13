@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Distribute accumulated_|*.csv files from STEP_2_TO_3_OUTPUT into "
-            "STEP_3/INPUT_FILES/<YEAR>/<MONTH>/<DAY>. "
+            "STEP_3/TASK_1_TO_2/<YEAR>/<MONTH>/<DAY>. "
             "Files spanning multiple days are split accordingly."
         )
     )
@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--archive",
         default="INPUT_FILES",
-        help="Directory name (under STEP_3) where processed originals are moved.",
+        help="Directory name (under TASK_1) where processed originals are moved.",
     )
     return parser.parse_args()
 
@@ -150,11 +150,10 @@ def main() -> int:
 
     station_dir = Path.home() / "DATAFLOW_v3" / "STATIONS" / f"MINGO0{station}"
     step2_to_3_dir = station_dir / "STAGE_1" / "EVENT_DATA" / "STEP_2_TO_3_OUTPUT"
-    step3_root = station_dir / "STAGE_1" / "EVENT_DATA" / "STEP_3" / "TASK_1"
-    input_root = step3_root / "OUTPUT_FILES"
-    archive_dir = step3_root / args.archive
-
-    destination_root = input_root
+    step3_root = station_dir / "STAGE_1" / "EVENT_DATA" / "STEP_3"
+    task1_root = step3_root / "TASK_1"
+    destination_root = step3_root / "TASK_1_TO_2"
+    archive_dir = task1_root / args.archive
 
     if not step2_to_3_dir.exists():
         print(f"Source directory not found: {step2_to_3_dir}")

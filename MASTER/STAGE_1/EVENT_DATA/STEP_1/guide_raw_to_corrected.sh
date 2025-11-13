@@ -53,38 +53,30 @@ fi
 
 
 # --------------------------------------------------------------------------------------------
-# Prevent the script from running multiple instances -----------------------------------------
+# Prevent overlapping runs per station using a lock ------------------------------------------
 # --------------------------------------------------------------------------------------------
+LOCK_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/LOCKS"
+mkdir -p "$LOCK_DIR"
+LOCK_FILE="$LOCK_DIR/step1_station_${station}.lock"
 
-# Variables
-script_name=$(basename "$0")
-script_args="$*"
-current_pid=$$
-
-existing_instances=()
-while IFS= read -r pid; do
-    if [[ "$pid" != "$current_pid" ]]; then
-        cmdline=$(ps -p "$pid" -o args=)
-        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
-            existing_instances+=("$pid")
-        fi
-    fi
-done < <(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}')
-
-if (( ${#existing_instances[@]} > 0 )); then
-    echo "------------------------------------------------------"
-    echo "$(date): Detected running instance(s) of $script_name with arguments '$script_args' (PID(s): ${existing_instances[*]})."
-    echo "Continuing; busy task scripts will be skipped if already running."
-else
-    echo "$(date) - No running instance found. Proceeding..."
+# Open FD 9 for flock; closing FD releases lock automatically
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "[$(date)] Another STEP_1 pipeline is already running for station $station (lock: $LOCK_FILE). Exiting."
+  exit 0
 fi
+
+cleanup_lock() {
+  flock -u 9
+  rm -f "$LOCK_FILE"
+}
+trap cleanup_lock EXIT
 
 echo "------------------------------------------------------"
 echo "raw_to_list_events.sh started on: $(date)"
-echo "Station: $script_args"
-echo "Running the script..."
+echo "Station: $station"
+echo "Lock acquired at $LOCK_FILE"
 echo "------------------------------------------------------"
-# --------------------------------------------------------------------------------------------
 
 
 # dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
