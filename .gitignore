@@ -1,6 +1,8 @@
 .github/workflows/bug-detector.yml
 add_to_rclone.info
 
+*.lock
+
 *.pkl
 *.npz
 *.bin
