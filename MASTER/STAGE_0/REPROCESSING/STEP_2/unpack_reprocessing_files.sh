@@ -171,6 +171,7 @@ mkdir -p \
 
 dat_unpacked_csv="${metadata_directory}/dat_files_unpacked.csv"
 dat_unpacked_header="dat_name,execution_timestamp,execution_duration_s"
+declare -A dat_unpacked_basenames=()
 
 # csv_path="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/database_status_${station}.csv"
 csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_date,list_ev_name,list_ev_add_date,acc_name,acc_add_date,merge_add_date"
@@ -179,6 +180,26 @@ ensure_dat_unpacked_csv() {
     if [[ ! -f "$dat_unpacked_csv" || ! -s "$dat_unpacked_csv" ]]; then
         printf '%s\n' "$dat_unpacked_header" > "$dat_unpacked_csv"
     fi
+}
+
+load_dat_unpacked_basenames() {
+    dat_unpacked_basenames=()
+    if [[ ! -s "$dat_unpacked_csv" ]]; then
+        return
+    fi
+    local first=true
+    while IFS=',' read -r dat_name _rest; do
+        if $first; then
+            first=false
+            continue
+        fi
+        dat_name=${dat_name//$'\r'/}
+        [[ -z "$dat_name" ]] && continue
+        local base
+        base=$(strip_suffix "$dat_name")
+        [[ -z "$base" ]] && base="$dat_name"
+        dat_unpacked_basenames["$base"]=1
+    done < "$dat_unpacked_csv"
 }
 
 # ensure_csv() {
@@ -341,6 +362,9 @@ process_single_hld() {
     script_start_epoch=$(date +%s)
     csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 
+    load_dat_unpacked_basenames
+    echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames as exclusions."
+
     echo "Creating necessary directories..."
     mkdir -p \
         "$unprocessed_uncompressed" \
@@ -430,6 +454,13 @@ process_single_hld() {
                 else
                     echo "Warning: failed to relocate $(basename "$candidate") to station $candidate_station." >&2
                 fi
+            fi
+            local candidate_base
+            candidate_base=$(strip_suffix "$(basename "$candidate")")
+            [[ -z "$candidate_base" ]] && candidate_base="$(basename "$candidate")"
+            if [[ -n ${dat_unpacked_basenames["$candidate_base"]+_} ]]; then
+                echo "  -> Skipping $(basename "$candidate") (already recorded in dat_files_unpacked.csv)."
+                continue
             fi
             filtered_candidates+=("$candidate")
         done
@@ -719,9 +750,11 @@ process_single_hld() {
 
     if (( ${#new_dat_files[@]} > 0 )); then
         ensure_dat_unpacked_csv
-        local dat_name
+        local dat_name dat_base
         for dat_name in "${new_dat_files[@]}"; do
-            printf '%s,%s,%s\n' "$dat_name" "$script_start_time" "$script_duration" >> "$dat_unpacked_csv"
+            dat_base=$(strip_suffix "$dat_name")
+            [[ -z "$dat_base" ]] && dat_base="$dat_name"
+            printf '%s,%s,%s\n' "$dat_base" "$script_start_time" "$script_duration" >> "$dat_unpacked_csv"
         done
     fi
 

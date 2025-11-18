@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hv-threshold",
         type=float,
-        default=3.0,
+        default=4.5,
         help="HV threshold (kV) used to classify green/orange/red segments. Default: 3.0",
     )
     parser.add_argument(

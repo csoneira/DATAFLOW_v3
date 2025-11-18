@@ -32,6 +32,9 @@ fi
 
 station=$1
 
+# Ensure snap-installed utilities such as yq are available even under cron
+export PATH="/snap/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_DIR="$SCRIPT_DIR"
 while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
@@ -101,6 +104,9 @@ dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/a
 
 # Additional paths
 mingo_direction="mingo0$station"
+# Shared SSH/Rsync options so cron never hangs awaiting passwords
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
+RSYNC_RSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=15"
 
 station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
 config_file_directory="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_$station"
@@ -108,6 +114,8 @@ stage0_directory="$station_directory/STAGE_0/NEW_FILES"
 stage0_to_1_directory="$station_directory/STAGE_0_to_1"
 metadata_directory="$stage0_directory/METADATA"
 raw_directory="$stage0_to_1_directory"
+# Reject list shared with STATIONS/MINGO0*/STAGE_0/NEW_FILES/METADATA/raw_files_brought.csv
+reject_list_csv="$metadata_directory/raw_files_brought.csv"
 
 mkdir -p "$station_directory" "$stage0_directory" "$stage0_to_1_directory" "$metadata_directory" "$config_file_directory"
 
@@ -117,7 +125,7 @@ mkdir -p "$station_directory" "$stage0_directory" "$stage0_to_1_directory" "$met
 #   STATUS_TIMESTAMP=""
 # fi
 
-log_csv="$metadata_directory/raw_files_brought.csv"
+log_csv="$reject_list_csv"
 log_csv_header="filename,bring_timestamp"
 run_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 
@@ -185,76 +193,92 @@ register_brought_file() {
 
 ensure_log_csv
 load_logged_files
+echo "Using reject list at $log_csv"
 
-# Fetch all data
-echo "Fetching data from $mingo_direction to $raw_directory..."
-echo '------------------------------------------------------'
-
-before_list=$(mktemp)
-# Strictly match files ending in .dat (not .dat*)
-find "$raw_directory" -maxdepth 1 -type f \
-  -regextype posix-extended -regex '.*/[^/]+\.dat$' \
-  -printf '%f\n' | sort -u > "$before_list"
-
-echo "Files currently available on $mingo_direction:"
-remote_list_cmd=$(printf 'cd %q && find . -maxdepth 1 -type f -regextype posix-extended -regex %s -printf %s | sort' \
-  "$dat_files_directory" "'.*/[^/]+\\.dat$'" "'%P\n'")
-ssh "$mingo_direction" "$remote_list_cmd" 2>/dev/null || echo "No .dat files found or listing unavailable."
-
-rsync_file_list=$(mktemp)
-filtered_rsync_file_list=$(mktemp)
-remote_find_cmd=$(printf 'cd %q && find . -maxdepth 1 -type f -regextype posix-extended -regex %s -printf %s' \
-  "$dat_files_directory" "'.*/[^/]+\\.dat$'" "'%P\0'")
-if ssh "$mingo_direction" "$remote_find_cmd" > "$rsync_file_list"; then
-  if [[ -s "$rsync_file_list" ]]; then
-    : > "$filtered_rsync_file_list"
-    while IFS= read -r -d '' candidate; do
-      candidate=${candidate//$'\r'/}
-      candidate=${candidate#./}
-      [[ -z "$candidate" ]] && continue
-      if [[ -n ${logged_files["$candidate"]+_} ]]; then
-        continue
-      fi
-      printf '%s\0' "$candidate" >> "$filtered_rsync_file_list"
-    done < "$rsync_file_list"
-
-    if [[ -s "$filtered_rsync_file_list" ]]; then
-      if ! rsync -avz --ignore-existing \
-        --files-from="$filtered_rsync_file_list" \
-        --from0 \
-        "$mingo_direction:$dat_files_directory/" \
-        "$raw_directory/"; then
-        echo "Warning: rsync encountered an error while fetching data." >&2
-      fi
-    else
-      echo "No .dat files eligible for transfer after excluding logged entries."
-    fi
-  else
-    echo "No .dat files found to transfer."
-  fi
+connection_ok=0
+echo "Checking connectivity to $mingo_direction..."
+if ssh "${SSH_OPTS[@]}" "$mingo_direction" "true" >/dev/null 2>&1; then
+  connection_ok=1
+  echo "Connection to $mingo_direction confirmed."
 else
-  echo "Warning: unable to build .dat file list from remote host." >&2
+  echo "Error: Unable to establish SSH connection with $mingo_direction. Skipping data fetch for this run." >&2
 fi
 
-after_list=$(mktemp)
-# Strictly match files ending in .dat (not .dat*)
-find "$raw_directory" -maxdepth 1 -type f \
-  -regextype posix-extended -regex '.*/[^/]+\.dat$' \
-  -printf '%f\n' | sort -u > "$after_list"
+if [[ $connection_ok -eq 1 ]]; then
+  # Fetch all data
+  echo "Fetching data from $mingo_direction to $raw_directory..."
+  echo '------------------------------------------------------'
 
-new_list=$(mktemp)
-comm -13 "$before_list" "$after_list" > "$new_list"
+  before_list=$(mktemp)
+  # Strictly match files ending in .dat (not .dat*)
+  find "$raw_directory" -maxdepth 1 -type f \
+    -regextype posix-extended -regex '.*/[^/]+\.dat$' \
+    -printf '%f\n' | sort -u > "$before_list"
 
-if [[ -s "$new_list" ]]; then
-  while IFS= read -r dat_entry; do
-    dat_entry=${dat_entry//$'\r'/}
-    [[ -z "$dat_entry" ]] && continue
-    register_brought_file "$dat_entry"
-  done < "$new_list"
-  new_count=$(grep -c '' "$new_list")
-  echo "Registered $new_count new file(s) in $log_csv."
+  echo "Files currently available on $mingo_direction:"
+  remote_list_cmd=$(printf 'cd %q && find . -maxdepth 1 -type f -regextype posix-extended -regex %s -printf %s | sort' \
+    "$dat_files_directory" "'.*/[^/]+\\.dat$'" "'%P\n'")
+  if ! ssh "${SSH_OPTS[@]}" "$mingo_direction" "$remote_list_cmd" 2>/dev/null; then
+    echo "No .dat files found or listing unavailable."
+  fi
+
+  rsync_file_list=$(mktemp)
+  filtered_rsync_file_list=$(mktemp)
+  remote_find_cmd=$(printf 'cd %q && find . -maxdepth 1 -type f -regextype posix-extended -regex %s -printf %s' \
+    "$dat_files_directory" "'.*/[^/]+\\.dat$'" "'%P\0'")
+  if ssh "${SSH_OPTS[@]}" "$mingo_direction" "$remote_find_cmd" > "$rsync_file_list"; then
+    if [[ -s "$rsync_file_list" ]]; then
+      : > "$filtered_rsync_file_list"
+      while IFS= read -r -d '' candidate; do
+        candidate=${candidate//$'\r'/}
+        candidate=${candidate#./}
+        [[ -z "$candidate" ]] && continue
+        if [[ -n ${logged_files["$candidate"]+_} ]]; then
+          continue
+        fi
+        printf '%s\0' "$candidate" >> "$filtered_rsync_file_list"
+      done < "$rsync_file_list"
+
+      if [[ -s "$filtered_rsync_file_list" ]]; then
+        if ! RSYNC_RSH="$RSYNC_RSH_CMD" rsync -avz --ignore-existing \
+          --files-from="$filtered_rsync_file_list" \
+          --from0 \
+          "$mingo_direction:$dat_files_directory/" \
+          "$raw_directory/"; then
+          echo "Warning: rsync encountered an error while fetching data." >&2
+        fi
+      else
+        echo "No .dat files eligible for transfer after excluding logged entries."
+      fi
+    else
+      echo "No .dat files found to transfer."
+    fi
+  else
+    echo "Warning: unable to build .dat file list from remote host." >&2
+  fi
+
+  after_list=$(mktemp)
+  # Strictly match files ending in .dat (not .dat*)
+  find "$raw_directory" -maxdepth 1 -type f \
+    -regextype posix-extended -regex '.*/[^/]+\.dat$' \
+    -printf '%f\n' | sort -u > "$after_list"
+
+  new_list=$(mktemp)
+  comm -13 "$before_list" "$after_list" > "$new_list"
+
+  if [[ -s "$new_list" ]]; then
+    while IFS= read -r dat_entry; do
+      dat_entry=${dat_entry//$'\r'/}
+      [[ -z "$dat_entry" ]] && continue
+      register_brought_file "$dat_entry"
+    done < "$new_list"
+    new_count=$(grep -c '' "$new_list")
+    echo "Registered $new_count new file(s) in $log_csv."
+  else
+    echo "No new files transferred."
+  fi
 else
-  echo "No new files transferred."
+  echo "Skipping data fetch because $mingo_direction is unreachable."
 fi
 
 

@@ -4,10 +4,9 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional
-
 import telebot
 
 
@@ -15,24 +14,18 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 TELEGRAM_DIR = Path(__file__).resolve().parent
 TOKEN_PATH = TELEGRAM_DIR / "API_TOKEN.txt"
 
-PIPELINE_PLOTS_DIR = (
-    BASE_DIR / "MASTER" / "ANCILLARY" / "PLOTTERS" / "PIPELINE_TRACK_FILES" / "PLOTS"
-)
-PIPELINE_DEFAULT_PDF = PIPELINE_PLOTS_DIR / "station_output_file_counts.pdf"
-PIPELINE_COMPLETE_PDF = PIPELINE_PLOTS_DIR / "station_output_file_counts_complete.pdf"
-
 PDF_TARGETS = {
-    "high_voltage_summary": {
+    "fill_factor_timeseries": {
         "path": BASE_DIR
         / "MASTER"
         / "ANCILLARY"
         / "PLOTTERS"
-        / "HIGH_VOLTAGE"
+        / "FILL_FACTOR"
         / "PLOTS"
-        / "high_voltage_network_summary.pdf",
-        "description": "High voltage network summary",
+        / "fill_factor_timeseries.pdf",
+        "description": "Fill-factor coverage report",
     },
-    "execution_report_realtime": {
+    "execution_report_realtime_hv": {
         "path": BASE_DIR
         / "MASTER"
         / "ANCILLARY"
@@ -40,8 +33,8 @@ PDF_TARGETS = {
         / "METADATA"
         / "EXECUTION"
         / "PLOTS"
-        / "execution_metadata_report_real_time.pdf",
-        "description": "Execution metadata report (real time)",
+        / "execution_metadata_report_real_time_hv.pdf",
+        "description": "Execution metadata report (real-time HV)",
     },
     "execution_report_zoomed": {
         "path": BASE_DIR
@@ -53,27 +46,6 @@ PDF_TARGETS = {
         / "PLOTS"
         / "execution_metadata_report_zoomed.pdf",
         "description": "Execution metadata report (zoomed)",
-    },
-    "execution_report_full": {
-        "path": BASE_DIR
-        / "MASTER"
-        / "ANCILLARY"
-        / "PLOTTERS"
-        / "METADATA"
-        / "EXECUTION"
-        / "PLOTS"
-        / "execution_metadata_report.pdf",
-        "description": "Execution metadata report (full)",
-    },
-    "real_time_hv_exec": {
-        "path": BASE_DIR
-        / "MASTER"
-        / "ANCILLARY"
-        / "PLOTTERS"
-        / "REAL_TIME_HV_AND_EXEC"
-        / "PLOTS"
-        / "real_time_hv_and_execution.pdf",
-        "description": "Real-time HV & execution PDF",
     },
     "online_file_count": {
         "path": BASE_DIR
@@ -87,18 +59,26 @@ PDF_TARGETS = {
     },
 }
 
+CLEANER_SCRIPT = (
+    BASE_DIR / "MASTER" / "ANCILLARY" / "CLEANERS" / "clean_dataflow.sh"
+)
+MAX_MESSAGE_CHARS = 3500
+
 HELP_TEXT = (
-    "Welcome to mingo_analysis_bot!\n\n"
-    "Available commands:\n"
-    "/start or /help - show this message\n"
-    "/high_voltage_summary - send the latest high voltage network summary\n"
-    "/execution_report_realtime - execution metadata (real time)\n"
-    "/execution_report_zoomed - execution metadata (zoomed)\n"
-    "/execution_report_full - execution metadata (full report)\n"
-    "/real_time_hv_exec - combined real-time HV and execution PDF\n"
-    "/online_file_count - online file count report\n"
-    "/pipeline_latest - send the most recent pipeline tracker PDF\n"
-    "/pipeline_complete - send the complete pipeline tracker PDF\n"
+    "===========================================\n"
+    "      mingo_analysis_bot - Command Guide\n"
+    "===========================================\n\n"
+    "General Commands:\n"
+    "  /start or /help - Display this guide.\n\n"
+    "PDF Reports:\n"
+    "  /fill_factor_timeseries - Fill-factor coverage PDF.\n"
+    "  /execution_report_realtime_hv - Execution metadata (real-time HV overlay).\n"
+    "  /execution_report_zoomed - Execution metadata (zoomed view).\n"
+    "  /online_file_count - Online file count report.\n\n"
+    "Maintenance Tools:\n"
+    "  /clean_dataflow_status - Run clean_dataflow.sh to show disk usage.\n"
+    "  /clean_dataflow_force - Run clean_dataflow.sh --force for cleanup.\n"
+    "==========================================="
 )
 
 
@@ -118,10 +98,13 @@ def load_token(token_path: Path) -> str:
 bot = telebot.TeleBot(load_token(TOKEN_PATH))
 
 
-def send_pdf(chat_id: int, pdf_path: Path, caption: str) -> None:
+def send_pdf(chat_id: int, pdf_path: Path, description: str) -> None:
     if not pdf_path.exists():
         bot.send_message(chat_id, f"File not found: {pdf_path}")
         return
+
+    creation = datetime.fromtimestamp(pdf_path.stat().st_mtime)
+    caption = f"{description}\nCreated: {creation:%Y-%m-%d %H:%M}"
 
     try:
         with pdf_path.open("rb") as handle:
@@ -146,49 +129,70 @@ def send_welcome(message):
     bot.send_message(message.chat.id, HELP_TEXT)
 
 
-def pipeline_pdfs() -> List[Path]:
-    if not PIPELINE_PLOTS_DIR.exists():
-        return []
-    return sorted(PIPELINE_PLOTS_DIR.glob("*.pdf"))
+def truncate_message(text: str) -> str:
+    if len(text) <= MAX_MESSAGE_CHARS:
+        return text
+    return text[: MAX_MESSAGE_CHARS - 3] + "..."
 
 
-def most_recent_pipeline_pdf() -> Optional[Path]:
-    pdfs = pipeline_pdfs()
-    if not pdfs:
-        return None
-    return max(pdfs, key=lambda path: path.stat().st_mtime)
+def run_cleaner(force: bool = False) -> str:
+    if not CLEANER_SCRIPT.exists():
+        raise RuntimeError(f"Cleaner script not found: {CLEANER_SCRIPT}")
 
+    command = [str(CLEANER_SCRIPT)]
+    if force:
+        command.append("--force")
 
-@bot.message_handler(commands=["pipeline_latest"])
-def handle_pipeline_latest(message):
-    latest = most_recent_pipeline_pdf()
-    if not latest:
-        bot.send_message(
-            message.chat.id,
-            f"No PDF files were found in {PIPELINE_PLOTS_DIR}",
+    logging.info("Calling %s", " ".join(command))
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(CLEANER_SCRIPT.parent),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
         )
-        return
+    except Exception as exc:  # pragma: no cover - defensive for runtime failures
+        raise RuntimeError(f"Failed to execute clean_dataflow.sh: {exc}") from exc
 
-    caption = f"Latest pipeline file tracker\nGenerated: {datetime.fromtimestamp(latest.stat().st_mtime):%Y-%m-%d %H:%M}"
-    send_pdf(message.chat.id, latest, caption)
-
-
-@bot.message_handler(commands=["pipeline_complete"])
-def handle_pipeline_complete(message):
-    if not PIPELINE_COMPLETE_PDF.exists():
-        bot.send_message(
-            message.chat.id,
-            "Complete tracker PDF not found. Run file_tracker_plotter.py with --complete first."
-            f"\nExpected path: {PIPELINE_COMPLETE_PDF}",
+    output = "".join(
+        part
+        for part in (
+            result.stdout or "",
+            "\n" if result.stdout and result.stderr else "",
+            result.stderr or "",
         )
-        return
+    ).strip() or "<no output>"
 
-    mtime = datetime.fromtimestamp(PIPELINE_COMPLETE_PDF.stat().st_mtime)
-    caption = (
-        "Complete pipeline tracker (all directories)\n"
-        f"Generated: {mtime:%Y-%m-%d %H:%M}"
+    mode = "--force" if force else "(disk usage check)"
+    message = (
+        f"clean_dataflow.sh {mode} finished with exit code {result.returncode}.\n"
+        f"{output}"
     )
-    send_pdf(message.chat.id, PIPELINE_COMPLETE_PDF, caption)
+    return truncate_message(message)
+
+
+def _handle_cleaner_command(message, force: bool) -> None:
+    try:
+        response = run_cleaner(force)
+    except Exception as exc:  # pragma: no cover
+        logging.exception("clean_dataflow.sh command failed")
+        bot.send_message(message.chat.id, f"Unable to run clean_dataflow.sh: {exc}")
+        return
+
+    bot.send_message(message.chat.id, response)
+
+
+@bot.message_handler(commands=["clean_dataflow_status"])
+def handle_clean_dataflow_status(message):  # type: ignore[misc]
+    _handle_cleaner_command(message, force=False)
+
+
+@bot.message_handler(commands=["clean_dataflow_force"])
+def handle_clean_dataflow_force(message):  # type: ignore[misc]
+    _handle_cleaner_command(message, force=True)
 
 
 @bot.message_handler(func=lambda message: True, content_types=["text"])
@@ -203,10 +207,8 @@ def handle_unknown_text(message):
         {
             "/start",
             "/help",
-            "/pipeline",
-            "/pipeline_latest",
-            "/pipeline_list",
-            "/pipeline_complete",
+            "/clean_dataflow_status",
+            "/clean_dataflow_force",
         }
     )
 

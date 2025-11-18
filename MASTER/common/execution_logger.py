@@ -59,44 +59,44 @@ def _normalise_script_name(script: Union[str, os.PathLike[str]]) -> str:
     return str(script_path)
 
 
-def _ensure_log_header(log_path: pathlib.Path) -> None:
-    if not log_path.exists():
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("w", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(_CSV_HEADER)
+# def _ensure_log_header(log_path: pathlib.Path) -> None:
+#     if not log_path.exists():
+#         log_path.parent.mkdir(parents=True, exist_ok=True)
+#         with log_path.open("w", newline="") as handle:
+#             writer = csv.writer(handle)
+#             writer.writerow(_CSV_HEADER)
 
 
-@contextmanager
-def log_execution(script: Union[str, os.PathLike[str]], station: Optional[Union[str, int]] = None) -> Iterator[None]:
-    """
-    Context manager that records the execution duration for a script.
+# @contextmanager
+# def log_execution(script: Union[str, os.PathLike[str]], station: Optional[Union[str, int]] = None) -> Iterator[None]:
+#     """
+#     Context manager that records the execution duration for a script.
 
-    Parameters
-    ----------
-    script:
-        Path or name of the script being executed. If ``__file__`` is provided it
-        will be resolved to an absolute path where possible.
-    station:
-        Optional station identifier. When ``None`` the column is left blank.
-    """
+#     Parameters
+#     ----------
+#     script:
+#         Path or name of the script being executed. If ``__file__`` is provided it
+#         will be resolved to an absolute path where possible.
+#     station:
+#         Optional station identifier. When ``None`` the column is left blank.
+#     """
 
-    start = time.perf_counter()
-    try:
-        yield
-    finally:
-        duration = time.perf_counter() - start
-        when = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        station_value = "" if station is None else str(station)
-        record = (_normalise_script_name(script), station_value, when, f"{duration:.3f}")
+#     start = time.perf_counter()
+#     try:
+#         yield
+#     finally:
+#         duration = time.perf_counter() - start
+#         when = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#         station_value = "" if station is None else str(station)
+#         record = (_normalise_script_name(script), station_value, when, f"{duration:.3f}")
 
-        try:
-            _ensure_log_header(LOG_PATH)
-            with LOG_PATH.open("a", newline="") as handle:
-                writer = csv.writer(handle)
-                writer.writerow(record)
-        except Exception as exc:  # pragma: no cover - best-effort logging
-            print(f"[execution_logger] Failed to append log entry: {exc}", file=sys.stderr)
+#         try:
+#             _ensure_log_header(LOG_PATH)
+#             with LOG_PATH.open("a", newline="") as handle:
+#                 writer = csv.writer(handle)
+#                 writer.writerow(record)
+#         except Exception as exc:  # pragma: no cover - best-effort logging
+#             print(f"[execution_logger] Failed to append log entry: {exc}", file=sys.stderr)
 
 
 def start_timer(script: Union[str, os.PathLike[str]]) -> None:
@@ -108,7 +108,7 @@ def start_timer(script: Union[str, os.PathLike[str]]) -> None:
     if not _atexit_registered:
         import atexit
 
-        atexit.register(write_log_entry)
+        # atexit.register(write_log_entry)
         _atexit_registered = True
 
 
@@ -118,26 +118,26 @@ def set_station(station: Optional[Union[str, int]]) -> None:
     _station_value = None if station is None else str(station)
 
 
-def write_log_entry() -> None:
-    """Write a log entry using the last values provided to `start_timer` and `set_station`."""
-    global _timer_started, _timer_start_value, _script_identifier
+# def write_log_entry() -> None:
+#     """Write a log entry using the last values provided to `start_timer` and `set_station`."""
+#     global _timer_started, _timer_start_value, _script_identifier
 
-    if not _timer_started or _timer_start_value is None or _script_identifier is None:
-        return
+#     if not _timer_started or _timer_start_value is None or _script_identifier is None:
+#         return
 
-    duration = time.perf_counter() - _timer_start_value
-    when = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    station_value = "" if _station_value is None else _station_value
-    record = (_script_identifier, station_value, when, f"{duration:.3f}")
+#     duration = time.perf_counter() - _timer_start_value
+#     when = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#     station_value = "" if _station_value is None else _station_value
+#     record = (_script_identifier, station_value, when, f"{duration:.3f}")
 
-    try:
-        _ensure_log_header(LOG_PATH)
-        with LOG_PATH.open("a", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(record)
-    except Exception as exc:  # pragma: no cover - best-effort logging
-        print(f"[execution_logger] Failed to append log entry: {exc}", file=sys.stderr)
-    finally:
-        _timer_started = False
-        _timer_start_value = None
-        _script_identifier = None
+#     try:
+#         _ensure_log_header(LOG_PATH)
+#         with LOG_PATH.open("a", newline="") as handle:
+#             writer = csv.writer(handle)
+#             writer.writerow(record)
+#     except Exception as exc:  # pragma: no cover - best-effort logging
+#         print(f"[execution_logger] Failed to append log entry: {exc}", file=sys.stderr)
+#     finally:
+#         _timer_started = False
+#         _timer_start_value = None
+#         _script_identifier = None

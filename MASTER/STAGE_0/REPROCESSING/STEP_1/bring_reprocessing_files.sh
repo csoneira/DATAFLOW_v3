@@ -19,8 +19,8 @@ MASTER_DIR="$SCRIPT_DIR"
 while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
   MASTER_DIR="$(dirname "${MASTER_DIR}")"
 done
-STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
-STATUS_TIMESTAMP=""
+# STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
+# STATUS_TIMESTAMP=""
 
 # finish() {
 #   local exit_code="$1"
@@ -161,8 +161,11 @@ output_directory="${reprocessing_directory}/OUTPUT_FILES"
 compressed_directory="${output_directory}/COMPRESSED_HLDS"
 uncompressed_directory="${output_directory}/UNCOMPRESSED_HLDS"
 metadata_directory="${reprocessing_directory}/METADATA"
-plots_directory="${reprocessing_directory}/PLOTS"
-mkdir -p "$input_directory" "$compressed_directory" "$uncompressed_directory" "$metadata_directory" "$plots_directory"
+mkdir -p "$input_directory" "$compressed_directory" "$uncompressed_directory" "$metadata_directory"
+
+step0_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_0"
+step0_metadata_directory="${step0_directory}/METADATA"
+step0_output_directory="${step0_directory}/OUTPUT_FILES"
 
 brought_csv="${metadata_directory}/hld_files_brought.csv"
 brought_csv_header="hld_name,bring_timesamp"
@@ -176,9 +179,22 @@ brought_csv_header="hld_name,bring_timesamp"
 remote_dir="/local/experiments/MINGOS/MINGO0${station}/"
 remote_user="rpcuser"
 printf -v remote_dir_escaped '%q' "$remote_dir"
-csv_path="${metadata_directory}/remote_database_${station}.csv"
+clean_metadata_csv="${step0_output_directory}/clean_remote_database_${station}.csv"
+working_metadata_csv="${input_directory}/clean_remote_database_${station}.csv"
 csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 csv_header="basename"
+
+metadata_prep_script="${MASTER_DIR}/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh"
+if $refresh_metadata || $plot_hist; then
+  if [[ ! -x "$metadata_prep_script" ]]; then
+    log_info "Metadata preparation script not found at $metadata_prep_script" >&2
+    exit 1
+  fi
+  step0_args=("$station")
+  $refresh_metadata && step0_args+=("--refresh-metadata")
+  $plot_hist && step0_args+=("--plot")
+  "$metadata_prep_script" "${step0_args[@]}"
+fi
 
 # Snapshot existing archives to detect fresh downloads after rsync completes
 tmp_before_compressed=$(mktemp)
@@ -219,25 +235,6 @@ load_brought_hld_records() {
     [[ -z "$hld_name" || "$hld_name" == "hld_name" ]] && continue
     brought_hld_records["$hld_name"]=1
   done < "$brought_csv"
-}
-
-ensure_csv() {
-  if [[ ! -f "$csv_path" || ! -s "$csv_path" ]]; then
-    printf '%s\n' "$csv_header" > "$csv_path"
-    return
-  fi
-
-  local current_header
-  current_header=$(head -n1 "$csv_path")
-  if [[ "$current_header" != "$csv_header" ]]; then
-    local upgrade_tmp
-    upgrade_tmp=$(mktemp)
-    {
-      printf '%s\n' "$csv_header"
-      tail -n +2 "$csv_path" | awk -F',' '{print $1}' | sed '/^[[:space:]]*$/d'
-    } > "$upgrade_tmp"
-    mv "$upgrade_tmp" "$csv_path"
-  fi
 }
 
 strip_suffix() {
@@ -288,175 +285,6 @@ basename_to_epoch() {
   time_key_to_epoch "$key"
 }
 
-filter_close_metadata_entries() {
-  local csv_file="$1"
-  if [[ ! -s "$csv_file" ]]; then
-    return 0
-  fi
-
-  local header
-  if ! header=$(head -n1 "$csv_file"); then
-    return 1
-  fi
-
-  local -a basenames=()
-  while IFS= read -r line; do
-    line=${line//$'\r'/}
-    [[ -z "$line" ]] && continue
-    basenames+=("$line")
-  done < <(tail -n +2 "$csv_file")
-
-  local total=${#basenames[@]}
-  if (( total == 0 )); then
-    return 0
-  fi
-
-  local -a keep_flags
-  keep_flags=()
-  for ((i = 0; i < total; i++)); do
-    keep_flags[i]=1
-  done
-
-  for ((i = 0; i < total - 1; i++)); do
-    local prev="${basenames[i]}"
-    local next="${basenames[i + 1]}"
-    [[ -z "$prev" || -z "$next" ]] && continue
-    local prev_epoch next_epoch
-    if ! prev_epoch=$(basename_to_epoch "$prev"); then
-      continue
-    fi
-    if ! next_epoch=$(basename_to_epoch "$next"); then
-      continue
-    fi
-    local delta=$((next_epoch - prev_epoch))
-    if (( delta >= 0 && delta < 600 )); then
-      keep_flags[i]=0
-    fi
-  done
-
-  local tmp_filtered
-  tmp_filtered=$(mktemp) || return 1
-  printf '%s\n' "$header" > "$tmp_filtered"
-  local removed=0
-  for ((i = 0; i < total; i++)); do
-    if (( keep_flags[i] == 1 )); then
-      printf '%s\n' "${basenames[i]}" >>"$tmp_filtered"
-    else
-      ((removed++))
-    fi
-  done
-
-  if (( removed > 0 )); then
-    mv "$tmp_filtered" "$csv_file"
-    log_info "Metadata filter removed ${removed} basename(s) closer than 10 minutes apart."
-  else
-    rm -f "$tmp_filtered"
-  fi
-}
-
-plot_metadata_time_deltas() {
-  local csv_file="$1"
-  local station_label="$2"
-  local plot_dir="$3"
-
-  if [[ ! -s "$csv_file" ]]; then
-    log_info "Metadata CSV ${csv_file} is empty; skipping histogram generation."
-    return 1
-  fi
-
-  mkdir -p "$plot_dir" || return 1
-  local plot_path="${plot_dir}/metadata_time_differences_${station_label}.pdf"
-
-  if PLOT_CSV="$csv_file" PLOT_PATH="$plot_path" STATION_LABEL="$station_label" python3 <<'PY'
-import csv
-import datetime as dt
-import os
-import re
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-csv_path = os.environ["PLOT_CSV"]
-plot_path = os.environ["PLOT_PATH"]
-station_label = os.environ.get("STATION_LABEL", "")
-
-basenames = []
-with open(csv_path, newline="") as handle:
-  reader = csv.reader(handle)
-  next(reader, None)
-  for row in reader:
-    if not row:
-      continue
-    base = row[0].strip()
-    if base:
-      basenames.append(base)
-
-pattern = re.compile(r"([0-9]{11})$")
-timestamps = []
-for base in basenames:
-  match = pattern.search(base)
-  if not match:
-    continue
-  key = match.group(1)
-  yy = int(key[0:2])
-  doy = int(key[2:5])
-  hh = int(key[5:7])
-  mm = int(key[7:9])
-  ss = int(key[9:11])
-  if doy < 1 or doy > 366:
-    continue
-  year = 2000 + yy
-  ts = dt.datetime(year, 1, 1) + dt.timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
-  timestamps.append(ts)
-
-timestamps.sort()
-
-title = f"Metadata time differences for {station_label}" if station_label else "Metadata time differences"
-
-def render_message(message: str) -> None:
-  fig, ax = plt.subplots(figsize=(8, 4.5))
-  ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12)
-  ax.set_axis_off()
-  fig.suptitle(title)
-  fig.tight_layout()
-  fig.savefig(plot_path, format="pdf")
-  plt.close(fig)
-
-if len(timestamps) < 2:
-  render_message("Not enough metadata entries\nto compute time differences.")
-else:
-  diffs = []
-  for idx in range(len(timestamps) - 1):
-    delta = timestamps[idx + 1] - timestamps[idx]
-    minutes = delta.total_seconds() / 60.0
-    if 0 <= minutes <= 120:
-      diffs.append(minutes)
-
-  if not diffs:
-    render_message("No metadata time differences\nwithin 0-120 minutes.")
-  else:
-    bins = "auto" if len(diffs) > 1 else 1
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.hist(diffs, bins=bins, color="#1f77b4", edgecolor="black", alpha=0.8)
-    ax.set_xlim(0, 120)
-    ax.set_title(title)
-    ax.set_xlabel("Minutes between consecutive files (0-120)")
-    ax.set_ylabel("Count")
-    ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(plot_path, format="pdf")
-    plt.close(fig)
-PY
-  then
-    log_info "Histogram of metadata time differences saved to ${plot_path}"
-    return 0
-  else
-    log_info "Failed to create metadata histogram at ${plot_path}" >&2
-    return 1
-  fi
-}
-
 ymd_to_epoch() {
   local ymd="$1"
   if [[ ! $ymd =~ ^[0-9]{6}$ ]]; then
@@ -476,69 +304,17 @@ ymd_to_bound_key() {
   printf '%s%s' "$doy" "$suffix"
 }
 
-refresh_metadata_csv() {
-  log_info "Refreshing metadata CSV for MINGO0${station} from remote listing..."
-
-  local tmp_listing
-  tmp_listing=$(mktemp) || return 1
-  if ! ssh -o BatchMode=yes "${remote_user}@backuplip" "cd ${remote_dir_escaped} && ls -1" > "$tmp_listing"; then
-    log_info "Warning: unable to refresh metadata; could not list remote directory ${remote_user}@backuplip:${remote_dir}" >&2
-    rm -f "$tmp_listing"
-    return 1
-  fi
-
-  declare -A refreshed_bases=()
-  local remote_entry
-  while IFS= read -r remote_entry; do
-    remote_entry=${remote_entry//$'\r'/}
-    [[ -z "$remote_entry" ]] && continue
-    [[ $remote_entry =~ \.hld ]] || continue
-    local base
-    base=$(strip_suffix "$remote_entry")
-    [[ -z "$base" ]] && continue
-    [[ $base =~ ^(mi|minI) ]] || continue
-    refreshed_bases["$base"]=1
-  done < "$tmp_listing"
-  rm -f "$tmp_listing"
-
-  if (( ${#refreshed_bases[@]} == 0 )); then
-    log_info "Metadata refresh found no basenames; existing CSV left unchanged."
-    return 1
-  fi
-
-  local tmp_sorted tmp_csv
-  tmp_sorted=$(mktemp) || return 1
-  printf '%s\n' "${!refreshed_bases[@]}" | sort > "$tmp_sorted"
-
-  tmp_csv=$(mktemp) || {
-    rm -f "$tmp_sorted"
-    return 1
-  }
-  {
-    printf '%s\n' "$csv_header"
-    cat "$tmp_sorted"
-  } > "$tmp_csv"
-  mv "$tmp_csv" "$csv_path"
-  rm -f "$tmp_sorted"
-  if ! filter_close_metadata_entries "$csv_path"; then
-    log_info "Metadata CSV filter could not be applied; continuing with unfiltered entries."
-  fi
-
-  log_info "Metadata CSV refreshed with ${#refreshed_bases[@]} basename(s)."
-  return 0
-}
-
-if $refresh_metadata; then
-  if refresh_metadata_csv; then
-    log_info "Metadata refresh completed."
-  else
-    log_info "Metadata refresh could not update the CSV; proceeding with existing entries."
-  fi
+if [[ ! -s "$clean_metadata_csv" ]]; then
+  log_info "Clean metadata CSV not found at ${clean_metadata_csv}. Run $(basename "$metadata_prep_script") --refresh-metadata first." >&2
+  exit 1
 fi
 
-ensure_csv
-
-log_info "CSV initialized at ${csv_path}"
+if ! cp "$clean_metadata_csv" "$working_metadata_csv"; then
+  log_info "Unable to copy metadata CSV into ${working_metadata_csv}." >&2
+  exit 1
+fi
+csv_path="$working_metadata_csv"
+log_info "Using metadata from ${csv_path}"
 
 declare -a metadata_basenames=()
 if [[ -s "$csv_path" ]]; then
@@ -558,14 +334,6 @@ if (( ${#metadata_basenames[@]} == 0 )); then
 fi
 log_info "Loaded ${#metadata_basenames[@]} basenames from metadata CSV."
 
-if $plot_hist; then
-  if (( ${#metadata_basenames[@]} < 2 )); then
-    log_info "Not enough metadata entries (need at least 2) to generate time-difference histogram."
-  else
-    plot_metadata_time_deltas "$csv_path" "MINGO0${station}" "$plots_directory" || true
-  fi
-fi
-
 if ! $perform_download; then
   if $plot_hist; then
     log_info "No download requested; plot-only run complete."
@@ -576,17 +344,13 @@ if ! $perform_download; then
 fi
 
 declare -A brought_basenames=()
-declare -A brought_files=()
 if [[ -s "$brought_csv" ]]; then
   {
     read -r _header || true
-    while IFS=',' read -r hld_name bring_ts; do
-      hld_name=${hld_name//$'\r'/}
-      [[ -z "$hld_name" || "$hld_name" == "hld_name" ]] && continue
-      base=$(strip_suffix "$hld_name")
-      [[ -z "$base" ]] && continue
-      brought_basenames["$base"]=1
-      brought_files["$hld_name"]=1
+    while IFS=',' read -r recorded_name bring_ts; do
+      recorded_name=${recorded_name//$'\r'/}
+      [[ -z "$recorded_name" || "$recorded_name" == "hld_name" ]] && continue
+      brought_basenames["$recorded_name"]=1
     done
   } < "$brought_csv"
 fi
@@ -661,9 +425,6 @@ for base in "${selected_bases[@]}"; do
   while IFS= read -r remote_entry; do
     remote_entry=${remote_entry//$'\r'/}
     [[ -z "$remote_entry" ]] && continue
-    if [[ -n ${brought_files["$remote_entry"]+_} ]]; then
-      continue
-    fi
     base_entry=$(strip_suffix "$remote_entry")
     if [[ -n ${brought_basenames["$base_entry"]+_} ]]; then
       continue
@@ -804,13 +565,15 @@ if [[ -s "$tmp_new_compressed" || -s "$tmp_new_uncompressed" ]]; then
   ensure_brought_csv
   while IFS= read -r brought_file; do
     [[ -z "$brought_file" ]] && continue
-    if [[ -n ${brought_files["$brought_file"]+_} ]]; then
+    base=$(strip_suffix "$brought_file")
+    if [[ -z "$base" ]]; then
       continue
     fi
-    printf '%s,%s\n' "$brought_file" "$csv_timestamp" >> "$brought_csv"
-    brought_files["$brought_file"]=1
-    base=$(strip_suffix "$brought_file")
-    [[ -n "$base" ]] && brought_basenames["$base"]=1
+    if [[ -n ${brought_basenames["$base"]+_} ]]; then
+      continue
+    fi
+    printf '%s,%s\n' "$base" "$csv_timestamp" >> "$brought_csv"
+    brought_basenames["$base"]=1
   done < "$new_downloads_file"
 fi
 

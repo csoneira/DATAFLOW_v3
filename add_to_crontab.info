@@ -4,10 +4,10 @@
 # minute hour day_of_month month day_of_week command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Updated at 2025-11-12 16:01
+# Updated at 2025-11-18 11:29
 
 SHELL=/bin/bash
-PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
+PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 
 # Replace current crontab with the contents of ~/DATAFLOW_v3/add_to_crontab.info
 * * * * * /usr/bin/crontab /home/mingo/DATAFLOW_v3/add_to_crontab.info
@@ -74,10 +74,10 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - NEW_FILES - BRING CURRENT ----------------------------------------
-0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_1.log 2>&1
-15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_2.log 2>&1
-30 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_3.log 2>&1
-45 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_4.log 2>&1
+*/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_1.log 2>&1
+*/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_2.log 2>&1
+*/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_3.log 2>&1
+*/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
@@ -86,20 +86,24 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # --------------------------------------------------------------------------------
 
 # --------------------------------------------------------------------------------
+# STEP_0
+# --------------------------------------------------------------------------------
+
+# STAGE_0 - REPROCESSING - STEP 0 - UPDATE DICTIONARY ---------------------------------------
+0 4 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh 1 --refresh-metadata --plot >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_prepare_reprocessing_metadata_1.log 2>&1
+0 5 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh 2 --refresh-metadata --plot >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_prepare_reprocessing_metadata_2.log 2>&1
+0 6 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh 3 --refresh-metadata --plot >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_prepare_reprocessing_metadata_3.log 2>&1
+0 7 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh 4 --refresh-metadata --plot >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_prepare_reprocessing_metadata_4.log 2>&1
+
+# --------------------------------------------------------------------------------
 # STEP_1
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - REPROCESSING - STEP 1 - BRING RANDOM ---------------------------------------
-*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
-*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
-*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
-*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
-
-# STAGE_0 - REPROCESSING - STEP 1 - UPDATE DICTIONARY (ONCE A MONTH) ---------------------------------------
-0 0 1 * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 --refresh-metadata --plot >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_refresh_metadata_1.log 2>&1
-0 0 2 * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 --refresh-metadata --plot >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_refresh_metadata_2.log 2>&1
-0 0 3 * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 --refresh-metadata --plot >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_refresh_metadata_3.log 2>&1
-0 0 4 * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 --refresh-metadata --plot >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_refresh_metadata_4.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_2
@@ -147,7 +151,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_3.log 2>&1
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_4.log 2>&1
 
-# LAST TASK WHICH DOES NOT QUITE GET EXEUTED IN THE CRONTAB I DONT KNOW WHY
+# TASK 5 - WHICH DOES NOT QUITE GET EXECUTED IN THE CRONTAB I DONT KNOW WHY
 * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_1.log 2>&1
 * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_2.log 2>&1
 * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_3.log 2>&1
@@ -212,30 +216,15 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
 
-# NETWORK PLOTTER ------------------------------------
-# 0 9 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/HIGH_VOLTAGE/high_voltage_network_plotter.py --save >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/metadata_network_plotter.log 2>&1
-
-# ADVANCED NETWORK AND METADATA PLOTTER
-*/10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/REAL_TIME_HV_AND_EXEC/real_time_hv_and_exec_plotter.py --include-step2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/real_time_hv_and_exec_plotter.log 2>&1
-
-# FILE COUNT PIPELINE
-# */10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/PIPELINE_TRACK_FILES/file_tracker_plotter.py
-# */10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/PIPELINE_TRACK_FILES/file_tracker_plotter.py -c
-
-# FILE COUNT TIME SERIES
-*/10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/ONLINE_FILE_COUNT/online_file_count_plotter.py
+# FILL FACTOR TRACKER
+*/10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/fill_factor_realtime_plotter.log 2>&1
 
 # EXECUTION METADATA PLOTTER
-# 0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
-*/10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py -z --include-stage0 --include-step2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
-# 0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py -r --include-stage0 --include-step2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
+*/10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 --zoom >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
+*/30 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 -r --include-hv --include-remote-db >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
 
-# FILL FACTOR TRACKER
-*/5 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/fill_factor_realtime_plotter.log 2>&1
-
-# SPECIFIC METADATA PLOTTER
-# 0 8 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/SPECIFIC/specific_metadata_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/execution_metadata_plotter.log 2>&1
-
+# FILE COUNT TIME SERIES
+*/15 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/ONLINE_FILE_COUNT/online_file_count_plotter.py
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
