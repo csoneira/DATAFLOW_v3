@@ -23,6 +23,49 @@ to_epoch() {
   date -d "$value" '+%s'
 }
 
+NOT_ERASE=false
+declare -a POSITIONAL_ARGS=()
+while (( $# > 0 )); do
+  case "$1" in
+    --not-erase)
+      NOT_ERASE=true
+      shift
+      ;;
+    -h|--help)
+      cat <<'EOF'
+Usage: update_execution_csvs.sh [--not-erase] [STATION ...]
+
+Without arguments processes stations 01–04. Provide numeric station IDs (1-4)
+to restrict execution. With --not-erase the script only recreates the processed
+basenames CSV under OUTPUT_FILES and leaves the pipeline CSVs untouched.
+EOF
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      log "Unknown option: $1"
+      exit 1
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if (( $# > 0 )); then
+  POSITIONAL_ARGS+=("$@")
+fi
+
+if (( ${#POSITIONAL_ARGS[@]} > 0 )); then
+  set -- "${POSITIONAL_ARGS[@]}"
+else
+  set --
+fi
+
 declare -a TARGET_STATIONS=()
 declare -A SEEN_STATIONS=()
 if (( $# == 0 )); then
@@ -135,6 +178,11 @@ done < <(find "$task_output" -type f -name '*.csv' -print0 | sort -z)
     done <<< "$sorted_basenames"
   } > "$processed_csv"
   log "[${station}] Processed metadata saved to $processed_csv"
+
+  if $NOT_ERASE; then
+    log "[${station}] --not-erase enabled, skipping pipeline CSV rewrites"
+    return
+  fi
 
   log "[${station}] Refreshing $hld_csv and $dat_csv with discovered basenames"
   {

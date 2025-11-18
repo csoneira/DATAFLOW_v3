@@ -190,10 +190,11 @@ def median_recent_rate(
 
 
 def plot_histories(history_payload: Dict[str, Tuple[List[datetime], List[float], List[int]]]) -> None:
-    plt.style.use("seaborn-v0_8-darkgrid")
+    plt.style.use("default")
     fig, ax = plt.subplots(figsize=(12, 6.5))
 
     any_plotted = False
+    global_max_pct: float | None = None
     for station in STATIONS:
         timestamps, percents, remotes = history_payload.get(station, ([], [], []))
         if not timestamps:
@@ -211,16 +212,23 @@ def plot_histories(history_payload: Dict[str, Tuple[List[datetime], List[float],
             color=color,
             label=label,
         )
+        station_max = max(percents)
+        if global_max_pct is None or station_max > global_max_pct:
+            global_max_pct = station_max
         any_plotted = True
 
     ax.set_xlabel("Snapshot timestamp")
     ax.set_ylabel("Processed coverage (%)")
-    ax.set_ylim(0, 105)
+    if global_max_pct is None:
+        ax.set_ylim(0, 100)
+    else:
+        margin = max(2.5, global_max_pct * 0.05)
+        ax.set_ylim(0, global_max_pct + margin)
     ax.yaxis.set_major_locator(MultipleLocator(10))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
 
     if any_plotted:
-        ax.legend(loc="lower right")
+        ax.legend(loc="upper right")
     ax.grid(True, linestyle="--", alpha=0.4)
     fig.autofmt_xdate()
 

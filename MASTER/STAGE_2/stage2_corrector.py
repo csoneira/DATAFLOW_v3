@@ -454,11 +454,11 @@ if __name__ == "__main__":
 
 if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
     
-    station = "4"
+    station = "1"
     
     result = quicklook(
-        start="2025-11-01",
-        end="2025-11-17",
+        start="2025-08-23",
+        end="2025-11-18",
         station=station,
         show=False,
         auto_save=False,
@@ -496,13 +496,19 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
     # Example: sum detector regions (12, 23, 34, etc.) and re-plot using those
     # derived columns. Edit the `regions` list to fit your detector layout.
     regions = ["12", "23", "34", "13", "24", "14", "123", "234", "124", "134", "1234"]
+    region_sum_columns: dict[str, pd.Series] = {}
     for region in regions:
         pattern = rf"^{region}_"
         matches = events_df.filter(regex=pattern)
         if matches.empty:
             print(f"[INFO] No columns found for region {region}; skipping.")
             continue
-        events_df[region] = matches.sum(axis=1)
+        region_sum_columns[region] = matches.sum(axis=1)
+
+    if region_sum_columns:
+        region_sum_df = pd.DataFrame(region_sum_columns).reindex(events_df.index)
+        events_df = pd.concat([events_df, region_sum_df], axis=1)
+        result["events"] = events_df
 
     fig = plot_overview(
         events_df,
@@ -545,43 +551,62 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
     plt.show()
     
     
-    
     # regions: "12", "23", "34" "13", "24", "14" "123", "234" "124", "134" "1234"
     
     # Plane by plane --------------------------------------------------------------------
+    # plane_definitions = {
+    #     1: {
+    #         "detected": ["12", "13", "14", "123", "124", "134", "1234"],
+    #         "passed": ["12", "23", "34", "13", "24", "14", "123", "124", "234", "134", "1234"],
+    #     },
+    #     2: {
+    #         "detected": ["12", "23", "24", "123", "124", "234", "1234"],
+    #         "passed": ["12", "23", "13", "24", "14", "123", "124", "234", "134", "1234"],
+    #     },
+    #     3: {
+    #         "detected": ["34", "23", "13", "123", "134", "234", "1234"],
+    #         "passed": ["23", "34", "13", "24", "14", "123", "124", "234", "134", "1234"],
+    #     },
+    #     4: {
+    #         "detected": ["34", "24", "14", "124", "234", "134", "1234"],
+    #         "passed": ["12", "23", "34", "13", "24", "14", "123", "124", "234", "134", "1234"],
+    #     },
+    # }
+    
     plane_definitions = {
         1: {
-            "detected": ["12", "13", "14", "123", "124", "134", "1234"],
-            "passed": ["12", "23", "34", "13", "24", "14", "123", "124", "234", "134", "1234"],
+            "detected": ["1234"],
+            "passed": ["234", "1234"],
         },
         2: {
-            "detected": ["12", "23", "24", "123", "124", "234", "1234"],
-            "passed": ["12", "23", "13", "24", "14", "123", "124", "234", "134", "1234"],
+            "detected": ["1234"],
+            "passed": ["134", "1234"],
         },
         3: {
-            "detected": ["34", "23", "13", "123", "134", "234", "1234"],
-            "passed": ["23", "34", "13", "24", "14", "123", "124", "234", "134", "1234"],
+            "detected": ["1234"],
+            "passed": ["124", "1234"],
         },
         4: {
-            "detected": ["34", "24", "14", "124", "234", "134", "1234"],
-            "passed": ["12", "23", "34", "13", "24", "14", "123", "124", "234", "134", "1234"],
+            "detected": ["1234"],
+            "passed": ["123", "1234"],
         },
     }
-    
     
     ang_regions = ["R0.0",
                "R1.0", "R1.1", "R1.2", "R1.3", "R1.4", "R1.5", "R1.6", "R1.7",
                "R2.0", "R2.1", "R2.2", "R2.3", "R2.4", "R2.5", "R2.6", "R2.7",
                "R3.0", "R3.1", "R3.2", "R3.3", "R3.4", "R3.5", "R3.6", "R3.7",
                ]
-    
+
+    angular_region_sum_columns: dict[str, pd.Series] = {}
+    efficiency_columns: dict[str, pd.Series] = {}
     for region in ang_regions:
         pattern = rf"{region}"
         matches = events_df.filter(regex=pattern)
         if matches.empty:
             print(f"[INFO] No columns found for region {region}; skipping.")
             continue
-        events_df[region] = matches.sum(axis=1)
+        angular_region_sum_columns[region] = matches.sum(axis=1)
         
         for plane_id, plane_cfg in plane_definitions.items():
             region_detected = _sum_region_combo_columns(
@@ -591,7 +616,19 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
                 events_df, plane_cfg["passed"], region
             )
             denom = region_passed.where(region_passed != 0)
-            events_df[f"{region}_eff_{plane_id}"] = region_detected.divide(denom)
+            efficiency_columns[f"{region}_eff_{plane_id}"] = region_detected.divide(denom)
+
+    if angular_region_sum_columns:
+        angular_region_sum_df = (
+            pd.DataFrame(angular_region_sum_columns).reindex(events_df.index)
+        )
+        events_df = pd.concat([events_df, angular_region_sum_df], axis=1)
+
+    if efficiency_columns:
+        efficiency_df = pd.DataFrame(efficiency_columns).reindex(events_df.index)
+        events_df = pd.concat([events_df, efficiency_df], axis=1)
+
+    result["events"] = events_df
     
     
     # Plot the ang_regions in different subplots acccording to the first number after R
@@ -617,7 +654,7 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
     plt.show()
 
 
-        
+    
     
     # Plot RX_eff_Y for X in [0.0, 1.0, 1.1, 1.2, ...] and Y in 1-4 in different subplots
     # In a superplot with 4 columns (one per plane) and as many rows as needed
@@ -681,8 +718,8 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
                     ax.set_axis_off()
                     continue
 
-                # Extract the time series
-                y = events_df[col_name]
+                # Extract the time series, forcing numeric dtype so pandas.NA coerces to NaN
+                y = pd.to_numeric(events_df[col_name], errors="coerce")
 
                 if y.isna().all():
                     print(f"  -> Column {col_name} is all NaN. Turning axis off.")
@@ -735,8 +772,8 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
                 ax.set_axis_off()
                 continue
 
-            # Extract the time series
-            y = events_df[col_name]
+            # Extract the time series and coerce nullable ints to floats
+            y = pd.to_numeric(events_df[col_name], errors="coerce")
 
             # Plot background colour for this region
             main_region = region.split(".")[0]
@@ -781,8 +818,8 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
                     continue
 
                 # Extract the time series
-                rate_y = events_df[rate_col]
-                eff_y = events_df[eff_col]
+                rate_y = pd.to_numeric(events_df[rate_col], errors="coerce")
+                eff_y = pd.to_numeric(events_df[eff_col], errors="coerce")
 
                 # Scatter plot of efficiency vs rate
                 ax.scatter(rate_y, eff_y, s=5, color='black', alpha=0.7)
@@ -804,6 +841,7 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
     
     # Correct the rate using the efficiency: rate_corrected = rate / efficiency
     
+    new_rate_columns: dict[str, pd.Series] = {}
     for region in region_names:
         rate_col = f"{region}"
         eff_cols = [f"{region}_eff_{plane_id}" for plane_id in range(1, num_planes + 1)]
@@ -813,19 +851,24 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
             continue
 
         # Extract the time series
-        rate_y = events_df[rate_col]
+        rate_y = pd.to_numeric(events_df[rate_col], errors="coerce")
         eff_y = pd.Series(1.0, index=events_df.index)
         for col in eff_cols:
-            eff_y = eff_y.multiply(events_df[col], fill_value=1.0)
+            col_values = pd.to_numeric(events_df[col], errors="coerce")
+            eff_y = eff_y.multiply(col_values, fill_value=1.0)
 
         # Avoid division by zero
         eff_y = eff_y.replace(0, pd.NA)
 
         # Corrected rate
         corrected_rate = rate_y.divide(eff_y)
-        
-        events_df[f"{region}_original_rate"] = rate_y
-        events_df[f"{region}_corrected_rate"] = corrected_rate
+        new_rate_columns[f"{region}_original_rate"] = rate_y
+        new_rate_columns[f"{region}_corrected_rate"] = corrected_rate
+
+    if new_rate_columns:
+        new_rate_df = pd.DataFrame(new_rate_columns).reindex(events_df.index)
+        events_df = pd.concat([events_df, new_rate_df], axis=1)
+        result["events"] = events_df
         
     fig, axes = plt.subplots(num_rows, 1, figsize=(10, 3 * num_rows), sharex=True)
     for row_idx, region in enumerate(region_names):
@@ -838,10 +881,10 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
             continue
 
         # Extract the time series
-        y = events_df[col_name]
-        
+        y = pd.to_numeric(events_df[col_name], errors="coerce")
+
         original_col_name = f"{region}_original_rate"
-        y_original = events_df[original_col_name]
+        y_original = pd.to_numeric(events_df[original_col_name], errors="coerce")
 
         # Plot the corrected rate curve
         ax.plot(events_df.index, y, linewidth=1.0, color='black')
@@ -877,7 +920,7 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
             continue
 
         # Extract the time series
-        y = events_df[col_name]
+        y = pd.to_numeric(events_df[col_name], errors="coerce")
         
         average = y[y > 0].mean()
         
@@ -910,7 +953,7 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
             continue
 
         # Extract the time series
-        y = events_df[col_name]
+        y = pd.to_numeric(events_df[col_name], errors="coerce")
         
         average = y[y > 0].mean()
         
@@ -1139,7 +1182,7 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
         if col_name not in events_df.columns:
             continue
 
-        y = events_df[col_name]
+        y = pd.to_numeric(events_df[col_name], errors="coerce")
         avg = y[y > 0].mean()
         if not np.isfinite(avg) or avg == 0:
             # Skip regions with ill-defined average

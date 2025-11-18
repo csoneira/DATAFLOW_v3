@@ -217,7 +217,8 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # FILL FACTOR TRACKER
-*/10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/fill_factor_realtime_plotter.log 2>&1
+*/30 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh --not-erase >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/update_execution_csvs.log 2>&1
+*/30 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/fill_factor_realtime_plotter.log 2>&1
 
 # EXECUTION METADATA PLOTTER
 */10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 --zoom >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1

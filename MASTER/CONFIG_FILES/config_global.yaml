@@ -120,7 +120,7 @@ logbook:
 stratos_save: true
 fast_mode: false # Do not iterate TimTrack, neither save figures, etc.
 debug_mode: false # Only 10000 rows with all detail
-last_file_test: false
+last_file_test: true
 alternative_fitting: true
 not_use_q_semisum_for_slew_corr: true
 residue_plots: false
@@ -216,7 +216,6 @@ limit_number_debug: 10000
 
 # General settings
 correct_angle: false
-last_file_test: false
 update_big_event_file: false
 
 multiple_files: true
