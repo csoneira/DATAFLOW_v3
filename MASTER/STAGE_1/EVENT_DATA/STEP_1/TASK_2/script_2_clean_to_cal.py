@@ -5203,7 +5203,8 @@ if crosstalk_removal_and_recalibration:
                 crosstalk_linear[f'crstlk_mx_b_P{key}s{j+1}'] = [m, b]
                 
                 crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}'] = mu - 2 * sigma
-                crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = min([mu + 3 * sigma, 1.2])
+                # crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = min([mu + 3 * sigma, 1.2])
+                crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = mu + 3 * sigma
                 
             except RuntimeError:
                 continue
