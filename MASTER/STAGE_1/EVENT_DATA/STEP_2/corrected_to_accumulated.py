@@ -45,6 +45,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 
 
@@ -111,6 +112,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 
 start_timer(__file__)
@@ -582,49 +584,45 @@ if user_file_selection:
     file_name = os.path.basename(user_file_path)
 else:
     if last_file_test:
-        if unprocessed_files:
-            unprocessed_files = sorted(unprocessed_files)
-            file_name = unprocessed_files[-1]
-            
+        latest_unprocessed = select_latest_candidate(unprocessed_files, station)
+        if latest_unprocessed:
+            file_name = latest_unprocessed
             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-            
-            print(f"Processing the last file in UNPROCESSED: {unprocessed_file_path}")
+
+            print(f"Processing the newest file in UNPROCESSED: {unprocessed_file_path}")
             print(f"Moving '{file_name}' to PROCESSING...")
             shutil.move(unprocessed_file_path, processing_file_path)
             print(f"File moved to PROCESSING: {processing_file_path}")
 
-        elif processing_files:
-            processing_files = sorted(processing_files)
-            file_name = processing_files[-1]
-            
-            # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-            processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-            
-            print(f"Processing the last file in PROCESSING: {processing_file_path}")
-            error_file_path = os.path.join(base_directories["error_directory"], file_name)
-            print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
-            shutil.move(processing_file_path, error_file_path)
-            processing_file_path = error_file_path
-            print(f"File moved to ERROR: {processing_file_path}")
-
-        elif completed_files:
-            completed_files = sorted(completed_files)
-            file_name = completed_files[-1]
-            
-            # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-            processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-            
-            print(f"Reprocessing the last file in COMPLETED: {completed_file_path}")
-            print(f"Moving '{completed_file_path}' to PROCESSING...")
-            shutil.move(completed_file_path, processing_file_path)
-            print(f"File moved to PROCESSING: {processing_file_path}")
-
         else:
-            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            latest_processing = select_latest_candidate(processing_files, station)
+            if latest_processing:
+                file_name = latest_processing
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+                print(f"Processing the newest file already in PROCESSING: {processing_file_path}")
+                error_file_path = os.path.join(base_directories["error_directory"], file_name)
+                print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
+                shutil.move(processing_file_path, error_file_path)
+                processing_file_path = error_file_path
+                print(f"File moved to ERROR: {processing_file_path}")
+
+            else:
+                latest_completed = select_latest_candidate(completed_files, station)
+                if latest_completed:
+                    file_name = latest_completed
+                    processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                    completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+                    print(f"Reprocessing the newest file in COMPLETED: {completed_file_path}")
+                    print(f"Moving '{completed_file_path}' to PROCESSING...")
+                    shutil.move(completed_file_path, processing_file_path)
+                    print(f"File moved to PROCESSING: {processing_file_path}")
+                else:
+                    sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
 
     else:
         if unprocessed_files:

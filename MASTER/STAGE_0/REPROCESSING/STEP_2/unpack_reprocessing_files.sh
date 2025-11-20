@@ -13,11 +13,12 @@ unpack_reprocessing_files.sh
 Unpacks compressed HLD archives and prepares data for STAGE_0 processing.
 
 Usage:
-  unpack_reprocessing_files.sh <station> [--loop|-l]
+  unpack_reprocessing_files.sh <station> [--loop|-l] [--newest|-n]
 
 Options:
-  -h, --help    Show this help message and exit.
-  -l, --loop    Process every pending HLD sequentially (repeat single-run workflow).
+  -h, --help       Show this help message and exit.
+  -l, --loop       Process every pending HLD sequentially (repeat single-run workflow).
+  -n, --newest     Select the newest pending HLD (after normalizing its prefix).
 
 Provide the numeric station identifier (1-4). The script ensures only one
 instance runs per-station and operates on files queued in STAGE_0 buffers.
@@ -26,7 +27,7 @@ EOF
 fi
 
 if (( $# < 1 || $# > 2 )); then
-    echo "Usage: $0 <station> [--loop|-l]"
+    echo "Usage: $0 <station> [--loop|-l] [--newest|-n]"
     exit 1
 fi
 
@@ -48,16 +49,22 @@ if (( station < 1 || station > 4 )); then
 fi
 
 station_code=$(printf "%02d" "$station")
+station_prefix=$(printf "mi0%d" "$station")
+station_prefix_lower="${station_prefix,,}"
 
 loop_mode=false
+newest_mode=false
 
 while (( $# > 0 )); do
     case "$1" in
         --loop|-l)
             loop_mode=true
             ;;
+        --newest|-n)
+            newest_mode=true
+            ;;
         *)
-            echo "Usage: $0 <station> [--loop|-l]"
+            echo "Usage: $0 <station> [--loop|-l] [--newest|-n]"
             exit 1
             ;;
     esac
@@ -124,7 +131,7 @@ echo "$(date) - No running instance found. Proceeding..."
 # If no duplicate process is found, continue
 echo "------------------------------------------------------"
 echo "unpack_reprocessing_files.sh started on: $(date)"
-echo "Station: ${station_code} (loop_mode=$loop_mode)"
+echo "Station: ${station_code} (loop_mode=$loop_mode, newest_mode=$newest_mode)"
 echo "Running the script..."
 
 shared_lock_file="${MASTER_DIR}/STAGE_0/REPROCESSING/STEP_2/.unpack_shared.lock"
@@ -230,6 +237,36 @@ strip_suffix() {
     name=${name%.hld}
     name=${name%.dat}
     printf '%s' "$name"
+}
+
+basename_time_key() {
+    local name="$1"
+    local base
+    base=$(strip_suffix "$name")
+    if [[ $base =~ ([0-9]{11})$ ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    else
+        printf ''
+    fi
+}
+
+order_key_after_prefix() {
+    local base="$1"
+    local normalized="${base,,}"
+    if [[ $normalized == mini* ]]; then
+        normalized="mi01${normalized:4}"
+    fi
+    if [[ -n "$station_prefix_lower" && $normalized == ${station_prefix_lower}* ]]; then
+        printf '%s' "${normalized:${#station_prefix_lower}}"
+        return 0
+    fi
+    local key
+    key=$(basename_time_key "$normalized")
+    if [[ -n "$key" ]]; then
+        printf '%s' "$key"
+        return 0
+    fi
+    printf '%s' "$normalized"
 }
 
 compute_start_date() {
@@ -478,6 +515,26 @@ process_single_hld() {
     local selected_file
     if [ "$random_file" = true ]; then
         selected_file="${candidate_files[RANDOM % ${#candidate_files[@]}]}"
+    elif $newest_mode; then
+        local best_candidate=""
+        local best_key=""
+        local path base order_key
+        for path in "${candidate_files[@]}"; do
+            [[ -e "$path" ]] || continue
+            base=$(strip_suffix "$(basename "$path")")
+            [[ -z "$base" ]] && base="$(basename "$path")"
+            order_key=$(order_key_after_prefix "$base")
+            if [[ -z "$best_candidate" || "$order_key" > "$best_key" ]]; then
+                best_candidate="$path"
+                best_key="$order_key"
+            fi
+        done
+        if [[ -z "$best_candidate" ]]; then
+            best_candidate="${candidate_files[0]}"
+            best_key=""
+        fi
+        selected_file="$best_candidate"
+        echo "--newest flag active; newest pending basename selected: $(basename "$selected_file")"
     else
         local -a sorted=()
         IFS=$'\n' sorted=($(printf '%s\n' "${candidate_files[@]}" | sort -u))

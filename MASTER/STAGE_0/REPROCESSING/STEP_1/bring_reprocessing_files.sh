@@ -38,11 +38,13 @@ usage() {
 Usage:
   bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot]
   bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] --random|-r
+  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] --newest|-n
   bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] <start YYMMDD> <end YYMMDD>
 
 Options:
   -h, --help            Show this help message and exit.
   -r, --random          Select a single random basename from metadata and download it.
+  -n, --newest          Select the newest (lexicographically last) unprocessed basename.
   -m, --refresh-metadata
                         Refresh the metadata CSV with the latest list of basenames
                         from the remote host. Can be combined with --random or a
@@ -63,11 +65,13 @@ Fetches HLD data from backuplip into the STAGE_0 buffers for a station.
 Usage:
   bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot]
   bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] --random/-r
+  bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] --newest/-n
   bring_reprocessing_files.sh <station> [--refresh-metadata|-m] [--plot] YYMMDD YYMMDD
 
 Options:
   -h, --help            Show this help message and exit.
   -r, --random          Select a single random basename from metadata and download it.
+  -n, --newest          Select the newest (lexicographically last) unprocessed basename.
   -m, --refresh-metadata
                         Refresh the metadata CSV with the latest list of basenames
                         from the remote host. Can be combined with --random or a
@@ -91,6 +95,7 @@ station="$1"
 shift
 
 random_mode=false
+newest_mode=false
 refresh_metadata=false
 plot_hist=false
 start_arg=""
@@ -107,10 +112,17 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --random|-r)
-      if [[ -n "$start_arg" || -n "$end_arg" ]]; then
+      if [[ -n "$start_arg" || -n "$end_arg" || $newest_mode == true ]]; then
         usage
       fi
       random_mode=true
+      shift
+      ;;
+    --newest|-n)
+      if [[ -n "$start_arg" || -n "$end_arg" || $random_mode == true ]]; then
+        usage
+      fi
+      newest_mode=true
       shift
       ;;
     -h|--help)
@@ -118,7 +130,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       if [[ "$1" =~ ^[0-9]{6}$ ]]; then
-        if $random_mode; then
+        if $random_mode || $newest_mode; then
           usage
         fi
         if [[ -z "$start_arg" ]]; then
@@ -137,7 +149,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 perform_download=true
-if $random_mode; then
+if $random_mode || $newest_mode; then
   if [[ -n "$start_arg" || -n "$end_arg" ]]; then
     usage
   fi
@@ -285,6 +297,26 @@ basename_to_epoch() {
   time_key_to_epoch "$key"
 }
 
+newest_mode_order_key() {
+  local base="$1"
+  local normalized="$base"
+  if [[ $normalized == minI* ]]; then
+    normalized="mi01${normalized:4}"
+  fi
+  local prefix="mi0${station}"
+  if [[ $normalized == "${prefix}"* ]]; then
+    printf '%s' "${normalized:${#prefix}}"
+    return 0
+  fi
+  local key
+  key=$(basename_time_key "$normalized")
+  if [[ -n "$key" ]]; then
+    printf '%s' "$key"
+    return 0
+  fi
+  printf '%s' "$normalized"
+}
+
 ymd_to_epoch() {
   local ymd="$1"
   if [[ ! $ymd =~ ^[0-9]{6}$ ]]; then
@@ -376,6 +408,36 @@ if $random_mode; then
   fi
   selected_bases=($(printf '%s\n' "${random_candidates[@]}" | shuf -n1))
   log_info "Randomly selected basename: ${selected_bases[0]}"
+elif $newest_mode; then
+  mapfile -t newest_candidates < <(
+    for base in "${metadata_basenames[@]}"; do
+      [[ -n ${brought_basenames["$base"]+_} ]] && continue
+      printf '%s\n' "$base"
+    done
+  )
+  if (( ${#newest_candidates[@]} == 0 )); then
+    log_info "--newest requested but all metadata basenames are already recorded in hld_files_brought.csv."
+    exit 0
+  fi
+  newest_base=""
+  newest_key=""
+  for base in "${newest_candidates[@]}"; do
+    order_key=$(newest_mode_order_key "$base")
+    if [[ -z "$newest_base" || "$order_key" > "$newest_key" ]]; then
+      newest_base="$base"
+      newest_key="$order_key"
+    fi
+  done
+  if [[ -z "$newest_base" ]]; then
+    newest_base=$(printf '%s\n' "${newest_candidates[@]}" | sort | tail -n1)
+    newest_key=""
+  fi
+  selected_bases=("$newest_base")
+  if [[ -n "$newest_key" ]]; then
+    log_info "--newest flag active; newest unprocessed basename selected: ${selected_bases[0]} (key ${newest_key})"
+  else
+    log_info "--newest flag active; newest unprocessed basename selected: ${selected_bases[0]}"
+  fi
 else
   start="$start_arg"
   end="$end_arg"
@@ -479,6 +541,8 @@ fi
 
 if $random_mode; then
   log_info "Fetching HLD files for MINGO0${station} using randomly selected basename ${selected_bases[0]}"
+elif $newest_mode; then
+  log_info "Fetching HLD files for MINGO0${station} using newest basename ${selected_bases[0]} (--newest)"
 else
   log_info "Fetching HLD files for MINGO0${station} for range ${start}-${end}"
 fi

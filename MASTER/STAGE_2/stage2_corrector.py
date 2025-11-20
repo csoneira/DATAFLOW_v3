@@ -79,6 +79,15 @@ DEFAULT_PRESSURE_COLUMNS = [
 ]
 
 
+def _running_in_ipython() -> bool:
+    """Detect IPython/Jupyter so we can skip CLI parsing in interactive sessions."""
+    try:
+        from IPython import get_ipython
+    except Exception:
+        return False
+    return get_ipython() is not None
+
+
 # %%
 def parse_date(token: str) -> dt.date:
     """Accept YYYY-MM-DD, YYYY/MM/DD, or YYYYMMDD tokens."""
@@ -441,24 +450,26 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"Loaded {events_rows} event rows and {lab_rows} lab rows")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and not _running_in_ipython():
     main()
 
 
 # %%
 
 # Playground (edit this block as needed to experiment with custom columns).
-# Change `if False` to `if True` (or copy the snippet into a notebook) and
-# adjust the column lists for your analysis. Keep it set to False when using
-# this module via the CLI/imports to avoid unexpected executions.
+# Flip PLAYGROUND_ENABLED to True (or copy the snippet into a notebook) and
+# adjust the column lists for your analysis. Keep it False for normal CLI/imports
+# to avoid unexpected executions.
 
-if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
+PLAYGROUND_ENABLED = True
+
+if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
     
     station = "1"
     
     result = quicklook(
-        start="2025-08-23",
-        end="2025-11-18",
+        start="2025-10-01",
+        end="2025-11-20",
         station=station,
         show=False,
         auto_save=False,
@@ -491,7 +502,7 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
     
     
     # Sum in 10 minute columns, not 1 minute ones
-    events_df = events_df.set_index("Time").resample("30T").sum().reset_index()
+    events_df = events_df.set_index("Time").resample("120T").sum().reset_index()
     
     # Example: sum detector regions (12, 23, 34, etc.) and re-plot using those
     # derived columns. Edit the `regions` list to fit your detector layout.
@@ -509,7 +520,7 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
         region_sum_df = pd.DataFrame(region_sum_columns).reindex(events_df.index)
         events_df = pd.concat([events_df, region_sum_df], axis=1)
         result["events"] = events_df
-
+        
     fig = plot_overview(
         events_df,
         lab_logs_df,
@@ -519,7 +530,6 @@ if True:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
         title="Custom quicklook with region sums",
     )
     plt.show()
-    
     
     
     # I want only the regions plots, not the temperature/pressure ones,
