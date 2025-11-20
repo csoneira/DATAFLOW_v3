@@ -539,6 +539,23 @@ outer_gs = gridspec.GridSpec(
     wspace=0.25,
 )
 
+
+y_lim_upper = None
+y_lim_lower = None
+
+for i_plane, plane in enumerate(planes):
+    for j_strip, strip in enumerate(strips):
+        
+        original_col = f"P{plane}_s{strip}_T_sum"
+
+        if original_col in df.columns:
+            current_max = df[original_col].max()
+            current_min = df[original_col].min()
+            if y_lim_upper is None or current_max > y_lim_upper:
+                y_lim_upper = current_max
+            if y_lim_lower is None or current_min < y_lim_lower:
+                y_lim_lower = current_min
+
 for i_plane, plane in enumerate(planes):
     for j_strip, strip in enumerate(strips):
 
@@ -551,6 +568,7 @@ for i_plane, plane in enumerate(planes):
                     marker="o", linestyle="", label="Parameter")
             
             ax.set_title(f"P{plane} S{strip}", fontsize=9)
+            ax.set_ylim(y_lim_lower, y_lim_upper)
 
             if j_strip == 0:
                 ax.set_ylabel("Hits")
@@ -589,6 +607,22 @@ outer_gs = gridspec.GridSpec(
     wspace=0.25,
 )
 
+y_lim_upper = None
+y_lim_lower = None
+
+for i_plane, plane in enumerate(planes):
+    for j_strip, strip in enumerate(strips):
+        
+        original_col = f"P{plane}_s{strip}_T_dif"
+
+        if original_col in df.columns:
+            current_max = df[original_col].max()
+            current_min = df[original_col].min()
+            if y_lim_upper is None or current_max > y_lim_upper:
+                y_lim_upper = current_max
+            if y_lim_lower is None or current_min < y_lim_lower:
+                y_lim_lower = current_min
+
 for i_plane, plane in enumerate(planes):
     for j_strip, strip in enumerate(strips):
 
@@ -601,6 +635,7 @@ for i_plane, plane in enumerate(planes):
                     marker="o", linestyle="", label="Parameter")
             
             ax.set_title(f"P{plane} S{strip}", fontsize=9)
+            ax.set_ylim(y_lim_lower, y_lim_upper)
 
             if j_strip == 0:
                 ax.set_ylabel("Hits")

@@ -4966,6 +4966,7 @@ if time_calibration:
         crt_values = crt_values[crt_values <= 1]
         filtered_crt_values = crt_values[(crt_values >= Q1 - 1.5 * (Q3 - Q1)) & (crt_values <= Q3 + 1.5 * (Q3 - Q1))]
         global_variables['CRT_avg'] = np.mean(filtered_crt_values)*1000 # To ps
+        global_variables['CRT_std'] = np.std(filtered_crt_values)*1000 # To ps
         
         print("---------------------------")
         print(f"CRT Avg: {global_variables['CRT_avg']:.4g} ps")
