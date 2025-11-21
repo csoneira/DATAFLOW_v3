@@ -4970,6 +4970,7 @@ if time_calibration:
         
         print("---------------------------")
         print(f"CRT Avg: {global_variables['CRT_avg']:.4g} ps")
+        print(f"CRT Std: {global_variables['CRT_std']:.4g} ps")
         print("---------------------------")
         
         

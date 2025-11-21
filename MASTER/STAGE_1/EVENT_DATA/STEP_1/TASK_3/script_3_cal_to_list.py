@@ -1960,6 +1960,8 @@ charge_plot_limit_left = config["charge_plot_limit_left"]
 charge_plot_limit_right = config["charge_plot_limit_right"]
 charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 
+charge_per_strip_plot_threshold = config["charge_per_strip_plot_threshold"]
+charge_per_plane_plot_threshold = config["charge_per_plane_plot_threshold"]
 
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
@@ -3160,7 +3162,7 @@ if create_plots or create_essential_plots:
             valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col]].replace(0, np.nan).dropna()
             
             # Extract variables and filter low charge
-            cond = valid_rows[q_sum_col] < 100
+            cond = valid_rows[q_sum_col] < charge_per_strip_plot_threshold
             t_sum  = valid_rows.loc[cond, t_sum_col]
             t_diff = valid_rows.loc[cond, t_diff_col]
             q_sum  = valid_rows.loc[cond, q_sum_col]
@@ -3327,7 +3329,7 @@ if create_plots:
         valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
         
         # Extract variables and filter low charge
-        cond = valid_rows[q_sum_col] < 150
+        cond = valid_rows[q_sum_col] < charge_per_plane_plot_threshold
         t_sum  = valid_rows.loc[cond, t_sum_col]
         t_diff = valid_rows.loc[cond, t_diff_col]
         q_sum  = valid_rows.loc[cond, q_sum_col]

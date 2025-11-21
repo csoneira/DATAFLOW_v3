@@ -3695,11 +3695,21 @@ def compute_definitive_tt(row):
 # Apply to all rows
 working_df["definitive_tt"] = working_df.apply(compute_definitive_tt, axis=1)
 
+definitive_tt_values = [234, 123, 34, 1234, 23, 12, 124, 134, 24, 13, 14]
+# Pre-seed metadata keys so CSVs always include all fit outputs, even if a
+# specific combination has no data in this run.
+for _tt in definitive_tt_values:
+    global_variables.setdefault(f"sigmoid_width_{_tt}", np.nan)
+    global_variables.setdefault(f"background_slope_{_tt}", np.nan)
+    global_variables.setdefault(f"sigmoid_amplitude_{_tt}", np.nan)
+    global_variables.setdefault(f"sigmoid_center_{_tt}", np.nan)
+    global_variables.setdefault(f"fit_normalization_{_tt}", np.nan)
+
 if time_window_fitting:
     
     print("---------------------------- Fitting loop ----------------------------")
     
-    for definitive_tt in [ 234, 123, 34, 1234, 23, 12, 124, 134, 24, 13, 14 ]:
+    for definitive_tt in definitive_tt_values:
         # Create a mask for the current definitive_tt
         mask = working_df['definitive_tt'] == definitive_tt
 
@@ -3751,6 +3761,7 @@ if time_window_fitting:
             denom = float(np.max(counts_per_width))
             if not np.isfinite(denom) or denom <= 0:
                 denom = 1.0
+        global_variables[f'fit_normalization_{definitive_tt}'] = denom
         counts_per_width_norm = counts_per_width / denom
 
         # # Define model function: signal (logistic) + linear background
@@ -3785,6 +3796,8 @@ if time_window_fitting:
 
         global_variables[f'sigmoid_width_{definitive_tt}'] = tau_fit
         global_variables[f'background_slope_{definitive_tt}'] = B_fit
+        global_variables[f'sigmoid_amplitude_{definitive_tt}'] = S_fit
+        global_variables[f'sigmoid_center_{definitive_tt}'] = w0_fit
 
        
         if create_plots:

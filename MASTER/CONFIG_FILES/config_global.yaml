@@ -223,7 +223,7 @@ run_jupyter_notebook: false
 remove_outliers: false
 
 # Plot settings
-create_plots: false
+create_plots: true
 create_essential_plots: true
 save_plots: true
 create_pdf: true
