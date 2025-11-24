@@ -117,7 +117,7 @@ logbook:
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-stratos_save: true
+stratos_save: false
 fast_mode: false # Do not iterate TimTrack, neither save figures, etc.
 debug_mode: false # Only 10000 rows with all detail
 last_file_test: true
@@ -223,10 +223,10 @@ run_jupyter_notebook: false
 remove_outliers: false
 
 # Plot settings
-create_plots: true
-create_essential_plots: true
-save_plots: true
-create_pdf: true
+create_plots: false
+create_essential_plots: false
+save_plots: false
+create_pdf: false
 force_replacement: true  # Creates a new datafile even if there is already one that looks complete
 show_plots: false
 

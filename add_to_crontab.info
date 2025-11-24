@@ -103,10 +103,10 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - REPROCESSING - STEP 1 - BRING RANDOM ---------------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
+*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
+*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
+*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
+*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_2
@@ -133,10 +133,10 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - COPERNICUS -------------------------------------------------------
-# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_bring_1.log 2>&1
-# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_bring_2.log 2>&1
-# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_bring_3.log 2>&1
-# * * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_bring_4.log 2>&1
+* 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_bring_1.log 2>&1
+* 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_bring_2.log 2>&1
+* 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_bring_3.log 2>&1
+* 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/copernicus_bring_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------

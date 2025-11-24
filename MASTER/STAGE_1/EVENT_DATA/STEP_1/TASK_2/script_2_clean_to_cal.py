@@ -3092,12 +3092,18 @@ for key in ['T1', 'T2', 'T3', 'T4']:
 
 
 # Count non-zero entries in the new _T_sum, _T_diff, _Q_sum, _Q_diff columns
-for key in ["T_sum", "T_diff", "Q_sum", "Q_diff"]:
-    matching_cols = [c for c in working_df.columns if key in c]
-    for colname in matching_cols:
-        count = (working_df[colname] != 0).sum()
-        global_var_name = f"{colname}_entries_original"
-        global_variables[global_var_name] = count
+def record_strip_entries(df: pd.DataFrame, suffix: str) -> None:
+    """Store per-plane/strip entry counts using the canonical T_sum columns."""
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            colname = f"T{plane}_T_sum_{strip}"
+            if colname not in df:
+                continue
+            count = int((df[colname] != 0).sum())
+            global_variables[f"P{plane}_s{strip}_entries_{suffix}"] = count
+
+
+record_strip_entries(working_df, "original")
 
 
 
@@ -6390,13 +6396,7 @@ print(f"Final number of events in the dataframe: {final_number_of_events}")
 
 
 
-# Count non-zero entries in the new _T_sum, _T_diff, _Q_sum, _Q_diff columns
-for key in ["T_sum", "T_diff", "Q_sum", "Q_diff"]:
-    matching_cols = [c for c in working_df.columns if key in c]
-    for colname in matching_cols:
-        count = (working_df[colname] != 0).sum()
-        global_var_name = f"{colname}_entries_final"
-        global_variables[global_var_name] = count
+record_strip_entries(working_df, "final")
 
 
 

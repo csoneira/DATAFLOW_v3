@@ -468,8 +468,8 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     station = "1"
     
     result = quicklook(
-        start="2025-10-01",
-        end="2025-11-20",
+        start="2025-08-16",
+        end="2025-11-04",
         station=station,
         show=False,
         auto_save=False,
@@ -531,6 +531,645 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     )
     plt.show()
     
+    #%%
+    
+    
+    
+    
+    
+    # Scatter/correction helpers to keep the plots compact and readable
+    import numpy as np
+
+    def merge_events_and_logs(
+        events: pd.DataFrame, lab_logs: pd.DataFrame, tolerance: str = "5min"
+    ) -> pd.DataFrame:
+        if events.empty or lab_logs.empty:
+            print("[INFO] Skipping scatter plots: missing events or lab logs.")
+            return pd.DataFrame()
+        return pd.merge_asof(
+            events.sort_values("Time"),
+            lab_logs.sort_values("Time"),
+            on="Time",
+            direction="nearest",
+            tolerance=pd.Timedelta(tolerance),
+        )
+
+    def plot_scatter_pairs(
+        merged: pd.DataFrame,
+        y_col: str,
+        pairs: list[tuple[str, str, str, str]],
+        *,
+        figsize: tuple[int, int] = (12, 5),
+    ) -> None:
+        """pairs: (x_col, xlabel, title, color)."""
+        pairs = [(x, xl, tt, c) for x, xl, tt, c in pairs if x in merged.columns]
+        if not pairs or y_col not in merged:
+            print(f"[INFO] Skipping scatter for {y_col}: columns not found.")
+            return
+        fig, axes = plt.subplots(1, len(pairs), figsize=figsize)
+        axes = [axes] if len(pairs) == 1 else axes
+        for ax, (x_col, xlabel, title, color) in zip(axes, pairs):
+            ax.scatter(merged[x_col], merged[y_col], alpha=0.5, color=color, s=1)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(y_col.replace("_", " ").title())
+            ax.set_title(title)
+        fig.tight_layout()
+        plt.show()
+
+    def detrend_multilinear(
+        df: pd.DataFrame,
+        *,
+        y_col: str,
+        x_cols: Sequence[str],
+        label: str = "multilinear",
+        quantile: float = 0.99,
+    ) -> pd.Series:
+        """Remove linear dependence on multiple predictors at once."""
+        numeric = df[[y_col, *x_cols]].apply(pd.to_numeric, errors="coerce")
+        subset = numeric.dropna()
+        if subset.empty:
+            print(f"[INFO] No data to fit {label}; returning original series.")
+            return numeric[y_col]
+
+        trimmed = subset
+        for col in subset.columns:
+            lo, hi = subset[col].quantile([1 - quantile, quantile])
+            trimmed = trimmed[trimmed[col].between(lo, hi)]
+        if trimmed.empty:
+            trimmed = subset
+
+        X_trim = trimmed[x_cols].to_numpy()
+        y_trim = trimmed[y_col].to_numpy()
+        X_design = np.column_stack([np.ones(len(trimmed)), X_trim])
+        coef, _, _, _ = np.linalg.lstsq(X_design, y_trim, rcond=None)
+        intercept = coef[0]
+        slopes = coef[1:]
+
+        y_pred_trim = X_design @ coef
+        ss_res = float(np.sum((y_trim - y_pred_trim) ** 2))
+        ss_tot = float(np.sum((y_trim - y_trim.mean()) ** 2))
+        r2 = 1 - ss_res / ss_tot if ss_tot else float("nan")
+
+        slope_str = ", ".join(f"{name}={val:.4g}" for name, val in zip(x_cols, slopes))
+        print(
+            f"[INFO] {label} fit: intercept={intercept:.4g}, {slope_str}, "
+            f"r2={r2:.3f}, n={len(trimmed)}"
+        )
+
+        corrected = numeric[y_col].copy()
+        valid_mask = numeric.notna().all(axis=1)
+        if valid_mask.any():
+            X_all = numeric.loc[valid_mask, x_cols].to_numpy()
+            X_all_design = np.column_stack([np.ones(len(X_all)), X_all])
+            predicted = X_all_design @ coef
+            corrected.loc[valid_mask] = numeric.loc[valid_mask, y_col] - predicted
+        return corrected
+
+    merged_df = merge_events_and_logs(events_df, lab_logs_df)
+    temp_col = DEFAULT_TEMP_COLUMNS[0]
+    pressure_col = DEFAULT_PRESSURE_COLUMNS[0]
+
+    if not merged_df.empty:
+        # Raw events vs temperature/pressure
+        plot_scatter_pairs(
+            merged_df,
+            "events",
+            [
+                (temp_col, "Temperature (°C)", "Events vs Temperature", "blue"),
+                (pressure_col, "Pressure (hPa)", "Events vs Pressure", "green"),
+            ],
+        )
+
+        # Joint temperature + pressure detrending to avoid reintroducing correlations
+        if {temp_col, pressure_col}.issubset(merged_df.columns):
+            merged_df["events_temp_pressure_detrended"] = detrend_multilinear(
+                merged_df,
+                y_col="events",
+                x_cols=[temp_col, pressure_col],
+                label="Temp + Pressure",
+            )
+            plot_scatter_pairs(
+                merged_df,
+                "events_temp_pressure_detrended",
+                [
+                    (
+                        temp_col,
+                        "Temperature (°C)",
+                        "Multi-corrected Events vs Temperature",
+                        "purple",
+                    ),
+                    (
+                        pressure_col,
+                        "Pressure (hPa)",
+                        "Multi-corrected Events vs Pressure",
+                        "brown",
+                    ),
+                ],
+            )
+        else:
+            print("[INFO] Skipping multi-fit: temp or pressure column missing.")
+    
+    
+    
+    #%%
+    
+    
+    # Plot the original events and the corrected events superimposed vs time
+    if "events_temp_pressure_detrended" in merged_df.columns:
+        fig, ax = plt.subplots(figsize=(14, 5))
+        times = merged_df["Time"].map(pd.Timestamp.to_pydatetime).to_numpy()
+        ax.plot(
+            times,
+            merged_df["events"] - merged_df["events"].mean(),
+            label="Original Events",
+            color="blue",
+            alpha=0.6,
+            lw=1.1,
+        )
+        ax.plot(
+            times,
+            merged_df["events_temp_pressure_detrended"],
+            label="Corrected Events",
+            color="red",
+            alpha=0.8,
+            lw=1.1,
+        )
+        ax.set_title("Original vs Corrected Events Over Time")
+        ax.set_ylabel("events / min")
+        ax.set_xlabel("Time")
+        # Y limits between 1000 and -1000
+        ax.set_ylim(-10000,10000)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
+        ax.legend(loc="upper left", frameon=False)
+        fig.tight_layout()
+        plt.show()
+    
+    
+    
+    #%%
+    
+    
+    
+    # WAVELET ANALYSIS OF THE EVENTS TIME SERIES
+    
+    from scipy import signal
+
+    def _regularize_series(
+        df: pd.DataFrame, value_col: str, freq: str = "30min"
+    ) -> pd.Series:
+        """Resample to a regular grid and fill gaps by interpolation."""
+        series = (
+            pd.to_numeric(df.set_index("Time")[value_col], errors="coerce")
+            .resample(freq)
+            .mean()
+        )
+        return series.interpolate(limit_direction="both")
+
+    def _remove_zscore_outliers(series: pd.Series, z_thresh: float = 2.0) -> pd.Series:
+        """Remove outliers anywhere in the series based on z-score and interpolate."""
+        if series.empty:
+            return series
+        z = _zscore(series)
+        mask = z.abs() > z_thresh
+        if mask.any():
+            cleaned = series.copy()
+            cleaned.loc[mask] = pd.NA
+            cleaned = cleaned.interpolate(limit_direction="both")
+            removed = int(mask.sum())
+            print(f"[INFO] Removed {removed} outlier(s) via interpolation (z>{z_thresh}).")
+            return cleaned
+        return series
+
+    def _variance_explained(y: pd.Series, y_hat: pd.Series) -> float:
+        """Compute R^2 between y and its model y_hat."""
+        y_arr = np.asarray(y, dtype=float)
+        y_hat_arr = np.asarray(y_hat, dtype=float)
+        mask = np.isfinite(y_arr) & np.isfinite(y_hat_arr)
+        if mask.sum() < 2:
+            return float("nan")
+        ss_res = np.sum((y_arr[mask] - y_hat_arr[mask]) ** 2)
+        ss_tot = np.sum((y_arr[mask] - y_arr[mask].mean()) ** 2)
+        return 1 - ss_res / ss_tot if ss_tot else float("nan")
+
+    def _zscore(series: pd.Series) -> pd.Series:
+        std = series.std()
+        return (series - series.mean()) / std if std and not pd.isna(std) else series * 0
+
+    def _welch(series: pd.Series, fs: float) -> tuple[np.ndarray, np.ndarray]:
+        """Welch PSD with pandas-friendly input."""
+        arr = np.asarray(series, dtype=float).ravel()
+        if len(arr) < 2:
+            return np.array([]), np.array([])
+        nperseg = min(512, len(arr))
+        return signal.welch(arr, fs=fs, nperseg=nperseg)
+
+    def _coherence(
+        series_a: pd.Series, series_b: pd.Series, fs: float
+    ) -> tuple[np.ndarray, np.ndarray]:
+        arr_a = np.asarray(series_a, dtype=float).ravel()
+        arr_b = np.asarray(series_b, dtype=float).ravel()
+        if len(arr_a) < 2 or len(arr_b) < 2:
+            return np.array([]), np.array([])
+        nperseg = min(512, len(arr_a), len(arr_b))
+        return signal.coherence(arr_a, arr_b, fs=fs, nperseg=nperseg)
+
+    def _stft_spectrogram(
+        series: pd.Series, fs: float
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Short-time Fourier spectrogram (time, freq, magnitude)."""
+        arr = np.asarray(series, dtype=float).ravel()
+        if len(arr) < 4:
+            return np.array([]), np.array([]), np.array([[]])
+        nperseg = min(256, len(arr))
+        freqs, times, Sxx = signal.spectrogram(
+            arr,
+            fs=fs,
+            nperseg=nperseg,
+            noverlap=nperseg // 2,
+            detrend="constant",
+            scaling="spectrum",
+        )
+        return freqs, times, Sxx
+
+    def _morlet_wavelet(length: int, s: float, w: float = 6.0) -> np.ndarray:
+        """Simple complex Morlet wavelet (manual to avoid SciPy version issues)."""
+        t = np.arange(-(length // 2), length // 2, dtype=float) / s
+        wavelet = np.exp(1j * w * t) * np.exp(-(t**2) / 2)
+        # Normalize energy to keep scale comparable across widths
+        wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
+        return wavelet
+
+    def _cwt_morlet(arr: np.ndarray, widths: np.ndarray) -> np.ndarray:
+        """Wavelet transform using manual Morlet to avoid morlet2 availability issues."""
+        arr = np.asarray(arr, dtype=float)
+        output = []
+        for width in widths:
+            wavelet = _morlet_wavelet(len(arr), s=width, w=6.0)
+            conv = signal.fftconvolve(arr, wavelet[::-1], mode="same")
+            output.append(conv)
+        return np.vstack(output)
+
+    def remove_temperature_component(
+        events: pd.Series,
+        temperature: pd.Series,
+        *,
+        smooth: int | None = 5,
+    ) -> tuple[pd.Series, pd.Series, tuple[float, float]]:
+        """Project events onto (smoothed) temperature and return residual + component."""
+        temp_series = temperature.copy()
+        if smooth and smooth > 1:
+            temp_series = temp_series.rolling(smooth, center=True, min_periods=1).median()
+        design = np.column_stack([np.ones(len(temp_series)), temp_series.to_numpy()])
+        coef, _, _, _ = np.linalg.lstsq(design, events.to_numpy(), rcond=None)
+        component = pd.Series(design @ coef, index=events.index)
+        residual = events - component
+        return residual, component, (coef[0], coef[1])
+
+    def _morlet_spectrogram(
+        series: pd.Series, dt_seconds: float, widths: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        arr = np.asarray(series, dtype=float).ravel()
+        if len(arr) < 4:
+            return np.array([[]]), np.array([]), np.array([])
+        widths = widths or np.geomspace(1, max(2, len(arr) // 6), num=60)
+        cwt_matrix = _cwt_morlet(arr, widths)
+        power = np.abs(cwt_matrix) ** 2
+        periods_minutes = widths * dt_seconds / 60
+        times_hours = np.arange(len(arr)) * dt_seconds / 3600
+        return power, periods_minutes, times_hours
+
+    if not merged_df.empty and temp_col in merged_df.columns:
+        # Regularize both series to a uniform grid
+        events_regular = _regularize_series(merged_df, "events")
+        temp_regular = _regularize_series(merged_df, temp_col)
+
+        # Inspect z-score distribution to pick an outlier threshold
+        events_zscore_full = _zscore(events_regular)
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.hist(events_zscore_full.dropna(), bins=180, color="steelblue", alpha=0.7)
+        ax.axvline(2.0, color="red", linestyle="--", label="z=±2.0")
+        ax.axvline(-2.0, color="red", linestyle="--")
+        ax.set_xlabel("Events z-score")
+        ax.set_ylabel("Count")
+        ax.set_title("Events z-score histogram (before outlier removal)")
+        ax.legend(frameon=False)
+        fig.tight_layout()
+        plt.show()
+
+        # Remove outliers and re-interpolate
+        events_regular = _remove_zscore_outliers(events_regular, z_thresh=2.0)
+        temp_regular = _remove_zscore_outliers(temp_regular, z_thresh=2.0)
+
+        # Common sampling characteristics
+        dt_seconds = (
+            events_regular.index.to_series().diff().median().total_seconds()
+            if len(events_regular) > 1
+            else 1.0
+        )
+        fs = 1.0 / dt_seconds if dt_seconds else 1.0
+
+        events_z = _zscore(events_regular)
+        temp_z = _zscore(temp_regular)
+
+        # Match and remove high-frequency temperature component (scaled) from events
+        hf_window = 12  # ~6 hours if 30min resample
+        temp_smooth = temp_regular.rolling(hf_window, center=True, min_periods=1).median()
+        events_smooth = events_regular.rolling(hf_window, center=True, min_periods=1).median()
+        temp_high = temp_regular - temp_smooth
+        events_high = events_regular - events_smooth
+        mask_hf = temp_high.notna() & events_high.notna()
+        if mask_hf.any():
+            design_hf = np.column_stack(
+                [np.ones(mask_hf.sum()), temp_high[mask_hf].to_numpy()]
+            )
+            coef_hf, _, _, _ = np.linalg.lstsq(design_hf, events_high[mask_hf].to_numpy(), rcond=None)
+            intercept_hf, slope_hf = coef_hf
+            events_high_filtered = events_high.copy()
+            events_high_filtered.loc[mask_hf] = (
+                events_high[mask_hf] - (intercept_hf + slope_hf * temp_high[mask_hf])
+            )
+            events_temp_clean_hf = events_smooth + events_high_filtered
+            print(
+                f"[INFO] HF temp->events fit: intercept={intercept_hf:.3g}, slope={slope_hf:.3g}"
+            )
+        else:
+            events_temp_clean_hf = events_regular
+            slope_hf = intercept_hf = float("nan")
+
+        # Robust multi-component temp removal (lag + smooth + high-pass)
+        lag_samples = max(1, int(round((6 * 3600) / max(dt_seconds, 1))))
+        best_lag = 0
+        best_corr = -np.inf
+        ev_z = _zscore(events_regular).fillna(0).to_numpy()
+        tp_z = _zscore(temp_regular).fillna(0).to_numpy()
+        for shift in range(-lag_samples, lag_samples + 1):
+            if shift < 0:
+                ev_shift, tp_shift = ev_z[-shift:], tp_z[: len(tp_z) + shift]
+            elif shift > 0:
+                ev_shift, tp_shift = ev_z[: len(ev_z) - shift], tp_z[shift:]
+            else:
+                ev_shift, tp_shift = ev_z, tp_z
+            if len(ev_shift) < 10:
+                continue
+            corr = np.corrcoef(ev_shift, tp_shift)[0, 1]
+            if np.isfinite(corr) and abs(corr) > abs(best_corr):
+                best_corr = corr
+                best_lag = shift
+
+        temp_lagged = temp_regular.shift(best_lag)
+        temp_smooth_lagged = temp_lagged.rolling(hf_window, center=True, min_periods=1).median()
+        temp_high_lagged = temp_lagged - temp_smooth_lagged
+        reg_df = pd.DataFrame(
+            {
+                "events": events_regular,
+                "temp_smooth": temp_smooth_lagged,
+                "temp_high": temp_high_lagged,
+            }
+        ).dropna()
+        if not reg_df.empty:
+            X = np.column_stack(
+                [
+                    np.ones(len(reg_df)),
+                    reg_df["temp_smooth"].to_numpy(),
+                    reg_df["temp_high"].to_numpy(),
+                ]
+            )
+            y = reg_df["events"].to_numpy()
+            weights = np.ones(len(reg_df))
+            for _ in range(4):
+                coef_robust, _, _, _ = np.linalg.lstsq(X * weights[:, None], y * weights, rcond=None)
+                resid = y - X @ coef_robust
+                scale = 1.4826 * np.median(np.abs(resid)) if len(resid) else 1.0
+                if scale == 0 or not np.isfinite(scale):
+                    break
+                weights = 1 / (1 + (resid / (3 * scale)) ** 2)
+            coef_robust, _, _, _ = np.linalg.lstsq(X * weights[:, None], y * weights, rcond=None)
+            component = pd.Series(X @ coef_robust, index=reg_df.index)
+            events_temp_clean_robust = events_regular - component.reindex(events_regular.index, fill_value=0)
+            r2_robust = _variance_explained(reg_df["events"], component)
+            print(
+                f"[INFO] Robust temp fit (lag={best_lag} samples): coef={coef_robust.tolist()}, R^2={r2_robust:.3f}"
+            )
+        else:
+            events_temp_clean_robust = events_regular
+            r2_robust = float("nan")
+
+        # Remove the best linear estimate of temperature from events (time-domain independence)
+        design = np.column_stack([np.ones(len(temp_z)), temp_z.to_numpy()])
+        coef, _, _, _ = np.linalg.lstsq(design, events_z.to_numpy(), rcond=None)
+        events_temp_residual = events_z - design @ coef
+        print(f"[INFO] Temp->events linear fit: intercept={coef[0]:.3g}, slope={coef[1]:.3g}")
+
+        # Reconstruct events minus dominant temperature-driven component (in original units)
+        events_clean, events_temp_component, coef_units = remove_temperature_component(
+            events_regular, temp_regular, smooth=5
+        )
+        print(
+            f"[INFO] Temp->events (raw units) fit: intercept={coef_units[0]:.3g}, "
+            f"slope={coef_units[1]:.3g}"
+        )
+        r2_raw = _variance_explained(events_regular, events_temp_component)
+        print(f"[INFO] Temp component R^2: {r2_raw:.3f}")
+
+        # Robust, lag-aware temp removal
+        cleaned_df = pd.DataFrame(
+            {
+                "events": events_regular,
+                "temp_component": events_temp_component,
+                "events_temp_clean": events_clean,
+                "events_temp_clean_hf": events_temp_clean_hf,
+                "events_temp_clean_robust": events_temp_clean_robust,
+            }
+        )
+        r2_raw = _variance_explained(events_regular, events_temp_component)
+        r2_clean = _variance_explained(events_regular, events_clean)
+        print(f"[INFO] Temp component R^2: {r2_raw:.3f}; cleaned vs raw R^2: {r2_clean:.3f}")
+        # Time-domain comparison
+        fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+        axes[0].plot(events_z.index, events_z, label="events (z)", lw=1.2)
+        axes[0].plot(temp_z.index, temp_z, label="temp (z)", lw=1.0, alpha=0.8)
+        axes[0].set_ylabel("z-score")
+        axes[0].set_title("Normalized series")
+        axes[0].legend(frameon=False)
+
+        axes[1].plot(events_temp_residual.index, events_temp_residual, lw=1.2, color="purple")
+        axes[1].set_ylabel("residual (events ⟂ temp)")
+        axes[1].set_xlabel("Time")
+        axes[1].set_title("Events residual after removing linear temp contribution")
+        fig.tight_layout()
+        plt.show()
+
+        # Temperature component vs cleaned events (original units)
+        fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+        axes[0].plot(cleaned_df.index, cleaned_df["events"], label="events", lw=1.0)
+        axes[0].plot(
+            cleaned_df.index,
+            cleaned_df["temp_component"],
+            label="temp-driven component",
+            lw=1.0,
+            alpha=0.8,
+            color="orange",
+        )
+        axes[0].set_ylabel("events / min")
+        axes[0].legend(frameon=False)
+        axes[0].set_title("Events and fitted temperature-driven component")
+
+        axes[1].plot(
+            cleaned_df.index,
+            cleaned_df["events_temp_clean"],
+            label="events cleaned of temperature",
+            lw=1.0,
+            color="green",
+        )
+        axes[1].set_ylabel("events / min")
+        axes[1].set_xlabel("Time")
+        axes[1].legend(frameon=False)
+        axes[1].set_title("Temperature-cleaned events (raw units)")
+        fig.tight_layout()
+        plt.show()
+
+        # Final overlay: original vs temperature-cleaned events (mean-subtracted for clarity)
+        fig, ax = plt.subplots(figsize=(12, 4))
+        events_anom = cleaned_df["events"] - cleaned_df["events"].mean()
+        events_clean_anom = cleaned_df["events_temp_clean"] - cleaned_df[
+            "events_temp_clean"
+        ].mean()
+        events_clean_hf_anom = cleaned_df["events_temp_clean_hf"] - cleaned_df[
+            "events_temp_clean_hf"
+        ].mean()
+        events_clean_robust_anom = cleaned_df["events_temp_clean_robust"] - cleaned_df[
+            "events_temp_clean_robust"
+        ].mean()
+        r2_clean_anom = _variance_explained(events_anom, events_clean_anom)
+        r2_clean_hf_anom = _variance_explained(events_anom, events_clean_hf_anom)
+        r2_clean_robust_anom = _variance_explained(events_anom, events_clean_robust_anom)
+        print(
+            f"[INFO] Variance captured (anoms): linear={r2_clean_anom:.3f}, "
+            f"HF={r2_clean_hf_anom:.3f}, robust/lagged={r2_clean_robust_anom:.3f}"
+        )
+        ax.plot(cleaned_df.index, events_anom, label="events (original)", lw=1.0)
+        ax.plot(
+            cleaned_df.index,
+            events_clean_anom,
+            label="events (temp-cleaned)",
+            lw=1.0,
+            color="green",
+            alpha=0.8,
+        )
+        ax.plot(
+            cleaned_df.index,
+            events_clean_hf_anom,
+            label="events (temp-cleaned + HF scaled)",
+            lw=1.0,
+            color="orange",
+            alpha=0.7,
+        )
+        ax.plot(
+            cleaned_df.index,
+            events_clean_robust_anom,
+            label="events (robust lagged clean)",
+            lw=1.0,
+            color="purple",
+            alpha=0.8,
+        )
+        ax.set_ylabel("events / min (mean-subtracted)")
+        ax.set_xlabel("Time")
+        ax.legend(frameon=False)
+        ax.set_title("Events: original vs temperature-cleaned")
+        fig.tight_layout()
+        plt.show()
+
+        # Frequency-domain PSDs and coherence
+        f_ev, p_ev = _welch(events_z, fs)
+        f_temp, p_temp = _welch(temp_z, fs)
+        f_res, p_res = _welch(events_temp_residual, fs)
+        f_coh, coh_ev_temp = _coherence(events_z, temp_z, fs)
+        _, coh_res_temp = _coherence(events_temp_residual, temp_z, fs)
+
+        if len(f_ev) and len(f_temp) and len(f_res):
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+            axes[0].loglog(f_ev, p_ev, label="events", color="blue")
+            axes[0].loglog(f_temp, p_temp, label="temp", color="red", alpha=0.8)
+            axes[0].loglog(f_res, p_res, label="events residual", color="purple")
+            axes[0].set_xlabel("Frequency (Hz)")
+            axes[0].set_ylabel("PSD")
+            axes[0].set_title("Welch PSDs")
+            axes[0].legend(frameon=False)
+
+            if len(f_coh):
+                axes[1].semilogx(f_coh, coh_ev_temp, label="events vs temp", color="black")
+                axes[1].semilogx(f_coh, coh_res_temp, label="residual vs temp", color="purple")
+                axes[1].set_ylim(0, 1)
+                axes[1].set_xlabel("Frequency (Hz)")
+            axes[1].set_ylabel("Coherence")
+            axes[1].set_title("Magnitude-squared coherence")
+            axes[1].legend(frameon=False)
+            axes[1].set_axisbelow(True)
+            fig.tight_layout()
+            plt.show()
+        else:
+            print("[INFO] Skipping PSD/coherence plot: insufficient samples.")
+
+        # STFT spectrograms (time vs frequency heatmaps)
+        f_ev_s, t_ev_s, spec_ev = _stft_spectrogram(events_z, fs)
+        f_temp_s, t_temp_s, spec_temp = _stft_spectrogram(temp_z, fs)
+        f_res_s, t_res_s, spec_res = _stft_spectrogram(events_temp_residual, fs)
+        if spec_ev.size and spec_temp.size and spec_res.size:
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+            for ax, freqs, times, spec, title in zip(
+                axes,
+                [f_ev_s, f_temp_s, f_res_s],
+                [t_ev_s, t_temp_s, t_res_s],
+                [spec_ev, spec_temp, spec_res],
+                ["Events spectrogram", "Temp spectrogram", "Residual spectrogram"],
+            ):
+                img = ax.pcolormesh(times * dt_seconds / 3600, freqs, spec, shading="auto")
+                ax.set_xlabel("Time (hours)")
+                ax.set_title(title)
+                fig.colorbar(img, ax=ax, label="Power")
+            axes[0].set_ylabel("Frequency (Hz)")
+            fig.suptitle("STFT spectrograms (time vs frequency)", fontsize=14)
+            fig.tight_layout()
+            plt.show()
+        else:
+            print("[INFO] Skipping STFT spectrograms: insufficient samples.")
+
+        # Wavelet spectrograms and cross power
+        cwt_events, periods_min, times_hours = _morlet_spectrogram(events_z, dt_seconds)
+        cwt_temp, _, _ = _morlet_spectrogram(temp_z, dt_seconds)
+        cross_power = np.abs(cwt_events * np.conjugate(cwt_temp))
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+        for ax, power, title in zip(
+            axes,
+            [np.abs(cwt_events) ** 2, np.abs(cwt_temp) ** 2, cross_power],
+            ["Events power", "Temperature power", "Cross power"],
+        ):
+            img = ax.imshow(
+                power,
+                origin="lower",
+                aspect="auto",
+                extent=(
+                    times_hours[0],
+                    times_hours[-1] if len(times_hours) > 1 else 1,
+                    periods_min[0],
+                    periods_min[-1],
+                ),
+                cmap="viridis",
+            )
+            ax.set_xlabel("Time (hours)")
+            ax.set_title(title)
+            fig.colorbar(img, ax=ax, label="Power")
+        axes[0].set_ylabel("Period (minutes)")
+        fig.suptitle("Morlet wavelet analysis", fontsize=14)
+        fig.tight_layout()
+        plt.show()
+    else:
+        print("[INFO] Wavelet analysis skipped: missing merged data or temperature column.")
+    
+    
+    
+    #%%
     
     # I want only the regions plots, not the temperature/pressure ones,
     # and i want in several different plots: one for 12, 23, 34;
@@ -560,6 +1199,7 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     fig.tight_layout()
     plt.show()
     
+    #%%
     
     # regions: "12", "23", "34" "13", "24", "14" "123", "234" "124", "134" "1234"
     

@@ -420,6 +420,7 @@ for directory in base_directories.values():
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
+csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
@@ -1356,6 +1357,29 @@ global_variables = {
     'unc_tdif': anc_std,
 }
 
+TRACK_COMBINATIONS: tuple[str, ...] = (
+    "12", "13", "14", "23", "24", "34",
+    "123", "124", "134", "234", "1234",
+)
+
+RESIDUAL_SERIES: tuple[str, ...] = (
+    "res_ystr",
+    "res_tsum",
+    "res_tdif",
+    "ext_res_ystr",
+    "ext_res_tsum",
+    "ext_res_tdif",
+)
+
+FILTER_METRIC_NAMES: tuple[str, ...] = (
+    "alt_residual_zeroed_event_pct",
+    "residual_zeroed_event_pct",
+    "small_values_zeroed_value_pct",
+    "alt_bounds_zeroed_event_pct",
+    "definitive_small_values_zeroed_value_pct",
+    "definitive_rows_removed_pct",
+)
+
 reprocessing_parameters = pd.DataFrame()
 
 
@@ -1376,6 +1400,46 @@ def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basenam
     return matches.reset_index(drop=True)
 
 
+def _fit_gaussian_sigma(series: pd.Series) -> float:
+    """Return Gaussian sigma for *series* ignoring zeros/NaNs; NaN if insufficient data."""
+    arr = np.asarray(series)
+    arr = arr[np.isfinite(arr) & (arr != 0)]
+    if arr.size < 10:
+        return np.nan
+    try:
+        _, sigma = norm.fit(arr)
+    except Exception:
+        return np.nan
+    return float(abs(sigma)) if np.isfinite(sigma) else np.nan
+
+
+filter_metrics: dict[str, float] = {}
+
+
+def record_filter_metric(name: str, removed: float, total: float) -> None:
+    """Record percentage removed for a filter."""
+    pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
+    filter_metrics[name] = round(pct, 4)
+    print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+
+
+def record_residual_sigmas(df: pd.DataFrame) -> None:
+    """Fit Gaussian sigmas for residual columns per track combination and plane."""
+    if "processed_tt" not in df.columns:
+        return
+
+    processed = df["processed_tt"].astype(str)
+    for combo in TRACK_COMBINATIONS:
+        combo_mask = processed == combo
+        combo_df = df.loc[combo_mask]
+        for plane in range(1, 5):
+            for metric in RESIDUAL_SERIES:
+                col = f"{metric}_{plane}"
+                key = f"{col}_{combo}_sigma"
+                sigma = np.nan
+                if col in df.columns and not combo_df.empty:
+                    sigma = _fit_gaussian_sigma(combo_df[col])
+                global_variables[key] = sigma
 
 
 reprocessing_values: dict[str, object] = {}
@@ -2944,6 +3008,11 @@ for alt_iteration in range(repeat + 1):
         if alt_changed:
             alt_changed_event_count += 1
     print(f"--> {alt_changed_event_count} events were residual filtered.")
+    record_filter_metric(
+        "alt_residual_zeroed_event_pct",
+        alt_changed_event_count,
+        len(working_df),
+    )
     
     alt_iteration += 1
 
@@ -2995,26 +3064,44 @@ n_small = mask.sum().sum()
 working_df = working_df.mask(mask, 0)  # Apply the replacement
 pct = 100 * n_small / n_total if n_total > 0 else 0
 print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")  # Report
+record_filter_metric(
+    "small_values_zeroed_value_pct",
+    n_small,
+    n_total if n_total else 0,
+)
 
 
+alt_bounds_changed = np.zeros(len(working_df), dtype=bool)
 for col in working_df.columns:
     # Alternative fitting results
     if 'alt_x' == col or 'alt_y' == col:
         cond_bound = (working_df[col] > alt_pos_filter) | (working_df[col] < -1*alt_pos_filter)
         cond_zero = (working_df[col] == 0)
-        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
+        change_mask = cond_bound | cond_zero
+        alt_bounds_changed |= change_mask
+        working_df.loc[:, col] = np.where(change_mask, 0, working_df[col])
     if 'alt_theta' == col:
         cond_bound = (working_df[col] > alt_theta_right_filter) | (working_df[col] < alt_theta_left_filter)
         cond_zero = (working_df[col] == 0)
-        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
+        change_mask = cond_bound | cond_zero
+        alt_bounds_changed |= change_mask
+        working_df.loc[:, col] = np.where(change_mask, 0, working_df[col])
     if 'alt_phi' == col:
         cond_bound = (working_df[col] > alt_phi_right_filter) | (working_df[col] < alt_phi_left_filter)
         cond_zero = (working_df[col] == 0)
-        working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
+        change_mask = cond_bound | cond_zero
+        alt_bounds_changed |= change_mask
+        working_df.loc[:, col] = np.where(change_mask, 0, working_df[col])
     if 'alt_s' == col:
         cond_bound = (working_df[col] > alt_slowness_filter_right) | (working_df[col] < alt_slowness_filter_left)
         cond_zero = (working_df[col] == 0)
         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
+
+record_filter_metric(
+    "alt_bounds_zeroed_event_pct",
+    float(alt_bounds_changed.sum()),
+    float(len(working_df)),
+)
 
 print("Alternative fitting done.")
 
@@ -3401,6 +3488,11 @@ for iteration in range(repeat + 1):
                                   f'P{plane_idx}_Q_diff_final']] = 0
 
     print(f"--> {changed_event_count} events were residual filtered.")
+    record_filter_metric(
+        "residual_zeroed_event_pct",
+        changed_event_count,
+        len(working_df),
+    )
     
     print(f"{len(working_df[working_df.iterations == iter_max])} reached the maximum number of iterations ({iter_max}).")
     print(f"Percentage of events that did not converge: {len(working_df[working_df.iterations == iter_max]) / len(working_df) * 100:.2f}%")
@@ -3988,6 +4080,11 @@ n_small = mask.sum().sum()
 definitive_df = definitive_df.mask(mask, 0)
 pct = 100 * n_small / n_total if n_total > 0 else 0
 print(f"\nIn definitive_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
+record_filter_metric(
+    "definitive_small_values_zeroed_value_pct",
+    n_small,
+    n_total if n_total else 0,
+)
 
 # Remove rows with zeros in key places ----------------------------------------
 cols_to_check = ['x', 'xp', 'y', 'yp', 's', 't0', 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s']
@@ -4005,6 +4102,11 @@ percentage_retained = 100 * n_after / n_before if n_before > 0 else 0
 print(f"Rows before: {n_before}")
 print(f"Rows after: {n_after}")
 print(f"Retained: {percentage_retained:.2f}%")
+record_filter_metric(
+    "definitive_rows_removed_pct",
+    n_before - n_after,
+    n_before if n_before else 0,
+)
 
 print("----------------------------------------------------------------------")
 print("Unique original_tt values:", sorted(definitive_df['original_tt'].unique()))
@@ -5312,6 +5414,9 @@ print("------------------- Finished list_events creation --------------------")
 print("----------------------------------------------------------------------\n\n\n")
 
 
+record_residual_sigmas(definitive_df)
+
+
 
 
 
@@ -5429,6 +5534,23 @@ execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
 
+
+
+# -------------------------------------------------------------------------------
+# Filter metadata (ancillary) ----------------------------------------------------
+# -------------------------------------------------------------------------------
+filter_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+}
+for name in FILTER_METRIC_NAMES:
+    filter_row[name] = filter_metrics.get(name, "")
+
+metadata_filter_csv_path = save_metadata(
+    csv_path_filter,
+    filter_row,
+)
+print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
 
 # -------------------------------------------------------------------------------

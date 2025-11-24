@@ -1,14 +1,20 @@
 
 #%%
 
+
+# TASK 1 --> channel counts
+# TASK 2 --> 
+
+
 from datetime import datetime, timedelta
 from pathlib import Path
 import pandas as pd
+import matplotlib.pyplot as plt
 
 # --- knobs to tweak ---
 STATION = "MINGO01"  # e.g. MINGO01, MINGO02, ...
 STEP = 1             # numeric step (1, 2, ...)
-TASK = 4          # for STEP_1 use an int (1-5); keep None for steps without tasks
+TASK = 2          # for STEP_1 use an int (1-5); keep None for steps without tasks
 START_DATE = "2025-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
 END_DATE = "2025-11-20 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
 # Window used when counting events (ns) and per-combination measured counts.
@@ -336,8 +342,8 @@ if STEP == 1 and TASK == 2:
 
     for plane in planes:
         for strip in strips:
-            orig = f"T{plane}_T_sum_{strip}_entries_original"
-            fin  = f"T{plane}_T_sum_{strip}_entries_final"
+            orig = f"P{plane}_s{strip}_entries_original"
+            fin  = f"P{plane}_s{strip}_entries_final"
 
             if orig in df.columns and fin in df.columns:
                 local_min = min(df[orig].min(), df[fin].min())
@@ -363,8 +369,8 @@ if STEP == 1 and TASK == 2:
     for i_plane, plane in enumerate(planes):
         for j_strip, strip in enumerate(strips):
 
-            orig = f"T{plane}_T_sum_{strip}_entries_original"
-            fin  = f"T{plane}_T_sum_{strip}_entries_final"
+            orig = f"P{plane}_s{strip}_entries_original"
+            fin  = f"P{plane}_s{strip}_entries_final"
 
             inner_gs = gridspec.GridSpecFromSubplotSpec(
                 2,
@@ -489,9 +495,9 @@ if STEP == 1 and TASK == 2:
 
             if original_col in df.columns and final_col in df.columns:
                 ax.plot(df["datetime"], df[original_col],
-                        marker="o", linestyle="", label="Original")
+                        marker="o", linestyle="", label="with_crstlk")
                 ax.plot(df["datetime"], df[final_col],
-                        marker="x", linestyle="", label="Final")
+                        marker="x", linestyle="", label="no_crstlk")
 
                 ax.set_title(f"P{plane} S{strip}", fontsize=9)
 
@@ -509,7 +515,7 @@ if STEP == 1 and TASK == 2:
             else:
                 ax.set_visible(False)
 
-    fig.suptitle("Hits per plane/strip for T_sum (Original vs Final)", fontsize=14)
+    fig.suptitle("Hits per plane/strip for T_sum (with and without crosstalk)", fontsize=14)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
 
@@ -808,6 +814,15 @@ if STEP == 1 and TASK == 2:
 #%%
 
 
+if STEP == 1 and TASK == 3:
+    
+    print("STEP 1 TASK 3")
+    
+    
+
+#%%
+
+
 if STEP == 1 and TASK == 4:
 
     # I want to plot 
@@ -991,10 +1006,67 @@ if STEP == 1 and TASK == 4:
 
     plt.suptitle(f"Sigmoid Widths and Background Slopes for {STATION} STEP {STEP} TASK {TASK}",
                 fontsize=16)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.show()
-    
-    
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+
+
+    # ------------------------------------------------------------------
+    # Residual sigma tracking (Gaussian fits stored in task_4 metadata)
+    # ------------------------------------------------------------------
+    sigma_metrics = [
+        "res_ystr",
+        "res_tsum",
+        "res_tdif",
+        "ext_res_ystr",
+        "ext_res_tsum",
+        "ext_res_tdif",
+    ]
+    sigma_combos = ["12", "13", "14", "23", "24", "34", "123", "124", "134", "234", "1234"]
+
+    sigma_columns = []
+    for metric in sigma_metrics:
+        for plane in range(1, 5):
+            for combo in sigma_combos:
+                col = f"{metric}_{plane}_{combo}_sigma"
+                if col in df.columns:
+                    sigma_columns.append(col)
+
+    if sigma_columns:
+        n_cols = 4
+        n_rows = (len(sigma_columns) + n_cols - 1) // n_cols
+        fig = plt.figure(figsize=(4 * n_cols, 3 * n_rows))
+        for idx, col in enumerate(sigma_columns):
+            ax = fig.add_subplot(n_rows, n_cols, idx + 1)
+            ax.plot(df["datetime"], df[col], marker=".", linestyle="", markersize=3)
+            ax.set_title(col, fontsize=8)
+            ax.grid(True)
+            if idx // n_cols == n_rows - 1:
+                ax.tick_params(axis='x', rotation=45)
+        plt.suptitle("Gaussian sigma of residuals by plane/combo", fontsize=14)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+
+
+    # ------------------------------------------------------------------
+    # Filter percentages (ancillary)
+    # ------------------------------------------------------------------
+    filter_cols = [col for col in df.columns if col.endswith("_pct")]
+    if filter_cols:
+        n_cols = 3
+        n_rows = (len(filter_cols) + n_cols - 1) // n_cols
+        fig = plt.figure(figsize=(5 * n_cols, 3 * n_rows))
+        for idx, col in enumerate(filter_cols):
+            ax = fig.add_subplot(n_rows, n_cols, idx + 1)
+            ax.plot(df["datetime"], df[col], marker="o", linestyle="", markersize=3)
+            ax.set_title(col, fontsize=9)
+            ax.set_ylabel("Percent")
+            ax.grid(True)
+            if idx // n_cols == n_rows - 1:
+                ax.tick_params(axis='x', rotation=45)
+        plt.suptitle("Filter removal percentages", fontsize=14)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+
     #%%
     
     WINDOW_NS = 3  # Set this to the coincidence window (ns) used when counting

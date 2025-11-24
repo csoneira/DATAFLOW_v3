@@ -3373,6 +3373,69 @@ if create_plots:
     plt.close()
 
 
+
+if create_plots:
+    fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
+    axes = axes.flatten()
+
+    for i_plane in range(1, 5):
+        # Column names
+        t_sum_col = f'P{i_plane}_T_sum_final'
+        t_diff_col = f'P{i_plane}_T_diff_final'
+        q_sum_col = f'P{i_plane}_Q_sum_final'
+        q_diff_col = f'P{i_plane}_Q_diff_final'
+        y_col = f'P{i_plane}_Y_final'
+
+        # Filter valid rows (non-zero)
+        valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
+        
+        # Extract variables and filter low charge
+        cond = valid_rows[q_sum_col] < charge_per_plane_plot_threshold / 4
+        t_sum  = valid_rows.loc[cond, t_sum_col]
+        t_diff = valid_rows.loc[cond, t_diff_col]
+        q_sum  = valid_rows.loc[cond, q_sum_col]
+        q_diff = valid_rows.loc[cond, q_diff_col]
+        y      = valid_rows.loc[cond, y_col]
+
+        base_idx = (i_plane - 1) * 10  # 10 plots per plane
+
+        combinations = [
+            (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+            (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
+            (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
+            (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
+            (t_diff, y,      f'{t_diff_col} vs {y_col}'),
+            (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
+            (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
+            (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
+            (q_diff, y,      f'{q_diff_col} vs {y_col}'),
+            (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+        ]
+
+        for offset, (x, yv, title) in enumerate(combinations):
+            ax = axes[base_idx + offset]
+            ax.hexbin(x, yv, gridsize=50, cmap='turbo')
+            ax.set_title(title)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
+    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane', fontsize=18)
+
+    if save_plots:
+        name_of_file = 'rpc_variables_hexbin_combinations'
+        final_filename = f'{fig_idx}_{name_of_file}.png'
+        fig_idx += 1
+
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    if show_plots: plt.show()
+    plt.close()
+
+
+
+
 print("----------------------------------------------------------------------")
 print("------ Put Tsum in reference to the first strip that is not zero -----")
 print("----------------------------------------------------------------------")
@@ -3386,6 +3449,24 @@ baseline_vals = vals[row_indices, first_nonzero_idx]
 vals_normalized = vals - baseline_vals[:, np.newaxis] + 1
 working_df[cols] = vals_normalized
 
+
+# Helper to track how many events remain non-zero for key variables around Filter 6
+def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
+    for i_plane in range(1, 5):
+        columns = {
+            "T_sum": f"P{i_plane}_T_sum_final",
+            "T_diff": f"P{i_plane}_T_diff_final",
+            "Q_sum": f"P{i_plane}_Q_sum_final",
+            "Q_diff": f"P{i_plane}_Q_diff_final",
+            "Y": f"P{i_plane}_Y_final",
+        }
+        for label, col in columns.items():
+            if col in df:
+                count = int((df[col] != 0).sum())
+                global_variables[f"P{i_plane}_{label}_nonzero_{tag}"] = count
+
+
+record_filter6_counts(working_df, "before_filter6")
 
 print("--------------------- Filter 6: calibrated data ----------------------")
 for col in working_df.columns:
@@ -3419,6 +3500,8 @@ for i_plane in range(1, 5):
 
     # Apply zeroing
     working_df.loc[mask, cols] = 0
+
+record_filter6_counts(working_df, "after_filter6")
 
 
 # ----------------------------------------------------------------------------------------------------------------
