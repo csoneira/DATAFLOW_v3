@@ -5393,12 +5393,16 @@ if os.path.exists(figure_directory):
 print("Moving file to COMPLETED directory...")
 
 if user_file_selection == False:
-    shutil.move(file_path, completed_file_path)
-    now = time.time()
-    os.utime(completed_file_path, (now, now))
-    print("************************************************************")
-    print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
-    print("************************************************************")
+    if os.path.exists(file_path):
+        shutil.move(file_path, completed_file_path)
+        now = time.time()
+        os.utime(completed_file_path, (now, now))
+        print("************************************************************")
+        print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
+        print("************************************************************")
+    else:
+        print(f"Input file already absent (maybe previously processed): {file_path}")
+        print("Skipping move; fitted output stays in OUTPUT_FILES.")
 
 
 
@@ -5610,9 +5614,13 @@ print(f"Listed dataframe saved to: {OUT_PATH}")
 print("Moving file to COMPLETED directory...")
 
 if user_file_selection == False:
-    shutil.move(file_path, completed_file_path)
-    now = time.time()
-    os.utime(completed_file_path, (now, now))
-    print("************************************************************")
-    print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
-    print("************************************************************")
+    if os.path.exists(file_path):
+        shutil.move(file_path, completed_file_path)
+        now = time.time()
+        os.utime(completed_file_path, (now, now))
+        print("************************************************************")
+        print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
+        print("************************************************************")
+    else:
+        print(f"Input file already absent (maybe previously processed): {file_path}")
+        print("Skipping move; fitted output stays in OUTPUT_FILES.")

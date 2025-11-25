@@ -134,25 +134,6 @@ echo "unpack_reprocessing_files.sh started on: $(date)"
 echo "Station: ${station_code} (loop_mode=$loop_mode, newest_mode=$newest_mode)"
 echo "Running the script..."
 
-shared_lock_file="${MASTER_DIR}/STAGE_0/REPROCESSING/STEP_2/.unpack_shared.lock"
-exec {shared_lock_fd}> "$shared_lock_file"
-if ! flock -n "$shared_lock_fd"; then
-    echo "$(date) - Another station is using the shared unpacker input; waiting for lock..."
-    flock "$shared_lock_fd"
-fi
-echo "$(date) - Acquired shared unpacker lock."
-cleanup_shared_lock() {
-    if [[ -n ${shared_lock_fd:-} ]]; then
-        flock -u "$shared_lock_fd"
-        exec {shared_lock_fd}>&-
-    fi
-}
-trap cleanup_shared_lock EXIT
-
-echo "------------------------------------------------------"
-
-# --------------------------------------------------------------------------------------------
-
 STATIONS_BASE="$HOME/DATAFLOW_v3/STATIONS"
 station_directory="${STATIONS_BASE}/MINGO${station_code}"
 reprocessing_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_2"
@@ -390,6 +371,108 @@ hld_input_directory=$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_
 asci_output_directory=$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci # <--------------------------------------------
 dest_directory="$stage0_to_1_directory"
 
+route_dat_outputs() {
+    local record_array_name="$1"
+    local record=false
+    if [[ -n "$record_array_name" ]]; then
+        record=true
+        local -n record_ref="$record_array_name"
+    fi
+
+    shopt -s nullglob
+    local moved_any=false
+    for dat_path in "$asci_output_directory"/*.dat*; do
+        [[ -f "$dat_path" ]] || continue
+        local fname dest_station destination_dir
+        fname=$(basename "$dat_path")
+        dest_station=$(extract_station_code_from_name "$fname" 2>/dev/null || true)
+        [[ -z "$dest_station" ]] && dest_station="$station_code"
+        destination_dir="${STATIONS_BASE}/MINGO${dest_station}/STAGE_0_to_1"
+        mkdir -p "$destination_dir"
+        if [[ -e "$destination_dir/$fname" ]]; then
+            echo "Skipping $fname — already present in ${destination_dir}."
+            continue
+        fi
+        if mv "$dat_path" "$destination_dir/$fname"; then
+            touch "$destination_dir/$fname"
+            moved_any=true
+            if [[ "$dest_station" != "$station_code" ]]; then
+                echo "--> Routed $fname to station ${dest_station} STAGE_0_to_1."
+            else
+                echo "Moved $fname to STAGE_0_to_1."
+                if $record; then
+                    record_ref+=("$fname")
+                fi
+            fi
+        else
+            echo "Warning: failed to move $fname into ${destination_dir}." >&2
+        fi
+    done
+    shopt -u nullglob
+
+    if $moved_any; then
+        echo "Drained unpacker output directory (${asci_output_directory})."
+    fi
+}
+
+wait_for_unpacker_slot() {
+    local max_wait=300
+    local stale_age=600
+    local start_epoch
+    start_epoch=$(date +%s)
+
+    while true; do
+        if [[ -d "${hld_input_directory}/semaphore" ]]; then
+            echo "Unpacker semaphore present; waiting..."
+            sleep 5
+            continue
+        fi
+
+        local now foreign_files=()
+        shopt -s nullglob
+        for leftover in "$hld_input_directory"/*.hld "$hld_input_directory"/*.HLD; do
+            [[ -e "$leftover" ]] || continue
+            local fname owner mtime age
+            fname=$(basename "$leftover")
+            owner=$(extract_station_code_from_name "$fname" 2>/dev/null || true)
+            mtime=$(stat -c %s "$leftover" 2>/dev/null || echo 0)
+            now=$(date +%s)
+            age=$((now - mtime))
+
+            if [[ -z "$owner" || "$owner" == "$station_code" ]]; then
+                mkdir -p "$completed_uncompressed"
+                mv "$leftover" "$completed_uncompressed/$fname"
+                echo "Parked leftover $fname into COMPLETED."
+                continue
+            fi
+
+            if (( age > stale_age )); then
+                local redirect_dir="${STATIONS_BASE}/MINGO${owner}/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/UNPROCESSED"
+                mkdir -p "$redirect_dir"
+                mv "$leftover" "$redirect_dir/$fname"
+                echo "--> Redirected stale foreign HLD $fname back to station ${owner} queue."
+                continue
+            fi
+
+            foreign_files+=("$fname")
+        done
+        shopt -u nullglob
+
+        if (( ${#foreign_files[@]} == 0 )); then
+            return 0
+        fi
+
+        now=$(date +%s)
+        if (( now - start_epoch >= max_wait )); then
+            echo "Timeout waiting for unpacker input to clear (${foreign_files[*]} still present)." >&2
+            return 1
+        fi
+
+        echo "Unpacker input busy with ${foreign_files[*]}; waiting..."
+        sleep 5
+    done
+}
+
 process_single_hld() {
     local script_start_time script_start_epoch script_end_epoch script_duration
     local csv_timestamp
@@ -430,27 +513,6 @@ process_single_hld() {
         done
     fi
     shopt -u nullglob
-
-    if [ -d "$hld_input_directory" ]; then
-        echo "Clearing leftover HLD files from unpacker input..."
-        shopt -s nullglob
-        for leftover in "$hld_input_directory"/*.hld*; do
-            [[ -e "$leftover" ]] || continue
-            local name
-            name=$(basename "$leftover")
-            if [[ -e "$completed_uncompressed/$name" ]]; then
-                rm -f "$completed_uncompressed/$name"
-            fi
-            mv "$leftover" "$completed_uncompressed/$name"
-        done
-        shopt -u nullglob
-    fi
-
-    if [ -d "$asci_output_directory" ]; then
-        echo "Moving existing dat files to removed directory..."
-        mkdir -p "$asci_output_directory/removed"
-        mv "$asci_output_directory"/*.dat* "$asci_output_directory/removed/" 2>/dev/null
-    fi
 
     echo "Selecting one HLD file to unpack..."
     local relocated_candidates=false
@@ -572,160 +634,57 @@ process_single_hld() {
         return 1
     fi
 
-    if ! cp "$processing_path" "$hld_input_directory/$filename"; then
-        echo "Warning: failed to copy $filename into unpacker input directory." >&2
-        return 1
-    fi
+    {
+        flock -w 300 200 || { echo "Another unpacking is in progress; try again shortly." >&2; return 1; }
 
-    name_no_ext="${filename%.hld}"
-    prefix="${name_no_ext:0:${#name_no_ext}-2}"
-    ss="${name_no_ext: -2}"
-    ss_val=$((10#$ss))
-
-    if (( ss_val < 30 )); then
-        ss_new=$(printf "%02d" $((ss_val + 1)))
-    else
-        ss_new=$(printf "%02d" $((ss_val - 1)))
-    fi
-
-    new_filename="${prefix}${ss_new}.hld"
-
-    echo "Original file: $filename"
-    echo "Copied as:     $new_filename"
-    cp "$hld_input_directory/$filename" "$hld_input_directory/$new_filename"
-
-    echo ""
-    echo ""
-    echo "Running unpacking..."
-    export RPCSYSTEM="mingo${station_code}"
-    export RPCRUNMODE=oneRun
-
-    "$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh"
-
-    echo ""
-    echo ""
-
-    echo "Moving dat files into STAGE_0_to_1..."
-    find "$asci_output_directory" -maxdepth 1 -type f -name '*.dat' -print
-
-    local stage0_before stage0_after stage0_new
-    stage0_before=$(mktemp)
-    find "$dest_directory" -maxdepth 1 -type f -name '*.dat' -printf '%f\n' | sort -u > "$stage0_before"
-
-    for file in "$asci_output_directory"/*.dat; do
-        [ -e "$file" ] || continue
-        local fname target_station_code destination_dir
-        fname=$(basename "$file")
-        touch "$file"
-        target_station_code=$(extract_station_code_from_name "$fname" 2>/dev/null || true)
-        destination_dir="$dest_directory"
-        if [[ -n "$target_station_code" && "$target_station_code" != "$station_code" ]]; then
-            destination_dir="${STATIONS_BASE}/MINGO${target_station_code}/STAGE_0_to_1"
-            echo "--> Redirecting $fname to ${destination_dir} (belongs to station ${target_station_code})."
+        if ! wait_for_unpacker_slot; then
+            echo "Unpacker input is busy with other station files. Try again later."
+            return 1
         fi
-        if [[ -e "$destination_dir/$fname" ]]; then
-            if [[ "$destination_dir" == "$dest_directory" ]]; then
-                echo "Skipping $fname — already present in STAGE_0_to_1."
-            else
-                echo "Skipping $fname — already present in ${destination_dir}."
-            fi
-            continue
+
+        route_dat_outputs
+
+        if ! cp "$processing_path" "$hld_input_directory/$filename"; then
+            echo "Warning: failed to copy $filename into unpacker input directory." >&2
+            return 1
         fi
-        mkdir -p "$destination_dir"
-        if mv "$file" "$destination_dir/$fname"; then
-            touch "$destination_dir/$fname"
-            if [[ "$destination_dir" == "$dest_directory" ]]; then
-                echo "Moved $fname to STAGE_0_to_1."
-            else
-                echo "Moved $fname to ${destination_dir}."
-            fi
+
+        name_no_ext="${filename%.hld}"
+        prefix="${name_no_ext:0:${#name_no_ext}-2}"
+        ss="${name_no_ext: -2}"
+        ss_val=$((10#$ss))
+
+        if (( ss_val < 30 )); then
+            ss_new=$(printf "%02d" $((ss_val + 1)))
         else
-            echo "Warning: failed to move $fname into ${destination_dir}." >&2
+            ss_new=$(printf "%02d" $((ss_val - 1)))
         fi
-    done
 
-    stage0_after=$(mktemp)
-    find "$dest_directory" -maxdepth 1 -type f -name '*.dat' -printf '%f\n' | sort -u > "$stage0_after"
+        new_filename="${prefix}${ss_new}.hld"
 
-    stage0_new=$(mktemp)
-    comm -13 "$stage0_before" "$stage0_after" > "$stage0_new"
+        echo "Original file: $filename"
+        echo "Copied as:     $new_filename"
+        cp "$hld_input_directory/$filename" "$hld_input_directory/$new_filename"
 
-    if [[ -s "$stage0_new" ]]; then
-        while IFS= read -r dat_entry; do
-            dat_entry=${dat_entry//$'\r'/}
-            [[ -z "$dat_entry" ]] && continue
-            new_dat_files+=("$dat_entry")
-        done < "$stage0_new"
-    fi
+        echo ""
+        echo ""
+        echo "Running unpacking..."
+        export RPCSYSTEM="mingo${station_code}"
+        export RPCRUNMODE=oneRun
 
-    if [[ -s "$stage0_after" ]]; then
-        while IFS= read -r dat_entry; do
-            dat_entry=${dat_entry//$'\r'/}
-            [[ -z "$dat_entry" ]] && continue
-            local dat_base
-            dat_base=$(strip_suffix "$dat_entry")
-            # append_row_if_missing "$dat_base" "" "$csv_timestamp" "$csv_timestamp"
-        done < "$stage0_after"
-    fi
+        "$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh"
 
-    # if [[ -s "$stage0_after" || -s "$stage0_new" ]]; then
-    #     awk -F',' -v OFS=',' -v all="$stage0_after" -v new="$stage0_new" -v ts="$csv_timestamp" '
-    #         function canonical(name) {
-    #             gsub(/\r/, "", name)
-    #             sub(/\.hld\.tar\.gz$/, "", name)
-    #             sub(/\.hld-tar-gz$/, "", name)
-    #             sub(/\.tar\.gz$/, "", name)
-    #             sub(/\.hld$/, "", name)
-    #             sub(/\.dat$/, "", name)
-    #             return name
-    #         }
-    #         BEGIN {
-    #             if (all != "") {
-    #                 while ((getline line < all) > 0) {
-    #                     if (line == "") { continue }
-    #                     roots_all[canonical(line)] = 1
-    #                 }
-    #                 close(all)
-    #             }
-    #             if (new != "") {
-    #                 while ((getline line < new) > 0) {
-    #                     if (line == "") { continue }
-    #                     roots_new[canonical(line)] = 1
-    #                 }
-    #                 close(new)
-    #             }
-    #         }
-    #         NR == 1 { print; next }
-    #         {
-    #             base = canonical($1)
-    #             if (base == "") {
-    #                 print
-    #                 next
-    #             }
-    #             if (base in roots_new) {
-    #                 if ($4 == "") {
-    #                     $4 = ts
-    #                 }
-    #                 $5 = ts
-    #             } else if (base in roots_all) {
-    #                 if ($4 == "") {
-    #                     $4 = ts
-    #                 }
-    #                 if ($5 == "") {
-    #                     $5 = ts
-    #                 }
-    #             }
-    #             print
-    #         }
-    #     ' "$csv_path" > "${csv_path}.tmp" && mv "${csv_path}.tmp" "$csv_path"
-    # fi
+        echo ""
+        echo ""
 
-    rm -f "$stage0_before" "$stage0_after" "$stage0_new"
+        echo "Moving dat files into STAGE_0_to_1..."
+        route_dat_outputs new_dat_files
+    } 200>"${hld_input_directory}/.unpacker_io.lock"
 
     if [ -d "$hld_input_directory" ]; then
         echo "Archiving processed HLD files into COMPLETED..."
         shopt -s nullglob
-        for processed in "$hld_input_directory"/*.hld*; do
+        for processed in "$hld_input_directory/$filename" "$hld_input_directory/$new_filename"; do
             [[ -e "$processed" ]] || continue
             local name
             name=$(basename "$processed")
@@ -748,12 +707,6 @@ process_single_hld() {
         mv "$processed" "$completed_uncompressed/$name"
     done
     shopt -u nullglob
-
-    if [ -d "$asci_output_directory" ]; then
-        echo "Moving existing dat files to removed directory..."
-        mkdir -p "$asci_output_directory/removed"
-        mv "$asci_output_directory"/*.dat* "$asci_output_directory/removed/" 2>/dev/null
-    fi
 
     local BASE_ROOT SUBDIRS
     BASE_ROOT="$STATIONS_BASE"

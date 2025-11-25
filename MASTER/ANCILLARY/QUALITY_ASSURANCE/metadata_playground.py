@@ -12,10 +12,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # --- knobs to tweak ---
-STATION = "MINGO01"  # e.g. MINGO01, MINGO02, ...
+STATION = "MINGO04"  # e.g. MINGO01, MINGO02, ...
 STEP = 1             # numeric step (1, 2, ...)
-TASK = 2          # for STEP_1 use an int (1-5); keep None for steps without tasks
-START_DATE = "2025-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
+TASK = 3          # for STEP_1 use an int (1-5); keep None for steps without tasks
+START_DATE = "2025-03-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
 END_DATE = "2025-11-20 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
 # Window used when counting events (ns) and per-combination measured counts.
 # Set WINDOW_NS to the calibration window you used (e.g., coincidence_window_cal_ns),
@@ -818,7 +818,133 @@ if STEP == 1 and TASK == 3:
     
     print("STEP 1 TASK 3")
     
-    
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+    import numpy as np
+
+    planes = range(1, 5)
+    types = ["T_sum", "T_diff", "Q_sum", "Q_diff", "Y"]
+
+    # Adjustable marker size
+    marker_size = 2
+    sigma_limit = 4  # y-limits for normalized plots
+
+    # ----------------------------------------------------------
+    # First pass: determine global y-limits (before/after)
+    # ----------------------------------------------------------
+
+    y_min_global = None
+    y_max_global = None
+
+    for plane in planes:
+        for typ in types:
+
+            before = f"P{plane}_{typ}_nonzero_before_filter6"
+            after  = f"P{plane}_{typ}_nonzero_after_filter6"
+
+            if before in df.columns and after in df.columns:
+                local_min = min(df[before].min(), df[after].min())
+                local_max = max(df[before].max(), df[after].max())
+
+                if y_min_global is None or local_min < y_min_global:
+                    y_min_global = local_min
+                if y_max_global is None or local_max > y_max_global:
+                    y_max_global = local_max
+
+    # ----------------------------------------------------------
+    # Second pass: build figure
+    # ----------------------------------------------------------
+
+    fig = plt.figure(figsize=(28, 14))
+    outer_gs = gridspec.GridSpec(
+        nrows=len(planes),
+        ncols=len(types),
+        hspace=0.35,
+        wspace=0.25,
+    )
+
+    for i_plane, plane in enumerate(planes):
+        for j_type, typ in enumerate(types):
+
+            before = f"P{plane}_{typ}_nonzero_before_filter6"
+            after  = f"P{plane}_{typ}_nonzero_after_filter6"
+
+            inner_gs = gridspec.GridSpecFromSubplotSpec(
+                2,
+                1,
+                subplot_spec=outer_gs[i_plane, j_type],
+                height_ratios=[3, 1],
+                hspace=0.05
+            )
+
+            ax_main = fig.add_subplot(inner_gs[0, 0])
+            ax_norm = fig.add_subplot(inner_gs[1, 0], sharex=ax_main)
+
+            if before in df.columns and after in df.columns:
+
+                t = df["datetime"]
+                y_before = df[before]
+                y_after  = df[after]
+
+                # --- Upper raw plot ---
+                ax_main.plot(t, y_before, marker="o", markersize=marker_size,
+                            linestyle="", label="Before")
+                ax_main.plot(t, y_after,  marker="x", markersize=marker_size,
+                            linestyle="", label="After")
+
+                ax_main.set_title(f"P{plane} – {typ}", fontsize=9)
+                ax_main.set_ylim(y_min_global, y_max_global)
+
+                if j_type == 0:
+                    ax_main.set_ylabel("Value")
+
+                ax_main.grid(True)
+
+                # Only one legend in top-left panel
+                if i_plane == 0 and j_type == 0:
+                    ax_main.legend(loc="upper right", fontsize=7)
+
+                # Hide x tick labels on upper plot
+                plt.setp(ax_main.get_xticklabels(), visible=False)
+
+                # Normalization function
+                def normalize(v):
+                    m = np.nanmean(v)
+                    s = np.nanstd(v)
+                    return (v - m) / s if s > 0 else np.zeros_like(v)
+
+                y_before_norm = normalize(y_before)
+                y_after_norm  = normalize(y_after)
+
+                # --- Lower normalized plot ---
+                ax_norm.plot(t, y_before_norm, marker="o", markersize=marker_size,
+                            linestyle="", label="Before")
+                ax_norm.plot(t, y_after_norm,  marker="x", markersize=marker_size,
+                            linestyle="", label="After")
+
+                ax_norm.set_ylim(-sigma_limit, sigma_limit)
+                ax_norm.axhline(0, linestyle="--", linewidth=0.8)
+
+                if j_type == 0:
+                    ax_norm.set_ylabel("Z")
+
+                if i_plane == len(planes) - 1:
+                    ax_norm.set_xlabel("Datetime")
+
+                ax_norm.grid(True)
+
+            else:
+                ax_main.set_visible(False)
+                ax_norm.set_visible(False)
+
+    fig.suptitle(
+        "Before/After Filter6 Comparison Per Plane/Type (Global Raw Limits + Normalized ±4σ)",
+        fontsize=14
+    )
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
+
 
 #%%
 
@@ -1006,9 +1132,10 @@ if STEP == 1 and TASK == 4:
 
     plt.suptitle(f"Sigmoid Widths and Background Slopes for {STATION} STEP {STEP} TASK {TASK}",
                 fontsize=16)
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.show()
-
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
+        
+    #%%
 
     # ------------------------------------------------------------------
     # Residual sigma tracking (Gaussian fits stored in task_4 metadata)
@@ -1069,95 +1196,5 @@ if STEP == 1 and TASK == 4:
 
     #%%
     
-    WINDOW_NS = 3  # Set this to the coincidence window (ns) used when counting
-    
-    #-----------------------------------------------------------------------
-    # Compute noise/signal counts from fit parameters + measured counts
-    #-----------------------------------------------------------------------
-    import numpy as np
-    from math import erf, sqrt
 
-    combinations_int = [234, 123, 34, 1234, 23, 12, 124, 134, 24, 13, 14]
-
-    if filter_col:
-        df_sorted = df.sort_values(filter_col)
-    else:
-        df_sorted = df
-
-    if len(df_sorted) == 0:
-        raise SystemExit("No metadata rows available.")
-
-    latest_row = df_sorted.iloc[-1]
-
-    if WINDOW_NS is None:
-        print("[Info] WINDOW_NS is not set. Fill it with the coincidence window (ns) used when counting.")
-
-    results = []
-    for combo in combinations_int:
-        width = latest_row.get(f"sigmoid_width_{combo}", np.nan)
-        slope = latest_row.get(f"background_slope_{combo}", np.nan)
-        amp = latest_row.get(f"sigmoid_amplitude_{combo}", np.nan)
-        center = latest_row.get(f"sigmoid_center_{combo}", np.nan)
-        measured_counts = MEASURED_COUNTS.get(combo)
-
-        if not np.all(np.isfinite([width, slope, amp, center])):
-            results.append({
-                "combo": combo,
-                "noise_counts": np.nan,
-                "signal_counts": np.nan,
-                "background_fraction": np.nan,
-                "note": "Missing fit parameters",
-            })
-            continue
-
-        if WINDOW_NS is None or not np.isfinite(WINDOW_NS):
-            results.append({
-                "combo": combo,
-                "noise_counts": np.nan,
-                "signal_counts": np.nan,
-                "background_fraction": np.nan,
-                "note": "Set WINDOW_NS first",
-            })
-            continue
-
-        # Signal/background split at the chosen window width (normalized units)
-        s = 0.5 * amp * (1 + erf((WINDOW_NS - center) / (sqrt(2) * width)))
-        b = slope * WINDOW_NS
-        total = s + b
-
-        if total <= 0 or not np.isfinite(total):
-            results.append({
-                "combo": combo,
-                "noise_counts": np.nan,
-                "signal_counts": np.nan,
-                "background_fraction": np.nan,
-                "note": "Non-positive total from fit",
-            })
-            continue
-
-        p_bkg = b / total
-        p_sig = 1 - p_bkg
-
-        if measured_counts is None:
-            results.append({
-                "combo": combo,
-                "noise_counts": np.nan,
-                "signal_counts": np.nan,
-                "background_fraction": p_bkg,
-                "note": "Add MEASURED_COUNTS[combo]",
-            })
-            continue
-
-        noise_counts = measured_counts * p_bkg
-        signal_counts = measured_counts * p_sig
-        results.append({
-            "combo": combo,
-            "noise_counts": noise_counts,
-            "signal_counts": signal_counts,
-            "background_fraction": p_bkg,
-            "note": "",
-        })
-
-    results_df = pd.DataFrame(results)
-    print("\nEstimated noise/signal counts per combination (latest metadata row):")
-    print(results_df.to_string(index=False))
+# %%

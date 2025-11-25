@@ -2378,9 +2378,11 @@ else:
                     shutil.move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
-                    sys.exit("No files to process in COMPLETED after normalization.")
+                    print("No files to process in COMPLETED after normalization.")
+                    sys.exit(0)
             else:
-                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                sys.exit(0)
 
     else:
         if unprocessed_files:
@@ -2426,10 +2428,12 @@ else:
                     print(f"File moved to PROCESSING: {processing_file_path}")
                     break
             else:
-                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                sys.exit(0)
 
         else:
-            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            sys.exit(0)
 
 # This is for all cases
 file_path = processing_file_path
