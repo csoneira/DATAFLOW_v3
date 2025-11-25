@@ -225,9 +225,9 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             "phi": "green",
             "x": "darkorange",
             "y": "darkorange",
-            "alt_y": "darkorange",
+            "det_y": "darkorange",
             "s": "purple",
-            "alt_s": "purple",
+            "det_s": "purple",
             "th_chi": "red",
             "res_ystr": "teal",
             "res_tsum": "brown",
@@ -246,11 +246,11 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             left, right = phi_left_filter, phi_right_filter
             selected_col = color_map["phi"]
 
-        elif col in ["x", "alt_x", "y", "alt_y"]:
+        elif col in ["x", "det_x", "y", "det_y"]:
             left, right = -pos_filter, pos_filter
             selected_col = color_map["x"]
 
-        elif col in ["s", "alt_s"]:
+        elif col in ["s", "det_s"]:
             left, right = slowness_filter_left, slowness_filter_right
             selected_col = color_map["s"]
 
@@ -451,7 +451,8 @@ def plot_err_only_ts_hist(df, base_cols, time_col, title):
             ts_ax.set_visible(False)
             hist_ax.set_visible(False)
             continue
-        series = df[err_col].dropna().abs()
+        # series = df[err_col].dropna().abs()
+        series = df[err_col].dropna()
         if series.empty:
             ts_ax.set_visible(False)
             hist_ax.set_visible(False)
@@ -483,7 +484,7 @@ def plot_err_only_ts_hist(df, base_cols, time_col, title):
 # -----------------------------------------------------------------------------
 
 
-run_jupyter_notebook = True
+run_jupyter_notebook = False
 if run_jupyter_notebook:
     station = "1"
 else:
@@ -1100,7 +1101,7 @@ blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
-number_of_alt_executions = config["number_of_alt_executions"]
+number_of_det_executions = config["number_of_det_executions"]
 
 # TimTrack
 fixed_speed = config["fixed_speed"]
@@ -1189,20 +1190,20 @@ Y_RPC_left = config["Y_RPC_left"]
 Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
-alt_pos_filter = config["alt_pos_filter"]
-alt_theta_left_filter = config["alt_theta_left_filter"]
-alt_theta_right_filter = config["alt_theta_right_filter"]
-alt_phi_left_filter = config["alt_phi_left_filter"]
-alt_phi_right_filter = config["alt_phi_right_filter"]
-alt_slowness_filter_left = config["alt_slowness_filter_left"]
-alt_slowness_filter_right = config["alt_slowness_filter_right"]
+det_pos_filter = config["det_pos_filter"]
+det_theta_left_filter = config["det_theta_left_filter"]
+det_theta_right_filter = config["det_theta_right_filter"]
+det_phi_left_filter = config["det_phi_left_filter"]
+det_phi_right_filter = config["det_phi_right_filter"]
+det_slowness_filter_left = config["det_slowness_filter_left"]
+det_slowness_filter_right = config["det_slowness_filter_right"]
 
-alt_res_ystr_filter = config["alt_res_ystr_filter"]
-alt_res_tsum_filter = config["alt_res_tsum_filter"]
-alt_res_tdif_filter = config["alt_res_tdif_filter"]
-alt_ext_res_ystr_filter = config["alt_ext_res_ystr_filter"]
-alt_ext_res_tsum_filter = config["alt_ext_res_tsum_filter"]
-alt_ext_res_tdif_filter = config["alt_ext_res_tdif_filter"]
+det_res_ystr_filter = config["det_res_ystr_filter"]
+det_res_tsum_filter = config["det_res_tsum_filter"]
+det_res_tdif_filter = config["det_res_tdif_filter"]
+det_ext_res_ystr_filter = config["det_ext_res_ystr_filter"]
+det_ext_res_tsum_filter = config["det_ext_res_tsum_filter"]
+det_ext_res_tdif_filter = config["det_ext_res_tdif_filter"]
 
 # TimTrack filter
 proj_filter = config["proj_filter"]
@@ -1354,16 +1355,16 @@ Q_diff_color = 'red'
 T_sum_color = 'blue'
 T_diff_color = 'green'
 
-pos_filter = alt_pos_filter
+pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = alt_slowness_filter_left
-slowness_filter_right = alt_slowness_filter_right
+slowness_filter_left = det_slowness_filter_left
+slowness_filter_right = det_slowness_filter_right
 
-theta_left_filter = alt_theta_left_filter
-theta_right_filter = alt_theta_right_filter
-phi_left_filter = alt_phi_left_filter
-phi_right_filter = alt_phi_right_filter
+theta_left_filter = det_theta_left_filter
+theta_right_filter = det_theta_right_filter
+phi_left_filter = det_phi_left_filter
+phi_right_filter = det_phi_right_filter
 
 fig_idx = 1
 plot_list = []
@@ -1534,10 +1535,10 @@ RESIDUAL_SERIES: tuple[str, ...] = (
 )
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
-    "alt_residual_zeroed_event_pct",
+    "det_residual_zeroed_event_pct",
     "residual_zeroed_event_pct",
     "small_values_zeroed_value_pct",
-    "alt_bounds_zeroed_event_pct",
+    "det_bounds_zeroed_event_pct",
     "definitive_small_values_zeroed_value_pct",
     "definitive_rows_removed_pct",
 )
@@ -1887,7 +1888,7 @@ blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
-number_of_alt_executions = config["number_of_alt_executions"]
+number_of_det_executions = config["number_of_det_executions"]
 
 # TimTrack
 fixed_speed = config["fixed_speed"]
@@ -1975,17 +1976,17 @@ Y_RPC_left = config["Y_RPC_left"]
 Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
-alt_pos_filter = config["alt_pos_filter"]
-alt_theta_left_filter = config["alt_theta_left_filter"]
-alt_theta_right_filter = config["alt_theta_right_filter"]
-alt_phi_left_filter = config["alt_phi_left_filter"]
-alt_phi_right_filter = config["alt_phi_right_filter"]
-alt_slowness_filter_left = config["alt_slowness_filter_left"]
-alt_slowness_filter_right = config["alt_slowness_filter_right"]
+det_pos_filter = config["det_pos_filter"]
+det_theta_left_filter = config["det_theta_left_filter"]
+det_theta_right_filter = config["det_theta_right_filter"]
+det_phi_left_filter = config["det_phi_left_filter"]
+det_phi_right_filter = config["det_phi_right_filter"]
+det_slowness_filter_left = config["det_slowness_filter_left"]
+det_slowness_filter_right = config["det_slowness_filter_right"]
 
-alt_res_ystr_filter = config["alt_res_ystr_filter"]
-alt_res_tsum_filter = config["alt_res_tsum_filter"]
-alt_res_tdif_filter = config["alt_res_tdif_filter"]
+det_res_ystr_filter = config["det_res_ystr_filter"]
+det_res_tsum_filter = config["det_res_tsum_filter"]
+det_res_tdif_filter = config["det_res_tdif_filter"]
 
 # TimTrack filter
 proj_filter = config["proj_filter"]
@@ -2132,16 +2133,16 @@ Q_diff_color = 'red'
 T_sum_color = 'blue'
 T_diff_color = 'green'
 
-pos_filter = alt_pos_filter
+pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = alt_slowness_filter_left
-slowness_filter_right = alt_slowness_filter_right
+slowness_filter_left = det_slowness_filter_left
+slowness_filter_right = det_slowness_filter_right
 
-theta_left_filter = alt_theta_left_filter
-theta_right_filter = alt_theta_right_filter
-phi_left_filter = alt_phi_left_filter
-phi_right_filter = alt_phi_right_filter
+theta_left_filter = det_theta_left_filter
+theta_right_filter = det_theta_right_filter
+phi_left_filter = det_phi_left_filter
+phi_right_filter = det_phi_right_filter
 
 fig_idx = 1
 plot_list = []
@@ -2562,7 +2563,7 @@ blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
-number_of_alt_executions = config["number_of_alt_executions"]
+number_of_det_executions = config["number_of_det_executions"]
 
 # TimTrack
 fixed_speed = config["fixed_speed"]
@@ -2655,17 +2656,17 @@ Y_RPC_left = config["Y_RPC_left"]
 Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
-alt_pos_filter = config["alt_pos_filter"]
-alt_theta_left_filter = config["alt_theta_left_filter"]
-alt_theta_right_filter = config["alt_theta_right_filter"]
-alt_phi_left_filter = config["alt_phi_left_filter"]
-alt_phi_right_filter = config["alt_phi_right_filter"]
-alt_slowness_filter_left = config["alt_slowness_filter_left"]
-alt_slowness_filter_right = config["alt_slowness_filter_right"]
+det_pos_filter = config["det_pos_filter"]
+det_theta_left_filter = config["det_theta_left_filter"]
+det_theta_right_filter = config["det_theta_right_filter"]
+det_phi_left_filter = config["det_phi_left_filter"]
+det_phi_right_filter = config["det_phi_right_filter"]
+det_slowness_filter_left = config["det_slowness_filter_left"]
+det_slowness_filter_right = config["det_slowness_filter_right"]
 
-alt_res_ystr_filter = config["alt_res_ystr_filter"]
-alt_res_tsum_filter = config["alt_res_tsum_filter"]
-alt_res_tdif_filter = config["alt_res_tdif_filter"]
+det_res_ystr_filter = config["det_res_ystr_filter"]
+det_res_tsum_filter = config["det_res_tsum_filter"]
+det_res_tdif_filter = config["det_res_tdif_filter"]
 
 # TimTrack filter
 proj_filter = config["proj_filter"]
@@ -2812,16 +2813,16 @@ Q_diff_color = 'red'
 T_sum_color = 'blue'
 T_diff_color = 'green'
 
-pos_filter = alt_pos_filter
+pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = alt_slowness_filter_left
-slowness_filter_right = alt_slowness_filter_right
+slowness_filter_left = det_slowness_filter_left
+slowness_filter_right = det_slowness_filter_right
 
-theta_left_filter = alt_theta_left_filter
-theta_right_filter = alt_theta_right_filter
-phi_left_filter = alt_phi_left_filter
-phi_right_filter = alt_phi_right_filter
+theta_left_filter = det_theta_left_filter
+theta_right_filter = det_theta_right_filter
+phi_left_filter = det_phi_left_filter
+phi_right_filter = det_phi_right_filter
 
 fig_idx = 1
 plot_list = []
@@ -2999,7 +3000,7 @@ if raw_data_len == 0 and not self_trigger:
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
-print("-------------- Alternative angle and slowness fitting ----------------")
+print("-------------- Detached angle and slowness fitting ----------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
@@ -3061,26 +3062,26 @@ n = len(working_df)
 
 # Angular definitions
 fit_cols = (
-    ['alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_chi2'] +
-    [f'alt_res_tdif_{p}' for p in range(1, 5)] +
-    [f'alt_res_ystr_{p}' for p in range(1, 5)]
+    ['det_x', 'det_y', 'det_theta', 'det_phi', 'det_chi2'] +
+    [f'det_res_tdif_{p}' for p in range(1, 5)] +
+    [f'det_res_ystr_{p}' for p in range(1, 5)]
 )
 
 # Slowness definitions
-slow_cols = ['alt_s', 'alt_s_ordinate' , 'chi2_tsum_fit'] + [f'alt_res_tsum_{p}' for p in range(1, 5)]
+slow_cols = ['det_s', 'det_s_ordinate' , 'chi2_tsum_fit'] + [f'det_res_tsum_{p}' for p in range(1, 5)]
 
 # Alternative analysis starts -----------------------------------------------
-repeat = number_of_alt_executions - 1 if alternative_iteration else 0
-for alt_iteration in range(repeat + 1):
+repeat = number_of_det_executions - 1 if alternative_iteration else 0
+for det_iteration in range(repeat + 1):
     fitted = 0
     if alternative_iteration:
-        print(f"Alternative iteration {alt_iteration+1} out of {number_of_alt_executions}.")
+        print(f"Alternative iteration {det_iteration+1} out of {number_of_det_executions}.")
     
     fit_res = {c: np.zeros(n, dtype=float) for c in fit_cols}
     slow_res  = {c: np.zeros(n, dtype=float) for c in slow_cols}
-    alt_ext_res_ystr_arr = np.zeros((n, 4), dtype=float)
-    alt_ext_res_tsum_arr = np.zeros((n, 4), dtype=float)
-    alt_ext_res_tdif_arr = np.zeros((n, 4), dtype=float)
+    det_ext_res_ystr_arr = np.zeros((n, 4), dtype=float)
+    det_ext_res_tsum_arr = np.zeros((n, 4), dtype=float)
+    det_ext_res_tdif_arr = np.zeros((n, 4), dtype=float)
     det_processed_tt_arr = np.zeros(n, dtype=int)
     
     for i, trk in enumerate(working_df.itertuples(index=False)):
@@ -3095,18 +3096,18 @@ for alt_iteration in range(repeat + 1):
         y = np.array([getattr(trk, f'P{p}_Y_final') for p in planes])
         z = z_positions[np.array(planes) - 1]
 
-        (fit_res['alt_x'][i], fit_res['alt_y'][i], fit_res['alt_theta'][i], fit_res['alt_phi'][i], fit_res['alt_chi2'][i], res_td, res_y) = fit_3d_line(x, y, z, anc_sx, anc_sy, anc_sz, planes, tdiff_to_x)
+        (fit_res['det_x'][i], fit_res['det_y'][i], fit_res['det_theta'][i], fit_res['det_phi'][i], fit_res['det_chi2'][i], res_td, res_y) = fit_3d_line(x, y, z, anc_sx, anc_sy, anc_sz, planes, tdiff_to_x)
 
         for p in range(1, 5):
-            fit_res[f'alt_res_tdif_{p}'][i] = res_td.get(p, 0.0)
-            fit_res[f'alt_res_ystr_{p}'][i] = res_y .get(p, 0.0)
+            fit_res[f'det_res_tdif_{p}'][i] = res_td.get(p, 0.0)
+            fit_res[f'det_res_ystr_{p}'][i] = res_y .get(p, 0.0)
 
         # Slowness part ----------------------------------------------------------------
         tsum = np.array([getattr(trk, f'P{p}_T_sum_final') for p in planes])
 
         # Reconstruct fitted points using the fitted direction and z-positions
-        θ, φ = fit_res['alt_theta'][i], fit_res['alt_phi'][i]
-        x0, y0 = fit_res['alt_x'][i], fit_res['alt_y'][i]
+        θ, φ = fit_res['det_theta'][i], fit_res['det_phi'][i]
+        x0, y0 = fit_res['det_x'][i], fit_res['det_y'][i]
 
         v = np.array([np.sin(θ) * np.cos(φ),
                       np.sin(θ) * np.sin(φ),
@@ -3127,11 +3128,11 @@ for alt_iteration in range(repeat + 1):
         res  = t_rel - (k * s_rel + b)
         chi2 = np.sum((res / anc_sts) ** 2)
 
-        slow_res['alt_s'][i]          = k
-        slow_res['alt_s_ordinate'][i] = b
+        slow_res['det_s'][i]          = k
+        slow_res['det_s_ordinate'][i] = b
         slow_res['chi2_tsum_fit'][i]  = chi2
         for p, r in zip(planes, res):
-            slow_res[f'alt_res_tsum_{p}'][i] = r
+            slow_res[f'det_res_tsum_{p}'][i] = r
 
         # External residuals (leave-one-plane-out) -----------------------------------
         if len(planes) >= 3:
@@ -3159,8 +3160,8 @@ for alt_iteration in range(repeat + 1):
                 x_obs_p = tdiff_to_x * getattr(trk, f'P{p}_T_diff_final')
                 y_obs_p = getattr(trk, f'P{p}_Y_final')
 
-                alt_ext_res_tdif_arr[i, p - 1] = (x_obs_p - x_pred_p) / tdiff_to_x
-                alt_ext_res_ystr_arr[i, p - 1] = (y_obs_p - y_pred_p)
+                det_ext_res_tdif_arr[i, p - 1] = (x_obs_p - x_pred_p) / tdiff_to_x
+                det_ext_res_ystr_arr[i, p - 1] = (y_obs_p - y_pred_p)
 
                 # tsum external residual using leave-one-out slope
                 x_fit_lo = x0_lo + v_lo[0] * z_lo / v_lo[2]
@@ -3176,24 +3177,24 @@ for alt_iteration in range(repeat + 1):
                     pos_p = np.array([x_fit_p, y_fit_p, z_p])
                     s_rel_p = pos_p @ v_lo - real_dist_lo[0]
                     t_rel_p = getattr(trk, f'P{p}_T_sum_final') - tsum_lo[0]
-                    alt_ext_res_tsum_arr[i, p - 1] = t_rel_p - (k_lo * s_rel_p + b_lo)
+                    det_ext_res_tsum_arr[i, p - 1] = t_rel_p - (k_lo * s_rel_p + b_lo)
 
 
     # 4.  Assemble all results and join once
     all_res = {**fit_res, **slow_res}
-    all_res['alt_ext_res_ystr_1'] = alt_ext_res_ystr_arr[:, 0]
-    all_res['alt_ext_res_ystr_2'] = alt_ext_res_ystr_arr[:, 1]
-    all_res['alt_ext_res_ystr_3'] = alt_ext_res_ystr_arr[:, 2]
-    all_res['alt_ext_res_ystr_4'] = alt_ext_res_ystr_arr[:, 3]
-    all_res['alt_ext_res_tsum_1'] = alt_ext_res_tsum_arr[:, 0]
-    all_res['alt_ext_res_tsum_2'] = alt_ext_res_tsum_arr[:, 1]
-    all_res['alt_ext_res_tsum_3'] = alt_ext_res_tsum_arr[:, 2]
-    all_res['alt_ext_res_tsum_4'] = alt_ext_res_tsum_arr[:, 3]
-    all_res['alt_ext_res_tdif_1'] = alt_ext_res_tdif_arr[:, 0]
-    all_res['alt_ext_res_tdif_2'] = alt_ext_res_tdif_arr[:, 1]
-    all_res['alt_ext_res_tdif_3'] = alt_ext_res_tdif_arr[:, 2]
-    all_res['alt_ext_res_tdif_4'] = alt_ext_res_tdif_arr[:, 3]
-    all_res['alt_th_chi'] = all_res['alt_chi2'] + all_res['chi2_tsum_fit']
+    all_res['det_ext_res_ystr_1'] = det_ext_res_ystr_arr[:, 0]
+    all_res['det_ext_res_ystr_2'] = det_ext_res_ystr_arr[:, 1]
+    all_res['det_ext_res_ystr_3'] = det_ext_res_ystr_arr[:, 2]
+    all_res['det_ext_res_ystr_4'] = det_ext_res_ystr_arr[:, 3]
+    all_res['det_ext_res_tsum_1'] = det_ext_res_tsum_arr[:, 0]
+    all_res['det_ext_res_tsum_2'] = det_ext_res_tsum_arr[:, 1]
+    all_res['det_ext_res_tsum_3'] = det_ext_res_tsum_arr[:, 2]
+    all_res['det_ext_res_tsum_4'] = det_ext_res_tsum_arr[:, 3]
+    all_res['det_ext_res_tdif_1'] = det_ext_res_tdif_arr[:, 0]
+    all_res['det_ext_res_tdif_2'] = det_ext_res_tdif_arr[:, 1]
+    all_res['det_ext_res_tdif_3'] = det_ext_res_tdif_arr[:, 2]
+    all_res['det_ext_res_tdif_4'] = det_ext_res_tdif_arr[:, 3]
+    all_res['det_th_chi'] = all_res['det_chi2'] + all_res['chi2_tsum_fit']
     all_res['det_processed_tt'] = det_processed_tt_arr
 
     new_cols = pd.DataFrame(all_res, index=working_df.index)
@@ -3204,18 +3205,18 @@ for alt_iteration in range(repeat + 1):
 
 
     # # Filter according to residual ------------------------------------------------
-    # alt_changed_event_count = 0
+    # det_changed_event_count = 0
     # for index, row in working_df.iterrows():
-    #     alt_changed = False
+    #     det_changed = False
     #     for i in range(1, 5):
-    #         if abs(row[f'alt_res_tsum_{i}']) > alt_res_tsum_filter or \
-    #             abs(row[f'alt_res_tdif_{i}']) > alt_res_tdif_filter or \
-    #             abs(row[f'alt_res_ystr_{i}']) > alt_res_ystr_filter or \
-    #             abs(row[f'alt_ext_res_tsum_{i}']) > alt_ext_res_tsum_filter or \
-    #             abs(row[f'alt_ext_res_tdif_{i}']) > alt_ext_res_tdif_filter or \
-    #             abs(row[f'alt_ext_res_ystr_{i}']) > alt_ext_res_ystr_filter:
+    #         if abs(row[f'det_res_tsum_{i}']) > det_res_tsum_filter or \
+    #             abs(row[f'det_res_tdif_{i}']) > det_res_tdif_filter or \
+    #             abs(row[f'det_res_ystr_{i}']) > det_res_ystr_filter or \
+    #             abs(row[f'det_ext_res_tsum_{i}']) > det_ext_res_tsum_filter or \
+    #             abs(row[f'det_ext_res_tdif_{i}']) > det_ext_res_tdif_filter or \
+    #             abs(row[f'det_ext_res_ystr_{i}']) > det_ext_res_ystr_filter:
     #             
-    #             alt_changed = True
+    #             det_changed = True
     #             working_df.at[index, f'P{i}_Y_final'] = 0
     #             working_df.at[index, f'P{i}_T_sum_final'] = 0
     #             working_df.at[index, f'P{i}_T_diff_final'] = 0
@@ -3223,21 +3224,21 @@ for alt_iteration in range(repeat + 1):
     #             working_df.at[index, f'P{i}_Q_diff_final'] = 0
     #             # Also clear residuals so they don't appear in other plane combinations
     #             for col in (
-    #                 f'alt_res_ystr_{i}', f'alt_res_tsum_{i}', f'alt_res_tdif_{i}',
-    #                 f'alt_ext_res_ystr_{i}', f'alt_ext_res_tsum_{i}', f'alt_ext_res_tdif_{i}'
+    #                 f'det_res_ystr_{i}', f'det_res_tsum_{i}', f'det_res_tdif_{i}',
+    #                 f'det_ext_res_ystr_{i}', f'det_ext_res_tsum_{i}', f'det_ext_res_tdif_{i}'
     #             ):
     #                 if col in working_df.columns:
     #                     working_df.at[index, col] = 0
-    #     if alt_changed:
-    #         alt_changed_event_count += 1
-    # print(f"--> {alt_changed_event_count} events were residual filtered.")
+    #     if det_changed:
+    #         det_changed_event_count += 1
+    # print(f"--> {det_changed_event_count} events were residual filtered.")
     # record_filter_metric(
-    #     "alt_residual_zeroed_event_pct",
-    #     alt_changed_event_count,
+    #     "det_residual_zeroed_event_pct",
+    #     det_changed_event_count,
     #     len(working_df),
     # )
     # 
-    # alt_iteration += 1
+    # det_iteration += 1
 
 
 # ---------------------------------------------------------------------------
@@ -3350,35 +3351,35 @@ record_filter_metric(
 )
 
 
-# alt_bounds_changed = np.zeros(len(working_df), dtype=bool)
+# det_bounds_changed = np.zeros(len(working_df), dtype=bool)
 # for col in working_df.columns:
 #     # Alternative fitting results
-#     if 'alt_x' == col or 'alt_y' == col:
-#         cond_bound = (working_df[col] > alt_pos_filter) | (working_df[col] < -1*alt_pos_filter)
+#     if 'det_x' == col or 'det_y' == col:
+#         cond_bound = (working_df[col] > det_pos_filter) | (working_df[col] < -1*det_pos_filter)
 #         cond_zero = (working_df[col] == 0)
 #         change_mask = cond_bound | cond_zero
-#         alt_bounds_changed |= change_mask
+#         det_bounds_changed |= change_mask
 #         working_df.loc[:, col] = np.where(change_mask, 0, working_df[col])
-#     if 'alt_theta' == col:
-#         cond_bound = (working_df[col] > alt_theta_right_filter) | (working_df[col] < alt_theta_left_filter)
+#     if 'det_theta' == col:
+#         cond_bound = (working_df[col] > det_theta_right_filter) | (working_df[col] < det_theta_left_filter)
 #         cond_zero = (working_df[col] == 0)
 #         change_mask = cond_bound | cond_zero
-#         alt_bounds_changed |= change_mask
+#         det_bounds_changed |= change_mask
 #         working_df.loc[:, col] = np.where(change_mask, 0, working_df[col])
-#     if 'alt_phi' == col:
-#         cond_bound = (working_df[col] > alt_phi_right_filter) | (working_df[col] < alt_phi_left_filter)
+#     if 'det_phi' == col:
+#         cond_bound = (working_df[col] > det_phi_right_filter) | (working_df[col] < det_phi_left_filter)
 #         cond_zero = (working_df[col] == 0)
 #         change_mask = cond_bound | cond_zero
-#         alt_bounds_changed |= change_mask
+#         det_bounds_changed |= change_mask
 #         working_df.loc[:, col] = np.where(change_mask, 0, working_df[col])
-#     if 'alt_s' == col:
-#         cond_bound = (working_df[col] > alt_slowness_filter_right) | (working_df[col] < alt_slowness_filter_left)
+#     if 'det_s' == col:
+#         cond_bound = (working_df[col] > det_slowness_filter_right) | (working_df[col] < det_slowness_filter_left)
 #         cond_zero = (working_df[col] == 0)
 #         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
 
 # record_filter_metric(
-#     "alt_bounds_zeroed_event_pct",
-#     float(alt_bounds_changed.sum()),
+#     "det_bounds_zeroed_event_pct",
+#     float(det_bounds_changed.sum()),
 #     float(len(working_df)),
 # )
 
@@ -3388,22 +3389,25 @@ print("Alternative fitting done.")
 #%%
 
 # Build detached (independent) variables
-working_df["det_x"] = working_df.get("alt_x", 0)
-working_df["det_y"] = working_df.get("alt_y", 0)
-working_df["det_theta"] = working_df.get("alt_theta", 0)
-working_df["det_phi"] = working_df.get("alt_phi", 0)
-working_df["det_s"] = working_df.get("alt_s", 0)
-working_df["det_t0"] = working_df.get("alt_s_ordinate", 0)
+working_df["det_x"] = working_df.get("det_x", 0)
+working_df["det_y"] = working_df.get("det_y", 0)
+working_df["det_theta"] = working_df.get("det_theta", 0)
+working_df["det_phi"] = working_df.get("det_phi", 0)
+working_df["det_s"] = working_df.get("det_s", 0)
+working_df["det_t0"] = working_df.get("det_s_ordinate", 0)
+
 # Detached processed_tt label for plotting (fallback only if not set by alt loop)
 if "det_processed_tt" not in working_df.columns:
     working_df["det_processed_tt"] = working_df.get("processed_tt", 0)
+
 for p in range(1, 5):
-    working_df[f"det_res_ystr_{p}"] = working_df.get(f"alt_res_ystr_{p}", 0)
-    working_df[f"det_res_tsum_{p}"] = working_df.get(f"alt_res_tsum_{p}", 0)
-    working_df[f"det_res_tdif_{p}"] = working_df.get(f"alt_res_tdif_{p}", 0)
-    working_df[f"det_ext_res_ystr_{p}"] = working_df.get(f"alt_ext_res_ystr_{p}", 0)
-    working_df[f"det_ext_res_tsum_{p}"] = working_df.get(f"alt_ext_res_tsum_{p}", 0)
-    working_df[f"det_ext_res_tdif_{p}"] = working_df.get(f"alt_ext_res_tdif_{p}", 0)
+    working_df[f"det_res_ystr_{p}"] = working_df.get(f"det_res_ystr_{p}", 0)
+    working_df[f"det_res_tsum_{p}"] = working_df.get(f"det_res_tsum_{p}", 0)
+    working_df[f"det_res_tdif_{p}"] = working_df.get(f"det_res_tdif_{p}", 0)
+    working_df[f"det_ext_res_ystr_{p}"] = working_df.get(f"det_ext_res_ystr_{p}", 0)
+    working_df[f"det_ext_res_tsum_{p}"] = working_df.get(f"det_ext_res_tsum_{p}", 0)
+    working_df[f"det_ext_res_tdif_{p}"] = working_df.get(f"det_ext_res_tdif_{p}", 0)
+
 
 if create_plots:
     # Detached method plots (per combination)
@@ -3434,16 +3438,6 @@ if create_plots:
                     time_col="datetime",
                     title=f"detached_residuals_combo_{combo}",
                 )
-            plot_residuals_ts_hist(
-                subset,
-                prefixes=[
-                    ("ystr", "det_res_ystr_", "det_ext_res_ystr_"),
-                    ("tsum", "det_res_tsum_", "det_ext_res_tsum_"),
-                    ("tdif", "det_res_tdif_", "det_ext_res_tdif_"),
-                ],
-                time_col="datetime",
-                title=f"detached_residuals_combo_{combo}",
-            )
 
 
 #%%
@@ -3837,9 +3831,9 @@ for iteration in range(repeat + 1):
     #             f'ext_res_ystr_{plane_idx}',
     #             f'ext_res_tsum_{plane_idx}',
     #             f'ext_res_tdif_{plane_idx}',
-    #             f'alt_res_ystr_{plane_idx}',
-    #             f'alt_res_tsum_{plane_idx}',
-    #             f'alt_res_tdif_{plane_idx}',
+    #             f'det_res_ystr_{plane_idx}',
+    #             f'det_res_tsum_{plane_idx}',
+    #             f'det_res_tdif_{plane_idx}',
     #         ]
     #         existing = [c for c in cols_to_zero if c in working_df.columns]
     #         working_df.loc[mask, existing] = 0
@@ -3877,16 +3871,18 @@ theta, phi = calculate_angles(working_df['xp'], working_df['yp'])
 new_columns_df = pd.DataFrame({'theta': theta, 'phi': phi}, index=working_df.index)
 working_df = pd.concat([working_df, new_columns_df], axis=1)
 
-
 # TimTrack-prefixed variables
 working_df["tim_x"] = working_df.get("x", 0)
 working_df["tim_y"] = working_df.get("y", 0)
+
 # Derive theta/phi from TimTrack slopes to ensure consistency
 theta_vals, phi_vals = calculate_angles(working_df["xp"], working_df["yp"])
 working_df["tim_theta"] = theta_vals
 working_df["tim_phi"] = phi_vals
+
 working_df["tim_s"] = working_df.get("s", 0)
 working_df["tim_t0"] = working_df.get("t0", 0)
+
 for p in range(1, 5):
     working_df[f"tim_res_ystr_{p}"] = working_df.get(f"res_ystr_{p}", 0)
     working_df[f"tim_res_tsum_{p}"] = working_df.get(f"res_tsum_{p}", 0)
@@ -3929,6 +3925,9 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
 # Combine detached and TimTrack estimates ------------------------------------
 combined_core_vars = ["x", "y", "theta", "phi", "s", "t0"]
 for base in combined_core_vars:
+    
+    working_df = working_df.copy()
+    
     det_col = f"det_{base}"
     tim_col = f"tim_{base}"
     det_vals = working_df[det_col].to_numpy(copy=False) if det_col in working_df else np.zeros(len(working_df))
@@ -3962,9 +3961,9 @@ for base, det_prefix, tim_prefix in residual_sets:
 
 
 
-print("----------------------------------------------------------------------")
-print("-------------------------- New definitions ---------------------------")
-print("----------------------------------------------------------------------")
+# print("----------------------------------------------------------------------")
+# print("-------------------------- New definitions ---------------------------")
+# print("----------------------------------------------------------------------")
 
 # Derive definitive_tt before any plotting/filters that rely on it.
 def compute_definitive_tt(row):
@@ -3996,13 +3995,13 @@ def compute_definitive_tt(row):
 working_df["definitive_tt"] = working_df.apply(compute_definitive_tt, axis=1)
 
 
-if create_plots and "definitive_tt" in working_df.columns and "datetime" in working_df.columns:
+if create_plots and "processed_tt" in working_df.columns and "datetime" in working_df.columns:
     for combo in TRACK_COMBINATIONS:
         try:
             combo_int = int(combo)
         except ValueError:
             continue
-        subset = working_df[working_df["definitive_tt"] == combo_int]
+        subset = working_df[working_df["processed_tt"] == combo_int]
         if subset.empty:
             continue
         plot_ts_err_with_hist(
@@ -4024,17 +4023,68 @@ if create_plots and "definitive_tt" in working_df.columns and "datetime" in work
 
 
 
-if create_plots:
+# Time series of core track variables (averaged and errors) ------------------
+if create_plots and 'datetime' in working_df.columns:
+    
+    ts_core = working_df.copy()
+    ts_core['datetime'] = pd.to_datetime(ts_core['datetime'])
+    ts_core = ts_core.sort_values('datetime')
+
+    core_vars = ['x', 'y', 'theta', 'phi', 's', 't0', 'chi_timtrack', 'chi_alternative',
+                 'x_err', 'y_err', 'theta_err', 'phi_err', 's_err']
+
+    # for combo in TRACK_COMBINATIONS:
+    #     try:
+    #         combo_int = int(combo)
+    #     except ValueError:
+    #         continue
+    #     subset = ts_core[ts_core['definitive_tt'] == combo_int]
+    #     if subset.empty:
+    #         continue
+
+    #     n_vars = len(core_vars)
+    #     fig, axes = plt.subplots(n_vars, 1, figsize=(14, 2.4 * n_vars), sharex=True)
+    #     if n_vars == 1:
+    #         axes = [axes]
+
+    #     for ax, var in zip(axes, core_vars):
+    #         if var not in subset.columns:
+    #             ax.set_visible(False)
+    #             continue
+    #         y = subset[var]
+    #         err_col = f"{var}_err"
+    #         if err_col in subset.columns:
+    #             # Ensure error bars are non-negative to satisfy matplotlib.
+    #             yerr = subset[err_col].abs()
+    #         else:
+    #             yerr = None
+    #         ax.errorbar(subset['datetime'], y, yerr=yerr, fmt='.', ms=2, label=var)
+    #         ax.set_ylabel(var)
+    #         ax.grid(True, alpha=0.3)
+    #         ax.legend(fontsize='x-small')
+    #     axes[-1].set_xlabel('Datetime')
+    #     plt.suptitle(f'Core track variables over time - combination {combo}', fontsize=12)
+    #     plt.tight_layout(rect=[0, 0, 1, 0.95])
+    #     if save_plots:
+    #         final_filename = f'{fig_idx}_ts_core_vars_combo_{combo}.png'
+    #         fig_idx += 1
+    #         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    #         plot_list.append(save_fig_path)
+    #         plt.savefig(save_fig_path, format='png')
+    #     if show_plots:
+    #         plt.show()
+    #     plt.close()
+    
     
     # Combined error histograms across combinations (one figure) --------------------
-    err_vars = ['x_err', 'y_err', 'theta_err', 'phi_err', 's_err']
+    err_vars = ['x_err', 'y_err', 'theta_err', 'phi_err', 's_err', 't0_err']
     combo_subsets = []
     for combo in TRACK_COMBINATIONS:
         try:
             combo_int = int(combo)
         except ValueError:
             continue
-        subset = ts_core[ts_core['definitive_tt'] == combo_int]
+        subset = ts_core[ts_core['processed_tt'] == combo_int]
         if subset.empty:
             continue
         combo_subsets.append((combo, subset))
@@ -4098,9 +4148,9 @@ if create_plots:
 
 
 
-import sys
-print("DEBUG EXITING")
-sys.exit()
+# import sys
+# print("DEBUG EXITING")
+# sys.exit()
 
 
 # print("----------------------------------------------------------------------")
@@ -4191,12 +4241,12 @@ sys.exit()
 # print("------------------ Slowness residual comprobation ---------------------")
 # print("----------------------------------------------------------------------")
 
-# working_df['delta_s'] = working_df['alt_s'] - working_df['s']  # Calculate the difference from the speed of light
+# working_df['delta_s'] = working_df['det_s'] - working_df['s']  # Calculate the difference from the speed of light
 
 
 
 # if create_plots:
-#     print("Plotting residuals of alt_s - s for each original_tt to processed_tt case...")
+#     print("Plotting residuals of det_s - s for each original_tt to processed_tt case...")
     
 #     df_filtered = working_df.copy()
 #     bins = np.linspace(delta_s_left, delta_s_right, 100)  # Adjust range and bin size as needed
@@ -4217,8 +4267,8 @@ sys.exit()
 
 #         df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
 #         residuals = df_tt['delta_s']  # Calculate the residuals
-#         # residuals = 2 * ( df_tt['alt_s'] - df_tt['s'] ) / ( df_tt['alt_s'] + df_tt['s'] )  # Calculate the residuals
-#         # rel_sum = ( df_tt['alt_s'] + df_tt['s'] ) / 2
+#         # residuals = 2 * ( df_tt['det_s'] - df_tt['s'] ) / ( df_tt['det_s'] + df_tt['s'] )  # Calculate the residuals
+#         # rel_sum = ( df_tt['det_s'] + df_tt['s'] ) / 2
 #         rel_sum = df_tt['s']
         
 #         if len(residuals) < 10:
@@ -4239,7 +4289,7 @@ sys.exit()
 #         ax.legend()
 
 #         if i % ncols == 0:
-#             ax.set_ylabel(r'$alt_s - s$')
+#             ax.set_ylabel(r'$det_s - s$')
 #         if i // ncols == nrows - 1:
 #             ax.set_xlabel(r'$s$')
 
@@ -4247,13 +4297,13 @@ sys.exit()
 #     for j in range(i + 1, len(axes)):
 #         axes[j].set_visible(False)
 
-#     plt.suptitle(r'Residuals: $alt_s - s$ per processed_tt case', fontsize=14)
+#     plt.suptitle(r'Residuals: $det_s - s$ per processed_tt case', fontsize=14)
 #     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
 #     # Save or show the plot
 #     plt.tight_layout()
 #     if save_plots:
-#         filename = f'{fig_idx}_residuals_alt_s_minus_s_processed_tt.png'
+#         filename = f'{fig_idx}_residuals_det_s_minus_s_processed_tt.png'
 #         fig_idx += 1
 #         save_fig_path = os.path.join(base_directories["figure_directory"], filename)
 #         plot_list.append(save_fig_path)
@@ -4276,16 +4326,16 @@ sys.exit()
 
 
 
-# working_df['x'] = ( working_df['x'] + working_df['alt_x'] ) / 2
-# working_df['y'] = ( working_df['y'] + working_df['alt_y'] ) / 2
-# working_df['theta'] = ( working_df['theta'] + working_df['alt_theta'] ) / 2
-# working_df['phi'] = ( working_df['phi'] + working_df['alt_phi'] ) / 2
-# working_df['s'] = ( working_df['s'] + working_df['alt_s'] ) / 2
+# working_df['x'] = ( working_df['x'] + working_df['det_x'] ) / 2
+# working_df['y'] = ( working_df['y'] + working_df['det_y'] ) / 2
+# working_df['theta'] = ( working_df['theta'] + working_df['det_theta'] ) / 2
+# working_df['phi'] = ( working_df['phi'] + working_df['det_phi'] ) / 2
+# working_df['s'] = ( working_df['s'] + working_df['det_s'] ) / 2
 
-# working_df['x_err'] = ( working_df['x'] - working_df['alt_x'] ) / 2
-# working_df['y_err'] = ( working_df['y'] - working_df['alt_y'] ) / 2
-# working_df['theta_err'] = ( working_df['theta'] - working_df['alt_theta'] ) / 2
-# phi_diff = working_df['phi'] - working_df['alt_phi']
+# working_df['x_err'] = ( working_df['x'] - working_df['det_x'] ) / 2
+# working_df['y_err'] = ( working_df['y'] - working_df['det_y'] ) / 2
+# working_df['theta_err'] = ( working_df['theta'] - working_df['det_theta'] ) / 2
+# phi_diff = working_df['phi'] - working_df['det_phi']
 # # Keep the smallest angular separation considering 2π periodicity
 # phi_err_abs = np.minimum.reduce([
 #     np.abs(phi_diff),
@@ -4293,81 +4343,29 @@ sys.exit()
 #     np.abs(phi_diff - 2*np.pi)
 # ])
 # working_df['phi_err'] = phi_err_abs / 2
-# working_df['s_err'] = ( working_df['s'] - working_df['alt_s'] ) / 2
+# working_df['s_err'] = ( working_df['s'] - working_df['det_s'] ) / 2
 
 # Mean/error residuals between TimTrack and alternative methods ---------------
 # for i in range(1, 5):
-#     working_df[f'res_ystr_mean_{i}'] = (working_df.get(f'res_ystr_{i}', 0) + working_df.get(f'alt_res_ystr_{i}', 0)) / 2
-#     working_df[f'res_tsum_mean_{i}'] = (working_df.get(f'res_tsum_{i}', 0) + working_df.get(f'alt_res_tsum_{i}', 0)) / 2
-#     working_df[f'res_tdif_mean_{i}'] = (working_df.get(f'res_tdif_{i}', 0) + working_df.get(f'alt_res_tdif_{i}', 0)) / 2
+#     working_df[f'res_ystr_mean_{i}'] = (working_df.get(f'res_ystr_{i}', 0) + working_df.get(f'det_res_ystr_{i}', 0)) / 2
+#     working_df[f'res_tsum_mean_{i}'] = (working_df.get(f'res_tsum_{i}', 0) + working_df.get(f'det_res_tsum_{i}', 0)) / 2
+#     working_df[f'res_tdif_mean_{i}'] = (working_df.get(f'res_tdif_{i}', 0) + working_df.get(f'det_res_tdif_{i}', 0)) / 2
 
-#     working_df[f'res_ystr_err_{i}'] = (working_df.get(f'res_ystr_{i}', 0) - working_df.get(f'alt_res_ystr_{i}', 0)) / 2
-#     working_df[f'res_tsum_err_{i}'] = (working_df.get(f'res_tsum_{i}', 0) - working_df.get(f'alt_res_tsum_{i}', 0)) / 2
-#     working_df[f'res_tdif_err_{i}'] = (working_df.get(f'res_tdif_{i}', 0) - working_df.get(f'alt_res_tdif_{i}', 0)) / 2
+#     working_df[f'res_ystr_err_{i}'] = (working_df.get(f'res_ystr_{i}', 0) - working_df.get(f'det_res_ystr_{i}', 0)) / 2
+#     working_df[f'res_tsum_err_{i}'] = (working_df.get(f'res_tsum_{i}', 0) - working_df.get(f'det_res_tsum_{i}', 0)) / 2
+#     working_df[f'res_tdif_err_{i}'] = (working_df.get(f'res_tdif_{i}', 0) - working_df.get(f'det_res_tdif_{i}', 0)) / 2
 
-#     working_df[f'ext_res_ystr_mean_{i}'] = (working_df.get(f'ext_res_ystr_{i}', 0) + working_df.get(f'alt_ext_res_ystr_{i}', 0)) / 2
-#     working_df[f'ext_res_tsum_mean_{i}'] = (working_df.get(f'ext_res_tsum_{i}', 0) + working_df.get(f'alt_ext_res_tsum_{i}', 0)) / 2
-#     working_df[f'ext_res_tdif_mean_{i}'] = (working_df.get(f'ext_res_tdif_{i}', 0) + working_df.get(f'alt_ext_res_tdif_{i}', 0)) / 2
+#     working_df[f'ext_res_ystr_mean_{i}'] = (working_df.get(f'ext_res_ystr_{i}', 0) + working_df.get(f'det_ext_res_ystr_{i}', 0)) / 2
+#     working_df[f'ext_res_tsum_mean_{i}'] = (working_df.get(f'ext_res_tsum_{i}', 0) + working_df.get(f'det_ext_res_tsum_{i}', 0)) / 2
+#     working_df[f'ext_res_tdif_mean_{i}'] = (working_df.get(f'ext_res_tdif_{i}', 0) + working_df.get(f'det_ext_res_tdif_{i}', 0)) / 2
 
-#     working_df[f'ext_res_ystr_err_{i}'] = (working_df.get(f'ext_res_ystr_{i}', 0) - working_df.get(f'alt_ext_res_ystr_{i}', 0)) / 2
-#     working_df[f'ext_res_tsum_err_{i}'] = (working_df.get(f'ext_res_tsum_{i}', 0) - working_df.get(f'alt_ext_res_tsum_{i}', 0)) / 2
-#     working_df[f'ext_res_tdif_err_{i}'] = (working_df.get(f'ext_res_tdif_{i}', 0) - working_df.get(f'alt_ext_res_tdif_{i}', 0)) / 2
+#     working_df[f'ext_res_ystr_err_{i}'] = (working_df.get(f'ext_res_ystr_{i}', 0) - working_df.get(f'det_ext_res_ystr_{i}', 0)) / 2
+#     working_df[f'ext_res_tsum_err_{i}'] = (working_df.get(f'ext_res_tsum_{i}', 0) - working_df.get(f'det_ext_res_tsum_{i}', 0)) / 2
+#     working_df[f'ext_res_tdif_err_{i}'] = (working_df.get(f'ext_res_tdif_{i}', 0) - working_df.get(f'det_ext_res_tdif_{i}', 0)) / 2
 
 # working_df['chi_timtrack'] = working_df['th_chi']
-# working_df['chi_alternative'] = working_df['alt_th_chi']
+# working_df['chi_alternative'] = working_df['det_th_chi']
 
-
-
-# Time series of core track variables (averaged and errors) ------------------
-if create_plots and 'datetime' in working_df.columns:
-    ts_core = working_df.copy()
-    ts_core['datetime'] = pd.to_datetime(ts_core['datetime'])
-    ts_core = ts_core.sort_values('datetime')
-
-    core_vars = ['x', 'y', 'theta', 'phi', 's', 't0', 'chi_timtrack', 'chi_alternative',
-                 'x_err', 'y_err', 'theta_err', 'phi_err', 's_err']
-
-    for combo in TRACK_COMBINATIONS:
-        try:
-            combo_int = int(combo)
-        except ValueError:
-            continue
-        subset = ts_core[ts_core['definitive_tt'] == combo_int]
-        if subset.empty:
-            continue
-
-        n_vars = len(core_vars)
-        fig, axes = plt.subplots(n_vars, 1, figsize=(14, 2.4 * n_vars), sharex=True)
-        if n_vars == 1:
-            axes = [axes]
-
-        for ax, var in zip(axes, core_vars):
-            if var not in subset.columns:
-                ax.set_visible(False)
-                continue
-            y = subset[var]
-            err_col = f"{var}_err"
-            if err_col in subset.columns:
-                # Ensure error bars are non-negative to satisfy matplotlib.
-                yerr = subset[err_col].abs()
-            else:
-                yerr = None
-            ax.errorbar(subset['datetime'], y, yerr=yerr, fmt='.', ms=2, label=var)
-            ax.set_ylabel(var)
-            ax.grid(True, alpha=0.3)
-            ax.legend(fontsize='x-small')
-        axes[-1].set_xlabel('Datetime')
-        plt.suptitle(f'Core track variables over time - combination {combo}', fontsize=12)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        if save_plots:
-            final_filename = f'{fig_idx}_ts_core_vars_combo_{combo}.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-        if show_plots:
-            plt.show()
-        plt.close()
 
 
 
@@ -4483,9 +4481,11 @@ if time_window_fitting:
 
         counts_per_width = np.array(counts_per_width)
         counts_per_width_dev = np.array(counts_per_width_dev)
+        
         # Safely compute a scalar denominator: use the maximum of counts_per_width if positive,
         # otherwise fall back to 1. This avoids passing a list mixing arrays and scalars to np.max,
         # which raises an error due to inhomogeneous shapes.
+        
         if counts_per_width.size == 0:
             denom = 1.0
         else:
@@ -4726,7 +4726,7 @@ record_filter_metric(
 )
 
 # Remove rows with zeros in key places ----------------------------------------
-cols_to_check = ['x', 'xp', 'y', 'yp', 's', 't0', 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s']
+cols_to_check = ['x', 'y', 's', 't0', 'theta', 'phi']
 
 cond = (working_df[cols_to_check[0]] != 0)
 for col in cols_to_check[1:]:
@@ -4776,170 +4776,7 @@ df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
 
 if create_plots:
     
-    # Alternative method --------------------------------------------------------------------------------------------
-    residual_columns = [
-        'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
-        'alt_res_tsum_1', 'alt_res_tsum_2', 'alt_res_tsum_3', 'alt_res_tsum_4',
-        'alt_res_tdif_1', 'alt_res_tdif_2', 'alt_res_tdif_3', 'alt_res_tdif_4'
-    ]
-    
-    unique_types = df_plot_ancillary['definitive_tt'].unique()
-    for t in unique_types:
-        if t < 1000:
-            continue
-        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == "1234"]
-        plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative fitting Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
-
-    # Alternative method - External residuals ----------------------------------------------------------------------
-    residual_columns = [
-        'alt_ext_res_ystr_1', 'alt_ext_res_ystr_2', 'alt_ext_res_ystr_3', 'alt_ext_res_ystr_4',
-        'alt_ext_res_tsum_1', 'alt_ext_res_tsum_2', 'alt_ext_res_tsum_3', 'alt_ext_res_tsum_4',
-        'alt_ext_res_tdif_1', 'alt_ext_res_tdif_2', 'alt_ext_res_tdif_3', 'alt_ext_res_tdif_4'
-    ]
-
-    unique_types = df_plot_ancillary['definitive_tt'].unique()
-    for t in unique_types:
-        if t < 1000:
-            continue
-        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
-        plot_histograms_and_gaussian(subset_data, residual_columns, f"Alternative External Residuals with Gaussian for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
-
-    # Error residuals (differences between methods) ----------------------------------------------------------------
-    residual_columns = [
-        'res_ystr_err_1', 'res_ystr_err_2', 'res_ystr_err_3', 'res_ystr_err_4',
-        'res_tsum_err_1', 'res_tsum_err_2', 'res_tsum_err_3', 'res_tsum_err_4',
-        'res_tdif_err_1', 'res_tdif_err_2', 'res_tdif_err_3', 'res_tdif_err_4',
-    ]
-    unique_types = df_plot_ancillary['definitive_tt'].unique()
-    for t in unique_types:
-        if t < 1000:
-            continue
-        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
-        plot_histograms_and_gaussian(subset_data, residual_columns, f"Residual Differences (TimTrack - Alt)/2 for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
-
-    # External mean/error residuals --------------------------------------------------------------------------------
-    residual_columns = [
-        'ext_res_ystr_mean_1', 'ext_res_ystr_mean_2', 'ext_res_ystr_mean_3', 'ext_res_ystr_mean_4',
-        'ext_res_tsum_mean_1', 'ext_res_tsum_mean_2', 'ext_res_tsum_mean_3', 'ext_res_tsum_mean_4',
-        'ext_res_tdif_mean_1', 'ext_res_tdif_mean_2', 'ext_res_tdif_mean_3', 'ext_res_tdif_mean_4',
-    ]
-    unique_types = df_plot_ancillary['definitive_tt'].unique()
-    for t in unique_types:
-        if t < 1000:
-            continue
-        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
-        plot_histograms_and_gaussian(subset_data, residual_columns, f"External Mean Residuals for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
-
-    residual_columns = [
-        'ext_res_ystr_err_1', 'ext_res_ystr_err_2', 'ext_res_ystr_err_3', 'ext_res_ystr_err_4',
-        'ext_res_tsum_err_1', 'ext_res_tsum_err_2', 'ext_res_tsum_err_3', 'ext_res_tsum_err_4',
-        'ext_res_tdif_err_1', 'ext_res_tdif_err_2', 'ext_res_tdif_err_3', 'ext_res_tdif_err_4',
-    ]
-    unique_types = df_plot_ancillary['definitive_tt'].unique()
-    for t in unique_types:
-        if t < 1000:
-            continue
-        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
-        plot_histograms_and_gaussian(subset_data, residual_columns, f"External Residual Differences (TimTrack - Alt)/2 for Original Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
-
-    # Alternative external residuals over time (per plane combination) --------------------------------------------
-    if 'datetime' in df_plot_ancillary.columns:
-        ts_base = df_plot_ancillary.copy()
-        ts_base['datetime'] = pd.to_datetime(ts_base['datetime'])
-        ts_base = ts_base.sort_values('datetime')
-
-        ts_vars = [
-            ('alt_ext_res_ystr', alt_ext_res_ystr_filter),
-            ('alt_ext_res_tsum', alt_ext_res_tsum_filter),
-            ('alt_ext_res_tdif', alt_ext_res_tdif_filter),
-        ]
-
-        for combo in TRACK_COMBINATIONS:
-            try:
-                combo_int = int(combo)
-            except ValueError:
-                continue
-            combo_planes = [int(ch) for ch in combo]
-            subset = ts_base[ts_base['definitive_tt'] == combo_int]
-            if subset.empty:
-                continue
-
-            n_vars = len(ts_vars)
-            fig, axes = plt.subplots(n_vars, 1, figsize=(14, 3 * n_vars), sharex=True)
-            if n_vars == 1:
-                axes = [axes]
-
-            for ax, (base, vlim) in zip(axes, ts_vars):
-                for p in combo_planes:
-                    col = f"{base}_{p}"
-                    if col not in subset.columns:
-                        continue
-                    y = subset[col]
-                    err_col = f"{col}_err"
-                    yerr = subset[err_col] if err_col in subset.columns else None
-                    ax.errorbar(subset['datetime'], y, yerr=yerr, fmt='.', ms=2, label=f"P{p}")
-                ax.set_ylabel(base)
-                ax.axhspan(-vlim, vlim, color='gray', alpha=0.1)
-                ax.legend(fontsize='x-small', ncol=len(combo_planes))
-                ax.grid(True, alpha=0.3)
-            axes[-1].set_xlabel('Datetime')
-            plt.suptitle(f'Alt external residuals over time - combination {combo}', fontsize=12)
-            plt.tight_layout(rect=[0, 0, 1, 0.95])
-            if save_plots:
-                final_filename = f'{fig_idx}_ts_alt_ext_res_combo_{combo}.png'
-                fig_idx += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
-            if show_plots:
-                plt.show()
-            plt.close()
-
-        # Core reconstruction variables over time (per plane combination) -----------------------------------------
-        core_vars = ['x', 'y', 't0', 's', 'theta', 'phi', 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s']
-        for combo in TRACK_COMBINATIONS:
-            try:
-                combo_int = int(combo)
-            except ValueError:
-                continue
-            subset = ts_base[ts_base['definitive_tt'] == combo_int]
-            if subset.empty:
-                continue
-
-            n_vars = len(core_vars)
-            fig, axes = plt.subplots(n_vars, 1, figsize=(14, 2.4 * n_vars), sharex=True)
-            if n_vars == 1:
-                axes = [axes]
-
-            for ax, var in zip(axes, core_vars):
-                if var not in subset.columns:
-                    ax.set_visible(False)
-                    continue
-                y = subset[var]
-                err_col = f"{var}_err"
-                if err_col in subset.columns:
-                    yerr = subset[err_col].abs()
-                else:
-                    yerr = None
-                ax.errorbar(subset['datetime'], y, yerr=yerr, fmt='.', ms=2, label=var)
-                ax.set_ylabel(var)
-                ax.grid(True, alpha=0.3)
-                ax.legend(fontsize='x-small')
-            axes[-1].set_xlabel('Datetime')
-            plt.suptitle(f'Track variables over time - combination {combo}', fontsize=12)
-            plt.tight_layout(rect=[0, 0, 1, 0.95])
-            if save_plots:
-                final_filename = f'{fig_idx}_ts_core_vars_combo_{combo}.png'
-                fig_idx += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
-            if show_plots:
-                plt.show()
-            plt.close()
-        
-    
-    # TimTrack method --------------------------------------------------------------------------------------------
+    # Combined methods --------------------------------------------------------------------------------------------
     residual_columns = [
         'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
         'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
@@ -4954,7 +4791,7 @@ if create_plots:
         plot_histograms_and_gaussian(subset_data, residual_columns, f"TimTrack Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
     
     
-    # TimTrack method - External residues -------------------------------------------------------------------------
+    # Combined methods - External residues -------------------------------------------------------------------------
     residual_columns = [
         'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
         'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
@@ -5132,19 +4969,19 @@ if create_plots:
             # Static
             'x': [-pos_filter, pos_filter],
             'y': [-pos_filter, pos_filter],
-            'alt_x': [-pos_filter, pos_filter],
-            'alt_y': [-pos_filter, pos_filter],
+            'det_x': [-pos_filter, pos_filter],
+            'det_y': [-pos_filter, pos_filter],
             'theta': [theta_left_filter, theta_right_filter],
             'phi': [phi_left_filter, phi_right_filter],
-            'alt_theta': [alt_theta_left_filter, alt_theta_right_filter],
-            'alt_phi': [alt_phi_left_filter, alt_phi_right_filter],
+            'det_theta': [det_theta_left_filter, det_theta_right_filter],
+            'det_phi': [det_phi_left_filter, det_phi_right_filter],
             'xp': [-1 * proj_filter, proj_filter],
             'yp': [-1 * proj_filter, proj_filter],
             's': [slowness_filter_left, slowness_filter_right],
-            'alt_s': [alt_slowness_filter_left, alt_slowness_filter_right],
+            'det_s': [det_slowness_filter_left, det_slowness_filter_right],
             'delta_s': [delta_s_left, delta_s_right],
             # 'th_chi': [0, 0.03],
-            # 'alt_th_chi': [0, 12],
+            # 'det_th_chi': [0, 12],
             
             # Dinamic
             'charge_event': [charge_plot_limit_left, charge_plot_event_limit_right],
@@ -5155,15 +4992,15 @@ if create_plots:
             'res_ystr_1': [-res_ystr_filter, res_ystr_filter], 'res_ystr_2': [-res_ystr_filter, res_ystr_filter], 'res_ystr_3': [-res_ystr_filter, res_ystr_filter], 'res_ystr_4': [-res_ystr_filter, res_ystr_filter],
             'res_tsum_1': [-res_tsum_filter, res_tsum_filter], 'res_tsum_2': [-res_tsum_filter, res_tsum_filter], 'res_tsum_3': [-res_tsum_filter, res_tsum_filter], 'res_tsum_4': [-res_tsum_filter, res_tsum_filter],
             'res_tdif_1': [-res_tdif_filter, res_tdif_filter], 'res_tdif_2': [-res_tdif_filter, res_tdif_filter], 'res_tdif_3': [-res_tdif_filter, res_tdif_filter], 'res_tdif_4': [-res_tdif_filter, res_tdif_filter],
-            'alt_res_ystr_1': [-alt_res_ystr_filter, alt_res_ystr_filter], 'alt_res_ystr_2': [-alt_res_ystr_filter, alt_res_ystr_filter], 'alt_res_ystr_3': [-alt_res_ystr_filter, alt_res_ystr_filter], 'alt_res_ystr_4': [-alt_res_ystr_filter, alt_res_ystr_filter],
-            'alt_res_tsum_1': [-alt_res_tsum_filter, alt_res_tsum_filter], 'alt_res_tsum_2': [-alt_res_tsum_filter, alt_res_tsum_filter], 'alt_res_tsum_3': [-alt_res_tsum_filter, alt_res_tsum_filter], 'alt_res_tsum_4': [-alt_res_tsum_filter, alt_res_tsum_filter],
-            'alt_res_tdif_1': [-alt_res_tdif_filter, alt_res_tdif_filter], 'alt_res_tdif_2': [-alt_res_tdif_filter, alt_res_tdif_filter], 'alt_res_tdif_3': [-alt_res_tdif_filter, alt_res_tdif_filter], 'alt_res_tdif_4': [-alt_res_tdif_filter, alt_res_tdif_filter],
+            'det_res_ystr_1': [-det_res_ystr_filter, det_res_ystr_filter], 'det_res_ystr_2': [-det_res_ystr_filter, det_res_ystr_filter], 'det_res_ystr_3': [-det_res_ystr_filter, det_res_ystr_filter], 'det_res_ystr_4': [-det_res_ystr_filter, det_res_ystr_filter],
+            'det_res_tsum_1': [-det_res_tsum_filter, det_res_tsum_filter], 'det_res_tsum_2': [-det_res_tsum_filter, det_res_tsum_filter], 'det_res_tsum_3': [-det_res_tsum_filter, det_res_tsum_filter], 'det_res_tsum_4': [-det_res_tsum_filter, det_res_tsum_filter],
+            'det_res_tdif_1': [-det_res_tdif_filter, det_res_tdif_filter], 'det_res_tdif_2': [-det_res_tdif_filter, det_res_tdif_filter], 'det_res_tdif_3': [-det_res_tdif_filter, det_res_tdif_filter], 'det_res_tdif_4': [-det_res_tdif_filter, det_res_tdif_filter],
             'ext_res_ystr_1': [-ext_res_ystr_filter, ext_res_ystr_filter], 'ext_res_ystr_2': [-ext_res_ystr_filter, ext_res_ystr_filter], 'ext_res_ystr_3': [-ext_res_ystr_filter, ext_res_ystr_filter], 'ext_res_ystr_4': [-ext_res_ystr_filter, ext_res_ystr_filter],
             'ext_res_tsum_1': [-ext_res_tsum_filter, ext_res_tsum_filter], 'ext_res_tsum_2': [-ext_res_tsum_filter, ext_res_tsum_filter], 'ext_res_tsum_3': [-ext_res_tsum_filter, ext_res_tsum_filter], 'ext_res_tsum_4': [-ext_res_tsum_filter, ext_res_tsum_filter],
             'ext_res_tdif_1': [-ext_res_tdif_filter, ext_res_tdif_filter], 'ext_res_tdif_2': [-ext_res_tdif_filter, ext_res_tdif_filter], 'ext_res_tdif_3': [-ext_res_tdif_filter, ext_res_tdif_filter], 'ext_res_tdif_4': [-ext_res_tdif_filter, ext_res_tdif_filter],
-            'alt_ext_res_ystr_1': [-alt_ext_res_ystr_filter, alt_ext_res_ystr_filter], 'alt_ext_res_ystr_2': [-alt_ext_res_ystr_filter, alt_ext_res_ystr_filter], 'alt_ext_res_ystr_3': [-alt_ext_res_ystr_filter, alt_ext_res_ystr_filter], 'alt_ext_res_ystr_4': [-alt_ext_res_ystr_filter, alt_ext_res_ystr_filter],
-            'alt_ext_res_tsum_1': [-alt_ext_res_tsum_filter, alt_ext_res_tsum_filter], 'alt_ext_res_tsum_2': [-alt_ext_res_tsum_filter, alt_ext_res_tsum_filter], 'alt_ext_res_tsum_3': [-alt_ext_res_tsum_filter, alt_ext_res_tsum_filter], 'alt_ext_res_tsum_4': [-alt_ext_res_tsum_filter, alt_ext_res_tsum_filter],
-            'alt_ext_res_tdif_1': [-alt_ext_res_tdif_filter, alt_ext_res_tdif_filter], 'alt_ext_res_tdif_2': [-alt_ext_res_tdif_filter, alt_ext_res_tdif_filter], 'alt_ext_res_tdif_3': [-alt_ext_res_tdif_filter, alt_ext_res_tdif_filter], 'alt_ext_res_tdif_4': [-alt_ext_res_tdif_filter, alt_ext_res_tdif_filter],
+            'det_ext_res_ystr_1': [-det_ext_res_ystr_filter, det_ext_res_ystr_filter], 'det_ext_res_ystr_2': [-det_ext_res_ystr_filter, det_ext_res_ystr_filter], 'det_ext_res_ystr_3': [-det_ext_res_ystr_filter, det_ext_res_ystr_filter], 'det_ext_res_ystr_4': [-det_ext_res_ystr_filter, det_ext_res_ystr_filter],
+            'det_ext_res_tsum_1': [-det_ext_res_tsum_filter, det_ext_res_tsum_filter], 'det_ext_res_tsum_2': [-det_ext_res_tsum_filter, det_ext_res_tsum_filter], 'det_ext_res_tsum_3': [-det_ext_res_tsum_filter, det_ext_res_tsum_filter], 'det_ext_res_tsum_4': [-det_ext_res_tsum_filter, det_ext_res_tsum_filter],
+            'det_ext_res_tdif_1': [-det_ext_res_tdif_filter, det_ext_res_tdif_filter], 'det_ext_res_tdif_2': [-det_ext_res_tdif_filter, det_ext_res_tdif_filter], 'det_ext_res_tdif_3': [-det_ext_res_tdif_filter, det_ext_res_tdif_filter], 'det_ext_res_tdif_4': [-det_ext_res_tdif_filter, det_ext_res_tdif_filter],
         }
         
         # Apply filters
@@ -5222,7 +5059,7 @@ if create_plots:
                     ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
                     ax.set_facecolor(plt.cm.turbo(0))
                     
-                    if "alt_s" in x_col and "s" in x_col or "s" in y_col and "alt_s" in y_col:
+                    if "det_s" in x_col and "s" in x_col or "s" in y_col and "det_s" in y_col:
                         # Draw a line in the diagonal y = x
                         line_x = np.linspace(-0.01, 0.015, 100)
                         line_y = line_x
@@ -5439,66 +5276,66 @@ if create_plots:
     #     )
     
     
-    for filters, title in df_cases_2:
-        relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_alt_tsum = [f"alt_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_ext_tsum = [f"ext_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+    # for filters, title in df_cases_2:
+    #     relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+    #     relevant_residues_det_tsum = [f"det_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+    #     relevant_residues_ext_tsum = [f"ext_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
         
-        columns_of_interest = relevant_residues_tsum + relevant_residues_alt_tsum + relevant_residues_ext_tsum
+    #     columns_of_interest = relevant_residues_tsum + relevant_residues_det_tsum + relevant_residues_ext_tsum
         
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            columns_of_interest,
-            filters,
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         columns_of_interest,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
     
-    for filters, title in df_cases_2:
-        relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_alt_tdif = [f"alt_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_ext_tdif = [f"ext_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+    # for filters, title in df_cases_2:
+    #     relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+    #     relevant_residues_det_tdif = [f"det_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+    #     relevant_residues_ext_tdif = [f"ext_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
         
-        columns_of_interest = relevant_residues_tdif + relevant_residues_alt_tdif + relevant_residues_ext_tdif
+    #     columns_of_interest = relevant_residues_tdif + relevant_residues_det_tdif + relevant_residues_ext_tdif
         
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            columns_of_interest,
-            filters,
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         columns_of_interest,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
     
-    for filters, title in df_cases_2:
-        relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_alt_ystr = [f"alt_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-        relevant_residues_ext_ystr = [f"ext_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+    # for filters, title in df_cases_2:
+    #     relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+    #     relevant_residues_det_ystr = [f"det_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+    #     relevant_residues_ext_ystr = [f"ext_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
         
-        columns_of_interest = relevant_residues_ystr + relevant_residues_alt_ystr + relevant_residues_ext_ystr
+    #     columns_of_interest = relevant_residues_ystr + relevant_residues_det_ystr + relevant_residues_ext_ystr
         
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            columns_of_interest,
-            filters,
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         columns_of_interest,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
     
     
     # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
+    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'det_s', 'det_phi', 'det_theta', 'det_y', 'det_x']
     # for filters, title in df_cases_1:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -5528,7 +5365,7 @@ if create_plots:
     #     )
     
     # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
+    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'det_s', 'det_phi', 'det_theta', 'det_y', 'det_x']
     # for filters, title in df_cases_3:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -5543,8 +5380,8 @@ if create_plots:
     #     )
     
     
-    # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['t0', 's', 'delta_s', 'alt_s', 'alt_s_ordinate']
+    # # Comparison with alternative fitting -------------------------------------------------------------------
+    # plot_col = ['t0', 's', 'delta_s', 'det_s', 'det_s_ordinate']
     # for filters, title in df_cases_3:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -5559,20 +5396,20 @@ if create_plots:
     #     )
     
     
-    # Comparison with alternative fitting -------------------------------------------------------------------
-    plot_col = ['theta', 'alt_theta']
-    for filters, title in df_cases_2:
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            plot_col,
-            filters,
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
+    # # Comparison with alternative fitting -------------------------------------------------------------------
+    # plot_col = ['theta', 'det_theta']
+    # for filters, title in df_cases_2:
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         plot_col,
+    #         filters,
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
     
     # A pure theta vs phi map
     plot_col = ['theta', 'phi']
@@ -5626,42 +5463,42 @@ if create_plots:
 
 
 
-if create_plots:
-    df_filtered = df_plot_ancillary.copy()
-    fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
-    colors = plt.cm.tab10.colors
-    bins = np.linspace(theta_left_filter, theta_right_filter, 150)
-    tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
+# if create_plots:
+#     df_filtered = df_plot_ancillary.copy()
+#     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
+#     colors = plt.cm.tab10.colors
+#     bins = np.linspace(theta_left_filter, theta_right_filter, 150)
+#     tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
 
-    for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('alt_theta', r'$\theta_{\mathrm{alt}}$')]):
-        ax = axes[row_idx]
-        for i, tt_val in enumerate(tt_values):
-            df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
-            theta_vals = df_tt[theta_col].dropna()
-            if len(theta_vals) < 10:
-                continue
-            label = f'{tt_val}'
-            ax.hist(theta_vals, bins=bins, histtype='step', linewidth=1,
-                    color=colors[i % len(colors)], label=label)
-        ax.set_xlim(theta_left_filter, theta_right_filter)
-        ax.set_xlabel(row_label + r' [rad]')
-        ax.set_ylabel('Counts')
-        ax.set_title(f'{row_label} — Zoom-in')
-        ax.grid(True)
-        if row_idx == 0:
-            ax.legend(title='definitive_tt', fontsize='small')
+#     for row_idx, (theta_col, row_label) in enumerate([('tim_theta', r'$\theta$'), ('det_theta', r'$\theta_{\mathrm{alt}}$')]):
+#         ax = axes[row_idx]
+#         for i, tt_val in enumerate(tt_values):
+#             df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
+#             theta_vals = df_tt[theta_col].dropna()
+#             if len(theta_vals) < 10:
+#                 continue
+#             label = f'{tt_val}'
+#             ax.hist(theta_vals, bins=bins, histtype='step', linewidth=1,
+#                     color=colors[i % len(colors)], label=label)
+#         ax.set_xlim(theta_left_filter, theta_right_filter)
+#         ax.set_xlabel(row_label + r' [rad]')
+#         ax.set_ylabel('Counts')
+#         ax.set_title(f'{row_label} — Zoom-in')
+#         ax.grid(True)
+#         if row_idx == 0:
+#             ax.legend(title='definitive_tt', fontsize='small')
 
-    plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Definitive TT Type', fontsize=15)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    if save_plots:
-        final_filename = f'{fig_idx}_theta_alt_theta_zoom_definitive_tt.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    if show_plots:
-        plt.show()
-    plt.close()
+#     plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Definitive TT Type', fontsize=15)
+#     plt.tight_layout(rect=[0, 0, 1, 0.95])
+#     if save_plots:
+#         final_filename = f'{fig_idx}_theta_det_theta_zoom_definitive_tt.png'
+#         fig_idx += 1
+#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#         plot_list.append(save_fig_path)
+#         plt.savefig(save_fig_path, format='png')
+#     if show_plots:
+#         plt.show()
+#     plt.close()
 
 
 
@@ -5673,7 +5510,7 @@ if create_plots:
     bins = np.linspace(theta_left_filter, theta_right_filter, 150)
     tt_values = sorted(df_filtered['tracking_tt'].dropna().unique(), key=lambda x: int(x))
 
-    for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('alt_theta', r'$\theta_{\mathrm{alt}}$')]):
+    for row_idx, (theta_col, row_label) in enumerate([('tim_theta', r'$\theta$'), ('det_theta', r'$\theta_{\mathrm{alt}}$')]):
         ax = axes[row_idx]
         for i, tt_val in enumerate(tt_values):
             df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
@@ -5694,7 +5531,7 @@ if create_plots:
     plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Tracking TT Type', fontsize=15)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_theta_alt_theta_zoom_tracking_tt.png'
+        final_filename = f'{fig_idx}_theta_det_theta_zoom_tracking_tt.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -5702,6 +5539,7 @@ if create_plots:
     if show_plots:
         plt.show()
     plt.close()
+
 
 
 print("----------------------------------------------------------------------")
@@ -5712,80 +5550,79 @@ data_purity = len(definitive_df) / raw_data_len*100
 print(f"Data purity is {data_purity:.1f}%")
 
 
-if create_plots:
+# if create_plots:
 
-    column_chosen = "definitive_tt"
-    plot_ancillary_df = definitive_df.copy()
+#     column_chosen = "definitive_tt"
+#     plot_ancillary_df = definitive_df.copy()
     
-    # Ensure datetime is proper and indexed
-    plot_ancillary_df['datetime'] = pd.to_datetime(plot_ancillary_df['datetime'], errors='coerce')
-    plot_ancillary_df = plot_ancillary_df.set_index('datetime')
+#     # Ensure datetime is proper and indexed
+#     plot_ancillary_df['datetime'] = pd.to_datetime(plot_ancillary_df['datetime'], errors='coerce')
+#     plot_ancillary_df = plot_ancillary_df.set_index('datetime')
 
-    # Prepare a container for each group: 2-plane, 3-plane, 4-plane cases
-    grouped_data = {
-        "Two planes": defaultdict(list),
-        "Three planes": defaultdict(list),
-        "Four planes": defaultdict(list)
-    }
+#     # Prepare a container for each group: 2-plane, 3-plane, 4-plane cases
+#     grouped_data = {
+#         "Two planes": defaultdict(list),
+#         "Three planes": defaultdict(list),
+#         "Four planes": defaultdict(list)
+#     }
 
-    # Classify events by number of planes in original_tt
-    for tt_code in plot_ancillary_df[column_chosen].unique():
-        planes = str(tt_code)
-        count = len(planes)
-        label = f'Case {tt_code}'
-        if count == 1:
-            grouped_data["One plane"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
-        if count == 2:
-            grouped_data["Two planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
-        elif count == 3:
-            grouped_data["Three planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
-        elif count == 4:
-            grouped_data["Four planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
+#     # Classify events by number of planes in original_tt
+#     for tt_code in plot_ancillary_df[column_chosen].unique():
+#         planes = str(tt_code)
+#         count = len(planes)
+#         label = f'Case {tt_code}'
+#         if count == 1:
+#             grouped_data["One plane"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
+#         if count == 2:
+#             grouped_data["Two planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
+#         elif count == 3:
+#             grouped_data["Three planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
+#         elif count == 4:
+#             grouped_data["Four planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
 
-    # Plotting
-    fig, axes = plt.subplots(1, 3, figsize=(24, 6))
-    colors = plt.colormaps['tab10']
+#     # Plotting
+#     fig, axes = plt.subplots(1, 3, figsize=(24, 6))
+#     colors = plt.colormaps['tab10']
 
-    for ax, (title, group_dict) in zip(axes, grouped_data.items()):
-        for i, (label, df) in enumerate(group_dict.items()):
-            df.index = pd.to_datetime(df.index, errors='coerce')
-            event_times = df.index.floor('s')
-            full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='S')
-            events_per_second = event_times.value_counts().reindex(full_range, fill_value=0).sort_index()
+#     for ax, (title, group_dict) in zip(axes, grouped_data.items()):
+#         for i, (label, df) in enumerate(group_dict.items()):
+#             df.index = pd.to_datetime(df.index, errors='coerce')
+#             event_times = df.index.floor('s')
+#             full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='S')
+#             events_per_second = event_times.value_counts().reindex(full_range, fill_value=0).sort_index()
             
-            hist_data = events_per_second.value_counts().sort_index()
-            lambda_estimate = events_per_second.mean()
-            x_values = np.arange(0, hist_data.index.max() + 1)
-            poisson_pmf = poisson.pmf(x_values, lambda_estimate)
-            poisson_pmf_scaled = poisson_pmf * len(events_per_second)
+#             hist_data = events_per_second.value_counts().sort_index()
+#             lambda_estimate = events_per_second.mean()
+#             x_values = np.arange(0, hist_data.index.max() + 1)
+#             poisson_pmf = poisson.pmf(x_values, lambda_estimate)
+#             poisson_pmf_scaled = poisson_pmf * len(events_per_second)
 
-            ax.plot(hist_data.index, hist_data.values, label=label, alpha=0.9, color=colors(i % 10), linewidth = 3)
-            ax.plot(x_values, poisson_pmf_scaled, '--', lw=1.5, color=colors(i % 10), alpha=0.6)
-            ax.set_xlim(0, 8)
+#             ax.plot(hist_data.index, hist_data.values, label=label, alpha=0.9, color=colors(i % 10), linewidth = 3)
+#             ax.plot(x_values, poisson_pmf_scaled, '--', lw=1.5, color=colors(i % 10), alpha=0.6)
+#             ax.set_xlim(0, 8)
 
-        ax.set_title(f'{title}')
-        ax.set_xlabel('Number of Events per Second')
-        ax.set_ylabel('Frequency')
-        ax.legend(fontsize='small', loc='upper right')
-        ax.grid(True)
+#         ax.set_title(f'{title}')
+#         ax.set_xlabel('Number of Events per Second')
+#         ax.set_ylabel('Frequency')
+#         ax.legend(fontsize='small', loc='upper right')
+#         ax.grid(True)
 
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.88)
-    plt.suptitle('Event Rate Histograms by Original_tt Cardinality with Poisson Fits', fontsize=16)
+#     plt.tight_layout()
+#     plt.subplots_adjust(top=0.88)
+#     plt.suptitle('Event Rate Histograms by Original_tt Cardinality with Poisson Fits', fontsize=16)
 
-    if save_plots:
-        final_filename = f'{fig_idx}_events_per_second_by_plane_cardinality_definitive_tt.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    if show_plots:
-        plt.show()
-    plt.close()
+#     if save_plots:
+#         final_filename = f'{fig_idx}_events_per_second_by_plane_cardinality_definitive_tt.png'
+#         fig_idx += 1
+#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#         plot_list.append(save_fig_path)
+#         plt.savefig(save_fig_path, format='png')
+#     if show_plots:
+#         plt.show()
+#     plt.close()
 
 
 if create_plots:
-
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12), sharey=True)
     colors = plt.colormaps['tab10']
@@ -6254,8 +6091,8 @@ columns_to_keep = [
     # New definitions
     'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
     
-    # Chisqs
-    'chi_timtrack', 'chi_alternative',
+    # # Chisqs
+    # 'chi_timtrack', 'chi_alternative',
 
     # Strip-level time and charge info (ordered by plane and strip)
     *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)],
@@ -6299,7 +6136,7 @@ for i_plane in range(1, 5):
     cols_to_remove.append(f'P{i_plane}_Q_diff_final')
     cols_to_remove.append(f'P{i_plane}_Y_final')
     
-    cols_to_remove.append(f'alt_res_tdif_{i_plane}')
+    cols_to_remove.append(f'det_res_tdif_{i_plane}')
     for strip in range(1, 5):
         cols_to_remove.append(f'T{i_plane}_T_sum_{strip}')
         cols_to_remove.append(f'T{i_plane}_T_diff_{strip}')

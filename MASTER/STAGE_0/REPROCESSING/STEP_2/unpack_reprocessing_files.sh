@@ -13,12 +13,13 @@ unpack_reprocessing_files.sh
 Unpacks compressed HLD archives and prepares data for STAGE_0 processing.
 
 Usage:
-  unpack_reprocessing_files.sh <station> [--loop|-l] [--newest|-n]
+  unpack_reprocessing_files.sh <station> [--loop|-l] [--newest|-n] [--max-parallel|-p N]
 
 Options:
   -h, --help       Show this help message and exit.
   -l, --loop       Process every pending HLD sequentially (repeat single-run workflow).
   -n, --newest     Select the newest pending HLD (after normalizing its prefix).
+  -p, --max-parallel N  Allow up to N concurrent runs for this station (default 5).
 
 Provide the numeric station identifier (1-4). The script ensures only one
 instance runs per-station and operates on files queued in STAGE_0 buffers.
@@ -26,11 +27,10 @@ EOF
     exit 0
 fi
 
-if (( $# < 1 || $# > 2 )); then
-    echo "Usage: $0 <station> [--loop|-l] [--newest|-n]"
+if (( $# < 1 || $# > 4 )); then
+    echo "Usage: $0 <station> [--loop|-l] [--newest|-n] [--max-parallel|-p N]"
     exit 1
 fi
-
 random_file=false  # set to true to enable random selection
 
 original_args="$*"
@@ -54,6 +54,7 @@ station_prefix_lower="${station_prefix,,}"
 
 loop_mode=false
 newest_mode=false
+max_parallel=5
 
 while (( $# > 0 )); do
     case "$1" in
@@ -62,6 +63,15 @@ while (( $# > 0 )); do
             ;;
         --newest|-n)
             newest_mode=true
+            ;;
+        --max-parallel|-p)
+            if [[ -n "${2:-}" && "${2}" =~ ^[0-9]+$ && ${2} -ge 1 ]]; then
+                max_parallel="${2}"
+                shift
+            else
+                echo "Error: --max-parallel requires a positive integer."
+                exit 1
+            fi
             ;;
         *)
             echo "Usage: $0 <station> [--loop|-l] [--newest|-n]"
@@ -87,51 +97,31 @@ script_name=$(basename "$0")
 script_args="$original_args"
 current_pid=$$
 
-# Debug: Check for running processes
-# echo "$(date) - Checking for existing processes of $script_name with args $script_args"
-# ps -eo pid,cmd | grep "[b]ash .*/$script_name"
+running_count=$(
+    ps -eo pid,args | awk -v me="$current_pid" -v st="$station" -v script="$script_name" '
+        {
+            for(i=2;i<=NF;i++){
+                if(index($(i),script)){
+                    if($(i+1)==st && $1!=me){c++}
+                    break
+                }
+            }
+        }
+        END{print c+0}
+    '
+)
 
-# Get all running instances of the script *with the same argument*, but exclude the current process
-# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | awk '{print $1}'); do
-for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
-    if [[ "$pid" != "$current_pid" ]]; then
-        cmdline=$(ps -p "$pid" -o args=)
-        # echo "$(date) - Found running process: PID $pid - $cmdline"
-        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
-            echo "------------------------------------------------------"
-            echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-            echo "------------------------------------------------------"
-            exit 1
-        fi
-    fi
-done
+if (( running_count >= max_parallel )); then
+    echo "------------------------------------------------------"
+    echo "$(date): Max parallel limit reached for station $station_code ($running_count/$max_parallel). Exiting."
+    echo "------------------------------------------------------"
+    exit 1
+fi
 
-# If no duplicate process is found, continue
-echo "$(date) - No running instance found. Proceeding..."
-
-# Variables
-# script_name=$(basename "$0")
-# script_args="$*"
-# current_pid=$$
-
-# # Get all running instances of the script (excluding itself)
-# # for pid in $(pgrep -f "bash .*/$script_name $script_args"); do
-# for pid in $(pgrep -f "bash .*/$script_name $script_args" | grep -v $$); do
-#     if [ "$pid" != "$current_pid" ]; then
-#         cmdline=$(ps -p "$pid" -o args=)
-#         if [[ "$cmdline" == *"$script_name"* && "$cmdline" == *"$script_args"* ]]; then
-#             echo "------------------------------------------------------"
-#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-#             echo "------------------------------------------------------"
-#             exit 1
-#         fi
-#     fi
-# done
-
-# If no duplicate process is found, continue
+echo "$(date) - Running instances for station $station_code: $running_count (limit $max_parallel). Proceeding..."
 echo "------------------------------------------------------"
 echo "unpack_reprocessing_files.sh started on: $(date)"
-echo "Station: ${station_code} (loop_mode=$loop_mode, newest_mode=$newest_mode)"
+echo "Station: ${station_code} (loop_mode=$loop_mode, newest_mode=$newest_mode, max_parallel=$max_parallel)"
 echo "Running the script..."
 
 STATIONS_BASE="$HOME/DATAFLOW_v3/STATIONS"
@@ -367,8 +357,8 @@ move_step1_outputs_to_unprocessed() {
     fi
 }
 
-hld_input_directory=$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/rawData/dat # <--------------------------------------------
-asci_output_directory=$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/data/daqData/asci # <--------------------------------------------
+hld_input_directory=$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/mingo${station_code}/data/daqData/rawData/dat # <--------------------------------------------
+asci_output_directory=$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/mingo${station_code}/data/daqData/asci # <--------------------------------------------
 dest_directory="$stage0_to_1_directory"
 
 route_dat_outputs() {

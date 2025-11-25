@@ -219,6 +219,9 @@ if station not in ["1", "2", "3", "4"]:
 set_station(station)
 config = update_config_with_parameters(config, parameter_config_file_path, station)
 
+# Cron job switch that decides if completed files can be revisited.
+complete_reanalysis = config.get("complete_reanalysis", False)
+
 
 def _coerce_numeric_sequence(raw_value, caster):
     """Return a list of numbers parsed from *raw_value*."""

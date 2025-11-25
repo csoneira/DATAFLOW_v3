@@ -224,6 +224,7 @@ remove_outliers: false
 
 # Plot settings
 create_plots: false
+create_plots_task_4: false
 create_essential_plots: false
 save_plots: false
 create_pdf: false

@@ -640,7 +640,8 @@ daq = initDAQ();
 daq.active                              = 1;
 daq.name                                = 'TRB';
 daq.subName                             = '3';
-    daq.path.base                       = [SYS 'devices' b  daq.name  daq.subName b];mkdirOS(daq.path.base,OS,1);    
+    stationPathSuffix                   = [SYSTEMNAME b];
+    daq.path.base                       = [SYS 'devices' b  daq.name  daq.subName b stationPathSuffix];mkdirOS(daq.path.base,OS,1);    
     daq.path.data                       = [daq.path.base 'data' b];                              mkdirOS(daq.path.data,OS,1);                              mkdirOS(daq.path.data,OS,1);
     daq.readable                        = 1;
     
@@ -806,4 +807,3 @@ configuration.Versioning = {'distributeAnaVars',1;'sendData2DB',0;'writeCSV4DB',
 mkdirOS([HOME 'software/conf/data/'],OS,1);
 save([HOME 'software/conf/data/configuration-' date '.mat'],'configuration');
 return
-
