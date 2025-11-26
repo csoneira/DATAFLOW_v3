@@ -191,10 +191,11 @@ def median_recent_rate(
 
 def plot_histories(history_payload: Dict[str, Tuple[List[datetime], List[float], List[int]]]) -> None:
     plt.style.use("default")
-    fig, ax = plt.subplots(figsize=(12, 6.5))
+    fig, ax = plt.subplots(figsize=(10, 5.5))
 
     any_plotted = False
     global_max_pct: float | None = None
+    now_time = datetime.now(timezone.utc).astimezone()
     for station in STATIONS:
         timestamps, percents, remotes = history_payload.get(station, ([], [], []))
         if not timestamps:
@@ -209,6 +210,7 @@ def plot_histories(history_payload: Dict[str, Tuple[List[datetime], List[float],
             marker="o",
             linestyle="-",
             linewidth=1.5,
+            markersize=4,
             color=color,
             label=label,
         )
@@ -227,8 +229,17 @@ def plot_histories(history_payload: Dict[str, Tuple[List[datetime], List[float],
     ax.yaxis.set_major_locator(MultipleLocator(10))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
 
-    if any_plotted:
-        ax.legend(loc="upper right")
+    now_label = now_time.strftime("%Y-%m-%d %H:%M")
+    now_line = ax.axvline(
+        now_time,
+        color="green",
+        linestyle="--",
+        linewidth=1.0,
+        label=f"Current time ({now_label})",
+    )
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(handles, labels, loc="upper left")
     ax.grid(True, linestyle="--", alpha=0.4)
     fig.autofmt_xdate()
 

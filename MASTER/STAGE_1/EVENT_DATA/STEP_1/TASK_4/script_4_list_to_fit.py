@@ -354,6 +354,9 @@ def plot_ts_with_side_hist(df, columns, time_col, title, width_ratios=(3, 1)):
         ts_ax.set_ylabel(col)
         ts_ax.grid(True, alpha=0.3)
         hist_ax.hist(series, bins=50, orientation="horizontal", color="C1", alpha=0.8)
+        # Let each histogram choose its own x-limits so peaks don't compress other panels
+        hist_ax.set_autoscale_on(True)
+        hist_ax.autoscale_view()
         hist_ax.set_xlabel("count")
         hist_ax.grid(True, alpha=0.2)
     axes[-1, 0].set_xlabel(time_col)
@@ -461,7 +464,11 @@ def plot_err_only_ts_hist(df, base_cols, time_col, title):
         ts_ax.set_ylabel(f"{col}_err")
         ts_ax.grid(True, alpha=0.3)
         hist_ax.hist(series, bins=50, orientation="horizontal", color="C4", alpha=0.7)
+        # Let each histogram scale independently so one peak doesn't compress others
+        hist_ax.set_autoscale_on(True)
+        hist_ax.autoscale_view()
         hist_ax.set_xlabel("count")
+        hist_ax.set_xscale("log")
         hist_ax.grid(True, alpha=0.2)
     axes[-1, 0].set_xlabel(time_col)
     plt.suptitle(title, fontsize=12)
@@ -959,7 +966,70 @@ KEY = "df"
 
 # Load dataframe
 working_df = pd.read_parquet(file_path, engine="pyarrow")
+working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 print(f"Listed dataframe reloaded from: {file_path}")
+print("Columns loaded from parquet:")
+for col in working_df.columns:
+    print(f" - {col}")
+# Backward compatibility: if old original_tt exists but raw_tt is missing, reuse it.
+if "raw_tt" not in working_df.columns and "original_tt" in working_df.columns:
+    working_df = working_df.rename(columns={"original_tt": "raw_tt"})
+# Backward compatibility: if clean_tt is missing but preprocessed_tt exists, reuse it.
+if "clean_tt" not in working_df.columns and "preprocessed_tt" in working_df.columns:
+    working_df = working_df.rename(columns={"preprocessed_tt": "clean_tt"})
+
+
+def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
+    """Compute trigger type based on planes with non-zero charge."""
+    def _derive_tt(row: pd.Series) -> str:
+        planes_with_charge = []
+        for plane in range(1, 5):
+            if columns_map:
+                charge_columns = [col for col in columns_map.get(plane, []) if col in row.index]
+            else:
+                charge_columns = [
+                    f"Q{plane}_F_1",
+                    f"Q{plane}_F_2",
+                    f"Q{plane}_F_3",
+                    f"Q{plane}_F_4",
+                    f"Q{plane}_B_1",
+                    f"Q{plane}_B_2",
+                    f"Q{plane}_B_3",
+                    f"Q{plane}_B_4",
+                ]
+            if any(row.get(col, 0) != 0 for col in charge_columns):
+                planes_with_charge.append(str(plane))
+        return "".join(planes_with_charge) if planes_with_charge else "0"
+
+    df[column_name] = df.apply(_derive_tt, axis=1)
+    df[column_name] = df[column_name].apply(builtins.int)
+    return df
+
+list_tt_columns = {
+    i_plane: [
+        f"P{i_plane}_T_sum_final",
+        f"P{i_plane}_T_dif_final",
+        f"P{i_plane}_Q_sum_final",
+        f"P{i_plane}_Q_dif_final",
+        f"P{i_plane}_Y_final",
+    ]
+    for i_plane in range(1, 5)
+}
+
+# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
+# 0 -> regular analysis
+# 1 -> repeated, careful analysis
+global_variables = {}
+
+working_df = compute_tt(working_df, "list_tt", list_tt_columns)
+list_tt_counts_initial = working_df["list_tt"].value_counts()
+for tt_value, count in list_tt_counts_initial.items():
+    global_variables[f"list_tt_{tt_value}_count"] = int(count)
+working_df["processed_tt"] = working_df["list_tt"].astype(int)
+
+# Ensure cal_tt is present for downstream correlations
+if "cal_tt" not in working_df.columns:
+    working_df["cal_tt"] = working_df["processed_tt"]
 
 
 # List all names of columns
@@ -1162,26 +1232,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -1232,8 +1302,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -1296,8 +1366,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -1309,15 +1379,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -1351,9 +1421,9 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -1510,15 +1580,14 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
-# 0 -> regular analysis
-# 1 -> repeated, careful analysis
-global_variables = {
-    'analysis_mode': 0,
-    'unc_y': anc_sy,
-    'unc_tsum': anc_sts,
-    'unc_tdif': anc_std,
-}
+
+
+
+global_variables['analysis_mode'] = 0
+global_variables['unc_y'] = anc_sy
+global_variables['unc_tsum'] = anc_sts
+global_variables['unc_tdif'] = anc_std
+
 
 TRACK_COMBINATIONS: tuple[str, ...] = (
     "12", "13", "14", "23", "24", "34",
@@ -1588,20 +1657,28 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
 
 def record_residual_sigmas(df: pd.DataFrame) -> None:
     """Fit Gaussian sigmas for residual columns per track combination and plane."""
-    if "processed_tt" not in df.columns:
+    tt_col = "list_tt" if "list_tt" in df.columns else "processed_tt"
+    if tt_col not in df.columns:
         return
 
-    processed = df["processed_tt"].astype(str)
+    processed = df[tt_col].astype(str)
     for combo in TRACK_COMBINATIONS:
-        combo_mask = processed == combo
+        combo_str = str(combo)
+        combo_mask = processed == combo_str
         combo_df = df.loc[combo_mask]
         for plane in range(1, 5):
+            if str(plane) not in combo_str:
+                continue  # skip planes not present in the trigger combination
             for metric in RESIDUAL_SERIES:
+                if metric.startswith("ext_") and len(combo_str) < 3:
+                    continue  # external residuals need at least 3 planes
                 col = f"{metric}_{plane}"
-                key = f"{col}_{combo}_sigma"
-                sigma = np.nan
-                if col in df.columns and not combo_df.empty:
-                    sigma = _fit_gaussian_sigma(combo_df[col])
+                key = f"{col}_{combo_str}_sigma"
+                if col not in df.columns or combo_df.empty:
+                    continue
+                sigma = _fit_gaussian_sigma(combo_df[col])
+                if np.isnan(sigma):
+                    continue  # avoid recording meaningless NaNs
                 global_variables[key] = sigma
 
 
@@ -1948,26 +2025,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -2015,8 +2092,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -2079,8 +2156,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -2092,15 +2169,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -2129,9 +2206,9 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -2628,26 +2705,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -2695,8 +2772,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -2759,8 +2836,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -2772,15 +2849,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -2809,9 +2886,9 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -3082,17 +3159,15 @@ for det_iteration in range(repeat + 1):
     det_ext_res_ystr_arr = np.zeros((n, 4), dtype=float)
     det_ext_res_tsum_arr = np.zeros((n, 4), dtype=float)
     det_ext_res_tdif_arr = np.zeros((n, 4), dtype=float)
-    det_processed_tt_arr = np.zeros(n, dtype=int)
+    det_processed_tt_arr = working_df.get("list_tt", pd.Series([0]*n)).astype(int).to_numpy()
     
     for i, trk in enumerate(working_df.itertuples(index=False)):
         planes = [p for p in range(1, nplan + 1)
                 if getattr(trk, f'P{p}_Q_sum_final') > 0]
         if len(planes) < 2:
             continue
-        det_processed_tt_arr[i] = int(''.join(map(str, planes))) if planes else 0
-        
         # Angular part -----------------------------------------------------------------
-        x = np.array([tdiff_to_x * getattr(trk, f'P{p}_T_diff_final') for p in planes])
+        x = np.array([tdiff_to_x * getattr(trk, f'P{p}_T_dif_final') for p in planes])
         y = np.array([getattr(trk, f'P{p}_Y_final') for p in planes])
         z = z_positions[np.array(planes) - 1]
 
@@ -3141,7 +3216,7 @@ for det_iteration in range(repeat + 1):
                 if len(lo_planes) < 2:
                     continue
 
-                x_lo = np.array([tdiff_to_x * getattr(trk, f'P{pl}_T_diff_final') for pl in lo_planes])
+                x_lo = np.array([tdiff_to_x * getattr(trk, f'P{pl}_T_dif_final') for pl in lo_planes])
                 y_lo = np.array([getattr(trk, f'P{pl}_Y_final') for pl in lo_planes])
                 z_lo = z_positions[np.array(lo_planes) - 1]
                 tsum_lo = np.array([getattr(trk, f'P{pl}_T_sum_final') for pl in lo_planes])
@@ -3157,7 +3232,7 @@ for det_iteration in range(repeat + 1):
                 z_p = z_positions[p - 1]
                 x_pred_p = x0_lo + v_lo[0] * z_p / v_lo[2]
                 y_pred_p = y0_lo + v_lo[1] * z_p / v_lo[2]
-                x_obs_p = tdiff_to_x * getattr(trk, f'P{p}_T_diff_final')
+                x_obs_p = tdiff_to_x * getattr(trk, f'P{p}_T_dif_final')
                 y_obs_p = getattr(trk, f'P{p}_Y_final')
 
                 det_ext_res_tdif_arr[i, p - 1] = (x_obs_p - x_pred_p) / tdiff_to_x
@@ -3219,9 +3294,9 @@ for det_iteration in range(repeat + 1):
     #             det_changed = True
     #             working_df.at[index, f'P{i}_Y_final'] = 0
     #             working_df.at[index, f'P{i}_T_sum_final'] = 0
-    #             working_df.at[index, f'P{i}_T_diff_final'] = 0
+    #             working_df.at[index, f'P{i}_T_dif_final'] = 0
     #             working_df.at[index, f'P{i}_Q_sum_final'] = 0
-    #             working_df.at[index, f'P{i}_Q_diff_final'] = 0
+    #             working_df.at[index, f'P{i}_Q_dif_final'] = 0
     #             # Also clear residuals so they don't appear in other plane combinations
     #             for col in (
     #                 f'det_res_ystr_{i}', f'det_res_tsum_{i}', f'det_res_tdif_{i}',
@@ -3305,18 +3380,22 @@ def plot_ts_err_with_hist(df, base_cols, time_col, title):
                 ax.set_visible(False)
             continue
         err_col = f"{col}_err"
-        yerr = df[err_col].abs() if err_col in df.columns else None
+        err_series = df[err_col].dropna() if err_col in df.columns else None
+        yerr = err_series.abs() if err_series is not None else None
         ts_ax.errorbar(df[time_col], df[col], yerr=yerr, fmt=".", ms=1, alpha=0.85)
         ts_ax.set_ylabel(col)
         ts_ax.grid(True, alpha=0.3)
         hist_ax.hist(series, bins=50, orientation="horizontal", color="C2", alpha=0.8)
         hist_ax.set_xlabel("count")
         hist_ax.grid(True, alpha=0.2)
-        if yerr is not None:
-            ts_err_ax.plot(df[time_col], yerr, ".", ms=1, alpha=0.8, label=f"{col}_err")
+        if err_series is not None and not err_series.empty:
+            ts_err_ax.plot(df[time_col], err_series, ".", ms=1, alpha=0.8, label=f"{col}_err")
             ts_err_ax.grid(True, alpha=0.3)
             ts_err_ax.legend(fontsize="x-small")
-            hist_err_ax.hist(yerr.dropna(), bins=50, orientation="horizontal", color="C4", alpha=0.7)
+            hist_err_ax.hist(err_series, bins=50, orientation="horizontal", color="C4", alpha=0.7)
+            hist_err_ax.set_autoscale_on(True)
+            hist_err_ax.autoscale_view()
+            hist_err_ax.set_xscale("log")
             hist_err_ax.set_xlabel("count")
             hist_err_ax.grid(True, alpha=0.2)
         else:
@@ -3560,7 +3639,7 @@ def extract_plane_data(track, iplane):
     zi  = z_positions[iplane - 1]
     yst = getattr(track, f'P{iplane}_Y_final')
     ts  = getattr(track, f'P{iplane}_T_sum_final')
-    td  = getattr(track, f'P{iplane}_T_diff_final')
+    td  = getattr(track, f'P{iplane}_T_dif_final')
     return [yst, ts, td], [anc_sy, anc_sts, anc_std], zi
 
 nvar = 3
@@ -3570,19 +3649,22 @@ if limit and limit_number < ntrk: ntrk = limit_number
 print("-----------------------------")
 print(f"{ntrk} events to be fitted")
 
-timtrack_results = [ 'x', 'xp', 'y', 'yp', 't0', 's',
-                'th_chi', 'res_y', 'res_ts', 'res_td', 'processed_tt',
-                'res_ystr_1', 'res_ystr_2', 'res_ystr_3', 'res_ystr_4',
-                'res_tsum_1', 'res_tsum_2', 'res_tsum_3', 'res_tsum_4',
-                'res_tdif_1', 'res_tdif_2', 'res_tdif_3', 'res_tdif_4',
-                'ext_res_ystr_1', 'ext_res_ystr_2', 'ext_res_ystr_3', 'ext_res_ystr_4',
-                'ext_res_tsum_1', 'ext_res_tsum_2', 'ext_res_tsum_3', 'ext_res_tsum_4',
-                'ext_res_tdif_1', 'ext_res_tdif_2', 'ext_res_tdif_3', 'ext_res_tdif_4',
-                'charge_1', 'charge_2', 'charge_3', 'charge_4', 'charge_event',
-                "iterations", "conv_distance", 'converged']
+timtrack_results = [
+    'tim_x', 'tim_xp', 'tim_y', 'tim_yp', 'tim_t0', 'tim_s',
+    'tim_th_chi', 'tim_res_y', 'tim_res_ts', 'tim_res_td', 'tim_list_tt',
+    'tim_res_ystr_1', 'tim_res_ystr_2', 'tim_res_ystr_3', 'tim_res_ystr_4',
+    'tim_res_tsum_1', 'tim_res_tsum_2', 'tim_res_tsum_3', 'tim_res_tsum_4',
+    'tim_res_tdif_1', 'tim_res_tdif_2', 'tim_res_tdif_3', 'tim_res_tdif_4',
+    'tim_ext_res_ystr_1', 'tim_ext_res_ystr_2', 'tim_ext_res_ystr_3', 'tim_ext_res_ystr_4',
+    'tim_ext_res_tsum_1', 'tim_ext_res_tsum_2', 'tim_ext_res_tsum_3', 'tim_ext_res_tsum_4',
+    'tim_ext_res_tdif_1', 'tim_ext_res_tdif_2', 'tim_ext_res_tdif_3', 'tim_ext_res_tdif_4',
+    'tim_charge_1', 'tim_charge_2', 'tim_charge_3', 'tim_charge_4', 'tim_charge_event',
+    "tim_iterations", "tim_conv_distance", 'tim_converged'
+]
 
-new_columns_df = pd.DataFrame(0., index=working_df.index, columns=timtrack_results)
-working_df = pd.concat([working_df, new_columns_df], axis=1)
+missing_tim_cols = {col: 0.0 for col in timtrack_results if col not in working_df.columns}
+if missing_tim_cols:
+    working_df = pd.concat([working_df, pd.DataFrame(missing_tim_cols, index=working_df.index)], axis=1)
 
 # TimTrack starts ------------------------------------------------------
 repeat = number_of_TT_executions - 1 if timtrack_iteration else 0
@@ -3604,7 +3686,7 @@ for iteration in range(repeat + 1):
     iterations_arr = np.zeros(n_rows, dtype=np.int32)
     conv_distance_arr = np.zeros(n_rows, dtype=float)
     converged_arr = np.zeros(n_rows, dtype=np.int8)
-    processed_tt_arr = np.zeros(n_rows, dtype=np.int32)
+    processed_tt_arr = working_df.get("list_tt", pd.Series([0] * n_rows)).astype(np.int32).to_numpy()
 
     th_chi_arr = np.zeros(n_rows, dtype=float)
     x_arr = np.zeros(n_rows, dtype=float)
@@ -3622,21 +3704,17 @@ for iteration in range(repeat + 1):
     
     for pos, track in enumerate(iterator):
         # INTRODUCTION ------------------------------------------------------------------
-        name_type_parts = []
         planes_to_iterate = []
         charge_event = 0.0
         for i_plane in range(nplan):
             plane_id = i_plane + 1
             charge_plane = getattr(track, f'P{plane_id}_Q_sum_final')
             if charge_plane != 0:
-                name_type_parts.append(str(plane_id))
                 planes_to_iterate.append(plane_id)
                 if plane_id <= 4:
                     charge_arr[pos, plane_id - 1] = charge_plane
                 charge_event += charge_plane
         
-        name_type = int(''.join(name_type_parts)) if name_type_parts else 0
-        processed_tt_arr[pos] = name_type
         charge_event_arr[pos] = charge_event
         
         # FITTING -----------------------------------------------------------------------
@@ -3701,8 +3779,6 @@ for iteration in range(repeat + 1):
                     res_tsum_arr[pos, iplane - 1] = vres[1]
                     res_tdif_arr[pos, iplane - 1] = vres[2]
             
-            processed_tt_arr[pos] = name_type
-            
             ndf  = ndat - npar    # number of degrees of freedom; was ndat - npar
             
             chi2 = ( res_ystr / anc_sy )**2 + ( res_tsum / anc_sts )**2 + ( res_tdif / anc_std )**2
@@ -3766,28 +3842,28 @@ for iteration in range(repeat + 1):
     # Push the accumulated results back to the DataFrame in a single shot ------
     for plane_idx in range(4):
         col_suffix = plane_idx + 1
-        working_df[f'charge_{col_suffix}'] = charge_arr[:, plane_idx]
-        working_df[f'res_ystr_{col_suffix}'] = res_ystr_arr[:, plane_idx]
-        working_df[f'res_tsum_{col_suffix}'] = res_tsum_arr[:, plane_idx]
-        working_df[f'res_tdif_{col_suffix}'] = res_tdif_arr[:, plane_idx]
-        working_df[f'ext_res_ystr_{col_suffix}'] = ext_res_ystr_arr[:, plane_idx]
-        working_df[f'ext_res_tsum_{col_suffix}'] = ext_res_tsum_arr[:, plane_idx]
-        working_df[f'ext_res_tdif_{col_suffix}'] = ext_res_tdif_arr[:, plane_idx]
+        working_df[f'tim_charge_{col_suffix}'] = charge_arr[:, plane_idx]
+        working_df[f'tim_res_ystr_{col_suffix}'] = res_ystr_arr[:, plane_idx]
+        working_df[f'tim_res_tsum_{col_suffix}'] = res_tsum_arr[:, plane_idx]
+        working_df[f'tim_res_tdif_{col_suffix}'] = res_tdif_arr[:, plane_idx]
+        working_df[f'tim_ext_res_ystr_{col_suffix}'] = ext_res_ystr_arr[:, plane_idx]
+        working_df[f'tim_ext_res_tsum_{col_suffix}'] = ext_res_tsum_arr[:, plane_idx]
+        working_df[f'tim_ext_res_tdif_{col_suffix}'] = ext_res_tdif_arr[:, plane_idx]
 
-    working_df['charge_event'] = charge_event_arr
-    working_df['iterations'] = iterations_arr
-    working_df['conv_distance'] = conv_distance_arr
-    working_df['converged'] = converged_arr
-    working_df['processed_tt'] = processed_tt_arr
+    working_df['tim_charge_event'] = charge_event_arr
+    working_df['tim_iterations'] = iterations_arr
+    working_df['tim_conv_distance'] = conv_distance_arr
+    working_df['tim_converged'] = converged_arr
+    working_df['tim_list_tt'] = processed_tt_arr
 
-    working_df['th_chi'] = th_chi_arr
-    working_df['x'] = x_arr
-    working_df['xp'] = xp_arr
-    working_df['y'] = y_arr
-    working_df['yp'] = yp_arr
-    working_df['t0'] = t0_arr
-    working_df['s'] = s_arr
-    working_df[['res_y', 'res_ts', 'res_td']] = 0.0
+    working_df['tim_th_chi'] = th_chi_arr
+    working_df['tim_x'] = x_arr
+    working_df['tim_xp'] = xp_arr
+    working_df['tim_y'] = y_arr
+    working_df['tim_yp'] = yp_arr
+    working_df['tim_t0'] = t0_arr
+    working_df['tim_s'] = s_arr
+    working_df[['tim_res_y', 'tim_res_ts', 'tim_res_td']] = 0.0
 
     possible_ndf = {nvar * planes - npar for planes in range(2, nplan + 1)}
     possible_ndf = {ndf for ndf in possible_ndf if ndf >= 0}
@@ -3822,9 +3898,9 @@ for iteration in range(repeat + 1):
     #         cols_to_zero = [
     #             f'P{plane_idx}_Y_final',
     #             f'P{plane_idx}_T_sum_final',
-    #             f'P{plane_idx}_T_diff_final',
+    #             f'P{plane_idx}_T_dif_final',
     #             f'P{plane_idx}_Q_sum_final',
-    #             f'P{plane_idx}_Q_diff_final',
+    #             f'P{plane_idx}_Q_dif_final',
     #             f'res_ystr_{plane_idx}',
     #             f'res_tsum_{plane_idx}',
     #             f'res_tdif_{plane_idx}',
@@ -3859,7 +3935,7 @@ for iteration in range(repeat + 1):
 # ------------------------------------------------------------------------------------
 
 # Set the label to integer -----------------------------------------------------------
-working_df['processed_tt'] = working_df['processed_tt'].apply(builtins.int)
+working_df["processed_tt"] = working_df["processed_tt"].astype(np.int32, copy=False)
 
 # Calculate angles -------------------------------------------------------------------
 def calculate_angles(xproj, yproj):
@@ -3867,29 +3943,57 @@ def calculate_angles(xproj, yproj):
     theta = np.arccos(1 / np.sqrt(xproj**2 + yproj**2 + 1))
     return theta, phi
 
-theta, phi = calculate_angles(working_df['xp'], working_df['yp'])
-new_columns_df = pd.DataFrame({'theta': theta, 'phi': phi}, index=working_df.index)
-working_df = pd.concat([working_df, new_columns_df], axis=1)
+theta_vals, phi_vals = calculate_angles(working_df["tim_xp"], working_df["tim_yp"])
 
-# TimTrack-prefixed variables
-working_df["tim_x"] = working_df.get("x", 0)
-working_df["tim_y"] = working_df.get("y", 0)
-
-# Derive theta/phi from TimTrack slopes to ensure consistency
-theta_vals, phi_vals = calculate_angles(working_df["xp"], working_df["yp"])
+# TimTrack-prefixed variables already exist; just ensure angles are set.
 working_df["tim_theta"] = theta_vals
 working_df["tim_phi"] = phi_vals
 
-working_df["tim_s"] = working_df.get("s", 0)
-working_df["tim_t0"] = working_df.get("t0", 0)
+# Preserve slope columns for downstream compatibility
+if "xp" not in working_df.columns:
+    working_df["xp"] = working_df["tim_xp"]
+if "yp" not in working_df.columns:
+    working_df["yp"] = working_df["tim_yp"]
+
+# Backward compatibility: expose tim_* results under legacy column names when missing
+for p in range(1, 5):
+    if f"res_ystr_{p}" not in working_df.columns:
+        working_df[f"res_ystr_{p}"] = working_df.get(f"tim_res_ystr_{p}", 0)
+    if f"res_tsum_{p}" not in working_df.columns:
+        working_df[f"res_tsum_{p}"] = working_df.get(f"tim_res_tsum_{p}", 0)
+    if f"res_tdif_{p}" not in working_df.columns:
+        working_df[f"res_tdif_{p}"] = working_df.get(f"tim_res_tdif_{p}", 0)
+    if f"ext_res_ystr_{p}" not in working_df.columns:
+        working_df[f"ext_res_ystr_{p}"] = working_df.get(f"tim_ext_res_ystr_{p}", 0)
+    if f"ext_res_tsum_{p}" not in working_df.columns:
+        working_df[f"ext_res_tsum_{p}"] = working_df.get(f"tim_ext_res_tsum_{p}", 0)
+    if f"ext_res_tdif_{p}" not in working_df.columns:
+        working_df[f"ext_res_tdif_{p}"] = working_df.get(f"tim_ext_res_tdif_{p}", 0)
+    if f"charge_{p}" not in working_df.columns:
+        working_df[f"charge_{p}"] = working_df.get(f"tim_charge_{p}", 0)
+
+if "charge_event" not in working_df.columns:
+    working_df["charge_event"] = working_df.get("tim_charge_event", 0)
+if "iterations" not in working_df.columns:
+    working_df["iterations"] = working_df.get("tim_iterations", 0)
+if "conv_distance" not in working_df.columns:
+    working_df["conv_distance"] = working_df.get("tim_conv_distance", 0)
+if "converged" not in working_df.columns:
+    working_df["converged"] = working_df.get("tim_converged", 0)
 
 for p in range(1, 5):
-    working_df[f"tim_res_ystr_{p}"] = working_df.get(f"res_ystr_{p}", 0)
-    working_df[f"tim_res_tsum_{p}"] = working_df.get(f"res_tsum_{p}", 0)
-    working_df[f"tim_res_tdif_{p}"] = working_df.get(f"res_tdif_{p}", 0)
-    working_df[f"tim_ext_res_ystr_{p}"] = working_df.get(f"ext_res_ystr_{p}", 0)
-    working_df[f"tim_ext_res_tsum_{p}"] = working_df.get(f"ext_res_tsum_{p}", 0)
-    working_df[f"tim_ext_res_tdif_{p}"] = working_df.get(f"ext_res_tdif_{p}", 0)
+    if f"tim_res_ystr_{p}" not in working_df.columns:
+        working_df[f"tim_res_ystr_{p}"] = working_df.get(f"res_ystr_{p}", 0)
+    if f"tim_res_tsum_{p}" not in working_df.columns:
+        working_df[f"tim_res_tsum_{p}"] = working_df.get(f"res_tsum_{p}", 0)
+    if f"tim_res_tdif_{p}" not in working_df.columns:
+        working_df[f"tim_res_tdif_{p}"] = working_df.get(f"res_tdif_{p}", 0)
+    if f"tim_ext_res_ystr_{p}" not in working_df.columns:
+        working_df[f"tim_ext_res_ystr_{p}"] = working_df.get(f"ext_res_ystr_{p}", 0)
+    if f"tim_ext_res_tsum_{p}" not in working_df.columns:
+        working_df[f"tim_ext_res_tsum_{p}"] = working_df.get(f"ext_res_tsum_{p}", 0)
+    if f"tim_ext_res_tdif_{p}" not in working_df.columns:
+        working_df[f"tim_ext_res_tdif_{p}"] = working_df.get(f"ext_res_tdif_{p}", 0)
 
 #%%
 
@@ -3977,9 +4081,9 @@ def compute_definitive_tt(row):
         # Use post-fit combined variables; fallback to raw finals if missing
         y_key = f"P{plane}_Y_final"
         ts_key = f"P{plane}_T_sum_final"
-        td_key = f"P{plane}_T_diff_final"
+        td_key = f"P{plane}_T_dif_final"
         qsum_key = f"P{plane}_Q_sum_final"
-        qdiff_key = f"P{plane}_Q_diff_final"
+        qdiff_key = f"P{plane}_Q_dif_final"
 
         y_val = row.get(y_key, 0)
         ts_val = row.get(ts_key, 0)
@@ -4030,52 +4134,6 @@ if create_plots and 'datetime' in working_df.columns:
     ts_core['datetime'] = pd.to_datetime(ts_core['datetime'])
     ts_core = ts_core.sort_values('datetime')
 
-    core_vars = ['x', 'y', 'theta', 'phi', 's', 't0', 'chi_timtrack', 'chi_alternative',
-                 'x_err', 'y_err', 'theta_err', 'phi_err', 's_err']
-
-    # for combo in TRACK_COMBINATIONS:
-    #     try:
-    #         combo_int = int(combo)
-    #     except ValueError:
-    #         continue
-    #     subset = ts_core[ts_core['definitive_tt'] == combo_int]
-    #     if subset.empty:
-    #         continue
-
-    #     n_vars = len(core_vars)
-    #     fig, axes = plt.subplots(n_vars, 1, figsize=(14, 2.4 * n_vars), sharex=True)
-    #     if n_vars == 1:
-    #         axes = [axes]
-
-    #     for ax, var in zip(axes, core_vars):
-    #         if var not in subset.columns:
-    #             ax.set_visible(False)
-    #             continue
-    #         y = subset[var]
-    #         err_col = f"{var}_err"
-    #         if err_col in subset.columns:
-    #             # Ensure error bars are non-negative to satisfy matplotlib.
-    #             yerr = subset[err_col].abs()
-    #         else:
-    #             yerr = None
-    #         ax.errorbar(subset['datetime'], y, yerr=yerr, fmt='.', ms=2, label=var)
-    #         ax.set_ylabel(var)
-    #         ax.grid(True, alpha=0.3)
-    #         ax.legend(fontsize='x-small')
-    #     axes[-1].set_xlabel('Datetime')
-    #     plt.suptitle(f'Core track variables over time - combination {combo}', fontsize=12)
-    #     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    #     if save_plots:
-    #         final_filename = f'{fig_idx}_ts_core_vars_combo_{combo}.png'
-    #         fig_idx += 1
-    #         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    #         plot_list.append(save_fig_path)
-    #         plt.savefig(save_fig_path, format='png')
-    #     if show_plots:
-    #         plt.show()
-    #     plt.close()
-    
-    
     # Combined error histograms across combinations (one figure) --------------------
     err_vars = ['x_err', 'y_err', 'theta_err', 'phi_err', 's_err', 't0_err']
     combo_subsets = []
@@ -4134,10 +4192,120 @@ if create_plots and 'datetime' in working_df.columns:
                 if c == 0:
                     ax.set_ylabel(f'Comb {combo}')
                 ax.grid(True, alpha=0.3)
-        plt.suptitle('Error distributions per combination', fontsize=12)
+        plt.suptitle('Error distributions per combination (data)', fontsize=12)
         plt.tight_layout(rect=[0, 0, 1, 0.94])
         if save_plots:
             final_filename = f'{fig_idx}_hist_core_errs_combined.png'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
+
+        # Fit a two-Gaussian mixture per combination/variable and overlay
+        def _gauss_mix(x, a1, mu1, sigma1, a2, mu2, sigma2):
+            return a1 * norm.pdf(x, mu1, sigma1) + a2 * norm.pdf(x, mu2, sigma2)
+
+        for combo, sub in combo_subsets:
+            try:
+                combo_int = int(combo)
+            except ValueError:
+                continue
+            for var in err_vars:
+                if var not in sub.columns:
+                    continue
+                series = sub[var].dropna()
+                if series.empty:
+                    continue
+                q_low, q_high = series.quantile([0.0001, 0.99999])
+                bin_edges = np.linspace(q_low, q_high, 161)
+                counts, edges = np.histogram(series, bins=bin_edges)
+                centers = 0.5 * (edges[1:] + edges[:-1])
+                if not np.any(counts):
+                    continue
+
+                mu_guess = float(series.mean())
+                sigma_guess = float(max(series.std(), 1e-6))
+                p0 = [
+                    float(counts.max()),
+                    mu_guess,
+                    sigma_guess / 2,
+                    float(counts.max()) / 5,
+                    mu_guess,
+                    sigma_guess,
+                ]
+                bounds = (
+                    [0, q_low, 1e-6, 0, q_low, 1e-6],
+                    [np.inf, q_high, (q_high - q_low) * 2, np.inf, q_high, (q_high - q_low) * 2],
+                )
+                try:
+                    popt, _ = curve_fit(_gauss_mix, centers, counts, p0=p0, bounds=bounds, maxfev=5000)
+                except Exception:
+                    continue
+                a1, mu1, sigma1, a2, mu2, sigma2 = popt
+                global_variables[f"{var}_{combo_int}_gauss1_mu"] = float(mu1)
+                global_variables[f"{var}_{combo_int}_gauss1_sigma"] = float(sigma1)
+                global_variables[f"{var}_{combo_int}_gauss2_mu"] = float(mu2)
+                global_variables[f"{var}_{combo_int}_gauss2_sigma"] = float(sigma2)
+
+        # Redraw with overlays
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
+        if n_rows == 1:
+            axes = np.array([axes])
+        for r, (combo, sub) in enumerate(combo_subsets):
+            for c, var in enumerate(err_vars):
+                ax = axes[r, c]
+                if var not in sub.columns:
+                    ax.set_visible(False)
+                    continue
+                data = sub[var].dropna()
+                if data.empty:
+                    ax.set_visible(False)
+                    continue
+                q_low, q_high = bounds.get(var, (data.min(), data.max()))
+                bin_edges = np.linspace(q_low, q_high, 161)
+                counts, edges, _ = ax.hist(data, bins=bin_edges, color='C0', alpha=0.6, label='data')
+                ax.set_yscale('log')
+                ax.set_xlim(q_low, q_high)
+
+                try:
+                    combo_int = int(combo)
+                except ValueError:
+                    combo_int = None
+                if combo_int is not None:
+                    key_base = f"{var}_{combo_int}"
+                    g1_mu = global_variables.get(f"{key_base}_gauss1_mu")
+                    g1_sigma = global_variables.get(f"{key_base}_gauss1_sigma")
+                    g2_mu = global_variables.get(f"{key_base}_gauss2_mu")
+                    g2_sigma = global_variables.get(f"{key_base}_gauss2_sigma")
+                    if all(v is not None for v in (g1_mu, g1_sigma, g2_mu, g2_sigma)):
+                        x_grid = np.linspace(q_low, q_high, 400)
+                        centers = 0.5 * (edges[1:] + edges[:-1])
+                        mask = counts > 0
+                        try:
+                            def _mix_fixed(x, a1, a2):
+                                return _gauss_mix(x, a1, g1_mu, g1_sigma, a2, g2_mu, g2_sigma)
+                            p0_amp = [counts.max(), counts.max() / 5]
+                            amps, _ = curve_fit(_mix_fixed, centers[mask], counts[mask], p0=p0_amp, maxfev=2000)
+                            mix_vals = _mix_fixed(x_grid, *amps)
+                            g1_vals = amps[0] * norm.pdf(x_grid, g1_mu, g1_sigma)
+                            g2_vals = amps[1] * norm.pdf(x_grid, g2_mu, g2_sigma)
+                            ax.plot(x_grid, mix_vals, 'r-', lw=1.0, label='mix fit')
+                            ax.plot(x_grid, g1_vals, 'r--', lw=0.8, label='peak')
+                            ax.plot(x_grid, g2_vals, 'g--', lw=0.8, label='bg')
+                        except Exception:
+                            pass
+                if r == 0:
+                    ax.set_title(var)
+                if c == 0:
+                    ax.set_ylabel(f'Comb {combo}')
+                ax.grid(True, alpha=0.3)
+        plt.suptitle('Error distributions per combination (fits)', fontsize=12)
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        if save_plots:
+            final_filename = f'{fig_idx}_hist_core_errs_combined_with_fits.png'
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
@@ -4588,7 +4756,7 @@ if time_window_fitting:
 
 # Put to zero the rows with traking in only one plane, that is, put 0 if tracking_tt < 10
 for index, row in working_df.iterrows():
-    if row['tracking_tt'] < 10 or row['processed_tt'] < 10 or row['original_tt'] < 10 or row['definitive_tt'] < 10:
+    if row['tracking_tt'] < 10 or row['list_tt'] < 10 or row.get('raw_tt', 0) < 10 or row['definitive_tt'] < 10:
         working_df.at[index, 'x'] = 0
         working_df.at[index, 'xp'] = 0
         working_df.at[index, 'y'] = 0
@@ -4651,10 +4819,10 @@ def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_id
 if create_plots:
     fig_idx = plot_tt_correlation(
         df=working_df,
-        row_label='original_tt',
-        col_label='processed_tt',
-        title='Event counts per (original_tt, processed_tt) combination',
-        filename_suffix='trigger_types_og_and_processed',
+        row_label='raw_tt',
+        col_label='list_tt',
+        title='Event counts per (raw_tt, list_tt) combination',
+        filename_suffix='trigger_types_raw_and_list',
         fig_idx=fig_idx,
         base_dir=base_directories["figure_directory"],
         show_plots=show_plots,
@@ -4665,9 +4833,9 @@ if create_plots:
     fig_idx = plot_tt_correlation(
         df=working_df,
         row_label='tracking_tt',
-        col_label='processed_tt',
-        title='Event counts per (tracking_tt, processed_tt) combination',
-        filename_suffix='trigger_types_tracking_and_processed',
+        col_label='list_tt',
+        title='Event counts per (tracking_tt, list_tt) combination',
+        filename_suffix='trigger_types_tracking_and_list',
         fig_idx=fig_idx,
         base_dir=base_directories["figure_directory"],
         show_plots=show_plots,
@@ -4678,9 +4846,9 @@ if create_plots:
     fig_idx = plot_tt_correlation(
         df=working_df,
         row_label='tracking_tt',
-        col_label='original_tt',
-        title='Event counts per (tracking_tt, original_tt) combination',
-        filename_suffix='trigger_types_tracking_and_original',
+        col_label='raw_tt',
+        title='Event counts per (tracking_tt, raw_tt) combination',
+        filename_suffix='trigger_types_tracking_and_raw',
         fig_idx=fig_idx,
         base_dir=base_directories["figure_directory"],
         show_plots=show_plots,
@@ -4691,10 +4859,10 @@ if create_plots:
 if create_plots or create_essential_plots:
     fig_idx = plot_tt_correlation(
         df=working_df,
-        row_label='original_tt',
+        row_label='raw_tt',
         col_label='definitive_tt',
-        title='Event counts per (original_tt, definitive_tt) combination',
-        filename_suffix='trigger_types_definitive_tt_and_original',
+        title='Event counts per (raw_tt, definitive_tt) combination',
+        filename_suffix='trigger_types_definitive_tt_and_raw',
         fig_idx=fig_idx,
         base_dir=base_directories["figure_directory"],
         show_plots=show_plots,
@@ -4709,16 +4877,16 @@ if create_plots or create_essential_plots:
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-definitive_df = working_df.copy()
+working_df = working_df.copy()
 
 # Remove small, non-zero values -----------------------------------------------
-mask = definitive_df.map(is_small_nonzero)
-nonzero_numeric_mask = definitive_df.map(lambda x: isinstance(x, (int, float)) and x != 0)
+mask = working_df.map(is_small_nonzero)
+nonzero_numeric_mask = working_df.map(lambda x: isinstance(x, (int, float)) and x != 0)
 n_total = nonzero_numeric_mask.sum().sum()
 n_small = mask.sum().sum()
-definitive_df = definitive_df.mask(mask, 0)
+working_df = working_df.mask(mask, 0)
 pct = 100 * n_small / n_total if n_total > 0 else 0
-print(f"\nIn definitive_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
+print(f"\nIn working_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
 record_filter_metric(
     "definitive_small_values_zeroed_value_pct",
     n_small,
@@ -4732,9 +4900,9 @@ cond = (working_df[cols_to_check[0]] != 0)
 for col in cols_to_check[1:]:
     cond &= (working_df[col] != 0)
 
-n_before = len(definitive_df)
-definitive_df = definitive_df[cond]
-n_after = len(definitive_df)
+n_before = len(working_df)
+working_df = working_df[cond]
+n_after = len(working_df)
 
 # Calculate and print percentage ----------------------------------------------
 percentage_retained = 100 * n_after / n_before if n_before > 0 else 0
@@ -4748,20 +4916,20 @@ record_filter_metric(
 )
 
 print("----------------------------------------------------------------------")
-print("Unique original_tt values:", sorted(definitive_df['original_tt'].unique()))
-print("Unique preprocessed_tt values:", sorted(definitive_df['preprocessed_tt'].unique()))
-print("Unique processed_tt values:", sorted(definitive_df['processed_tt'].unique()))
-print("Unique tracking_tt values:", sorted(definitive_df['tracking_tt'].unique()))
-print("Unique definitive_tt values:", sorted(definitive_df['definitive_tt'].unique()))
+for tt_col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "definitive_tt"):
+    if tt_col in working_df.columns:
+        try:
+            print(f"Unique {tt_col} values:", sorted(working_df[tt_col].unique()))
+        except Exception:
+            print(f"Could not list unique values for {tt_col}")
+print("----------------------------------------------------------------------")
 
 
 print("----------------------------------------------------------------------")
 print("----------------------- Calculating some stuff -----------------------")
 print("----------------------------------------------------------------------")
 
-df_plot_ancillary = definitive_df.copy()
-
-
+df_plot_ancillary = working_df.copy()
 
 cond = ( df_plot_ancillary['charge_1'] < charge_plot_limit_right ) &\
     ( df_plot_ancillary['charge_2'] < charge_plot_limit_right ) &\
@@ -5546,14 +5714,14 @@ print("----------------------------------------------------------------------")
 print("----------------------- Final data statistics ------------------------")
 print("----------------------------------------------------------------------")
 
-data_purity = len(definitive_df) / raw_data_len*100
+data_purity = len(working_df) / raw_data_len*100
 print(f"Data purity is {data_purity:.1f}%")
 
 
 # if create_plots:
 
 #     column_chosen = "definitive_tt"
-#     plot_ancillary_df = definitive_df.copy()
+#     plot_ancillary_df = working_df.copy()
     
 #     # Ensure datetime is proper and indexed
 #     plot_ancillary_df['datetime'] = pd.to_datetime(plot_ancillary_df['datetime'], errors='coerce')
@@ -5626,11 +5794,11 @@ if create_plots:
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12), sharey=True)
     colors = plt.colormaps['tab10']
-    tt_types = ['original_tt', 'definitive_tt']
-    row_titles = ['Original TT', 'Processed TT']
+    tt_types = ['raw_tt', 'definitive_tt']
+    row_titles = ['Raw TT', 'Processed TT']
 
     for row_idx, column_chosen in enumerate(tt_types):
-        plot_ancillary_df = definitive_df.copy()
+        plot_ancillary_df = working_df.copy()
 
         # Ensure datetime is proper and indexed
         plot_ancillary_df['datetime'] = pd.to_datetime(plot_ancillary_df['datetime'], errors='coerce')
@@ -5734,31 +5902,30 @@ def round_to_4_significant_digits(x):
         return x
 
 print("Rounding the dataframe values.") 
-for col in definitive_df.select_dtypes(include=[np.floating]).columns:
-    original_dtype = definitive_df[col].dtype
-    rounded_series = definitive_df[col].apply(round_to_4_significant_digits)
-    definitive_df.loc[:, col] = rounded_series.astype(original_dtype, copy=False)
+for col in working_df.select_dtypes(include=[np.floating]).columns:
+    original_dtype = working_df[col].dtype
+    rounded_series = working_df[col].apply(round_to_4_significant_digits)
+    working_df.loc[:, col] = rounded_series.astype(original_dtype, copy=False)
 
 
 
 # Save the data ---------------------------------------------------------------
 # if save_full_data: # Save a full version of the data, for different studies and debugging
-#     definitive_df.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
+#     working_df.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
 #     print(f"Datafile saved in {save_full_filename}.")
 
 # Save the main columns, relevant for the posterior analysis ------------------
 for i, module in enumerate(['1', '2', '3', '4']):
     for j in range(4):
         strip = j + 1
-        definitive_df[f'Q_P{module}s{strip}'] = definitive_df[f'Q{module}_Q_sum_{strip}_no_crstlk']
-        definitive_df[f'Q_P{module}s{strip}_with_crstlk'] = definitive_df[f'Q{module}_Q_sum_{strip}_with_crstlk']
+        working_df[f'Q_P{module}s{strip}'] = working_df[f'Q{module}_Q_sum_{strip}_no_crstlk']
+        working_df[f'Q_P{module}s{strip}_with_crstlk'] = working_df[f'Q{module}_Q_sum_{strip}_with_crstlk']
 
 if self_trigger:
     for i, module in enumerate(['1', '2', '3', '4']):
         for j in range(4):
             strip = j + 1
             working_st_df[f'Q_P{module}s{strip}'] = working_st_df[f'Q{module}_Q_sum_{strip}']
-
 
 # Charge checking --------------------------------------------------------------------------------------------------------
 if self_trigger:
@@ -5772,9 +5939,9 @@ if self_trigger:
                 col_name_2 = f"Q_P{i}s{j}_with_crstlk"
                 
                 # Plot the histogram
-                v = definitive_df[col_name]
+                v = working_df[col_name]
                 v = v[v != 0]
-                w = definitive_df[col_name_2]
+                w = working_df[col_name_2]
                 w = w[w != 0]
                 
                 # For 'no crosstalk' histogram
@@ -5826,7 +5993,7 @@ if self_trigger:
                 col_name = f"Q_P{i}s{j}"
                 col_name_2 = f"Q_P{i}s{j}_with_crstlk"
                 
-                plot_def_df = definitive_df.copy()
+                plot_def_df = working_df.copy()
                 plot_def_df = plot_def_df [ plot_def_df["definitive_tt"] == "1234" ]
                 
                 # Plot the histogram
@@ -6075,7 +6242,7 @@ print("------------------- Finished list_events creation --------------------")
 print("----------------------------------------------------------------------\n\n\n")
 
 
-record_residual_sigmas(definitive_df)
+record_residual_sigmas(working_df)
 
 
 
@@ -6084,24 +6251,30 @@ record_residual_sigmas(definitive_df)
 
 
 
-columns_to_keep = [
-    # Timestamp and identifiers
-    'datetime', 'original_tt', 'processed_tt', 'tracking_tt', 'definitive_tt',
+tt_columns_desired = ['datetime', 'raw_tt', 'clean_tt', 'cal_tt', 'list_tt', 'tracking_tt', 'definitive_tt']
+tt_columns_present = [col for col in tt_columns_desired if col in working_df.columns]
 
-    # New definitions
-    'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
-    
-    # # Chisqs
-    # 'chi_timtrack', 'chi_alternative',
+columns_to_keep = (
+    tt_columns_present
+    + [
+        # New definitions
+        'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
 
-    # Strip-level time and charge info (ordered by plane and strip)
-    *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)],
-    
-    # Strip-level time and charge info with crosstalk
-    *[f'Q_P{p}s{s}_with_crstlk' for p in range(1, 5) for s in range(1, 5)]
-]
+        # Charge
 
-reduced_df = definitive_df[columns_to_keep]
+
+        # # Chisqs
+        # 'chi_timtrack', 'chi_alternative',
+
+        # Strip-level time and charge info (ordered by plane and strip)
+        *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)],
+        
+        # Strip-level time and charge info with crosstalk
+        # *[f'Q_P{p}s{s}_with_crstlk' for p in range(1, 5) for s in range(1, 5)]
+    ]
+)
+
+working_df = working_df[columns_to_keep]
 
 
 
@@ -6122,35 +6295,13 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 
 
 
-# Print all column names in the dataframe
-print("Columns in the reduced_df dataframe:")
-for col in reduced_df.columns:
-    print(col)
-
-# Remove the columns in the form "T*_T_sum_*", "T*_T_diff_*", "Q*_Q_sum_*", "Q*_Q_diff_*", do a loop from 1 to 4
-cols_to_remove = []
-for i_plane in range(1, 5):
-    cols_to_remove.append(f'P{i_plane}_T_sum_final')
-    cols_to_remove.append(f'P{i_plane}_T_diff_final')
-    cols_to_remove.append(f'P{i_plane}_Q_sum_final')
-    cols_to_remove.append(f'P{i_plane}_Q_diff_final')
-    cols_to_remove.append(f'P{i_plane}_Y_final')
-    
-    cols_to_remove.append(f'det_res_tdif_{i_plane}')
-    for strip in range(1, 5):
-        cols_to_remove.append(f'T{i_plane}_T_sum_{strip}')
-        cols_to_remove.append(f'T{i_plane}_T_diff_{strip}')
-        cols_to_remove.append(f'Q{i_plane}_Q_sum_{strip}')
-        cols_to_remove.append(f'Q{i_plane}_Q_diff_{strip}')
-reduced_df.drop(columns=cols_to_remove, inplace=True, errors='ignore')
-
 
 
 
 # Print all column names in the dataframe
 print("Columns in the final dataframe:")
-for col in reduced_df.columns:
-    print(col)
+for col in working_df.columns:
+    print(f" - {col}")
     
 
 
@@ -6165,8 +6316,8 @@ for col in reduced_df.columns:
 # Q_SUM_PATTERN = re.compile(r'^P[1-4]_Q_sum_.*$')
 
 # # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
-# Q_cols = _collect_columns(reduced_df.columns, Q_SUM_PATTERN)
-# reduced_df = reduced_df[(reduced_df[Q_cols] != 0).any(axis=1)]
+# Q_cols = _collect_columns(working_df.columns, Q_SUM_PATTERN)
+# working_df = working_df[(working_df[Q_cols] != 0).any(axis=1)]
 
 
 
@@ -6175,8 +6326,34 @@ for col in reduced_df.columns:
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 # Final number of events
-final_number_of_events = len(reduced_df)
+final_number_of_events = len(working_df)
 print(f"Final number of events in the dataframe: {final_number_of_events}")
+fit_tt_columns = {
+    i_plane: [
+        f"P{i_plane}_T_sum_final",
+        f"P{i_plane}_T_dif_final",
+        f"P{i_plane}_Q_sum_final",
+        f"P{i_plane}_Q_dif_final",
+        f"P{i_plane}_Y_final",
+    ]
+    for i_plane in range(1, 5)
+}
+working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
+working_df["list_to_fit_tt"] = (
+    working_df["list_tt"].astype(str) + "_" + working_df["fit_tt"].astype(str)
+)
+
+fit_tt_counts = working_df["fit_tt"].value_counts()
+for tt_value, count in fit_tt_counts.items():
+    global_variables[f"fit_tt_{tt_value}_count"] = int(count)
+
+list_to_fit_counts = working_df["list_to_fit_tt"].value_counts()
+for combo_value, count in list_to_fit_counts.items():
+    global_variables[f"list_to_fit_tt_{combo_value}_count"] = int(count)
+
+print("Columns before saving list->fit parquet:")
+for col in working_df.columns:
+    print(f" - {col}")
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
@@ -6263,7 +6440,6 @@ print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
 # Save to HDF5 file
 
-working_df = reduced_df
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Listed dataframe saved to: {OUT_PATH}")
 
