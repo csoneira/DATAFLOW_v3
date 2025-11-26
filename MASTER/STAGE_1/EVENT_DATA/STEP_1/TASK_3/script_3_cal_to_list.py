@@ -304,7 +304,7 @@ blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
-number_of_alt_executions = config["number_of_alt_executions"]
+number_of_det_executions = config["number_of_det_executions"]
 
 # TimTrack
 fixed_speed = config["fixed_speed"]
@@ -393,17 +393,17 @@ Y_RPC_left = config["Y_RPC_left"]
 Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
-alt_pos_filter = config["alt_pos_filter"]
-alt_theta_left_filter = config["alt_theta_left_filter"]
-alt_theta_right_filter = config["alt_theta_right_filter"]
-alt_phi_left_filter = config["alt_phi_left_filter"]
-alt_phi_right_filter = config["alt_phi_right_filter"]
-alt_slowness_filter_left = config["alt_slowness_filter_left"]
-alt_slowness_filter_right = config["alt_slowness_filter_right"]
+det_pos_filter = config["det_pos_filter"]
+det_theta_left_filter = config["det_theta_left_filter"]
+det_theta_right_filter = config["det_theta_right_filter"]
+det_phi_left_filter = config["det_phi_left_filter"]
+det_phi_right_filter = config["det_phi_right_filter"]
+det_slowness_filter_left = config["det_slowness_filter_left"]
+det_slowness_filter_right = config["det_slowness_filter_right"]
 
-alt_res_ystr_filter = config["alt_res_ystr_filter"]
-alt_res_tsum_filter = config["alt_res_tsum_filter"]
-alt_res_tdif_filter = config["alt_res_tdif_filter"]
+det_res_ystr_filter = config["det_res_ystr_filter"]
+det_res_tsum_filter = config["det_res_tsum_filter"]
+det_res_tdif_filter = config["det_res_tdif_filter"]
 
 # TimTrack filter
 proj_filter = config["proj_filter"]
@@ -550,16 +550,16 @@ Q_diff_color = 'red'
 T_sum_color = 'blue'
 T_diff_color = 'green'
 
-pos_filter = alt_pos_filter
+pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = alt_slowness_filter_left
-slowness_filter_right = alt_slowness_filter_right
+slowness_filter_left = det_slowness_filter_left
+slowness_filter_right = det_slowness_filter_right
 
-theta_left_filter = alt_theta_left_filter
-theta_right_filter = alt_theta_right_filter
-phi_left_filter = alt_phi_left_filter
-phi_right_filter = alt_phi_right_filter
+theta_left_filter = det_theta_left_filter
+theta_right_filter = det_theta_right_filter
+phi_left_filter = det_phi_left_filter
+phi_right_filter = det_phi_right_filter
 
 fig_idx = 1
 plot_list = []
@@ -1137,7 +1137,7 @@ blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
-number_of_alt_executions = config["number_of_alt_executions"]
+number_of_det_executions = config["number_of_det_executions"]
 
 # TimTrack
 fixed_speed = config["fixed_speed"]
@@ -1225,17 +1225,17 @@ Y_RPC_left = config["Y_RPC_left"]
 Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
-alt_pos_filter = config["alt_pos_filter"]
-alt_theta_left_filter = config["alt_theta_left_filter"]
-alt_theta_right_filter = config["alt_theta_right_filter"]
-alt_phi_left_filter = config["alt_phi_left_filter"]
-alt_phi_right_filter = config["alt_phi_right_filter"]
-alt_slowness_filter_left = config["alt_slowness_filter_left"]
-alt_slowness_filter_right = config["alt_slowness_filter_right"]
+det_pos_filter = config["det_pos_filter"]
+det_theta_left_filter = config["det_theta_left_filter"]
+det_theta_right_filter = config["det_theta_right_filter"]
+det_phi_left_filter = config["det_phi_left_filter"]
+det_phi_right_filter = config["det_phi_right_filter"]
+det_slowness_filter_left = config["det_slowness_filter_left"]
+det_slowness_filter_right = config["det_slowness_filter_right"]
 
-alt_res_ystr_filter = config["alt_res_ystr_filter"]
-alt_res_tsum_filter = config["alt_res_tsum_filter"]
-alt_res_tdif_filter = config["alt_res_tdif_filter"]
+det_res_ystr_filter = config["det_res_ystr_filter"]
+det_res_tsum_filter = config["det_res_tsum_filter"]
+det_res_tdif_filter = config["det_res_tdif_filter"]
 
 # TimTrack filter
 proj_filter = config["proj_filter"]
@@ -1382,16 +1382,16 @@ Q_diff_color = 'red'
 T_sum_color = 'blue'
 T_diff_color = 'green'
 
-pos_filter = alt_pos_filter
+pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = alt_slowness_filter_left
-slowness_filter_right = alt_slowness_filter_right
+slowness_filter_left = det_slowness_filter_left
+slowness_filter_right = det_slowness_filter_right
 
-theta_left_filter = alt_theta_left_filter
-theta_right_filter = alt_theta_right_filter
-phi_left_filter = alt_phi_left_filter
-phi_right_filter = alt_phi_right_filter
+theta_left_filter = det_theta_left_filter
+theta_right_filter = det_theta_right_filter
+phi_left_filter = det_phi_left_filter
+phi_right_filter = det_phi_right_filter
 
 fig_idx = 1
 plot_list = []
@@ -1730,7 +1730,7 @@ blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
-number_of_alt_executions = config["number_of_alt_executions"]
+number_of_det_executions = config["number_of_det_executions"]
 
 # TimTrack
 fixed_speed = config["fixed_speed"]
@@ -1818,17 +1818,17 @@ Y_RPC_left = config["Y_RPC_left"]
 Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
-alt_pos_filter = config["alt_pos_filter"]
-alt_theta_left_filter = config["alt_theta_left_filter"]
-alt_theta_right_filter = config["alt_theta_right_filter"]
-alt_phi_left_filter = config["alt_phi_left_filter"]
-alt_phi_right_filter = config["alt_phi_right_filter"]
-alt_slowness_filter_left = config["alt_slowness_filter_left"]
-alt_slowness_filter_right = config["alt_slowness_filter_right"]
+det_pos_filter = config["det_pos_filter"]
+det_theta_left_filter = config["det_theta_left_filter"]
+det_theta_right_filter = config["det_theta_right_filter"]
+det_phi_left_filter = config["det_phi_left_filter"]
+det_phi_right_filter = config["det_phi_right_filter"]
+det_slowness_filter_left = config["det_slowness_filter_left"]
+det_slowness_filter_right = config["det_slowness_filter_right"]
 
-alt_res_ystr_filter = config["alt_res_ystr_filter"]
-alt_res_tsum_filter = config["alt_res_tsum_filter"]
-alt_res_tdif_filter = config["alt_res_tdif_filter"]
+det_res_ystr_filter = config["det_res_ystr_filter"]
+det_res_tsum_filter = config["det_res_tsum_filter"]
+det_res_tdif_filter = config["det_res_tdif_filter"]
 
 # TimTrack filter
 proj_filter = config["proj_filter"]
@@ -1977,16 +1977,16 @@ Q_diff_color = 'red'
 T_sum_color = 'blue'
 T_diff_color = 'green'
 
-pos_filter = alt_pos_filter
+pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = alt_slowness_filter_left
-slowness_filter_right = alt_slowness_filter_right
+slowness_filter_left = det_slowness_filter_left
+slowness_filter_right = det_slowness_filter_right
 
-theta_left_filter = alt_theta_left_filter
-theta_right_filter = alt_theta_right_filter
-phi_left_filter = alt_phi_left_filter
-phi_right_filter = alt_phi_right_filter
+theta_left_filter = det_theta_left_filter
+theta_right_filter = det_theta_right_filter
+phi_left_filter = det_phi_left_filter
+phi_right_filter = det_phi_right_filter
 
 fig_idx = 1
 plot_list = []

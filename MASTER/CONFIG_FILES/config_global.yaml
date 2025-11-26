@@ -166,7 +166,7 @@ blur_y: true
 
 # Alternative --------------------------------------
 alternative_iteration: false
-number_of_alt_executions: 2
+number_of_det_executions: 2
 
 # TimTrack -----------------------------------------
 fixed_speed: false

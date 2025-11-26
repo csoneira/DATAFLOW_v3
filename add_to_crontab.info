@@ -51,6 +51,12 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 0 3 * * * rsync -avz --delete /home/mingo/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo03:/home/rpcuser/station_automation_scripts/
 0 4 * * * rsync -avz --delete /home/mingo/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo04:/home/rpcuser/station_automation_scripts/
 
+# Update the list of processed basenames
+0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh --not-erase >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/update_execution_csvs.log 2>&1
+
+# Remove the UNPROCESSED files if already in the list of processed
+5 * * * * /bin/bash MASTER/ANCILLARY/PIPELINE_OPERATIONS/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/flush_from_unprocessed.log 2>&1
+
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
@@ -220,8 +226,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # FILL FACTOR TRACKER
-*/30 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh --not-erase >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/update_execution_csvs.log 2>&1
-*/30 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/fill_factor_realtime_plotter.log 2>&1
+0 */2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/fill_factor_realtime_plotter.log 2>&1
 
 # EXECUTION METADATA PLOTTER
 */10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 --zoom >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1

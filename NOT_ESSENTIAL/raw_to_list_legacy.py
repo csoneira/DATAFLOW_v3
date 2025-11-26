@@ -519,7 +519,7 @@ blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
-number_of_alt_executions = config["number_of_alt_executions"]
+number_of_det_executions = config["number_of_det_executions"]
 
 # TimTrack
 fixed_speed = config["fixed_speed"]
@@ -607,17 +607,17 @@ Y_RPC_left = config["Y_RPC_left"]
 Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
-alt_pos_filter = config["alt_pos_filter"]
-alt_theta_left_filter = config["alt_theta_left_filter"]
-alt_theta_right_filter = config["alt_theta_right_filter"]
-alt_phi_left_filter = config["alt_phi_left_filter"]
-alt_phi_right_filter = config["alt_phi_right_filter"]
-alt_slowness_filter_left = config["alt_slowness_filter_left"]
-alt_slowness_filter_right = config["alt_slowness_filter_right"]
+det_pos_filter = config["det_pos_filter"]
+det_theta_left_filter = config["det_theta_left_filter"]
+det_theta_right_filter = config["det_theta_right_filter"]
+det_phi_left_filter = config["det_phi_left_filter"]
+det_phi_right_filter = config["det_phi_right_filter"]
+det_slowness_filter_left = config["det_slowness_filter_left"]
+det_slowness_filter_right = config["det_slowness_filter_right"]
 
-alt_res_ystr_filter = config["alt_res_ystr_filter"]
-alt_res_tsum_filter = config["alt_res_tsum_filter"]
-alt_res_tdif_filter = config["alt_res_tdif_filter"]
+det_res_ystr_filter = config["det_res_ystr_filter"]
+det_res_tsum_filter = config["det_res_tsum_filter"]
+det_res_tdif_filter = config["det_res_tdif_filter"]
 
 # TimTrack filter
 proj_filter = config["proj_filter"]
@@ -764,16 +764,16 @@ Q_diff_color = 'red'
 T_sum_color = 'blue'
 T_diff_color = 'green'
 
-pos_filter = alt_pos_filter
+pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = alt_slowness_filter_left
-slowness_filter_right = alt_slowness_filter_right
+slowness_filter_left = det_slowness_filter_left
+slowness_filter_right = det_slowness_filter_right
 
-theta_left_filter = alt_theta_left_filter
-theta_right_filter = alt_theta_right_filter
-phi_left_filter = alt_phi_left_filter
-phi_right_filter = alt_phi_right_filter
+theta_left_filter = det_theta_left_filter
+theta_right_filter = det_theta_right_filter
+phi_left_filter = det_phi_left_filter
+phi_right_filter = det_phi_right_filter
 
 fig_idx = 1
 plot_list = []
@@ -1357,9 +1357,9 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             "phi": "green",
             "x": "darkorange",
             "y": "darkorange",
-            "alt_y": "darkorange",
+            "det_y": "darkorange",
             "s": "purple",
-            "alt_s": "purple",
+            "det_s": "purple",
             "th_chi": "red",
             "res_ystr": "teal",
             "res_tsum": "brown",
@@ -1378,11 +1378,11 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             left, right = phi_left_filter, phi_right_filter
             selected_col = color_map["phi"]
 
-        elif col in ["x", "alt_x", "y", "alt_y"]:
+        elif col in ["x", "det_x", "y", "det_y"]:
             left, right = -pos_filter, pos_filter
             selected_col = color_map["x"]
 
-        elif col in ["s", "alt_s"]:
+        elif col in ["s", "det_s"]:
             left, right = slowness_filter_left, slowness_filter_right
             selected_col = color_map["s"]
 
@@ -7128,20 +7128,20 @@ n = len(working_df)
 
 # Angular definitions
 fit_cols = (
-    ['alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_chi2'] +
-    [f'alt_res_tdif_{p}' for p in range(1, 5)] +
-    [f'alt_res_ystr_{p}' for p in range(1, 5)]
+    ['det_x', 'det_y', 'det_theta', 'det_phi', 'det_chi2'] +
+    [f'det_res_tdif_{p}' for p in range(1, 5)] +
+    [f'det_res_ystr_{p}' for p in range(1, 5)]
 )
 
 # Slowness definitions
-slow_cols = ['alt_s', 'alt_s_ordinate' , 'chi2_tsum_fit'] + [f'alt_res_tsum_{p}' for p in range(1, 5)]
+slow_cols = ['det_s', 'det_s_ordinate' , 'chi2_tsum_fit'] + [f'det_res_tsum_{p}' for p in range(1, 5)]
 
 # Alternative analysis starts -----------------------------------------------
-repeat = number_of_alt_executions - 1 if alternative_iteration else 0
-for alt_iteration in range(repeat + 1):
+repeat = number_of_det_executions - 1 if alternative_iteration else 0
+for det_iteration in range(repeat + 1):
     fitted = 0
     if alternative_iteration:
-        print(f"Alternative iteration {alt_iteration+1} out of {number_of_alt_executions}.")
+        print(f"Alternative iteration {det_iteration+1} out of {number_of_det_executions}.")
     
     fit_res = {c: np.zeros(n, dtype=float) for c in fit_cols}
     slow_res  = {c: np.zeros(n, dtype=float) for c in slow_cols}
@@ -7157,18 +7157,18 @@ for alt_iteration in range(repeat + 1):
         y = np.array([getattr(trk, f'Y_{p}')                           for p in planes])
         z = z_positions[np.array(planes) - 1]
 
-        (fit_res['alt_x'][i], fit_res['alt_y'][i], fit_res['alt_theta'][i], fit_res['alt_phi'][i], fit_res['alt_chi2'][i], res_td, res_y) = fit_3d_line(x, y, z, anc_sx, anc_sy, anc_sz, planes, tdiff_to_x)
+        (fit_res['det_x'][i], fit_res['det_y'][i], fit_res['det_theta'][i], fit_res['det_phi'][i], fit_res['det_chi2'][i], res_td, res_y) = fit_3d_line(x, y, z, anc_sx, anc_sy, anc_sz, planes, tdiff_to_x)
 
         for p in range(1, 5):
-            fit_res[f'alt_res_tdif_{p}'][i] = res_td.get(p, 0.0)
-            fit_res[f'alt_res_ystr_{p}'][i] = res_y .get(p, 0.0)
+            fit_res[f'det_res_tdif_{p}'][i] = res_td.get(p, 0.0)
+            fit_res[f'det_res_ystr_{p}'][i] = res_y .get(p, 0.0)
 
         # Slowness part ----------------------------------------------------------------
         tsum = np.array([getattr(trk, f'P{p}_T_sum_final') for p in planes])
 
         # Reconstruct fitted points using the fitted direction and z-positions
-        θ, φ = fit_res['alt_theta'][i], fit_res['alt_phi'][i]
-        x0, y0 = fit_res['alt_x'][i], fit_res['alt_y'][i]
+        θ, φ = fit_res['det_theta'][i], fit_res['det_phi'][i]
+        x0, y0 = fit_res['det_x'][i], fit_res['det_y'][i]
 
         v = np.array([np.sin(θ) * np.cos(φ),
                       np.sin(θ) * np.sin(φ),
@@ -7189,16 +7189,16 @@ for alt_iteration in range(repeat + 1):
         res  = t_rel - (k * s_rel + b)
         chi2 = np.sum((res / anc_sts) ** 2)
 
-        slow_res['alt_s'][i]          = k
-        slow_res['alt_s_ordinate'][i] = b
+        slow_res['det_s'][i]          = k
+        slow_res['det_s_ordinate'][i] = b
         slow_res['chi2_tsum_fit'][i]  = chi2
         for p, r in zip(planes, res):
-            slow_res[f'alt_res_tsum_{p}'][i] = r
+            slow_res[f'det_res_tsum_{p}'][i] = r
 
 
     # 4.  Assemble all results and join once
     all_res = {**fit_res, **slow_res}
-    all_res['alt_th_chi'] = all_res['alt_chi2'] + all_res['chi2_tsum_fit']
+    all_res['det_th_chi'] = all_res['det_chi2'] + all_res['chi2_tsum_fit']
 
     new_cols = pd.DataFrame(all_res, index=working_df.index)
     dupes = new_cols.columns.intersection(working_df.columns)
@@ -7208,25 +7208,25 @@ for alt_iteration in range(repeat + 1):
 
 
     # Filter according to residual ------------------------------------------------
-    alt_changed_event_count = 0
+    det_changed_event_count = 0
     for index, row in working_df.iterrows():
-        alt_changed = False
+        det_changed = False
         for i in range(1, 5):
-            if abs(row[f'alt_res_tsum_{i}']) > alt_res_tsum_filter or \
-                abs(row[f'alt_res_tdif_{i}']) > alt_res_tdif_filter or \
-                abs(row[f'alt_res_ystr_{i}']) > alt_res_ystr_filter:
+            if abs(row[f'det_res_tsum_{i}']) > det_res_tsum_filter or \
+                abs(row[f'det_res_tdif_{i}']) > det_res_tdif_filter or \
+                abs(row[f'det_res_ystr_{i}']) > det_res_ystr_filter:
                 
-                alt_changed = True
+                det_changed = True
                 working_df.at[index, f'Y_{i}'] = 0
                 working_df.at[index, f'P{i}_T_sum_final'] = 0
                 working_df.at[index, f'P{i}_T_diff_final'] = 0
                 working_df.at[index, f'P{i}_Q_sum_final'] = 0
                 working_df.at[index, f'P{i}_Q_diff_final'] = 0
-        if alt_changed:
-            alt_changed_event_count += 1
-    print(f"--> {alt_changed_event_count} events were residual filtered.")
+        if det_changed:
+            det_changed_event_count += 1
+    print(f"--> {det_changed_event_count} events were residual filtered.")
     
-    alt_iteration += 1
+    det_iteration += 1
 
 
 # ---------------------------------------------------------------------------
@@ -7280,20 +7280,20 @@ print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct
 
 for col in working_df.columns:
     # Alternative fitting results
-    if 'alt_x' == col or 'alt_y' == col:
-        cond_bound = (working_df[col] > alt_pos_filter) | (working_df[col] < -1*alt_pos_filter)
+    if 'det_x' == col or 'det_y' == col:
+        cond_bound = (working_df[col] > det_pos_filter) | (working_df[col] < -1*det_pos_filter)
         cond_zero = (working_df[col] == 0)
         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-    if 'alt_theta' == col:
-        cond_bound = (working_df[col] > alt_theta_right_filter) | (working_df[col] < alt_theta_left_filter)
+    if 'det_theta' == col:
+        cond_bound = (working_df[col] > det_theta_right_filter) | (working_df[col] < det_theta_left_filter)
         cond_zero = (working_df[col] == 0)
         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-    if 'alt_phi' == col:
-        cond_bound = (working_df[col] > alt_phi_right_filter) | (working_df[col] < alt_phi_left_filter)
+    if 'det_phi' == col:
+        cond_bound = (working_df[col] > det_phi_right_filter) | (working_df[col] < det_phi_left_filter)
         cond_zero = (working_df[col] == 0)
         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-    if 'alt_s' == col:
-        cond_bound = (working_df[col] > alt_slowness_filter_right) | (working_df[col] < alt_slowness_filter_left)
+    if 'det_s' == col:
+        cond_bound = (working_df[col] > det_slowness_filter_right) | (working_df[col] < det_slowness_filter_left)
         cond_zero = (working_df[col] == 0)
         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
 
@@ -7905,12 +7905,12 @@ print("----------------------------------------------------------------------")
 print("------------------ Slowness residual comprobation ---------------------")
 print("----------------------------------------------------------------------")
 
-working_df['delta_s'] = working_df['alt_s'] - working_df['s']  # Calculate the difference from the speed of light
+working_df['delta_s'] = working_df['det_s'] - working_df['s']  # Calculate the difference from the speed of light
 
 
 
 if create_plots or create_essential_plots or create_very_essential_plots:
-    print("Plotting residuals of alt_s - s for each original_tt to processed_tt case...")
+    print("Plotting residuals of det_s - s for each original_tt to processed_tt case...")
     
     df_filtered = working_df.copy()
     bins = np.linspace(delta_s_left, delta_s_right, 100)  # Adjust range and bin size as needed
@@ -7931,8 +7931,8 @@ if create_plots or create_essential_plots or create_very_essential_plots:
 
         df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
         residuals = df_tt['delta_s']  # Calculate the residuals
-        # residuals = 2 * ( df_tt['alt_s'] - df_tt['s'] ) / ( df_tt['alt_s'] + df_tt['s'] )  # Calculate the residuals
-        # rel_sum = ( df_tt['alt_s'] + df_tt['s'] ) / 2
+        # residuals = 2 * ( df_tt['det_s'] - df_tt['s'] ) / ( df_tt['det_s'] + df_tt['s'] )  # Calculate the residuals
+        # rel_sum = ( df_tt['det_s'] + df_tt['s'] ) / 2
         rel_sum = df_tt['s']
         
         if len(residuals) < 10:
@@ -7953,7 +7953,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
         ax.legend()
 
         if i % ncols == 0:
-            ax.set_ylabel(r'$alt_s - s$')
+            ax.set_ylabel(r'$det_s - s$')
         if i // ncols == nrows - 1:
             ax.set_xlabel(r'$s$')
 
@@ -7961,13 +7961,13 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
 
-    plt.suptitle(r'Residuals: $alt_s - s$ per processed_tt case', fontsize=14)
+    plt.suptitle(r'Residuals: $det_s - s$ per processed_tt case', fontsize=14)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     # Save or show the plot
     plt.tight_layout()
     if save_plots:
-        filename = f'{fig_idx}_residuals_alt_s_minus_s_processed_tt.png'
+        filename = f'{fig_idx}_residuals_det_s_minus_s_processed_tt.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], filename)
         plot_list.append(save_fig_path)
@@ -7990,20 +7990,20 @@ print("----------------------------------------------------------------------")
 print("-------------------------- New definitions ---------------------------")
 print("----------------------------------------------------------------------")
 
-working_df['x'] = ( working_df['x'] + working_df['alt_x'] ) / 2
-working_df['y'] = ( working_df['y'] + working_df['alt_y'] ) / 2
-working_df['theta'] = ( working_df['theta'] + working_df['alt_theta'] ) / 2
-working_df['phi'] = ( working_df['phi'] + working_df['alt_phi'] ) / 2
-working_df['s'] = ( working_df['s'] + working_df['alt_s'] ) / 2
+working_df['x'] = ( working_df['x'] + working_df['det_x'] ) / 2
+working_df['y'] = ( working_df['y'] + working_df['det_y'] ) / 2
+working_df['theta'] = ( working_df['theta'] + working_df['det_theta'] ) / 2
+working_df['phi'] = ( working_df['phi'] + working_df['det_phi'] ) / 2
+working_df['s'] = ( working_df['s'] + working_df['det_s'] ) / 2
 
-working_df['x_err'] = ( working_df['x'] - working_df['alt_x'] ) / 2
-working_df['y_err'] = ( working_df['y'] - working_df['alt_y'] ) / 2
-working_df['theta_err'] = ( working_df['theta'] - working_df['alt_theta'] ) / 2
-working_df['phi_err'] = ( working_df['phi'] - working_df['alt_phi'] ) / 2
-working_df['s_err'] = ( working_df['s'] - working_df['alt_s'] ) / 2
+working_df['x_err'] = ( working_df['x'] - working_df['det_x'] ) / 2
+working_df['y_err'] = ( working_df['y'] - working_df['det_y'] ) / 2
+working_df['theta_err'] = ( working_df['theta'] - working_df['det_theta'] ) / 2
+working_df['phi_err'] = ( working_df['phi'] - working_df['det_phi'] ) / 2
+working_df['s_err'] = ( working_df['s'] - working_df['det_s'] ) / 2
 
 working_df['chi_timtrack'] = working_df['th_chi']
-working_df['chi_alternative'] = working_df['alt_th_chi']
+working_df['chi_alternative'] = working_df['det_th_chi']
 
 
 print("----------------------------------------------------------------------")
@@ -8353,7 +8353,7 @@ pct = 100 * n_small / n_total if n_total > 0 else 0
 print(f"\nIn definitive_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
 
 # Remove rows with zeros in key places ----------------------------------------
-cols_to_check = ['x', 'xp', 'y', 'yp', 's', 't0', 'alt_x', 'alt_y', 'alt_theta', 'alt_phi', 'alt_s']
+cols_to_check = ['x', 'xp', 'y', 'yp', 's', 't0', 'det_x', 'det_y', 'det_theta', 'det_phi', 'det_s']
 
 cond = (working_df[cols_to_check[0]] != 0)
 for col in cols_to_check[1:]:
@@ -8402,9 +8402,9 @@ if create_essential_plots or (create_plots and residual_plots):
     
     # Alternative method --------------------------------------------------------------------------------------------
     residual_columns = [
-        'alt_res_ystr_1', 'alt_res_ystr_2', 'alt_res_ystr_3', 'alt_res_ystr_4',
-        'alt_res_tsum_1', 'alt_res_tsum_2', 'alt_res_tsum_3', 'alt_res_tsum_4',
-        'alt_res_tdif_1', 'alt_res_tdif_2', 'alt_res_tdif_3', 'alt_res_tdif_4'
+        'det_res_ystr_1', 'det_res_ystr_2', 'det_res_ystr_3', 'det_res_ystr_4',
+        'det_res_tsum_1', 'det_res_tsum_2', 'det_res_tsum_3', 'det_res_tsum_4',
+        'det_res_tdif_1', 'det_res_tdif_2', 'det_res_tdif_3', 'det_res_tdif_4'
     ]
     
     unique_types = df_plot_ancillary['definitive_tt'].unique()
@@ -8608,19 +8608,19 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             # Static
             'x': [-pos_filter, pos_filter],
             'y': [-pos_filter, pos_filter],
-            'alt_x': [-pos_filter, pos_filter],
-            'alt_y': [-pos_filter, pos_filter],
+            'det_x': [-pos_filter, pos_filter],
+            'det_y': [-pos_filter, pos_filter],
             'theta': [theta_left_filter, theta_right_filter],
             'phi': [phi_left_filter, phi_right_filter],
-            'alt_theta': [alt_theta_left_filter, alt_theta_right_filter],
-            'alt_phi': [alt_phi_left_filter, alt_phi_right_filter],
+            'det_theta': [det_theta_left_filter, det_theta_right_filter],
+            'det_phi': [det_phi_left_filter, det_phi_right_filter],
             'xp': [-1 * proj_filter, proj_filter],
             'yp': [-1 * proj_filter, proj_filter],
             's': [slowness_filter_left, slowness_filter_right],
-            'alt_s': [alt_slowness_filter_left, alt_slowness_filter_right],
+            'det_s': [det_slowness_filter_left, det_slowness_filter_right],
             'delta_s': [delta_s_left, delta_s_right],
             # 'th_chi': [0, 0.03],
-            # 'alt_th_chi': [0, 12],
+            # 'det_th_chi': [0, 12],
             
             # Dinamic
             'charge_event': [charge_plot_limit_left, charge_plot_event_limit_right],
@@ -8631,9 +8631,9 @@ if create_plots or create_very_essential_plots or create_essential_plots:
             'res_ystr_1': [-res_ystr_filter, res_ystr_filter], 'res_ystr_2': [-res_ystr_filter, res_ystr_filter], 'res_ystr_3': [-res_ystr_filter, res_ystr_filter], 'res_ystr_4': [-res_ystr_filter, res_ystr_filter],
             'res_tsum_1': [-res_tsum_filter, res_tsum_filter], 'res_tsum_2': [-res_tsum_filter, res_tsum_filter], 'res_tsum_3': [-res_tsum_filter, res_tsum_filter], 'res_tsum_4': [-res_tsum_filter, res_tsum_filter],
             'res_tdif_1': [-res_tdif_filter, res_tdif_filter], 'res_tdif_2': [-res_tdif_filter, res_tdif_filter], 'res_tdif_3': [-res_tdif_filter, res_tdif_filter], 'res_tdif_4': [-res_tdif_filter, res_tdif_filter],
-            'alt_res_ystr_1': [-alt_res_ystr_filter, alt_res_ystr_filter], 'alt_res_ystr_2': [-alt_res_ystr_filter, alt_res_ystr_filter], 'alt_res_ystr_3': [-alt_res_ystr_filter, alt_res_ystr_filter], 'alt_res_ystr_4': [-alt_res_ystr_filter, alt_res_ystr_filter],
-            'alt_res_tsum_1': [-alt_res_tsum_filter, alt_res_tsum_filter], 'alt_res_tsum_2': [-alt_res_tsum_filter, alt_res_tsum_filter], 'alt_res_tsum_3': [-alt_res_tsum_filter, alt_res_tsum_filter], 'alt_res_tsum_4': [-alt_res_tsum_filter, alt_res_tsum_filter],
-            'alt_res_tdif_1': [-alt_res_tdif_filter, alt_res_tdif_filter], 'alt_res_tdif_2': [-alt_res_tdif_filter, alt_res_tdif_filter], 'alt_res_tdif_3': [-alt_res_tdif_filter, alt_res_tdif_filter], 'alt_res_tdif_4': [-alt_res_tdif_filter, alt_res_tdif_filter],
+            'det_res_ystr_1': [-det_res_ystr_filter, det_res_ystr_filter], 'det_res_ystr_2': [-det_res_ystr_filter, det_res_ystr_filter], 'det_res_ystr_3': [-det_res_ystr_filter, det_res_ystr_filter], 'det_res_ystr_4': [-det_res_ystr_filter, det_res_ystr_filter],
+            'det_res_tsum_1': [-det_res_tsum_filter, det_res_tsum_filter], 'det_res_tsum_2': [-det_res_tsum_filter, det_res_tsum_filter], 'det_res_tsum_3': [-det_res_tsum_filter, det_res_tsum_filter], 'det_res_tsum_4': [-det_res_tsum_filter, det_res_tsum_filter],
+            'det_res_tdif_1': [-det_res_tdif_filter, det_res_tdif_filter], 'det_res_tdif_2': [-det_res_tdif_filter, det_res_tdif_filter], 'det_res_tdif_3': [-det_res_tdif_filter, det_res_tdif_filter], 'det_res_tdif_4': [-det_res_tdif_filter, det_res_tdif_filter],
             'ext_res_ystr_1': [-ext_res_ystr_filter, ext_res_ystr_filter], 'ext_res_ystr_2': [-ext_res_ystr_filter, ext_res_ystr_filter], 'ext_res_ystr_3': [-ext_res_ystr_filter, ext_res_ystr_filter], 'ext_res_ystr_4': [-ext_res_ystr_filter, ext_res_ystr_filter],
             'ext_res_tsum_1': [-ext_res_tsum_filter, ext_res_tsum_filter], 'ext_res_tsum_2': [-ext_res_tsum_filter, ext_res_tsum_filter], 'ext_res_tsum_3': [-ext_res_tsum_filter, ext_res_tsum_filter], 'ext_res_tsum_4': [-ext_res_tsum_filter, ext_res_tsum_filter],
             'ext_res_tdif_1': [-ext_res_tdif_filter, ext_res_tdif_filter], 'ext_res_tdif_2': [-ext_res_tdif_filter, ext_res_tdif_filter], 'ext_res_tdif_3': [-ext_res_tdif_filter, ext_res_tdif_filter], 'ext_res_tdif_4': [-ext_res_tdif_filter, ext_res_tdif_filter],
@@ -8695,7 +8695,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
                     ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
                     ax.set_facecolor(plt.cm.turbo(0))
                     
-                    if "alt_s" in x_col and "s" in x_col or "s" in y_col and "alt_s" in y_col:
+                    if "det_s" in x_col and "s" in x_col or "s" in y_col and "det_s" in y_col:
                         # Draw a line in the diagonal y = x
                         line_x = np.linspace(-0.01, 0.015, 100)
                         line_y = line_x
@@ -8915,10 +8915,10 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     if residue_plots:
         for filters, title in df_cases_2:
             relevant_residues_tsum = [f"res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
-            relevant_residues_alt_tsum = [f"alt_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
+            relevant_residues_det_tsum = [f"det_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
             relevant_residues_ext_tsum = [f"ext_res_tsum_{n}" for n in map(int, title.split()[0].split('-'))]
             
-            columns_of_interest = relevant_residues_tsum + relevant_residues_alt_tsum + relevant_residues_ext_tsum
+            columns_of_interest = relevant_residues_tsum + relevant_residues_det_tsum + relevant_residues_ext_tsum
             
             fig_idx = plot_hexbin_matrix(
                 df_plot_ancillary,
@@ -8934,10 +8934,10 @@ if create_plots or create_very_essential_plots or create_essential_plots:
         
         for filters, title in df_cases_2:
             relevant_residues_tdif = [f"res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
-            relevant_residues_alt_tdif = [f"alt_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
+            relevant_residues_det_tdif = [f"det_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
             relevant_residues_ext_tdif = [f"ext_res_tdif_{n}" for n in map(int, title.split()[0].split('-'))]
             
-            columns_of_interest = relevant_residues_tdif + relevant_residues_alt_tdif + relevant_residues_ext_tdif
+            columns_of_interest = relevant_residues_tdif + relevant_residues_det_tdif + relevant_residues_ext_tdif
             
             fig_idx = plot_hexbin_matrix(
                 df_plot_ancillary,
@@ -8953,10 +8953,10 @@ if create_plots or create_very_essential_plots or create_essential_plots:
         
         for filters, title in df_cases_2:
             relevant_residues_ystr = [f"res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
-            relevant_residues_alt_ystr = [f"alt_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
+            relevant_residues_det_ystr = [f"det_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
             relevant_residues_ext_ystr = [f"ext_res_ystr_{n}" for n in map(int, title.split()[0].split('-'))]
             
-            columns_of_interest = relevant_residues_ystr + relevant_residues_alt_ystr + relevant_residues_ext_ystr
+            columns_of_interest = relevant_residues_ystr + relevant_residues_det_ystr + relevant_residues_ext_ystr
             
             fig_idx = plot_hexbin_matrix(
                 df_plot_ancillary,
@@ -8972,7 +8972,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     
     
     # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
+    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'det_s', 'det_phi', 'det_theta', 'det_y', 'det_x']
     # for filters, title in df_cases_1:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -9002,7 +9002,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     #     )
     
     # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'alt_s', 'alt_phi', 'alt_theta', 'alt_y', 'alt_x']
+    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'det_s', 'det_phi', 'det_theta', 'det_y', 'det_x']
     # for filters, title in df_cases_3:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -9018,7 +9018,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     
     
     # Comparison with alternative fitting -------------------------------------------------------------------
-    plot_col = ['t0', 's', 'delta_s', 'alt_s', 'alt_s_ordinate']
+    plot_col = ['t0', 's', 'delta_s', 'det_s', 'det_s_ordinate']
     for filters, title in df_cases_3:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
@@ -9034,7 +9034,7 @@ if create_plots or create_very_essential_plots or create_essential_plots:
     
     
     # Comparison with alternative fitting -------------------------------------------------------------------
-    plot_col = ['theta', 'alt_theta']
+    plot_col = ['theta', 'det_theta']
     for filters, title in df_cases_2:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
@@ -9092,7 +9092,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     bins = np.linspace(theta_left_filter, theta_right_filter, 150)
     tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
 
-    for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('alt_theta', r'$\theta_{\mathrm{alt}}$')]):
+    for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('det_theta', r'$\theta_{\mathrm{alt}}$')]):
         ax = axes[row_idx]
         for i, tt_val in enumerate(tt_values):
             df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
@@ -9113,7 +9113,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Processed TT Type', fontsize=15)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_theta_alt_theta_zoom_definitive_tt.png'
+        final_filename = f'{fig_idx}_theta_det_theta_zoom_definitive_tt.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -9131,7 +9131,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     bins = np.linspace(theta_left_filter, theta_right_filter, 150)
     tt_values = sorted(df_filtered['tracking_tt'].dropna().unique(), key=lambda x: int(x))
 
-    for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('alt_theta', r'$\theta_{\mathrm{alt}}$')]):
+    for row_idx, (theta_col, row_label) in enumerate([('theta', r'$\theta$'), ('det_theta', r'$\theta_{\mathrm{alt}}$')]):
         ax = axes[row_idx]
         for i, tt_val in enumerate(tt_values):
             df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
@@ -9152,7 +9152,7 @@ if create_plots or create_essential_plots or create_very_essential_plots:
     plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Processed TT Type', fontsize=15)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_theta_alt_theta_zoom_tracking_tt.png'
+        final_filename = f'{fig_idx}_theta_det_theta_zoom_tracking_tt.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)

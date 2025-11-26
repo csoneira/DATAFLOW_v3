@@ -569,7 +569,7 @@ blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
-number_of_alt_executions = config["number_of_alt_executions"]
+number_of_det_executions = config["number_of_det_executions"]
 
 # TimTrack
 fixed_speed = config["fixed_speed"]
@@ -659,17 +659,17 @@ Y_RPC_left = config["Y_RPC_left"]
 Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
-alt_pos_filter = config["alt_pos_filter"]
-alt_theta_left_filter = config["alt_theta_left_filter"]
-alt_theta_right_filter = config["alt_theta_right_filter"]
-alt_phi_left_filter = config["alt_phi_left_filter"]
-alt_phi_right_filter = config["alt_phi_right_filter"]
-alt_slowness_filter_left = config["alt_slowness_filter_left"]
-alt_slowness_filter_right = config["alt_slowness_filter_right"]
+det_pos_filter = config["det_pos_filter"]
+det_theta_left_filter = config["det_theta_left_filter"]
+det_theta_right_filter = config["det_theta_right_filter"]
+det_phi_left_filter = config["det_phi_left_filter"]
+det_phi_right_filter = config["det_phi_right_filter"]
+det_slowness_filter_left = config["det_slowness_filter_left"]
+det_slowness_filter_right = config["det_slowness_filter_right"]
 
-alt_res_ystr_filter = config["alt_res_ystr_filter"]
-alt_res_tsum_filter = config["alt_res_tsum_filter"]
-alt_res_tdif_filter = config["alt_res_tdif_filter"]
+det_res_ystr_filter = config["det_res_ystr_filter"]
+det_res_tsum_filter = config["det_res_tsum_filter"]
+det_res_tdif_filter = config["det_res_tdif_filter"]
 
 # TimTrack filter
 proj_filter = config["proj_filter"]
@@ -815,16 +815,16 @@ Q_diff_color = 'red'
 T_sum_color = 'blue'
 T_diff_color = 'green'
 
-pos_filter = alt_pos_filter
+pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
 t0_right_filter = T_sum_RPC_right
-slowness_filter_left = alt_slowness_filter_left
-slowness_filter_right = alt_slowness_filter_right
+slowness_filter_left = det_slowness_filter_left
+slowness_filter_right = det_slowness_filter_right
 
-theta_left_filter = alt_theta_left_filter
-theta_right_filter = alt_theta_right_filter
-phi_left_filter = alt_phi_left_filter
-phi_right_filter = alt_phi_right_filter
+theta_left_filter = det_theta_left_filter
+theta_right_filter = det_theta_right_filter
+phi_left_filter = det_phi_left_filter
+phi_right_filter = det_phi_right_filter
 
 fig_idx = 1
 plot_list = []
@@ -1421,9 +1421,9 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             "phi": "green",
             "x": "darkorange",
             "y": "darkorange",
-            "alt_y": "darkorange",
+            "det_y": "darkorange",
             "s": "purple",
-            "alt_s": "purple",
+            "det_s": "purple",
             "th_chi": "red",
             "res_ystr": "teal",
             "res_tsum": "brown",
@@ -1442,11 +1442,11 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
             left, right = phi_left_filter, phi_right_filter
             selected_col = color_map["phi"]
 
-        elif col in ["x", "alt_x", "y", "alt_y"]:
+        elif col in ["x", "det_x", "y", "det_y"]:
             left, right = -pos_filter, pos_filter
             selected_col = color_map["x"]
 
-        elif col in ["s", "alt_s"]:
+        elif col in ["s", "det_s"]:
             left, right = slowness_filter_left, slowness_filter_right
             selected_col = color_map["s"]
 
