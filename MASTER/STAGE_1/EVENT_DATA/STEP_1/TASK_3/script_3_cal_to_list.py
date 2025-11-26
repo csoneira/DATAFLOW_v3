@@ -365,26 +365,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -432,8 +432,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -496,8 +496,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -509,15 +509,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -546,9 +546,9 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -701,6 +701,32 @@ Q_clip_max_ST = Q_clip_max_ST
 global_variables = {
     'analysis_mode': 0,
 }
+
+def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
+    """Compute trigger type based on planes with non-zero charge."""
+    def _derive_tt(row: pd.Series) -> str:
+        planes_with_charge = []
+        for plane in range(1, 5):
+            if columns_map:
+                charge_columns = [col for col in columns_map.get(plane, []) if col in row.index]
+            else:
+                charge_columns = [
+                    f"Q{plane}_F_1",
+                    f"Q{plane}_F_2",
+                    f"Q{plane}_F_3",
+                    f"Q{plane}_F_4",
+                    f"Q{plane}_B_1",
+                    f"Q{plane}_B_2",
+                    f"Q{plane}_B_3",
+                    f"Q{plane}_B_4",
+                ]
+            if any(row.get(col, 0) != 0 for col in charge_columns):
+                planes_with_charge.append(str(plane))
+        return "".join(planes_with_charge) if planes_with_charge else "0"
+
+    df[column_name] = df.apply(_derive_tt, axis=1)
+    df[column_name] = df[column_name].apply(builtins.int)
+    return df
 
 reprocessing_parameters = pd.DataFrame()
 
@@ -1197,26 +1223,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -1264,8 +1290,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -1328,8 +1354,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -1341,15 +1367,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -1378,9 +1404,9 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -1790,26 +1816,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -1857,8 +1883,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -1921,8 +1947,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -1934,15 +1960,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -1973,9 +1999,9 @@ charge_per_plane_plot_threshold = config["charge_per_plane_plot_threshold"]
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -2514,7 +2540,28 @@ KEY = "df"
 
 # Load dataframe
 working_df = pd.read_parquet(file_path, engine="pyarrow")
+working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 print(f"Cleaned dataframe reloaded from: {file_path}")
+print("Columns loaded from parquet:")
+for col in working_df.columns:
+    print(f" - {col}")
+
+cal_tt_columns: dict[int, list[str]] = {}
+for plane in range(1, 5):
+    cal_tt_columns[plane] = [
+        f"T{plane}_T_sum_{strip}" for strip in range(1, 5) if f"T{plane}_T_sum_{strip}" in working_df.columns
+    ] + [
+        f"T{plane}_T_dif_{strip}" for strip in range(1, 5) if f"T{plane}_T_dif_{strip}" in working_df.columns
+    ] + [
+        f"Q{plane}_Q_sum_{strip}" for strip in range(1, 5) if f"Q{plane}_Q_sum_{strip}" in working_df.columns
+    ] + [
+        f"Q{plane}_Q_dif_{strip}" for strip in range(1, 5) if f"Q{plane}_Q_dif_{strip}" in working_df.columns
+    ]
+
+working_df = compute_tt(working_df, "cal_tt", cal_tt_columns)
+cal_tt_counts_initial = working_df["cal_tt"].value_counts()
+for tt_value, count in cal_tt_counts_initial.items():
+    global_variables[f"cal_tt_{tt_value}_count"] = int(count)
 
 original_number_of_events = len(working_df)
 print(f"Original number of events in the dataframe: {original_number_of_events}")
@@ -2658,6 +2705,21 @@ working_df = pd.concat([working_df, pd.DataFrame(active_strip_cols, index=workin
 print("Active strips per plane calculated.")
 print(working_df[['active_strips_P1', 'active_strips_P2', 'active_strips_P3', 'active_strips_P4']].head())
 
+# Store counts of each active strip pattern (per plane) into metadata
+active_patterns = [
+    "1000", "0100", "0010", "0001",
+    "1100", "0110", "0011", "1010",
+    "1001", "0101", "1110", "1011",
+    "0111", "1101", "1111",
+]
+for plane_id in range(1, 5):
+    col_name = f"active_strips_P{plane_id}"
+    if col_name not in working_df.columns:
+        continue
+    counts = working_df[col_name].value_counts()
+    for pattern in active_patterns:
+        global_variables[f"{col_name}_{pattern}_count"] = int(counts.get(pattern, 0))
+
 if create_plots:
 
     fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(10, 12), sharex=True, sharey=True)
@@ -2717,13 +2779,13 @@ if create_plots:
 
         # Column names
         T_sum_cols = [f'T{i_plane}_T_sum_{j+1}' for j in range(4)]
-        T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
+        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
         Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
-        Q_dif_cols = [f'Q{i_plane}_Q_diff_{j+1}' for j in range(4)]
+        Q_dif_cols = [f'Q{i_plane}_Q_dif_{j+1}' for j in range(4)]
 
         variable_sets = [
             ('T_sum', T_sum_cols),
-            ('T_diff', T_diff_cols),
+            ('T_diff', T_dif_cols),
             ('Q_sum', Q_sum_cols),
             ('Q_dif', Q_dif_cols)
         ]
@@ -2827,7 +2889,7 @@ if create_plots:
 
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
-        T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
+        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
 
         for j_pattern, pattern in enumerate(patterns_of_interest):
             ax = axs[i_plane - 1, j_pattern]
@@ -2843,8 +2905,8 @@ if create_plots:
                 ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
                 continue
 
-            xi = working_df.loc[mask, T_diff_cols[i]].values
-            yi = working_df.loc[mask, T_diff_cols[j]].values
+            xi = working_df.loc[mask, T_dif_cols[i]].values
+            yi = working_df.loc[mask, T_dif_cols[j]].values
             diff = ( yi - xi ) * tdiff_to_x
             semi_suma = ( yi + xi ) / 2 * tdiff_to_x
 
@@ -2881,7 +2943,7 @@ if create_plots:
 
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
-        T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
+        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
 
         for j_pattern, pattern in enumerate(patterns_of_interest):
             ax = axs[i_plane - 1, j_pattern]
@@ -2897,8 +2959,8 @@ if create_plots:
                 ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
                 continue
 
-            xi = working_df.loc[mask, T_diff_cols[i]].values
-            yi = working_df.loc[mask, T_diff_cols[j]].values
+            xi = working_df.loc[mask, T_dif_cols[i]].values
+            yi = working_df.loc[mask, T_dif_cols[j]].values
             
             cond = (xi != 0) & (yi != 0) & (abs(xi) < 1) & (abs(yi) < 1)
             xi = xi[cond]
@@ -2938,7 +3000,7 @@ if create_plots:
     
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
-        T_diff_cols = [f'T{i_plane}_T_diff_{j+1}' for j in range(4)]
+        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
 
         for j_pattern, pattern in enumerate(patterns_of_interest):
             ax = axs[i_plane - 1, j_pattern]
@@ -2954,8 +3016,8 @@ if create_plots:
                 ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
                 continue
 
-            xi = working_df.loc[mask, T_diff_cols[i]].values
-            yi = working_df.loc[mask, T_diff_cols[j]].values
+            xi = working_df.loc[mask, T_dif_cols[i]].values
+            yi = working_df.loc[mask, T_dif_cols[j]].values
         
             cond = (xi != 0) & (yi != 0) & (abs(xi) < 1) & (abs(yi) < 1)
             xi = xi[cond]
@@ -3158,29 +3220,29 @@ if create_plots or create_essential_plots:
         for strip in range(1, 5):
             # Column names
             t_sum_col = f'T{i_plane}_T_sum_{strip}'
-            t_diff_col = f'T{i_plane}_T_diff_{strip}'
+            t_dif_col = f'T{i_plane}_T_dif_{strip}'
             q_sum_col = f'Q{i_plane}_Q_sum_{strip}'
-            q_diff_col = f'Q{i_plane}_Q_diff_{strip}'
+            q_dif_col = f'Q{i_plane}_Q_dif_{strip}'
 
             # Filter valid rows (non-zero)
-            valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col]].replace(0, np.nan).dropna()
+            valid_rows = working_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col]].replace(0, np.nan).dropna()
             
             # Extract variables and filter low charge
             cond = valid_rows[q_sum_col] < charge_per_strip_plot_threshold
             t_sum  = valid_rows.loc[cond, t_sum_col]
-            t_diff = valid_rows.loc[cond, t_diff_col]
+            t_diff = valid_rows.loc[cond, t_dif_col]
             q_sum  = valid_rows.loc[cond, q_sum_col]
-            q_diff = valid_rows.loc[cond, q_diff_col]
+            q_diff = valid_rows.loc[cond, q_dif_col]
 
             base_idx = (strip - 1) * 6
 
             combinations = [
-                (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+                (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
                 (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
-                (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
-                (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
-                (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
-                (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+                (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}'),
+                (t_sum,  q_diff, f'{t_sum_col} vs {q_dif_col}'),
+                (t_diff, q_diff, f'{t_dif_col} vs {q_dif_col}'),
+                (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
             ]
 
             for offset, (x, yv, title) in enumerate(combinations):
@@ -3217,29 +3279,29 @@ if self_trigger:
             for strip in range(1, 5):
                 # Column names
                 t_sum_col = f'T{i_plane}_T_sum_{strip}'
-                t_diff_col = f'T{i_plane}_T_diff_{strip}'
+                t_dif_col = f'T{i_plane}_T_dif_{strip}'
                 q_sum_col = f'Q{i_plane}_Q_sum_{strip}'
-                q_diff_col = f'Q{i_plane}_Q_diff_{strip}'
+                q_dif_col = f'Q{i_plane}_Q_dif_{strip}'
 
                 # Filter valid rows (non-zero)
-                valid_rows = working_st_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col]].replace(0, np.nan).dropna()
+                valid_rows = working_st_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col]].replace(0, np.nan).dropna()
                 
                 # Extract variables and filter low charge
                 cond = valid_rows[q_sum_col] < 40
                 t_sum  = valid_rows.loc[cond, t_sum_col]
-                t_diff = valid_rows.loc[cond, t_diff_col]
+                t_diff = valid_rows.loc[cond, t_dif_col]
                 q_sum  = valid_rows.loc[cond, q_sum_col]
-                q_diff = valid_rows.loc[cond, q_diff_col]
+                q_diff = valid_rows.loc[cond, q_dif_col]
 
                 base_idx = (strip - 1) * 6
 
                 combinations = [
-                    (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+                    (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
                     (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
-                    (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
-                    (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
-                    (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
-                    (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+                    (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}'),
+                    (t_sum,  q_diff, f'{t_sum_col} vs {q_dif_col}'),
+                    (t_diff, q_diff, f'{t_dif_col} vs {q_dif_col}'),
+                    (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
                 ]
 
                 for offset, (x, yv, title) in enumerate(combinations):
@@ -3275,9 +3337,9 @@ final_columns = {}
 for i_plane in range(1, 5):
     # Column names
     T_sum_cols = [f'T{i_plane}_T_sum_{i+1}' for i in range(4)]
-    T_dif_cols = [f'T{i_plane}_T_diff_{i+1}' for i in range(4)]
+    T_dif_cols = [f'T{i_plane}_T_dif_{i+1}' for i in range(4)]
     Q_sum_cols = [f'Q{i_plane}_Q_sum_{i+1}' for i in range(4)]
-    Q_dif_cols = [f'Q{i_plane}_Q_diff_{i+1}' for i in range(4)]
+    Q_dif_cols = [f'Q{i_plane}_Q_dif_{i+1}' for i in range(4)]
 
     # Extract data
     T_sums = working_df[T_sum_cols].astype(float).fillna(0).values
@@ -3300,17 +3362,17 @@ for i_plane in range(1, 5):
     Q_dif_masked = Q_difs * active_mask
 
     T_sum_final = T_sum_masked.sum(axis=1) / n_active_safe
-    T_diff_final = T_dif_masked.sum(axis=1) / n_active_safe
+    T_dif_final = T_dif_masked.sum(axis=1) / n_active_safe
 
     # Enforce zero where no active strips
     T_sum_final[n_active == 0] = 0
-    T_diff_final[n_active == 0] = 0
+    T_dif_final[n_active == 0] = 0
 
     # Store final values in dictionary
     final_columns[f'P{i_plane}_T_sum_final'] = T_sum_final
-    final_columns[f'P{i_plane}_T_diff_final'] = T_diff_final
+    final_columns[f'P{i_plane}_T_dif_final'] = T_dif_final
     final_columns[f'P{i_plane}_Q_sum_final'] = (Q_sums * active_mask).sum(axis=1)
-    final_columns[f'P{i_plane}_Q_diff_final'] = Q_dif_masked.sum(axis=1)
+    final_columns[f'P{i_plane}_Q_dif_final'] = Q_dif_masked.sum(axis=1)
 
 # Concatenate all new final columns at once
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
@@ -3324,35 +3386,35 @@ if create_plots:
     for i_plane in range(1, 5):
         # Column names
         t_sum_col = f'P{i_plane}_T_sum_final'
-        t_diff_col = f'P{i_plane}_T_diff_final'
+        t_dif_col = f'P{i_plane}_T_dif_final'
         q_sum_col = f'P{i_plane}_Q_sum_final'
-        q_diff_col = f'P{i_plane}_Q_diff_final'
+        q_dif_col = f'P{i_plane}_Q_dif_final'
         y_col = f'P{i_plane}_Y_final'
 
         # Filter valid rows (non-zero)
-        valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
+        valid_rows = working_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]].replace(0, np.nan).dropna()
         
         # Extract variables and filter low charge
         cond = valid_rows[q_sum_col] < charge_per_plane_plot_threshold
         t_sum  = valid_rows.loc[cond, t_sum_col]
-        t_diff = valid_rows.loc[cond, t_diff_col]
+        t_diff = valid_rows.loc[cond, t_dif_col]
         q_sum  = valid_rows.loc[cond, q_sum_col]
-        q_diff = valid_rows.loc[cond, q_diff_col]
+        q_diff = valid_rows.loc[cond, q_dif_col]
         y      = valid_rows.loc[cond, y_col]
 
         base_idx = (i_plane - 1) * 10  # 10 plots per plane
 
         combinations = [
-            (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+            (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
             (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
             (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
-            (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
-            (t_diff, y,      f'{t_diff_col} vs {y_col}'),
+            (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}'),
+            (t_diff, y,      f'{t_dif_col} vs {y_col}'),
             (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
-            (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
-            (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
-            (q_diff, y,      f'{q_diff_col} vs {y_col}'),
-            (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+            (t_sum,  q_diff, f'{t_sum_col} vs {q_dif_col}'),
+            (t_diff, q_diff, f'{t_dif_col} vs {q_dif_col}'),
+            (q_diff, y,      f'{q_dif_col} vs {y_col}'),
+            (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
         ]
 
         for offset, (x, yv, title) in enumerate(combinations):
@@ -3385,35 +3447,35 @@ if create_plots:
     for i_plane in range(1, 5):
         # Column names
         t_sum_col = f'P{i_plane}_T_sum_final'
-        t_diff_col = f'P{i_plane}_T_diff_final'
+        t_dif_col = f'P{i_plane}_T_dif_final'
         q_sum_col = f'P{i_plane}_Q_sum_final'
-        q_diff_col = f'P{i_plane}_Q_diff_final'
+        q_dif_col = f'P{i_plane}_Q_dif_final'
         y_col = f'P{i_plane}_Y_final'
 
         # Filter valid rows (non-zero)
-        valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
+        valid_rows = working_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]].replace(0, np.nan).dropna()
         
         # Extract variables and filter low charge
         cond = valid_rows[q_sum_col] < charge_per_plane_plot_threshold / 4
         t_sum  = valid_rows.loc[cond, t_sum_col]
-        t_diff = valid_rows.loc[cond, t_diff_col]
+        t_diff = valid_rows.loc[cond, t_dif_col]
         q_sum  = valid_rows.loc[cond, q_sum_col]
-        q_diff = valid_rows.loc[cond, q_diff_col]
+        q_diff = valid_rows.loc[cond, q_dif_col]
         y      = valid_rows.loc[cond, y_col]
 
         base_idx = (i_plane - 1) * 10  # 10 plots per plane
 
         combinations = [
-            (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+            (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
             (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
             (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
-            (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
-            (t_diff, y,      f'{t_diff_col} vs {y_col}'),
+            (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}'),
+            (t_diff, y,      f'{t_dif_col} vs {y_col}'),
             (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
-            (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
-            (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
-            (q_diff, y,      f'{q_diff_col} vs {y_col}'),
-            (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+            (t_sum,  q_diff, f'{t_sum_col} vs {q_dif_col}'),
+            (t_diff, q_diff, f'{t_dif_col} vs {q_dif_col}'),
+            (q_diff, y,      f'{q_dif_col} vs {y_col}'),
+            (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
         ]
 
         for offset, (x, yv, title) in enumerate(combinations):
@@ -3459,9 +3521,9 @@ def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
     for i_plane in range(1, 5):
         columns = {
             "T_sum": f"P{i_plane}_T_sum_final",
-            "T_diff": f"P{i_plane}_T_diff_final",
+            "T_diff": f"P{i_plane}_T_dif_final",
             "Q_sum": f"P{i_plane}_Q_sum_final",
-            "Q_diff": f"P{i_plane}_Q_diff_final",
+            "Q_diff": f"P{i_plane}_Q_dif_final",
             "Y": f"P{i_plane}_Y_final",
         }
         for label, col in columns.items():
@@ -3476,11 +3538,11 @@ print("--------------------- Filter 6: calibrated data ----------------------")
 for col in working_df.columns:
     if 'T_sum_final' in col:
         working_df[col] = np.where((working_df[col] < T_sum_RPC_left) | (working_df[col] > T_sum_RPC_right), 0, working_df[col])
-    if 'T_diff_final' in col:
-        working_df[col] = np.where((working_df[col] < T_diff_RPC_left) | (working_df[col] > T_diff_RPC_right), 0, working_df[col])
+    if 'T_dif_final' in col:
+        working_df[col] = np.where((working_df[col] < T_dif_RPC_left) | (working_df[col] > T_dif_RPC_right), 0, working_df[col])
     if 'Q_sum_final' in col:
         working_df[col] = np.where((working_df[col] < Q_RPC_left) | (working_df[col] > Q_RPC_right), 0, working_df[col])
-    if 'Q_diff_final' in col:
+    if 'Q_dif_final' in col:
         working_df[col] = np.where((working_df[col] < Q_dif_RPC_left) | (working_df[col] > Q_dif_RPC_right), 0, working_df[col])
     if 'Y_' in col:
         working_df[col] = np.where((working_df[col] < Y_RPC_left) | (working_df[col] > Y_RPC_right), 0, working_df[col])
@@ -3490,11 +3552,11 @@ total_events = len(working_df)
 for i_plane in range(1, 5):
     y_col      = f'P{i_plane}_Y_final'
     t_sum_col  = f'P{i_plane}_T_sum_final'
-    t_diff_col = f'P{i_plane}_T_diff_final'
+    t_dif_col = f'P{i_plane}_T_dif_final'
     q_sum_col  = f'P{i_plane}_Q_sum_final'
-    q_diff_col = f'P{i_plane}_Q_diff_final'
+    q_dif_col = f'P{i_plane}_Q_dif_final'
 
-    cols = [y_col, t_sum_col, t_diff_col, q_sum_col, q_diff_col]
+    cols = [y_col, t_sum_col, t_dif_col, q_sum_col, q_dif_col]
 
     # Identify affected rows
     mask = (working_df[cols] == 0).any(axis=1)
@@ -3516,14 +3578,14 @@ if stratos_save:
     
     stratos_df = working_df.copy()
     
-    # Select columns that start with "Y_" or match "T<number>_T_diff_final"
-    filtered_columns = [col for col in stratos_df.columns if col.startswith("Y_") or "_T_diff_final" in col or 'datetime' in col]
+    # Select columns that start with "Y_" or match "T<number>_T_dif_final"
+    filtered_columns = [col for col in stratos_df.columns if col.startswith("Y_") or "_T_dif_final" in col or 'datetime' in col]
 
     # Create a new DataFrame with the selected columns
     filtered_stratos_df = stratos_df[filtered_columns].copy()
 
-    # Rename "T<number>_T_diff_final" to "X_<number>" and multiply by 200
-    filtered_stratos_df.rename(columns=lambda col: f'X_{col.split("_")[0][1:]}' if "_T_diff_final" in col else col, inplace=True)
+    # Rename "T<number>_T_dif_final" to "X_<number>" and multiply by 200
+    filtered_stratos_df.rename(columns=lambda col: f'X_{col.split("_")[0][1:]}' if "_T_dif_final" in col else col, inplace=True)
     filtered_stratos_df.loc[:, filtered_stratos_df.columns.str.startswith("X_")] *= 200
 
     # Define the save path
@@ -3543,35 +3605,35 @@ if create_plots or create_essential_plots:
     for i_plane in range(1, 5):
         # Column names
         t_sum_col = f'P{i_plane}_T_sum_final'
-        t_diff_col = f'P{i_plane}_T_diff_final'
+        t_dif_col = f'P{i_plane}_T_dif_final'
         q_sum_col = f'P{i_plane}_Q_sum_final'
-        q_diff_col = f'P{i_plane}_Q_diff_final'
+        q_dif_col = f'P{i_plane}_Q_dif_final'
         y_col = f'P{i_plane}_Y_final'
 
         # Filter valid rows (non-zero)
-        valid_rows = working_df[[t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]].replace(0, np.nan).dropna()
+        valid_rows = working_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]].replace(0, np.nan).dropna()
         
         # Extract variables and filter low charge
         cond = valid_rows[q_sum_col] < 150
         t_sum  = valid_rows.loc[cond, t_sum_col]
-        t_diff = valid_rows.loc[cond, t_diff_col]
+        t_diff = valid_rows.loc[cond, t_dif_col]
         q_sum  = valid_rows.loc[cond, q_sum_col]
-        q_diff = valid_rows.loc[cond, q_diff_col]
+        q_diff = valid_rows.loc[cond, q_dif_col]
         y      = valid_rows.loc[cond, y_col]
 
         base_idx = (i_plane - 1) * 10  # 10 plots per plane
 
         combinations = [
-            (t_sum,  t_diff, f'{t_sum_col} vs {t_diff_col}'),
+            (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
             (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
             (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
-            (t_diff, q_sum,  f'{t_diff_col} vs {q_sum_col}'),
-            (t_diff, y,      f'{t_diff_col} vs {y_col}'),
+            (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}'),
+            (t_diff, y,      f'{t_dif_col} vs {y_col}'),
             (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
-            (t_sum,  q_diff, f'{t_sum_col} vs {q_diff_col}'),
-            (t_diff, q_diff, f'{t_diff_col} vs {q_diff_col}'),
-            (q_diff, y,      f'{q_diff_col} vs {y_col}'),
-            (q_sum,  q_diff, f'{q_sum_col} vs {q_diff_col}')
+            (t_sum,  q_diff, f'{t_sum_col} vs {q_dif_col}'),
+            (t_diff, q_diff, f'{t_dif_col} vs {q_dif_col}'),
+            (q_diff, y,      f'{q_dif_col} vs {y_col}'),
+            (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
         ]
 
         for offset, (x, yv, title) in enumerate(combinations):
@@ -3601,12 +3663,12 @@ if create_plots or create_essential_plots:
 #     for i_plane in range(1, 5):
 #         # Column names
 #         t_sum_col  = f'P{i_plane}_T_sum_final'
-#         t_diff_col = f'P{i_plane}_T_diff_final'
+#         t_dif_col = f'P{i_plane}_T_dif_final'
 #         q_sum_col  = f'P{i_plane}_Q_sum_final'
-#         q_diff_col = f'P{i_plane}_Q_diff_final'
+#         q_dif_col = f'P{i_plane}_Q_dif_final'
 #         y_col      = f'P{i_plane}_Y_final'
 
-#         cols = [t_sum_col, t_diff_col, q_sum_col, q_diff_col, y_col]
+#         cols = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
 
 #         # Keep only valid rows (non-zero) and enforce q_sum < 150
 #         valid_rows = (working_df[cols]
@@ -3720,28 +3782,15 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 
 
 
-# Print all column names in the dataframe
-print("Columns in the cleaned dataframe:")
-for col in working_df.columns:
-    print(col)
-
-# Remove the columns in the form "T*_T_sum_*", "T*_T_diff_*", "Q*_Q_sum_*", "Q*_Q_diff_*", do a loop from 1 to 4
+# Remove the columns in the form "T*_T_sum_*", "T*_T_dif_*", "Q*_Q_sum_*", "Q*_Q_dif_*", do a loop from 1 to 4
 cols_to_remove = []
 for i_plane in range(1, 5):
     for strip in range(1, 5):
         cols_to_remove.append(f'T{i_plane}_T_sum_{strip}')
-        cols_to_remove.append(f'T{i_plane}_T_diff_{strip}')
+        cols_to_remove.append(f'T{i_plane}_T_dif_{strip}')
         cols_to_remove.append(f'Q{i_plane}_Q_sum_{strip}')
-        cols_to_remove.append(f'Q{i_plane}_Q_diff_{strip}')
+        cols_to_remove.append(f'Q{i_plane}_Q_dif_{strip}')
 working_df.drop(columns=cols_to_remove, inplace=True, errors='ignore')
-
-
-
-
-# Print all column names in the dataframe
-print("Columns in the final dataframe:")
-for col in working_df.columns:
-    print(col)
     
     
 
@@ -3773,6 +3822,32 @@ print(f"Original number of events in the dataframe: {original_number_of_events}"
 # Final number of events
 final_number_of_events = len(working_df)
 print(f"Final number of events in the dataframe: {final_number_of_events}")
+list_tt_columns = {
+    i_plane: [
+        f"P{i_plane}_T_sum_final",
+        f"P{i_plane}_T_dif_final",
+        f"P{i_plane}_Q_sum_final",
+        f"P{i_plane}_Q_dif_final",
+        f"P{i_plane}_Y_final",
+    ]
+    for i_plane in range(1, 5)
+}
+working_df = compute_tt(working_df, "list_tt", list_tt_columns)
+working_df["cal_to_list_tt"] = (
+    working_df["cal_tt"].astype(str) + "_" + working_df["list_tt"].astype(str)
+)
+
+list_tt_counts = working_df["list_tt"].value_counts()
+for tt_value, count in list_tt_counts.items():
+    global_variables[f"list_tt_{tt_value}_count"] = int(count)
+
+cal_to_list_counts = working_df["cal_to_list_tt"].value_counts()
+for combo_value, count in cal_to_list_counts.items():
+    global_variables[f"cal_to_list_tt_{combo_value}_count"] = int(count)
+
+print("Columns before saving calibrated->list parquet:")
+for col in working_df.columns:
+    print(f" - {col}")
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100

@@ -58,7 +58,7 @@ class TimeCalibrationConfig:
     T_B_right_ST: float
     T_sum_left_pre: float
     T_sum_right_pre: float
-    T_diff_threshold: float
+    T_dif_threshold: float
     coincidence_window_precal_ns: float
 
 
@@ -70,8 +70,8 @@ class PlotConfig:
     distance_sum_charges_plot: float
     distance_sum_charges_left_fit: float
     distance_sum_charges_right_fit: float
-    distance_diff_charges_up_fit: float
-    distance_diff_charges_low_fit: float
+    distance_dif_charges_up_fit: float
+    distance_dif_charges_low_fit: float
     front_back_fit_threshold: float
     scatter_xlim_left: float
     scatter_xlim_right: float
@@ -372,7 +372,7 @@ def stage2_clean_to_cal(
         T_B_right_ST=config["T_side_right_pre_cal_ST"],
         T_sum_left_pre=config["T_sum_left_pre_cal"],
         T_sum_right_pre=config["T_sum_right_pre_cal"],
-        T_diff_threshold=config["T_diff_cal_threshold"],
+        T_dif_threshold=config["T_dif_cal_threshold"],
         coincidence_window_precal_ns=config["coincidence_window_precal_ns"],
     )
 
@@ -422,7 +422,7 @@ def stage2_clean_to_cal(
     pos_test = working_df.copy()
     for i, plane in enumerate(["1", "2", "3", "4"]):
         for strip in range(4):
-            pos_test[f"T{plane}_diff_{strip+1}"] = (pos_test[f"T{plane}_B_{strip+1}"] - pos_test[f"T{plane}_F_{strip+1}"]) / 2
+            pos_test[f"T{plane}_dif_{strip+1}"] = (pos_test[f"T{plane}_B_{strip+1}"] - pos_test[f"T{plane}_F_{strip+1}"]) / 2
 
     for i, plane in enumerate(["1", "2", "3", "4"]):
         T_F_plane = np.stack([working_df[f"T{plane}_F_{strip+1}"].values for strip in range(4)], axis=1)
@@ -436,8 +436,8 @@ def stage2_clean_to_cal(
             for strip in range(4)
         ]
         for strip, offset in enumerate(offsets):
-            mask = pos_test[f"T{plane}_diff_{strip+1}"] != 0
-            pos_test.loc[mask, f"T{plane}_diff_{strip+1}"] -= offset
+            mask = pos_test[f"T{plane}_dif_{strip+1}"] != 0
+            pos_test.loc[mask, f"T{plane}_dif_{strip+1}"] -= offset
 
     working_df = working_df.copy()
     working_df["original_tt"] = create_original_tt(working_df)

@@ -40,7 +40,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh --select temps --force >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_temps_clean_dataflow.log 2>&1
 
 # Solve stale locks
-*/10 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/solve_stale_locks.cron.log 2>&1
+*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/solve_stale_locks.cron.log 2>&1
 
 # NMDB update
 # 0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_nmdb_retrieval.log 2>&1
@@ -109,10 +109,10 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - REPROCESSING - STEP 1 - BRING RANDOM ---------------------------------------
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_1.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_2.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_3.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 -n >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_bring_reprocessing_files_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_2

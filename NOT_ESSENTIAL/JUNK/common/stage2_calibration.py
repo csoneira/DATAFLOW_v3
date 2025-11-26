@@ -99,7 +99,7 @@ def _perform_charge_pedestal_calibration(
         T_B_right_ST=config["T_side_right_pre_cal_ST"],
         T_sum_left_pre=config["T_sum_left_pre_cal"],
         T_sum_right_pre=config["T_sum_right_pre_cal"],
-        T_diff_threshold=config["T_diff_cal_threshold"],
+        T_dif_threshold=config["T_dif_cal_threshold"],
         coincidence_window_precal_ns=config["coincidence_window_precal_ns"],
     )
 
@@ -148,7 +148,7 @@ def _perform_charge_pedestal_calibration(
     return charge_test, QF_arr, QB_arr
 
 
-def _perform_time_diff_calibration(
+def _perform_time_dif_calibration(
     working_df: pd.DataFrame,
     config: dict,
 ) -> Tuple[pd.DataFrame, np.ndarray]:
@@ -163,14 +163,14 @@ def _perform_time_diff_calibration(
         T_B_right_ST=config["T_side_right_pre_cal_ST"],
         T_sum_left_pre=config["T_sum_left_pre_cal"],
         T_sum_right_pre=config["T_sum_right_pre_cal"],
-        T_diff_threshold=config["T_diff_cal_threshold"],
+        T_dif_threshold=config["T_dif_cal_threshold"],
         coincidence_window_precal_ns=config["coincidence_window_precal_ns"],
     )
 
     pos_test = working_df.copy()
     for plane, key in enumerate(["T1", "T2", "T3", "T4"], start=1):
         for strip in range(4):
-            pos_test[f"{key}_diff_{strip+1}"] = (
+            pos_test[f"{key}_dif_{strip+1}"] = (
                 pos_test[f"{key}_B_{strip+1}"] - pos_test[f"{key}_F_{strip+1}"]
             ) / 2
 
@@ -191,8 +191,8 @@ def _perform_time_diff_calibration(
 
     for i, key in enumerate(["T1", "T2", "T3", "T4"]):
         for j in range(4):
-            mask = pos_test_copy[f"{key}_diff_{j+1}"] != 0
-            pos_test.loc[mask, f"{key}_diff_{j+1}"] -= Tdiff_cal[i, j]
+            mask = pos_test_copy[f"{key}_dif_{j+1}"] != 0
+            pos_test.loc[mask, f"{key}_dif_{j+1}"] -= Tdiff_cal[i, j]
 
     return pos_test, Tdiff_cal
 
@@ -289,16 +289,16 @@ def run_stage2_calibration(
         if path:
             plot_paths.append(path)
 
-    pos_test, Tdiff_cal = _perform_time_diff_calibration(working_df, config)
+    pos_test, Tdiff_cal = _perform_time_dif_calibration(working_df, config)
 
     if save_plots:
         save_path = plot_root / "calibration_t_diff.png"
     else:
         save_path = None
-    path = _plot_time_diff_histograms(
+    path = _plot_time_dif_histograms(
         pos_test,
         num_bins=q_min_settings["num_bins"],
-        diff_threshold=config.get("T_diff_cal_threshold", 5.0),
+        diff_threshold=config.get("T_dif_cal_threshold", 5.0),
         save_path=save_path,
         show_plots=show_plots,
     )
@@ -331,7 +331,7 @@ def run_stage2_calibration(
         save_path=save_path,
         show_plots=show_plots,
         qsum_limits=(config.get("Q_sum_left_cal", 0.0), config.get("Q_sum_right_cal", 120.0)),
-        qdiff_limits=(-config.get("Q_diff_cal_threshold", 40.0), config.get("Q_diff_cal_threshold", 40.0)),
+        qdiff_limits=(-config.get("Q_dif_cal_threshold", 40.0), config.get("Q_dif_cal_threshold", 40.0)),
     )
     if path:
         plot_paths.append(path)

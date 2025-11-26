@@ -2673,7 +2673,7 @@ create_plots = config["create_plots"]
 create_plots_task_4 = config.get("create_plots_task_4", False)
 if create_plots_task_4:
     # Force plotting in Task 4 only, even if global flag is off.
-    create_plots = True
+    create_plots = False
     create_essential_plots = True
     save_plots = True
     create_pdf = True
@@ -4024,7 +4024,6 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
             title=f"timtrack_residuals_combo_{combo}",
         )
 
-#%%
 
 # Combine detached and TimTrack estimates ------------------------------------
 combined_core_vars = ["x", "y", "theta", "phi", "s", "t0"]
@@ -4126,9 +4125,12 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
         )
 
 
+#%%
+
+
 
 # Time series of core track variables (averaged and errors) ------------------
-if create_plots and 'datetime' in working_df.columns:
+if (create_plots or create_essential_plots) and 'datetime' in working_df.columns:
     
     ts_core = working_df.copy()
     ts_core['datetime'] = pd.to_datetime(ts_core['datetime'])
@@ -4149,7 +4151,7 @@ if create_plots and 'datetime' in working_df.columns:
 
     if combo_subsets:
         # Compute global quantile bounds per variable across all combos
-        bounds = {}
+        bounds_dict = {}
         for var in err_vars:
             lows = []
             highs = []
@@ -4163,9 +4165,9 @@ if create_plots and 'datetime' in working_df.columns:
                 lows.append(q_low)
                 highs.append(q_high)
             if lows and highs:
-                bounds[var] = (min(lows), max(highs))
+                bounds_dict[var] = (min(lows), max(highs))
             else:
-                bounds[var] = (0, 1)
+                bounds_dict[var] = (0, 1)
 
         n_rows = len(combo_subsets)
         n_cols = len(err_vars)
@@ -4182,7 +4184,7 @@ if create_plots and 'datetime' in working_df.columns:
                 if data.empty:
                     ax.set_visible(False)
                     continue
-                q_low, q_high = bounds.get(var, (data.min(), data.max()))
+                q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
                 bin_edges = np.linspace(q_low, q_high, 161)
                 ax.hist(data, bins=bin_edges, color='C0', alpha=0.7)
                 ax.set_yscale('log')
@@ -4205,8 +4207,10 @@ if create_plots and 'datetime' in working_df.columns:
         plt.close()
 
         # Fit a two-Gaussian mixture per combination/variable and overlay
-        def _gauss_mix(x, a1, mu1, sigma1, a2, mu2, sigma2):
-            return a1 * norm.pdf(x, mu1, sigma1) + a2 * norm.pdf(x, mu2, sigma2)
+        def _gauss(x, amp, mu, sigma):
+            return amp * norm.pdf(x, mu, sigma)
+
+        fit_results: dict[tuple[int, str], tuple[float, float, float]] = {}
 
         for combo, sub in combo_subsets:
             try:
@@ -4221,34 +4225,32 @@ if create_plots and 'datetime' in working_df.columns:
                     continue
                 q_low, q_high = series.quantile([0.0001, 0.99999])
                 bin_edges = np.linspace(q_low, q_high, 161)
+                bin_width = bin_edges[1] - bin_edges[0]
                 counts, edges = np.histogram(series, bins=bin_edges)
-                centers = 0.5 * (edges[1:] + edges[:-1])
                 if not np.any(counts):
                     continue
 
-                mu_guess = float(series.mean())
-                sigma_guess = float(max(series.std(), 1e-6))
-                p0 = [
-                    float(counts.max()),
-                    mu_guess,
-                    sigma_guess / 2,
-                    float(counts.max()) / 5,
-                    mu_guess,
-                    sigma_guess,
-                ]
-                bounds = (
-                    [0, q_low, 1e-6, 0, q_low, 1e-6],
-                    [np.inf, q_high, (q_high - q_low) * 2, np.inf, q_high, (q_high - q_low) * 2],
-                )
+                # Suppress central spike: drop bins far above the typical height
+                nonzero = counts[counts > 0]
+                typical = np.median(nonzero) if len(nonzero) else 0
+                mask = counts > 0
+                if typical > 0:
+                    mask &= counts < typical * 4  # keep background-like bins
+                centers = 0.5 * (edges[1:] + edges[:-1])
+                x_fit = centers[mask]
+                y_fit = counts[mask]
+                if y_fit.size < 5:
+                    continue
                 try:
-                    popt, _ = curve_fit(_gauss_mix, centers, counts, p0=p0, bounds=bounds, maxfev=5000)
+                    p0 = [y_fit.max(), float(series.mean()), float(max(series.std(), 1e-6))]
+                    popt, _ = curve_fit(_gauss, x_fit, y_fit, p0=p0, maxfev=4000)
                 except Exception:
                     continue
-                a1, mu1, sigma1, a2, mu2, sigma2 = popt
-                global_variables[f"{var}_{combo_int}_gauss1_mu"] = float(mu1)
-                global_variables[f"{var}_{combo_int}_gauss1_sigma"] = float(sigma1)
-                global_variables[f"{var}_{combo_int}_gauss2_mu"] = float(mu2)
-                global_variables[f"{var}_{combo_int}_gauss2_sigma"] = float(sigma2)
+                amp, mu, sigma = popt
+                fit_results[(combo_int, var)] = (float(amp), float(mu), float(sigma))
+                global_variables[f"{var}_{combo_int}_gauss1_amp"] = float(amp)
+                global_variables[f"{var}_{combo_int}_gauss1_mu"] = float(mu)
+                global_variables[f"{var}_{combo_int}_gauss1_sigma"] = float(sigma)
 
         # Redraw with overlays
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
@@ -4264,43 +4266,29 @@ if create_plots and 'datetime' in working_df.columns:
                 if data.empty:
                     ax.set_visible(False)
                     continue
-                q_low, q_high = bounds.get(var, (data.min(), data.max()))
+                q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
                 bin_edges = np.linspace(q_low, q_high, 161)
                 counts, edges, _ = ax.hist(data, bins=bin_edges, color='C0', alpha=0.6, label='data')
                 ax.set_yscale('log')
                 ax.set_xlim(q_low, q_high)
+                y_min, y_max = ax.get_ylim()
 
                 try:
                     combo_int = int(combo)
                 except ValueError:
                     combo_int = None
                 if combo_int is not None:
-                    key_base = f"{var}_{combo_int}"
-                    g1_mu = global_variables.get(f"{key_base}_gauss1_mu")
-                    g1_sigma = global_variables.get(f"{key_base}_gauss1_sigma")
-                    g2_mu = global_variables.get(f"{key_base}_gauss2_mu")
-                    g2_sigma = global_variables.get(f"{key_base}_gauss2_sigma")
-                    if all(v is not None for v in (g1_mu, g1_sigma, g2_mu, g2_sigma)):
+                    params = fit_results.get((combo_int, var))
+                    if params:
+                        amp, mu, sigma = params
                         x_grid = np.linspace(q_low, q_high, 400)
-                        centers = 0.5 * (edges[1:] + edges[:-1])
-                        mask = counts > 0
-                        try:
-                            def _mix_fixed(x, a1, a2):
-                                return _gauss_mix(x, a1, g1_mu, g1_sigma, a2, g2_mu, g2_sigma)
-                            p0_amp = [counts.max(), counts.max() / 5]
-                            amps, _ = curve_fit(_mix_fixed, centers[mask], counts[mask], p0=p0_amp, maxfev=2000)
-                            mix_vals = _mix_fixed(x_grid, *amps)
-                            g1_vals = amps[0] * norm.pdf(x_grid, g1_mu, g1_sigma)
-                            g2_vals = amps[1] * norm.pdf(x_grid, g2_mu, g2_sigma)
-                            ax.plot(x_grid, mix_vals, 'r-', lw=1.0, label='mix fit')
-                            ax.plot(x_grid, g1_vals, 'r--', lw=0.8, label='peak')
-                            ax.plot(x_grid, g2_vals, 'g--', lw=0.8, label='bg')
-                        except Exception:
-                            pass
+                        g_vals = _gauss(x_grid, amp, mu, sigma)
+                        ax.plot(x_grid, g_vals, 'r-', lw=1.0, label='fit')
                 if r == 0:
                     ax.set_title(var)
                 if c == 0:
                     ax.set_ylabel(f'Comb {combo}')
+                ax.set_ylim(y_min, y_max)
                 ax.grid(True, alpha=0.3)
         plt.suptitle('Error distributions per combination (fits)', fontsize=12)
         plt.tight_layout(rect=[0, 0, 1, 0.94])
@@ -4316,9 +4304,9 @@ if create_plots and 'datetime' in working_df.columns:
 
 
 
-# import sys
-# print("DEBUG EXITING")
-# sys.exit()
+import sys
+print("DEBUG EXITING")
+sys.exit()
 
 
 # print("----------------------------------------------------------------------")

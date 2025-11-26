@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 # --- knobs to tweak ---
 STATION = "MINGO04"  # e.g. MINGO01, MINGO02, ...
 STEP = 1             # numeric step (1, 2, ...)
-TASK = 3          # for STEP_1 use an int (1-5); keep None for steps without tasks
+TASK = 1          # for STEP_1 use an int (1-5); keep None for steps without tasks
 START_DATE = "2025-03-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
 END_DATE = "2025-11-20 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
 # Window used when counting events (ns) and per-combination measured counts.
@@ -41,6 +41,7 @@ if not metadata_path.exists():
     raise FileNotFoundError(f"Cannot find metadata at {metadata_path}")
 
 df = pd.read_csv(metadata_path)
+plotted_cols: set[str] = set()
 
 filename_col = "filename_base" if "filename_base" in df.columns else None
 timestamp_col = None
@@ -91,7 +92,18 @@ if filter_col and (START_DATE or END_DATE):
 print(f"Loaded: {metadata_path}")
 print(f"Rows: {len(df)}")
 
-#%%
+tt_count_cols = [c for c in df.columns if "_tt_" in c and c.endswith("_count")]
+if tt_count_cols and filter_col:
+    plot_df = df[[filter_col] + tt_count_cols].dropna(subset=[filter_col]).copy()
+    plot_df = plot_df.set_index(filter_col)
+    ax = plot_df.plot(figsize=(12, 6), marker="o", linewidth=1)
+    ax.set_title(f"TT counts over time • {STATION} STEP {STEP} TASK {TASK}")
+    ax.set_xlabel(filter_col)
+    ax.set_ylabel("Count")
+    ax.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+    plt.show()
+    plotted_cols.update(tt_count_cols)
 
 # Print all column names
 print("Columns:")
@@ -116,6 +128,7 @@ if STEP == 1 and TASK == 1:
         plt.ylabel("Valid Lines Percentage (%)")
         plt.grid(True)
         plt.show()
+        plotted_cols.add("valid_lines_in_binary_file_percentage")
     else:
         print("Required columns for plotting valid lines percentage are missing.")
 
@@ -193,6 +206,7 @@ if STEP == 1 and TASK == 1:
                 final_col    = f"T{plane}_{side}_{strip}_entries_final"
 
                 if original_col in df.columns and final_col in df.columns:
+                    plotted_cols.update([original_col, final_col])
                     t = df["datetime"]
                     y_orig = df[original_col]
                     y_fin  = df[final_col]
@@ -315,6 +329,7 @@ if STEP == 1 and TASK == 2:
     plt.ylabel("CRT (ns)")
     plt.grid(True)
     plt.show()
+    plotted_cols.update({"CRT_avg", "CRT_std"})
 
 
 
@@ -445,7 +460,7 @@ if STEP == 1 and TASK == 2:
 
 
     # Loop on plane, strip, original/final
-    #     - T1_T_diff_1_entries_original
+    #     - T1_T_dif_1_entries_original
     # It's the same
 
 
@@ -455,7 +470,7 @@ if STEP == 1 and TASK == 2:
 
 
     # Loop on plane, strip, original/final
-    #     - Q1_Q_diff_1_entries_original
+    #     - Q1_Q_dif_1_entries_original
     # It's the same
 
 
@@ -1172,6 +1187,7 @@ if STEP == 1 and TASK == 4:
         plt.suptitle("Gaussian sigma of residuals by plane/combo", fontsize=14)
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
+        plotted_cols.update(sigma_columns)
 
 
     # ------------------------------------------------------------------
@@ -1193,8 +1209,70 @@ if STEP == 1 and TASK == 4:
         plt.suptitle("Filter removal percentages", fontsize=14)
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
+        plotted_cols.update(filter_cols)
 
-    #%%
-    
+    # ------------------------------------------------------------------
+    # Catch-all plots for any remaining numeric metadata columns
+    # ------------------------------------------------------------------
+    ignore_cols = {filename_col, timestamp_col, filter_col, "datetime", "filename_base", "execution_time", "execution_timestamp"}
+    ignore_cols = {c for c in ignore_cols if c}
+    numeric_candidates = [
+        c for c in df.columns
+        if c not in plotted_cols
+        and c not in ignore_cols
+        and pd.api.types.is_numeric_dtype(df[c])
+    ]
+    if numeric_candidates:
+        x_col = filter_col if filter_col and filter_col in df.columns else None
+        for col in numeric_candidates:
+            series = df[col].dropna()
+            if series.empty:
+                continue
+            plt.figure(figsize=(10, 4))
+            if x_col:
+                plt.plot(df[x_col], series, marker="o", linestyle="-", markersize=2)
+                plt.xlabel(x_col)
+            else:
+                plt.hist(series, bins=50, alpha=0.7)
+                plt.xlabel(col)
+            plt.ylabel(col if x_col else "count")
+            plt.title(f"{col} over time" if x_col else f"{col} distribution")
+            plt.grid(True, alpha=0.4)
+            plt.tight_layout()
+            plt.show()
+
+#%%
+
+
+# ------------------------------------------------------------------
+# Global catch-all plots for any remaining numeric metadata columns
+# (runs for all steps/tasks, even if not covered by sections above)
+# ------------------------------------------------------------------
+ignore_cols = {filename_col, timestamp_col, filter_col, "datetime", "filename_base", "execution_time", "execution_timestamp"}
+ignore_cols = {c for c in ignore_cols if c}
+numeric_candidates = [
+    c for c in df.columns
+    if c not in plotted_cols
+    and c not in ignore_cols
+    and pd.api.types.is_numeric_dtype(df[c])
+]
+if numeric_candidates:
+    x_col = filter_col if filter_col and filter_col in df.columns else None
+    for col in numeric_candidates:
+        series = df[col].dropna()
+        if series.empty:
+            continue
+        plt.figure(figsize=(10, 4))
+        if x_col:
+            plt.plot(df[x_col], series, marker="o", linestyle="-", markersize=2)
+            plt.xlabel(x_col)
+        else:
+            plt.hist(series, bins=50, alpha=0.7)
+            plt.xlabel(col)
+        plt.ylabel(col if x_col else "count")
+        plt.title(f"{col} over time" if x_col else f"{col} distribution")
+        plt.grid(True, alpha=0.4)
+        plt.tight_layout()
+        plt.show()
 
 # %%

@@ -631,26 +631,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -698,8 +698,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -762,8 +762,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -775,15 +775,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -811,9 +811,9 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -1065,11 +1065,11 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
     # ------------------------------------------------------------------------------
     
     
-    T_rel_th = calibrate_strip_T_diff_T_rel_th
-    abs_th = calibrate_strip_T_diff_T_abs_th
+    T_rel_th = calibrate_strip_T_dif_T_rel_th
+    abs_th = calibrate_strip_T_dif_T_abs_th
 
     # Apply mask to filter values within the threshold
-    mask = (np.abs(T_diff) < T_diff_pre_cal_threshold)
+    mask = (np.abs(T_diff) < T_dif_pre_cal_threshold)
     T_diff = T_diff[mask]
     
     # Remove zero values
@@ -1252,8 +1252,8 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
 
     xdat_plot = xdat[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
     ydat_plot = ydat_translated[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
-    xdat_pre_fit = xdat[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
-    ydat_pre_fit = ydat_translated[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_diff_charges_up_fit) & (ydat_translated > distance_diff_charges_low_fit)]
+    xdat_pre_fit = xdat[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_dif_charges_up_fit) & (ydat_translated > distance_dif_charges_low_fit)]
+    ydat_pre_fit = ydat_translated[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_dif_charges_up_fit) & (ydat_translated > distance_dif_charges_low_fit)]
     
     # Fit a polynomial of specified degree using curve_fit
     initial_guess = [1] * (degree_of_polynomial + 1)
@@ -1304,7 +1304,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
         plt.legend(markerscale=5)  # Increase marker scale by 5 times
         plt.tight_layout()
         if save_plots:
-            name_of_file = 'charge_diff_vs_charge_sum_cal'
+            name_of_file = 'charge_dif_vs_charge_sum_cal'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -1997,6 +1997,11 @@ working_df = pd.DataFrame(columns_data)
 original_number_of_events = len(working_df)
 
 working_df["datetime"] = selected_df['datetime']
+working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+
+print("Columns right after initial assignment (before raw_tt computation):")
+for col in working_df.columns:
+    print(f" - {col}")
 
 if found_matching_conf:
     # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
@@ -2021,6 +2026,7 @@ if self_trigger:
     # Create a DataFrame from the columns data
     working_st_df = pd.DataFrame(columns_data)
     working_st_df["datetime"] = self_trigger_df['datetime']
+    working_st_df = working_st_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
     
     if found_matching_conf:
         # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
@@ -2053,44 +2059,58 @@ for key, idx_range in column_indices.items():
 
 # ----------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------
-# Original trigger type ------------------------------------------------------------
+# Trigger type helpers -------------------------------------------------------------
 # ----------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------
 
-# Now obtain the trigger type
-def create_original_tt(df):
-    def get_original_tt(row):
+def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
+    """Compute trigger type based on planes with non-zero charge."""
+    def _derive_tt(row: pd.Series) -> str:
         planes_with_charge = []
         for plane in range(1, 5):
-            charge_columns = [f'Q{plane}_F_1', f'Q{plane}_F_2', f'Q{plane}_F_3', f'Q{plane}_F_4',
-                              f'Q{plane}_B_1', f'Q{plane}_B_2', f'Q{plane}_B_3', f'Q{plane}_B_4']
-            if any(row[col] != 0 for col in charge_columns):
+            if columns_map:
+                charge_columns = [col for col in columns_map.get(plane, []) if col in row.index]
+            else:
+                charge_columns = [
+                    f"Q{plane}_F_1",
+                    f"Q{plane}_F_2",
+                    f"Q{plane}_F_3",
+                    f"Q{plane}_F_4",
+                    f"Q{plane}_B_1",
+                    f"Q{plane}_B_2",
+                    f"Q{plane}_B_3",
+                    f"Q{plane}_B_4",
+                ]
+            if any(row.get(col, 0) != 0 for col in charge_columns):
                 planes_with_charge.append(str(plane))
-        return ''.join(planes_with_charge)
-    
-    df['original_tt'] = df.apply(get_original_tt, axis=1)
+        return "".join(planes_with_charge) if planes_with_charge else "0"
+
+    df[column_name] = df.apply(_derive_tt, axis=1)
+    df[column_name] = df[column_name].apply(builtins.int)
     return df
 
 # Apply the function to the DataFrame
-working_df = create_original_tt(working_df)
-working_df['original_tt'] = working_df['original_tt'].apply(builtins.int)
+working_df = compute_tt(working_df, "raw_tt")
+
+raw_tt_counts = working_df["raw_tt"].value_counts()
+for tt_value, count in raw_tt_counts.items():
+    global_variables[f"raw_tt_{tt_value}_count"] = int(count)
 
 if self_trigger:
-    working_st_df = create_original_tt(working_st_df)
-    working_st_df['original_tt'] = working_st_df['original_tt'].apply(builtins.int)
+    working_st_df = compute_tt(working_st_df, "raw_tt")
 
 if create_plots :
-    event_counts = working_df['original_tt'].value_counts()
+    event_counts = working_df['raw_tt'].value_counts()
 
     plt.figure(figsize=(10, 6))
     event_counts.plot(kind='bar', alpha=0.7)
-    plt.title(f'Number of Events per Original TT Label, {start_time}')
-    plt.xlabel('Original TT Label')
+    plt.title(f'Number of Events per Raw TT Label, {start_time}')
+    plt.xlabel('Raw TT Label')
     plt.ylabel('Number of Events')
     plt.xticks(rotation=45)
     plt.tight_layout()
     if save_plots:
-        final_filename = f'{fig_idx}_original_TT.png'
+        final_filename = f'{fig_idx}_raw_TT.png'
         fig_idx += 1
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -2104,17 +2124,17 @@ if create_plots :
 if self_trigger:
     if create_essential_plots or create_plots:
    
-        event_counts = working_st_df['original_tt'].value_counts()
+        event_counts = working_st_df['raw_tt'].value_counts()
 
         plt.figure(figsize=(10, 6))
         event_counts.plot(kind='bar', alpha=0.7)
-        plt.title(f'Number of Events per Original TT Label, {start_time}')
-        plt.xlabel('Original TT Label')
+        plt.title(f'Number of Events per Raw TT Label, {start_time}')
+        plt.xlabel('Raw TT Label')
         plt.ylabel('Number of Events')
         plt.xticks(rotation=45)
         plt.tight_layout()
         if save_plots:
-            final_filename = f'{fig_idx}_original_TT_ST.png'
+            final_filename = f'{fig_idx}_raw_TT_ST.png'
             fig_idx += 1
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -2614,8 +2634,8 @@ if time_window_filtering:
         
     # Pre removal of outliers
     spread_results = []
-    for original_tt in sorted(working_df["original_tt"].unique()):
-        filtered_df = working_df[working_df["original_tt"] == original_tt].copy()
+    for raw_tt in sorted(working_df["raw_tt"].unique()):
+        filtered_df = working_df[working_df["raw_tt"] == raw_tt].copy()
         T_sum_columns_tt = filtered_df.filter(regex='_time_OG_sum_').columns
         t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
         filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
@@ -2626,8 +2646,8 @@ if time_window_filtering:
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
-        for i, tt in enumerate(sorted(spread_df["original_tt"].unique())):
-            subset = spread_df[spread_df["original_tt"] == tt]
+        for i, tt in enumerate(sorted(spread_df["raw_tt"].unique())):
+            subset = spread_df[spread_df["raw_tt"] == tt]
             v = subset["T_sum_spread_OG"].dropna()
             v = v[v < coincidence_window_og_ns * 3]
             axs[i].hist(v, bins=100, alpha=0.7)
@@ -2637,7 +2657,7 @@ if time_window_filtering:
             axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')
             # Logscale
             axs[i].set_yscale('log')
-        fig.suptitle("Non filtered. Intra-Event T_sum Spread by original_tt")
+        fig.suptitle("Non filtered. Intra-Event T_sum Spread by raw_tt")
         fig.tight_layout(rect=[0, 0, 1, 0.95])
         if save_plots:
             hist_filename = f'{fig_idx}_tsum_spread_histograms_OG.png'
@@ -2663,8 +2683,8 @@ if time_window_filtering:
 
     # Post removal of outliers
     spread_results = []
-    for original_tt in sorted(working_df["original_tt"].unique()):
-        filtered_df = working_df[working_df["original_tt"] == original_tt].copy()
+    for raw_tt in sorted(working_df["raw_tt"].unique()):
+        filtered_df = working_df[working_df["raw_tt"] == raw_tt].copy()
         T_sum_columns_tt = filtered_df.filter(regex='_time_OG_sum_').columns
         t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
         filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
@@ -2675,8 +2695,8 @@ if time_window_filtering:
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
-        for i, tt in enumerate(sorted(spread_df["original_tt"].unique())):
-            subset = spread_df[spread_df["original_tt"] == tt]
+        for i, tt in enumerate(sorted(spread_df["raw_tt"].unique())):
+            subset = spread_df[spread_df["raw_tt"] == tt]
             v = subset["T_sum_spread_OG"].dropna()
             axs[i].hist(v, bins=100, alpha=0.7)
             axs[i].set_title(f"TT = {tt}")
@@ -2684,7 +2704,7 @@ if time_window_filtering:
             axs[i].set_ylabel("Events")
             axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
             axs[i].set_yscale('log')
-        fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by original_tt")
+        fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by raw_tt")
         fig.tight_layout(rect=[0, 0, 1, 0.95])
         if save_plots:
             hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered_OG.png'
@@ -2749,16 +2769,6 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 # working_df = ...
 
 
-# Print all column names in the dataframe
-print("Columns in the cleaned dataframe:")
-for col in working_df.columns:
-    print(col)
-
-
-
-
-
-
 # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
 Q_F_cols = _collect_columns(working_df.columns, Q_FRONT_PATTERN)
 Q_B_cols = _collect_columns(working_df.columns, Q_BACK_PATTERN)
@@ -2769,9 +2779,19 @@ print(f"Original number of events in the dataframe: {original_number_of_events}"
 # Final number of events
 final_number_of_events = len(working_df)
 print(f"Final number of events in the dataframe: {final_number_of_events}")
+# Compute clean trigger types on the filtered dataframe
+working_df = compute_tt(working_df, "clean_tt")
+working_df["raw_to_clean_tt"] = (
+    working_df["raw_tt"].astype(str) + "_" + working_df["clean_tt"].astype(str)
+)
 
+clean_tt_counts = working_df["clean_tt"].value_counts()
+for tt_value, count in clean_tt_counts.items():
+    global_variables[f"clean_tt_{tt_value}_count"] = int(count)
 
-
+raw_to_clean_counts = working_df["raw_to_clean_tt"].value_counts()
+for combo_value, count in raw_to_clean_counts.items():
+    global_variables[f"raw_to_clean_tt_{combo_value}_count"] = int(count)
 
 # ----------------------------------------------------------------------------------
 # Count the number of non-zero entries per channel in the whole dataframe ----------
@@ -2859,8 +2879,9 @@ metadata_specific_csv_path = save_metadata(
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
-
-
+print("Columns before saving cleaned parquet:")
+for col in working_df.columns:
+    print(f" - {col}")
 
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)

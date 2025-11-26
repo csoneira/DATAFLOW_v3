@@ -705,7 +705,26 @@ KEY = "df"
 
 # Load dataframe
 working_df = pd.read_parquet(file_path, engine="pyarrow")
+working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 print(f"Listed dataframe reloaded from: {file_path}")
+print("Columns loaded from parquet:")
+for col in working_df.columns:
+    print(f" - {col}")
+
+fit_tt_columns = {
+    i_plane: [
+        f"P{i_plane}_T_sum_final",
+        f"P{i_plane}_T_dif_final",
+        f"P{i_plane}_Q_sum_final",
+        f"P{i_plane}_Q_dif_final",
+        f"P{i_plane}_Y_final",
+    ]
+    for i_plane in range(1, 5)
+}
+working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
+fit_tt_counts_initial = working_df["fit_tt"].value_counts()
+for tt_value, count in fit_tt_counts_initial.items():
+    global_variables[f"fit_tt_{tt_value}_count"] = int(count)
 
 
 
@@ -911,26 +930,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -978,8 +997,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -1042,8 +1061,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -1055,15 +1074,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -1097,9 +1116,9 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -1474,26 +1493,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -1541,8 +1560,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -1605,8 +1624,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -1618,15 +1637,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -1655,9 +1674,9 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -1940,6 +1959,32 @@ global_variables = {
     'analysis_mode': 0,
 }
 
+def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
+    """Compute trigger type based on planes with non-zero charge."""
+    def _derive_tt(row: pd.Series) -> str:
+        planes_with_charge = []
+        for plane in range(1, 5):
+            if columns_map:
+                charge_columns = [col for col in columns_map.get(plane, []) if col in row.index]
+            else:
+                charge_columns = [
+                    f"Q{plane}_F_1",
+                    f"Q{plane}_F_2",
+                    f"Q{plane}_F_3",
+                    f"Q{plane}_F_4",
+                    f"Q{plane}_B_1",
+                    f"Q{plane}_B_2",
+                    f"Q{plane}_B_3",
+                    f"Q{plane}_B_4",
+                ]
+            if any(row.get(col, 0) != 0 for col in charge_columns):
+                planes_with_charge.append(str(plane))
+        return "".join(planes_with_charge) if planes_with_charge else "0"
+
+    df[column_name] = df.apply(_derive_tt, axis=1)
+    df[column_name] = df[column_name].apply(builtins.int)
+    return df
+
 reprocessing_parameters = pd.DataFrame()
 
 
@@ -2188,26 +2233,26 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 # Pre-cal Sum & Diff
 Q_left_pre_cal = config["Q_left_pre_cal"]
 Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_diff_pre_cal_threshold = config["Q_diff_pre_cal_threshold"]
+Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
 T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
 T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_diff_pre_cal_threshold = config["T_diff_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
 Q_sum_left_cal = config["Q_sum_left_cal"]
 Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_diff_cal_threshold = config["Q_diff_cal_threshold"]
-Q_diff_cal_threshold_FB = config["Q_diff_cal_threshold_FB"]
-Q_diff_cal_threshold_FB_wide = config["Q_diff_cal_threshold_FB_wide"]
+Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
+Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
+Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_sum_left_cal = config["T_sum_left_cal"]
 T_sum_right_cal = config["T_sum_right_cal"]
-T_diff_cal_threshold = config["T_diff_cal_threshold"]
+T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_diff_RPC_left = config["T_diff_RPC_left"]
-T_diff_RPC_right = config["T_diff_RPC_right"]
+T_dif_RPC_left = config["T_dif_RPC_left"]
+T_dif_RPC_right = config["T_dif_RPC_right"]
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
 Q_dif_RPC_left = config["Q_dif_RPC_left"]
@@ -2255,8 +2300,8 @@ pedestal_right = config["pedestal_right"]
 # Front-back charge
 distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
 distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_diff_charges_up_fit = config["distance_diff_charges_up_fit"]
-distance_diff_charges_low_fit = config["distance_diff_charges_low_fit"]
+distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
+distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
 front_back_fit_threshold = config["front_back_fit_threshold"]
 
@@ -2319,8 +2364,8 @@ scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
 scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
 scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_diff_T_rel_th = config["calibrate_strip_T_diff_T_rel_th"]
-calibrate_strip_T_diff_T_abs_th = config["calibrate_strip_T_diff_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
+calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
 interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
 interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
@@ -2332,15 +2377,15 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_diff_left = config["q_diff_left"]
-q_diff_right = config["q_diff_right"]
+q_dif_left = config["q_dif_left"]
+q_dif_right = config["q_dif_right"]
 
 Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
 Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_diff_left = config["T_sum_corrected_diff_left"]
-T_sum_corrected_diff_right = config["T_sum_corrected_diff_right"]
+T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
+T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -2373,9 +2418,9 @@ angular_corr_directory = config_files_directory + "/ANGULAR_CORRECTION"
 # Variables to not touch unless necessary -------------------------------------
 # -----------------------------------------------------------------------------
 Q_sum_color = 'orange'
-Q_diff_color = 'red'
+Q_dif_color = 'red'
 T_sum_color = 'blue'
-T_diff_color = 'green'
+T_dif_color = 'green'
 
 pos_filter = det_pos_filter
 t0_left_filter = T_sum_RPC_left
@@ -3305,16 +3350,16 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 # Print all column names in the dataframe
 print("Columns in the cleaned dataframe:")
 for col in working_df.columns:
-    print(col)
+    print(f" - {col}")
 
-# Remove the columns in the form "T*_T_sum_*", "T*_T_diff_*", "Q*_Q_sum_*", "Q*_Q_diff_*", do a loop from 1 to 4
+# Remove the columns in the form "T*_T_sum_*", "T*_T_dif_*", "Q*_Q_sum_*", "Q*_Q_dif_*", do a loop from 1 to 4
 cols_to_remove = []
 for i_plane in range(1, 5):
     for strip in range(1, 5):
         cols_to_remove.append(f'T{i_plane}_T_sum_{strip}')
-        cols_to_remove.append(f'T{i_plane}_T_diff_{strip}')
+        cols_to_remove.append(f'T{i_plane}_T_dif_{strip}')
         cols_to_remove.append(f'Q{i_plane}_Q_sum_{strip}')
-        cols_to_remove.append(f'Q{i_plane}_Q_diff_{strip}')
+        cols_to_remove.append(f'Q{i_plane}_Q_dif_{strip}')
 working_df.drop(columns=cols_to_remove, inplace=True, errors='ignore')
 
 
@@ -3323,7 +3368,7 @@ working_df.drop(columns=cols_to_remove, inplace=True, errors='ignore')
 # Print all column names in the dataframe
 print("Columns in the final dataframe:")
 for col in working_df.columns:
-    print(col)
+    print(f" - {col}")
     
     
 
@@ -3341,6 +3386,32 @@ print(f"Original number of events in the dataframe: {original_number_of_events}"
 # Final number of events
 final_number_of_events = len(working_df)
 print(f"Final number of events in the dataframe: {final_number_of_events}")
+corr_tt_columns = {
+    i_plane: [
+        f"P{i_plane}_T_sum_final",
+        f"P{i_plane}_T_dif_final",
+        f"P{i_plane}_Q_sum_final",
+        f"P{i_plane}_Q_dif_final",
+        f"P{i_plane}_Y_final",
+    ]
+    for i_plane in range(1, 5)
+}
+working_df = compute_tt(working_df, "corr_tt", corr_tt_columns)
+working_df["fit_to_corr_tt"] = (
+    working_df["fit_tt"].astype(str) + "_" + working_df["corr_tt"].astype(str)
+)
+
+corr_tt_counts = working_df["corr_tt"].value_counts()
+for tt_value, count in corr_tt_counts.items():
+    global_variables[f"corr_tt_{tt_value}_count"] = int(count)
+
+fit_to_corr_counts = working_df["fit_to_corr_tt"].value_counts()
+for combo_value, count in fit_to_corr_counts.items():
+    global_variables[f"fit_to_corr_tt_{combo_value}_count"] = int(count)
+
+print("Columns before saving fit->corr parquet:")
+for col in working_df.columns:
+    print(col)
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100

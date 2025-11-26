@@ -1826,7 +1826,7 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     # ----------------------------------------------------------------------
     # 1) Compute and store percentage differences per region in events_df
     # ----------------------------------------------------------------------
-    pct_diff_cols = []
+    pct_dif_cols = []
     for region in region_names:
         col_name = f"{region}_corrected_rate"
         if col_name not in events_df.columns:
@@ -1840,9 +1840,9 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
 
         diff_col = f"{region}_pct_diff"
         events_df[diff_col] = (y - avg) / avg * 100.0
-        pct_diff_cols.append(diff_col)
+        pct_dif_cols.append(diff_col)
 
-    if not pct_diff_cols:
+    if not pct_dif_cols:
         raise RuntimeError("No percentage-difference columns could be computed. "
                         "Check that *_corrected_rate columns exist and are non-zero.")
 
