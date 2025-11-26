@@ -1189,6 +1189,52 @@ if STEP == 1 and TASK == 4:
         plt.show()
         plotted_cols.update(sigma_columns)
 
+    # ------------------------------------------------------------------
+    # Gaussian fit parameters from error fits (amps/mu/sigma)
+    # ------------------------------------------------------------------
+    gauss_cols = [c for c in df.columns if "_gauss1_" in c or "_gauss2_" in c]
+    if gauss_cols:
+        n_cols = 3
+        n_rows = (len(gauss_cols) + n_cols - 1) // n_cols
+        fig = plt.figure(figsize=(5 * n_cols, 3 * n_rows))
+        for idx, col in enumerate(gauss_cols):
+            ax = fig.add_subplot(n_rows, n_cols, idx + 1)
+            if "datetime" in df.columns:
+                ax.plot(df["datetime"], df[col], marker=".", linestyle="", markersize=3)
+            else:
+                ax.plot(df.index, df[col], marker=".", linestyle="", markersize=3)
+            ax.set_title(col, fontsize=8)
+            ax.grid(True)
+            if idx // n_cols == n_rows - 1 and "datetime" in df.columns:
+                ax.tick_params(axis='x', rotation=45)
+        plt.suptitle("Gaussian fit parameters (error fits)", fontsize=14)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+        plotted_cols.update(gauss_cols)
+
+    # ------------------------------------------------------------------
+    # Interquartile ranges (q25/q75) for error variables
+    # ------------------------------------------------------------------
+    iqr_cols = [c for c in df.columns if c.endswith("_q25") or c.endswith("_q75")]
+    if iqr_cols:
+        n_cols = 3
+        n_rows = (len(iqr_cols) + n_cols - 1) // n_cols
+        fig = plt.figure(figsize=(5 * n_cols, 3 * n_rows))
+        for idx, col in enumerate(iqr_cols):
+            ax = fig.add_subplot(n_rows, n_cols, idx + 1)
+            if "datetime" in df.columns:
+                ax.plot(df["datetime"], df[col], marker=".", linestyle="", markersize=3)
+            else:
+                ax.plot(df.index, df[col], marker=".", linestyle="", markersize=3)
+            ax.set_title(col, fontsize=8)
+            ax.grid(True)
+            if idx // n_cols == n_rows - 1 and "datetime" in df.columns:
+                ax.tick_params(axis='x', rotation=45)
+        plt.suptitle("Error interquartile ranges (q25/q75)", fontsize=14)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+        plotted_cols.update(iqr_cols)
+
 
     # ------------------------------------------------------------------
     # Filter percentages (ancillary)

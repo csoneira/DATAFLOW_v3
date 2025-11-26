@@ -3604,10 +3604,20 @@ def fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi): # va vector
 def fmahd(npar, vin1, vin2, merr): # Mahalanobis distance
     vdif  = np.subtract(vin1,vin2)
     vdsq  = np.power(vdif,2)
-    verr  = np.diag(merr,0)
-    vsig  = np.divide(vdsq,verr)
+    merr_diag = np.diag(merr) if merr.ndim > 1 else merr
+    # Avoid divide-by-zero; treat missing variance as zero contribution
+    vsig  = np.divide(vdsq, merr_diag, out=np.zeros_like(vdsq), where=merr_diag!=0)
     dist  = np.sqrt(np.sum(vsig))
     return dist
+
+def covariance_inv_diag(matrix):
+    """Return only the diagonal of inv(matrix) using Cholesky; fallback to pinv if needed."""
+    try:
+        chol = np.linalg.cholesky(matrix)
+        solve_eye = np.linalg.solve(chol, np.eye(chol.shape[0]))
+        return np.sum(solve_eye * solve_eye, axis=0)
+    except np.linalg.LinAlgError:
+        return np.diag(np.linalg.pinv(matrix))
 
 def fres(vs, vdat, lenx, ss, zi):  # Residuals array
     X0 = vs[0]; XP = vs[1]; Y0 = vs[2]; YP = vs[3]; T0 = vs[4]
@@ -3731,6 +3741,8 @@ for iteration in range(repeat + 1):
         istp = 0   # nb. of fitting steps
         dist = d0
         while dist > cocut and istp < iter_max:
+            mk.fill(0.0)
+            va.fill(0.0)
             for iplane in planes_to_iterate:
                 
                 # Data --------------------------------------------------------
@@ -3742,8 +3754,8 @@ for iteration in range(repeat + 1):
             istp = istp + 1
             vs0 = vs
             vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
-            merr = np.linalg.inv(mk)      # Only compute if needed for fmahd()
-            dist = fmahd(npar, vs, vs0, merr)
+            merr_diag = covariance_inv_diag(mk)  # Only compute if needed for fmahd()
+            dist = fmahd(npar, vs, vs0, merr_diag)
             
         if istp >= iter_max or dist >= cocut:
             converged_arr[pos] = 1
@@ -3817,6 +3829,8 @@ for iteration in range(repeat + 1):
                 istp = 0
                 dist = d0
                 while dist > cocut and istp < iter_max:
+                    mk.fill(0.0)
+                    va.fill(0.0)
                     for iplane in planes_to_iterate_short:
                     
                         # Data --------------------------------------------------------
@@ -3829,8 +3843,8 @@ for iteration in range(repeat + 1):
                     istp = istp + 1
                     vs0 = vs
                     vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
-                    merr = np.linalg.inv(mk)      # Only compute if needed for fmahd()
-                    dist = fmahd(npar, vs, vs0, merr)
+                    merr_diag = covariance_inv_diag(mk)  # Only compute if needed for fmahd()
+                    dist = fmahd(npar, vs, vs0, merr_diag)
                     
                 v_res = fres(vs, vdat_ref, lenx, ss, 0)
                 
@@ -4130,7 +4144,7 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
 
 
 # Time series of core track variables (averaged and errors) ------------------
-if (create_plots or create_essential_plots) and 'datetime' in working_df.columns:
+if 'datetime' in working_df.columns:
     
     ts_core = working_df.copy()
     ts_core['datetime'] = pd.to_datetime(ts_core['datetime'])
@@ -4171,42 +4185,8 @@ if (create_plots or create_essential_plots) and 'datetime' in working_df.columns
 
         n_rows = len(combo_subsets)
         n_cols = len(err_vars)
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
-        if n_rows == 1:
-            axes = np.array([axes])
-        for r, (combo, sub) in enumerate(combo_subsets):
-            for c, var in enumerate(err_vars):
-                ax = axes[r, c]
-                if var not in sub.columns:
-                    ax.set_visible(False)
-                    continue
-                data = sub[var].dropna()
-                if data.empty:
-                    ax.set_visible(False)
-                    continue
-                q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
-                bin_edges = np.linspace(q_low, q_high, 161)
-                ax.hist(data, bins=bin_edges, color='C0', alpha=0.7)
-                ax.set_yscale('log')
-                ax.set_xlim(q_low, q_high)
-                if r == 0:
-                    ax.set_title(var)
-                if c == 0:
-                    ax.set_ylabel(f'Comb {combo}')
-                ax.grid(True, alpha=0.3)
-        plt.suptitle('Error distributions per combination (data)', fontsize=12)
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
-        if save_plots:
-            final_filename = f'{fig_idx}_hist_core_errs_combined.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-        if show_plots:
-            plt.show()
-        plt.close()
 
-        # Fit a two-Gaussian mixture per combination/variable and overlay
+        # Fit a Gaussian per combination/variable and store stats (always, even if plots are off)
         def _gauss(x, amp, mu, sigma):
             return amp * norm.pdf(x, mu, sigma)
 
@@ -4223,10 +4203,15 @@ if (create_plots or create_essential_plots) and 'datetime' in working_df.columns
                 series = sub[var].dropna()
                 if series.empty:
                     continue
-                q_low, q_high = series.quantile([0.0001, 0.99999])
+                q25, q75 = series.quantile([0.25, 0.75])
+                global_variables[f"{var}_{combo_int}_q25"] = float(q25)
+                global_variables[f"{var}_{combo_int}_q75"] = float(q75)
+                mirror_for_half = var == "theta_err"
+                series_fit = pd.concat([series, -series]) if mirror_for_half else series
+                q_low, q_high = series_fit.quantile([0.0001, 0.99999])
                 bin_edges = np.linspace(q_low, q_high, 161)
                 bin_width = bin_edges[1] - bin_edges[0]
-                counts, edges = np.histogram(series, bins=bin_edges)
+                counts, edges = np.histogram(series_fit, bins=bin_edges)
                 if not np.any(counts):
                     continue
 
@@ -4235,7 +4220,7 @@ if (create_plots or create_essential_plots) and 'datetime' in working_df.columns
                 typical = np.median(nonzero) if len(nonzero) else 0
                 mask = counts > 0
                 if typical > 0:
-                    mask &= counts < typical * 4  # keep background-like bins
+                    mask &= counts < typical * 6  # keep more populated bins as well
                 centers = 0.5 * (edges[1:] + edges[:-1])
                 x_fit = centers[mask]
                 y_fit = counts[mask]
@@ -4243,70 +4228,118 @@ if (create_plots or create_essential_plots) and 'datetime' in working_df.columns
                     continue
                 try:
                     p0 = [y_fit.max(), float(series.mean()), float(max(series.std(), 1e-6))]
-                    popt, _ = curve_fit(_gauss, x_fit, y_fit, p0=p0, maxfev=4000)
+                    weights = np.maximum(y_fit, 1)
+                    popt, _ = curve_fit(
+                        _gauss,
+                        x_fit,
+                        y_fit,
+                        p0=p0,
+                        sigma=1.0 / weights,  # heavier weight for populous bins
+                        absolute_sigma=False,
+                        maxfev=4000,
+                    )
                 except Exception:
                     continue
                 amp, mu, sigma = popt
+                if mirror_for_half:
+                    amp *= 0.5  # adjust amplitude back to one-sided scale
                 fit_results[(combo_int, var)] = (float(amp), float(mu), float(sigma))
                 global_variables[f"{var}_{combo_int}_gauss1_amp"] = float(amp)
                 global_variables[f"{var}_{combo_int}_gauss1_mu"] = float(mu)
                 global_variables[f"{var}_{combo_int}_gauss1_sigma"] = float(sigma)
 
-        # Redraw with overlays
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
-        if n_rows == 1:
-            axes = np.array([axes])
-        for r, (combo, sub) in enumerate(combo_subsets):
-            for c, var in enumerate(err_vars):
-                ax = axes[r, c]
-                if var not in sub.columns:
-                    ax.set_visible(False)
-                    continue
-                data = sub[var].dropna()
-                if data.empty:
-                    ax.set_visible(False)
-                    continue
-                q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
-                bin_edges = np.linspace(q_low, q_high, 161)
-                counts, edges, _ = ax.hist(data, bins=bin_edges, color='C0', alpha=0.6, label='data')
-                ax.set_yscale('log')
-                ax.set_xlim(q_low, q_high)
-                y_min, y_max = ax.get_ylim()
+        # Only plot if requested
+        if create_plots or create_essential_plots:
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
+            if n_rows == 1:
+                axes = np.array([axes])
+            for r, (combo, sub) in enumerate(combo_subsets):
+                for c, var in enumerate(err_vars):
+                    ax = axes[r, c]
+                    if var not in sub.columns:
+                        ax.set_visible(False)
+                        continue
+                    data = sub[var].dropna()
+                    if data.empty:
+                        ax.set_visible(False)
+                        continue
+                    q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
+                    bin_edges = np.linspace(q_low, q_high, 161)
+                    ax.hist(data, bins=bin_edges, color='C0', alpha=0.7)
+                    ax.set_yscale('log')
+                    ax.set_xlim(q_low, q_high)
+                    if r == 0:
+                        ax.set_title(var)
+                    if c == 0:
+                        ax.set_ylabel(f'Comb {combo}')
+                    ax.grid(True, alpha=0.3)
+            plt.suptitle('Error distributions per combination (data)', fontsize=12)
+            plt.tight_layout(rect=[0, 0, 1, 0.94])
+            if save_plots:
+                final_filename = f'{fig_idx}_hist_core_errs_combined.png'
+                fig_idx += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+            if show_plots:
+                plt.show()
+            plt.close()
 
-                try:
-                    combo_int = int(combo)
-                except ValueError:
-                    combo_int = None
-                if combo_int is not None:
-                    params = fit_results.get((combo_int, var))
-                    if params:
-                        amp, mu, sigma = params
-                        x_grid = np.linspace(q_low, q_high, 400)
-                        g_vals = _gauss(x_grid, amp, mu, sigma)
-                        ax.plot(x_grid, g_vals, 'r-', lw=1.0, label='fit')
-                if r == 0:
-                    ax.set_title(var)
-                if c == 0:
-                    ax.set_ylabel(f'Comb {combo}')
-                ax.set_ylim(y_min, y_max)
-                ax.grid(True, alpha=0.3)
-        plt.suptitle('Error distributions per combination (fits)', fontsize=12)
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
-        if save_plots:
-            final_filename = f'{fig_idx}_hist_core_errs_combined_with_fits.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
-        if show_plots:
-            plt.show()
-        plt.close()
+            # Redraw with overlays
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
+            if n_rows == 1:
+                axes = np.array([axes])
+            for r, (combo, sub) in enumerate(combo_subsets):
+                for c, var in enumerate(err_vars):
+                    ax = axes[r, c]
+                    if var not in sub.columns:
+                        ax.set_visible(False)
+                        continue
+                    data = sub[var].dropna()
+                    if data.empty:
+                        ax.set_visible(False)
+                        continue
+                    q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
+                    bin_edges = np.linspace(q_low, q_high, 161)
+                    counts, edges, _ = ax.hist(data, bins=bin_edges, color='C0', alpha=0.6, label='data')
+                    ax.set_yscale('log')
+                    ax.set_xlim(q_low, q_high)
+                    y_min, y_max = ax.get_ylim()
+
+                    try:
+                        combo_int = int(combo)
+                    except ValueError:
+                        combo_int = None
+                    if combo_int is not None:
+                        params = fit_results.get((combo_int, var))
+                        if params:
+                            amp, mu, sigma = params
+                            x_grid = np.linspace(q_low, q_high, 400)
+                            g_vals = _gauss(x_grid, amp, mu, sigma)
+                            ax.plot(x_grid, g_vals, 'r-', lw=1.0, label='fit')
+                    if r == 0:
+                        ax.set_title(var)
+                    if c == 0:
+                        ax.set_ylabel(f'Comb {combo}')
+                    ax.set_ylim(y_min, y_max)
+                    ax.grid(True, alpha=0.3)
+            plt.suptitle('Error distributions per combination (fits)', fontsize=12)
+            plt.tight_layout(rect=[0, 0, 1, 0.94])
+            if save_plots:
+                final_filename = f'{fig_idx}_hist_core_errs_combined_with_fits.png'
+                fig_idx += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+            if show_plots:
+                plt.show()
+            plt.close()
 
 
 
 import sys
-print("DEBUG EXITING")
-sys.exit()
+#print("DEBUG EXITING")
+#sys.exit()
 
 
 # print("----------------------------------------------------------------------")
