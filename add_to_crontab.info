@@ -4,7 +4,7 @@
 # minute hour day_of_month month day_of_week command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Updated at 2025-11-18 11:29
+# Updated at 2025-11-27 13:08
 
 SHELL=/bin/bash
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
@@ -226,7 +226,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # FILL FACTOR TRACKER
-0 */2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/fill_factor_realtime_plotter.log 2>&1
+*/20 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/fill_factor_realtime_plotter.log 2>&1
 
 # EXECUTION METADATA PLOTTER
 */10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 --zoom >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1

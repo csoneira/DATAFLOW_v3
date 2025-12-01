@@ -711,6 +711,33 @@ print("Columns loaded from parquet:")
 for col in working_df.columns:
     print(f" - {col}")
 
+# Helper: compute trigger types based on non-zero charge columns
+def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
+    """Compute trigger type based on planes with non-zero charge."""
+    def _derive_tt(row: pd.Series) -> str:
+        planes_with_charge = []
+        for plane in range(1, 5):
+            if columns_map:
+                charge_columns = [col for col in columns_map.get(plane, []) if col in row.index]
+            else:
+                charge_columns = [
+                    f"Q{plane}_F_1",
+                    f"Q{plane}_F_2",
+                    f"Q{plane}_F_3",
+                    f"Q{plane}_F_4",
+                    f"Q{plane}_B_1",
+                    f"Q{plane}_B_2",
+                    f"Q{plane}_B_3",
+                    f"Q{plane}_B_4",
+                ]
+            if any(row.get(col, 0) != 0 for col in charge_columns):
+                planes_with_charge.append(str(plane))
+        return "".join(planes_with_charge) if planes_with_charge else "0"
+
+    df[column_name] = df.apply(_derive_tt, axis=1)
+    df[column_name] = df[column_name].apply(builtins.int)
+    return df
+
 fit_tt_columns = {
     i_plane: [
         f"P{i_plane}_T_sum_final",
@@ -720,6 +747,9 @@ fit_tt_columns = {
         f"P{i_plane}_Y_final",
     ]
     for i_plane in range(1, 5)
+}
+global_variables = {
+    'analysis_mode': 0,
 }
 working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
 fit_tt_counts_initial = working_df["fit_tt"].value_counts()
@@ -1951,39 +1981,6 @@ save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filenam
 
 
 
-
-# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
-# 0 -> regular analysis
-# 1 -> repeated, careful analysis
-global_variables = {
-    'analysis_mode': 0,
-}
-
-def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
-    """Compute trigger type based on planes with non-zero charge."""
-    def _derive_tt(row: pd.Series) -> str:
-        planes_with_charge = []
-        for plane in range(1, 5):
-            if columns_map:
-                charge_columns = [col for col in columns_map.get(plane, []) if col in row.index]
-            else:
-                charge_columns = [
-                    f"Q{plane}_F_1",
-                    f"Q{plane}_F_2",
-                    f"Q{plane}_F_3",
-                    f"Q{plane}_F_4",
-                    f"Q{plane}_B_1",
-                    f"Q{plane}_B_2",
-                    f"Q{plane}_B_3",
-                    f"Q{plane}_B_4",
-                ]
-            if any(row.get(col, 0) != 0 for col in charge_columns):
-                planes_with_charge.append(str(plane))
-        return "".join(planes_with_charge) if planes_with_charge else "0"
-
-    df[column_name] = df.apply(_derive_tt, axis=1)
-    df[column_name] = df[column_name].apply(builtins.int)
-    return df
 
 reprocessing_parameters = pd.DataFrame()
 

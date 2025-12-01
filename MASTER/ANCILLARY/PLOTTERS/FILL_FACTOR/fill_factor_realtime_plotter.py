@@ -184,9 +184,17 @@ def median_recent_rate(
             continue
         delta = (recent_values[idx] - recent_values[idx - 1]) / dt_days
         deltas.append(delta)
-    if not deltas:
-        return 0.0
-    return statistics.median(deltas)
+    # Prefer the median of non-zero deltas so isolated zero-steps don't hide activity.
+    non_zero = [d for d in deltas if abs(d) > 1e-12]
+    if non_zero:
+        return statistics.median(non_zero)
+    # Fallback: compute the average rate across the whole recent window.
+    total_dt_days = (
+        recent_timestamps[-1] - recent_timestamps[0]
+    ).total_seconds() / 86400.0
+    if total_dt_days > 0:
+        return (recent_values[-1] - recent_values[0]) / total_dt_days
+    return 0.0
 
 
 def plot_histories(history_payload: Dict[str, Tuple[List[datetime], List[float], List[int]]]) -> None:
@@ -210,7 +218,7 @@ def plot_histories(history_payload: Dict[str, Tuple[List[datetime], List[float],
             marker="o",
             linestyle="-",
             linewidth=1.5,
-            markersize=4,
+            markersize=1,
             color=color,
             label=label,
         )
