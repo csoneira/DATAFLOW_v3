@@ -128,25 +128,29 @@ is_task_running() {
 echo '------------------------------------------------------'
 echo '------------------------------------------------------'
 
-for task_script in "${TASK_SCRIPTS[@]}"; do
-  if [[ ! -x "$task_script" ]]; then
-    echo "Warning: task script $task_script not found or not executable. Skipping."
-    continue
-  fi
+iteration=1
+while true; do
+  echo "Pipeline iteration $iteration started at: $(date '+%Y-%m-%d %H:%M:%S')"
+  for task_script in "${TASK_SCRIPTS[@]}"; do
+    if [[ ! -x "$task_script" ]]; then
+      echo "Warning: task script $task_script not found or not executable. Skipping."
+      continue
+    fi
 
-  if running_line=$(is_task_running "$task_script"); then
-    echo "Skipping $(basename "$task_script") because it is already running: $running_line"
+    if running_line=$(is_task_running "$task_script"); then
+      echo "Skipping $(basename "$task_script") because it is already running: $running_line"
+      echo '------------------------------------------------------'
+      continue
+    fi
+
+    echo "Running $(basename "$task_script")..."
+    if ! python3 -u "$task_script" "$station"; then
+      echo "Task $(basename "$task_script") failed; aborting pipeline."
+      exit 1
+    fi
     echo '------------------------------------------------------'
-    continue
-  fi
-
-  echo "Running $(basename "$task_script")..."
-  if ! python3 -u "$task_script" "$station"; then
-    echo "Task $(basename "$task_script") failed; aborting pipeline."
-    exit 1
-  fi
+  done
+  echo "Pipeline iteration $iteration completed at: $(date '+%Y-%m-%d %H:%M:%S')"
   echo '------------------------------------------------------'
+  iteration=$((iteration + 1))
 done
-
-echo "raw_to_list_events.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
-echo '------------------------------------------------------'

@@ -468,7 +468,7 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     station = "1"
     
     result = quicklook(
-        start="2025-08-16",
+        start="2025-06-16",
         end="2025-11-04",
         station=station,
         show=False,
@@ -707,7 +707,6 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     
     
     #%%
-    
     
     
     # WAVELET ANALYSIS OF THE EVENTS TIME SERIES
@@ -1975,6 +1974,13 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     print(f"Saved angular percentage-difference GIF to: {gif_path}")
 
     
-    
+    #%%
+
+
+
+
+
+
+
     
 # %%

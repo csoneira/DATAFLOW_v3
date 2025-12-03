@@ -112,12 +112,15 @@ def load_metadata(
 
     filter_col = "datetime" if "datetime" in df.columns else timestamp_col
 
-    if filter_col and (start_date or end_date):
+    # Always parse the chosen time column to datetime so plotting works even without date filtering.
+    if filter_col:
         if filter_col == "execution_timestamp":
             fmt = "%Y-%m-%d_%H.%M.%S"
             df[filter_col] = pd.to_datetime(df[filter_col], format=fmt, errors="coerce")
         else:
             df[filter_col] = pd.to_datetime(df[filter_col], errors="coerce")
+
+    if filter_col and (start_date or end_date):
         start = pd.to_datetime(start_date) if start_date else df[filter_col].min()
         end = pd.to_datetime(end_date) if end_date else df[filter_col].max()
         df = df.loc[df[filter_col].between(start, end)]
@@ -137,6 +140,7 @@ def print_columns(df: pd.DataFrame) -> None:
     print("Columns:")
     for column in df.columns:
         print(f" - {column}")
+    print(f"Total columns: {len(df.columns)}")
 
 
 def _common_ylim(df: pd.DataFrame, columns: Iterable[str], margin: float = 0.05) -> tuple[float, float] | None:
@@ -174,6 +178,7 @@ def plot_tt_pairs(
     df = ctx.df
     tcol = ctx.time_col
     if not tcol:
+        print("No time column available for plot_tt_pairs; skipping.")
         return
 
     left_cols = [c for c in df.columns if c.startswith(prefix_left) and c.endswith("_count")]
@@ -259,6 +264,7 @@ def plot_tt_matrix(
     df = ctx.df
     tcol = ctx.time_col
     if not tcol:
+        print("No time column available for plot_tt_matrix; skipping.")
         return
 
     pat = re.compile(rf"{from_prefix}_to_{to_prefix}_tt_(\d+)_(\d+)_count")
