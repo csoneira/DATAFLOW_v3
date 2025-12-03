@@ -33,6 +33,18 @@ ctx = load_metadata(STATION, STEP, TASK, START_DATE, END_DATE)
 df = ctx.df
 plotted_cols: set[str] = set()
 
+
+print(f"Loaded: {ctx.metadata_path}")
+print(f"Rows: {len(df)}")
+
+
+
+
+
+
+
+
+
 def rpc_variable_counts_sets() -> tuple[list[str], list[str]]:
     planes = range(1, 5)
     types = ["T_sum", "T_diff", "Q_sum", "Q_diff", "Y"]
@@ -150,212 +162,241 @@ print_columns(df)
 
 #%%
 
-if STEP == 1 and TASK == 1:
-    COLUMN_FAMILY_DOC = '''
-    Channel count families for STEP 1 TASK 1
-    ---------------------------------------
-    1. Raw and clean channel hits contributing to trigger selection (raw_tt_*/clean_tt_*).
-    2. Lists-to-fit conversions (list_to_fit_tt_*).
-    3. Various cal_tt and list_tt event totals tracking triggers before/after filtering.
-    4. Topology patterns (active_strips_P*_????_count) describing strip multiplicities per plane.
-    5. RPC nonzero counts before/after filter6 for timing and charge sums/differences.
-    '''
-    print(COLUMN_FAMILY_DOC)
+COLUMN_FAMILY_DOC = '''
+Channel count families for STEP 1 TASK 1
+---------------------------------------
+1. Raw and clean channel hits contributing to trigger selection (raw_tt_*/clean_tt_*).
+2. Lists-to-fit conversions (list_to_fit_tt_*).
+3. Various cal_tt and list_tt event totals tracking triggers before/after filtering.
+4. Topology patterns (active_strips_P*_????_count) describing strip multiplicities per plane.
+5. RPC nonzero counts before/after filter6 for timing and charge sums/differences.
+'''
+print(COLUMN_FAMILY_DOC)
 
 
-    # STEP 1 - TASK 1
-
-    # Plot the time series of valid_lines_in_binary_file_percentage percentage over datetime
-    if "valid_lines_in_binary_file_percentage" in df.columns:
-        import matplotlib.pyplot as plt
-
-        plt.figure(figsize=(10, 6))
-        plt.plot(df["datetime"],df["valid_lines_in_binary_file_percentage"], marker='o', linestyle='-')
-        plt.title(f"Valid Lines Percentage Over Time for {STATION} STEP {STEP} TASK {TASK}")
-        plt.xlabel("Datetime")
-        plt.ylabel("Valid Lines Percentage (%)")
-        plt.grid(True)
-        plt.show()
-        plotted_cols.add("valid_lines_in_binary_file_percentage")
-    else:
-        print("Required columns for plotting valid lines percentage are missing.")
+# STEP 1 - TASK 1
 
 
-    #%%
-    
-    
-    import matplotlib.pyplot as plt
-    import matplotlib.gridspec as gridspec
-    import numpy as np
-
-    planes = range(1, 5)   # 1..4
-    strips = range(1, 5)   # 1..4
-    sides  = ["F", "B"]    # top/bottom
-
-    # Adjustable marker size
-    marker_size = 2
-    sigma_limit = 3
-
-    # ----------------------------------------------------------
-    # First pass: global y-limits over all planes/strips/sides
-    # (for the raw plots: Original & Final)
-    # ----------------------------------------------------------
-    y_min_global = None
-    y_max_global = None
-
-    for plane in planes:
-        for strip in strips:
-            for side in sides:
-                original_col = f"T{plane}_{side}_{strip}_entries_original"
-                final_col    = f"T{plane}_{side}_{strip}_entries_final"
-
-                if original_col in df.columns and final_col in df.columns:
-                    y_orig = df[original_col]
-                    y_fin  = df[final_col]
-
-                    local_min = min(np.nanmin(y_orig), np.nanmin(y_fin))
-                    local_max = max(np.nanmax(y_orig), np.nanmax(y_fin))
-
-                    if y_min_global is None or local_min < y_min_global:
-                        y_min_global = local_min
-                    if y_max_global is None or local_max > y_max_global:
-                        y_max_global = local_max
-
-    # ----------------------------------------------------------
-    # Second pass: build figure with raw + normalized/3σ
-    # ----------------------------------------------------------
-    fig = plt.figure(figsize=(32, 22))
-    outer_gs = gridspec.GridSpec(
-        nrows=len(planes),
-        ncols=len(strips),
-        hspace=0.35,
-        wspace=0.25,
-    )
-
-    for i_plane, plane in enumerate(planes):
-        for j_strip, strip in enumerate(strips):
-            # 4×1 grid per (plane, strip):
-            # 0: F raw, 1: F norm, 2: B raw, 3: B norm
-            inner_gs = gridspec.GridSpecFromSubplotSpec(
-                4,
-                1,
-                subplot_spec=outer_gs[i_plane, j_strip],
-                height_ratios=[3, 1, 3, 1],
-                hspace=0.05,
-            )
-
-            for k_side, side in enumerate(sides):  # 0 -> F, 1 -> B
-                row_base = 2 * k_side
-                ax_main = fig.add_subplot(inner_gs[row_base, 0])
-                ax_norm = fig.add_subplot(inner_gs[row_base + 1, 0],
-                                          sharex=ax_main)
-
-                original_col = f"T{plane}_{side}_{strip}_entries_original"
-                final_col    = f"T{plane}_{side}_{strip}_entries_final"
-
-                if original_col in df.columns and final_col in df.columns:
-                    plotted_cols.update([original_col, final_col])
-                    t = df["datetime"]
-                    y_orig = df[original_col]
-                    y_fin  = df[final_col]
-
-                    # ---------------------------
-                    # Raw plot (upper in pair)
-                    # ---------------------------
-                    ax_main.plot(
-                        t, y_orig,
-                        marker="o", markersize=marker_size,
-                        linestyle="", label="Original",
-                    )
-                    ax_main.plot(
-                        t, y_fin,
-                        marker="x", markersize=marker_size,
-                        linestyle="", label="Final",
-                    )
-
-                    if y_min_global is not None and y_max_global is not None:
-                        ax_main.set_ylim(y_min_global, y_max_global)
-
-                    # Title once per (plane, strip) on the first side (F)
-                    if k_side == 0:
-                        ax_main.set_title(f"P{plane} S{strip}", fontsize=9)
-
-                    # Side label on the left (F/B)
-                    ax_main.text(
-                        0.01, 0.9, side,
-                        transform=ax_main.transAxes,
-                        fontsize=8,
-                        va="top", ha="left",
-                    )
-
-                    # Y label only on the first column
-                    if j_strip == 0:
-                        ax_main.set_ylabel("Hits")
-
-                    ax_main.grid(True)
-
-                    # Legend only once, first raw subplot (P1, S1, F)
-                    if i_plane == 0 and j_strip == 0 and k_side == 0:
-                        ax_main.legend(loc="upper right", fontsize=7)
-
-                    # Hide x tick labels on upper raw plots
-                    plt.setp(ax_main.get_xticklabels(), visible=False)
-
-                    # ---------------------------
-                    # Normalized plot (lower in pair)
-                    #   (x - μ) / (3σ)
-                    # ---------------------------
-                    def normalize_3sigma(v):
-                        m = np.nanmean(v)
-                        s = np.nanstd(v)
-                        if s > 0:
-                            return (v - m) / s
-                        else:
-                            return np.zeros_like(v)
-
-                    y_orig_n = normalize_3sigma(y_orig)
-                    y_fin_n  = normalize_3sigma(y_fin)
-
-                    ax_norm.plot(
-                        t, y_orig_n,
-                        marker="o", markersize=marker_size,
-                        linestyle="", label="Original",
-                    )
-                    ax_norm.plot(
-                        t, y_fin_n,
-                        marker="x", markersize=marker_size,
-                        linestyle="", label="Final",
-                    )
-
-                    ax_norm.set_ylim(-sigma_limit, sigma_limit)
-                    ax_norm.axhline(0.0, linestyle="--", linewidth=0.8)
-
-                    if j_strip == 0:
-                        ax_norm.set_ylabel("Z/σ")
-
-                    # Only bottom-most panel (B normalized, last plane row)
-                    # gets the x-axis label
-                    if i_plane == len(planes) - 1 and k_side == 1:
-                        ax_norm.set_xlabel("Datetime")
-                    else:
-                        plt.setp(ax_norm.get_xticklabels(), visible=False)
-
-                    ax_norm.grid(True)
-
-                else:
-                    ax_main.set_visible(False)
-                    ax_norm.set_visible(False)
-
-    fig.suptitle(
-        "Hits per plane / strip / side (Original vs Final, raw and normalized / 3σ)",
-        fontsize=14,
-    )
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.show()
-
-    
-    
 
 
 # %%
+
+
+
+# --- Additional intelligent plotting for STEP 1 TASK 1 ---
+
+# determine time column to use for plotting
+tcol = ctx.time_col
+
+# Example reuse: plot clean -> cal pairs. Uncomment if wanted.
+try:
+    plot_tt_pairs('raw_tt_', 'clean_tt_', tcol, f"raw_tt → clean_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=4)
+except Exception:
+    print("Could not plot raw_tt_ -> clean_tt_ pairs.")
+    pass
+
+
+#%%
+
+
+
+# Plot raw->clean matrix (re-usable: change prefixes to plot other matrices)
+try:
+    plot_tt_matrix('raw', 'clean', tcol, f"raw_to_clean matrix • {STATION} STEP {STEP} TASK {TASK}")
+except Exception:
+    print("Could not plot raw -> clean matrix.")
+    pass
+# %%
+
+
+# Plot the time series of valid_lines_in_binary_file_percentage percentage over datetime
+if "valid_lines_in_binary_file_percentage" in df.columns:
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(df["datetime"],df["valid_lines_in_binary_file_percentage"], marker='o', linestyle='-')
+    plt.title(f"Valid Lines Percentage Over Time for {STATION} STEP {STEP} TASK {TASK}")
+    plt.xlabel("Datetime")
+    plt.ylabel("Valid Lines Percentage (%)")
+    plt.grid(True)
+    plt.show()
+    plotted_cols.add("valid_lines_in_binary_file_percentage")
+else:
+    print("Required columns for plotting valid lines percentage are missing.")
+
+
+#%%
+
+
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import numpy as np
+
+planes = range(1, 5)   # 1..4
+strips = range(1, 5)   # 1..4
+sides  = ["F", "B"]    # top/bottom
+
+# Adjustable marker size
+marker_size = 1
+sigma_limit = 3
+
+# ----------------------------------------------------------
+# First pass: global y-limits over all planes/strips/sides
+# (for the raw plots: Original & Final)
+# ----------------------------------------------------------
+y_min_global = None
+y_max_global = None
+
+for plane in planes:
+    for strip in strips:
+        for side in sides:
+            original_col = f"T{plane}_{side}_{strip}_entries_original"
+            final_col    = f"T{plane}_{side}_{strip}_entries_final"
+
+            if original_col in df.columns and final_col in df.columns:
+                y_orig = df[original_col]
+                y_fin  = df[final_col]
+
+                local_min = min(np.nanmin(y_orig), np.nanmin(y_fin))
+                local_max = max(np.nanmax(y_orig), np.nanmax(y_fin))
+
+                if y_min_global is None or local_min < y_min_global:
+                    y_min_global = local_min
+                if y_max_global is None or local_max > y_max_global:
+                    y_max_global = local_max
+
+# ----------------------------------------------------------
+# Second pass: build figure with raw + normalized/3σ
+# ----------------------------------------------------------
+fig = plt.figure(figsize=(32, 22))
+outer_gs = gridspec.GridSpec(
+    nrows=len(planes),
+    ncols=len(strips),
+    hspace=0.35,
+    wspace=0.25,
+)
+
+for i_plane, plane in enumerate(planes):
+    for j_strip, strip in enumerate(strips):
+        # 4×1 grid per (plane, strip):
+        # 0: F raw, 1: F norm, 2: B raw, 3: B norm
+        inner_gs = gridspec.GridSpecFromSubplotSpec(
+            4,
+            1,
+            subplot_spec=outer_gs[i_plane, j_strip],
+            height_ratios=[3, 1, 3, 1],
+            hspace=0.05,
+        )
+
+        for k_side, side in enumerate(sides):  # 0 -> F, 1 -> B
+            row_base = 2 * k_side
+            ax_main = fig.add_subplot(inner_gs[row_base, 0])
+            ax_norm = fig.add_subplot(inner_gs[row_base + 1, 0],
+                                        sharex=ax_main)
+
+            original_col = f"T{plane}_{side}_{strip}_entries_original"
+            final_col    = f"T{plane}_{side}_{strip}_entries_final"
+
+            if original_col in df.columns and final_col in df.columns:
+                plotted_cols.update([original_col, final_col])
+                t = df["datetime"]
+                y_orig = df[original_col]
+                y_fin  = df[final_col]
+
+                # ---------------------------
+                # Raw plot (upper in pair)
+                # ---------------------------
+                ax_main.plot(
+                    t, y_orig,
+                    marker=".", markersize=marker_size,
+                    linestyle="", label="Original",
+                )
+                ax_main.plot(
+                    t, y_fin,
+                    marker="x", markersize=marker_size,
+                    linestyle="", label="Final",
+                )
+
+                if y_min_global is not None and y_max_global is not None:
+                    ax_main.set_ylim(y_min_global, y_max_global)
+
+                # Title once per (plane, strip) on the first side (F)
+                if k_side == 0:
+                    ax_main.set_title(f"P{plane} S{strip}", fontsize=9)
+
+                # Side label on the left (F/B)
+                ax_main.text(
+                    0.01, 0.9, side,
+                    transform=ax_main.transAxes,
+                    fontsize=8,
+                    va="top", ha="left",
+                )
+
+                # Y label only on the first column
+                if j_strip == 0:
+                    ax_main.set_ylabel("Hits")
+
+                ax_main.grid(True)
+
+                # Legend only once, first raw subplot (P1, S1, F)
+                if i_plane == 0 and j_strip == 0 and k_side == 0:
+                    ax_main.legend(loc="upper right", fontsize=7)
+
+                # Hide x tick labels on upper raw plots
+                plt.setp(ax_main.get_xticklabels(), visible=False)
+
+                # ---------------------------
+                # Normalized plot (lower in pair)
+                #   (x - μ) / (3σ)
+                # ---------------------------
+                def normalize_3sigma(v):
+                    m = np.nanmean(v)
+                    s = np.nanstd(v)
+                    if s > 0:
+                        return (v - m) / s
+                    else:
+                        return np.zeros_like(v)
+
+                y_orig_n = normalize_3sigma(y_orig)
+                y_fin_n  = normalize_3sigma(y_fin)
+
+                ax_norm.plot(
+                    t, y_orig_n,
+                    marker="o", markersize=marker_size,
+                    linestyle="", label="Original",
+                )
+                ax_norm.plot(
+                    t, y_fin_n,
+                    marker="x", markersize=marker_size,
+                    linestyle="", label="Final",
+                )
+
+                ax_norm.set_ylim(-sigma_limit, sigma_limit)
+                ax_norm.axhline(0.0, linestyle="--", linewidth=0.8)
+
+                if j_strip == 0:
+                    ax_norm.set_ylabel("Z/σ")
+
+                # Only bottom-most panel (B normalized, last plane row)
+                # gets the x-axis label
+                if i_plane == len(planes) - 1 and k_side == 1:
+                    ax_norm.set_xlabel("Datetime")
+                else:
+                    plt.setp(ax_norm.get_xticklabels(), visible=False)
+
+                ax_norm.grid(True)
+
+            else:
+                ax_main.set_visible(False)
+                ax_norm.set_visible(False)
+
+fig.suptitle(
+    "Hits per plane / strip / side (Original vs Final, raw and normalized / 3σ)",
+    fontsize=14,
+)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.show()
+
+
+
 

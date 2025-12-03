@@ -437,37 +437,38 @@ def verify_plotted_columns(context):
 
 
 
-if STEP == 1 and TASK == 4:
-    COLUMN_FAMILY_DOC = f"""
-    Column families documented for STEP {STEP} TASK {TASK}
-    -----------------------------------------------
-    1. Run metadata & geometry
-       - analysis_mode, unc_y, unc_tsum, unc_tdif
-       - z_P1-z_P4, filename_base, execution_timestamp
-    2. Sigmoid fits (efficiency curves)
-       - Patterns: sigmoid_(width|amplitude|center)_{{COMB}}, background_slope_{{COMB}}, fit_normalization_{{COMB}}
-       - Combinations: {', '.join(COMBINATIONS)}
-    3. Intrinsic resolution sigmas
-       - Patterns: res_(ystr|tsum|tdif)_{{PLANE}}_{{COMB}}_sigma with planes 1-4
-       - Combinations: {', '.join(COMBINATIONS)}
-    4. External resolution sigmas
-       - Same pattern as (3) prefixed with ext_res_
-    5. Event statistics
-       - list_tt_{{combo}}_count for combos {', '.join(EVENT_COMBOS)}
-       - fit_tt_0_count
-       - list_to_fit_tt_{{combo}}_0_count for {', '.join(COMBINATIONS)}
-    6. Gaussian mixtures
-       - Variables: {', '.join(GAUSS_VARS)}
-       - Patterns: {{var}}_err_{{combo}}_gauss1_(mu|sigma|amp) + ...gauss2_(mu|sigma)
-       - Combinations: {', '.join(COMBINATIONS)}
-    7. Error quantiles (q25/q75) for {', '.join(GAUSS_VARS)} across {', '.join(COMBINATIONS)}
-    """
-    print(COLUMN_FAMILY_DOC)
+COLUMN_FAMILY_DOC = f"""
+Column families documented for STEP {STEP} TASK {TASK}
+-----------------------------------------------
+1. Run metadata & geometry
+    - analysis_mode, unc_y, unc_tsum, unc_tdif
+    - z_P1-z_P4, filename_base, execution_timestamp
+2. Sigmoid fits (efficiency curves)
+    - Patterns: sigmoid_(width|amplitude|center)_{{COMB}}, background_slope_{{COMB}}, fit_normalization_{{COMB}}
+    - Combinations: {', '.join(COMBINATIONS)}
+3. Intrinsic resolution sigmas
+    - Patterns: res_(ystr|tsum|tdif)_{{PLANE}}_{{COMB}}_sigma with planes 1-4
+    - Combinations: {', '.join(COMBINATIONS)}
+4. External resolution sigmas
+    - Same pattern as (3) prefixed with ext_res_
+5. Event statistics
+    - list_tt_{{combo}}_count for combos {', '.join(EVENT_COMBOS)}
+    - fit_tt_0_count
+    - list_to_fit_tt_{{combo}}_0_count for {', '.join(COMBINATIONS)}
+6. Gaussian mixtures
+    - Variables: {', '.join(GAUSS_VARS)}
+    - Patterns: {{var}}_err_{{combo}}_gauss1_(mu|sigma|amp) + ...gauss2_(mu|sigma)
+    - Combinations: {', '.join(COMBINATIONS)}
+7. Error quantiles (q25/q75) for {', '.join(GAUSS_VARS)} across {', '.join(COMBINATIONS)}
+"""
+print(COLUMN_FAMILY_DOC)
 
-    plot_metadata_columns(ctx)
-    plot_sigmoid_parameters(ctx)
-    plot_resolution_sigmas(ctx)
-    plot_event_statistics(ctx)
-    plot_gaussian_mixtures(ctx)
-    plot_error_quantiles(ctx)
-    verify_plotted_columns(ctx)
+plot_metadata_columns(ctx)
+plot_sigmoid_parameters(ctx)
+plot_resolution_sigmas(ctx)
+plot_event_statistics(ctx)
+plot_gaussian_mixtures(ctx)
+plot_error_quantiles(ctx)
+verify_plotted_columns(ctx)
+
+# %%

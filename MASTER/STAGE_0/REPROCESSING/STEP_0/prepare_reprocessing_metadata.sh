@@ -7,6 +7,15 @@
 
 set -euo pipefail
 
+tmp_files_to_cleanup=()
+
+cleanup_tmp_files() {
+  for f in "${tmp_files_to_cleanup[@]:-}"; do
+    [[ -n "$f" && -f "$f" ]] && rm -f "$f"
+  done
+}
+trap cleanup_tmp_files EXIT
+
 log_info() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
@@ -70,6 +79,16 @@ input_directory="${step0_directory}/INPUT_FILES"
 output_directory="${step0_directory}/OUTPUT_FILES"
 plots_directory="${step0_directory}/PLOTS"
 mkdir -p "$metadata_directory" "$input_directory" "$output_directory" "$plots_directory"
+config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
+min_filesize_mb=1    # default lower cutoff in MB (overridden by config)
+max_filesize_mb=0    # default upper cutoff in MB; 0 disables upper bound
+min_filesize_bytes=0
+max_filesize_bytes=0
+min_gap_minutes=10   # default min gap between files (minutes)
+max_gap_minutes=120  # default max gap for plots (minutes)
+min_gap_seconds=600
+filtered_plot_csv=""
+
 
 remote_user="rpcuser"
 remote_dir="/local/experiments/MINGOS/MINGO0${station}/"
@@ -79,7 +98,7 @@ raw_csv="${input_directory}/remote_database_${station}.csv"
 clean_csv="${output_directory}/clean_remote_database_${station}.csv"
 metadata_tracking_csv="${metadata_directory}/metadata_refresh_history.csv"
 metadata_tracking_header="executed_at,remote_file_count,clean_file_count"
-csv_header="basename"
+csv_header="basename,filesize_bytes,minutes_to_next"
 
 strip_suffix() {
   local name="$1"
@@ -89,6 +108,300 @@ strip_suffix() {
   name=${name%.hld}
   name=${name%.dat}
   printf '%s' "$name"
+}
+
+load_size_thresholds() {
+  local station_id="$1"
+  local cfg_path="$config_file"
+  if [[ -f "$cfg_path" ]]; then
+    local result
+    if result=$(python3 - "$station_id" "$cfg_path" <<'PY'
+import sys
+try:
+  import yaml
+except ImportError:
+  print(",")  # no config override available
+  sys.exit(0)
+
+station = sys.argv[1]
+cfg_path = sys.argv[2]
+with open(cfg_path, "r") as f:
+  data = yaml.safe_load(f) or {}
+
+def get(key):
+  try:
+    val = data.get(key)
+  except AttributeError:
+    return ""
+  if val is None:
+    return ""
+  try:
+    return float(val)
+  except Exception:
+    return ""
+
+print(f"{get(f'min_size_mb_{station}')},{get(f'max_size_mb_{station}')}")
+PY
+    ); then
+      local cfg_min cfg_max
+      cfg_min="${result%%,*}"
+      cfg_max="${result#*,}"
+      if [[ -n "$cfg_min" ]]; then
+        min_filesize_mb="$cfg_min"
+      fi
+      if [[ -n "$cfg_max" ]]; then
+        max_filesize_mb="$cfg_max"
+      fi
+    fi
+  fi
+
+  min_filesize_bytes=$(MIN_MB="$min_filesize_mb" python3 - <<'PY'
+import os
+mb = float(os.environ.get("MIN_MB", "0"))
+print(int(mb * 1024 * 1024))
+PY
+  )
+  max_filesize_bytes=$(MAX_MB="$max_filesize_mb" python3 - <<'PY'
+import os
+mb = float(os.environ.get("MAX_MB", "0"))
+print(int(mb * 1024 * 1024) if mb > 0 else 0)
+PY
+  )
+}
+
+load_time_thresholds() {
+  local station_id="$1"
+  local cfg_path="$config_file"
+  if [[ -f "$cfg_path" ]]; then
+    local result
+    if result=$(python3 - "$station_id" "$cfg_path" <<'PY'
+import sys
+try:
+  import yaml
+except ImportError:
+  print(",")  # no config override available
+  sys.exit(0)
+
+station = sys.argv[1]
+cfg_path = sys.argv[2]
+with open(cfg_path, "r") as f:
+  data = yaml.safe_load(f) or {}
+
+def get(key):
+  try:
+    val = data.get(key)
+  except AttributeError:
+    return ""
+  if val is None:
+    return ""
+  try:
+    return float(val)
+  except Exception:
+    return ""
+
+print(f"{get(f'min_gap_minutes_{station}')},{get(f'max_gap_minutes_{station}')}")
+PY
+    ); then
+      local cfg_min cfg_max
+      cfg_min="${result%%,*}"
+      cfg_max="${result#*,}"
+      if [[ -n "$cfg_min" ]]; then
+        min_gap_minutes="$cfg_min"
+      fi
+      if [[ -n "$cfg_max" ]]; then
+        max_gap_minutes="$cfg_max"
+      fi
+    fi
+  fi
+
+  min_gap_seconds=$(MIN_GAP_MINUTES="$min_gap_minutes" python3 - <<'PY'
+import os
+try:
+  mg = float(os.environ.get("MIN_GAP_MINUTES", "0"))
+except Exception:
+  mg = 0.0
+print(int(mg * 60))
+PY
+  )
+}
+
+ensure_filtered_plot_csv() {
+  if [[ -n "${filtered_plot_csv:-}" && -s "$filtered_plot_csv" ]]; then
+    return 0
+  fi
+  if [[ ! -s "$raw_csv" ]]; then
+    return 1
+  fi
+
+  local tmp_filtered_plot
+  tmp_filtered_plot=$(mktemp) || return 1
+  if RAW_CSV="$raw_csv" OUT_CSV="$tmp_filtered_plot" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" python3 <<'PY'
+import csv
+import os
+
+raw_path = os.environ["RAW_CSV"]
+out_path = os.environ["OUT_CSV"]
+min_bytes = int(os.environ.get("MIN_BYTES", "0") or 0)
+max_bytes = int(os.environ.get("MAX_BYTES", "0") or 0)
+min_gap = float(os.environ.get("MIN_GAP_MIN", "0") or 0.0)
+
+rows = []
+with open(raw_path, newline="") as handle:
+  reader = csv.reader(handle)
+  header = next(reader, None)
+  for row in reader:
+    if len(row) < 3:
+      continue
+    base = row[0].strip()
+    try:
+      size = float(row[1])
+    except Exception:
+      continue
+    try:
+      dt = float(row[2])
+    except Exception:
+      dt = None
+    if size < min_bytes:
+      continue
+    if max_bytes > 0 and size > max_bytes:
+      continue
+    if dt is not None and dt < min_gap:
+      continue
+    rows.append((base, size, dt))
+
+with open(out_path, "w", newline="") as handle:
+  writer = csv.writer(handle)
+  writer.writerow(["basename", "filesize_bytes", "minutes_to_next"])
+  for base, size, dt in rows:
+    writer.writerow([base, int(size), "" if dt is None else f"{dt:.3f}"])
+PY
+  then
+    filtered_plot_csv="$tmp_filtered_plot"
+    tmp_files_to_cleanup+=("$tmp_filtered_plot")
+    return 0
+  else
+    rm -f "$tmp_filtered_plot"
+    return 1
+  fi
+}
+
+filter_existing_raw_csv() {
+  local stats
+  if [[ ! -s "$raw_csv" ]]; then
+    log_info "Raw metadata CSV ${raw_csv} is missing; run with --refresh-metadata first." >&2
+    return 1
+  fi
+
+  local tmp_filtered_plot tmp_clean
+  tmp_filtered_plot=$(mktemp) || return 1
+  tmp_clean=$(mktemp) || { rm -f "$tmp_filtered_plot"; return 1; }
+
+  if stats=$(RAW_CSV="$raw_csv" OUT_FILTERED="$tmp_filtered_plot" OUT_CLEAN="$tmp_clean" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" python3 <<'PY'
+import csv
+import os
+import re
+
+raw_path = os.environ["RAW_CSV"]
+out_filtered = os.environ["OUT_FILTERED"]
+out_clean = os.environ["OUT_CLEAN"]
+min_bytes = int(os.environ.get("MIN_BYTES", "0") or 0)
+max_bytes = int(os.environ.get("MAX_BYTES", "0") or 0)
+min_gap = float(os.environ.get("MIN_GAP_MIN", "0") or 0.0)
+
+pattern = re.compile(r"([0-9]{11})$")
+
+def parse_ts(base: str):
+  m = pattern.search(base)
+  if not m:
+    return None
+  key = m.group(1)
+  try:
+    yy = int(key[0:2]); doy = int(key[2:5]); hh = int(key[5:7]); mm = int(key[7:9]); ss = int(key[9:11])
+  except Exception:
+    return None
+  if not (1 <= doy <= 366):
+    return None
+  import datetime as dt
+  try:
+    return dt.datetime(2000 + yy, 1, 1) + dt.timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
+  except Exception:
+    return None
+
+bases = []
+sizes = []
+minutes = []
+
+with open(raw_path, newline="") as handle:
+  reader = csv.reader(handle)
+  header = next(reader, None)
+  for row in reader:
+    if not row:
+      continue
+    base = row[0].strip()
+    if not base:
+      continue
+    try:
+      size = float(row[1]) if len(row) > 1 else 0.0
+    except Exception:
+      size = 0.0
+    dt_val = None
+    if len(row) > 2 and row[2].strip():
+      try:
+        dt_val = float(row[2])
+      except Exception:
+        dt_val = None
+    bases.append(base)
+    sizes.append(size)
+    minutes.append(dt_val)
+
+total = len(bases)
+timestamps = [parse_ts(b) for b in bases]
+
+for i in range(total):
+  if minutes[i] is None:
+    if i + 1 < total and timestamps[i] and timestamps[i + 1]:
+      delta = (timestamps[i + 1] - timestamps[i]).total_seconds() / 60.0
+      if delta >= 0:
+        minutes[i] = delta
+
+filtered = []
+removed_low = removed_high = removed_gap = 0
+for base, size, dt_val in zip(bases, sizes, minutes):
+  if size < min_bytes:
+    removed_low += 1
+    continue
+  if max_bytes > 0 and size > max_bytes:
+    removed_high += 1
+    continue
+  if dt_val is not None and dt_val < min_gap:
+    removed_gap += 1
+    continue
+  filtered.append((base, int(size), "" if dt_val is None else f"{dt_val:.3f}"))
+
+with open(out_filtered, "w", newline="") as handle:
+  writer = csv.writer(handle)
+  writer.writerow(["basename", "filesize_bytes", "minutes_to_next"])
+  writer.writerows(filtered)
+
+with open(out_clean, "w", newline="") as handle:
+  writer = csv.writer(handle)
+  writer.writerow(["basename"])
+  for base, _, _ in filtered:
+    writer.writerow([base])
+
+print(f"{len(bases)},{len(filtered)},{removed_low},{removed_high},{removed_gap}")
+PY
+  ); then
+    IFS=',' read -r raw_count clean_count removed_low removed_high removed_gap <<<"$stats"
+    mv "$tmp_clean" "$clean_csv"
+    filtered_plot_csv="$tmp_filtered_plot"
+    tmp_files_to_cleanup+=("$filtered_plot_csv")
+    log_info "Metadata filtering (existing raw): raw=${raw_count} entries, clean=${clean_count} entries. Filtered out (size low=${removed_low}, size high=${removed_high}, gap=${removed_gap})."
+    return 0
+  else
+    rm -f "$tmp_filtered_plot" "$tmp_clean"
+    return 1
+  fi
 }
 
 basename_time_key() {
@@ -141,16 +454,19 @@ filter_close_metadata_entries() {
   fi
 
   local -a basenames=()
+  local -a lines=()
   while IFS= read -r line; do
     line=${line//$'\r'/}
     [[ -z "$line" ]] && continue
-    basenames+=("$line")
+    basenames+=("${line%%,*}")
+    lines+=("$line")
   done < <(tail -n +2 "$csv_file")
 
   local total=${#basenames[@]}
   if (( total == 0 )); then
     return 0
   fi
+  local gap_limit=${min_gap_seconds:-600}
 
   local -a keep_flags
   keep_flags=()
@@ -170,7 +486,7 @@ filter_close_metadata_entries() {
       continue
     fi
     local delta=$((next_epoch - prev_epoch))
-    if (( delta >= 0 && delta < 600 )); then
+    if (( delta >= 0 && delta < gap_limit )); then
       keep_flags[i]=0
     fi
   done
@@ -181,7 +497,7 @@ filter_close_metadata_entries() {
   local removed=0
   for ((i = 0; i < total; i++)); do
     if (( keep_flags[i] == 1 )); then
-      printf '%s\n' "${basenames[i]}" >>"$tmp_filtered"
+      printf '%s\n' "${lines[i]}" >>"$tmp_filtered"
     else
       ((removed++))
     fi
@@ -189,7 +505,69 @@ filter_close_metadata_entries() {
 
   if (( removed > 0 )); then
     mv "$tmp_filtered" "$csv_file"
-    log_info "Metadata filter removed ${removed} basename(s) closer than 10 minutes apart."
+    local gap_minutes_display=$((gap_limit / 60))
+    log_info "Metadata filter removed ${removed} basename(s) closer than ${gap_minutes_display} minutes apart."
+  else
+    rm -f "$tmp_filtered"
+  fi
+}
+
+filter_file_sizes() {
+  local csv_file="$1"
+  local min_bytes="$2"
+  local max_bytes="$3"
+  if [[ ! -s "$csv_file" ]]; then
+    return 0
+  fi
+
+  local header
+  if ! IFS= read -r header < "$csv_file"; then
+    return 1
+  fi
+
+  local tmp_filtered
+  tmp_filtered=$(mktemp) || return 1
+  printf '%s\n' "$header" > "$tmp_filtered"
+
+  local removed=0
+  local kept=0
+  local removed_low=0
+  local removed_high=0
+  while IFS= read -r line; do
+    line=${line//$'\r'/}
+    [[ -z "$line" ]] && continue
+    local base size_bytes
+    base=${line%%,*}
+    size_bytes=${line#*,}
+    if [[ -z "$size_bytes" || ! "$size_bytes" =~ ^[0-9]+$ ]]; then
+      ((removed++))
+      continue
+    fi
+    if (( size_bytes < min_bytes )); then
+      ((removed++))
+      ((removed_low++))
+      continue
+    fi
+    if (( max_bytes > 0 && size_bytes > max_bytes )); then
+      ((removed++))
+      ((removed_high++))
+      continue
+    fi
+    if (( size_bytes >= min_bytes )); then
+      printf '%s\n' "$line" >>"$tmp_filtered"
+      ((kept++))
+    else
+      ((removed++))
+    fi
+  done < <(tail -n +2 "$csv_file")
+
+  if (( removed > 0 )); then
+    mv "$tmp_filtered" "$csv_file"
+    local upper_display="${max_bytes}"
+    if (( max_bytes <= 0 )); then
+      upper_display="inf"
+    fi
+    log_info "Metadata filter removed ${removed} file(s) outside size bounds [${min_bytes}, ${upper_display}] bytes; kept ${kept}. (low=${removed_low}, high=${removed_high})"
   else
     rm -f "$tmp_filtered"
   fi
@@ -221,7 +599,7 @@ plot_metadata_time_deltas() {
   mkdir -p "$plot_dir" || return 1
   local plot_path="${plot_dir}/metadata_time_differences_${station_label}.pdf"
 
-  if PLOT_CSV="$csv_file" PLOT_PATH="$plot_path" STATION_LABEL="$station_label" python3 <<'PY'
+  if PLOT_CSV="$csv_file" PLOT_PATH="$plot_path" STATION_LABEL="$station_label" MAX_GAP_MINUTES="$max_gap_minutes" python3 <<'PY'
 import csv
 import datetime as dt
 import os
@@ -267,6 +645,10 @@ for base in basenames:
 timestamps.sort()
 
 title = f"Metadata time differences for {station_label}" if station_label else "Metadata time differences"
+try:
+  max_range = float(os.environ.get("MAX_GAP_MINUTES", "0"))
+except Exception:
+  max_range = 0.0
 
 def render_message(message: str) -> None:
   fig, ax = plt.subplots(figsize=(8, 4.5))
@@ -284,18 +666,28 @@ else:
   for idx in range(len(timestamps) - 1):
     delta = timestamps[idx + 1] - timestamps[idx]
     minutes = delta.total_seconds() / 60.0
-    if 0 <= minutes <= 120:
-      diffs.append(minutes)
+    if minutes < 0:
+      continue
+    if max_range > 0 and minutes > max_range:
+      continue
+    diffs.append(minutes)
 
   if not diffs:
-    render_message("No metadata time differences\nwithin 0-120 minutes.")
+    msg = "No metadata time differences"
+    if max_range > 0:
+      msg += f" within 0-{max_range:.0f} minutes."
+    render_message(msg)
   else:
     bins = "auto" if len(diffs) > 1 else 1
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.hist(diffs, bins=bins, color="#1f77b4", edgecolor="black", alpha=0.8)
-    ax.set_xlim(0, 120)
+    if max_range > 0:
+      ax.set_xlim(0, max_range)
     ax.set_title(title)
-    ax.set_xlabel("Minutes between consecutive files (0-120)")
+    if max_range > 0:
+      ax.set_xlabel(f"Minutes between consecutive files (0-{max_range:.0f})")
+    else:
+      ax.set_xlabel("Minutes between consecutive files")
     ax.set_ylabel("Count")
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
@@ -311,28 +703,267 @@ PY
   fi
 }
 
+plot_metadata_file_sizes() {
+  local csv_file="$1"
+  local station_label="$2"
+  local plot_dir="$3"
+  local min_mb="$4"
+  local max_mb="$5"
+
+  if [[ ! -s "$csv_file" ]]; then
+    log_info "Metadata CSV ${csv_file} is empty; skipping filesize histogram generation."
+    return 1
+  fi
+
+  mkdir -p "$plot_dir" || return 1
+  local plot_path="${plot_dir}/metadata_file_sizes_${station_label}.pdf"
+
+  if PLOT_CSV="$csv_file" PLOT_PATH="$plot_path" STATION_LABEL="$station_label" MIN_MB="$min_mb" MAX_MB="$max_mb" python3 <<'PY'
+import csv
+import os
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+csv_path = os.environ["PLOT_CSV"]
+plot_path = os.environ["PLOT_PATH"]
+station_label = os.environ.get("STATION_LABEL", "")
+min_mb = float(os.environ.get("MIN_MB", "0.0"))
+max_mb = float(os.environ.get("MAX_MB", "0.0"))
+
+sizes_mb = []
+with open(csv_path, newline="") as handle:
+  reader = csv.reader(handle)
+  next(reader, None)
+  for row in reader:
+    if len(row) < 2:
+      continue
+    try:
+      size_bytes = float(row[1])
+    except ValueError:
+      continue
+    if size_bytes < 0:
+      continue
+    sizes_mb.append(size_bytes / (1024 * 1024))
+
+title = f"Metadata file sizes for {station_label}" if station_label else "Metadata file sizes"
+
+def render_message(message: str) -> None:
+  fig, ax = plt.subplots(figsize=(8, 4.5))
+  ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12)
+  ax.set_axis_off()
+  fig.suptitle(title)
+  fig.tight_layout()
+  fig.savefig(plot_path, format="pdf")
+  plt.close(fig)
+
+if not sizes_mb:
+  render_message("No file sizes available for histogram.")
+else:
+  bins = "auto" if len(sizes_mb) > 1 else 1
+  fig, ax = plt.subplots(figsize=(10, 6))
+  ax.hist(sizes_mb, bins=bins, color="#ff7f0e", edgecolor="black", alpha=0.8)
+  if min_mb > 0:
+    ax.axvline(min_mb, color="red", linestyle="--", linewidth=1.5, label=f"Min size {min_mb:.2f} MB")
+  if max_mb > 0:
+    ax.axvline(max_mb, color="green", linestyle="--", linewidth=1.5, label=f"Max size {max_mb:.2f} MB")
+  if min_mb > 0 or max_mb > 0:
+    ax.legend()
+  ax.set_title(title)
+  ax.set_xlabel("File size (MB)")
+  ax.set_ylabel("Count")
+  ax.grid(axis="y", alpha=0.3)
+  fig.tight_layout()
+  fig.savefig(plot_path, format="pdf")
+  plt.close(fig)
+PY
+  then
+    log_info "Histogram of metadata file sizes saved to ${plot_path}"
+    return 0
+  else
+    log_info "Failed to create metadata filesize histogram at ${plot_path}" >&2
+    return 1
+  fi
+}
+
+plot_size_vs_time_delta() {
+  local csv_file="$1"
+  local station_label="$2"
+  local plot_dir="$3"
+  local prefix="$4"
+  local min_mb="${5:-0}"
+  local max_mb="${6:-0}"
+
+  if [[ ! -s "$csv_file" ]]; then
+    log_info "Metadata CSV ${csv_file} is empty; skipping size vs duration scatter (${prefix})."
+    return 1
+  fi
+
+  mkdir -p "$plot_dir" || return 1
+  local plot_path="${plot_dir}/metadata_size_vs_dt_${prefix}_${station_label}.pdf"
+
+  if PLOT_CSV="$csv_file" PLOT_PATH="$plot_path" STATION_LABEL="$station_label" MAX_GAP_MINUTES="$max_gap_minutes" MIN_MB="$min_mb" MAX_MB="$max_mb" python3 <<'PY'
+import csv
+import datetime as dt
+import os
+import re
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+csv_path = os.environ["PLOT_CSV"]
+plot_path = os.environ["PLOT_PATH"]
+station_label = os.environ.get("STATION_LABEL", "")
+try:
+  max_range = float(os.environ.get("MAX_GAP_MINUTES", "0"))
+except Exception:
+  max_range = 0.0
+try:
+  min_mb = float(os.environ.get("MIN_MB", "0"))
+except Exception:
+  min_mb = 0.0
+try:
+  max_mb = float(os.environ.get("MAX_MB", "0"))
+except Exception:
+  max_mb = 0.0
+
+rows = []
+with open(csv_path, newline="") as handle:
+  reader = csv.reader(handle)
+  next(reader, None)
+  for row in reader:
+    if len(row) < 2:
+      continue
+    base = row[0].strip()
+    try:
+      size_bytes = float(row[1])
+    except ValueError:
+      continue
+    size_mb = size_bytes / (1024 * 1024)
+    if min_mb > 0 and size_mb < min_mb:
+      continue
+    if max_mb > 0 and size_mb > max_mb:
+      continue
+    rows.append((base, size_bytes))
+
+pattern = re.compile(r"([0-9]{11})$")
+
+def parse_ts(name: str):
+  m = pattern.search(name)
+  if not m:
+    return None
+  key = m.group(1)
+  yy = int(key[0:2])
+  doy = int(key[2:5])
+  hh = int(key[5:7])
+  mm = int(key[7:9])
+  ss = int(key[9:11])
+  if doy < 1 or doy > 366:
+    return None
+  try:
+    return dt.datetime(2000 + yy, 1, 1) + dt.timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
+  except Exception:
+    return None
+
+rows_with_ts = []
+for base, size in rows:
+  ts = parse_ts(base)
+  if ts is None:
+    continue
+  rows_with_ts.append((ts, size))
+
+rows_with_ts.sort(key=lambda x: x[0])
+
+if len(rows_with_ts) < 2:
+  fig, ax = plt.subplots(figsize=(8, 4.5))
+  ax.text(0.5, 0.5, "Not enough entries for scatter", ha="center", va="center", fontsize=12)
+  ax.set_axis_off()
+  fig.suptitle(f"Size vs duration for {station_label}")
+  fig.tight_layout()
+  fig.savefig(plot_path, format="pdf")
+  plt.close(fig)
+else:
+  deltas = []
+  sizes_mb = []
+  for idx in range(len(rows_with_ts) - 1):
+    t_cur, size_cur = rows_with_ts[idx]
+    t_next, _ = rows_with_ts[idx + 1]
+    delta_min = (t_next - t_cur).total_seconds() / 60.0
+    if delta_min < 0:
+      continue
+    if max_range > 0 and delta_min > max_range:
+      continue
+    deltas.append(delta_min)
+    sizes_mb.append(size_cur / (1024 * 1024))
+
+  fig, ax = plt.subplots(figsize=(10, 6))
+  ax.scatter(deltas, sizes_mb, s=1, alpha=0.6, color="#2ca02c")
+  if deltas:
+    min_delta = min(deltas)
+    max_delta = max_range if max_range > 0 else max(deltas)
+    ax.set_xlim(min_delta, max_delta)
+    label_range = f"{min_delta:.0f}-{max_delta:.0f}" if max_range > 0 else "data range"
+  else:
+    label_range = ""
+  if max_range > 0:
+    ax.set_xlabel(f"Minutes until next file ({label_range or f'0-{max_range:.0f}'})")
+  else:
+    ax.set_xlabel("Minutes until next file" + (f" ({label_range})" if label_range else ""))
+  ax.set_ylabel("File size (MB)")
+  ax.set_title(f"Size vs duration for {station_label} (per file)")
+  ax.grid(alpha=0.3)
+  fig.tight_layout()
+  fig.savefig(plot_path, format="pdf")
+  plt.close(fig)
+PY
+  then
+    log_info "Scatter size vs duration saved to ${plot_path}"
+    return 0
+  else
+    log_info "Failed to create size vs duration scatter at ${plot_path}" >&2
+    return 1
+  fi
+}
+
 refresh_metadata_csv() {
   log_info "Refreshing metadata CSV for MINGO0${station} from remote listing..."
 
   local tmp_listing
   tmp_listing=$(mktemp) || return 1
-  if ! ssh -o BatchMode=yes "${remote_user}@backuplip" "cd ${remote_dir_escaped} && ls -1" > "$tmp_listing"; then
+  if ! ssh -o BatchMode=yes "${remote_user}@backuplip" "cd ${remote_dir_escaped} && find . -maxdepth 1 -type f \\( -name '*.hld' -o -name '*.hld.tar.gz' -o -name '*.hld-tar-gz' -o -name '*.tar.gz' -o -name '*.dat' \\) -printf '%f,%s\n'" > "$tmp_listing"; then
     log_info "Warning: unable to refresh metadata; could not list remote directory ${remote_user}@backuplip:${remote_dir}" >&2
     rm -f "$tmp_listing"
     return 1
   fi
 
   declare -A refreshed_bases=()
+  declare -A base_sizes=()
   local remote_entry
   while IFS= read -r remote_entry; do
     remote_entry=${remote_entry//$'\r'/}
     [[ -z "$remote_entry" ]] && continue
-    [[ $remote_entry =~ \.hld ]] || continue
+    local file_name file_size
+    file_name=${remote_entry%%,*}
+    file_size=${remote_entry#*,}
+    [[ -z "$file_name" ]] && continue
+    [[ $file_name =~ \.hld ]] || continue
+    if [[ -z "$file_size" || ! "$file_size" =~ ^[0-9]+$ ]]; then
+      file_size=0
+    fi
     local base
-    base=$(strip_suffix "$remote_entry")
+    base=$(strip_suffix "$file_name")
     [[ -z "$base" ]] && continue
     [[ $base =~ ^(mi|minI) ]] || continue
     refreshed_bases["$base"]=1
+    if [[ -n ${base_sizes["$base"]:-} ]]; then
+      if (( file_size > base_sizes["$base"] )); then
+        base_sizes["$base"]=$file_size
+      fi
+    else
+      base_sizes["$base"]=$file_size
+    fi
   done < "$tmp_listing"
   rm -f "$tmp_listing"
 
@@ -345,20 +976,115 @@ refresh_metadata_csv() {
   tmp_sorted=$(mktemp) || return 1
   printf '%s\n' "${!refreshed_bases[@]}" | sort > "$tmp_sorted"
 
+  # Build entries with epochs and minutes_to_next
+  local -a bases epochs sizes minutes_to_next entries_filtered
+  while IFS= read -r base; do
+    bases+=("$base")
+    sizes+=("${base_sizes[$base]:-0}")
+    if epoch_val=$(basename_to_epoch "$base"); then
+      epochs+=("$epoch_val")
+    else
+      epochs+=("")
+    fi
+  done < "$tmp_sorted"
+
+  local total=${#bases[@]}
+  minutes_to_next=()
+  for ((i = 0; i < total; i++)); do
+    local curr_epoch="${epochs[i]}"
+    local next_epoch=""
+    if (( i + 1 < total )); then
+      next_epoch="${epochs[i + 1]}"
+    fi
+    if [[ -n "$curr_epoch" && -n "$next_epoch" ]]; then
+      local delta_sec=$((next_epoch - curr_epoch))
+      if (( delta_sec >= 0 )); then
+        minutes_to_next[i]=$(DELTA="$delta_sec" python3 - <<'PY'
+import os
+delta = int(os.environ.get("DELTA", "0"))
+print(f"{delta/60:.3f}")
+PY
+        )
+      else
+        minutes_to_next[i]=""
+      fi
+    else
+      minutes_to_next[i]=""
+    fi
+  done
+
   {
     printf '%s\n' "$csv_header"
-    cat "$tmp_sorted"
+    for ((i = 0; i < total; i++)); do
+      printf '%s,%s,%s\n' "${bases[i]}" "${sizes[i]}" "${minutes_to_next[i]}"
+    done
   } > "$raw_csv"
 
-  cp "$raw_csv" "$clean_csv"
-  if ! filter_close_metadata_entries "$clean_csv"; then
-    log_info "Metadata CSV filter could not be applied; continuing with unfiltered entries."
-  fi
+  # Filter using size and min-gap (toward next file)
+  entries_filtered=()
+  local removed_size_low=0 removed_size_high=0 removed_gap=0 kept=0
+  for ((i = 0; i < total; i++)); do
+    local base="${bases[i]}"
+    local size_bytes="${sizes[i]}"
+    local dt_min="${minutes_to_next[i]}"
+
+    if [[ -z "$size_bytes" || ! "$size_bytes" =~ ^[0-9]+$ ]]; then
+      ((removed_size_low++))
+      continue
+    fi
+    if (( size_bytes < min_filesize_bytes )); then
+      ((removed_size_low++))
+      continue
+    fi
+    if (( max_filesize_bytes > 0 && size_bytes > max_filesize_bytes )); then
+      ((removed_size_high++))
+      continue
+    fi
+
+    if [[ -n "$dt_min" ]]; then
+      # dt_min is a float string; compare using python for simplicity
+      if ! python3 - <<'PY'
+import os, sys
+dt = float(os.environ.get("DT_MIN", "0"))
+min_gap = float(os.environ.get("MIN_GAP", "0"))
+sys.exit(0 if dt >= min_gap else 1)
+PY
+DT_MIN="$dt_min" MIN_GAP="$min_gap_minutes"
+      then
+        ((removed_gap++))
+        continue
+      fi
+    fi
+
+    entries_filtered+=("$base,${size_bytes},${dt_min}")
+    ((kept++))
+  done
+
+  # Write clean CSV with only basename column
+  {
+    printf 'basename\n'
+    for entry in "${entries_filtered[@]}"; do
+      printf '%s\n' "${entry%%,*}"
+    done
+  } > "$clean_csv"
+
+  # Prepare filtered data CSV for plotting (full columns)
+  local tmp_filtered_plot
+  tmp_filtered_plot=$(mktemp)
+  tmp_files_to_cleanup+=("$tmp_filtered_plot")
+  {
+    printf '%s\n' "$csv_header"
+    for entry in "${entries_filtered[@]}"; do
+      printf '%s\n' "$entry"
+    done
+  } > "$tmp_filtered_plot"
+  filtered_plot_csv="$tmp_filtered_plot"
 
   local raw_count clean_count
-  raw_count=$(tail -n +2 "$raw_csv" | sed '/^[[:space:]]*$/d' | wc -l | tr -d '[:space:]')
-  clean_count=$(tail -n +2 "$clean_csv" | sed '/^[[:space:]]*$/d' | wc -l | tr -d '[:space:]')
+  raw_count=$total
+  clean_count=$kept
   log_info "Metadata CSV refreshed: raw=${raw_count} entries, clean=${clean_count} entries."
+  log_info "Filtered out (size low=${removed_size_low}, size high=${removed_size_high}, gap=${removed_gap})."
 
   record_metadata_history "$raw_count" "$clean_count"
 
@@ -366,12 +1092,26 @@ refresh_metadata_csv() {
   return 0
 }
 
+# Load thresholds (overrides defaults with station-specific config if present)
+load_time_thresholds "$station"
+load_size_thresholds "$station"
+
 if $refresh_metadata; then
   if refresh_metadata_csv; then
     log_info "Metadata refresh completed."
   else
     log_info "Metadata refresh could not update the CSV; continuing with existing entries."
   fi
+  # Always rebuild clean/plot CSVs from the current raw file to keep behavior consistent
+  filter_existing_raw_csv || {
+    log_info "Unable to build clean metadata from refreshed raw CSV; aborting." >&2
+    exit 1
+  }
+else
+  filter_existing_raw_csv || {
+    log_info "Unable to build clean metadata from existing raw CSV; aborting." >&2
+    exit 1
+  }
 fi
 
 if $plot_hist; then
@@ -379,7 +1119,18 @@ if $plot_hist; then
     log_info "Clean metadata CSV ${clean_csv} is missing; run with --refresh-metadata first." >&2
     exit 1
   fi
-  plot_metadata_time_deltas "$clean_csv" "MINGO0${station}" "$plots_directory" || true
+  if [[ -s "$raw_csv" ]]; then
+    plot_size_vs_time_delta "$raw_csv" "MINGO0${station}" "$plots_directory" "before_filter" 0 0 || true
+  fi
+  ensure_filtered_plot_csv || true
+  filtered_source="${filtered_plot_csv:-$raw_csv}"
+  if [[ -s "$filtered_source" ]]; then
+    plot_metadata_time_deltas "$filtered_source" "MINGO0${station}" "$plots_directory" || true
+    plot_metadata_file_sizes "$filtered_source" "MINGO0${station}" "$plots_directory" "$min_filesize_mb" "$max_filesize_mb" || true
+    plot_size_vs_time_delta "$filtered_source" "MINGO0${station}" "$plots_directory" "after_filter" "$min_filesize_mb" "$max_filesize_mb" || true
+  else
+    log_info "Filtered plot CSV missing; skipping filtered plots."
+  fi
 fi
 
 log_info "STEP_0 metadata preparation finished."

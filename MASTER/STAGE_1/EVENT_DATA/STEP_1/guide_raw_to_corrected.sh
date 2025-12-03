@@ -112,6 +112,56 @@ TASK_SCRIPTS=(
   "$SCRIPT_DIR/TASK_5/script_5_fit_to_corr.py"
 )
 
+max_cpu_usage_pct() {
+  # Returns overall CPU utilization over ~1s window (any core peak is close to overall when busy)
+  local line1 line2
+  line1=$(grep '^cpu ' /proc/stat) || { echo 0; return; }
+  sleep 1
+  line2=$(grep '^cpu ' /proc/stat) || { echo 0; return; }
+
+  local _ u1 n1 s1 i1 w1 irq1 sirq1 st1 stl1 u2 n2 s2 i2 w2 irq2 sirq2 st2 stl2
+  read -r _ u1 n1 s1 i1 w1 irq1 sirq1 st1 stl1 _ <<<"$line1"
+  read -r _ u2 n2 s2 i2 w2 irq2 sirq2 st2 stl2 _ <<<"$line2"
+
+  local idle=$(( (i2 - i1) + (w2 - w1) ))
+  local total=$(( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) + (w2-w1) + (irq2-irq1) + (sirq2-sirq1) + (st2-st1) + (stl2-stl1) ))
+  [[ $total -le 0 ]] && { echo 0; return; }
+  local busy_pct=$(( (100 * (total - idle)) / total ))
+  echo "$busy_pct"
+}
+
+wait_for_resources() {
+  local swap_limit_pct=35
+  local swap_limit_kb=$((4 * 1024 * 1024)) # 4 GB
+  while true; do
+    read -r mem_total mem_avail swap_total swap_free < <(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} /SwapTotal:/ {st=$2} /SwapFree:/ {sf=$2} END {print t, a, st, sf}' /proc/meminfo)
+    if [[ -z "${mem_total:-}" || -z "${mem_avail:-}" || "$mem_total" -eq 0 ]]; then
+      echo "Warning: unable to read memory info; continuing."
+      return
+    fi
+    mem_used_pct=$(( (100 * (mem_total - mem_avail)) / mem_total ))
+    swap_used_pct=0
+    swap_used_kb=0
+    if [[ -n "${swap_total:-}" && "$swap_total" -gt 0 ]]; then
+      swap_used_pct=$(( (100 * (swap_total - swap_free)) / swap_total ))
+      swap_used_kb=$((swap_total - swap_free))
+    fi
+
+    max_cpu_pct=$(max_cpu_usage_pct || echo 0)
+    if [[ -z "${max_cpu_pct:-}" ]]; then
+      max_cpu_pct=0
+    fi
+
+    if (( mem_used_pct < 90 && swap_used_pct < swap_limit_pct && swap_used_kb < swap_limit_kb && max_cpu_pct < 95 )); then
+      echo "Resources OK: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k) / Swap ${swap_used_pct}% (${swap_used_kb}k used) / Max CPU ${max_cpu_pct}%."
+      return
+    fi
+
+    echo "Waiting: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k, limit <90), Swap ${swap_used_pct}% (${swap_used_kb}k used, limits <${swap_limit_pct}% and <${swap_limit_kb}k), Max CPU ${max_cpu_pct}% (limit <95)."
+    sleep 15
+  done
+}
+
 is_task_running() {
   local script_path="$1"
   while IFS= read -r line; do
@@ -143,6 +193,7 @@ while true; do
       continue
     fi
 
+    wait_for_resources
     echo "Running $(basename "$task_script")..."
     if ! python3 -u "$task_script" "$station"; then
       echo "Task $(basename "$task_script") failed; aborting pipeline."
