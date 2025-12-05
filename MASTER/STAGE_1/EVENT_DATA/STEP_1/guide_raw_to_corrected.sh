@@ -4,34 +4,56 @@
 # mkdir -p "$(dirname "$log_file")"
 
 # Station specific -----------------------------
-if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
+print_help() {
   cat <<'EOF'
-raw_to_list_events.sh
-Launches the STAGE_0_to_1-to-LIST processing stage for a single station.
+guide_raw_to_corrected.sh
+Launches the STAGE_1 EVENT_DATA STEP_1 pipeline for a station.
 
 Usage:
-  raw_to_list_events.sh <station>
+  guide_raw_to_corrected.sh [--station <list>] [--task <list>] [--run-anyway]
 
 Options:
-  -h, --help    Show this help message and exit.
+  -s, --station   Station numbers (1-4). Comma-separated or space-separated. Default: all.
+  -t, --task      Task IDs to run: 1-5 or "all" (default: all tasks).
+  --run-anyway    Skip the check that prevents overlapping guide_raw_to_corrected.sh runs.
+  -h, --help      Show this help message and exit.
 
-The script schedules the STAGE_0_to_1-LIST pipeline for the given station (1-4),
-ensuring only one instance runs concurrently per station and updates status
-tracking as files move through the queue.
+When multiple stations and tasks are provided, tasks are executed in task-major
+order (e.g., stations 1,2 and tasks 3,4,5 run as: 1-3, 2-3, 1-4, 2-4, 1-5, 2-5),
+looping continuously. If another guide_raw_to_corrected.sh is already running
+for a station, that station is skipped for this invocation.
 EOF
-  exit 0
-fi
+}
 
-if [ -z "$1" ]; then
-  echo "Error: No station provided."
-  echo "Usage: $0 <station>"
-  exit 1
-fi
+station_filter_raw="all"
+task_filter_raw="all"
+run_anyway=false
 
-# echo '------------------------------------------------------'
-# echo "bring_and_analyze_events.sh started on: $(date '+%Y-%m-%d %H:%M:%S')"
-
-station=$1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -s|--station)
+      station_filter_raw="${2:-}"
+      shift 2
+      ;;
+    -t|--task)
+      task_filter_raw="${2:-}"
+      shift 2
+      ;;
+    --run-anyway)
+      run_anyway=true
+      shift
+      ;;
+    -h|--help)
+      print_help
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      print_help
+      exit 1
+      ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_DIR="$SCRIPT_DIR"
@@ -42,50 +64,122 @@ STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
 STATUS_TIMESTAMP=""
 # STATUS_CSV=""
 
-# If $1 is not 1, 2, 3, 4, exit
-if [[ ! "$station" =~ ^[1-4]$ ]]; then
-  echo "Error: Invalid station number. Please provide a number between 1 and 4."
-  exit 1
-fi
+TASK_SCRIPTS=(
+  "$SCRIPT_DIR/TASK_1/script_1_raw_to_clean.py"
+  "$SCRIPT_DIR/TASK_2/script_2_clean_to_cal.py"
+  "$SCRIPT_DIR/TASK_3/script_3_cal_to_list.py"
+  "$SCRIPT_DIR/TASK_4/script_4_list_to_fit.py"
+  "$SCRIPT_DIR/TASK_5/script_5_fit_to_corr.py"
+)
 
-# echo "Station: $station"
-# ----------------------------------------------
+TASK_LABELS=(
+  "raw_to_clean"
+  "clean_to_cal"
+  "cal_to_list"
+  "list_to_fit"
+  "fit_to_corr"
+)
 
+parse_list() {
+  local raw="$1"
+  local default_array_name="$2"
+  local out_var="$3"
 
-# --------------------------------------------------------------------------------------------
-# Prevent overlapping runs per station using a lock ------------------------------------------
-# --------------------------------------------------------------------------------------------
-LOCK_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/LOCKS"
-mkdir -p "$LOCK_DIR"
-LOCK_FILE="$LOCK_DIR/step1_station_${station}.lock"
+  # Use the provided defaults if raw is empty/all
+  if [[ -z "$raw" || "$raw" == "all" ]]; then
+    eval "$out_var=(\"\${${default_array_name}[@]}\")"
+    return
+  fi
 
-# Open FD 9 for flock; closing FD releases lock automatically
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  echo "[$(date)] Another STEP_1 pipeline is already running for station $station (lock: $LOCK_FILE). Exiting."
-  exit 0
-fi
-
-cleanup_lock() {
-  flock -u 9
-  rm -f "$LOCK_FILE"
+  local tmp=()
+  IFS=', ' read -r -a parts <<<"$raw"
+  for p in "${parts[@]}"; do
+    [[ -z "$p" ]] && continue
+    tmp+=("$p")
+  done
+  eval "$out_var=(\"\${tmp[@]}\")"
 }
-trap cleanup_lock EXIT
+
+ALL_STATIONS=(1 2 3 4)
+ALL_TASK_IDS=(1 2 3 4 5)
+
+parse_list "$station_filter_raw" ALL_STATIONS stations_requested
+parse_list "$task_filter_raw" ALL_TASK_IDS tasks_requested
+
+validate_stations() {
+  local arr=("$@")
+  local validated=()
+  for s in "${arr[@]}"; do
+    if [[ "$s" =~ ^[1-4]$ ]]; then
+      validated+=("$s")
+    else
+      echo "Warning: ignoring invalid station '$s' (must be 1-4)" >&2
+    fi
+  done
+  if [[ ${#validated[@]} -eq 0 ]]; then
+    echo "Error: no valid stations to process." >&2
+    exit 1
+  fi
+  stations_requested=("${validated[@]}")
+}
+
+validate_tasks() {
+  local arr=("$@")
+  local validated=()
+  for t in "${arr[@]}"; do
+    if [[ "$t" =~ ^[1-5]$ ]]; then
+      validated+=("$t")
+    else
+      echo "Warning: ignoring invalid task '$t' (must be 1-5)" >&2
+    fi
+  done
+  if [[ ${#validated[@]} -eq 0 ]]; then
+    echo "Error: no valid tasks to process." >&2
+    exit 1
+  fi
+  tasks_requested=("${validated[@]}")
+}
+
+validate_stations "${stations_requested[@]}"
+validate_tasks "${tasks_requested[@]}"
+
+# Max runtime watchdog (minutes); override with STEP1_MAX_RUNTIME_MIN env
+MAX_RUNTIME_MIN=${STEP1_MAX_RUNTIME_MIN:-120}
+watchdog_pid=""
+
+
+cleanup() {
+  if [[ -n "$watchdog_pid" ]]; then
+    kill "$watchdog_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 echo "------------------------------------------------------"
-echo "raw_to_list_events.sh started on: $(date)"
-echo "Station: $station"
-echo "Lock acquired at $LOCK_FILE"
+echo "guide_raw_to_corrected.sh started on: $(date)"
+echo "Stations: ${stations_requested[*]}"
+echo "Tasks: ${tasks_requested[*]}"
+echo -n "Execution order: "
+execution_pairs=()
+for task_id in "${tasks_requested[@]}"; do
+  for st in "${stations_requested[@]}"; do
+    execution_pairs+=("${st}-${task_id}")
+  done
+done
+echo "${execution_pairs[*]}"
 echo "------------------------------------------------------"
 
 
 # dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
 
-# # Define base working directory
-# station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
-base_working_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station/STAGE_1/EVENT_DATA"
+config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
 
-mkdir -p "$base_working_directory"
+# Resource gate defaults (overridden by config_global.yaml if present)
+mem_limit_pct=90
+swap_limit_pct=35
+swap_limit_kb=$((4 * 1024 * 1024)) # 4 GB
+cpu_limit_pct=95
+
 # STATUS_CSV="$base_working_directory/raw_to_list_events_status.csv"
 # if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
 #     echo "Warning: unable to record status in $STATUS_CSV" >&2
@@ -101,16 +195,38 @@ mkdir -p "$base_working_directory"
 
 # trap 'finish $?' EXIT
 
-# # Additional paths
-# mingo_direction="mingo0$station"
-
-TASK_SCRIPTS=(
-  "$SCRIPT_DIR/TASK_1/script_1_raw_to_clean.py"
-  "$SCRIPT_DIR/TASK_2/script_2_clean_to_cal.py"
-  "$SCRIPT_DIR/TASK_3/script_3_cal_to_list.py"
-  "$SCRIPT_DIR/TASK_4/script_4_list_to_fit.py"
-  "$SCRIPT_DIR/TASK_5/script_5_fit_to_corr.py"
-)
+load_resource_limits() {
+  local cfg_path="$config_file"
+  local result
+  if [[ -f "$cfg_path" ]]; then
+    if result=$(python3 - "$cfg_path" <<'PY'
+import sys
+cfg_path = sys.argv[1]
+try:
+    import yaml
+except ImportError:
+    print(",,,,".strip(","))
+    sys.exit(0)
+try:
+    data = yaml.safe_load(open(cfg_path)) or {}
+except Exception:
+    print(",,,,".strip(","))
+    sys.exit(0)
+node = data.get("event_data_resource_limits") or {}
+def val(key):
+    v = node.get(key)
+    return "" if v is None else v
+print(f"{val('mem_used_pct_max')},{val('swap_used_pct_max')},{val('swap_used_kb_max')},{val('cpu_used_pct_max')}")
+PY
+    ); then
+      IFS=',' read -r cfg_mem cfg_swap_pct cfg_swap_kb cfg_cpu <<<"$result"
+      if [[ $cfg_mem =~ ^[0-9]+$ ]]; then mem_limit_pct=$cfg_mem; fi
+      if [[ $cfg_swap_pct =~ ^[0-9]+$ ]]; then swap_limit_pct=$cfg_swap_pct; fi
+      if [[ $cfg_swap_kb =~ ^[0-9]+$ ]]; then swap_limit_kb=$cfg_swap_kb; fi
+      if [[ $cfg_cpu =~ ^[0-9]+$ ]]; then cpu_limit_pct=$cfg_cpu; fi
+    fi
+  fi
+}
 
 max_cpu_usage_pct() {
   # Returns overall CPU utilization over ~1s window (any core peak is close to overall when busy)
@@ -131,43 +247,45 @@ max_cpu_usage_pct() {
 }
 
 wait_for_resources() {
-  local swap_limit_pct=35
-  local swap_limit_kb=$((4 * 1024 * 1024)) # 4 GB
-  while true; do
-    read -r mem_total mem_avail swap_total swap_free < <(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} /SwapTotal:/ {st=$2} /SwapFree:/ {sf=$2} END {print t, a, st, sf}' /proc/meminfo)
-    if [[ -z "${mem_total:-}" || -z "${mem_avail:-}" || "$mem_total" -eq 0 ]]; then
-      echo "Warning: unable to read memory info; continuing."
-      return
-    fi
-    mem_used_pct=$(( (100 * (mem_total - mem_avail)) / mem_total ))
-    swap_used_pct=0
-    swap_used_kb=0
-    if [[ -n "${swap_total:-}" && "$swap_total" -gt 0 ]]; then
-      swap_used_pct=$(( (100 * (swap_total - swap_free)) / swap_total ))
-      swap_used_kb=$((swap_total - swap_free))
-    fi
+  read -r mem_total mem_avail swap_total swap_free < <(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} /SwapTotal:/ {st=$2} /SwapFree:/ {sf=$2} END {print t, a, st, sf}' /proc/meminfo)
+  if [[ -z "${mem_total:-}" || -z "${mem_avail:-}" || "$mem_total" -eq 0 ]]; then
+    echo "Warning: unable to read memory info; continuing."
+    return 0
+  fi
+  mem_used_pct=$(( (100 * (mem_total - mem_avail)) / mem_total ))
+  swap_used_pct=0
+  swap_used_kb=0
+  if [[ -n "${swap_total:-}" && "$swap_total" -gt 0 ]]; then
+    swap_used_pct=$(( (100 * (swap_total - swap_free)) / swap_total ))
+    swap_used_kb=$((swap_total - swap_free))
+  fi
 
-    max_cpu_pct=$(max_cpu_usage_pct || echo 0)
-    if [[ -z "${max_cpu_pct:-}" ]]; then
-      max_cpu_pct=0
-    fi
+  max_cpu_pct=$(max_cpu_usage_pct || echo 0)
+  if [[ -z "${max_cpu_pct:-}" ]]; then
+    max_cpu_pct=0
+  fi
 
-    if (( mem_used_pct < 90 && swap_used_pct < swap_limit_pct && swap_used_kb < swap_limit_kb && max_cpu_pct < 95 )); then
-      echo "Resources OK: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k) / Swap ${swap_used_pct}% (${swap_used_kb}k used) / Max CPU ${max_cpu_pct}%."
-      return
-    fi
+  if (( mem_used_pct < mem_limit_pct && swap_used_pct < swap_limit_pct && swap_used_kb < swap_limit_kb && max_cpu_pct < cpu_limit_pct )); then
+    echo "Resources OK: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k) / Swap ${swap_used_pct}% (${swap_used_kb}k used) / Max CPU ${max_cpu_pct}%."
+    return 0
+  fi
 
-    echo "Waiting: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k, limit <90), Swap ${swap_used_pct}% (${swap_used_kb}k used, limits <${swap_limit_pct}% and <${swap_limit_kb}k), Max CPU ${max_cpu_pct}% (limit <95)."
-    sleep 15
-  done
+  echo "Resources high: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k, limit <${mem_limit_pct}), Swap ${swap_used_pct}% (${swap_used_kb}k used, limits <${swap_limit_pct}% and <${swap_limit_kb}k), Max CPU ${max_cpu_pct}% (limit <${cpu_limit_pct}). Skipping this station/task this loop."
+  return 1
 }
 
-is_task_running() {
-  local script_path="$1"
+pipeline_already_running() {
+  local self_pid="$$"
+  local target_station="$1"
+
   while IFS= read -r line; do
-    # Each line contains "PID COMMAND"; we only need the command portion.
+    local pid="${line%% *}"
     local cmd="${line#* }"
-    if [[ "$cmd" == *"$script_path"* && "$cmd" == *" $station"* ]]; then
+    [[ "$pid" == "$self_pid" ]] && continue
+    [[ "$cmd" != *"guide_raw_to_corrected.sh"* ]] && continue
+
+    # Accept either --station N, --station=N, or legacy positional "<script> N"
+    if [[ "$cmd" == *"--station ${target_station}"* || "$cmd" == *"--station=${target_station}"* || "$cmd" == *" ${target_station}"* ]]; then
       echo "$line"
       return 0
     fi
@@ -175,33 +293,87 @@ is_task_running() {
   return 1
 }
 
+any_pipeline_running() {
+  local self_pid="$$"
+  local hits
+  hits=$(pgrep -af "guide_raw_to_corrected.sh" || true)
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local pid="${line%% *}"
+    [[ "$pid" == "$self_pid" ]] && continue
+    # ignore the pgrep command itself if it shows up
+    [[ "$line" == *"pgrep"* ]] && continue
+    echo "$line"
+    return 0
+  done <<<"$hits"
+  return 1
+}
+
+load_resource_limits
+
 echo '------------------------------------------------------'
 echo '------------------------------------------------------'
 
 iteration=1
+if [[ "$run_anyway" != true ]]; then
+  echo "Checking for any other running guide_raw_to_corrected.sh instances..."
+  if any_pipeline_running; then
+    echo "Another guide_raw_to_corrected.sh is already running; exiting. Use --run-anyway to override."
+    exit 0
+  fi
+  echo "No other instances detected; continuing."
+else
+  echo "--run-anyway set; skipping other-instance check."
+fi
+
+skip_all=true
+for st in "${stations_requested[@]}"; do
+  if pipeline_already_running "$st"; then
+    echo "Another guide_raw_to_corrected.sh is already running for station $st; skipping this station."
+    continue
+  fi
+  skip_all=false
+done
+
+if [[ "$skip_all" == true ]]; then
+  echo "All requested stations are already being processed by another guide_raw_to_corrected.sh; exiting."
+  exit 0
+fi
+
 while true; do
   echo "Pipeline iteration $iteration started at: $(date '+%Y-%m-%d %H:%M:%S')"
-  for task_script in "${TASK_SCRIPTS[@]}"; do
-    if [[ ! -x "$task_script" ]]; then
-      echo "Warning: task script $task_script not found or not executable. Skipping."
-      continue
-    fi
-
-    if running_line=$(is_task_running "$task_script"); then
-      echo "Skipping $(basename "$task_script") because it is already running: $running_line"
+  for task_id in "${tasks_requested[@]}"; do
+    task_index=$((task_id - 1))
+    task_script="${TASK_SCRIPTS[$task_index]}"
+    task_label="${TASK_LABELS[$task_index]}"
+    for st in "${stations_requested[@]}"; do
+      station="$st"
+      echo "Considering station $station task${task_id} (${task_label}) ..."
+      if pipeline_already_running "$station"; then
+        echo "Station $station already handled by another guide_raw_to_corrected.sh; skipping."
+        echo '------------------------------------------------------'
+        continue
+      fi
+      if [[ ! -x "$task_script" ]]; then
+        echo "Warning: task script $task_script not found or not executable. Skipping."
+        continue
+      fi
+      if ! wait_for_resources; then
+        echo "Skipping station $station task${task_id} (${task_label}) this loop due to high load."
+        echo '------------------------------------------------------'
+        continue
+      fi
+      echo "Running station $station task${task_id} (${task_label}) ..."
+      if ! python3 -u "$task_script" "$station"; then
+        echo "Task $(basename "$task_script") failed for station $station; aborting pipeline."
+        exit 1
+      fi
+      echo "Completed station $station task${task_id} (${task_label})."
       echo '------------------------------------------------------'
-      continue
-    fi
-
-    wait_for_resources
-    echo "Running $(basename "$task_script")..."
-    if ! python3 -u "$task_script" "$station"; then
-      echo "Task $(basename "$task_script") failed; aborting pipeline."
-      exit 1
-    fi
-    echo '------------------------------------------------------'
+    done
   done
   echo "Pipeline iteration $iteration completed at: $(date '+%Y-%m-%d %H:%M:%S')"
   echo '------------------------------------------------------'
   iteration=$((iteration + 1))
+  echo "Starting next iteration..."
 done
