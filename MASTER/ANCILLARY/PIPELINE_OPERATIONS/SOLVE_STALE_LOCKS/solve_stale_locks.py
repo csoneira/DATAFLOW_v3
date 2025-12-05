@@ -6,8 +6,8 @@ This helper is meant to be executed from cron.  It scans the lock directory
 file is stale.  A lock is considered stale when both of the following are true:
 
 * the file is older than the configured threshold, and
-* there is no `guide_raw_to_corrected.sh <station>` process still running for
-  the station encoded in the file name.
+* there is no `guide_raw_to_corrected.sh --station <station> [--task <task>]`
+  process still running for the station/task encoded in the file name.
 
 The routine also keeps an eye on the STEP_0 unpacker shared lock
 (`.unpack_shared.lock`). That lock is considered stale only when it
@@ -36,6 +36,9 @@ UNPACK_LOCK_NAME = ".unpack_shared.lock"
 DEFAULT_LOG_FILE = (
     Path.home() / "DATAFLOW_v3" / "EXECUTION_LOGS" / "CRON_LOGS" / "solve_stale_locks.log"
 )
+# Task-level locks should clear faster so the pipeline does not get stuck if a task died
+# before releasing its lock.
+TASK_LOCK_MAX_AGE = dt.timedelta(minutes=5)
 
 
 def _now() -> dt.datetime:
@@ -62,6 +65,17 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         help="Minimum age (in minutes) before a lock can be considered stale",
     )
     parser.add_argument(
+        "--force-age-minutes",
+        type=int,
+        default=15,
+        help="Force-delete locks older than this age even if processes appear to be running (default: 15)",
+    )
+    parser.add_argument(
+        "--kill-stale-processes",
+        action="store_true",
+        help="Kill guide_raw_to_corrected.sh processes older than the force age when removing stale locks",
+    )
+    parser.add_argument(
         "--log-file",
         type=Path,
         default=DEFAULT_LOG_FILE,
@@ -84,15 +98,33 @@ def log_message(message: str, *, logfile: Path) -> None:
         handle.write(formatted + "\n")
 
 
-def station_from_lock_name(path: Path) -> str | None:
-    match = re.fullmatch(r"step1_station_(\d+)\.lock", path.name)
+def pipeline_info_from_lock_name(path: Path) -> tuple[str, str | None] | None:
+    """Return (station, task_id|None) for pipeline locks."""
+    match = re.fullmatch(r"step1_station_(\d+)(?:_task_(\d+))?\.lock", path.name)
     if match:
-        return match.group(1)
+        station = match.group(1)
+        task_id = match.group(2)
+        return station, task_id
     return None
 
 
-def pipeline_running(station: str) -> bool:
-    pattern = f"guide_raw_to_corrected.sh {station}"
+def station_from_lock_name(path: Path) -> str | None:
+    info = pipeline_info_from_lock_name(path)
+    return info[0] if info else None
+
+
+def task_info_from_lock_name(path: Path) -> tuple[str, str] | None:
+    """Return (task_base, station) for task lock names task_<task>_station_<station>.lock"""
+    match = re.fullmatch(r"task_(.+)_station_(\d+)\.lock", path.name)
+    if match:
+        return match.group(1), match.group(2)
+    return None
+
+
+def pipeline_running(station: str, task: str | None = None) -> bool:
+    pattern = rf"guide_raw_to_corrected.sh.*--station\s+{station}"
+    if task:
+        pattern = rf"{pattern}.*(--task|-t)\s+{task}"
     try:
         result = subprocess.run(
             ["pgrep", "-af", pattern],
@@ -104,6 +136,55 @@ def pipeline_running(station: str) -> bool:
         # Fall back to assuming a process is running to avoid false positives.
         return True
     return result.returncode == 0 and result.stdout.strip() != ""
+
+
+def task_running(task_base: str, station: str) -> bool:
+    pattern = f"{task_base}.py {station}"
+    try:
+        result = subprocess.run(
+            ["pgrep", "-af", pattern],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0 and result.stdout.strip() != ""
+
+
+def pipeline_max_age(station: str, task: str | None = None) -> int | None:
+    """Return the maximum elapsed time (seconds) among running pipeline procs for the station/task."""
+    pattern = rf"guide_raw_to_corrected.sh.*--station\s+{station}"
+    if task:
+        pattern = rf"{pattern}.*(--task|-t)\s+{task}"
+    try:
+        ps_out = subprocess.run(
+            ["pgrep", "-af", pattern],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if ps_out.returncode != 0 or not ps_out.stdout.strip():
+        return None
+    max_age = None
+    for line in ps_out.stdout.strip().splitlines():
+        pid = line.split()[0]
+        ps_detail = subprocess.run(
+            ["ps", "-o", "etimes=", "-p", pid],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if ps_detail.returncode != 0 or not ps_detail.stdout.strip():
+            continue
+        try:
+            et = int(ps_detail.stdout.strip())
+            max_age = et if max_age is None else max(max_age, et)
+        except ValueError:
+            continue
+    return max_age
 
 
 def unpacker_running() -> bool:
@@ -120,19 +201,87 @@ def unpacker_running() -> bool:
     return result.returncode == 0 and result.stdout.strip() != ""
 
 
-def lock_is_stale(lock_path: Path, *, max_age: dt.timedelta) -> tuple[bool, str]:
+def kill_station_processes(station: str, *, min_age: dt.timedelta, logfile: Path, task: str | None = None) -> None:
+    """Kill guide_raw_to_corrected.sh processes older than min_age for a station (optionally task-scoped)."""
+    pattern = rf"guide_raw_to_corrected.sh.*--station\s+{station}"
+    if task:
+        pattern = rf"{pattern}.*(--task|-t)\s+{task}"
+    try:
+        ps_out = subprocess.run(
+            ["pgrep", "-af", pattern],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return
+    if ps_out.returncode != 0 or not ps_out.stdout.strip():
+        return
+    lines = ps_out.stdout.strip().splitlines()
+    now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
+    for line in lines:
+        parts = line.strip().split()
+        if not parts:
+            continue
+        pid = parts[0]
+        try:
+            ps_detail = subprocess.run(
+                ["ps", "-o", "pid,etimes,cmd", "-p", pid],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if ps_detail.returncode != 0:
+                continue
+            detail_lines = ps_detail.stdout.strip().splitlines()
+            if len(detail_lines) < 2:
+                continue
+            fields = detail_lines[1].split(None, 2)
+            if len(fields) < 2:
+                continue
+            etimes = int(fields[1])
+        except Exception:
+            continue
+        if etimes >= min_age.total_seconds():
+            try:
+                subprocess.run(["kill", "-9", pid], check=False)
+                suffix = f"station {station}"
+                if task:
+                    suffix += f" task {task}"
+                log_message(f"Killed stale guide_raw_to_corrected.sh {suffix} pid {pid} (age {etimes}s)", logfile=logfile)
+            except Exception as exc:  # noqa: BLE001
+                log_message(f"Failed to kill pid {pid} for station {station}: {exc}", logfile=logfile)
+
+
+def lock_is_stale(lock_path: Path, *, max_age: dt.timedelta, force_age: dt.timedelta | None = None) -> tuple[bool, str]:
     try:
         mtime = dt.datetime.fromtimestamp(lock_path.stat().st_mtime, tz=dt.timezone.utc)
     except FileNotFoundError:
         return False, "lock disappeared before inspection"
 
     age = _now() - mtime
-    if age < max_age:
-        return False, f"age {age} is newer than threshold"
-
-    station = station_from_lock_name(lock_path)
-    if station and pipeline_running(station):
-        return False, f"station {station} pipeline still running"
+    pipeline_info = pipeline_info_from_lock_name(lock_path)
+    station = pipeline_info[0] if pipeline_info else None
+    task = pipeline_info[1] if pipeline_info else None
+    if station and pipeline_running(station, task):
+        if force_age is not None:
+            proc_age = pipeline_max_age(station, task)
+            if proc_age is not None and proc_age >= force_age.total_seconds():
+                detail = f"station {station}"
+                if task:
+                    detail += f" task {task}"
+                return True, f"{detail} pipeline age {proc_age}s exceeds forced threshold {force_age}"
+        # If process running and not over forced age, use lock age check
+        if age < max_age:
+            detail = f"station {station}"
+            if task:
+                detail += f" task {task}"
+            return False, f"{detail} pipeline still running; age {age} < threshold"
+    else:
+        if force_age is not None and age >= force_age:
+            return True, f"age {age} exceeds forced threshold {force_age}"
+        if age < max_age:
+            return False, f"age {age} is newer than threshold"
 
     if lock_path.name == UNPACK_LOCK_NAME:
         if unpacker_running():
@@ -143,6 +292,8 @@ def lock_is_stale(lock_path: Path, *, max_age: dt.timedelta) -> tuple[bool, str]
     details = f"age {age} exceeds threshold"
     if station:
         details += f"; no pipeline process found for station {station}"
+        if task:
+            details += f" task {task}"
     else:
         details += "; station unknown"
     return True, details
@@ -151,6 +302,7 @@ def lock_is_stale(lock_path: Path, *, max_age: dt.timedelta) -> tuple[bool, str]
 def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
     threshold = dt.timedelta(minutes=args.max_age_minutes)
+    force_threshold = dt.timedelta(minutes=args.force_age_minutes) if getattr(args, "force_age_minutes", None) else None
     lock_dir = args.lock_dir
     log_path = args.log_file
 
@@ -160,7 +312,32 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     stale_found = False
     for lock_file in sorted(lock_dir.glob("*.lock")):
-        is_stale, reason = lock_is_stale(lock_file, max_age=threshold)
+        task_info = task_info_from_lock_name(lock_file)
+        if task_info:
+            task_base, task_station = task_info
+            try:
+                age = _now() - dt.datetime.fromtimestamp(lock_file.stat().st_mtime, tz=dt.timezone.utc)
+            except FileNotFoundError:
+                continue
+            if age < TASK_LOCK_MAX_AGE:
+                continue
+            if task_running(task_base, task_station):
+                continue
+            stale_found = True
+            action = "DRY-RUN would delete" if args.dry_run else "Deleting"
+            reason = f"task lock {task_base} station {task_station} idle; age {age} >= {TASK_LOCK_MAX_AGE}"
+            log_message(f"{action} stale lock {lock_file}: {reason}", logfile=log_path)
+            if args.dry_run:
+                continue
+            try:
+                lock_file.unlink()
+            except FileNotFoundError:
+                log_message(f"Lock {lock_file} vanished before removal", logfile=log_path)
+            except OSError as exc:
+                log_message(f"Failed to delete {lock_file}: {exc}", logfile=log_path)
+            continue
+
+        is_stale, reason = lock_is_stale(lock_file, max_age=threshold, force_age=force_threshold)
         if not is_stale:
             continue
         stale_found = True
@@ -168,6 +345,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         log_message(f"{action} stale lock {lock_file}: {reason}", logfile=log_path)
         if args.dry_run:
             continue
+        pipeline_info = pipeline_info_from_lock_name(lock_file)
+        if args.kill_stale_processes and pipeline_info and force_threshold:
+            station, task = pipeline_info
+            kill_station_processes(station, min_age=force_threshold, logfile=log_path, task=task)
         try:
             lock_file.unlink()
         except FileNotFoundError:

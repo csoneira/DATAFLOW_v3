@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Optional
 
+import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -172,8 +173,9 @@ def plot_tt_pairs(
     prefix_left: str,
     prefix_right: str,
     title_prefix: str,
-    ncols: int = 4,
+    ncols: int = 5,
     figsize_per_cell: tuple[int, int] = (4, 2),
+    marker_size: int = 1,
 ) -> None:
     df = ctx.df
     tcol = ctx.time_col
@@ -200,55 +202,141 @@ def plot_tt_pairs(
     n = len(ids)
     nrows = math.ceil(n / ncols)
     fig_w = ncols * figsize_per_cell[0]
-    fig_h = nrows * figsize_per_cell[1]
-    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_w, fig_h), sharex=True)
-    axes_list = axes.flatten() if hasattr(axes, "flatten") else [axes]
-    if isinstance(axes_list, np.ndarray):
-        axes_list = axes_list.flatten()
+    fig_h = nrows * figsize_per_cell[1] * 2.0  # extra space for z-score subplot
 
-    for ax, tt in zip(axes_list, ids):
+    fig = plt.figure(figsize=(fig_w, fig_h), constrained_layout=True)
+    # height ratios enforce 3:1 main-to-z subplot ratio
+    gs = gridspec.GridSpec(
+        nrows * 2,
+        ncols,
+        figure=fig,
+        hspace=0.15,
+        height_ratios=[3, 1] * nrows,
+    )
+
+    def get_series(colname: str) -> Optional[pd.DataFrame]:
+        if colname not in df.columns:
+            return None
+        series = df[[tcol, colname]].dropna()
+        if series.empty:
+            return None
+        return series.sort_values(by=tcol)
+
+    def z_scores(values: pd.Series) -> Optional[pd.Series]:
+        med = np.median(values)
+        mad = np.median(np.abs(values - med))
+        # Consistent estimator for normal data
+        scale = mad * 1.4826
+        if scale is None or scale == 0 or np.isnan(scale):
+            return None
+        return (values - med) / scale
+
+    axes_pairs = []
+    for idx, tt in enumerate(ids):
+        grid_row = (idx // ncols) * 2
+        grid_col = idx % ncols
+        ax = fig.add_subplot(gs[grid_row, grid_col])
+        z_ax = fig.add_subplot(gs[grid_row + 1, grid_col], sharex=ax)
+        axes_pairs.append((ax, z_ax))
+
+    for idx, ((ax, z_ax), tt) in enumerate(zip(axes_pairs, ids)):
         left_name = f"{prefix_left}{tt}_count"
         right_name = f"{prefix_right}{tt}_count"
 
         plotted = False
 
-        def scatter_col(ax_inner, colname, label, color, marker):
-            if colname not in df.columns:
-                return False
-            series = df[[tcol, colname]].dropna()
-            if series.empty:
-                return False
-            series = series.sort_values(by=tcol)
-            ax_inner.scatter(
-                series[tcol], series[colname], s=18, label=label, color=color, marker=marker, alpha=0.9
+        left_series = get_series(left_name)
+        right_series = get_series(right_name)
+
+        if left_series is not None:
+            ax.scatter(
+                left_series[tcol],
+                left_series[left_name],
+                s=marker_size,
+                label=f"left:{left_name}",
+                color="C0",
+                marker="o",
+                alpha=0.85,
             )
-            return True
-
-        left_plotted = scatter_col(ax, left_name, f"left:{left_name}", "C0", "o")
-        right_plotted = scatter_col(ax, right_name, f"right:{right_name}", "C1", "x")
-
-        if left_plotted or right_plotted:
             plotted = True
+        if right_series is not None:
+            ax.scatter(
+                right_series[tcol],
+                right_series[right_name],
+                s=marker_size,
+                label=f"right:{right_name}",
+                color="C1",
+                marker="x",
+                alpha=0.85,
+            )
+            plotted = True
+
+        if plotted:
             present = []
-            if left_plotted:
+            if left_series is not None:
                 present.append(prefix_left.rstrip("_"))
-            if right_plotted:
+            if right_series is not None:
                 present.append(prefix_right.rstrip("_"))
             ax.set_title(f"{tt} • {', '.join(present)}", fontsize=8)
             if common_ylim:
                 ax.set_ylim(*common_ylim)
             ax.grid(True, linestyle="--", alpha=0.35)
-            if left_plotted and right_plotted:
-                ax.legend(fontsize=7)
-            ax.set_ylabel("Count")
+            if left_series is not None and right_series is not None:
+                ax.legend(fontsize=6)
+            ax.set_ylabel("Count", fontsize=8)
+            ax.tick_params(axis="x", labelrotation=20, labelsize=7)
+
+            z_vals: list[float] = []
+            if left_series is not None:
+                z_left = z_scores(left_series[left_name])
+                if z_left is not None:
+                    z_ax.scatter(
+                        left_series[tcol],
+                        z_left,
+                        s=marker_size,
+                        label=f"z:{left_name}",
+                        color="C0",
+                        marker="o",
+                        alpha=0.75,
+                    )
+                    z_vals.extend(z_left.tolist())
+            if right_series is not None:
+                z_right = z_scores(right_series[right_name])
+                if z_right is not None:
+                    z_ax.scatter(
+                        right_series[tcol],
+                        z_right,
+                        s=marker_size,
+                        label=f"z:{right_name}",
+                        color="C1",
+                        marker="x",
+                        alpha=0.75,
+                    )
+                    z_vals.extend(z_right.tolist())
+            if z_vals:
+                max_abs = max(abs(v) for v in z_vals)
+                z_ax.set_ylim(-max_abs * 1.1, max_abs * 1.1)
+            z_ax.axhline(0, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+            z_ax.grid(True, linestyle="--", alpha=0.25)
+            z_ax.set_ylabel("z", fontsize=8)
+            z_ax.tick_params(axis="x", labelrotation=20, labelsize=7)
+            z_ax.tick_params(axis="y", labelsize=7)
+            if (idx // ncols) == nrows - 1:
+                z_ax.set_xlabel("Datetime", fontsize=8)
+            if left_series is not None and right_series is not None:
+                z_ax.legend(fontsize=6)
         else:
             ax.set_visible(False)
+            z_ax.set_visible(False)
 
-    for ax in axes_list[len(ids) :]:
-        ax.set_visible(False)
+    total_slots = nrows * ncols
+    for idx in range(n, total_slots):
+        grid_row = (idx // ncols) * 2
+        grid_col = idx % ncols
+        fig.add_subplot(gs[grid_row, grid_col]).set_visible(False)
+        fig.add_subplot(gs[grid_row + 1, grid_col]).set_visible(False)
 
-    fig.suptitle(title_prefix)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig.suptitle(title_prefix, y=0.995)
     plt.show()
 
     ctx.record([c for c in [f"{prefix_left}{tt}_count" for tt in ids] if c in df.columns])

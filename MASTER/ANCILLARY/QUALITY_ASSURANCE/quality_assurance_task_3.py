@@ -264,13 +264,13 @@ tcol = ctx.time_col
 
 # Example reuse: plot clean -> cal pairs. Uncomment if wanted.
 try:
-    plot_tt_pairs('cal_tt_', 'list_tt_', tcol, f"cal_tt → list_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=4)
+    plot_tt_pairs(ctx, 'cal_tt_', 'list_tt_', f"cal_tt → list_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=4)
 except Exception as exc:
     print(f"Could not plot cal_tt_ -> list_tt_ pairs: {exc}")
 
 # Plot raw->clean matrix (re-usable: change prefixes to plot other matrices)
 try:
-    plot_tt_matrix('cal', 'list', tcol, f"cal_to_list matrix • {STATION} STEP {STEP} TASK {TASK}")
+    plot_tt_matrix(ctx, 'cal', 'list', f"cal_to_list matrix • {STATION} STEP {STEP} TASK {TASK}")
 except Exception as exc:
     print(f"Could not plot cal -> list matrix: {exc}")
 

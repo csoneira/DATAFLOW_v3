@@ -18,7 +18,7 @@ from qa_shared import load_metadata, print_columns, plot_tt_pairs, plot_tt_matri
 STATION = "MINGO04"  # e.g. "MINGO01", "MINGO02", ...
 STEP = 1             # numeric step (1, 2, ...)
 TASK = 1          # for STEP_1 use an int (1-5); keep None for steps without tasks
-START_DATE = "2024-03-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
+START_DATE = "2025-02-15 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
 END_DATE = "2025-11-20 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
 # Window used when counting events (ns) and per-combination measured counts.
 # Set WINDOW_NS to the calibration window you used (e.g., coincidence_window_cal_ns),
@@ -190,7 +190,7 @@ tcol = ctx.time_col
 
 # Example reuse: plot clean -> cal pairs. Uncomment if wanted.
 try:
-    plot_tt_pairs('raw_tt_', 'clean_tt_', tcol, f"raw_tt → clean_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=4)
+    plot_tt_pairs(ctx, 'raw_tt_', 'clean_tt_', f"raw_tt → clean_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=5)
 except Exception:
     print("Could not plot raw_tt_ -> clean_tt_ pairs.")
     pass
@@ -202,7 +202,7 @@ except Exception:
 
 # Plot raw->clean matrix (re-usable: change prefixes to plot other matrices)
 try:
-    plot_tt_matrix('raw', 'clean', tcol, f"raw_to_clean matrix • {STATION} STEP {STEP} TASK {TASK}")
+    plot_tt_matrix(ctx, 'raw', 'clean', f"raw_to_clean matrix • {STATION} STEP {STEP} TASK {TASK}")
 except Exception:
     print("Could not plot raw -> clean matrix.")
     pass
@@ -396,7 +396,6 @@ fig.suptitle(
 )
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 plt.show()
-
 
 
 

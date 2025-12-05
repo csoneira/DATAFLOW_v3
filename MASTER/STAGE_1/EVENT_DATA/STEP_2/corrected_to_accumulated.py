@@ -229,6 +229,9 @@ three_plane_eff = config["three_plane_eff"]
 crosstalk_limit = config["crosstalk_limit"]
 streamer_limit = config["streamer_limit"]
 
+
+complete_reanalysis = config["complete_reanalysis"]
+
 # Constants
 q_e = config["q_e"]
 
@@ -655,20 +658,24 @@ else:
                 break
 
         elif completed_files:
-            print("Shuffling the files in COMPLETED...")
-            random.shuffle(completed_files)
-            for file_name in completed_files:
-                # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+            if complete_reanalysis:
+                print("Shuffling the files in COMPLETED...")
+                random.shuffle(completed_files)
+                for file_name in completed_files:
+                    # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                    completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                    processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
 
-                print(f"Moving '{file_name}' to PROCESSING...")
-                shutil.move(completed_file_path, processing_file_path)
-                print(f"File moved to PROCESSING: {processing_file_path}")
-                break
+                    print(f"Moving '{file_name}' to PROCESSING...")
+                    shutil.move(completed_file_path, processing_file_path)
+                    print(f"File moved to PROCESSING: {processing_file_path}")
+                    break
+            else:
+                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
 
         else:
             sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+
 
 # This is for all cases
 file_path = processing_file_path

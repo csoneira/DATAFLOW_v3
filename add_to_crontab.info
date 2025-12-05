@@ -39,8 +39,8 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 0 1 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_clean_dataflow.log 2>&1
 0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh --select temps --force >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_temps_clean_dataflow.log 2>&1
 
-# Solve stale locks
-*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/solve_stale_locks.cron.log 2>&1
+# Solve stale locks (force 15 min age and kill matching stale pipelines)
+*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.py --force-age-minutes 15 --kill-stale-processes >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/solve_stale_locks.cron.log 2>&1
 
 # NMDB update
 # 0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_nmdb_retrieval.log 2>&1
@@ -119,10 +119,10 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - REPROCESSING - STEP 2 - REPROCESSING - UNPACK (-r for random, -n for newest) ---------------------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 1 -r -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_1.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 2 -r -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_2.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 3 -r -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_3.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 4 -r -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_4.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 1 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_1.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 2 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_2.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 3 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_3.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 4 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
@@ -155,36 +155,21 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - EVENT_DATA - RAW_TO_CORR -----------------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_1.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_2.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_3.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_4.log 2>&1
-
-# TASK 5 - WHICH DOES NOT QUITE GET EXECUTED IN THE CRONTAB I DONT KNOW WHY
-#* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_1.log 2>&1
-#* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_2.log 2>&1
-#* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_3.log 2>&1
-#* * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/script_5_fit_to_corr_4.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_all.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_2
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - EVENT_DATA - ACCUMULATOR -----------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_1.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_2.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_3.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ev_accumulator_4.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh --no-loop >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_corrected_to_accumulated_all.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_3
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - EVENT_DATA - STEP_3 DISTRIBUTOR -----------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_distributor_1.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_distributor_2.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_distributor_3.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/accumulated_distributor_4.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh --no-loop >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_accumulated_to_joined_all.log 2>&1
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------

@@ -491,9 +491,9 @@ def plot_err_only_ts_hist(df, base_cols, time_col, title):
 # -----------------------------------------------------------------------------
 
 
-run_jupyter_notebook = False
+run_jupyter_notebook = True
 if run_jupyter_notebook:
-    station = "1"
+    station = "3"
 else:
     # Check if the script has an argument
     if len(sys.argv) < 2:
@@ -3060,6 +3060,7 @@ if raw_data_len == 0 and not self_trigger:
 
 
 
+#%%
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -3073,6 +3074,739 @@ if raw_data_len == 0 and not self_trigger:
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
+
+# # Print the name of the columns
+# print("Columns in working_df:", working_df.columns.tolist())
+
+# # Create a 4x4 plot histogram of: Q{plane}_Q_sum_{strip}_with_crstlk between 0 and 80, per each combination in cal_tt
+
+# log_scale = False
+
+# if create_plots:
+#     # Detached method plots (per combination)
+#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
+#         for combo in TRACK_COMBINATIONS:
+
+#             try:
+#                 combo_int = int(combo)
+#             except ValueError:
+#                 continue
+#             subset = working_df[working_df["list_tt"] == combo_int]
+#             if subset.empty:
+#                 continue
+
+#             fig, axes = plt.subplots(4, 4, figsize=(16, 16))
+#             planes = [1, 2, 3, 4]
+#             for i, plane_i in enumerate(planes):
+#                 for j, plane_j in enumerate(planes):
+#                     ax = axes[i, j]
+#                     col_name = f'Q{plane_i}_Q_sum_{plane_j}_with_crstlk'
+#                     if col_name in working_df.columns:
+#                         q_sum_data = subset[col_name].dropna()
+
+#                         # Remove 0s
+#                         q_sum_data = q_sum_data[q_sum_data != 0]
+
+#                         if not q_sum_data.empty:
+#                             ax.hist(q_sum_data, bins=50, range=(0, 80), color='blue', alpha=0.5)
+#                             ax.set_title(f'Plane {plane_i} strip {plane_j} Q_sum')
+#                             ax.set_xlabel('Q_sum_final (fC)')
+#                             ax.set_ylabel('Counts')
+
+#                             # Log scale if needed
+#                             if log_scale:
+#                                 ax.set_yscale('log')
+#                         else:
+#                             ax.set_axis_off()
+#                     else:
+#                         ax.set_axis_off()
+#             plt.suptitle(f'Charge Distributions for Combination {combo_int}')
+#             plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#             plt.show()
+
+
+# #%%
+
+# # Detached processed_tt label for plotting (fallback only if not set by alt loop)
+# if "det_processed_tt" not in working_df.columns:
+#     working_df["det_processed_tt"] = working_df.get("processed_tt", 0)
+
+
+# # Select events to plot based on the charge of the planes
+
+# if create_plots:
+#     # Detached method plots (per combination)
+#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
+#         for combo in TRACK_COMBINATIONS:
+#             try:
+#                 combo_int = int(combo)
+#             except ValueError:
+#                 continue
+#             subset = working_df[working_df["list_tt"] == combo_int]
+#             if subset.empty:
+#                 continue
+
+#             print(f"Plotting charge distributions for combination {combo_int} with {len(subset)} events.")
+
+#             # 1x4 grid of histograms (0–80 fC) for each plane's Q_sum_final; leave missing planes blank
+#             fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+#             planes_in_combo = [int(p) for p in combo]
+#             max_height = 0
+
+#             for plane_id, ax in enumerate(axes, start=1):
+#                 col_name = f'P{plane_id}_Q_sum_final'
+#                 if plane_id in planes_in_combo and col_name in subset.columns:
+#                     q_sum_data = subset[col_name].dropna()
+#                     if not q_sum_data.empty:
+#                         counts, bin_edges = np.histogram(q_sum_data, bins=50, range=(0, 80))
+#                         max_height = max(max_height, counts.max(initial=0))
+#                         ax.hist(q_sum_data, bins=50, range=(0, 80), color=plane_colors.get(plane_id, "blue"), alpha=0.5, label=f"P{plane_id}")
+#                         ax.set_title(f'Plane {plane_id} Q_sum_final')
+#                         ax.set_xlabel('Q_sum_final (fC)')
+#                         ax.set_ylabel('Counts')
+#                         ax.legend()
+#                         continue
+#                 ax.set_axis_off()
+#             if max_height > 0:
+#                 for ax in axes:
+#                     if ax.has_data():
+#                         ax.set_ylim(0, max_height * 1.05)
+            
+
+#             # Same y axis for all histograms
+#             max_y = 0
+#             for plane_id in planes_in_combo:
+#                 col_name = f'P{plane_id}_Q_sum_final'
+#                 if col_name in subset.columns:
+#                     q_sum_data = subset[col_name].dropna()
+#                     if not q_sum_data.empty:
+#                         counts, _ = np.histogram(q_sum_data, bins=50, range=(0, 80))
+#                         max_y = max(max_y, counts.max())
+#             for ax in axes:
+#                 ax.set_ylim(0, max_y * 1.1)
+
+#             plt.suptitle(f'Charge Distributions for Combination {combo_int}')
+#             plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#             plt.show()
+
+# #%%
+
+# # Differences between histograms of Q_sum_final for each pair of planes in the combination
+
+# bin_number = 50
+# max_bin = 60
+# hist_diff_stats = {}  # {combo_int: { "p1-p2": {"pos": sum_positive, "neg": sum_negative} }}
+
+# if create_plots:
+#     # Detached method plots (per combination)
+#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
+#         for combo in TRACK_COMBINATIONS:
+
+#             try:
+#                 combo_int = int(combo)
+#             except ValueError:
+#                 continue
+#             subset = working_df[working_df["list_tt"] == combo_int]
+#             if subset.empty:
+#                 continue
+
+#             print(f"Plotting charge distributions for combination {combo} with {len(subset)} events.")
+
+#             planes_in_combo = [int(p) for p in combo]
+#             hist_diff_stats.setdefault(combo_int, {})
+
+#             # Now i want a len(planes_in_combo)x len(planes_in_combo) grid
+#             if len(planes_in_combo) >= 2:
+#                 n_planes = len(planes_in_combo)
+#                 fig, axes = plt.subplots(n_planes, n_planes, figsize=(4*n_planes, 4*n_planes))
+
+#                 for i, p1 in enumerate(planes_in_combo):
+#                     for j, p2 in enumerate(planes_in_combo):
+
+#                         ax = axes[i, j]
+
+#                         # Plot only the plots below the diagonal
+#                         if j > i:
+#                             ax.set_axis_off()
+#                             continue
+
+#                         if j == i:
+#                             # Diagonal: histogram of that plane
+#                             col_name = f'P{p1}_Q_sum_final'
+#                             if col_name in subset.columns:
+#                                 q_sum_data = subset[col_name].dropna()
+#                                 if not q_sum_data.empty:
+#                                     ax.hist(q_sum_data, bins=bin_number, range=(0, max_bin), color='blue', alpha=0.5)
+#                                     ax.set_title(f'Plane {p1} Q_sum_final')
+#                                     ax.set_xlabel('Q_sum_final (fC)')
+#                                     ax.set_ylabel('Counts')
+#                             else:
+#                                 ax.set_axis_off()
+#                             continue
+
+#                         col_name1 = f'P{p1}_Q_sum_final'
+#                         col_name2 = f'P{p2}_Q_sum_final'
+#                         if col_name1 in subset.columns and col_name2 in subset.columns:
+#                             q_sum_data1 = subset[col_name1].dropna()
+#                             q_sum_data2 = subset[col_name2].dropna()
+#                             common_indices = q_sum_data1.index.intersection(q_sum_data2.index)
+#                             if not common_indices.empty:
+#                                 # Calculate the histogram 1d for each case with 50 bins between 0 and 80 and make the difference
+#                                 # I want you to plot in x the 0-80 and in y the difference of the histograms. Not scatter.
+#                                 hist1, bin_edges = np.histogram(q_sum_data1.loc[common_indices], bins=bin_number, range=(0, max_bin))
+#                                 hist2, _ = np.histogram(q_sum_data2.loc[common_indices], bins=bin_number, range=(0, max_bin))
+#                                 hist_diff = hist1 - hist2
+#                                 pos_bins = int((hist_diff > 0).sum())
+#                                 neg_bins = int((hist_diff < 0).sum())
+#                                 hist_diff_stats[combo_int][f"{p1}-{p2}"] = {"pos_bins": pos_bins, "neg_bins": neg_bins}
+#                                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+#                                 ax.bar(bin_centers, hist_diff, width=bin_edges[1]-bin_edges[0], alpha=0.5)
+#                                 ax.set_xlabel(f'Q_sum_final (fC)')
+#                                 ax.set_ylabel(f'Histogram Difference (Plane {p1} - Plane {p2})')
+#                                 max_abs = np.abs(hist_diff).max(initial=0)
+#                                 if max_abs > 0:
+#                                     ax.set_ylim(-max_abs, max_abs)
+#                                 # ax.set_xlim(0, 80)
+#                                 ax.grid(True)
+#                         else:
+#                             ax.set_axis_off()
+#                 plt.suptitle(f'Differences in histograms of Q_sum_final for Combination {combo}')
+#                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#                 plt.show()
+
+
+# #%%
+
+
+# # Plane color palette for consistent plotting
+# plane_colors = {1: "red", 2: "green", 3: "blue", 4: "purple"}
+
+# bin_number = 100
+# max_bin = 100
+# hist_diff_stats = {}  # {combo_int: { "p1-p2": {"pos": sum_positive, "neg": sum_negative} }}
+
+
+# # Overlayed histograms and differences on the same axes (one histogram positive, the other negative, plus the difference)
+# if create_plots:
+#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
+#         for combo in TRACK_COMBINATIONS:
+
+#             try:
+#                 combo_int = int(combo)
+#             except ValueError:
+#                 continue
+#             subset = working_df[working_df["cal_tt"] == combo_int]
+#             if subset.empty:
+#                 continue
+
+#             planes_in_combo = [int(p) for p in combo]
+
+#             if len(planes_in_combo) >= 2:
+#                 n_planes = len(planes_in_combo)
+#                 grid_size = n_planes - 1  # omit diagonal: rows/cols shifted to skip self-pairs
+#                 fig, axes = plt.subplots(grid_size, grid_size, figsize=(4 * grid_size, 4 * grid_size))
+#                 axes_array = np.array(axes, ndmin=2, dtype=object)
+
+#                 for i in range(grid_size):
+#                     p1 = planes_in_combo[i]
+#                     for j in range(grid_size):
+#                         p2 = planes_in_combo[j + 1]
+#                         ax = axes_array[i, j]
+
+#                         # Only plot when p2 comes after p1 (no diagonal/self)
+#                         if p2 <= p1:
+#                             ax.set_axis_off()
+#                             continue
+
+#                         col_name1 = f'P{p1}_Q_sum_final'
+#                         col_name2 = f'P{p2}_Q_sum_final'
+#                         if col_name1 in subset.columns and col_name2 in subset.columns:
+#                             q_sum_data1 = subset[col_name1].dropna()
+#                             q_sum_data2 = subset[col_name2].dropna()
+#                             common_indices = q_sum_data1.index.intersection(q_sum_data2.index)
+#                             if common_indices.empty:
+#                                 ax.set_axis_off()
+#                                 continue
+
+#                             hist1, bin_edges = np.histogram(q_sum_data1.loc[common_indices], bins=bin_number, range=(0, max_bin))
+#                             hist2, _ = np.histogram(q_sum_data2.loc[common_indices], bins=bin_number, range=(0, max_bin))
+#                             hist_diff = hist1 - hist2
+#                             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+#                             max_abs = max(
+#                                 hist1.max(initial=0),
+#                                 hist2.max(initial=0),
+#                                 np.abs(hist_diff).max(initial=0),
+#                             )
+
+#                             # Plot p1 as positive bars, p2 as negative bars, and overlay the difference
+#                             color1 = plane_colors.get(p1, "gray")
+#                             color2 = plane_colors.get(p2, "orange")
+#                             ax.bar(bin_centers, hist1, width=bin_edges[1] - bin_edges[0], color=color1, alpha=0.4, label=f'P{p1}')
+#                             ax.bar(bin_centers, -hist2, width=bin_edges[1] - bin_edges[0], color=color2, alpha=0.4, label=f'P{p2}')
+#                             ax.plot(bin_centers, hist_diff, color='black', linewidth=1.0, label='diff')
+#                             ax.set_xlabel('Q_sum_final (fC)')
+#                             ax.set_ylabel(f'Hist +/- and diff (P{p1}-P{p2})')
+#                             ax.legend()
+#                             if max_abs > 0:
+#                                 ax.set_ylim(-max_abs * 1.1, max_abs * 1.1)
+#                             ax.grid(True)
+#                             # if i == 0 and j == 0:
+#                             #     ax.legend()
+#                         else:
+#                             ax.set_axis_off()
+
+#                 plt.suptitle(f'Overlayed histograms and differences for Combination {combo}')
+#                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#                 plt.show()
+
+
+# #%%
+
+
+# # Plane color palette for consistent plotting
+# plane_colors = {1: "red", 2: "green", 3: "blue", 4: "purple"}
+# hist_store = {}  # {combo_int: {plane_id: (hist, bin_edges)}}
+# hist_comparison_stats = []  # records for later dataframe summary
+
+
+# bin_number = 70
+# max_bin = 40
+
+
+# # Store per-combo, per-plane charge histograms and compare to reference combo
+# hist_range = (0, max_bin)
+# reference_combo = 1234
+# reference_scale_fallback = 1.0  # fallback scalar if scaling cannot be computed
+# scale_threshold = 10  # minimum charge (fC) to consider when computing scaling
+# ref_scales = {}  # {plane_id: {combo_int: scale}}
+
+# # Collect histograms
+# if "list_tt" in working_df.columns and "datetime" in working_df.columns:
+#     for combo in TRACK_COMBINATIONS:
+#         try:
+#             combo_int = int(combo)
+#         except ValueError:
+#             continue
+#         subset = working_df[working_df["list_tt"] == combo_int]
+#         if subset.empty:
+#             continue
+
+#         planes_in_combo = [int(p) for p in combo]
+#         for plane_id in planes_in_combo:
+#             col_name = f'P{plane_id}_Q_sum_final'
+#             if col_name not in subset.columns:
+#                 continue
+#             q_sum_data = subset[col_name].dropna()
+#             if q_sum_data.empty:
+#                 continue
+#             hist, bin_edges = np.histogram(q_sum_data, bins=bin_number, range=hist_range)
+#             hist_store.setdefault(combo_int, {})[plane_id] = (hist, bin_edges)
+
+# # Compute optimal per-combo scaling against the reference (per plane) using bins above the threshold
+# if reference_combo in hist_store:
+#     for plane_id in range(1, 5):
+#         ref_entry = hist_store.get(reference_combo, {}).get(plane_id)
+#         if ref_entry is None:
+#             continue
+#         ref_hist, ref_edges = ref_entry
+#         ref_centers = (ref_edges[:-1] + ref_edges[1:]) / 2
+#         mask = ref_centers >= scale_threshold
+#         ref_slice = ref_hist[mask]
+#         denom = np.dot(ref_slice, ref_slice)
+
+#         for combo_int, plane_dict in hist_store.items():
+#             if combo_int == reference_combo:
+#                 continue
+#             if plane_id not in plane_dict:
+#                 continue
+#             combo_hist, combo_edges = plane_dict[plane_id]
+#             combo_centers = (combo_edges[:-1] + combo_edges[1:]) / 2
+#             combo_slice = combo_hist[(combo_centers >= scale_threshold) & (combo_centers <= hist_range[1])]
+#             if len(combo_slice) != len(ref_slice):
+#                 ref_scales.setdefault(plane_id, {})[combo_int] = reference_scale_fallback
+#                 continue
+#             if denom == 0:
+#                 ref_scales.setdefault(plane_id, {})[combo_int] = reference_scale_fallback
+#                 continue
+#             scale = float(np.dot(combo_slice, ref_slice) / denom)
+#             ref_scales.setdefault(plane_id, {})[combo_int] = scale
+
+# # Plot comparisons to reference per plane, one subplot per comparison combo (in a row).
+# # Reference histogram is shown as negative bars (scaled) to mimic earlier overlay style; difference is also shown.
+# if create_plots and reference_combo in hist_store:
+#     for plane_id in range(1, 5):
+#         ref_entry = hist_store.get(reference_combo, {}).get(plane_id)
+#         if ref_entry is None:
+#             continue
+#         ref_hist, ref_edges = ref_entry
+#         ref_centers = (ref_edges[:-1] + ref_edges[1:]) / 2
+#         # ref_scaled will be combo-dependent below
+
+#         # Gather other combos that include this plane
+#         comparison_entries = []
+#         for combo_int, plane_dict in hist_store.items():
+#             if combo_int == reference_combo:
+#                 continue
+#             if plane_id in plane_dict:
+#                 comparison_entries.append((combo_int, plane_dict[plane_id]))
+
+#         if not comparison_entries:
+#             continue
+
+#         comparison_entries = sorted(comparison_entries, key=lambda x: x[0])
+#         fig, axes = plt.subplots(1, len(comparison_entries), figsize=(6 * len(comparison_entries), 4))
+#         axes_array = np.array(axes, ndmin=1, dtype=object)
+
+#         for idx, (combo_int, (hist_vals, edges_vals)) in enumerate(comparison_entries):
+#             ax = axes_array[idx]
+#             centers = (edges_vals[:-1] + edges_vals[1:]) / 2
+#             scale = ref_scales.get(plane_id, {}).get(combo_int, reference_scale_fallback)
+#             ref_scaled = ref_hist * scale
+#             diff_vals = hist_vals - ref_scaled
+
+#             color = plane_colors.get(plane_id, "gray")
+#             width = edges_vals[1] - edges_vals[0]
+
+#             ax.bar(centers, hist_vals, width=width, color=color, alpha=0.5, label=f'P{plane_id} combo {combo_int}')
+#             ax.bar(ref_centers, -ref_scaled, width=width, color=color, alpha=0.2,
+#                    label=f'P{plane_id} combo {reference_combo} (scaled {scale:.3f})')
+#             ax.plot(centers, diff_vals, color='black', linewidth=1.0, label='diff (combo - ref)')
+
+#             max_abs = max(hist_vals.max(initial=0), ref_scaled.max(initial=0), np.abs(diff_vals).max(initial=0))
+#             if max_abs > 0:
+#                 ax.set_ylim(-max_abs * 1.1, max_abs * 1.1)
+#             ax.set_xlabel('Q_sum_final (fC)')
+#             ax.set_ylabel('Counts / Diff')
+#             ax.set_title(f'Plane {plane_id}: combo {combo_int} vs {reference_combo}')
+#             ax.grid(True)
+#             ax.legend()
+
+#             # Stats for dataframe summary
+#             total_counts = int(hist_vals.sum())
+#             mask_low = centers < scale_threshold
+#             diff_low_counts = float( np.abs( diff_vals[mask_low].sum() ) ) if mask_low.any() else 0.0
+#             diff_low_counts = round(diff_low_counts, 0)
+#             noise_pct = (diff_low_counts / total_counts * 100.0) if total_counts > 0 else 0.0
+#             hist_comparison_stats.append(
+#                 {
+#                     "plane": plane_id,
+#                     "combo": combo_int,
+#                     "reference_combo": reference_combo,
+#                     "scale_used": scale,
+#                     "scale_threshold": scale_threshold,
+#                     "total_counts": total_counts,
+#                     "diff_counts_below_threshold": diff_low_counts,
+#                     "noise_pct": noise_pct,
+#                 }
+#             )
+
+#         plt.suptitle(f'Plane {plane_id} histogram comparison vs reference {reference_combo}')
+#         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#         plt.show()
+
+# #%%
+
+
+
+# # Print nicely in the terminal the hist_comparison_stats noise_pct per plane and combo
+# if hist_comparison_stats:
+#     print("Histogram Comparison Noise Summary (vs reference combo {}):".format(reference_combo))
+#     print("{:<10} {:<10} {:<15} {:<12} {:<18} {:<12}".format(
+#         "Plane", "Combo", "Scale Used", "Total Cts", "Diff Cts < Thr", "Noise (%)"
+#     ))
+#     for stat in hist_comparison_stats:
+#         print("{:<10} {:<10} {:<15.4f} {:<12} {:<18.2f} {:<12.2f}".format(
+#             stat["plane"],
+#             stat["combo"],
+#             stat["scale_used"],
+#             stat["total_counts"],
+#             stat["diff_counts_below_threshold"],
+#             stat["noise_pct"]
+#         ))
+
+    
+
+
+
+# #%%
+
+
+# # Make a nice 4 row x combo length column python table in the spirit of plot_tt_correlation,
+# # where the value shown is noise_pct and the background color is using that value in turbo colormap
+# if hist_comparison_stats:
+    
+#     # Heatmap-like table of noise_pct (planes as rows, combos as columns) with turbo colormap
+#     combos_all = sorted({stat["combo"] for stat in hist_comparison_stats})
+#     planes_all = [1, 2, 3, 4]
+#     data = np.full((len(planes_all), len(combos_all)), np.nan)
+#     for stat in hist_comparison_stats:
+#         plane_id = stat["plane"]
+#         combo_id = stat["combo"]
+#         if plane_id in planes_all and combo_id in combos_all:
+#             i = planes_all.index(plane_id)
+#             j = combos_all.index(combo_id)
+#             data[i, j] = stat["noise_pct"]
+
+#     fig, ax = plt.subplots(figsize=(1.1 * len(combos_all), 4))
+#     ax.set_xticks(np.arange(len(combos_all)))
+#     ax.set_yticks(np.arange(len(planes_all)))
+#     ax.set_xticklabels([str(c) for c in combos_all])
+#     ax.set_yticklabels([str(p) for p in planes_all])
+#     ax.set_xlabel("Track Combination")
+#     ax.set_ylabel("Plane")
+#     ax.set_title("Histogram Comparison Noise (%) Summary")
+#     cmap = plt.get_cmap('viridis')
+#     norm = plt.Normalize(0, 100)
+#     im = ax.imshow(data, cmap=cmap, norm=norm, aspect='auto')
+#     plt.colorbar(im, ax=ax, label="Noise (%)")
+#     for i in range(len(planes_all)):
+#         for j in range(len(combos_all)):
+#             if not np.isnan(data[i, j]):
+#                 # If the colour of background is too bright, put the text to black, else white
+#                 ax.text(j, i, f"{data[i, j]:.1f}", ha="center", va="center",
+#                         color="white" if data[i, j] < 50 else "black")
+#     plt.tight_layout()
+#     plt.show()
+    
+
+
+# #%%
+
+
+
+# # Make a nice 4 row x combo length column python table in the spirit of plot_tt_correlation,
+# # where the value shown is noise_pct and the background color is using that value in turbo colormap
+# if hist_comparison_stats:
+    
+#     # Heatmap-like table of noise_pct (planes as rows, combos as columns) with turbo colormap
+#     combos_all = sorted({stat["combo"] for stat in hist_comparison_stats})
+#     planes_all = [1, 2, 3, 4]
+#     data = np.full((len(planes_all), len(combos_all)), np.nan)
+#     for stat in hist_comparison_stats:
+#         plane_id = stat["plane"]
+#         combo_id = stat["combo"]
+#         if plane_id in planes_all and combo_id in combos_all:
+#             i = planes_all.index(plane_id)
+#             j = combos_all.index(combo_id)
+#             data[i, j] = stat["diff_counts_below_threshold"]
+
+#     fig, ax = plt.subplots(figsize=(1.1 * len(combos_all), 4))
+#     ax.set_xticks(np.arange(len(combos_all)))
+#     ax.set_yticks(np.arange(len(planes_all)))
+#     ax.set_xticklabels([str(c) for c in combos_all])
+#     ax.set_yticklabels([str(p) for p in planes_all])
+#     ax.set_xlabel("Track Combination")
+#     ax.set_ylabel("Plane")
+#     ax.set_title("Histogram Comparison Noise COUNTS Summary")
+#     cmap = plt.get_cmap('viridis')
+#     # norm = plt.Normalize(0, 100)
+#     # im = ax.imshow(data, cmap=cmap, norm=norm, aspect='auto')
+#     im = ax.imshow(data, cmap=cmap, aspect='auto')
+#     plt.colorbar(im, ax=ax, label="Noise COUNTS")
+#     for i in range(len(planes_all)):
+#         for j in range(len(combos_all)):
+#             if not np.isnan(data[i, j]):
+#                 # If the colour of background is too bright, put the text to black, else white
+#                 ax.text(j, i, f"{data[i, j]:.1f}", ha="center", va="center",
+#                         color="white" if data[i, j] < np.nanmedian(data) * 2 else "black")
+#     plt.tight_layout()
+#     plt.show()
+
+
+# #%%
+
+
+# if create_plots:
+#     # Detached method plots (per combination)
+#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
+#         for combo in TRACK_COMBINATIONS:
+
+#             try:
+#                 combo_int = int(combo)
+#             except ValueError:
+#                 continue
+#             subset = working_df[working_df["list_tt"] == combo_int]
+#             if subset.empty:
+#                 continue
+
+#             print(f"Plotting charge distributions for combination {combo} with {len(subset)} events.")
+
+#             planes_in_combo = [int(p) for p in combo]
+
+#             # Now i want a len(planes_in_combo)x len(planes_in_combo) grid of scatter plots
+#             if len(planes_in_combo) >= 2:
+#                 n_planes = len(planes_in_combo)
+#                 fig, axes = plt.subplots(n_planes, n_planes, figsize=(4*n_planes, 4*n_planes))
+
+#                 for i, p1 in enumerate(planes_in_combo):
+#                     for j, p2 in enumerate(planes_in_combo):
+
+#                         ax = axes[i, j]
+
+#                         # Plot only the plots below the diagonal
+#                         if j > i:
+#                             ax.set_axis_off()
+#                             continue
+
+#                         if j == i:
+#                             # Diagonal: histogram of that plane
+#                             col_name = f'P{p1}_Q_sum_final'
+#                             if col_name in subset.columns:
+#                                 q_sum_data = subset[col_name].dropna()
+#                                 if not q_sum_data.empty:
+#                                     ax.hist(q_sum_data, bins=50, range=(0, 80), color='blue', alpha=0.5)
+#                                     ax.set_title(f'Plane {p1} Q_sum_final')
+#                                     ax.set_xlabel('Q_sum_final (fC)')
+#                                     ax.set_ylabel('Counts')
+#                             else:
+#                                 ax.set_axis_off()
+#                             continue
+
+#                         col_name1 = f'P{p1}_Q_sum_final'
+#                         col_name2 = f'P{p2}_Q_sum_final'
+#                         if col_name1 in subset.columns and col_name2 in subset.columns:
+#                             q_sum_data1 = subset[col_name1].dropna()
+#                             q_sum_data2 = subset[col_name2].dropna()
+#                             common_indices = q_sum_data1.index.intersection(q_sum_data2.index)
+#                             if not common_indices.empty:
+#                                 ax.scatter(q_sum_data1.loc[common_indices], q_sum_data2.loc[common_indices], alpha=0.5, s=1)
+#                                 ax.set_xlabel(f'Plane {p1} Q_sum_final (fC)')
+#                                 ax.set_ylabel(f'Plane {p2} Q_sum_final (fC)')
+#                                 ax.set_xlim(0, 80)
+#                                 ax.set_ylim(0, 80)
+#                                 ax.grid(True)
+#                         else:
+#                             ax.set_axis_off()
+#                 plt.suptitle(f'Scatter Plots of Q_sum_final for Combination {combo}')
+#                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#                 plt.show()
+
+# #%%
+
+
+
+# # I want a calculation of efficiency which is simply counting how many list_tt 1234 are compared to list_tt 234 for eff 1,
+# # 1234 vs 134 for eff 2, 1234 vs 124 for eff 3, 1234 vs 123 for eff 4. But I want to do a loop in charge threshold from 0 to 80
+# # for all the planes in steps of 5 fC, and plot the efficiency curves for each plane.
+
+# # HERE
+# if create_plots and "list_tt" in working_df.columns:
+#     eff_pairs = {1: 234, 2: 134, 3: 124, 4: 123}
+#     thresholds = np.arange(1, 40, 0.5)  # 0 to 80 inclusive in 5 fC steps
+#     plane_efficiency = {plane: [] for plane in eff_pairs}
+#     plane_errors = {plane: [] for plane in eff_pairs}
+#     charge_cols = {plane: f"P{plane}_Q_sum_final" for plane in eff_pairs}
+#     available_planes = [p for p, col in charge_cols.items() if col in working_df.columns]
+
+#     if available_planes:
+#         # Preload charges as array (NaN -> 0 so threshold comparison is False)
+#         charges = np.stack([working_df[charge_cols[p]].fillna(0).to_numpy() for p in [1, 2, 3, 4]], axis=1)
+#         weights = np.array([1, 2, 4, 8])
+#         mask_map = {1: 14, 2: 13, 3: 11, 4: 7}  # combo masks missing each plane
+
+#         for thr in thresholds:
+#             presence = charges >= thr  # (n,4)
+#             combo_mask = (presence * weights).sum(axis=1)  # bitmask for planes passing thr
+#             count_1234 = np.count_nonzero(combo_mask == 15)
+#             for plane, missing_mask in mask_map.items():
+#                 if plane not in available_planes:
+#                     plane_efficiency[plane].append(np.nan)
+#                     continue
+#                 count_missing = np.count_nonzero(combo_mask == missing_mask)
+#                 denom = count_1234 + count_missing
+#                 eff = (count_1234 / denom) if denom > 0 else np.nan
+#                 plane_efficiency[plane].append(eff)
+
+#         # Error bars: binomial sqrt(p*(1-p)/N) per threshold
+#         for plane, missing_mask in mask_map.items():
+#             errs = []
+#             if plane not in available_planes:
+#                 plane_errors[plane] = [np.nan] * len(thresholds)
+#                 continue
+#             for idx_thr, thr in enumerate(thresholds):
+#                 presence = charges >= thr
+#                 combo_mask = (presence * weights).sum(axis=1)
+#                 count_1234 = np.count_nonzero(combo_mask == 15)
+#                 count_missing = np.count_nonzero(combo_mask == missing_mask)
+#                 N = count_1234 + count_missing
+#                 p = plane_efficiency[plane][idx_thr] if idx_thr < len(plane_efficiency[plane]) else np.nan
+#                 if N > 0 and not np.isnan(p):
+#                     errs.append(np.sqrt(p * (1 - p) / N))
+#                 else:
+#                     errs.append(np.nan)
+#             plane_errors[plane] = errs
+
+#     plt.figure(figsize=(8, 6))
+#     for plane, effs in plane_efficiency.items():
+#         color = plane_colors.get(plane, None)
+#         errs = plane_errors.get(plane, [np.nan] * len(thresholds))
+#         plt.plot(thresholds, effs, marker='o', label=f"Plane {plane}", color=color)
+#         effs_arr = np.array(effs, dtype=float)
+#         errs_arr = np.array(errs, dtype=float)
+#         if np.any(np.isfinite(errs_arr)):
+#             upper = effs_arr + errs_arr
+#             lower = effs_arr - errs_arr
+#             plt.fill_between(thresholds, lower, upper, color=color, alpha=0.15)
+#     plt.xlabel("Charge threshold (fC)")
+#     plt.ylabel("Efficiency (1234 vs missing-plane combo)")
+#     plt.title("Efficiency vs threshold")
+#     plt.ylim(0, 1.05)
+#     plt.grid(True)
+#     plt.legend()
+#     plt.tight_layout()
+#     plt.show()
+
+
+# #%%
+
+
+# # Contour plots scanning separate thresholds for 1234 and missing combo (per plane)
+# if create_plots and "list_tt" in working_df.columns:
+#     charge_cols = {plane: f"P{plane}_Q_sum_final" for plane in [1, 2, 3, 4]}
+#     if all(col in working_df.columns for col in charge_cols.values()):
+#         thr_vals = thresholds  # reuse same threshold grid
+#         charge_arr = {p: working_df[charge_cols[p]].fillna(0).to_numpy() for p in [1, 2, 3, 4]}
+#         fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True, sharey=True)
+#         axes = np.array(axes).reshape(-1)
+#         im = None
+#         for idx, plane in enumerate([1, 2, 3, 4]):
+#             ax = axes[idx]
+#             others = [p for p in [1, 2, 3, 4] if p != plane]
+#             grid = np.full((len(thr_vals), len(thr_vals)), np.nan)
+#             for i, thr_ref in enumerate(thr_vals):
+#                 ref_mask = np.ones(len(working_df), dtype=bool)
+#                 for p in [1, 2, 3, 4]:
+#                     ref_mask &= charge_arr[p] >= thr_ref
+#                 for j, thr_cmp in enumerate(thr_vals):
+#                     cmp_mask = charge_arr[plane] < thr_cmp
+#                     for p in others:
+#                         cmp_mask &= charge_arr[p] >= thr_cmp
+#                     total_1234 = ref_mask.sum()
+#                     total_missing = cmp_mask.sum()
+#                     denom = total_1234 + total_missing
+#                     grid[i, j] = (total_1234 / denom) if denom > 0 else np.nan
+#             im = ax.contourf(thr_vals, thr_vals, grid, levels=np.linspace(0, 1, 21), cmap="viridis", vmin=0, vmax=1)
+#             ax.set_title(f"Plane {plane}")
+#             ax.set_xlabel("Thr 1234 (fC)")
+#             if idx in [0, 2]:
+#                 ax.set_ylabel("Thr missing (fC)")
+#             ax.grid(True, alpha=0.2)
+#         if im is not None:
+#             # The bar is over the plot, but it should not be
+#             cbar = fig.colorbar(im, ax=axes.tolist(), label="Efficiency", shrink=0.95, pad=0.02)
+#         fig.suptitle("Efficiency contour: threshold(1234) vs threshold(missing combo)", y=1.01)
+#         # fig.tight_layout(rect=[0, 0, 1, 0.98])
+#         plt.show()
+
+
+
+
+
+
+
+
+#%%
 
 
 print("----------------------------------------------------------------------")
@@ -3475,9 +4209,6 @@ working_df["det_phi"] = working_df.get("det_phi", 0)
 working_df["det_s"] = working_df.get("det_s", 0)
 working_df["det_t0"] = working_df.get("det_s_ordinate", 0)
 
-# Detached processed_tt label for plotting (fallback only if not set by alt loop)
-if "det_processed_tt" not in working_df.columns:
-    working_df["det_processed_tt"] = working_df.get("processed_tt", 0)
 
 for p in range(1, 5):
     working_df[f"det_res_ystr_{p}"] = working_df.get(f"det_res_ystr_{p}", 0)
@@ -3486,6 +4217,8 @@ for p in range(1, 5):
     working_df[f"det_ext_res_ystr_{p}"] = working_df.get(f"det_ext_res_ystr_{p}", 0)
     working_df[f"det_ext_res_tsum_{p}"] = working_df.get(f"det_ext_res_tsum_{p}", 0)
     working_df[f"det_ext_res_tdif_{p}"] = working_df.get(f"det_ext_res_tdif_{p}", 0)
+
+#%%
 
 
 if create_plots:
@@ -3944,6 +4677,18 @@ for iteration in range(repeat + 1):
 
 #%%
 
+
+
+
+
+
+
+
+
+#%%
+
+
+
 # ------------------------------------------------------------------------------------
 # End of TimTrack loop ---------------------------------------------------------------
 # ------------------------------------------------------------------------------------
@@ -4038,6 +4783,8 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
             title=f"timtrack_residuals_combo_{combo}",
         )
 
+
+#%%
 
 # Combine detached and TimTrack estimates ------------------------------------
 combined_core_vars = ["x", "y", "theta", "phi", "s", "t0"]
@@ -4247,6 +4994,8 @@ if 'datetime' in working_df.columns:
                 global_variables[f"{var}_{combo_int}_gauss1_amp"] = float(amp)
                 global_variables[f"{var}_{combo_int}_gauss1_mu"] = float(mu)
                 global_variables[f"{var}_{combo_int}_gauss1_sigma"] = float(sigma)
+
+#%%
 
         # Only plot if requested
         if create_plots or create_essential_plots:

@@ -3163,8 +3163,8 @@ if y_new_method:
 
 if create_plots:
 
-    for posfiltered_tt in [  12 ,  23,   34 ,1234 , 123 , 234,  124  , 13  , 14 ,24 , 134]:
-        mask = working_df['posfiltered_tt'] == posfiltered_tt
+    for cal_tt in [ 12, 23, 34, 1234, 123, 234, 124, 13, 14, 24, 134]:
+        mask = working_df['cal_tt'] == cal_tt
         filtered_df = working_df[mask].copy()  # Work on a copy for fitting
     
         plt.figure(figsize=(12, 8))
@@ -3190,10 +3190,10 @@ if create_plots:
             plt.ylabel('Counts')
             plt.grid(True)
         
-        plt.suptitle(f'Y Position Distribution for posfiltered_tt = {posfiltered_tt}', fontsize=16)
+        plt.suptitle(f'Y Position Distribution for cal_tt = {cal_tt}', fontsize=16)
         plt.tight_layout()
         if save_plots:
-            name_of_file = f'Y_{posfiltered_tt}'
+            name_of_file = f'Y_{cal_tt}'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)

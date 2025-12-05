@@ -23,6 +23,7 @@ from typing import Iterable, List, Sequence
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 pd.plotting.register_matplotlib_converters()
@@ -184,7 +185,20 @@ def _select_columns(df: pd.DataFrame, candidates: Sequence[str]) -> List[str]:
 
 
 def _coerce_numeric(series: pd.Series) -> pd.Series:
-    return pd.to_numeric(series, errors="coerce")
+    if isinstance(series, pd.DataFrame):
+        # Try to squeeze single-column frames; otherwise bail out gracefully
+        if series.shape[1] == 1:
+            series = series.iloc[:, 0]
+        else:
+            series = series.stack()
+    arr = np.asarray(series)
+    if arr.ndim > 1:
+        arr = arr.reshape(-1)
+    coerced = pd.to_numeric(arr, errors="coerce")
+    idx = getattr(series, "index", None)
+    if idx is not None and len(idx) == len(coerced):
+        return pd.Series(coerced, index=idx)
+    return pd.Series(coerced)
 
 
 def _print_column_catalog(
@@ -241,7 +255,14 @@ def _plot_panel(
     times = subset["Time"].map(pd.Timestamp.to_pydatetime).to_numpy()
     plotted = False
     for col in cols:
-        values = _coerce_numeric(subset[col])
+        col_values = subset[col]
+        if isinstance(col_values, pd.DataFrame):
+            if col_values.shape[1] == 1:
+                col_values = col_values.iloc[:, 0]
+            else:
+                print(f"[INFO] Skipping column group {col}: expected 1D data.")
+                continue
+        values = _coerce_numeric(col_values)
         if values.notna().any():
             mask = values.notna().to_numpy()
             ax.plot(times[mask], values[mask].to_numpy(), lw=1.1, label=col)
@@ -465,10 +486,10 @@ PLAYGROUND_ENABLED = True
 
 if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc work
     
-    station = "1"
+    station = "2"
     
     result = quicklook(
-        start="2025-06-16",
+        start="2025-08-10",
         end="2025-11-04",
         station=station,
         show=False,
@@ -531,14 +552,160 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     )
     plt.show()
     
+
     #%%
+
+    # Eff 1 is the ( 1 - events_df['234'] ) / events_df['1234']
+    if '1234' in events_df.columns and '234' in events_df.columns:
+        events_df["eff1"] = (1 - events_df['234'] / events_df['1234']).replace([np.inf, -np.inf], np.nan)
+    if '1234' in events_df.columns and '134' in events_df.columns:
+        events_df["eff2"] = (1 - events_df['134'] / events_df['1234']).replace([np.inf, -np.inf], np.nan)
+    if '1234' in events_df.columns and '124' in events_df.columns:
+        events_df["eff3"] = (1 - events_df['124'] / events_df['1234']).replace([np.inf, -np.inf], np.nan)
+    if '1234' in events_df.columns and '123' in events_df.columns:
+        events_df["eff4"] = (1 - events_df['123'] / events_df['1234']).replace([np.inf, -np.inf], np.nan)
     
+    # Plot 5 plots, one for each efficiency and one for "events"
+    fig, axes = plt.subplots(5, 1, figsize=(14, 15), sharex=True)
+    _plot_panel(
+        axes[0],
+        events_df,
+        ["events"],
+        title="Event rates",
+        ylabel="events / 2h",
+    )
+    _plot_panel(
+        axes[1],
+        events_df,
+        ["eff1"],
+        title="Efficiency 1",
+        ylabel="eff1",
+    )
+    _plot_panel(
+        axes[2],
+        events_df,
+        ["eff2"],
+        title="Efficiency 2",
+        ylabel="eff2",
+    )
+    _plot_panel(
+        axes[3],
+        events_df,
+        ["eff3"],
+        title="Efficiency 3",
+        ylabel="eff3",
+    )
+    _plot_panel(
+        axes[4],
+        events_df,
+        ["eff4"],
+        title="Efficiency 4",
+        ylabel="eff4",
+    )
+    axes[-1].set_xlabel("Time")
+    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
+    fig.suptitle("Station custom quicklook with efficiencies", fontsize=14)
+    fig.tight_layout()
+    plt.show()
+
+    #%%
+
+    # Now i want you to detrend events against a polynomic nth grade combination of the efficiencies
+    # For example, a 2nd grade polynomial would be:
+    # events ~ a0 + a1*eff1 + a2*eff2 + a3*eff3 + a4*eff4 + a5*eff1^2 + a6*eff2^2 + a7*eff3^2 + a8*eff4^2 + a9*eff1*eff2 + a10*eff1*eff3 + ...
+    # You can choose the degree of the polynomial (e.g., 2 for quadratic, 3 for cubic, etc.)
+    # Use numpy or scipy to perform the polynomial fitting and detrending.
+    # After detrending, plot the original events and the detrended events for comparison.
+    from itertools import combinations_with_replacement
+    def detrend_polynomial(
+        df: pd.DataFrame,
+        *,
+        y_col: str,
+        x_cols: Sequence[str],
+        degree: int = 2,
+        label: str = "polynomial",
+        quantile: float = 0.99,
+    ) -> pd.Series:
+        """Remove polynomial dependence on multiple predictors at once."""
+        numeric = df[[y_col, *x_cols]].apply(pd.to_numeric, errors="coerce")
+        subset = numeric.dropna()
+        if subset.empty:
+            print(f"[INFO] No data to fit {label}; returning original series.")
+            return numeric[y_col]
+
+        trimmed = subset
+        for col in subset.columns:
+            lo, hi = subset[col].quantile([1 - quantile, quantile])
+            trimmed = trimmed[trimmed[col].between(lo, hi)]
+        if trimmed.empty:
+            trimmed = subset
+
+        y_trim = trimmed[y_col].to_numpy()
+        
+        # Build design matrix with polynomial terms
+        X_terms = []
+        for deg in range(1, degree + 1):
+            for combo in combinations_with_replacement(x_cols, deg):
+                term = np.prod([trimmed[col].to_numpy() for col in combo], axis=0)
+                X_terms.append(term)
+        X_design = np.column_stack([np.ones(len(trimmed)), *X_terms])
+        
+        coef, _, _, _ = np.linalg.lstsq(X_design, y_trim, rcond=None)
+
+        y_pred_trim = X_design @ coef
+        ss_res = float(np.sum((y_trim - y_pred_trim) ** 2))
+        ss_tot = float(np.sum((y_trim - y_trim.mean()) ** 2))
+        r2 = 1 - ss_res / ss_tot if ss_tot else float("nan")
+
+        print(
+            f"[INFO] {label} fit: degree={degree}, r2={r2:.3f}, n={len(trimmed)}"
+        )
+
+        corrected = numeric[y_col].copy()
+        valid_mask = numeric.notna().all(axis=1)
+        if valid_mask.any():
+            X_all_terms = []
+            for deg in range(1, degree + 1):
+                for combo in combinations_with_replacement(x_cols, deg):
+                    term = np.prod(
+                        [numeric.loc[valid_mask, col].to_numpy() for col in combo],
+                        axis=0,
+                    )
+                    X_all_terms.append(term)
+            X_all_design = np.column_stack([np.ones(len(X_all_terms[0])), *X_all_terms])
+            predicted = X_all_design @ coef
+            corrected.loc[valid_mask] = numeric.loc[valid_mask, y_col] - predicted
+        return corrected
+    detrended_events = detrend_polynomial(
+        events_df,
+        y_col="events",
+        x_cols=["eff1", "eff2", "eff3", "eff4"],
+        degree=2,
+        label="Polynomial detrending",
+    )
+
     
-    
-    
-    
+
+    # Plot original and detrended events
+    fig, ax = plt.subplots(figsize=(14, 5))
+    times = events_df["Time"].map(pd.Timestamp.to_pydatetime).to_numpy()
+    ax.plot(times, events_df["events"], lw=1.1, label="Original Events")
+    ax.plot(times, detrended_events, lw=1.1, label="Detrended Events")
+    ax.set_title("Original vs Detrended Events")
+    ax.set_ylabel("events / 2h")
+    ax.set_xlabel("Time")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
+    ax.legend(loc="upper left", frameon=False)
+    fig.tight_layout()
+    plt.show()
+
+    #%%
+
+    events_df["detrended_events"] = detrended_events
+
     # Scatter/correction helpers to keep the plots compact and readable
     import numpy as np
+    from scipy import optimize
 
     def merge_events_and_logs(
         events: pd.DataFrame, lab_logs: pd.DataFrame, tolerance: str = "5min"
@@ -575,6 +742,51 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
             ax.set_title(title)
         fig.tight_layout()
         plt.show()
+    
+
+    # I want you to create scatter plots of the detrended events against eff1, eff2, eff3, and eff4
+    merged_df = merge_events_and_logs(events_df, lab_logs_df, tolerance="10min")
+    plot_scatter_pairs(
+        merged_df,
+        y_col="events",
+        pairs=[
+            ("eff1", "Efficiency 1", "Original Events vs Eff1", "blue"),
+            ("eff2", "Efficiency 2", "Original Events vs Eff2", "orange"),
+            ("eff3", "Efficiency 3", "Original Events vs Eff3", "green"),
+            ("eff4", "Efficiency 4", "Original Events vs Eff4", "red"),
+        ],
+        figsize=(16, 4),
+    )
+    
+    plot_scatter_pairs(
+        merged_df,
+        y_col="detrended_events",
+        pairs=[
+            ("eff1", "Efficiency 1", "Detrended Events vs Eff1", "blue"),
+            ("eff2", "Efficiency 2", "Detrended Events vs Eff2", "orange"),
+            ("eff3", "Efficiency 3", "Detrended Events vs Eff3", "green"),
+            ("eff4", "Efficiency 4", "Detrended Events vs Eff4", "red"),
+        ],
+        figsize=(16, 4),
+    )
+
+    #%%
+
+    # More things: give me the variables fitted in the detrending step
+    # i want the coefficients of the polynomial fit used in the detrending step
+    # and their uncertainties if possible.
+
+
+
+
+
+    #%%
+    
+    
+    
+    
+    
+    
 
     def detrend_multilinear(
         df: pd.DataFrame,
@@ -625,6 +837,216 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
             corrected.loc[valid_mask] = numeric.loc[valid_mask, y_col] - predicted
         return corrected
 
+    def detrend_temp_exp_pressure(
+        df: pd.DataFrame,
+        *,
+        y_col: str,
+        temp_col: str,
+        pressure_col: str,
+        label: str = "Temp + exp(Pressure)",
+        quantile: float = 0.99,
+    ) -> pd.Series:
+        """Fit temperature linearly and pressure exponentially, return residual."""
+        numeric = df[[y_col, temp_col, pressure_col]].apply(pd.to_numeric, errors="coerce")
+        subset = numeric.dropna()
+        if subset.empty:
+            print(f"[INFO] No data to fit {label}; returning original series.")
+            return numeric[y_col]
+
+        trimmed = subset
+        for col in subset.columns:
+            lo, hi = subset[col].quantile([1 - quantile, quantile])
+            trimmed = trimmed[trimmed[col].between(lo, hi)]
+        if trimmed.empty:
+            trimmed = subset
+
+        y_trim = trimmed[y_col].to_numpy()
+        temps = trimmed[temp_col].to_numpy()
+        pressures = trimmed[pressure_col].to_numpy()
+        press_center = np.median(pressures)
+        temp_center = np.median(temps)
+
+        design = np.column_stack([np.ones(len(trimmed)), temps, pressures - press_center])
+        coef_lin, _, _, _ = np.linalg.lstsq(design, y_trim, rcond=None)
+        intercept_init, temp_slope_init, pressure_slope_init = coef_lin
+        k_init = 1.0 / max(np.std(pressures), 1.0)
+        amp_init = pressure_slope_init / max(k_init, 1e-6)
+
+        def model(X, intercept, temp_slope, amp, k):
+            temp, pressure = X
+            return intercept + temp_slope * temp + amp * (np.exp(k * (pressure - press_center) ) - 1.0)
+
+        try:
+            popt, _ = optimize.curve_fit(
+                model,
+                (temps, pressures),
+                y_trim,
+                p0=[intercept_init, temp_slope_init, amp_init, k_init],
+                maxfev=10000,
+                bounds=([-np.inf, -np.inf, -np.inf, -0.05], [np.inf, np.inf, np.inf, 0.05]),
+            )
+        except Exception as exc:
+            print(f"[INFO] {label} exp fit failed ({exc}); falling back to linear warm start.")
+            popt = [intercept_init, temp_slope_init, amp_init, k_init]
+
+        intercept_hat, temp_slope_hat, amp_hat, k_hat = popt
+        approx_pressure_slope = amp_hat * k_hat
+        y_pred_trim = model((temps, pressures), *popt)
+        ss_res = float(np.sum((y_trim - y_pred_trim) ** 2))
+        ss_tot = float(np.sum((y_trim - y_trim.mean()) ** 2))
+        r2 = 1 - ss_res / ss_tot if ss_tot else float("nan")
+
+        print(
+            f"[INFO] {label} exp fit: intercept={intercept_hat:.4g}, temp_slope={temp_slope_hat:.4g}, "
+            f"amp={amp_hat:.4g}, k={k_hat:.4g}, linearized_pressure_slope≈{approx_pressure_slope:.4g}, "
+            f"r2={r2:.3f}, n={len(trimmed)}"
+        )
+
+        corrected = numeric[y_col].copy()
+        valid_mask = numeric.notna().all(axis=1)
+        if valid_mask.any():
+            temps_all = numeric.loc[valid_mask, temp_col].to_numpy()
+            pressures_all = numeric.loc[valid_mask, pressure_col].to_numpy()
+            predicted = model((temps_all, pressures_all), *popt)
+            corrected.loc[valid_mask] = numeric.loc[valid_mask, y_col] - predicted
+        return corrected
+
+    def detrend_poly3_temp_pressure(
+        df: pd.DataFrame,
+        *,
+        y_col: str,
+        temp_col: str,
+        pressure_col: str,
+        label: str = "Temp + Pressure poly3",
+        quantile: float = 0.99,
+    ) -> pd.Series:
+        """Fit a full 2D polynomial (temp, pressure) up to degree 3; return residual."""
+        numeric = df[[y_col, temp_col, pressure_col]].apply(pd.to_numeric, errors="coerce")
+        subset = numeric.dropna()
+        if subset.empty:
+            print(f"[INFO] No data to fit {label}; returning original series.")
+            return numeric[y_col]
+
+        trimmed = subset
+        for col in subset.columns:
+            lo, hi = subset[col].quantile([1 - quantile, quantile])
+            trimmed = trimmed[trimmed[col].between(lo, hi)]
+        if trimmed.empty:
+            trimmed = subset
+
+        y_trim = trimmed[y_col].to_numpy()
+        temps = trimmed[temp_col].to_numpy()
+        pressures = trimmed[pressure_col].to_numpy()
+        temp_center = temps.mean()
+        pressure_center = pressures.mean()
+        t = temps - temp_center
+        p = pressures - pressure_center
+
+        # Build polynomial features up to total degree 3
+        feats: list[np.ndarray] = [np.ones(len(trimmed))]
+        terms = []
+        for i in range(1, 4):  # degree 1..3
+            for j in range(i + 1):
+                power_t = i - j
+                power_p = j
+                terms.append((power_t, power_p))
+                feats.append((t**power_t) * (p**power_p))
+        X_design = np.column_stack(feats)
+        coef, _, _, _ = np.linalg.lstsq(X_design, y_trim, rcond=None)
+
+        y_pred_trim = X_design @ coef
+        ss_res = float(np.sum((y_trim - y_pred_trim) ** 2))
+        ss_tot = float(np.sum((y_trim - y_trim.mean()) ** 2))
+        r2 = 1 - ss_res / ss_tot if ss_tot else float("nan")
+
+        # First-order coefficients correspond to linear terms
+        linear_t = coef[1] if len(coef) > 1 else float("nan")
+        linear_p = coef[2] if len(coef) > 2 else float("nan")
+        print(
+            f"[INFO] {label} fit: intercept={coef[0]:.4g}, "
+            f"dT={linear_t:.4g}, dP={linear_p:.4g}, r2={r2:.3f}, n={len(trimmed)}"
+        )
+
+        corrected = numeric[y_col].copy()
+        valid_mask = numeric.notna().all(axis=1)
+        if valid_mask.any():
+            t_all = numeric.loc[valid_mask, temp_col].to_numpy() - temp_center
+            p_all = numeric.loc[valid_mask, pressure_col].to_numpy() - pressure_center
+            feats_all = [np.ones(len(t_all))]
+            for power_t, power_p in terms:
+                feats_all.append((t_all**power_t) * (p_all**power_p))
+            X_all = np.column_stack(feats_all)
+            predicted = X_all @ coef
+            corrected.loc[valid_mask] = numeric.loc[valid_mask, y_col] - predicted
+        return corrected
+
+    def detrend_poly4_temp_pressure(
+        df: pd.DataFrame,
+        *,
+        y_col: str,
+        temp_col: str,
+        pressure_col: str,
+        label: str = "Temp + Pressure poly4",
+        quantile: float = 0.99,
+    ) -> pd.Series:
+        """Fit a full 2D polynomial (temp, pressure) up to degree 4; return residual."""
+        numeric = df[[y_col, temp_col, pressure_col]].apply(pd.to_numeric, errors="coerce")
+        subset = numeric.dropna()
+        if subset.empty:
+            print(f"[INFO] No data to fit {label}; returning original series.")
+            return numeric[y_col]
+
+        trimmed = subset
+        for col in subset.columns:
+            lo, hi = subset[col].quantile([1 - quantile, quantile])
+            trimmed = trimmed[trimmed[col].between(lo, hi)]
+        if trimmed.empty:
+            trimmed = subset
+
+        y_trim = trimmed[y_col].to_numpy()
+        temps = trimmed[temp_col].to_numpy()
+        pressures = trimmed[pressure_col].to_numpy()
+        temp_center = temps.mean()
+        pressure_center = pressures.mean()
+        t = temps - temp_center
+        p = pressures - pressure_center
+
+        feats: list[np.ndarray] = [np.ones(len(trimmed))]
+        terms = []
+        for i in range(1, 8):  # degree 1..4
+            for j in range(i + 1):
+                power_t = i - j
+                power_p = j
+                terms.append((power_t, power_p))
+                feats.append((t**power_t) * (p**power_p))
+        X_design = np.column_stack(feats)
+        coef, _, _, _ = np.linalg.lstsq(X_design, y_trim, rcond=None)
+
+        y_pred_trim = X_design @ coef
+        ss_res = float(np.sum((y_trim - y_pred_trim) ** 2))
+        ss_tot = float(np.sum((y_trim - y_trim.mean()) ** 2))
+        r2 = 1 - ss_res / ss_tot if ss_tot else float("nan")
+
+        linear_t = coef[1] if len(coef) > 1 else float("nan")
+        linear_p = coef[2] if len(coef) > 2 else float("nan")
+        print(
+            f"[INFO] {label} fit: intercept={coef[0]:.4g}, "
+            f"dT={linear_t:.4g}, dP={linear_p:.4g}, r2={r2:.3f}, n={len(trimmed)}"
+        )
+
+        corrected = numeric[y_col].copy()
+        valid_mask = numeric.notna().all(axis=1)
+        if valid_mask.any():
+            t_all = numeric.loc[valid_mask, temp_col].to_numpy() - temp_center
+            p_all = numeric.loc[valid_mask, pressure_col].to_numpy() - pressure_center
+            feats_all = [np.ones(len(t_all))]
+            for power_t, power_p in terms:
+                feats_all.append((t_all**power_t) * (p_all**power_p))
+            X_all = np.column_stack(feats_all)
+            predicted = X_all @ coef
+            corrected.loc[valid_mask] = numeric.loc[valid_mask, y_col] - predicted
+        return corrected
+
     merged_df = merge_events_and_logs(events_df, lab_logs_df)
     temp_col = DEFAULT_TEMP_COLUMNS[0]
     pressure_col = DEFAULT_PRESSURE_COLUMNS[0]
@@ -666,41 +1088,188 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
                     ),
                 ],
             )
+
+            # Second try: exponential pressure contribution (linear term is first-order expansion)
+            merged_df["events_temp_exp_pressure_detrended"] = detrend_temp_exp_pressure(
+                merged_df,
+                y_col="events",
+                temp_col=temp_col,
+                pressure_col=pressure_col,
+                label="Temp + exp(Pressure)",
+            )
+            plot_scatter_pairs(
+                merged_df,
+                "events_temp_exp_pressure_detrended",
+                [
+                    (
+                        temp_col,
+                        "Temperature (°C)",
+                        "Exp-fit Events vs Temperature",
+                        "teal",
+                    ),
+                    (
+                        pressure_col,
+                        "Pressure (hPa)",
+                        "Exp-fit Events vs Pressure",
+                        "darkred",
+                    ),
+                ],
+            )
+
+            merged_df["events_temp_pressure_poly3_detrended"] = detrend_poly3_temp_pressure(
+                merged_df,
+                y_col="events",
+                temp_col=temp_col,
+                pressure_col=pressure_col,
+                label="Temp + Pressure poly3",
+            )
+            plot_scatter_pairs(
+                merged_df,
+                "events_temp_pressure_poly3_detrended",
+                [
+                    (
+                        temp_col,
+                        "Temperature (°C)",
+                        "Poly3-corrected Events vs Temperature",
+                        "navy",
+                    ),
+                    (
+                        pressure_col,
+                        "Pressure (hPa)",
+                        "Poly3-corrected Events vs Pressure",
+                        "darkorange",
+                    ),
+                ],
+            )
+
+            merged_df["events_temp_pressure_poly4_detrended"] = detrend_poly4_temp_pressure(
+                merged_df,
+                y_col="events",
+                temp_col=temp_col,
+                pressure_col=pressure_col,
+                label="Temp + Pressure poly4",
+            )
+            plot_scatter_pairs(
+                merged_df,
+                "events_temp_pressure_poly4_detrended",
+                [
+                    (
+                        temp_col,
+                        "Temperature (°C)",
+                        "Poly4-corrected Events vs Temperature",
+                        "darkcyan",
+                    ),
+                    (
+                        pressure_col,
+                        "Pressure (hPa)",
+                        "Poly4-corrected Events vs Pressure",
+                        "firebrick",
+                    ),
+                ],
+            )
         else:
             print("[INFO] Skipping multi-fit: temp or pressure column missing.")
+        
+        # Histograms to compare spread of the three detrending methods
+        hist_series = {
+            "Linear P": merged_df.get("events_temp_pressure_detrended"),
+            "Exp P": merged_df.get("events_temp_exp_pressure_detrended"),
+            "Poly3 P": merged_df.get("events_temp_pressure_poly3_detrended"),
+            "Poly4 P": merged_df.get("events_temp_pressure_poly4_detrended"),
+        }
+        hist_series = {k: v.dropna() for k, v in hist_series.items() if isinstance(v, pd.Series)}
+        if len(hist_series) >= 2:
+            fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=True)
+            bins = 40
+            for label, series in hist_series.items():
+                q05, q95 = series.quantile([0.05, 0.95])
+                values = series[series.between(q05, q95)]
+                axes[0].hist(
+                    values,
+                    bins=bins,
+                    histtype="step",
+                    linewidth=1.2,
+                    label=label,
+                    density=True,
+                )
+                series_centered = values - values.median()
+                axes[1].hist(
+                    series_centered,
+                    bins=bins,
+                    histtype="step",
+                    linewidth=1.2,
+                    label=label,
+                    density=True,
+                )
+            axes[0].set_title("Detrended events histograms")
+            axes[0].set_xlabel("events / min")
+            axes[0].set_ylabel("density")
+            axes[1].set_title("Centered (median) histograms")
+            axes[1].set_xlabel("events / min (centered)")
+            axes[0].legend(frameon=False)
+            fig.tight_layout()
+            plt.show()
+        else:
+            print("[INFO] Skipping histogram comparison: not enough detrended series.")
     
     
     
     #%%
     
     
-    # Plot the original events and the corrected events superimposed vs time
+    # Plot the original events and the corrected events (three cases) vs time
+    available_cases = []
     if "events_temp_pressure_detrended" in merged_df.columns:
-        fig, ax = plt.subplots(figsize=(14, 5))
+        available_cases.append(
+            ("events_temp_pressure_detrended", "Corrected (linear P)", "red")
+        )
+    if "events_temp_exp_pressure_detrended" in merged_df.columns:
+        available_cases.append(
+            ("events_temp_exp_pressure_detrended", "Corrected (exp P)", "teal")
+        )
+    if "events_temp_pressure_poly3_detrended" in merged_df.columns:
+        available_cases.append(
+            ("events_temp_pressure_poly3_detrended", "Corrected (poly3 P)", "purple")
+        )
+    if "events_temp_pressure_poly4_detrended" in merged_df.columns:
+        available_cases.append(
+            ("events_temp_pressure_poly4_detrended", "Corrected (poly4 P)", "darkcyan")
+        )
+
+    if available_cases:
         times = merged_df["Time"].map(pd.Timestamp.to_pydatetime).to_numpy()
-        ax.plot(
-            times,
-            merged_df["events"] - merged_df["events"].mean(),
-            label="Original Events",
-            color="blue",
-            alpha=0.6,
-            lw=1.1,
+        events_center = merged_df["events"].median()
+        ev_q1, ev_q3 = merged_df["events"].quantile([0.01, 0.99])
+        ev_iqr_mask = merged_df["events"].between(ev_q1, ev_q3)
+        events_scale = merged_df.loc[ev_iqr_mask, "events"].sub(events_center).std()
+        events_z = (
+            merged_df["events"].sub(events_center) / events_scale
+            if events_scale and not pd.isna(events_scale)
+            else merged_df["events"].sub(events_center)
         )
-        ax.plot(
-            times,
-            merged_df["events_temp_pressure_detrended"],
-            label="Corrected Events",
-            color="red",
-            alpha=0.8,
-            lw=1.1,
-        )
-        ax.set_title("Original vs Corrected Events Over Time")
-        ax.set_ylabel("events / min")
-        ax.set_xlabel("Time")
-        # Y limits between 1000 and -1000
-        ax.set_ylim(-10000,10000)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
-        ax.legend(loc="upper left", frameon=False)
+        fig, axes = plt.subplots(len(available_cases), 1, figsize=(14, 4.5 * len(available_cases)), sharex=True)
+        if len(available_cases) == 1:
+            axes = [axes]
+        for ax, (col, label, color) in zip(axes, available_cases):
+            corr_center = merged_df[col].median()
+            c_q1, c_q3 = merged_df[col].quantile([0.01, 0.99])
+            corr_mask = merged_df[col].between(c_q1, c_q3)
+            corr_scale = merged_df.loc[corr_mask, col].sub(corr_center).std()
+            corrected_z = (
+                merged_df[col].sub(corr_center) / corr_scale
+                if corr_scale and not pd.isna(corr_scale)
+                else merged_df[col].sub(corr_center)
+            )
+            ax.plot(times, events_z, label="Original (z-score)", color="blue", alpha=0.6, lw=1.0)
+            ax.plot(times, corrected_z, label=f"{label} (z-score)", color=color, alpha=0.85, lw=1.1)
+            ax.set_ylabel("events (median z-score)")
+            ax.set_title(f"Original vs {label} (median-centered z)")
+            # Limit to ~±3 sigma to reduce outlier influence on display
+            y_span = 3.0
+            ax.set_ylim(-y_span, y_span)
+            ax.legend(loc="upper left", frameon=False)
+        axes[-1].set_xlabel("Time")
+        axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
         fig.tight_layout()
         plt.show()
     
@@ -1279,6 +1848,7 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
 
     result["events"] = events_df
     
+    #%%
     
     # Plot the ang_regions in different subplots acccording to the first number after R
     region_groups = [
@@ -1304,6 +1874,9 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
 
 
     
+
+
+    #%%
     
     # Plot RX_eff_Y for X in [0.0, 1.0, 1.1, 1.2, ...] and Y in 1-4 in different subplots
     # In a superplot with 4 columns (one per plane) and as many rows as needed
@@ -1408,7 +1981,7 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
 
         plt.show()
     
-    
+    #%%
     
     fig, axes = plt.subplots(num_rows, num_planes, figsize=(4 * num_planes, 3 * num_rows), sharex=True, sharey=True)
     for row_idx, region in enumerate(region_names):
@@ -1447,6 +2020,11 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     fig.suptitle("Angular Region Efficiencies by Plane", fontsize=14)
     fig.tight_layout()
     plt.show()
+
+
+
+
+    #%%
     
     
     

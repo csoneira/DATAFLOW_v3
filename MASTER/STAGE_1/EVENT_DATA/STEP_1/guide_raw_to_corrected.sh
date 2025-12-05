@@ -80,6 +80,138 @@ TASK_LABELS=(
   "fit_to_corr"
 )
 
+TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/TRAFFIC_LIGHT"
+TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step1_station_task_queue.txt"
+
+build_default_queue_order() {
+  local -n out_arr=$1
+  out_arr=()
+  for task_id in "${ALL_TASK_IDS[@]}"; do
+    for station in "${ALL_STATIONS[@]}"; do
+      out_arr+=("${station}-${task_id}")
+    done
+  done
+}
+
+sanitize_queue_file() {
+  local -a default_pairs sanitized
+  build_default_queue_order default_pairs
+
+  declare -A valid_map=()
+  for pair in "${default_pairs[@]}"; do
+    valid_map["$pair"]=1
+  done
+
+  sanitized=()
+  declare -A seen_pairs=()
+  if [[ -s "$TRAFFIC_QUEUE_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line//$'\r'/}"
+      line="${line//[$'\t ']/}"
+      [[ -z "$line" ]] && continue
+      if [[ -n "${valid_map[$line]:-}" && -z "${seen_pairs[$line]:-}" ]]; then
+        sanitized+=("$line")
+        seen_pairs["$line"]=1
+      fi
+    done <"$TRAFFIC_QUEUE_FILE"
+  fi
+
+  for pair in "${default_pairs[@]}"; do
+    if [[ -z "${seen_pairs[$pair]:-}" ]]; then
+      sanitized+=("$pair")
+    fi
+  done
+
+  if [[ ${#sanitized[@]} -eq 0 ]]; then
+    sanitized=("${default_pairs[@]}")
+  fi
+
+  {
+    for pair in "${sanitized[@]}"; do
+      echo "$pair"
+    done
+  } >"$TRAFFIC_QUEUE_FILE"
+}
+
+traffic_light_queue_init() {
+  mkdir -p "$TRAFFIC_LIGHT_DIR"
+  sanitize_queue_file
+}
+
+load_queue_snapshot() {
+  local -n out_arr=$1
+  out_arr=()
+  [[ -f "$TRAFFIC_QUEUE_FILE" ]] || sanitize_queue_file
+  if [[ -f "$TRAFFIC_QUEUE_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line//$'\r'/}"
+      line="${line//[$'\t ']/}"
+      [[ -z "$line" ]] && continue
+      out_arr+=("$line")
+    done <"$TRAFFIC_QUEUE_FILE"
+  fi
+}
+
+build_iteration_pairs_from_queue() {
+  local -n out_arr=$1
+  local -A requested_map=()
+  for pair in "${execution_pairs[@]}"; do
+    requested_map["$pair"]=0
+  done
+
+  local -a queue_snapshot
+  load_queue_snapshot queue_snapshot
+
+  out_arr=()
+  for pair in "${queue_snapshot[@]}"; do
+    if [[ -n "${requested_map[$pair]:-}" ]]; then
+      out_arr+=("$pair")
+      requested_map["$pair"]=1
+    fi
+  done
+
+  for pair in "${execution_pairs[@]}"; do
+    if [[ "${requested_map[$pair]}" -ne 1 ]]; then
+      out_arr+=("$pair")
+    fi
+  done
+
+  if [[ ${#out_arr[@]} -eq 0 ]]; then
+    out_arr=("${execution_pairs[@]}")
+  fi
+}
+
+rotate_pair_to_queue_end() {
+  local pair="$1"
+  [[ -f "$TRAFFIC_QUEUE_FILE" ]] || sanitize_queue_file
+  local -a snapshot new_order
+  snapshot=()
+  if [[ -f "$TRAFFIC_QUEUE_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line//$'\r'/}"
+      line="${line//[$'\t ']/}"
+      [[ -z "$line" ]] && continue
+      snapshot+=("$line")
+    done <"$TRAFFIC_QUEUE_FILE"
+  fi
+
+  local moved=false
+  for entry in "${snapshot[@]}"; do
+    if [[ "$entry" == "$pair" && "$moved" == false ]]; then
+      moved=true
+      continue
+    fi
+    new_order+=("$entry")
+  done
+  new_order+=("$pair")
+
+  {
+    for entry in "${new_order[@]}"; do
+      echo "$entry"
+    done
+  } >"$TRAFFIC_QUEUE_FILE"
+}
+
 parse_list() {
   local raw="$1"
   local default_array_name="$2"
@@ -102,6 +234,42 @@ parse_list() {
 
 ALL_STATIONS=(1 2 3 4)
 ALL_TASK_IDS=(1 2 3 4 5)
+
+# Collect the PID chain (this shell plus ancestors spawned by cron/bash -c) so
+# the duplicate detector can ignore them when scanning for real other runs.
+SELF_INVOCATION_PIDS=()
+
+collect_self_invocation_pids() {
+  local pid="$$"
+  local guard=0
+
+  while [[ -n "$pid" && "$pid" =~ ^[0-9]+$ && $pid -gt 1 && $guard -lt 20 ]]; do
+    SELF_INVOCATION_PIDS+=("$pid")
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    guard=$((guard + 1))
+    [[ -z "$pid" ]] && break
+  done
+
+  if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]]; then
+    SELF_INVOCATION_PIDS+=("$pid")
+  fi
+
+  if [[ -n "${PPID:-}" && "$PPID" =~ ^[0-9]+$ ]]; then
+    SELF_INVOCATION_PIDS+=("$PPID")
+  fi
+}
+
+collect_self_invocation_pids
+
+pid_is_self_or_ancestor() {
+  local candidate="$1"
+  for spid in "${SELF_INVOCATION_PIDS[@]}"; do
+    if [[ -n "$spid" && "$candidate" == "$spid" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 parse_list "$station_filter_raw" ALL_STATIONS stations_requested
 parse_list "$task_filter_raw" ALL_TASK_IDS tasks_requested
@@ -275,44 +443,76 @@ wait_for_resources() {
 }
 
 pipeline_already_running() {
-  local self_pid="$$"
   local target_station="$1"
 
   while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
     local pid="${line%% *}"
     local cmd="${line#* }"
-    [[ "$pid" == "$self_pid" ]] && continue
+    [[ -z "$pid" || "$pid" == "$line" ]] && continue
+    [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
+
+    if pid_is_self_or_ancestor "$pid"; then
+      continue
+    fi
     [[ "$cmd" != *"guide_raw_to_corrected.sh"* ]] && continue
 
-    # Accept either --station N, --station=N, or legacy positional "<script> N"
     if [[ "$cmd" == *"--station ${target_station}"* || "$cmd" == *"--station=${target_station}"* || "$cmd" == *" ${target_station}"* ]]; then
-      echo "$line"
+      echo "$pid $cmd"
       return 0
     fi
   done < <(ps -eo pid=,args=)
   return 1
 }
 
+
 any_pipeline_running() {
-  local self_pid="$$"
   local hits
   hits=$(pgrep -af "guide_raw_to_corrected.sh" || true)
+
+  local self_pid="$$"
+
+  echo "DEBUG any_pipeline_running: self_pid=$self_pid"
+  echo "DEBUG any_pipeline_running: pgrep hits:"
+  printf 'DEBUG   %s\n' "$hits"
+
+  local found_other=1
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     local pid="${line%% *}"
-    [[ "$pid" == "$self_pid" ]] && continue
-    # ignore the pgrep command itself if it shows up
-    [[ "$line" == *"pgrep"* ]] && continue
+
+    if [[ -z "$pid" ]] || [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+      continue
+    fi
+    if pid_is_self_or_ancestor "$pid"; then
+      echo "DEBUG   skipping self/ancestor pid=$pid"
+      continue
+    fi
+    if (( pid >= self_pid )); then
+      echo "DEBUG   ignoring pid=$pid (started after self)"
+      continue
+    fi
+    if [[ "$line" == *"pgrep"* ]]; then
+      echo "DEBUG   skipping pgrep line: $line"
+      continue
+    fi
+
+    echo "DEBUG   found other instance: $line"
     echo "$line"
-    return 0
+    found_other=0
+    break
   done <<<"$hits"
-  return 1
+
+  return $found_other
 }
+
 
 load_resource_limits
 
 echo '------------------------------------------------------'
 echo '------------------------------------------------------'
+
+traffic_light_queue_init
 
 iteration=1
 if [[ "$run_anyway" != true ]]; then
@@ -326,51 +526,40 @@ else
   echo "--run-anyway set; skipping other-instance check."
 fi
 
-skip_all=true
-for st in "${stations_requested[@]}"; do
-  if pipeline_already_running "$st"; then
-    echo "Another guide_raw_to_corrected.sh is already running for station $st; skipping this station."
-    continue
-  fi
-  skip_all=false
-done
-
-if [[ "$skip_all" == true ]]; then
-  echo "All requested stations are already being processed by another guide_raw_to_corrected.sh; exiting."
-  exit 0
-fi
 
 while true; do
   echo "Pipeline iteration $iteration started at: $(date '+%Y-%m-%d %H:%M:%S')"
-  for task_id in "${tasks_requested[@]}"; do
+  build_iteration_pairs_from_queue iteration_pairs
+  echo "Traffic-light queue snapshot: ${iteration_pairs[*]}"
+  for pair in "${iteration_pairs[@]}"; do
+    IFS='-' read -r station task_id <<<"$pair"
     task_index=$((task_id - 1))
     task_script="${TASK_SCRIPTS[$task_index]}"
     task_label="${TASK_LABELS[$task_index]}"
-    for st in "${stations_requested[@]}"; do
-      station="$st"
-      echo "Considering station $station task${task_id} (${task_label}) ..."
-      if pipeline_already_running "$station"; then
-        echo "Station $station already handled by another guide_raw_to_corrected.sh; skipping."
-        echo '------------------------------------------------------'
-        continue
-      fi
-      if [[ ! -x "$task_script" ]]; then
-        echo "Warning: task script $task_script not found or not executable. Skipping."
-        continue
-      fi
-      if ! wait_for_resources; then
-        echo "Skipping station $station task${task_id} (${task_label}) this loop due to high load."
-        echo '------------------------------------------------------'
-        continue
-      fi
-      echo "Running station $station task${task_id} (${task_label}) ..."
-      if ! python3 -u "$task_script" "$station"; then
-        echo "Task $(basename "$task_script") failed for station $station; aborting pipeline."
-        exit 1
-      fi
-      echo "Completed station $station task${task_id} (${task_label})."
+    echo "Considering station $station task${task_id} (${task_label}) ..."
+    rotate_pair_to_queue_end "$pair"
+    if pipeline_already_running "$station"; then
+      echo "Station $station already handled by another guide_raw_to_corrected.sh; skipping."
       echo '------------------------------------------------------'
-    done
+      continue
+    fi
+    if [[ ! -x "$task_script" ]]; then
+      echo "Warning: task script $task_script not found or not executable. Skipping."
+      continue
+    fi
+    if ! wait_for_resources; then
+      echo "Skipping station $station task${task_id} (${task_label}) this loop due to high load."
+      echo '------------------------------------------------------'
+      continue
+    fi
+    echo "Running station $station task${task_id} (${task_label}) ..."
+    if ! python3 -u "$task_script" "$station"; then
+      echo "Task $(basename "$task_script") failed for station $station; continuing to next pair."
+      echo '------------------------------------------------------'
+      continue
+    fi
+    echo "Completed station $station task${task_id} (${task_label})."
+    echo '------------------------------------------------------'
   done
   echo "Pipeline iteration $iteration completed at: $(date '+%Y-%m-%d %H:%M:%S')"
   echo '------------------------------------------------------'

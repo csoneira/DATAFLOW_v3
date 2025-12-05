@@ -1,37 +1,352 @@
 #!/bin/bash
 
-if [[ $# -ne 1 || "$1" =~ ^(-h|--help)$ ]]; then
+print_help() {
   cat <<'EOF'
 guide_accumulated_to_joined.sh
-Guides accumulated event data files to be joined into final output files.
+Launches STAGE_1 EVENT_DATA STEP_3 for one or more stations.
+
 Usage:
-  guide_accumulated_to_joined.sh <station>
+  guide_accumulated_to_joined.sh [--station <list>] [--run-anyway]
+
 Options:
-  -h, --help    Show this help message and exit.
-Pass the station number (1-4). The script runs the distributor and joiner for that station.
+  -s, --station   Station numbers (1-4). Comma/space-separated. Default: all.
+  --run-anyway    Skip the check that prevents overlapping runs.
+  -h, --help      Show this help message and exit.
+
+When run without arguments (typical cron usage), the script loops
+continuously, processing stations according to the traffic-light queue
+persisted in EXECUTION_LOGS/TRAFFIC_LIGHT. Each station is moved to the end
+of the queue as soon as it is selected, so the next invocation continues with
+the following station even if the current run exits early.
 EOF
-  exit 0
+}
+
+station_filter_raw="all"
+station_filter_overridden=false
+run_anyway=false
+no_loop=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -s|--station)
+      station_filter_raw="${2:-}"
+      station_filter_overridden=true
+      shift 2
+      ;;
+    --station=*)
+      station_filter_raw="${1#*=}"
+      station_filter_overridden=true
+      shift
+      ;;
+    --run-anyway)
+      run_anyway=true
+      shift
+      ;;
+    --no-loop)
+      no_loop=true
+      shift
+      ;;
+    -h|--help)
+      print_help
+      exit 0
+      ;;
+    [1-4])
+      station_filter_raw="$1"
+      station_filter_overridden=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      print_help
+      exit 1
+      ;;
+  esac
+done
+
+ALL_STATIONS=(1 2 3 4)
+TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/TRAFFIC_LIGHT"
+TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step3_station_queue.txt"
+
+SELF_INVOCATION_PIDS=()
+
+collect_self_invocation_pids() {
+  local pid="$$"
+  local guard=0
+
+  while [[ -n "$pid" && "$pid" =~ ^[0-9]+$ && $pid -gt 1 && $guard -lt 20 ]]; do
+    SELF_INVOCATION_PIDS+=("$pid")
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    guard=$((guard + 1))
+    [[ -z "$pid" ]] && break
+  done
+
+  if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]]; then
+    SELF_INVOCATION_PIDS+=("$pid")
+  fi
+
+  if [[ -n "${PPID:-}" && "$PPID" =~ ^[0-9]+$ ]]; then
+    SELF_INVOCATION_PIDS+=("$PPID")
+  fi
+}
+
+collect_self_invocation_pids
+
+pid_is_self_or_ancestor() {
+  local candidate="$1"
+  for spid in "${SELF_INVOCATION_PIDS[@]}"; do
+    if [[ -n "$spid" && "$candidate" == "$spid" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+parse_list() {
+  local raw="$1"
+  local default_array_name="$2"
+  local out_var="$3"
+
+  if [[ -z "$raw" || "$raw" == "all" ]]; then
+    eval "$out_var=(\"\${${default_array_name}[@]}\")"
+    return
+  fi
+
+  local tmp=()
+  IFS=', ' read -r -a parts <<<"$raw"
+  for p in "${parts[@]}"; do
+    [[ -z "$p" ]] && continue
+    tmp+=("$p")
+  done
+  eval "$out_var=(\"\${tmp[@]}\")"
+}
+
+sanitize_queue_file() {
+  mkdir -p "$TRAFFIC_LIGHT_DIR"
+  local -a sanitized
+  local -A valid_map=()
+  for st in "${ALL_STATIONS[@]}"; do
+    valid_map["$st"]=1
+  done
+
+  sanitized=()
+  declare -A seen=()
+  if [[ -s "$TRAFFIC_QUEUE_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line//$'\r'/}"
+      line="${line//[$'\t ']/}"
+      [[ -z "$line" ]] && continue
+      if [[ -n "${valid_map[$line]:-}" && -z "${seen[$line]:-}" ]]; then
+        sanitized+=("$line")
+        seen["$line"]=1
+      fi
+    done <"$TRAFFIC_QUEUE_FILE"
+  fi
+
+  for st in "${ALL_STATIONS[@]}"; do
+    if [[ -z "${seen[$st]:-}" ]]; then
+      sanitized+=("$st")
+    fi
+  done
+
+  if [[ ${#sanitized[@]} -eq 0 ]]; then
+    sanitized=("${ALL_STATIONS[@]}")
+  fi
+
+  {
+    for st in "${sanitized[@]}"; do
+      echo "$st"
+    done
+  } >"$TRAFFIC_QUEUE_FILE"
+}
+
+load_queue_snapshot() {
+  local -n out_arr=$1
+  out_arr=()
+  [[ -f "$TRAFFIC_QUEUE_FILE" ]] || sanitize_queue_file
+  if [[ -f "$TRAFFIC_QUEUE_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line//$'\r'/}"
+      line="${line//[$'\t ']/}"
+      [[ -z "$line" ]] && continue
+      out_arr+=("$line")
+    done <"$TRAFFIC_QUEUE_FILE"
+  fi
+}
+
+build_iteration_stations() {
+  local -n out_arr=$1
+  local -A requested_map=()
+  for st in "${stations_requested[@]}"; do
+    requested_map["$st"]=0
+  done
+
+  local -a queue_snapshot
+  load_queue_snapshot queue_snapshot
+
+  out_arr=()
+  for entry in "${queue_snapshot[@]}"; do
+    if [[ -n "${requested_map[$entry]:-}" ]]; then
+      out_arr+=("$entry")
+      requested_map["$entry"]=1
+    fi
+  done
+
+  for st in "${stations_requested[@]}"; do
+    if [[ "${requested_map[$st]}" -ne 1 ]]; then
+      out_arr+=("$st")
+    fi
+  done
+
+  if [[ ${#out_arr[@]} -eq 0 ]]; then
+    out_arr=("${stations_requested[@]}")
+  fi
+}
+
+rotate_station_to_queue_end() {
+  local station="$1"
+  [[ -f "$TRAFFIC_QUEUE_FILE" ]] || sanitize_queue_file
+  local -a snapshot new_order
+  snapshot=()
+  if [[ -f "$TRAFFIC_QUEUE_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line//$'\r'/}"
+      line="${line//[$'\t ']/}"
+      [[ -z "$line" ]] && continue
+      snapshot+=("$line")
+    done <"$TRAFFIC_QUEUE_FILE"
+  fi
+
+  local moved=false
+  for entry in "${snapshot[@]}"; do
+    if [[ "$entry" == "$station" && "$moved" == false ]]; then
+      moved=true
+      continue
+    fi
+    new_order+=("$entry")
+  done
+  new_order+=("$station")
+
+  {
+    for entry in "${new_order[@]}"; do
+      echo "$entry"
+    done
+  } >"$TRAFFIC_QUEUE_FILE"
+}
+
+parse_list "$station_filter_raw" ALL_STATIONS stations_requested
+
+validate_stations() {
+  local arr=("$@")
+  local validated=()
+  for st in "${arr[@]}"; do
+    if [[ "$st" =~ ^[1-4]$ ]]; then
+      validated+=("$st")
+    else
+      echo "Warning: ignoring invalid station '$st'" >&2
+    fi
+  done
+  if [[ ${#validated[@]} -eq 0 ]]; then
+    echo "Error: no valid stations to process." >&2
+    exit 1
+  fi
+  stations_requested=("${validated[@]}")
+}
+
+validate_stations "${stations_requested[@]}"
+
+use_traffic_light=true
+if [[ "$station_filter_overridden" == true ]]; then
+  use_traffic_light=false
 fi
 
-station=$1
-if [[ ! "$station" =~ ^[1-4]$ ]]; then
-  echo "Error: Invalid station number. Please provide a number between 1 and 4."
-  exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MASTER_DIR="$SCRIPT_DIR"
+while [[ "$MASTER_DIR" != "/" && "$(basename "$MASTER_DIR")" != "MASTER" ]]; do
+  MASTER_DIR="$(dirname "$MASTER_DIR")"
+done
+accumulated_distributor_py="$SCRIPT_DIR/TASK_1/accumulated_distributor.py"
+distributed_joiner_py="$SCRIPT_DIR/TASK_2/distributed_joiner.py"
 
-script_name=$(basename "$0")
-lockfile="/tmp/${script_name}_${station}.lock"
+any_pipeline_running() {
+  local hits
+  local self_pid="$$"
+  hits=$(pgrep -af "guide_accumulated_to_joined.sh" || true)
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local pid="${line%% *}"
+    [[ -z "$pid" ]] && continue
+    [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
+    if pid_is_self_or_ancestor "$pid"; then
+      continue
+    fi
+    if (( pid >= self_pid )); then
+      continue
+    fi
+    [[ "$line" == *"pgrep"* ]] && continue
+    echo "$line"
+    return 0
+  done <<<"$hits"
+  return 1
+}
 
-# Acquire exclusive lock so we do not run overlapping instances for the same station.
-exec 200>"$lockfile"
-if ! flock -n 200; then
+process_station() {
+  local station="$1"
   echo "------------------------------------------------------"
-  echo "$(date): $script_name is already running for station $station (lock held in $lockfile). Exiting."
-  echo "------------------------------------------------------"
-  exit 1
-fi
-trap 'rm -f "$lockfile"' EXIT
-echo "$(date) - Lock acquired ($lockfile). Proceeding with station $station."
+  echo "Processing STEP_3 for station $station"
 
-python3 $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/TASK_1/accumulated_distributor.py $station
-python3 $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/TASK_2/distributed_joiner.py $station
+  if ! python3 -u "$accumulated_distributor_py" "$station"; then
+    echo "Station $station STEP_3 distributor failed; continuing with next station."
+    return 1
+  fi
+
+  if ! python3 -u "$distributed_joiner_py" "$station"; then
+    echo "Station $station STEP_3 joiner failed; continuing with next station."
+    return 1
+  fi
+
+  echo "Station $station STEP_3 completed."
+  return 0
+}
+
+echo "------------------------------------------------------"
+echo "guide_accumulated_to_joined.sh started on: $(date)"
+echo "Stations: ${stations_requested[*]}"
+echo "Traffic-light mode: $use_traffic_light"
+echo "------------------------------------------------------"
+
+if [[ "$use_traffic_light" == true ]]; then
+  sanitize_queue_file
+fi
+
+if [[ "$run_anyway" != true ]]; then
+  if any_pipeline_running; then
+    echo "Another guide_accumulated_to_joined.sh is already running; exiting. Use --run-anyway to override."
+    exit 0
+  fi
+fi
+
+iteration=1
+
+if [[ "$use_traffic_light" == true ]]; then
+  while true; do
+    echo "STEP_3 iteration $iteration started at: $(date '+%Y-%m-%d %H:%M:%S')"
+    build_iteration_stations iteration_stations
+    echo "Traffic-light queue snapshot: ${iteration_stations[*]}"
+    for station in "${iteration_stations[@]}"; do
+      rotate_station_to_queue_end "$station"
+      process_station "$station"
+    done
+    echo "STEP_3 iteration $iteration completed at: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "------------------------------------------------------"
+    iteration=$((iteration + 1))
+    if [[ "$no_loop" == true ]]; then
+      echo "--no-loop flag set; exiting after single pass."
+      break
+    fi
+    echo "Starting next iteration..."
+  done
+else
+  for station in "${stations_requested[@]}"; do
+    process_station "$station"
+  done
+fi

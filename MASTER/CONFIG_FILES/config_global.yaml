@@ -67,6 +67,11 @@ max_gap_minutes_3: 40
 min_gap_minutes_4: 60
 max_gap_minutes_4: 140
 
+use_processed_as_reject_list_1: true
+use_processed_as_reject_list_2: true
+use_processed_as_reject_list_3: true
+use_processed_as_reject_list_4: false
+
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -236,6 +241,13 @@ time_calibration_debug: false
 charge_front_back: true
 charge_front_back_fast: false
 charge_front_back_debug: false
+
+# Resource limits for STEP_1 pipeline (guide_raw_to_corrected.sh)
+event_data_resource_limits:
+  mem_used_pct_max: 90          # percent
+  swap_used_pct_max: 35         # percent
+  swap_used_kb_max: 4194304     # 4 GB in kB
+  cpu_used_pct_max: 95          # percent
 
 limit: false
 limit_fast: false

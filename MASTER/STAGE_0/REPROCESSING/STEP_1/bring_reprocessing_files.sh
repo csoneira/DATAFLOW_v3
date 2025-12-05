@@ -181,6 +181,8 @@ step0_output_directory="${step0_directory}/OUTPUT_FILES"
 
 brought_csv="${metadata_directory}/hld_files_brought.csv"
 brought_csv_header="hld_name,bring_timesamp"
+processed_csv="${MASTER_DIR}/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/OUTPUT_FILES/MINGO0${station}_processed_basenames.csv"
+config_file="${MASTER_DIR}/CONFIG_FILES/config_global.yaml"
 
 # STATUS_CSV="${metadata_directory}/bring_reprocessing_files_status.csv"
 # if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
@@ -230,6 +232,31 @@ cleanup() {
   [[ -n "$new_downloads_file" ]] && rm -f "$new_downloads_file"
 }
 trap cleanup EXIT
+
+read_config_value() {
+  local key="$1"
+  [[ ! -f "$config_file" ]] && return 0
+  python3 - "$key" "$config_file" <<'PY' || true
+import re
+import sys
+
+key = sys.argv[1]
+path = sys.argv[2]
+value = None
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            match = re.match(rf"\s*{re.escape(key)}\s*:\s*(\S+)", line)
+            if match:
+                value = match.group(1)
+                break
+except FileNotFoundError:
+    pass
+
+if value:
+    print(value.strip())
+PY
+}
 
 ensure_brought_csv() {
   if [[ ! -f "$brought_csv" || ! -s "$brought_csv" ]]; then
@@ -388,6 +415,30 @@ if [[ -s "$brought_csv" ]]; then
 fi
 log_info "Basenames already recorded as brought: ${#brought_basenames[@]}"
 
+skip_processed_exclusion=false
+config_key="use_processed_as_reject_list_${station}"
+config_setting=$(read_config_value "$config_key" | tr '[:upper:]' '[:lower:]')
+if [[ "$config_setting" == "true" ]]; then
+  skip_processed_exclusion=true
+fi
+
+declare -A processed_basenames=()
+if $skip_processed_exclusion; then
+  log_info "${config_key} is true in config_global.yaml; NOT excluding processed basenames."
+else
+  if [[ -s "$processed_csv" ]]; then
+    {
+      read -r _header || true
+      while IFS=',' read -r processed_name _rest; do
+        processed_name=${processed_name//$'\r'/}
+        [[ -z "$processed_name" || "$processed_name" == "basename" ]] && continue
+        processed_basenames["$processed_name"]=1
+      done
+    } < "$processed_csv"
+  fi
+  log_info "Basenames already processed (execution CSVs): ${#processed_basenames[@]}"
+fi
+
 log_info "Selecting basenames to download..."
 
 declare -a selected_bases=()
@@ -396,6 +447,9 @@ if $random_mode; then
   mapfile -t random_candidates < <(
     for base in "${metadata_basenames[@]}"; do
       [[ -n ${brought_basenames["$base"]+_} ]] && continue
+      if ! $skip_processed_exclusion && [[ -n ${processed_basenames["$base"]+_} ]]; then
+        continue
+      fi
       printf '%s\n' "$base"
     done
   )
@@ -412,6 +466,9 @@ elif $newest_mode; then
   mapfile -t newest_candidates < <(
     for base in "${metadata_basenames[@]}"; do
       [[ -n ${brought_basenames["$base"]+_} ]] && continue
+      if ! $skip_processed_exclusion && [[ -n ${processed_basenames["$base"]+_} ]]; then
+        continue
+      fi
       printf '%s\n' "$base"
     done
   )
@@ -460,6 +517,9 @@ else
 
   for base in "${metadata_basenames[@]}"; do
     [[ -n ${brought_basenames["$base"]+_} ]] && continue
+    if ! $skip_processed_exclusion && [[ -n ${processed_basenames["$base"]+_} ]]; then
+      continue
+    fi
     [[ "$base" < "$start_bound" ]] && continue
     [[ "$base" > "$end_bound" ]] && continue
     selected_bases+=("$base")

@@ -1,150 +1,355 @@
 #!/bin/bash
 
-# log_file="${LOG_FILE:-~/cron_logs/bring_and_analyze_events_${station}.log}"
-# mkdir -p "$(dirname "$log_file")"
-
-# Station specific -----------------------------
-if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
+print_help() {
   cat <<'EOF'
-ev_accumulator.sh
-Runs the LIST-->ACC stage, aggregating calibrated events for a specified station.
+guide_corrected_to_accumulated.sh
+Launches STAGE_1 EVENT_DATA STEP_2 for one or more stations.
 
 Usage:
-  ev_accumulator.sh <station>
+  guide_corrected_to_accumulated.sh [--station <list>] [--run-anyway]
 
 Options:
-  -h, --help    Show this help message and exit.
+  -s, --station   Station numbers (1-4). Comma/space-separated. Default: all.
+  --run-anyway    Skip the check that prevents overlapping runs.
+  -h, --help      Show this help message and exit.
 
-Stations are numbered 1-4. The script prevents duplicate runs for the same
-station and records execution status alongside generated outputs.
+When run without arguments (typical cron usage), the script loops
+continuously, processing stations according to the traffic-light queue
+persisted in EXECUTION_LOGS/TRAFFIC_LIGHT. Each station is moved to the end
+of the queue as soon as it is selected, so the next invocation continues with
+the following station even if the current run exits early.
 EOF
-  exit 0
+}
+
+station_filter_raw="all"
+station_filter_overridden=false
+run_anyway=false
+no_loop=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -s|--station)
+      station_filter_raw="${2:-}"
+      station_filter_overridden=true
+      shift 2
+      ;;
+    --station=*)
+      station_filter_raw="${1#*=}"
+      station_filter_overridden=true
+      shift
+      ;;
+    --run-anyway)
+      run_anyway=true
+      shift
+      ;;
+    --no-loop)
+      no_loop=true
+      shift
+      ;;
+    -h|--help)
+      print_help
+      exit 0
+      ;;
+    [1-4])
+      station_filter_raw="$1"
+      station_filter_overridden=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      print_help
+      exit 1
+      ;;
+  esac
+done
+
+ALL_STATIONS=(1 2 3 4)
+TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/TRAFFIC_LIGHT"
+TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step2_station_queue.txt"
+
+SELF_INVOCATION_PIDS=()
+
+collect_self_invocation_pids() {
+  local pid="$$"
+  local guard=0
+
+  while [[ -n "$pid" && "$pid" =~ ^[0-9]+$ && $pid -gt 1 && $guard -lt 20 ]]; do
+    SELF_INVOCATION_PIDS+=("$pid")
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    guard=$((guard + 1))
+    [[ -z "$pid" ]] && break
+  done
+
+  if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]]; then
+    SELF_INVOCATION_PIDS+=("$pid")
+  fi
+
+  if [[ -n "${PPID:-}" && "$PPID" =~ ^[0-9]+$ ]]; then
+    SELF_INVOCATION_PIDS+=("$PPID")
+  fi
+}
+
+collect_self_invocation_pids
+
+pid_is_self_or_ancestor() {
+  local candidate="$1"
+  for spid in "${SELF_INVOCATION_PIDS[@]}"; do
+    if [[ -n "$spid" && "$candidate" == "$spid" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+parse_list() {
+  local raw="$1"
+  local default_array_name="$2"
+  local out_var="$3"
+
+  if [[ -z "$raw" || "$raw" == "all" ]]; then
+    eval "$out_var=(\"\${${default_array_name}[@]}\")"
+    return
+  fi
+
+  local tmp=()
+  IFS=', ' read -r -a parts <<<"$raw"
+  for p in "${parts[@]}"; do
+    [[ -z "$p" ]] && continue
+    tmp+=("$p")
+  done
+  eval "$out_var=(\"\${tmp[@]}\")"
+}
+
+sanitize_queue_file() {
+  mkdir -p "$TRAFFIC_LIGHT_DIR"
+  local -a sanitized
+  local -A valid_map=()
+  for st in "${ALL_STATIONS[@]}"; do
+    valid_map["$st"]=1
+  done
+
+  sanitized=()
+  declare -A seen=()
+  if [[ -s "$TRAFFIC_QUEUE_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line//$'\r'/}"
+      line="${line//[$'\t ']/}"
+      [[ -z "$line" ]] && continue
+      if [[ -n "${valid_map[$line]:-}" && -z "${seen[$line]:-}" ]]; then
+        sanitized+=("$line")
+        seen["$line"]=1
+      fi
+    done <"$TRAFFIC_QUEUE_FILE"
+  fi
+
+  for st in "${ALL_STATIONS[@]}"; do
+    if [[ -z "${seen[$st]:-}" ]]; then
+      sanitized+=("$st")
+    fi
+  done
+
+  if [[ ${#sanitized[@]} -eq 0 ]]; then
+    sanitized=("${ALL_STATIONS[@]}")
+  fi
+
+  {
+    for st in "${sanitized[@]}"; do
+      echo "$st"
+    done
+  } >"$TRAFFIC_QUEUE_FILE"
+}
+
+load_queue_snapshot() {
+  local -n out_arr=$1
+  out_arr=()
+  [[ -f "$TRAFFIC_QUEUE_FILE" ]] || sanitize_queue_file
+  if [[ -f "$TRAFFIC_QUEUE_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line//$'\r'/}"
+      line="${line//[$'\t ']/}"
+      [[ -z "$line" ]] && continue
+      out_arr+=("$line")
+    done <"$TRAFFIC_QUEUE_FILE"
+  fi
+}
+
+build_iteration_stations() {
+  local -n out_arr=$1
+  local -A requested_map=()
+  for st in "${stations_requested[@]}"; do
+    requested_map["$st"]=0
+  done
+
+  local -a queue_snapshot
+  load_queue_snapshot queue_snapshot
+
+  out_arr=()
+  for entry in "${queue_snapshot[@]}"; do
+    if [[ -n "${requested_map[$entry]:-}" ]]; then
+      out_arr+=("$entry")
+      requested_map["$entry"]=1
+    fi
+  done
+
+  for st in "${stations_requested[@]}"; do
+    if [[ "${requested_map[$st]}" -ne 1 ]]; then
+      out_arr+=("$st")
+    fi
+  done
+
+  if [[ ${#out_arr[@]} -eq 0 ]]; then
+    out_arr=("${stations_requested[@]}")
+  fi
+}
+
+rotate_station_to_queue_end() {
+  local station="$1"
+  [[ -f "$TRAFFIC_QUEUE_FILE" ]] || sanitize_queue_file
+  local -a snapshot new_order
+  snapshot=()
+  if [[ -f "$TRAFFIC_QUEUE_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line//$'\r'/}"
+      line="${line//[$'\t ']/}"
+      [[ -z "$line" ]] && continue
+      snapshot+=("$line")
+    done <"$TRAFFIC_QUEUE_FILE"
+  fi
+
+  local moved=false
+  for entry in "${snapshot[@]}"; do
+    if [[ "$entry" == "$station" && "$moved" == false ]]; then
+      moved=true
+      continue
+    fi
+    new_order+=("$entry")
+  done
+  new_order+=("$station")
+
+  {
+    for entry in "${new_order[@]}"; do
+      echo "$entry"
+    done
+  } >"$TRAFFIC_QUEUE_FILE"
+}
+
+parse_list "$station_filter_raw" ALL_STATIONS stations_requested
+
+validate_stations() {
+  local arr=("$@")
+  local validated=()
+  for st in "${arr[@]}"; do
+    if [[ "$st" =~ ^[1-4]$ ]]; then
+      validated+=("$st")
+    else
+      echo "Warning: ignoring invalid station '$st'" >&2
+    fi
+  done
+  if [[ ${#validated[@]} -eq 0 ]]; then
+    echo "Error: no valid stations to process." >&2
+    exit 1
+  fi
+  stations_requested=("${validated[@]}")
+}
+
+validate_stations "${stations_requested[@]}"
+
+use_traffic_light=true
+if [[ "$station_filter_overridden" == true ]]; then
+  use_traffic_light=false
 fi
-
-if [ -z "$1" ]; then
-  echo "Error: No station provided."
-  echo "Usage: $0 <station>"
-  exit 1
-fi
-
-# echo '------------------------------------------------------'
-# echo "bring_and_analyze_events.sh started on: $(date '+%Y-%m-%d %H:%M:%S')"
-
-station=$1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_DIR="$SCRIPT_DIR"
-while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
-  MASTER_DIR="$(dirname "${MASTER_DIR}")"
+while [[ "$MASTER_DIR" != "/" && "$(basename "$MASTER_DIR")" != "MASTER" ]]; do
+  MASTER_DIR="$(dirname "$MASTER_DIR")"
 done
-STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
-STATUS_TIMESTAMP=""
-# STATUS_CSV=""
+corrected_to_accumulated_py="$SCRIPT_DIR/corrected_to_accumulated.py"
 
-# If $1 is not 1, 2, 3, 4, exit
-if [[ ! "$station" =~ ^[1-4]$ ]]; then
-  echo "Error: Invalid station number. Please provide a number between 1 and 4."
-  exit 1
+any_pipeline_running() {
+  local hits
+  local self_pid="$$"
+  hits=$(pgrep -af "guide_corrected_to_accumulated.sh" || true)
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local pid="${line%% *}"
+    [[ -z "$pid" ]] && continue
+    [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
+    if pid_is_self_or_ancestor "$pid"; then
+      continue
+    fi
+    if (( pid >= self_pid )); then
+      continue
+    fi
+    [[ "$line" == *"pgrep"* ]] && continue
+    echo "$line"
+    return 0
+  done <<<"$hits"
+  return 1
+}
+
+process_station() {
+  local station="$1"
+  echo "------------------------------------------------------"
+  echo "Processing STEP_2 for station $station"
+
+  local station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
+  local base_event_directory="$station_directory/STAGE_1/EVENT_DATA"
+  local input_directory="$base_event_directory/STEP_1_TO_2_OUTPUT"
+  local base_working_directory="$base_event_directory/STEP_2"
+
+  mkdir -p "$base_working_directory" "$input_directory" "$station_directory"
+  echo "Source (STEP_1_TO_2_OUTPUT): $input_directory"
+  echo "Working directory (STEP_2): $base_working_directory"
+
+  if ! python3 -u "$corrected_to_accumulated_py" "$station"; then
+    echo "Station $station STEP_2 failed; continuing with next station."
+    return 1
+  fi
+
+  echo "Station $station STEP_2 completed."
+  return 0
+}
+
+echo "------------------------------------------------------"
+echo "guide_corrected_to_accumulated.sh started on: $(date)"
+echo "Stations: ${stations_requested[*]}"
+echo "Traffic-light mode: $use_traffic_light"
+echo "------------------------------------------------------"
+
+if [[ "$use_traffic_light" == true ]]; then
+  sanitize_queue_file
 fi
 
+if [[ "$run_anyway" != true ]]; then
+  if any_pipeline_running; then
+    echo "Another guide_corrected_to_accumulated.sh is already running; exiting. Use --run-anyway to override."
+    exit 0
+  fi
+fi
 
-# --------------------------------------------------------------------------------------------
-# Prevent the script from running multiple instances -----------------------------------------
-# --------------------------------------------------------------------------------------------
+iteration=1
 
-# Variables
-script_name=$(basename "$0")
-script_args="$*"
-current_pid=$$
-
-# Debug: Check for running processes
-
-for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
-    if [[ "$pid" != "$current_pid" ]]; then
-        cmdline=$(ps -p "$pid" -o args=)
-        # echo "$(date) - Found running process: PID $pid - $cmdline"
-        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
-            echo "------------------------------------------------------"
-            echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-            echo "------------------------------------------------------"
-            exit 1
-        fi
+if [[ "$use_traffic_light" == true ]]; then
+  while true; do
+    echo "STEP_2 iteration $iteration started at: $(date '+%Y-%m-%d %H:%M:%S')"
+    build_iteration_stations iteration_stations
+    echo "Traffic-light queue snapshot: ${iteration_stations[*]}"
+    for station in "${iteration_stations[@]}"; do
+      rotate_station_to_queue_end "$station"
+      process_station "$station"
+    done
+    echo "STEP_2 iteration $iteration completed at: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "------------------------------------------------------"
+    iteration=$((iteration + 1))
+    if [[ "$no_loop" == true ]]; then
+      echo "--no-loop flag set; exiting after single pass."
+      break
     fi
-done
-
-# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
-#     if [[ "$pid" != "$current_pid" ]]; then
-#         cmdline=$(ps -p "$pid" -o args=)
-#         # echo "$(date) - Found running process: PID $pid - $cmdline"
-#         if [[ "$cmdline" == *"$script_name"* ]]; then
-#             echo "------------------------------------------------------"
-#             echo "$(date): The script $script_name is already running (PID: $pid). Exiting."
-#             echo "------------------------------------------------------"
-#             exit 1
-#         fi
-#     fi
-# done
-
-# If no duplicate process is found, continue
-echo "$(date) - No running instance found. Proceeding..."
-
-
-# If no duplicate process is found, continue
-echo "------------------------------------------------------"
-echo "ev_accumulator.sh started on: $(date)"
-echo "Station: $script_args"
-echo "Running the script..."
-echo "------------------------------------------------------"
-# --------------------------------------------------------------------------------------------
-
-
-dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
-
-# Define base working directory
-station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
-base_event_directory="$station_directory/STAGE_1/EVENT_DATA"
-input_directory="$base_event_directory/STEP_1_TO_2_OUTPUT"
-base_working_directory="$base_event_directory/STEP_2"
-
-mkdir -p "$base_working_directory"
-mkdir -p "$input_directory"
-echo "Source (STEP_1_TO_2_OUTPUT): $input_directory"
-echo "Working directory (STEP_2): $base_working_directory"
-# STATUS_CSV="$base_working_directory/ev_accumulator_status.csv"
-# if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
-#   echo "Warning: unable to record status in $STATUS_CSV" >&2
-#   STATUS_TIMESTAMP=""
-# fi
-
-# finish() {
-#   local exit_code="$1"
-#   if [[ ${exit_code} -eq 0 && -n "${STATUS_TIMESTAMP:-}" && -n "${STATUS_CSV:-}" ]]; then
-#     python3 "$STATUS_HELPER" complete "$STATUS_CSV" "$STATUS_TIMESTAMP" >/dev/null 2>&1 || true
-#   fi
-# }
-
-# trap 'finish $?' EXIT
-
-# Additional paths
-mingo_direction="mingo0$station"
-
-corrected_to_accumulated_directory="$HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py"
-
-# exclude_list_file="$base_working_directory/tmp/exclude_list.txt"
-
-# Create necessary directories
-mkdir -p "$station_directory"
-# mkdir -p "$base_working_directory/tmp"
-
-echo '------------------------------------------------------'
-echo '------------------------------------------------------'
-
-# Process the data: corrected_to_accumulated.py
-echo "Processing list files with Python script (corrected_to_accumulated.py)..."
-python3 -u "$corrected_to_accumulated_directory" "$station"
-
-# rm -r "$base_working_directory/tmp"
-
-echo '------------------------------------------------------'
-echo "ev_accumulator.sh completed on: $(date '+%Y-%m-%d %H:%M:%S')"
-echo '------------------------------------------------------'
+    echo "Starting next iteration..."
+  done
+else
+  for station in "${stations_requested[@]}"; do
+    process_station "$station"
+  done
+fi
