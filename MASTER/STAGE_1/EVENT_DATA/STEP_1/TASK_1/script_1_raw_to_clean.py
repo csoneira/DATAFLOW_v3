@@ -145,7 +145,9 @@ try:
 except NameError:
     pass
 home_path = config["home_path"]
-REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
+
+# ~/DATAFLOW_v3/MASTER/ANCILLARY/QUALITY_ASSURANCE
+REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "ANCILLARY" / "QUALITY_ASSURANCE" / "REFERENCE_TABLES"
 
 def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
     """Append *row* to *metadata_path*, preserving all existing columns."""

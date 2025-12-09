@@ -52,6 +52,13 @@ station_code=$(printf "%02d" "$station")
 station_prefix=$(printf "mi0%d" "$station")
 station_prefix_lower="${station_prefix,,}"
 
+unpack_anyway=false
+config_key="unpack_anyway_station_${station}"
+config_setting=$(read_config_value "$config_key" | tr '[:upper:]' '[:lower:]')
+if [[ "$config_setting" == "true" ]]; then
+    unpack_anyway=true
+fi
+
 loop_mode=false
 newest_mode=false
 max_parallel=5
@@ -86,6 +93,34 @@ MASTER_DIR="$SCRIPT_DIR"
 while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
     MASTER_DIR="$(dirname "${MASTER_DIR}")"
 done
+
+config_file="${MASTER_DIR}/CONFIG_FILES/config_global.yaml"
+
+read_config_value() {
+    local key="$1"
+    [[ ! -f "$config_file" ]] && return 0
+    python3 - "$key" "$config_file" <<'PY' || true
+import re
+import sys
+
+key = sys.argv[1]
+path = sys.argv[2]
+value = None
+pattern = re.compile(rf"\s*{re.escape(key)}\s*:\s*(\S+)")
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            match = pattern.match(line)
+            if match:
+                value = match.group(1)
+                break
+except FileNotFoundError:
+    pass
+
+if value:
+    print(value.strip())
+PY
+}
 
 
 # --------------------------------------------------------------------------------------------
@@ -123,6 +158,9 @@ echo "------------------------------------------------------"
 echo "unpack_reprocessing_files.sh started on: $(date)"
 echo "Station: ${station_code} (loop_mode=$loop_mode, newest_mode=$newest_mode, max_parallel=$max_parallel)"
 echo "Running the script..."
+if $unpack_anyway; then
+    echo "Config ${config_key} is true: duplicate-protection checks are disabled."
+fi
 
 STATIONS_BASE="$HOME/DATAFLOW_v3/STATIONS"
 station_directory="${STATIONS_BASE}/MINGO${station_code}"
@@ -380,8 +418,13 @@ route_dat_outputs() {
         destination_dir="${STATIONS_BASE}/MINGO${dest_station}/STAGE_0_to_1"
         mkdir -p "$destination_dir"
         if [[ -e "$destination_dir/$fname" ]]; then
-            echo "Skipping $fname — already present in ${destination_dir}."
-            continue
+            if $unpack_anyway; then
+                echo "unpack_anyway=true: replacing existing $fname in ${destination_dir}."
+                rm -f "$destination_dir/$fname"
+            else
+                echo "Skipping $fname — already present in ${destination_dir}."
+                continue
+            fi
         fi
         if mv "$dat_path" "$destination_dir/$fname"; then
             touch "$destination_dir/$fname"
@@ -473,7 +516,11 @@ process_single_hld() {
     csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 
     load_dat_unpacked_basenames
-    echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames as exclusions."
+    if $unpack_anyway; then
+        echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames (unpack_anyway=true, so they will be reprocessed if present)."
+    else
+        echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames as exclusions."
+    fi
 
     echo "Creating necessary directories..."
     mkdir -p \
@@ -548,8 +595,12 @@ process_single_hld() {
             candidate_base=$(strip_suffix "$(basename "$candidate")")
             [[ -z "$candidate_base" ]] && candidate_base="$(basename "$candidate")"
             if [[ -n ${dat_unpacked_basenames["$candidate_base"]+_} ]]; then
-                echo "  -> Skipping $(basename "$candidate") (already recorded in dat_files_unpacked.csv)."
-                continue
+                if $unpack_anyway; then
+                    echo "  -> Re-processing $(basename "$candidate") (record exists in dat_files_unpacked.csv; unpack_anyway=true)."
+                else
+                    echo "  -> Skipping $(basename "$candidate") (already recorded in dat_files_unpacked.csv)."
+                    continue
+                fi
             fi
             filtered_candidates+=("$candidate")
         done

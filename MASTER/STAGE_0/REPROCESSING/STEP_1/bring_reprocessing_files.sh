@@ -286,6 +286,29 @@ strip_suffix() {
   printf '%s' "$name"
 }
 
+basename_has_local_file() {
+  local base="$1"
+  local alt="$base"
+  if [[ $alt == minI* ]]; then
+    alt="mi0${station}${alt:4}"
+  fi
+  local candidate
+  for candidate in \
+    "${compressed_directory}/${base}.hld.tar.gz" \
+    "${compressed_directory}/${base}.hld-tar-gz" \
+    "${compressed_directory}/${base}.tar.gz" \
+    "${compressed_directory}/${base}.dat" \
+    "${uncompressed_directory}/${base}.hld" \
+    "${uncompressed_directory}/${base}.dat" \
+    "${compressed_directory}/${alt}.hld.tar.gz" \
+    "${compressed_directory}/${alt}.hld-tar-gz" \
+    "${compressed_directory}/${alt}.tar.gz" \
+    "${uncompressed_directory}/${alt}.hld"; do
+    [[ -n "$candidate" && -f "$candidate" ]] && return 0
+  done
+  return 1
+}
+
 basename_time_key() {
   local name="$1"
   local base
@@ -412,6 +435,19 @@ if [[ -s "$brought_csv" ]]; then
       brought_basenames["$recorded_name"]=1
     done
   } < "$brought_csv"
+fi
+initial_brought_count=${#brought_basenames[@]}
+  if (( initial_brought_count > 0 )); then
+    missing_local_count=0
+    for recorded_name in "${!brought_basenames[@]}"; do
+      if ! basename_has_local_file "$recorded_name"; then
+        unset "brought_basenames[$recorded_name]"
+        ((missing_local_count+=1))
+      fi
+    done
+    if (( missing_local_count > 0 )); then
+      log_info "Detected ${missing_local_count} basenames recorded as brought but missing in OUTPUT_FILES; they will be re-downloaded."
+  fi
 fi
 log_info "Basenames already recorded as brought: ${#brought_basenames[@]}"
 

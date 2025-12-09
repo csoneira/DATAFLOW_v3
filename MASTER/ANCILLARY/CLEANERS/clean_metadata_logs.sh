@@ -31,8 +31,8 @@ purge_pattern() {
 log "Starting metadata CSV cleanup..."
 
 purge_pattern "${ROOT}/STATIONS/MINGO0*/STAGE_0/NEW_FILES/METADATA/raw_files_brought.csv"
-purge_pattern "${ROOT}/STATIONS/MINGO04/STAGE_0/REPROCESSING/STEP_1/METADATA/hld_files_brought.csv"
-purge_pattern "${ROOT}/STATIONS/MINGO04/STAGE_0/REPROCESSING/STEP_2/METADATA/dat_files_unpacked.csv"
-purge_pattern "${ROOT}/STATIONS/MINGO0*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/METADATA/task_*_metadata_execution.csv"
+purge_pattern "${ROOT}/STATIONS/MINGO0*/STAGE_0/REPROCESSING/STEP_1/METADATA/hld_files_brought.csv"
+purge_pattern "${ROOT}/STATIONS/MINGO0*/STAGE_0/REPROCESSING/STEP_2/METADATA/dat_files_unpacked.csv"
+#purge_pattern "${ROOT}/STATIONS/MINGO0*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/METADATA/task_*_metadata_execution.csv"
 
 log "Metadata CSV cleanup complete."

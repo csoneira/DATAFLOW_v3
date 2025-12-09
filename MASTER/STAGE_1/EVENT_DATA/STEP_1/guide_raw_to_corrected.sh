@@ -4,6 +4,8 @@
 # mkdir -p "$(dirname "$log_file")"
 
 # Station specific -----------------------------
+original_args=("$@")
+original_args_string="$*"
 print_help() {
   cat <<'EOF'
 guide_raw_to_corrected.sh
@@ -54,6 +56,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# # If the time is 00 in minutes, run pgrep -f 'bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh' | xargs -r kill
+# if [[ "$(date +%M)" == "00" ]]; then
+#   echo "Killing old instances of guide_raw_to_corrected.sh"
+#   pgrep -f 'bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh' | xargs -r kill
+# fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_DIR="$SCRIPT_DIR"
@@ -235,6 +243,64 @@ parse_list() {
 ALL_STATIONS=(1 2 3 4)
 ALL_TASK_IDS=(1 2 3 4 5)
 
+LOCK_BASE_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/guide_raw_to_corrected"
+ARG_LOCK_FILE=""
+ARG_LOCK_FD=""
+LOCK_SIGNATURE_DESC=""
+
+format_original_args() {
+  if (( ${#original_args[@]} == 0 )); then
+    printf '[no explicit args]'
+    return
+  fi
+  local rendered=()
+  local arg
+  for arg in "${original_args[@]}"; do
+    rendered+=("$(printf '%q' "$arg")")
+  done
+  printf '%s' "${rendered[*]}"
+}
+
+prepare_argument_signature() {
+  local payload=""
+  if (( ${#original_args[@]} == 0 )); then
+    payload="__default__"
+    LOCK_SIGNATURE_DESC="[no explicit args]"
+  else
+    LOCK_SIGNATURE_DESC="$(format_original_args)"
+    payload=$(printf '%s\037' "${original_args[@]}")
+  fi
+  local hash
+  hash=$(printf '%s' "$payload" | md5sum | awk '{print $1}')
+  ARG_LOCK_FILE="${LOCK_BASE_DIR}/${hash}.lock"
+}
+
+acquire_argument_lock() {
+  prepare_argument_signature
+  mkdir -p "$LOCK_BASE_DIR"
+  exec {ARG_LOCK_FD}> "$ARG_LOCK_FILE"
+  if ! flock -n "$ARG_LOCK_FD"; then
+    echo "Another guide_raw_to_corrected.sh with identical arguments (${LOCK_SIGNATURE_DESC}) is already running."
+    echo "Lock file: ${ARG_LOCK_FILE}"
+    echo "Use --run-anyway to override this safety check."
+    return 1
+  fi
+  echo "Acquired run lock for argument set ${LOCK_SIGNATURE_DESC} (lock: ${ARG_LOCK_FILE})."
+  return 0
+}
+
+release_argument_lock() {
+  if [[ -n "${ARG_LOCK_FD:-}" ]]; then
+    flock -u "$ARG_LOCK_FD" 2>/dev/null || true
+    eval "exec ${ARG_LOCK_FD}>&-" 2>/dev/null || true
+    ARG_LOCK_FD=""
+    if [[ -n "${ARG_LOCK_FILE:-}" ]]; then
+      rm -f "$ARG_LOCK_FILE"
+      ARG_LOCK_FILE=""
+    fi
+  fi
+}
+
 # Collect the PID chain (this shell plus ancestors spawned by cron/bash -c) so
 # the duplicate detector can ignore them when scanning for real other runs.
 SELF_INVOCATION_PIDS=()
@@ -320,6 +386,7 @@ cleanup() {
   if [[ -n "$watchdog_pid" ]]; then
     kill "$watchdog_pid" 2>/dev/null || true
   fi
+  release_argument_lock
 }
 trap cleanup EXIT
 
@@ -457,7 +524,7 @@ pipeline_already_running() {
     fi
     [[ "$cmd" != *"guide_raw_to_corrected.sh"* ]] && continue
 
-    if [[ "$cmd" == *"--station ${target_station}"* || "$cmd" == *"--station=${target_station}"* || "$cmd" == *" ${target_station}"* ]]; then
+    if command_targets_station "$cmd" "$target_station"; then
       echo "$pid $cmd"
       return 0
     fi
@@ -465,45 +532,71 @@ pipeline_already_running() {
   return 1
 }
 
+station_value_matches_target() {
+  local value="$1"
+  local target="$2"
+  local lowered="${value,,}"
+  [[ -z "$value" ]] && return 1
+  if [[ "$lowered" == "all" ]]; then
+    return 0
+  fi
+  IFS=',' read -ra parts <<<"$value"
+  local part cleaned
+  for part in "${parts[@]}"; do
+    cleaned="${part//[^0-9]/}"
+    [[ -z "$cleaned" ]] && continue
+    if (( 10#$cleaned == 10#$target )); then
+      return 0
+    fi
+  done
+  return 1
+}
 
-any_pipeline_running() {
-  local hits
-  hits=$(pgrep -af "guide_raw_to_corrected.sh" || true)
-
-  local self_pid="$$"
-
-  echo "DEBUG any_pipeline_running: self_pid=$self_pid"
-  echo "DEBUG any_pipeline_running: pgrep hits:"
-  printf 'DEBUG   %s\n' "$hits"
-
-  local found_other=1
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    local pid="${line%% *}"
-
-    if [[ -z "$pid" ]] || [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+command_targets_station() {
+  local cmd="$1"
+  local target="$2"
+  local expect_value=false
+  local saw_station_arg=false
+  local -a tokens=()
+  # shellcheck disable=SC2206
+  read -ra tokens <<< "$cmd"
+  local token value
+  for token in "${tokens[@]}"; do
+    if $expect_value; then
+      expect_value=false
+      saw_station_arg=true
+      [[ -z "$token" ]] && continue
+      if station_value_matches_target "$token" "$target"; then
+        return 0
+      fi
       continue
     fi
-    if pid_is_self_or_ancestor "$pid"; then
-      echo "DEBUG   skipping self/ancestor pid=$pid"
-      continue
-    fi
-    if (( pid >= self_pid )); then
-      echo "DEBUG   ignoring pid=$pid (started after self)"
-      continue
-    fi
-    if [[ "$line" == *"pgrep"* ]]; then
-      echo "DEBUG   skipping pgrep line: $line"
-      continue
-    fi
-
-    echo "DEBUG   found other instance: $line"
-    echo "$line"
-    found_other=0
-    break
-  done <<<"$hits"
-
-  return $found_other
+    case "$token" in
+      --station|-s)
+        expect_value=true
+        continue
+        ;;
+      --station=*)
+        saw_station_arg=true
+        value="${token#*=}"
+        if station_value_matches_target "$value" "$target"; then
+          return 0
+        fi
+        ;;
+      -s*)
+        saw_station_arg=true
+        value="${token#-s}"
+        if [[ -n "$value" ]] && station_value_matches_target "$value" "$target"; then
+          return 0
+        fi
+        ;;
+    esac
+  done
+  if [[ "$saw_station_arg" != true ]]; then
+    # Default behavior processes all stations.
+    return 0
+  fi
+  return 1
 }
 
 
@@ -516,14 +609,12 @@ traffic_light_queue_init
 
 iteration=1
 if [[ "$run_anyway" != true ]]; then
-  echo "Checking for any other running guide_raw_to_corrected.sh instances..."
-  if any_pipeline_running; then
-    echo "Another guide_raw_to_corrected.sh is already running; exiting. Use --run-anyway to override."
+  echo "Ensuring no other guide_raw_to_corrected.sh is running with identical arguments..."
+  if ! acquire_argument_lock; then
     exit 0
   fi
-  echo "No other instances detected; continuing."
 else
-  echo "--run-anyway set; skipping other-instance check."
+  echo "--run-anyway set; skipping same-argument locking."
 fi
 
 
@@ -539,9 +630,9 @@ while true; do
     echo "Considering station $station task${task_id} (${task_label}) ..."
     rotate_pair_to_queue_end "$pair"
     if pipeline_already_running "$station"; then
-      echo "Station $station already handled by another guide_raw_to_corrected.sh; skipping."
+      echo "Station $station already handled by another guide_raw_to_corrected.sh; exiting to avoid waiting indefinitely."
       echo '------------------------------------------------------'
-      continue
+      exit 0
     fi
     if [[ ! -x "$task_script" ]]; then
       echo "Warning: task script $task_script not found or not executable. Skipping."

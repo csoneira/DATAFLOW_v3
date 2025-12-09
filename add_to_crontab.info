@@ -4,7 +4,7 @@
 # minute hour day_of_month month day_of_week command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Updated at 2025-12-03 11:36
+# Updated at 2025-12-09 10:03
 
 SHELL=/bin/bash
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
@@ -56,6 +56,9 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 
 # Remove the UNPROCESSED files if already in the list of processed
 5 * * * * /bin/bash MASTER/ANCILLARY/PIPELINE_OPERATIONS/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/flush_from_unprocessed.log 2>&1
+
+# Run Stage 0 reprocessing unpacker for station 1 with limited concurrency
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 1 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_unpack_reprocessing_files_1.log 2>&1
 
 
 # --------------------------------------------------------------------------------
@@ -155,7 +158,10 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - EVENT_DATA - RAW_TO_CORR -----------------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_all.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_1.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_2.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_3.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_2

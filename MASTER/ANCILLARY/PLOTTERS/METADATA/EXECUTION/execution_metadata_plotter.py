@@ -375,6 +375,13 @@ def _load_metadata_csv_from_path(metadata_csv: Path) -> pd.DataFrame:
             "skipping metadata entries for this task."
         )
         return pd.DataFrame()
+    
+    # Show all the filename_bases for debugging
+    # for filename in df["filename_base"]:
+    #     print(filename)
+    
+    # If a filename is not starting with 'mi*', dont use the row. Aviod rows with nans
+    df = df[df["filename_base"].str.startswith("mi", na=False)]
 
     df = df.copy()
     df["execution_timestamp"] = pd.to_datetime(
@@ -386,6 +393,8 @@ def _load_metadata_csv_from_path(metadata_csv: Path) -> pd.DataFrame:
     df["data_purity_percentage"] = pd.to_numeric(
         df["data_purity_percentage"], errors="coerce"
     )
+    
+
     df["file_timestamp"] = pd.to_datetime(
         df["filename_base"].map(extract_datetime_from_basename), errors="coerce"
     )

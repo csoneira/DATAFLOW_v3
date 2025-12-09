@@ -67,10 +67,15 @@ max_gap_minutes_3: 40
 min_gap_minutes_4: 60
 max_gap_minutes_4: 140
 
-use_processed_as_reject_list_1: true
-use_processed_as_reject_list_2: true
-use_processed_as_reject_list_3: true
+use_processed_as_reject_list_1: false
+use_processed_as_reject_list_2: false
+use_processed_as_reject_list_3: false
 use_processed_as_reject_list_4: false
+
+unpack_anyway_station_1: true
+unpack_anyway_station_2: true
+unpack_anyway_station_3: true
+unpack_anyway_station_4: true
 
 
 # -----------------------------------------------------------------------------

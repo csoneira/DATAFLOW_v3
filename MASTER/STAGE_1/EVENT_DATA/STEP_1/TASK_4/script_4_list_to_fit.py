@@ -491,7 +491,7 @@ def plot_err_only_ts_hist(df, base_cols, time_col, title):
 # -----------------------------------------------------------------------------
 
 
-run_jupyter_notebook = True
+run_jupyter_notebook = False
 if run_jupyter_notebook:
     station = "3"
 else:

@@ -13,7 +13,9 @@ import matplotlib.pyplot as plt
 from qa_shared import load_metadata, print_columns, plot_tt_pairs, plot_tt_matrix
 
 # --- knobs to tweak ---
-STATION = "MINGO04"  # e.g. "MINGO01", "MINGO02", ...
+station = 1
+
+STATION = f"MINGO0{station}"  # e.g. "MINGO01", "MINGO02", ...
 STEP = 1             # numeric step (1, 2, ...)
 TASK = 2          # for STEP_1 use an int (1-5); keep None for steps without tasks
 START_DATE = "2024-03-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
@@ -35,10 +37,12 @@ plotted_cols: set[str] = set()
 print(f"Loaded: {ctx.metadata_path}")
 print(f"Rows: {len(df)}")
 
-
 print("Columns:")
 print_columns(df)
 
+
+# Read the /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}/input_file_mingo0{station}.csv
+runs_df = ...
 
 
 
@@ -63,7 +67,6 @@ except Exception:
 
 
     #%%
-
 
 #     - CRT_avg
 # Plot CRT_avg time series with error bar = CRT_std
@@ -260,9 +263,9 @@ for i_plane, plane in enumerate(planes):
 
         if original_col in df.columns and final_col in df.columns:
             ax.plot(df["datetime"], df[original_col],
-                    marker=".", linestyle="", label="with_crstlk")
+                    marker=".", linestyle="", label="with_crstlk", markersize=1)
             ax.plot(df["datetime"], df[final_col],
-                    marker="x", linestyle="", label="no_crstlk")
+                    marker="x", linestyle="", label="no_crstlk", markersize=1)
 
             ax.set_title(f"P{plane} S{strip}", fontsize=9)
 
@@ -354,56 +357,6 @@ plt.show()
 
 
 
-#%%
-
-
-# Loop on planes and strips
-#     - P1_s1_Q_sum
-
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-
-planes = range(1, 5)
-strips = range(1, 5)
-
-fig = plt.figure(figsize=(28, 14))
-outer_gs = gridspec.GridSpec(
-    nrows=len(planes),
-    ncols=len(strips),
-    hspace=0.35,
-    wspace=0.25,
-)
-
-for i_plane, plane in enumerate(planes):
-    for j_strip, strip in enumerate(strips):
-
-        ax = fig.add_subplot(outer_gs[i_plane, j_strip])
-
-        original_col = f"P{plane}_s{strip}_Q_sum"
-
-        if original_col in df.columns:
-            ax.plot(df["datetime"], df[original_col],
-                    marker=".", linestyle="", label="Parameter", markersize=1)
-            
-            ax.set_title(f"P{plane} S{strip}", fontsize=9)
-
-            if j_strip == 0:
-                ax.set_ylabel("Hits")
-
-            if i_plane == len(planes) - 1:
-                ax.set_xlabel("Datetime")
-
-            ax.grid(True)
-
-            if i_plane == 0 and j_strip == 0:
-                ax.legend(loc="upper right", fontsize=7)
-
-        else:
-            ax.set_visible(False)
-
-fig.suptitle("Q_sum calibration parameter", fontsize=14)
-plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.show()
 
 
 #%%
@@ -463,6 +416,56 @@ plt.show()
 
 
 
+#%%
+
+
+# Loop on planes and strips
+#     - P1_s1_Q_sum
+
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
+planes = range(1, 5)
+strips = range(1, 5)
+
+fig = plt.figure(figsize=(28, 14))
+outer_gs = gridspec.GridSpec(
+    nrows=len(planes),
+    ncols=len(strips),
+    hspace=0.35,
+    wspace=0.25,
+)
+
+for i_plane, plane in enumerate(planes):
+    for j_strip, strip in enumerate(strips):
+
+        ax = fig.add_subplot(outer_gs[i_plane, j_strip])
+
+        original_col = f"P{plane}_s{strip}_Q_sum"
+
+        if original_col in df.columns:
+            ax.plot(df["datetime"], df[original_col],
+                    marker=".", linestyle="", label="Parameter", markersize=1)
+            
+            ax.set_title(f"P{plane} S{strip}", fontsize=9)
+
+            if j_strip == 0:
+                ax.set_ylabel("Hits")
+
+            if i_plane == len(planes) - 1:
+                ax.set_xlabel("Datetime")
+
+            ax.grid(True)
+
+            if i_plane == 0 and j_strip == 0:
+                ax.legend(loc="upper right", fontsize=7)
+
+        else:
+            ax.set_visible(False)
+
+fig.suptitle("Q_sum calibration parameter", fontsize=14)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.show()
 
 #%%
 
