@@ -397,7 +397,7 @@ def plot_tt_matrix(
                 series = df[[tcol, colname]].dropna()
                 if not series.empty:
                     series = series.sort_values(by=tcol)
-                    ax.scatter(series[tcol], series[colname], s=18, color="C0", marker="o", alpha=0.9)
+                    ax.scatter(series[tcol], series[colname], s=1, color="C0", marker="o", alpha=0.9)
                     ax.set_title(f"{frm}→{to}\n{colname}", fontsize=8)
                     if common_ylim:
                         ax.set_ylim(*common_ylim)

@@ -1158,11 +1158,6 @@ def plot_station(
         runtime_non_nan = runtime_series.dropna()
         has_runtime_points = not runtime_non_nan.empty
 
-        if has_runtime_points:
-            runtime_max = runtime_non_nan.max()
-            if pd.notna(runtime_max):
-                axis_upper = max(axis_upper, float(runtime_max) * 1.15)
-
         ax.set_ylim(0, axis_upper)
         apply_hv_background(axis_upper)
 

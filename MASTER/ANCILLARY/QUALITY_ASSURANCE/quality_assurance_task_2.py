@@ -68,7 +68,7 @@ except Exception:
 
     #%%
 
-#     - CRT_avg
+# - CRT_avg
 # Plot CRT_avg time series with error bar = CRT_std
 
 import matplotlib.pyplot as plt

@@ -214,7 +214,7 @@ if "valid_lines_in_binary_file_percentage" in df.columns:
     import matplotlib.pyplot as plt
 
     plt.figure(figsize=(10, 6))
-    plt.plot(df["datetime"],df["valid_lines_in_binary_file_percentage"], marker='o', linestyle='-')
+    plt.plot(df["datetime"],df["valid_lines_in_binary_file_percentage"], marker='.', linestyle='-')
     plt.title(f"Valid Lines Percentage Over Time for {STATION} STEP {STEP} TASK {TASK}")
     plt.xlabel("Datetime")
     plt.ylabel("Valid Lines Percentage (%)")

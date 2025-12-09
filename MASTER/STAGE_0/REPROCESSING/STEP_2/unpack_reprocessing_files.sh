@@ -639,10 +639,9 @@ process_single_hld() {
         selected_file="$best_candidate"
         echo "--newest flag active; newest pending basename selected: $(basename "$selected_file")"
     else
-        local -a sorted=()
-        IFS=$'\n' sorted=($(printf '%s\n' "${candidate_files[@]}" | sort -u))
-        unset IFS
-        selected_file="${sorted[0]}"
+        local random_index=$((RANDOM % ${#candidate_files[@]}))
+        selected_file="${candidate_files[random_index]}"
+        echo "No --newest flag; randomly selected: $(basename "$selected_file")"
     fi
 
     echo "Selected HLD file: $(basename "$selected_file") [source: $source_stage]"

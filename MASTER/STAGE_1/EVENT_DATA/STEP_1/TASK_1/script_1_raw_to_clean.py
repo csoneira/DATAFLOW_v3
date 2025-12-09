@@ -2482,6 +2482,93 @@ if create_plots:
     plt.close(fig_Q)
 
 
+# Per trigger type
+create_super_essential_plots = True
+
+if create_plots or create_super_essential_plots:
+
+    for tt_value in sorted(working_df['raw_tt'].unique()):
+        filtered_df = working_df[working_df['raw_tt'] == tt_value]
+
+        # Create the grand figure for T values
+        fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+        axes_T = axes_T.flatten()
+        
+        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+            for j in range(4):
+                col_F = f'{key}_F_{j+1}'
+                col_B = f'{key}_B_{j+1}'
+                y_F = filtered_df[col_F]
+                y_B = filtered_df[col_B]
+                
+                # Plot histograms with T-specific clipping and bins
+                axes_T[i*4 + j].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
+                                    bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
+                axes_T[i*4 + j].hist(y_B[(y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max)], 
+                                    bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
+                axes_T[i*4 + j].set_title(f'{col_F} vs {col_B}')
+                axes_T[i*4 + j].legend()
+                
+                if log_scale:
+                    axes_T[i*4 + j].set_yscale('log')  # For T values
+
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.9)
+        plt.suptitle(f"Grand Figure for T values, {tt_value}, mingo0{station}\n{start_time}", fontsize=16)
+        
+        if save_plots:
+            final_filename = f'{fig_idx}_{tt_value}_grand_figure_T.png'
+            fig_idx += 1
+
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+
+        if show_plots: plt.show()
+        plt.close(fig_T)
+
+        # Create the grand figure for Q values
+        fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+        axes_Q = axes_Q.flatten()
+        
+        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+            for j in range(4):
+                col_F = f'{key.replace("T", "Q")}_F_{j+1}'
+                col_B = f'{key.replace("T", "Q")}_B_{j+1}'
+                y_F = filtered_df[col_F]
+                y_B = filtered_df[col_B]
+                
+                # Plot histograms with Q-specific clipping and bins
+                Q_clip_min = 80
+                Q_clip_max = 120
+
+                axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                                    bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
+                axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                                    bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
+                axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
+                axes_Q[i*4 + j].legend()
+                
+                # if log_scale:
+                #     axes_Q[i*4 + j].set_yscale('log')  # For Q values
+
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.9)
+        plt.suptitle(f"Grand Figure for Q values, {tt_value}, mingo0{station}\n{start_time}", fontsize=16)
+        
+        if save_plots:
+            final_filename = f'{fig_idx}_{tt_value}_grand_figure_Q.png'
+            fig_idx += 1
+            
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+
+        if show_plots: plt.show()
+        plt.close(fig_Q)
+
+
+
 if create_plots or create_essential_plots:
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary

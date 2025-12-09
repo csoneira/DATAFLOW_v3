@@ -25,7 +25,7 @@ from qa_shared import load_metadata, print_columns
 # ---------------------------------------------------------------------------
 # User-tunable defaults (used when running from notebooks)
 # ---------------------------------------------------------------------------
-DEFAULT_STATION = 1
+DEFAULT_STATION = 3
 STEP = 1
 TASK = 2
 START_DATE = "2024-03-01 00:00:00"
@@ -38,7 +38,14 @@ CALIBRATION_VARIABLES = ["T_sum", "T_dif", "Q_sum"] + [f"Q_FB_coeff_{i}" for i i
 # Optional per-variable filters (min/max). Leave empty dict for no filtering.
 VARIABLE_FILTERS: Dict[str, Dict[str, float]] = {
     # Example:
-    # "Q_sum": {"min": 0, "max": 1.5e6},
+    "Q_sum": {"min": 75, "max": 105},
+    "T_sum": {"min": -5, "max": 5},
+    "T_dif": {"min": -10, "max": 10},
+    "Q_FB_coeff_1": {"min": -5, "max": 5},
+    "Q_FB_coeff_2": {"min": -2, "max": 2},
+    "Q_FB_coeff_3": {"min": -1, "max": 1},
+    "Q_FB_coeff_4": {"min": -0.5, "max": 0.5},
+    "Q_FB_coeff_5": {"min": -0.2, "max": 0.2},
 }
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "OUTPUT_FILES"
@@ -59,14 +66,17 @@ def load_runs_dataframe(station: int) -> pd.DataFrame:
     runs_df = pd.read_csv(csv_path, skiprows=1)
     runs_df["start"] = pd.to_datetime(runs_df["start"])
     runs_df["end"] = pd.to_datetime(runs_df["end"]).fillna(pd.Timestamp.now())
+
+    print(runs_df)
+
     return runs_df
 
 
 def apply_variable_filters(series: pd.Series, variable: str) -> pd.Series:
     config = VARIABLE_FILTERS.get(variable)
     if not config:
-        return series
-    filtered = series.copy()
+        return pd.to_numeric(series, errors="coerce")
+    filtered = pd.to_numeric(series, errors="coerce")
     min_val = config.get("min")
     max_val = config.get("max")
     if min_val is not None:
@@ -192,6 +202,24 @@ def plot_variable(
     cmap = plt.get_cmap("turbo")
     max_conf = runs_df["conf"].max() if not runs_df.empty else 1
 
+    # Determine consistent y-limits across all subplots
+    global_min = None
+    global_max = None
+    for plane in planes:
+        for strip in strips:
+            col = f"P{plane}_s{strip}_{variable}"
+            if col not in df.columns:
+                continue
+            filtered = apply_variable_filters(df[col], variable).dropna()
+            if filtered.empty:
+                continue
+            local_min = filtered.min()
+            local_max = filtered.max()
+            global_min = local_min if global_min is None else min(global_min, local_min)
+            global_max = local_max if global_max is None else max(global_max, local_max)
+    if global_min is None or global_max is None or np.isclose(global_min, global_max):
+        global_min, global_max = -1, 1
+
     for i_plane, plane in enumerate(planes):
         for j_strip, strip in enumerate(strips):
             col = f"P{plane}_s{strip}_{variable}"
@@ -220,6 +248,7 @@ def plot_variable(
                     ax_norm.set_xlabel("Datetime")
 
                 ax_main.set_title(f"P{plane} S{strip}", fontsize=9)
+                ax_main.set_ylim(global_min, global_max)
                 ax_main.grid(True)
 
                 clean_series = series.dropna()
@@ -275,9 +304,9 @@ def run_analysis(station: int = DEFAULT_STATION, pdf_generate: bool = PDF_GENERA
     if calibration_df.empty:
         print("No calibration constants computed for the provided ranges.")
     else:
-        csv_path = OUTPUT_DIR / f"MINGO0{station}_task{TASK}_calibration_medians.csv"
+        csv_path = OUTPUT_DIR / f"MINGO0{station}_task{TASK}_calibration_parameters.csv"
         calibration_df[["conf", "plane", "strip", "variable", "parameter"]].to_csv(csv_path, index=False)
-        print(f"Saved calibration medians to {csv_path}")
+        print(f"Saved calibration parameters to {csv_path}")
 
     pdf: PdfPages | None = None
     if pdf_generate:
@@ -285,21 +314,23 @@ def run_analysis(station: int = DEFAULT_STATION, pdf_generate: bool = PDF_GENERA
         pdf = PdfPages(pdf_path)
         print(f"Generating PDF at {pdf_path}")
 
-    for variable in CALIBRATION_VARIABLES:
-        fig = plot_variable(
-            df, runs_df, variable, time_col, segments_map, rasterized=bool(pdf)
-        )
-        if pdf:
-            pdf.savefig(fig, dpi=200)
-            plt.close(fig)
-        else:
-            plt.show()
+        for variable in CALIBRATION_VARIABLES:
+            fig = plot_variable(
+                df, runs_df, variable, time_col, segments_map, rasterized=bool(pdf)
+            )
+            if pdf:
+                pdf.savefig(fig, dpi=200)
+                plt.close(fig)
+            else:
+                plt.show()
 
-    if pdf:
-        pdf.close()
-        print("PDF generation complete.")
+        if pdf:
+            pdf.close()
+            print("PDF generation complete.")
 
 
 if __name__ == "__main__":
     cli_args = parse_args()
     run_analysis(station=cli_args.station, pdf_generate=cli_args.pdf)
+
+# %%
