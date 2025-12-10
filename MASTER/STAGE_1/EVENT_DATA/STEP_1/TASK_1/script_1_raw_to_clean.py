@@ -2701,15 +2701,12 @@ if low_value_cols:
     sys.exit(1)
 
 
-time_window_filtering = True
-create_essential_plots = True
-save_plots = True
-create_super_essential_plots = True
+
 
 if time_window_filtering:
     
     print("----------------------------------------------------------------------")
-    print("-------------------- Time window filtering (1/3) ---------------------")
+    print("-------------------- Time window filtering (1/1) ---------------------")
     print("----------------------------------------------------------------------")
     
     for key in ['T1', 'T2', 'T3', 'T4']:
@@ -2799,13 +2796,15 @@ if time_window_filtering:
             subset_OG = spread_df_OG[spread_df_OG["raw_tt"] == tt]
             v = subset["T_sum_spread_OG"].dropna()
             w = subset_OG["T_sum_spread_OG"].dropna()
-            w = w[w < max(v)]
+            if len(v) > 0:
+                w = w[w < max(v)]
             axs[i].hist(v, bins=100, alpha=0.7, histtype='step', label='Filtered')
             axs[i].hist(w, bins=100, alpha=0.7, histtype='step', label='Original')
             axs[i].set_title(f"TT = {tt}")
             axs[i].set_xlabel("ΔT (ns)")
             axs[i].set_ylabel("Events")
-            axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
+            axs[i].axvline(x=coincidence_window_og_ns, color='red', linestyle='--', label='Time coincidence window')
+            # Logscale
             axs[i].set_yscale('log')
         fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by raw_tt")
         fig.tight_layout(rect=[0, 0, 1, 0.95])

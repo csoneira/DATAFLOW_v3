@@ -42,6 +42,17 @@ new_just_to_check: 0
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
+
+# prepare_reprocessing_metadata.sh configuration
+prepare_reprocessing_metadata:
+  remote_host: "backuplip"         # SSH host with the remote raw listings.
+  remote_user: "rpcuser"           # SSH user to connect to the remote host.
+  remote_directory_root: "/local/experiments/MINGOS"  # Base path that contains MINGO0{station} folders.
+  date_range:
+    start: null    # Earliest UTC datetime to keep (e.g. "2024-01-01" or "2024-01-01T08:00:00"); null disables.
+    end: null      # Latest UTC datetime to keep (inclusive); null disables.
+
+# Station-specific size and min-gap thresholds (used by prepare_reprocessing_metadata.sh)
 min_size_mb_1: 5.0
 max_size_mb_1: 8.0
 
@@ -170,7 +181,7 @@ logbook:
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-try_to_use_reprocessing_table: true
+try_to_use_reprocessing_table: false
 
 stratos_save: false
 fast_mode: false # Do not iterate TimTrack, neither save figures, etc.
@@ -203,7 +214,7 @@ charge_front_back: true
 slewing_correction: false
 
 # Time filtering -----------------------------------
-time_window_filtering: false
+time_window_filtering: true
 
 # Time calibration ---------------------------------
 time_calibration: true

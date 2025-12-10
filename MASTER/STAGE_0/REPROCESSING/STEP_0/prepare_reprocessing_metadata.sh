@@ -89,10 +89,20 @@ max_gap_minutes=120  # default max gap for plots (minutes)
 min_gap_seconds=600
 filtered_plot_csv=""
 
-
+remote_host="backuplip"
 remote_user="rpcuser"
-remote_dir="/local/experiments/MINGOS/MINGO0${station}/"
-printf -v remote_dir_escaped '%q' "$remote_dir"
+remote_directory_root="/local/experiments/MINGOS"
+remote_dir=""
+remote_dir_escaped=""
+date_range_start_label=""
+date_range_end_label=""
+date_range_start_epoch=""
+date_range_end_epoch=""
+date_range_start_epoch_defined=false
+date_range_end_epoch_defined=false
+date_range_start_epoch_int=0
+date_range_end_epoch_int=0
+date_range_filter_enabled=false
 
 raw_csv="${input_directory}/remote_database_${station}.csv"
 clean_csv="${output_directory}/clean_remote_database_${station}.csv"

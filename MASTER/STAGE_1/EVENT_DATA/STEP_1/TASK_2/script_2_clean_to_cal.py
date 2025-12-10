@@ -262,6 +262,8 @@ self_trigger = False
 
 
 
+create_super_essential_plots = False
+
 print("Creating the necessary directories...")
 
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
@@ -816,6 +818,7 @@ charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
 
+iteration_tt_check = 0
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
@@ -882,7 +885,7 @@ time_sum_reference = np.array([
     [0.34898167, 0.72719093,-0.2700321 ,0.01139674],
     [0.08731539,-0.61900897,-0.39471968,-0.07661417]
 ])
-time_calibration = False
+
 
 
 if fast_mode:
@@ -1027,6 +1030,8 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
 
     df[column_name] = df.apply(_derive_tt, axis=1)
     df[column_name] = df[column_name].apply(builtins.int)
+    # If the value is smaller than 10, put a NaN, to indicate invalid TT
+    df.loc[df[column_name] < 10, column_name] = np.nan
     return df
 
 reprocessing_parameters = pd.DataFrame()
@@ -1309,11 +1314,10 @@ print(f"Cleaned dataframe reloaded from: {file_path}")
 # for col in working_df.columns:
 #     print(f" - {col}")
 
-
-
-
-
 working_df = compute_tt(working_df, "clean_tt")
+
+# Remove rows in which clean_tt is NaN (invalid TT)
+working_df = working_df.dropna(subset=["clean_tt"])
 
 
 clean_tt_counts_initial = working_df["clean_tt"].value_counts()
@@ -3401,47 +3405,56 @@ if create_plots:
     plt.close()
 
 
+
 if time_window_filtering:
     
     print("----------------------------------------------------------------------")
-    print("-------------------- Time window filtering (2/3) ---------------------")
+    print("-------------------- Time window filtering (1/2) ---------------------")
     print("----------------------------------------------------------------------")
     
     # Pre removal of outliers
     spread_results = []
     for clean_tt in sorted(working_df["clean_tt"].unique()):
+        print(f"Processing clean_tt = {clean_tt}")
         filtered_df = working_df[working_df["clean_tt"] == clean_tt].copy()
         T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
         t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
         filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
-
+    spread_df_OG = spread_df.copy()
     
-    if create_plots:
-        fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
-        axs = axs.flatten()
-        for i, tt in enumerate(sorted(spread_df["clean_tt"].unique())):
-            subset = spread_df[spread_df["clean_tt"] == tt]
-            v = subset["T_sum_spread_OG"].dropna()
-            v = v[v < coincidence_window_precal_ns * 3]
-            axs[i].hist(v, bins=100, alpha=0.7)
-            axs[i].set_title(f"TT = {tt}")
-            axs[i].set_xlabel("ΔT (ns)")
-            axs[i].set_ylabel("Events")
-            axs[i].axvline(x=coincidence_window_precal_ns, color='red', linestyle='--', label='Time coincidence window')
-            # Logscale
-            axs[i].set_yscale('log')
-        fig.suptitle("Non filtered. Intra-Event T_sum Spread by clean_tt")
-        fig.tight_layout(rect=[0, 0, 1, 0.95])
-        if save_plots:
-            hist_filename = f'{fig_idx}_tsum_spread_histograms_OG.png'
-            fig_idx += 1
-            hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
-            plot_list.append(hist_path)
-            fig.savefig(hist_path, format='png')
-        if show_plots: plt.show()
-        plt.close(fig)
+    if create_super_essential_plots:
+        clean_tts = sorted(spread_df["clean_tt"].unique())
+        if clean_tts:
+            ncols = min(3, len(clean_tts))
+            nrows = math.ceil(len(clean_tts) / ncols)
+            fig, axs = plt.subplots(nrows, ncols, figsize=(15, 10), sharex=True, sharey=False)
+            axs = np.atleast_1d(axs).flatten()
+            for ax, tt in zip(axs, clean_tts):
+                subset = spread_df[spread_df["clean_tt"] == tt]
+                v = subset["T_sum_spread_OG"].dropna()
+                # v = v[v < coincidence_window_og_ns * 3]
+                v = v[v < 100]
+                ax.hist(v, bins=100, alpha=0.7)
+                ax.set_title(f"TT = {tt}")
+                ax.set_xlabel("ΔT (ns)")
+                ax.set_ylabel("Events")
+                ax.axvline(x=coincidence_window_precal_ns, color='red', linestyle='--', label='Time coincidence window')
+                # Logscale
+                ax.set_yscale('log')
+            for ax in axs[len(clean_tts):]:
+                ax.axis('off')
+            fig.suptitle("Non filtered. Intra-Event T_sum Spread by clean_tt")
+            fig.tight_layout(rect=[0, 0, 1, 0.95])
+            if save_plots:
+                hist_filename = f'{fig_idx}_tsum_spread_histograms_OG.png'
+                fig_idx += 1
+                hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+                plot_list.append(hist_path)
+                fig.savefig(hist_path, format='png')
+            if show_plots: plt.show()
+            plt.close(fig)
 
     # Removal of outliers
     def zero_outlier_tsum(row, threshold=coincidence_window_precal_ns):
@@ -3454,6 +3467,7 @@ if time_window_filtering:
         outliers = deviations > threshold / 2
         for col in outliers.index[outliers]: row[col] = 0.0
         return row
+
     working_df = working_df.apply(zero_outlier_tsum, axis=1)
 
     # Post removal of outliers
@@ -3465,30 +3479,48 @@ if time_window_filtering:
         filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
-
     
-    if create_plots:
-        fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
-        axs = axs.flatten()
-        for i, tt in enumerate(sorted(spread_df["clean_tt"].unique())):
-            subset = spread_df[spread_df["clean_tt"] == tt]
-            v = subset["T_sum_spread_OG"].dropna()
-            axs[i].hist(v, bins=100, alpha=0.7)
-            axs[i].set_title(f"TT = {tt}")
-            axs[i].set_xlabel("ΔT (ns)")
-            axs[i].set_ylabel("Events")
-            axs[i].axvline(x=coincidence_window_precal_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
-            axs[i].set_yscale('log')
-        fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by clean_tt")
-        fig.tight_layout(rect=[0, 0, 1, 0.95])
-        if save_plots:
-            hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered_OG.png'
+    if create_super_essential_plots:
+        clean_tts = sorted(spread_df["clean_tt"].unique())
+        if clean_tts:
+            ncols = min(3, len(clean_tts))
+            nrows = math.ceil(len(clean_tts) / ncols)
+            fig, axs = plt.subplots(nrows, ncols, figsize=(15, 10), sharex=True, sharey=False)
+            axs = np.atleast_1d(axs).flatten()
+            for ax, tt in zip(axs, clean_tts):
+                subset = spread_df[spread_df["clean_tt"] == tt]
+                subset_OG = spread_df_OG[spread_df_OG["clean_tt"] == tt]
+                v = subset["T_sum_spread_OG"].dropna()
+                w = subset_OG["T_sum_spread_OG"].dropna()
+                w = w[w < max(v)]
+                ax.hist(v, bins=100, alpha=0.7, histtype='step', label='Filtered')
+                ax.hist(w, bins=100, alpha=0.7, histtype='step', label='Original')
+                ax.set_title(f"TT = {tt}")
+                ax.set_xlabel("ΔT (ns)")
+                ax.set_ylabel("Events")
+                ax.axvline(x=coincidence_window_precal_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
+                ax.set_yscale('log')
+            for ax in axs[len(clean_tts):]:
+                ax.axis('off')
+            fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by clean_tt")
+            fig.tight_layout(rect=[0, 0, 1, 0.95])
+            if save_plots:
+                hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered_OG.png'
             fig_idx += 1
             hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
             plot_list.append(hist_path)
             fig.savefig(hist_path, format='png')
         if show_plots: plt.show()
         plt.close(fig)
+
+
+
+
+
+# Print the unique types in clean_tt column
+iteration_tt_check += 1
+unique_tt_types = working_df['clean_tt'].unique()
+print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
 
 print("----------------------------------------------------------------------")
@@ -3642,7 +3674,10 @@ if self_trigger:
         if 'Q_dif' in col:
             working_st_df[col] = np.where((working_st_df[col] > Q_dif_cal_threshold) | (working_st_df[col] < -Q_dif_cal_threshold), 0, working_st_df[col])
 
-
+# Print the unique types in clean_tt column
+iteration_tt_check += 1
+unique_tt_types = working_df['clean_tt'].unique()
+print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
 if create_plots:
 
@@ -3701,7 +3736,6 @@ print("----------------------------------------------------------------------")
 
 if charge_front_back:
 
-    
     for key in [1, 2, 3, 4]:
         for i in range(4):
             # Extract data from the DataFrame
@@ -3730,14 +3764,13 @@ if charge_front_back:
             column_name = f'Q{key}_Q_dif_{i+1}'
             target_dtype = working_df[column_name].dtype
             
-            
-            if global_variables["analysis_mode"] == 1:
-                for index in [0, 1, 2, 3, 4, 5, 6]:
-                    coeff_key = f"P{key}_s{i+1}_Q_FB_coeffs[{index}]_smoothed"
-                    coeff_value = get_reprocessing_value(reprocessing_parameters, coeff_key)
-                    if coeff_value is not None:
-                        print("Using smoothed Q_FB_coeffs for P",key,"s",i+1,"index",index)
-                        coeffs[index] = coeff_value
+            # if global_variables["analysis_mode"] == 1:
+            #     for index in [0, 1, 2, 3, 4, 5, 6]:
+            #         coeff_key = f"P{key}_s{i+1}_Q_FB_coeffs[{index}]_smoothed"
+            #         coeff_value = get_reprocessing_value(reprocessing_parameters, coeff_key)
+            #         if coeff_value is not None:
+            #             print("Using smoothed Q_FB_coeffs for P",key,"s",i+1,"index",index)
+            #             coeffs[index] = coeff_value
 
             
             corrected_diff = Q_dif_adjusted - polynomial(Q_sum_adjusted, *coeffs)
@@ -3778,9 +3811,6 @@ if charge_front_back:
                 corrected_diff = Q_dif_adjusted - polynomial(Q_sum_adjusted, *coeffs)
                 working_st_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
     
-    else:
-        Q_FB_coeff_1
-    
     print('\nCharge front-back correction performed.')
     
 else:
@@ -3800,7 +3830,10 @@ if self_trigger:
         if 'Q_diff' in col:
             working_st_df[col] = np.where(np.abs(working_st_df[col]) < Q_dif_cal_threshold_FB, working_st_df[col], 0)
 
-
+# Print the unique types in clean_tt column
+iteration_tt_check += 1
+unique_tt_types = working_df['clean_tt'].unique()
+print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
 if create_plots:
 
@@ -3876,10 +3909,19 @@ for plane in range(1, 5):
             (working_df[t_sum]  == 0) |
             (working_df[t_diff] == 0)
         )
+
+        mask_and = (
+            (working_df[q_sum]  == 0) &
+            (working_df[q_diff] == 0) &
+            (working_df[t_sum]  == 0) &
+            (working_df[t_diff] == 0)
+        )
         
         # Count affected events
         num_affected_events = mask.sum()
-        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
+        zeroes_before = mask_and.sum()
+        set_to_zero = num_affected_events - zeroes_before
+        print(f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)")
 
         # Zero the affected values
         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
@@ -3910,6 +3952,12 @@ if self_trigger:
 
             # Zero the affected values
             working_st_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+
+
+# Print the unique types in clean_tt column
+iteration_tt_check += 1
+unique_tt_types = working_df['clean_tt'].unique()
+print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
 
 if create_plots:
@@ -4767,11 +4815,19 @@ if time_calibration:
 
     if calculate_T_sum_calibration:
         if old_timing_method:
+            
             # Initialize an empty list to store the resulting matrices for each event
             event_matrices = []
-            
+            skipped_time_calibration = 0
+
             # Iterate over each event (row) in the DataFrame
             for _, row in working_df.iterrows():
+
+                # Use only if clean_tt is 123, 324, 124, 134, 1234
+                if row['clean_tt'] not in [123, 324, 124, 134, 1234]:
+                    skipped_time_calibration += 1
+                    continue
+
                 event_matrix = []
                 for module in ['T1', 'T2', 'T3', 'T4']:
                     # Find the index of the strip with the maximum Q_sum for this module
@@ -4795,6 +4851,8 @@ if time_calibration:
                 
                 # Convert the event matrix to a numpy array and append it to the list of event matrices
                 event_matrices.append(np.array(event_matrix))
+            
+            print(f"Skipped {skipped_time_calibration} 2-fold events for time calibration (acc. to clean_tt).")
             
             # Convert the list of event matrices to a 3D numpy array (events x modules x features)
             event_matrices = np.array(event_matrices)
@@ -5353,6 +5411,12 @@ for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         working_df.loc[mask, f'{key}_T_sum_{j+1}'] += Tsum_cal[i][j]
 
 
+# Print the unique types in clean_tt column
+iteration_tt_check += 1
+unique_tt_types = working_df['clean_tt'].unique()
+print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
+
+
 print("----------------------------------------------------------------------")
 print("--------------- Cross-talk filtering, will be set to 0 ---------------")
 print("----------------------------------------------------------------------")
@@ -5635,7 +5699,6 @@ if crosstalk_removal_and_recalibration:
 
 
 # Fitted the crosstalk or not, the zoom is displayed
-create_super_essential_plots = True
 if create_super_essential_plots:
 # if create_plots or create_essential_plots:
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -5675,6 +5738,11 @@ if create_super_essential_plots:
     if show_plots: plt.show()
     plt.close(fig_Q)
 
+
+# Print the unique types in clean_tt column
+iteration_tt_check += 1
+unique_tt_types = working_df['clean_tt'].unique()
+print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
 
 # Per trigger type
@@ -5749,9 +5817,18 @@ for plane in range(1, 5):
             (working_df[t_diff] == 0)
         )
         
+        mask_and = (
+            (working_df[q_sum]  == 0) &
+            (working_df[q_diff] == 0) &
+            (working_df[t_sum]  == 0) &
+            (working_df[t_diff] == 0)
+        )
+        
         # Count affected events
         num_affected_events = mask.sum()
-        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
+        zeroes_before = mask_and.sum()
+        set_to_zero = num_affected_events - zeroes_before
+        print(f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)")
 
         # Zero the affected values
         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
@@ -5773,7 +5850,10 @@ if fb_columns:
 #     print(f"Removed {len(crstlk_columns)} columns with '_crstlk' in their names.")
 
 
-
+# Print the unique types in clean_tt column
+iteration_tt_check += 1
+unique_tt_types = working_df['clean_tt'].unique()
+print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
 slewing_correction = False
 if slewing_correction:
@@ -5970,10 +6050,6 @@ if create_plots or create_essential_plots:
 #                     working_df.at[idx, t_sum_col] = row[t_sum_col] - max_tsum
 
 
-
-
-#
-
 #     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
 #     plot_df = working_df.copy()
 #     plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
@@ -6022,8 +6098,6 @@ if create_plots or create_essential_plots:
 #         plt.show()
 #     plt.close()
 
-
-
 # print("----------------------------------------------------------------------")
 # print("------------------------- Time sum filtering -------------------------")
 # print("----------------------------------------------------------------------")
@@ -6031,7 +6105,6 @@ if create_plots or create_essential_plots:
 # for col in working_df.columns:
 #     if '_T_sum_' in col:
 #         working_df[col] = np.where((working_df[col] > T_sum_right_cal) | (working_df[col] < T_sum_left_cal), 0, working_df[col])
-
 
 # print("----------------------------------------------------------------------")
 # print("---------- Filter if any variable in the strip is 0 (3/3) ------------")
@@ -6064,7 +6137,6 @@ if create_plots or create_essential_plots:
 #         # Zero the affected values
 #         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
-
 # if self_trigger:
 #     total_events = len(working_st_df)
 
@@ -6090,7 +6162,6 @@ if create_plots or create_essential_plots:
 #             # Zero the affected values
 #             working_st_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
-
 # print("----------------------------------------------------------------------")
 # print("----------------- Filter the Tsum values in a gaussian ---------------")
 # print("----------------------------------------------------------------------")
@@ -6099,8 +6170,6 @@ if create_plots or create_essential_plots:
 # def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
 #     return (A1 * np.exp(-(x - mu1)**2 / (2 * sigma1**2)) +
 #             A2 * np.exp(-(x - mu2)**2 / (2 * sigma2**2)))
-
-
 
 # def find_true_max(A1, mu1, sigma1, A2, mu2, sigma2):
 #     # Initial guess: midpoint between the two peaks
@@ -6214,8 +6283,6 @@ if create_plots or create_essential_plots:
 #         working_df.loc[~mask & (series != 0), col] = 0.0
 
 
-
-#
 #     fig, axs = plt.subplots(4, 4, figsize=(20, 16))
 #     fig.suptitle("Double Gaussian Fits for $T_\\mathrm{sum}$ Distributions", fontsize=16)
 
@@ -6295,9 +6362,18 @@ for plane in range(1, 5):
             (working_df[t_diff] == 0)
         )
         
+        mask_and = (
+            (working_df[q_sum]  == 0) &
+            (working_df[q_diff] == 0) &
+            (working_df[t_sum]  == 0) &
+            (working_df[t_diff] == 0)
+        )
+        
         # Count affected events
         num_affected_events = mask.sum()
-        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
+        zeroes_before = mask_and.sum()
+        set_to_zero = num_affected_events - zeroes_before
+        print(f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)")
 
         # Zero the affected values
         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
@@ -6308,53 +6384,63 @@ print("--------------------- Using clean_tt as trigger ----------------------")
 print("----------------------------------------------------------------------")
 
 
-if time_window_filtering:    
+
+if time_window_filtering:
     print("----------------------------------------------------------------------")
-    print("-------------------- Time window filtering (3/3) ---------------------")
+    print("-------------------- Time window filtering (2/2) ---------------------")
     print("----------------------------------------------------------------------")
     
     # Pre removal of outliers
     spread_results = []
     for clean_tt in sorted(working_df["clean_tt"].unique()):
+        print(f"Processing clean_tt = {clean_tt}")
         filtered_df = working_df[working_df["clean_tt"] == clean_tt].copy()
         T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
         t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
-        filtered_df["T_sum_spread"] = t_sum_spread_tt
+        filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
-
-    if create_plots:
-        fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
-        axs = axs.flatten()
-        for i, tt in enumerate(sorted(spread_df["clean_tt"].unique())):
-            subset = spread_df[spread_df["clean_tt"] == tt]
-            v = subset["T_sum_spread"].dropna()
-            v = v[v < coincidence_window_cal_ns * 2]
-            axs[i].hist(v, bins=100, alpha=0.7)
-            axs[i].set_title(f"TT = {tt}")
-            axs[i].set_xlabel("ΔT (ns)")
-            axs[i].set_ylabel("Events")
-            axs[i].axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
-            # Logscale
-            axs[i].set_yscale('log')
-        fig.suptitle("Non filtered. Intra-Event T_sum Spread by clean_tt")
-        fig.tight_layout(rect=[0, 0, 1, 0.95])
-        if save_plots:
-            hist_filename = f'{fig_idx}_tsum_spread_histograms.png'
-            fig_idx += 1
-            hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
-            plot_list.append(hist_path)
-            fig.savefig(hist_path, format='png')
-        if show_plots: plt.show()
-        plt.close(fig)
+    spread_df_OG = spread_df.copy()
+    
+    if create_super_essential_plots:
+        clean_tts = sorted(spread_df["clean_tt"].unique())
+        if clean_tts:
+            ncols = min(3, len(clean_tts))
+            nrows = math.ceil(len(clean_tts) / ncols)
+            fig, axs = plt.subplots(nrows, ncols, figsize=(15, 10), sharex=True, sharey=False)
+            axs = np.atleast_1d(axs).flatten()
+            for ax, tt in zip(axs, clean_tts):
+                subset = spread_df[spread_df["clean_tt"] == tt]
+                v = subset["T_sum_spread_OG"].dropna()
+                # v = v[v < coincidence_window_og_ns * 3]
+                v = v[v < 100]
+                ax.hist(v, bins=100, alpha=0.7)
+                ax.set_title(f"TT = {tt}")
+                ax.set_xlabel("ΔT (ns)")
+                ax.set_ylabel("Events")
+                ax.axvline(x=coincidence_window_precal_ns, color='red', linestyle='--', label='Time coincidence window')
+                # Logscale
+                ax.set_yscale('log')
+            for ax in axs[len(clean_tts):]:
+                ax.axis('off')
+            fig.suptitle("Non filtered. Intra-Event T_sum Spread by clean_tt")
+            fig.tight_layout(rect=[0, 0, 1, 0.95])
+            if save_plots:
+                hist_filename = f'{fig_idx}_tsum_spread_histograms_OG.png'
+                fig_idx += 1
+                hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+                plot_list.append(hist_path)
+                fig.savefig(hist_path, format='png')
+            if show_plots: plt.show()
+            plt.close(fig)
 
     # Removal of outliers
-    def zero_outlier_tsum(row, threshold=coincidence_window_cal_ns):
+    def zero_outlier_tsum(row, threshold=coincidence_window_precal_ns):
         t_sum_cols = [col for col in row.index if '_T_sum_' in col]
         t_sum_vals = row[t_sum_cols].copy()
         nonzero_vals = t_sum_vals[t_sum_vals != 0]
         if len(nonzero_vals) < 2: return row
-        center = np.mean(nonzero_vals)
+        center = np.median(nonzero_vals)
         deviations = np.abs(nonzero_vals - center)
         outliers = deviations > threshold / 2
         for col in outliers.index[outliers]: row[col] = 0.0
@@ -6367,32 +6453,42 @@ if time_window_filtering:
         filtered_df = working_df[working_df["clean_tt"] == clean_tt].copy()
         T_sum_columns_tt = filtered_df.filter(regex='_T_sum_').columns
         t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
-        filtered_df["T_sum_spread"] = t_sum_spread_tt
+        filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
-
-    if create_plots:
-        fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=False)
-        axs = axs.flatten()
-        for i, tt in enumerate(sorted(spread_df["clean_tt"].unique())):
-            subset = spread_df[spread_df["clean_tt"] == tt]
-            v = subset["T_sum_spread"].dropna()
-            axs[i].hist(v, bins=100, alpha=0.7)
-            axs[i].set_title(f"TT = {tt}")
-            axs[i].set_xlabel("ΔT (ns)")
-            axs[i].set_ylabel("Events")
-            axs[i].axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
-            axs[i].set_yscale('log')
-        fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by clean_tt")
-        fig.tight_layout(rect=[0, 0, 1, 0.95])
-        if save_plots:
-            hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered.png'
-            fig_idx += 1
-            hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
-            plot_list.append(hist_path)
-            fig.savefig(hist_path, format='png')
-        if show_plots: plt.show()
-        plt.close(fig)
+    
+    if create_super_essential_plots:
+        clean_tts = sorted(spread_df["clean_tt"].unique())
+        if clean_tts:
+            ncols = min(3, len(clean_tts))
+            nrows = math.ceil(len(clean_tts) / ncols)
+            fig, axs = plt.subplots(nrows, ncols, figsize=(15, 10), sharex=True, sharey=False)
+            axs = np.atleast_1d(axs).flatten()
+            for ax, tt in zip(axs, clean_tts):
+                subset = spread_df[spread_df["clean_tt"] == tt]
+                subset_OG = spread_df_OG[spread_df_OG["clean_tt"] == tt]
+                v = subset["T_sum_spread_OG"].dropna()
+                w = subset_OG["T_sum_spread_OG"].dropna()
+                w = w[w < max(v)]
+                ax.hist(v, bins=100, alpha=0.7, histtype='step', label='Filtered')
+                ax.hist(w, bins=100, alpha=0.7, histtype='step', label='Original')
+                ax.set_title(f"TT = {tt}")
+                ax.set_xlabel("ΔT (ns)")
+                ax.set_ylabel("Events")
+                ax.axvline(x=coincidence_window_precal_ns, color='red', linestyle='--', label='Time coincidence window')# Logscale
+                ax.set_yscale('log')
+            for ax in axs[len(clean_tts):]:
+                ax.axis('off')
+            fig.suptitle("Cleaned. Corrected Intra-Event T_sum Spread by clean_tt")
+            fig.tight_layout(rect=[0, 0, 1, 0.95])
+            if save_plots:
+                hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered_OG.png'
+                fig_idx += 1
+                hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+                plot_list.append(hist_path)
+                fig.savefig(hist_path, format='png')
+            if show_plots: plt.show()
+            plt.close(fig)
 
 
     if create_plots:
@@ -6462,6 +6558,8 @@ if time_window_filtering:
             plt.close()
 
 
+
+
 print("----------------------------------------------------------------------")
 print("---------- Filter if any variable in the strip is 0 (5/3) ------------")
 print("----------------------------------------------------------------------")
@@ -6486,9 +6584,18 @@ for plane in range(1, 5):
             (working_df[t_diff] == 0)
         )
         
+        mask_and = (
+            (working_df[q_sum]  == 0) &
+            (working_df[q_diff] == 0) &
+            (working_df[t_sum]  == 0) &
+            (working_df[t_diff] == 0)
+        )
+        
         # Count affected events
         num_affected_events = mask.sum()
-        print(f"Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
+        zeroes_before = mask_and.sum()
+        set_to_zero = num_affected_events - zeroes_before
+        print(f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)")
 
         # Zero the affected values
         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0

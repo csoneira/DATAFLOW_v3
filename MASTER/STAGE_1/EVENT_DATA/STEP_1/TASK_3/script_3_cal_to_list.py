@@ -2881,10 +2881,6 @@ if create_plots:
 
 
 
-create_super_essential_plots = True
-calculate_sigmas_adjacent = True
-save_plots = True
-create_pdf = True
 
 if create_super_essential_plots:
 
