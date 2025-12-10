@@ -117,7 +117,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib import gridspec
-from matplotlib.gridspec import GridSpec
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.backends.backend_pdf import PdfPages
 from mpl_toolkits.mplot3d import Axes3D
 
@@ -5465,6 +5465,7 @@ crosstalk_linear = {
 }
 
 
+crosstalk_removal_and_recalibration = True
 
 if crosstalk_removal_and_recalibration:
 
@@ -5697,6 +5698,7 @@ if crosstalk_removal_and_recalibration:
                 working_st_df.loc[mask, f'Q{key}_Q_sum_{j+1}'] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
 
 
+create_super_essential_plots = False
 
 # Fitted the crosstalk or not, the zoom is displayed
 if create_super_essential_plots:
@@ -6163,13 +6165,9 @@ if create_plots or create_essential_plots:
 #             working_st_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
 
-time_filtering_tsum_gaussian = True
+time_study_tsum = True
 
-create_essential_plots = True
-save_plots = True
-create_pdf = True
-
-if time_filtering_tsum_gaussian:
+if time_study_tsum:
     print("----------------------------------------------------------------------")
     print("----------------- Filter the Tsum values -----------------------------")
     print("----------------------------------------------------------------------")
@@ -6177,6 +6175,22 @@ if time_filtering_tsum_gaussian:
 
     # I want you now to go pair by pair and plot the histograms of the Tsum differences, grouping all trigger types
     tt_values = working_df['clean_tt'].unique()
+    tsum_charge_threshold = 3.0  # Both charges must exceed this for the overlay histogram
+
+    # Pre-create all required difference columns to avoid dataframe fragmentation
+    tsum_diff_columns = []
+    for plane_1 in range(1, 5):
+        for plane_2 in range(1, 5):
+            for strip_1 in range(1, 5):
+                for strip_2 in range(1, 5):
+                    if plane_1 > plane_2 and strip_1 > strip_2:
+                        continue
+                    if plane_1 == plane_2 and strip_1 == strip_2:
+                        continue
+                    tsum_diff_columns.append(f"P{plane_1}s{strip_1}_minus_P{plane_2}s{strip_2}")
+    missing_cols = {col: np.nan for col in tsum_diff_columns if col not in working_df.columns}
+    if missing_cols:
+        working_df = working_df.assign(**missing_cols)
 
     for plane_1 in range(1, 5):
         for plane_2 in range(1, 5):
@@ -6190,64 +6204,161 @@ if time_filtering_tsum_gaussian:
                     col_1 = f"T{plane_1}_T_sum_{strip_1}"
                     col_2 = f"T{plane_2}_T_sum_{strip_2}"
                     col = f"P{plane_1}s{strip_1}_minus_P{plane_2}s{strip_2}"
+                    q_col_1 = f"Q{plane_1}_Q_sum_{strip_1}"
+                    q_col_2 = f"Q{plane_2}_Q_sum_{strip_2}"
+
+                    if col_1 not in working_df.columns or col_2 not in working_df.columns:
+                        print(f"Skipping {col}: missing time columns.")
+                        continue
+                    if q_col_1 not in working_df.columns or q_col_2 not in working_df.columns:
+                        print(f"Skipping {col}: missing charge columns.")
+                        continue
 
                     tt_hist_data = []
                     for tt in tt_values:
                         mask = working_df['clean_tt'] == tt
                         if not mask.any():
-                            tt_hist_data.append((tt, np.array([])))
+                            tt_hist_data.append((tt, np.array([]), np.array([]), np.array([]), np.array([])))
                             continue
 
                         mask_nonzero = (working_df.loc[mask, col_1] != 0) & (working_df.loc[mask, col_2] != 0)
                         working_df.loc[mask & mask_nonzero, col] = working_df.loc[mask & mask_nonzero, col_1] - working_df.loc[mask & mask_nonzero, col_2]
-                        subset = working_df[mask]
-                        series = subset[col].dropna()
-                        nonzero = series[series != 0]
+                        subset = working_df.loc[mask, [col, q_col_1, q_col_2]].copy()
+                        subset = subset[(subset[col] != 0) & subset[col].notna()]
 
-                        if len(nonzero) < 100:
-                            print(f"Skipping {col} for tt={tt}: too few entries ({len(nonzero)})")
-                            tt_hist_data.append((tt, np.array([])))
+                        if subset.empty or len(subset[col]) < 100:
+                            print(f"Skipping {col} for tt={tt}: too few entries ({len(subset[col])})")
+                            tt_hist_data.append((tt, np.array([]), np.array([]), np.array([]), np.array([])))
                             continue
 
-                        tt_hist_data.append((tt, nonzero))
+                        charges_1 = subset[q_col_1]
+                        charges_2 = subset[q_col_2]
+                        nonzero = subset[col]
+                        charge_diff = charges_1 - charges_2
+                        charge_sum = charges_1 + charges_2
+
+                        high_charge_mask = (charges_1 > tsum_charge_threshold) & (charges_2 > tsum_charge_threshold)
+                        high_charge_data = nonzero[high_charge_mask].values
+
+                        tt_hist_data.append(
+                            (
+                                tt,
+                                nonzero.values,
+                                high_charge_data,
+                                charge_diff.values,
+                                charge_sum.values,
+                            )
+                        )
 
                     if not tt_hist_data:
                         print(f"No valid histograms for {col}; skipping figure.")
                         continue
+                    
+                    should_plot = create_plots or create_essential_plots
+                    if should_plot:
+                        print(f"Creating histograms and scatter plots for {col}...")
+                    max_panels = 12  # 4 columns x 3 rows
+                    diff_ylim = (-50, 50)
+                    sum_ylim = (0, 100)
 
-                    num_plots = len(tt_hist_data)
-                    cols = min(3, num_plots)
-                    rows = math.ceil(num_plots / cols)
-                    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4), sharex=True, sharey=True)
-                    axes = np.atleast_1d(axes).flatten()
-
-                    for ax, (tt, data) in zip(axes, tt_hist_data):
-                        if len(data) > 0:
-                            ax.hist(data, bins=200, alpha=0.7, color='blue')
+                    for chunk_start in range(0, len(tt_hist_data), max_panels):
+                        chunk = tt_hist_data[chunk_start:chunk_start + max_panels]
+                        chunk_values = [entry[1] for entry in chunk if len(entry[1]) > 0]
+                        if chunk_values:
+                            concatenated = np.concatenate(chunk_values)
+                            global_xmin, global_xmax = np.quantile(concatenated, [0.01, 0.99])
                         else:
-                            ax.set_facecolor('#f0f0f0')
-                            ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes, fontsize=10, color='gray')
-                        ax.set_title(f'{col} | tt={tt}')
-                        ax.set_xlabel('Time Difference (ns)')
-                        ax.set_ylabel('Counts')
+                            global_xmin = global_xmax = None
 
-                    for ax in axes[num_plots:]:
-                        ax.axis('off')
+                        # Store counts in global_variables regardless of plotting
+                        for entry in chunk:
+                            tt, _, high_data, _, _ = entry
+                            if global_xmin is not None and global_xmax is not None and len(high_data) > 0:
+                                in_window = (high_data >= global_xmin) & (high_data <= global_xmax)
+                                count_value = int(np.count_nonzero(in_window))
+                            else:
+                                count_value = len(high_data)
+                            global_key = f"P{plane_1}s{strip_1}_P{plane_2}s{strip_2}_{tt}"
+                            global_variables[global_key] = count_value
 
-                    fig.suptitle(f'Histograms for {col}')
-                    plt.tight_layout(rect=[0, 0, 1, 0.96])
+                        if not should_plot:
+                            continue
 
-                    if save_plots:
-                        final_filename = f'{fig_idx}_histogram_{col}.png'
-                        fig_idx += 1
-                        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                        plot_list.append(save_fig_path)
-                        plt.savefig(save_fig_path, format='png')
-                    if show_plots:
-                        plt.show()
-                    plt.close(fig)
+                        rows, cols = 3, 4
+                        fig = plt.figure(figsize=(cols * 6, rows * 6))
+                        gs_outer = GridSpec(rows, cols, figure=fig, hspace=0.5, wspace=0.3)
+                        hist_ref = diff_ref = sum_ref = None
 
-sys.exit("Exiting for debugging")
+                        for idx in range(rows * cols):
+                            if idx >= len(chunk):
+                                ax = fig.add_subplot(gs_outer[idx])
+                                ax.axis('off')
+                                continue
+
+                            sub_spec = GridSpecFromSubplotSpec(3, 1, subplot_spec=gs_outer[idx], height_ratios=[1.0, 1.0, 1.0], hspace=0.15)
+                            if hist_ref is None:
+                                hist_ax = fig.add_subplot(sub_spec[0])
+                                hist_ref = hist_ax
+                            else:
+                                hist_ax = fig.add_subplot(sub_spec[0], sharex=hist_ref, sharey=hist_ref)
+
+                            if diff_ref is None:
+                                diff_ax = fig.add_subplot(sub_spec[1], sharex=hist_ax)
+                                diff_ref = diff_ax
+                            else:
+                                diff_ax = fig.add_subplot(sub_spec[1], sharex=hist_ax, sharey=diff_ref)
+
+                            if sum_ref is None:
+                                sum_ax = fig.add_subplot(sub_spec[2], sharex=hist_ax)
+                                sum_ref = sum_ax
+                            else:
+                                sum_ax = fig.add_subplot(sub_spec[2], sharex=hist_ax, sharey=sum_ref)
+
+                            tt, data, high_data, diff_data, sum_data = chunk[idx]
+
+                            if len(data) > 0:
+                                hist_ax.hist(data, bins=200, alpha=0.7, color='blue', label='All entries')
+                                if len(high_data) > 0:
+                                    hist_ax.hist(high_data, bins=200, histtype='step', color='red', linewidth=1.5, label=f'Q>{tsum_charge_threshold}')
+                                    hist_ax.legend()
+                            else:
+                                hist_ax.set_facecolor('#f0f0f0')
+                                hist_ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=hist_ax.transAxes, fontsize=10, color='gray')
+                            hist_ax.set_title(f'{col} | tt={tt}')
+                            hist_ax.set_ylabel('Counts')
+                            if global_xmin is not None and global_xmax is not None:
+                                hist_ax.set_xlim(global_xmin, global_xmax)
+
+                            if len(data) > 0 and len(diff_data) > 0:
+                                diff_ax.scatter(data, diff_data, s=5, alpha=0.4, color='purple')
+                            else:
+                                diff_ax.set_facecolor('#f0f0f0')
+                                diff_ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=diff_ax.transAxes, fontsize=9, color='gray')
+                            diff_ax.set_ylabel('Charge Δ (a.u.)')
+                            diff_ax.set_ylim(diff_ylim)
+
+                            if len(data) > 0 and len(sum_data) > 0:
+                                sum_ax.scatter(data, sum_data, s=5, alpha=0.4, color='green')
+                            else:
+                                sum_ax.set_facecolor('#f0f0f0')
+                                sum_ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=sum_ax.transAxes, fontsize=9, color='gray')
+                            sum_ax.set_ylabel('Charge Σ (a.u.)')
+                            sum_ax.set_ylim(sum_ylim)
+                            sum_ax.set_xlabel('Tsum difference (ns)')
+
+                        fig.suptitle(f'Histograms and Charge Correlations for {col}')
+                        plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+                        if save_plots:
+                            final_filename = f'{fig_idx}_histogram_{col}_part_{chunk_start // max_panels + 1}.png'
+                            fig_idx += 1
+                            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                            plot_list.append(save_fig_path)
+                            plt.savefig(save_fig_path, format='png')
+                        if show_plots:
+                            plt.show()
+                        plt.close(fig)
+
 
     # # Define the sum of two Gaussians
     # def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
