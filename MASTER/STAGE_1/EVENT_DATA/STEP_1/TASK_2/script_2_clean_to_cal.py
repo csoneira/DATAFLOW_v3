@@ -6162,180 +6162,263 @@ if create_plots or create_essential_plots:
 #             # Zero the affected values
 #             working_st_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
-# print("----------------------------------------------------------------------")
-# print("----------------- Filter the Tsum values in a gaussian ---------------")
-# print("----------------------------------------------------------------------")
 
-# # Define the sum of two Gaussians
-# def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
-#     return (A1 * np.exp(-(x - mu1)**2 / (2 * sigma1**2)) +
-#             A2 * np.exp(-(x - mu2)**2 / (2 * sigma2**2)))
+time_filtering_tsum_gaussian = True
 
-# def find_true_max(A1, mu1, sigma1, A2, mu2, sigma2):
-#     # Initial guess: midpoint between the two peaks
-#     x0 = (mu1 + mu2) / 2
-    
-#     # Search bounds: wider range around the peaks
-#     bounds = (min(mu1 - 3*sigma1, mu2 - 3*sigma2), 
-#               max(mu1 + 3*sigma1, mu2 + 3*sigma2))
-    
-#     # Find the maximum by minimizing the negative of the function
-#     result = minimize_scalar(
-#         lambda x: -double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2),
-#         bounds=bounds,
-#         method='bounded'
-#     )
-    
-#     if result.success:
-#         return result.x, -result.fun  # Return position and value of maximum
-#     else:
-#         # Fallback to midpoint if optimization fails
-#         x_max = (mu1 + mu2) / 2
-#         return x_max, double_gaussian(x_max, A1, mu1, sigma1, A2, mu2, sigma2)
+create_essential_plots = True
+save_plots = True
+create_pdf = True
+
+if time_filtering_tsum_gaussian:
+    print("----------------------------------------------------------------------")
+    print("----------------- Filter the Tsum values -----------------------------")
+    print("----------------------------------------------------------------------")
 
 
-# def find_threshold_crossings(f, popt, max_val, rel_th=0.01, x_range=(-10, 10), tol=1e-2):
-#     """
-#     Finds the x values where the double Gaussian drops below rel_th * max_val.
-    
-#     Returns:
-#         q_low: lower bound crossing point
-#         q_high: upper bound crossing point
-#     """
-#     threshold = rel_th * max_val
+    # I want you now to go pair by pair and plot the histograms of the Tsum differences, grouping all trigger types
+    tt_values = working_df['clean_tt'].unique()
 
-#     # Define shifted function for root finding
-#     def shifted_func(x):
-#         return f(x, *popt) - threshold
+    for plane_1 in range(1, 5):
+        for plane_2 in range(1, 5):
+            for strip_1 in range(1, 5):
+                for strip_2 in range(1, 5):
+                    if plane_1 > plane_2 and strip_1 > strip_2:
+                        continue
+                    if plane_1 == plane_2 and strip_1 == strip_2:
+                        continue
 
-#     # Sample the function to find intervals where the threshold is crossed
-#     x_vals = np.linspace(*x_range, 1000)
-#     y_vals = [shifted_func(x) for x in x_vals]
+                    col_1 = f"T{plane_1}_T_sum_{strip_1}"
+                    col_2 = f"T{plane_2}_T_sum_{strip_2}"
+                    col = f"P{plane_1}s{strip_1}_minus_P{plane_2}s{strip_2}"
 
-#     # Find sign changes: threshold crossings
-#     crossings = []
-#     for i in range(len(x_vals) - 1):
-#         if y_vals[i] * y_vals[i + 1] < 0:  # Sign change implies root in interval
-#             try:
-#                 root = brentq(shifted_func, x_vals[i], x_vals[i + 1], xtol=tol)
-#                 crossings.append(root)
-#             except ValueError:
-#                 continue
+                    tt_hist_data = []
+                    for tt in tt_values:
+                        mask = working_df['clean_tt'] == tt
+                        if not mask.any():
+                            tt_hist_data.append((tt, np.array([])))
+                            continue
 
-#     # Return first and last crossing as bounds
-#     if len(crossings) >= 2:
-#         return crossings[0], crossings[-1]
-#     else:
-#         return None, None  # or raise Exception("Could not determine bounds")
+                        mask_nonzero = (working_df.loc[mask, col_1] != 0) & (working_df.loc[mask, col_2] != 0)
+                        working_df.loc[mask & mask_nonzero, col] = working_df.loc[mask & mask_nonzero, col_1] - working_df.loc[mask & mask_nonzero, col_2]
+                        subset = working_df[mask]
+                        series = subset[col].dropna()
+                        nonzero = series[series != 0]
 
-# t_sum_gaussian_rel_th = 0.05
-# fit_results = {}  # store results if needed
-# copied_working_df = working_df.copy()
+                        if len(nonzero) < 100:
+                            print(f"Skipping {col} for tt={tt}: too few entries ({len(nonzero)})")
+                            tt_hist_data.append((tt, np.array([])))
+                            continue
 
-# for plane in range(1, 5):
-#     for strip in range(1, 5):
-#         col = f"T{plane}_T_sum_{strip}"
-#         series = working_df[col]
-#         nonzero = series[series != 0]
+                        tt_hist_data.append((tt, nonzero))
 
-#         if len(nonzero) < 100:
-#             print(f"Skipping {col}: too few entries ({len(nonzero)})")
-#             continue
+                    if not tt_hist_data:
+                        print(f"No valid histograms for {col}; skipping figure.")
+                        continue
 
-#         # Histogram for fitting
-#         hist_vals, bin_edges = np.histogram(nonzero, bins=200, density=True)
-#         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                    num_plots = len(tt_hist_data)
+                    cols = min(3, num_plots)
+                    rows = math.ceil(num_plots / cols)
+                    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4), sharex=True, sharey=True)
+                    axes = np.atleast_1d(axes).flatten()
 
-#         # Initial parameter guesses
-#         A1_guess = np.max(hist_vals)
-#         mu1_guess = np.median(nonzero)
-#         sigma1_guess = np.std(nonzero) / 2
-#         A2_guess = A1_guess / 2
-#         mu2_guess = mu1_guess
-#         sigma2_guess = np.std(nonzero)
+                    for ax, (tt, data) in zip(axes, tt_hist_data):
+                        if len(data) > 0:
+                            ax.hist(data, bins=200, alpha=0.7, color='blue')
+                        else:
+                            ax.set_facecolor('#f0f0f0')
+                            ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes, fontsize=10, color='gray')
+                        ax.set_title(f'{col} | tt={tt}')
+                        ax.set_xlabel('Time Difference (ns)')
+                        ax.set_ylabel('Counts')
 
-#         try:
-#             popt, _ = curve_fit(
-#                 double_gaussian,
-#                 bin_centers,
-#                 hist_vals,
-#                 p0=[A1_guess, mu1_guess, sigma1_guess, A2_guess, mu2_guess, sigma2_guess],
-#                 bounds=(
-#                     [0, -5, 0.1, 0, -5, 0.1],  # Lower bounds
-#                     [np.inf, 5, 20, np.inf, 5, 20]  # Upper bounds
-#                 ),
-#                 maxfev=5000
-#             )
-#         except RuntimeError:
-#             print(f"Fit failed for {col}")
-#             continue
+                    for ax in axes[num_plots:]:
+                        ax.axis('off')
 
-#         # Save result
-#         fit_results[col] = popt
-#         A1, mu1, sigma1, A2, mu2, sigma2 = popt
+                    fig.suptitle(f'Histograms for {col}')
+                    plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-#         # q_low, q_high = ( mu1 + mu2 ) / 2 - 3 * ( sigma1 + sigma2 ) / 2, ( mu1 + mu2 ) / 2 + 3 * ( sigma1 + sigma2 ) / 2
+                    if save_plots:
+                        final_filename = f'{fig_idx}_histogram_{col}.png'
+                        fig_idx += 1
+                        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                        plot_list.append(save_fig_path)
+                        plt.savefig(save_fig_path, format='png')
+                    if show_plots:
+                        plt.show()
+                    plt.close(fig)
+
+sys.exit("Exiting for debugging")
+
+    # # Define the sum of two Gaussians
+    # def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
+    #     return (A1 * np.exp(-(x - mu1)**2 / (2 * sigma1**2)) +
+    #             A2 * np.exp(-(x - mu2)**2 / (2 * sigma2**2)))
+
+    # def find_true_max(A1, mu1, sigma1, A2, mu2, sigma2):
+    #     # Initial guess: midpoint between the two peaks
+    #     x0 = (mu1 + mu2) / 2
         
-#         max_x, max_val = find_true_max(*popt)
-#         q_low, q_high = find_threshold_crossings(double_gaussian, popt, max_val, rel_th=t_sum_gaussian_rel_th)
-
-#         mask = (series >= q_low) & (series <= q_high)
-#         working_df.loc[~mask & (series != 0), col] = 0.0
-
-
-#     fig, axs = plt.subplots(4, 4, figsize=(20, 16))
-#     fig.suptitle("Double Gaussian Fits for $T_\\mathrm{sum}$ Distributions", fontsize=16)
-
-#     for plane in range(1, 5):
-#         for strip in range(1, 5):
-#             col = f"T{plane}_T_sum_{strip}"
-#             series = copied_working_df[col]
-#             nonzero = series[series != 0]
-
-#             ax = axs[plane - 1, strip - 1]
-
-#             if len(nonzero) < 100 or col not in fit_results:
-#                 ax.set_title(f"{col} (no fit)")
-#                 ax.axis("off")
-#                 continue
-
-#             hist_vals, bin_edges = np.histogram(nonzero, bins=200, density=True)
-#             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-
-#             popt = fit_results[col]
-#             A1, mu1, sigma1, A2, mu2, sigma2 = popt
-            
-#             # q_low, q_high = ( mu1 + mu2 ) / 2 - 3 * ( sigma1 + sigma2 ) / 2, ( mu1 + mu2 ) / 2 + 3 * ( sigma1 + sigma2 ) / 2
+    #     # Search bounds: wider range around the peaks
+    #     bounds = (min(mu1 - 3*sigma1, mu2 - 3*sigma2), 
+    #             max(mu1 + 3*sigma1, mu2 + 3*sigma2))
         
-#             # Find the maximum value of the fitted function
-#             x_max, max_val = find_true_max(*popt)
-#             print(f"True maximum at x = {x_max:.2f}, value = {max_val:.2f}")
-            
-#             max_x, max_val = find_true_max(*popt)
-#             q_low, q_high = find_threshold_crossings(double_gaussian, popt, max_val, rel_th=t_sum_gaussian_rel_th)
-            
-#             x_fit = np.linspace(bin_centers.min(), bin_centers.max(), 1000)
-#             y_fit = double_gaussian(x_fit, *popt)
-            
-#             ax.axvline(q_low, color='red', linestyle='--', label='Lower Limit', alpha=0.7)
-#             ax.axvline(q_high, color='red', linestyle='--', label='Upper Limit', alpha=0.7)
-#             ax.plot(bin_centers, hist_vals, lw=1.5, label="Data", alpha=0.6)
-#             ax.plot(x_fit, y_fit, lw=2.0, label="Fit")
-#             ax.set_xlim(-3, 3)
-#             ax.set_title(f"{col}")
-#             ax.tick_params(labelsize=8)
+    #     # Find the maximum by minimizing the negative of the function
+    #     result = minimize_scalar(
+    #         lambda x: -double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2),
+    #         bounds=bounds,
+    #         method='bounded'
+    #     )
+        
+    #     if result.success:
+    #         return result.x, -result.fun  # Return position and value of maximum
+    #     else:
+    #         # Fallback to midpoint if optimization fails
+    #         x_max = (mu1 + mu2) / 2
+    #         return x_max, double_gaussian(x_max, A1, mu1, sigma1, A2, mu2, sigma2)
 
-#     plt.tight_layout(rect=[0, 0.03, 1, 0.97])
-#     if save_plots:
-#         name_of_file = f'gaussian_timing_{plane}_{strip}'
-#         final_filename = f'{fig_idx}_{name_of_file}.png'
-#         fig_idx += 1
-#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
-#     if show_plots:
-#         plt.show()
-#     plt.close()
+
+    # def find_threshold_crossings(f, popt, max_val, rel_th=0.01, x_range=(-10, 10), tol=1e-2):
+    #     """
+    #     Finds the x values where the double Gaussian drops below rel_th * max_val.
+        
+    #     Returns:
+    #         q_low: lower bound crossing point
+    #         q_high: upper bound crossing point
+    #     """
+    #     threshold = rel_th * max_val
+
+    #     # Define shifted function for root finding
+    #     def shifted_func(x):
+    #         return f(x, *popt) - threshold
+
+    #     # Sample the function to find intervals where the threshold is crossed
+    #     x_vals = np.linspace(*x_range, 1000)
+    #     y_vals = [shifted_func(x) for x in x_vals]
+
+    #     # Find sign changes: threshold crossings
+    #     crossings = []
+    #     for i in range(len(x_vals) - 1):
+    #         if y_vals[i] * y_vals[i + 1] < 0:  # Sign change implies root in interval
+    #             try:
+    #                 root = brentq(shifted_func, x_vals[i], x_vals[i + 1], xtol=tol)
+    #                 crossings.append(root)
+    #             except ValueError:
+    #                 continue
+
+    #     # Return first and last crossing as bounds
+    #     if len(crossings) >= 2:
+    #         return crossings[0], crossings[-1]
+    #     else:
+    #         return None, None  # or raise Exception("Could not determine bounds")
+
+    # t_sum_gaussian_rel_th = 0.05
+    # fit_results = {}  # store results if needed
+    # copied_working_df = working_df.copy()
+
+    # for plane in range(1, 5):
+    #     for strip in range(1, 5):
+    #         col = f"T{plane}_T_sum_{strip}"
+    #         series = working_df[col]
+    #         nonzero = series[series != 0]
+
+    #         if len(nonzero) < 100:
+    #             print(f"Skipping {col}: too few entries ({len(nonzero)})")
+    #             continue
+
+    #         # Histogram for fitting
+    #         hist_vals, bin_edges = np.histogram(nonzero, bins=200, density=True)
+    #         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    #         # Initial parameter guesses
+    #         A1_guess = np.max(hist_vals)
+    #         mu1_guess = np.median(nonzero)
+    #         sigma1_guess = np.std(nonzero) / 2
+    #         A2_guess = A1_guess / 2
+    #         mu2_guess = mu1_guess
+    #         sigma2_guess = np.std(nonzero)
+
+    #         try:
+    #             popt, _ = curve_fit(
+    #                 double_gaussian,
+    #                 bin_centers,
+    #                 hist_vals,
+    #                 p0=[A1_guess, mu1_guess, sigma1_guess, A2_guess, mu2_guess, sigma2_guess],
+    #                 bounds=(
+    #                     [0, -5, 0.1, 0, -5, 0.1],  # Lower bounds
+    #                     [np.inf, 5, 20, np.inf, 5, 20]  # Upper bounds
+    #                 ),
+    #                 maxfev=5000
+    #             )
+    #         except RuntimeError:
+    #             print(f"Fit failed for {col}")
+    #             continue
+
+    #         # Save result
+    #         fit_results[col] = popt
+    #         A1, mu1, sigma1, A2, mu2, sigma2 = popt
+
+    #         # q_low, q_high = ( mu1 + mu2 ) / 2 - 3 * ( sigma1 + sigma2 ) / 2, ( mu1 + mu2 ) / 2 + 3 * ( sigma1 + sigma2 ) / 2
+            
+    #         max_x, max_val = find_true_max(*popt)
+    #         q_low, q_high = find_threshold_crossings(double_gaussian, popt, max_val, rel_th=t_sum_gaussian_rel_th)
+
+    #         mask = (series >= q_low) & (series <= q_high)
+    #         working_df.loc[~mask & (series != 0), col] = 0.0
+
+
+    #     fig, axs = plt.subplots(4, 4, figsize=(20, 16))
+    #     fig.suptitle("Double Gaussian Fits for $T_\\mathrm{sum}$ Distributions", fontsize=16)
+
+    #     for plane in range(1, 5):
+    #         for strip in range(1, 5):
+    #             col = f"T{plane}_T_sum_{strip}"
+    #             series = copied_working_df[col]
+    #             nonzero = series[series != 0]
+
+    #             ax = axs[plane - 1, strip - 1]
+
+    #             if len(nonzero) < 100 or col not in fit_results:
+    #                 ax.set_title(f"{col} (no fit)")
+    #                 ax.axis("off")
+    #                 continue
+
+    #             hist_vals, bin_edges = np.histogram(nonzero, bins=200, density=True)
+    #             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    #             popt = fit_results[col]
+    #             A1, mu1, sigma1, A2, mu2, sigma2 = popt
+                
+    #             # q_low, q_high = ( mu1 + mu2 ) / 2 - 3 * ( sigma1 + sigma2 ) / 2, ( mu1 + mu2 ) / 2 + 3 * ( sigma1 + sigma2 ) / 2
+            
+    #             # Find the maximum value of the fitted function
+    #             x_max, max_val = find_true_max(*popt)
+    #             print(f"True maximum at x = {x_max:.2f}, value = {max_val:.2f}")
+                
+    #             max_x, max_val = find_true_max(*popt)
+    #             q_low, q_high = find_threshold_crossings(double_gaussian, popt, max_val, rel_th=t_sum_gaussian_rel_th)
+                
+    #             x_fit = np.linspace(bin_centers.min(), bin_centers.max(), 1000)
+    #             y_fit = double_gaussian(x_fit, *popt)
+                
+    #             ax.axvline(q_low, color='red', linestyle='--', label='Lower Limit', alpha=0.7)
+    #             ax.axvline(q_high, color='red', linestyle='--', label='Upper Limit', alpha=0.7)
+    #             ax.plot(bin_centers, hist_vals, lw=1.5, label="Data", alpha=0.6)
+    #             ax.plot(x_fit, y_fit, lw=2.0, label="Fit")
+    #             ax.set_xlim(-3, 3)
+    #             ax.set_title(f"{col}")
+    #             ax.tick_params(labelsize=8)
+
+    #     plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+    #     if save_plots:
+    #         name_of_file = f'gaussian_timing_{plane}_{strip}'
+    #         final_filename = f'{fig_idx}_{name_of_file}.png'
+    #         fig_idx += 1
+    #         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+    #         plot_list.append(save_fig_path)
+    #         plt.savefig(save_fig_path, format='png')
+    #     if show_plots:
+    #         plt.show()
+    #     plt.close()
 
 
 print("----------------------------------------------------------------------")

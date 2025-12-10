@@ -2567,11 +2567,6 @@ if create_plots or create_super_essential_plots:
         plt.close(fig_Q)
 
 
-
-create_essential_plots = True
-save_plots = True
-create_pdf = True
-
 if create_plots or create_essential_plots:
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2809,8 +2804,6 @@ if time_window_filtering:
         filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
-
-    working_df = filtered_df.copy()
 
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
