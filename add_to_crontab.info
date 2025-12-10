@@ -42,6 +42,9 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # Solve stale locks (force 15 min age and kill matching stale pipelines)
 */5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.py --force-age-minutes 15 --kill-stale-processes >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/solve_stale_locks.cron.log 2>&1
 
+# Purge cron logs nightly at 23:00
+0 23 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/erase_cron_logs.log 2>&1
+
 # NMDB update
 # 0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_nmdb_retrieval.log 2>&1
 

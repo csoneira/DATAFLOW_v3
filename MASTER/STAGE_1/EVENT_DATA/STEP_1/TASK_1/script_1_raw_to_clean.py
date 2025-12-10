@@ -2568,6 +2568,10 @@ if create_plots or create_super_essential_plots:
 
 
 
+create_essential_plots = True
+save_plots = True
+create_pdf = True
+
 if create_plots or create_essential_plots:
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2702,6 +2706,26 @@ if low_value_cols:
 
 
 
+# Go plane by plane and strip by strip, and if F is zero or B is zero, set the other to zero too, per row.
+for plane in range(1, 5):
+    for strip in range(1, 5):
+        col_F = f'T{plane}_F_{strip}'
+        col_B = f'T{plane}_B_{strip}'
+
+        # Create a mask where either front or back is zero
+        mask_zero_or = (working_df[col_F] == 0) | (working_df[col_B] == 0)
+        mask_zero_and = (working_df[col_F] == 0) & (working_df[col_B] == 0)
+
+        # Set to zero in mask_zero_or
+        working_df.loc[mask_zero_or, col_F] = 0
+        working_df.loc[mask_zero_or, col_B] = 0
+
+        # Count how many changes were made, which is the number of True in mask_zero_or - mask_zero_and
+        changes_made = mask_zero_or.sum() - mask_zero_and.sum()
+        if changes_made > 0:
+            print(f"[P{plane}s{strip}] Set to zero {changes_made} values, {changes_made/len(working_df)*100:.2f}% of total rows.")
+
+
 
 if time_window_filtering:
     
@@ -2788,7 +2812,7 @@ if time_window_filtering:
 
     working_df = filtered_df.copy()
 
-    if create_super_essential_plots or create_plots:
+    if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
         for i, tt in enumerate(sorted(spread_df["raw_tt"].unique())):
@@ -2798,6 +2822,8 @@ if time_window_filtering:
             w = subset_OG["T_sum_spread_OG"].dropna()
             if len(v) > 0:
                 w = w[w < max(v)]
+            v = v[v > 0]
+            w = w[w > 0]
             axs[i].hist(v, bins=100, alpha=0.7, histtype='step', label='Filtered')
             axs[i].hist(w, bins=100, alpha=0.7, histtype='step', label='Original')
             axs[i].set_title(f"TT = {tt}")
@@ -2822,6 +2848,64 @@ if os.path.exists(temp_file):
     print("Removing temporary file...")
     os.remove(temp_file)
 
+
+
+if create_plots or create_essential_plots:
+    # Initialize figure and axes for scatter plot of Time vs Charge
+    fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+    axes_TQ = axes_TQ.flatten()
+
+    # Iterate over each module (T1, T2, T3, T4)
+    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+        for j in range(4):
+            col_F = f'{key}_F_{j+1}'  # Time F column
+            col_B = f'{key}_B_{j+1}'  # Time B column
+            
+            y_F = working_df[col_F]  # Time values for front
+            y_B = working_df[col_B]  # Time values for back
+            
+            charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'  # Corresponding charge column for front
+            charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'  # Corresponding charge column for back
+            
+            charge_F = working_df[charge_col_F]  # Charge values for front
+            charge_B = working_df[charge_col_B]  # Charge values for back
+            
+            # Apply clipping ranges to the data
+            mask_F = (y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max) & (charge_F > Q_clip_min) & (charge_F < Q_clip_max)
+            mask_B = (y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max) & (charge_B > Q_clip_min) & (charge_B < Q_clip_max)
+            
+            # Plot scatter plots for Time F vs Charge F and Time B vs Charge B
+            axes_TQ[i*4 + j].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
+            axes_TQ[i*4 + j].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
+            
+            # Plot threshold lines for time and charge
+            axes_TQ[i*4 + j].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
+            axes_TQ[i*4 + j].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
+            axes_TQ[i*4 + j].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
+            axes_TQ[i*4 + j].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
+            
+            axes_TQ[i*4 + j].set_title(f'{col_F} vs {col_B}')
+            axes_TQ[i*4 + j].legend()
+
+    # Adjust the layout and title
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.suptitle(f"Scatter Plot for T vs Q values, time-filtered, mingo0{station}\n{start_time}", fontsize=16)
+
+    # Save the plot
+    if save_plots:
+        final_filename = f'{fig_idx}_scatter_plot_TQ_time_filtered.png'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+
+    # Show the plot if requested
+    if show_plots:
+        plt.show()
+
+    # Close the plot to avoid excessive memory usage
+    plt.close(fig_TQ)
 
 
 # -----------------------------------------------------------------------------
