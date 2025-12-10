@@ -1305,11 +1305,17 @@ KEY = "df"
 working_df = pd.read_parquet(file_path, engine="pyarrow")
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 print(f"Cleaned dataframe reloaded from: {file_path}")
-print("Columns loaded from parquet:")
-for col in working_df.columns:
-    print(f" - {col}")
+# print("Columns loaded from parquet:")
+# for col in working_df.columns:
+#     print(f" - {col}")
+
+
+
+
 
 working_df = compute_tt(working_df, "clean_tt")
+
+
 clean_tt_counts_initial = working_df["clean_tt"].value_counts()
 for tt_value, count in clean_tt_counts_initial.items():
     global_variables[f"clean_tt_{tt_value}_count"] = int(count)

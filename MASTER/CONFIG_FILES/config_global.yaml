@@ -55,16 +55,16 @@ min_size_mb_4: 4.5
 max_size_mb_4: 6.1
 
 
-min_gap_minutes_1: 15
+min_gap_minutes_1: 5
 max_gap_minutes_1: 120
 
-min_gap_minutes_2: 30
+min_gap_minutes_2: 5
 max_gap_minutes_2: 140
 
-min_gap_minutes_3: 10
+min_gap_minutes_3: 5
 max_gap_minutes_3: 40
 
-min_gap_minutes_4: 60
+min_gap_minutes_4: 5
 max_gap_minutes_4: 140
 
 use_processed_as_reject_list_1: false
@@ -252,7 +252,7 @@ charge_front_back_debug: false
 # Resource limits for STEP_1 pipeline (guide_raw_to_corrected.sh)
 event_data_resource_limits:
   mem_used_pct_max: 90          # percent
-  swap_used_pct_max: 35         # percent
+  swap_used_pct_max: 75         # percent
   swap_used_kb_max: 4194304     # 4 GB in kB
   cpu_used_pct_max: 95          # percent
 
@@ -288,8 +288,8 @@ remove_outliers: false
 create_plots: false
 create_plots_task_4: false
 create_essential_plots: false
-save_plots: true
-create_pdf: true
+save_plots: false
+create_pdf: false
 force_replacement: true  # Creates a new datafile even if there is already one that looks complete
 show_plots: false
 

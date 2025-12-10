@@ -2091,6 +2091,7 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
     df[column_name] = df[column_name].apply(builtins.int)
     return df
 
+
 # Apply the function to the DataFrame
 working_df = compute_tt(working_df, "raw_tt")
 
@@ -2539,8 +2540,6 @@ if create_plots or create_super_essential_plots:
                 y_B = filtered_df[col_B]
                 
                 # Plot histograms with Q-specific clipping and bins
-                Q_clip_min = 80
-                Q_clip_max = 120
 
                 axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                     bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
@@ -2702,6 +2701,11 @@ if low_value_cols:
     sys.exit(1)
 
 
+time_window_filtering = True
+create_essential_plots = True
+save_plots = True
+create_super_essential_plots = True
+
 if time_window_filtering:
     
     print("----------------------------------------------------------------------")
@@ -2730,7 +2734,7 @@ if time_window_filtering:
         filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
-
+    spread_df_OG = spread_df.copy()
    
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
@@ -2738,7 +2742,8 @@ if time_window_filtering:
         for i, tt in enumerate(sorted(spread_df["raw_tt"].unique())):
             subset = spread_df[spread_df["raw_tt"] == tt]
             v = subset["T_sum_spread_OG"].dropna()
-            v = v[v < coincidence_window_og_ns * 3]
+            # v = v[v < coincidence_window_og_ns * 3]
+            v = v[v < 100]
             axs[i].hist(v, bins=100, alpha=0.7)
             axs[i].set_title(f"TT = {tt}")
             axs[i].set_xlabel("ΔT (ns)")
@@ -2754,10 +2759,13 @@ if time_window_filtering:
             hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
             plot_list.append(hist_path)
             fig.savefig(hist_path, format='png')
-        if show_plots: plt.show()
+        if show_plots:
+            plt.show()
         plt.close(fig)
 
     # Removal of outliers
+    print("Removing outliers based on T_sum values...")
+
     def zero_outlier_tsum(row, threshold=coincidence_window_og_ns):
         t_sum_cols = [col for col in row.index if 'T' in col]
         t_sum_vals = row[t_sum_cols].copy()
@@ -2768,6 +2776,7 @@ if time_window_filtering:
         outliers = deviations > threshold / 2
         for col in outliers.index[outliers]: row[col] = 0.0
         return row
+    
     working_df = working_df.apply(zero_outlier_tsum, axis=1)
 
     # Post removal of outliers
@@ -2780,14 +2789,19 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
 
-   
-    if create_essential_plots or create_plots:
+    working_df = filtered_df.copy()
+
+    if create_super_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
         for i, tt in enumerate(sorted(spread_df["raw_tt"].unique())):
             subset = spread_df[spread_df["raw_tt"] == tt]
+            subset_OG = spread_df_OG[spread_df_OG["raw_tt"] == tt]
             v = subset["T_sum_spread_OG"].dropna()
-            axs[i].hist(v, bins=100, alpha=0.7)
+            w = subset_OG["T_sum_spread_OG"].dropna()
+            w = w[w < max(v)]
+            axs[i].hist(v, bins=100, alpha=0.7, histtype='step', label='Filtered')
+            axs[i].hist(w, bins=100, alpha=0.7, histtype='step', label='Original')
             axs[i].set_title(f"TT = {tt}")
             axs[i].set_xlabel("ΔT (ns)")
             axs[i].set_ylabel("Events")

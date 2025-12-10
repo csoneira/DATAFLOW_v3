@@ -2880,8 +2880,13 @@ if create_plots:
 
 
 
-if create_plots:
 
+create_super_essential_plots = True
+calculate_sigmas_adjacent = True
+save_plots = True
+create_pdf = True
+
+if create_super_essential_plots:
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
@@ -2934,7 +2939,63 @@ if create_plots:
 
 
 
+create_super_essential_plots = False
 
+if create_super_essential_plots:
+
+    patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
+    fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 12), sharex=True, sharey=False)
+
+    for i_plane in range(1, 5):
+        active_col = f'active_strips_P{i_plane}'
+        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
+        Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+
+        for j_pattern, pattern in enumerate(patterns_of_interest):
+            ax = axs[i_plane - 1, j_pattern]
+
+            active_strips = [i for i, c in enumerate(pattern) if c == '1']
+            if len(active_strips) != 2:
+                ax.set_visible(False)
+                continue
+
+            i, j = active_strips
+            mask = working_df[active_col] == pattern
+            if mask.sum() == 0:
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+                continue
+
+            xi = working_df.loc[mask, T_dif_cols[i]].values
+            yi = working_df.loc[mask, T_dif_cols[j]].values
+            diff = ( yi - xi ) * tdiff_to_x
+            semi_suma = ( yi + xi ) / 2 * tdiff_to_x
+            qi = working_df.loc[mask, Q_sum_cols[i]].values
+            qj = working_df.loc[mask, Q_sum_cols[j]].values
+            q_semisum = ( qi + qj ) / 2
+            q_semidiff = ( qi - qj ) / 2 / q_semisum
+
+            # ax.hist(diff, bins=40, color='blue', alpha=0.7)
+            ax.scatter(q_semisum, diff, color='blue', alpha=0.6, s = 1)
+            # ax.axvline(0, color='black', linestyle='--', linewidth=1)
+            ax.set_xlim(0, 50)
+            ax.set_ylim(-2 * tdiff_to_x, 2 * tdiff_to_x)
+            ax.set_title(f'Plane {i_plane}, Pattern {pattern}')
+            ax.set_xlabel(f'Q mean (ns)')
+            ax.set_ylabel(f'X difference (mm)')
+            ax.grid(True)
+
+    fig.suptitle("Histograms of T_diff Differences for Different Patterns", fontsize=16)
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    if save_plots:
+        name_of_file = 'tdiff_differences_vs_q_sum_4x3.png'
+        final_filename = f'{fig_idx}_{name_of_file}'
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
 
 
 if create_plots:
@@ -3159,116 +3220,104 @@ if create_plots:
     plt.close()
 
 
-create_super_essential_plots = True
-calculate_sigmas_adjacent = True
-save_plots = True
-create_pdf = True
+calculate_sigmas_adjacent = False
 
 if calculate_sigmas_adjacent:
 
-    # # Sigmas per charge limit storage, Save in each line the charge limit, the pattern and the sigmas for each plane
-    # sigma_results = {}
-    # all_results = {}
-
-    # charge_limits_to_test = np.linspace(0, 30, 10)
-    # for charge_limit in charge_limits_to_test:
-
-    #     patterns_of_interest = ['1100', '0110', '0011']
-        
-    #     # Double Gaussian model
-    #     def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
-    #         g1 = A1 * np.exp(-0.5 * ((x - mu1) / sigma1)**2)
-    #         g2 = A2 * np.exp(-0.5 * ((x - mu2) / sigma2)**2)
-    #         return g1 + g2
-        
-    #     for i_plane in range(1, 5):
-    #         active_col = f'active_strips_P{i_plane}'
-    #         T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
-    #         Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
-
-    #         for j_pattern, pattern in enumerate(patterns_of_interest):
-
-    #             active_strips = [i for i, c in enumerate(pattern) if c == '1']
-
-    #             i, j = active_strips
-    #             mask = working_df[active_col] == pattern
-
-    #             xi = working_df.loc[mask, T_dif_cols[i]].values
-    #             yi = working_df.loc[mask, T_dif_cols[j]].values
-    #             qi = working_df.loc[mask, Q_sum_cols[i]].values
-    #             qj = working_df.loc[mask, Q_sum_cols[j]].values
-            
-    #             cond = (xi != 0) & (yi != 0) & (abs(xi) < 1) & (abs(yi) < 1)
-    #             xi = xi[cond]
-    #             yi = yi[cond]
-    #             qi = qi[cond]
-    #             qj = qj[cond]
-    #             diff = ( yi - xi ) * tdiff_to_x
-
-    #             # charge_condition = (qi > charge_limit) & (qj > charge_limit)
-    #             charge_condition = ( (qi + qj) > charge_limit) & (qi > 1) & (qj > 1)
-    #             # charge_condition = ( (qi + qj) > charge_limit)
-    #             diff = diff[charge_condition]
-                
-    #             cond_new = abs(diff) < 150
-    #             diff = diff[cond_new]
-                
-    #             adjacent_nbins = 100
-                
-    #             # Histogram
-    #             counts, bin_edges = np.histogram(diff, bins=adjacent_nbins, range=(-150, 150))
-    #             bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-
-    #             # Constraint bounds
-    #             tolerance_in_pct = 100  # percent
-                
-    #             anc_std_in_mm = anc_std * tdiff_to_x
-                
-    #             sigma_small_left = anc_std_in_mm * (1 - tolerance_in_pct/100)
-    #             sigma_small_right = anc_std_in_mm * (1 + tolerance_in_pct/100)
-                
-    #             # print(f"Left and right limits in sigma: {sigma_small_left:.3f}, {sigma_small_right:.3f} mm")
-                
-    #             lower_bound = [0,     -10, sigma_small_left,  0,     -10, 0]
-    #             upper_bound = [np.inf, 10, sigma_small_right, np.inf, 10, 1000]
-
-    #             # Initial guesses
-    #             p0 = [50, 0, anc_std_in_mm, 50, 0, 20]
-
-    #             # Fit
-    #             try:
-    #                 popt, _ = curve_fit(double_gaussian, bin_centers, counts, p0=p0, bounds=(lower_bound, upper_bound))
-    #             except RuntimeError:
-    #                 print(f"Fit failed for Plane {i_plane}, Pattern {pattern}, Charge limit {charge_limit:.1f}. Skipping.")
-    #                 ax.text(0.5, 0.5, 'Fit failed', ha='center', va='center', transform=ax.transAxes)
-    #                 continue
-
-    #             # Extract fitted components
-    #             A1, mu1, sigma1, A2, mu2, sigma2 = popt
-    #             fit_x = np.linspace(-150, 150, 500)
-    #             g1 = A1 * np.exp(-0.5 * ((fit_x - mu1) / sigma1)**2)
-    #             g2 = A2 * np.exp(-0.5 * ((fit_x - mu2) / sigma2)**2)
-    #             fit_total = g1 + g2
-
-    #             # Store sigma1 result
-    #             sigma_results[(f'Charge_{charge_limit:.1f}', f'Plane_{i_plane}', pattern)] = sigma1, sigma2
-    #             all_results[(f'Charge_{charge_limit:.1f}', f'Plane_{i_plane}', pattern)] = popt
-    
-
     # Sigmas per charge limit storage, Save in each line the charge limit, the pattern and the sigmas for each plane
-    all_results_loop = {}
+    sigma_results = {}
+    all_results = {}
 
-    charge_limits_to_loop = np.linspace(0, 20, 5)
-    for charge_limit_1 in charge_limits_to_loop:
-        for charge_limit_2 in charge_limits_to_loop:
+    charge_limits_to_test = np.linspace(0, 50, 50)
+    for charge_limit in charge_limits_to_test:
+
+        patterns_of_interest = ['1100', '0110', '0011']
+        
+        # Double Gaussian model
+        def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
+            g1 = A1 * np.exp(-0.5 * ((x - mu1) / sigma1)**2)
+            g2 = A2 * np.exp(-0.5 * ((x - mu2) / sigma2)**2)
+            return g1 + g2
+        
+        for i_plane in range(1, 5):
+            active_col = f'active_strips_P{i_plane}'
+            T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
+            Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+
+            for j_pattern, pattern in enumerate(patterns_of_interest):
+
+                active_strips = [i for i, c in enumerate(pattern) if c == '1']
+
+                i, j = active_strips
+                mask = working_df[active_col] == pattern
+
+                xi = working_df.loc[mask, T_dif_cols[i]].values
+                yi = working_df.loc[mask, T_dif_cols[j]].values
+                qi = working_df.loc[mask, Q_sum_cols[i]].values
+                qj = working_df.loc[mask, Q_sum_cols[j]].values
+            
+                cond = (xi != 0) & (yi != 0) & (abs(xi) < 1) & (abs(yi) < 1)
+                xi = xi[cond]
+                yi = yi[cond]
+                qi = qi[cond]
+                qj = qj[cond]
+                diff = ( yi - xi ) * tdiff_to_x
+
+                # charge_condition = (qi > charge_limit) & (qj > charge_limit)
+                radius = 2
+                charge_condition = ( (qi + qj) > charge_limit - radius) & ( (qi + qj) < charge_limit + radius) & (qi > 1) & (qj > 1)
+                # charge_condition = ( (qi + qj) > charge_limit)
+                diff = diff[charge_condition]
+                
+                cond_new = abs(diff) < 150
+                diff = diff[cond_new]
+                
+                adjacent_nbins = 100
+                
+                # Histogram
+                counts, bin_edges = np.histogram(diff, bins=adjacent_nbins, range=(-150, 150))
+                bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+                # Constraint bounds
+                tolerance_in_pct = 100  # percent
+                
+                anc_std_in_mm = anc_std * tdiff_to_x
+                
+                sigma_small_left = anc_std_in_mm * (1 - tolerance_in_pct/100)
+                sigma_small_right = anc_std_in_mm * (1 + tolerance_in_pct/100)
+                
+                # print(f"Left and right limits in sigma_small: {sigma_small_left:.3f}, {sigma_small_right:.3f} mm")
+                
+                lower_bound = [0,     -10, sigma_small_left,  0,     -10, 0]
+                upper_bound = [np.inf, 10, sigma_small_right, np.inf, 10, 1000]
+
+                # Initial guesses
+                p0 = [50, 0, anc_std_in_mm, 50, 0, 20]
+
+                # Fit
+                try:
+                    popt, _ = curve_fit(double_gaussian, bin_centers, counts, p0=p0, bounds=(lower_bound, upper_bound))
+                except RuntimeError:
+                    print(f"Fit failed for Plane {i_plane}, Pattern {pattern}, Charge limit {charge_limit:.1f}. Skipping.")
+                    continue
+
+                # Extract fitted components
+                A1, mu1, sigma1, A2, mu2, sigma2 = popt
+                fit_x = np.linspace(-150, 150, 500)
+                g1 = A1 * np.exp(-0.5 * ((fit_x - mu1) / sigma1)**2)
+                g2 = A2 * np.exp(-0.5 * ((fit_x - mu2) / sigma2)**2)
+                fit_total = g1 + g2
+
+                # Store sigma1 result
+                sigma_results[(f'Charge_{charge_limit:.1f}', f'Plane_{i_plane}', pattern)] = sigma1, sigma2
+                all_results[(f'Charge_{charge_limit:.1f}', f'Plane_{i_plane}', pattern)] = popt
+    
+    
+    if create_plots:
+        for charge_limit in charge_limits_to_test:
 
             patterns_of_interest = ['1100', '0110', '0011']
-            
-            # Double Gaussian model
-            def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
-                g1 = A1 * np.exp(-0.5 * ((x - mu1) / sigma1)**2)
-                g2 = A2 * np.exp(-0.5 * ((x - mu2) / sigma2)**2)
-                return g1 + g2
+            fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(24, 18), sharex=True, sharey=True)
             
             for i_plane in range(1, 5):
                 active_col = f'active_strips_P{i_plane}'
@@ -3276,11 +3325,18 @@ if calculate_sigmas_adjacent:
                 Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
 
                 for j_pattern, pattern in enumerate(patterns_of_interest):
+                    ax = axs[i_plane - 1, j_pattern]
 
                     active_strips = [i for i, c in enumerate(pattern) if c == '1']
+                    if len(active_strips) != 2:
+                        ax.set_visible(False)
+                        continue
 
                     i, j = active_strips
                     mask = working_df[active_col] == pattern
+                    if mask.sum() == 0:
+                        ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+                        continue
 
                     xi = working_df.loc[mask, T_dif_cols[i]].values
                     yi = working_df.loc[mask, T_dif_cols[j]].values
@@ -3294,7 +3350,10 @@ if calculate_sigmas_adjacent:
                     qj = qj[cond]
                     diff = ( yi - xi ) * tdiff_to_x
 
-                    charge_condition = (qi > charge_limit_1) & (qj > charge_limit_2)
+                    # charge_condition = (qi > charge_limit) & (qj > charge_limit)
+                    radius = 5
+                    charge_condition = ( (qi + qj) > charge_limit - radius) & ( (qi + qj) < charge_limit + radius) & (qi > 1) & (qj > 1)
+                    # charge_condition = (qi + qj > charge_limit)
                     diff = diff[charge_condition]
                     
                     cond_new = abs(diff) < 150
@@ -3306,192 +3365,188 @@ if calculate_sigmas_adjacent:
                     counts, bin_edges = np.histogram(diff, bins=adjacent_nbins, range=(-150, 150))
                     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
-                    # Constraint bounds
-                    tolerance_in_pct = 100  # percent
+                    # Extract fitted components
+                    popt = all_results.get((f'Charge_{charge_limit:.1f}', f'Plane_{i_plane}', pattern), None)
                     
-                    anc_std_in_mm = anc_std * tdiff_to_x
-                    
-                    sigma_small_left = anc_std_in_mm * (1 - tolerance_in_pct/100)
-                    sigma_small_right = anc_std_in_mm * (1 + tolerance_in_pct/100)
-                    
-                    # print(f"Left and right limits in sigma: {sigma_small_left:.3f}, {sigma_small_right:.3f} mm")
-                    
-                    lower_bound = [0,     -10, sigma_small_left,  0,     -10, 0]
-                    upper_bound = [np.inf, 10, sigma_small_right, np.inf, 10, 1000]
-
-                    # Initial guesses
-                    p0 = [50, 0, anc_std_in_mm, 50, 0, 20]
-
-                    # Fit
-                    try:
-                        popt, _ = curve_fit(double_gaussian, bin_centers, counts, p0=p0, bounds=(lower_bound, upper_bound))
-                    except RuntimeError:
-                        print(f"Fit failed for Plane {i_plane}, Pattern {pattern}, Charge limit {charge_limit:.1f}. Skipping.")
-                        ax.text(0.5, 0.5, 'Fit failed', ha='center', va='center', transform=ax.transAxes)
+                    if popt is None:
+                        print(f"No fit results for Plane {i_plane}, Pattern {pattern}, Charge limit {charge_limit:.1f}. Skipping.")
+                        ax.text(0.5, 0.5, 'No fit results', ha='center', va='center', transform=ax.transAxes)
                         continue
 
-                    # Extract fitted components
                     A1, mu1, sigma1, A2, mu2, sigma2 = popt
                     fit_x = np.linspace(-150, 150, 500)
                     g1 = A1 * np.exp(-0.5 * ((fit_x - mu1) / sigma1)**2)
                     g2 = A2 * np.exp(-0.5 * ((fit_x - mu2) / sigma2)**2)
                     fit_total = g1 + g2
 
-                    # Store sigma1 result
-                    all_results_loop[(f'Charge_1_{charge_limit_1:.1f}', f'Charge_2_{charge_limit_2:.1f}', f'Plane_{i_plane}', pattern)] = popt
+                    ax.hist(diff, bins=adjacent_nbins, range=(-150, 150), color='blue', alpha=0.4, label='Data')
+                    ax.plot(fit_x, g1, '--', label=f'σ={sigma1:.1f}')
+                    ax.plot(fit_x, g2, '--', label=f'σ={sigma2:.1f}')
 
-
-    # if create_plots:
-    #     for charge_limit in charge_limits_to_test:
-
-    #         patterns_of_interest = ['1100', '0110', '0011']
-    #         fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(24, 18), sharex=True, sharey=True)
-            
-    #         for i_plane in range(1, 5):
-    #             active_col = f'active_strips_P{i_plane}'
-    #             T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
-    #             Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
-
-    #             for j_pattern, pattern in enumerate(patterns_of_interest):
-    #                 ax = axs[i_plane - 1, j_pattern]
-
-    #                 active_strips = [i for i, c in enumerate(pattern) if c == '1']
-    #                 if len(active_strips) != 2:
-    #                     ax.set_visible(False)
-    #                     continue
-
-    #                 i, j = active_strips
-    #                 mask = working_df[active_col] == pattern
-    #                 if mask.sum() == 0:
-    #                     ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
-    #                     continue
-
-    #                 xi = working_df.loc[mask, T_dif_cols[i]].values
-    #                 yi = working_df.loc[mask, T_dif_cols[j]].values
-    #                 qi = working_df.loc[mask, Q_sum_cols[i]].values
-    #                 qj = working_df.loc[mask, Q_sum_cols[j]].values
-                
-    #                 cond = (xi != 0) & (yi != 0) & (abs(xi) < 1) & (abs(yi) < 1)
-    #                 xi = xi[cond]
-    #                 yi = yi[cond]
-    #                 qi = qi[cond]
-    #                 qj = qj[cond]
-    #                 diff = ( yi - xi ) * tdiff_to_x
-
-    #                 # charge_condition = (qi > charge_limit) & (qj > charge_limit)
-    #                 charge_condition = (qi + qj > charge_limit) & (qi > 1) & (qj > 1)
-    #                 # charge_condition = (qi + qj > charge_limit)
-    #                 diff = diff[charge_condition]
+                    ax.plot(fit_x, fit_total, '-', color='red', label='Total fit')
                     
-    #                 cond_new = abs(diff) < 150
-    #                 diff = diff[cond_new]
-                    
-    #                 adjacent_nbins = 100
-                    
-    #                 # Histogram
-    #                 counts, bin_edges = np.histogram(diff, bins=adjacent_nbins, range=(-150, 150))
-    #                 bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+                    ax.set_xlim(-150, 150)
+                    ax.set_title(f'Plane {i_plane}, Pattern {pattern}')
+                    ax.set_xlabel(f'X difference (mm)')
+                    ax.set_ylabel('Counts')
+                    ax.grid(True)
+                    ax.legend()
 
-    #                 # Extract fitted components
-    #                 popt = all_results.get((f'Charge_{charge_limit:.1f}', f'Plane_{i_plane}', pattern), None)
-                    
-    #                 if popt is None:
-    #                     print(f"No fit results for Plane {i_plane}, Pattern {pattern}, Charge limit {charge_limit:.1f}. Skipping.")
-    #                     ax.text(0.5, 0.5, 'No fit results', ha='center', va='center', transform=ax.transAxes)
-    #                     continue
-
-    #                 A1, mu1, sigma1, A2, mu2, sigma2 = popt
-    #                 fit_x = np.linspace(-150, 150, 500)
-    #                 g1 = A1 * np.exp(-0.5 * ((fit_x - mu1) / sigma1)**2)
-    #                 g2 = A2 * np.exp(-0.5 * ((fit_x - mu2) / sigma2)**2)
-    #                 fit_total = g1 + g2
-
-    #                 ax.hist(diff, bins=adjacent_nbins, range=(-150, 150), color='blue', alpha=0.4, label='Data')
-    #                 ax.plot(fit_x, g1, '--', label=f'σ={sigma1:.1f}')
-    #                 ax.plot(fit_x, g2, '--', label=f'σ={sigma2:.1f}')
-
-    #                 ax.plot(fit_x, fit_total, '-', color='red', label='Total fit')
-                    
-    #                 ax.set_xlim(-150, 150)
-    #                 ax.set_title(f'Plane {i_plane}, Pattern {pattern}')
-    #                 ax.set_xlabel(f'X difference (mm)')
-    #                 ax.set_ylabel('Counts')
-    #                 ax.grid(True)
-    #                 ax.legend()
-
-    #         fig.suptitle(f"Fit to the Histograms of T_diff Differences for Different Patterns, Charge limit: {charge_limit:.1f}", fontsize=16)
-    #         fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-    #         if save_plots:
-    #             name_of_file = f'tdiff_differences_hist_4x3_fit_{charge_limit:.1f}.png'
-    #             final_filename = f'{fig_idx}_{name_of_file}'
-    #             fig_idx += 1
-    #             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    #             plot_list.append(save_fig_path)
-    #             plt.savefig(save_fig_path, format='png')
-    #         if show_plots:
-    #             plt.show()
-    #         plt.close()
+            fig.suptitle(f"Fit to the Histograms of T_diff Differences for Different Patterns, Charge limit: {charge_limit:.1f}", fontsize=16)
+            fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+            if save_plots:
+                name_of_file = f'tdiff_differences_hist_4x3_fit_{charge_limit:.1f}.png'
+                final_filename = f'{fig_idx}_{name_of_file}'
+                fig_idx += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                plt.savefig(save_fig_path, format='png')
+            if show_plots:
+                plt.show()
+            plt.close()
 
 
-    
-
-    # if create_plots:
-    #     # Plot especifically the sigmas vs charge limit for each plane and pattern, one row per plane, one column per pattern
-    #     fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 24), sharex=True, sharey=True)
-    #     for i_plane in range(1, 5):
-    #         for j_pattern, pattern in enumerate(patterns_of_interest):
-    #             ax = axs[i_plane - 1, j_pattern]
-
-    #             charge_limits = []
-    #             mu1_values = []
-    #             mu2_values = []
-    #             sigma1_values = []
-    #             sigma2_values = []
-
-    #             for charge_limit in charge_limits_to_test:
-    #                 key = (f'Charge_{charge_limit:.1f}', f'Plane_{i_plane}', pattern)
-    #                 # if key in sigma_results:
-    #                 #     sigma1, sigma2 = sigma_results[key]
-    #                 #     charge_limits.append(charge_limit)
-    #                 #     sigma1_values.append(sigma1)
-    #                 #     sigma2_values.append(sigma2)
-    #                 if key in all_results:
-    #                     A1, mu1, sigma1, A2, mu2, sigma2 = all_results[key]
-    #                     charge_limits.append(charge_limit)
-    #                     mu1_values.append(mu1)
-    #                     sigma1_values.append(sigma1)
-    #                     mu2_values.append(mu2)
-    #                     sigma2_values.append(sigma2)
-
-    #             ax.plot(charge_limits, mu1_values, marker='o', label='Mu 1')
-    #             ax.fill_between(charge_limits, mu1_values - np.array(sigma1_values), mu1_values + np.array(sigma1_values), alpha=0.2)
-    #             ax.plot(charge_limits, mu2_values, marker='s', label='Mu 2')
-    #             ax.fill_between(charge_limits, mu2_values - np.array(sigma2_values), mu2_values + np.array(sigma2_values), alpha=0.2)
-
-    #             ax.set_title(f'Plane {i_plane}, Pattern {pattern}')
-    #             ax.set_xlabel('Charge Limit')
-    #             ax.set_ylabel('Sigma (mm)')
-    #             ax.grid(True)
-    #             ax.legend()
-    #     fig.suptitle("Fitted Sigmas vs Charge Limit for Different Patterns", fontsize=16)
-    #     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-    #     if save_plots:
-    #         name_of_file = f'tdiff_fitted_sigmas_vs_charge_limit.png'
-    #         final_filename = f'{fig_idx}_{name_of_file}'
-    #         fig_idx += 1
-    #         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-    #         plot_list.append(save_fig_path)
-    #         plt.savefig(save_fig_path, format='png')
-    #     if show_plots:
-    #         plt.show()
-    #     plt.close()
     
 
     if create_super_essential_plots:
+        # Plot especifically the sigmas vs charge limit for each plane and pattern, one row per plane, one column per pattern
+        fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 24), sharex=True, sharey=True)
+        for i_plane in range(1, 5):
+            for j_pattern, pattern in enumerate(patterns_of_interest):
+                ax = axs[i_plane - 1, j_pattern]
 
-        print(all_results_loop)
+                charge_limits = []
+                mu1_values = []
+                mu2_values = []
+                sigma1_values = []
+                sigma2_values = []
+
+                for charge_limit in charge_limits_to_test:
+                    key = (f'Charge_{charge_limit:.1f}', f'Plane_{i_plane}', pattern)
+                    
+                    if key in all_results:
+                        A1, mu1, sigma1, A2, mu2, sigma2 = all_results[key]
+                        charge_limits.append(charge_limit)
+                        mu1_values.append(mu1)
+                        sigma1_values.append(sigma1)
+                        mu2_values.append(mu2)
+                        sigma2_values.append(sigma2)
+
+                ax.plot(charge_limits, mu1_values, marker='o', label='Mu 1')
+                ax.fill_between(charge_limits, mu1_values - np.array(sigma1_values), mu1_values + np.array(sigma1_values), alpha=0.2)
+                ax.plot(charge_limits, mu2_values, marker='s', label='Mu 2')
+                ax.fill_between(charge_limits, mu2_values - np.array(sigma2_values), mu2_values + np.array(sigma2_values), alpha=0.2)
+
+                ax.set_title(f'Plane {i_plane}, Pattern {pattern}')
+                ax.set_xlabel('Charge Limit')
+                ax.set_ylabel('Sigma (mm)')
+                ax.grid(True)
+                ax.legend()
+        fig.suptitle("Fitted Sigmas vs Charge Limit for Different Patterns", fontsize=16)
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+        if save_plots:
+            name_of_file = f'tdiff_fitted_sigmas_vs_charge_limit.png'
+            final_filename = f'{fig_idx}_{name_of_file}'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
+    
+
+    loop_adjacent_strip_fit = False
+
+    if loop_adjacent_strip_fit:
+        # Sigmas per charge limit storage, Save in each line the charge limit, the pattern and the sigmas for each plane
+        all_results_loop = {}
+
+        charge_limits_to_loop = np.linspace(0, 10, 10)
+        for charge_limit_1 in charge_limits_to_loop:
+            for charge_limit_2 in charge_limits_to_loop:
+
+                patterns_of_interest = ['1100', '0110', '0011']
+                
+                # Double Gaussian model
+                def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
+                    g1 = A1 * np.exp(-0.5 * ((x - mu1) / sigma1)**2)
+                    g2 = A2 * np.exp(-0.5 * ((x - mu2) / sigma2)**2)
+                    return g1 + g2
+                
+                for i_plane in range(1, 5):
+                    active_col = f'active_strips_P{i_plane}'
+                    T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
+                    Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+
+                    for j_pattern, pattern in enumerate(patterns_of_interest):
+
+                        active_strips = [i for i, c in enumerate(pattern) if c == '1']
+
+                        i, j = active_strips
+                        mask = working_df[active_col] == pattern
+
+                        xi = working_df.loc[mask, T_dif_cols[i]].values
+                        yi = working_df.loc[mask, T_dif_cols[j]].values
+                        qi = working_df.loc[mask, Q_sum_cols[i]].values
+                        qj = working_df.loc[mask, Q_sum_cols[j]].values
+                    
+                        cond = (xi != 0) & (yi != 0) & (abs(xi) < 1) & (abs(yi) < 1)
+                        xi = xi[cond]
+                        yi = yi[cond]
+                        qi = qi[cond]
+                        qj = qj[cond]
+                        diff = ( yi - xi ) * tdiff_to_x
+
+                        charge_condition = (qi > charge_limit_1) & (qj > charge_limit_2)
+                        diff = diff[charge_condition]
+                        
+                        cond_new = abs(diff) < 150
+                        diff = diff[cond_new]
+                        
+                        adjacent_nbins = 100
+                        
+                        # Histogram
+                        counts, bin_edges = np.histogram(diff, bins=adjacent_nbins, range=(-150, 150))
+                        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+                        # Constraint bounds
+                        tolerance_in_pct = 100  # percent
+                        
+                        anc_std_in_mm = anc_std * tdiff_to_x
+                        
+                        sigma_small_left = anc_std_in_mm * (1 - tolerance_in_pct/100)
+                        sigma_small_right = anc_std_in_mm * (1 + tolerance_in_pct/100)
+                        
+                        # print(f"Left and right limits in sigma: {sigma_small_left:.3f}, {sigma_small_right:.3f} mm")
+                        
+                        lower_bound = [0,     -10, sigma_small_left,  0,     -10, 0]
+                        upper_bound = [np.inf, 10, sigma_small_right, np.inf, 10, 1000]
+
+                        # Initial guesses
+                        p0 = [50, 0, anc_std_in_mm, 50, 0, 20]
+
+                        # Fit
+                        try:
+                            popt, _ = curve_fit(double_gaussian, bin_centers, counts, p0=p0, bounds=(lower_bound, upper_bound))
+                        except RuntimeError:
+                            print(f"Fit failed for Plane {i_plane}, Pattern {pattern}, Charge limits {charge_limit_1:.1f}, {charge_limit_2:.1f}. Skipping.")
+                            continue
+
+                        # Extract fitted components
+                        A1, mu1, sigma1, A2, mu2, sigma2 = popt
+                        fit_x = np.linspace(-150, 150, 500)
+                        g1 = A1 * np.exp(-0.5 * ((fit_x - mu1) / sigma1)**2)
+                        g2 = A2 * np.exp(-0.5 * ((fit_x - mu2) / sigma2)**2)
+                        fit_total = g1 + g2
+
+                        # Store sigma1 result
+                        all_results_loop[(f'Charge_1_{charge_limit_1:.1f}', f'Charge_2_{charge_limit_2:.1f}', f'Plane_{i_plane}', pattern)] = popt
+
 
         # Plot especifically the sigmas vs charge limit for each plane and pattern, one row per plane, one column per pattern
+
+        # Sigma 1
         fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 24), sharex=True, sharey=True)
         for i_plane in range(1, 5):
             for j_pattern, pattern in enumerate(patterns_of_interest):
@@ -3506,7 +3561,7 @@ if calculate_sigmas_adjacent:
 
                 for charge_limit_1 in charge_limits_to_loop:
                     for charge_limit_2 in charge_limits_to_loop:
-                        key = (f'Charge_1_{charge_limit_1:.1f}, Charge_2_{charge_limit_2:.1f}', f'Plane_{i_plane}', pattern)
+                        key = (f'Charge_1_{charge_limit_1:.1f}', f'Charge_2_{charge_limit_2:.1f}', f'Plane_{i_plane}', pattern)
                         
                         if key in all_results_loop:
                             A1, mu1, sigma1, A2, mu2, sigma2 = all_results_loop[key]
@@ -3549,7 +3604,6 @@ if calculate_sigmas_adjacent:
                 # Choose which sigma to plot in this figure:
                 #   for sigma1 contours:
                 Z = sigma1_grid
-                print(Z)
                 #   for sigma2 contours instead, comment line above and use:
                 # Z = sigma2_grid
 
@@ -3574,7 +3628,7 @@ if calculate_sigmas_adjacent:
         fig.suptitle("Fitted Sigmas vs Charge Limit for Different Patterns", fontsize=16)
         fig.tight_layout(rect=[0, 0.03, 1, 0.95])
         if save_plots:
-            name_of_file = f'tdiff_fitted_sigmas_vs_charge_limit.png'
+            name_of_file = f'tdiff_fitted_sigma_1_vs_charge_limit.png'
             final_filename = f'{fig_idx}_{name_of_file}'
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -3584,7 +3638,100 @@ if calculate_sigmas_adjacent:
             plt.show()
         plt.close()
 
-sys.exit("Finished sigma calculations.")
+
+        # Sigma 2
+        # Plot especifically the sigmas vs charge limit for each plane and pattern, one row per plane, one column per pattern
+        fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 24), sharex=True, sharey=True)
+        for i_plane in range(1, 5):
+            for j_pattern, pattern in enumerate(patterns_of_interest):
+                ax = axs[i_plane - 1, j_pattern]
+
+                charge_limits_1 = []
+                charge_limits_2 = []
+                mu1_values = []
+                mu2_values = []
+                sigma1_values = []
+                sigma2_values = []
+
+                for charge_limit_1 in charge_limits_to_loop:
+                    for charge_limit_2 in charge_limits_to_loop:
+                        key = (f'Charge_1_{charge_limit_1:.1f}', f'Charge_2_{charge_limit_2:.1f}', f'Plane_{i_plane}', pattern)
+                        
+                        if key in all_results_loop:
+                            A1, mu1, sigma1, A2, mu2, sigma2 = all_results_loop[key]
+                            charge_limits_1.append(charge_limit_1)
+                            charge_limits_2.append(charge_limit_2)
+                            mu1_values.append(mu1)
+                            sigma1_values.append(sigma1)
+                            mu2_values.append(mu2)
+                            sigma2_values.append(sigma2)
+                
+                print(sigma1_values)
+
+
+                # Build unique sorted axes for charge_1 and charge_2
+                charge1_values = charge_limits_1
+                charge2_values = charge_limits_2
+
+                unique_c1 = np.array(sorted(set(charge1_values)))
+                unique_c2 = np.array(sorted(set(charge2_values)))
+
+                # Meshgrid of (charge_1, charge_2)
+                C1, C2 = np.meshgrid(unique_c1, unique_c2, indexing='xy')
+
+                # Matrices for sigma1 and sigma2
+                sigma1_grid = np.full(C1.shape, np.nan, dtype=float)
+                sigma2_grid = np.full(C2.shape, np.nan, dtype=float)
+
+                # Precompute index lookup for speed
+                idx_c1 = {c: j for j, c in enumerate(unique_c1)}
+                idx_c2 = {c: i for i, c in enumerate(unique_c2)}
+
+                # Fill matrices
+                for c1, c2, s1, s2 in zip(charge1_values, charge2_values,
+                                        sigma1_values, sigma2_values):
+                    i = idx_c2[c2]
+                    j = idx_c1[c1]
+                    sigma1_grid[i, j] = s1
+                    sigma2_grid[i, j] = s2
+
+                # Choose which sigma to plot in this figure:
+                #   for sigma1 contours:
+                # Z = sigma1_grid
+                #   for sigma2 contours instead, comment line above and use:
+                Z = sigma2_grid
+
+                # Remove rows/cols that are all NaN (optional but avoids warnings)
+                if np.all(np.isnan(Z)):
+                    ax.set_title(f'Plane {i_plane}, Pattern {pattern}\n(no valid fits)')
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    continue
+
+                # Contour plot
+                cs = ax.contourf(C1, C2, Z, levels=20)
+                # Add a colorbar per row, per column, or one for the whole figure
+                # Example: one colorbar per-axis:
+                fig.colorbar(cs, ax=ax)
+
+                ax.set_title(f'Plane {i_plane}, Pattern {pattern}')
+                ax.set_xlabel('Charge 1')
+                ax.set_ylabel('Charge 2')
+                ax.grid(True)
+                
+        fig.suptitle("Fitted Sigmas vs Charge Limit for Different Patterns", fontsize=16)
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+        if save_plots:
+            name_of_file = f'tdiff_fitted_sigma_2_vs_charge_limit.png'
+            final_filename = f'{fig_idx}_{name_of_file}'
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        if show_plots:
+            plt.show()
+        plt.close()
+
 
 print("----------------------------------------------------------------------")
 print("----------------------- Y position calculation -----------------------")

@@ -198,14 +198,13 @@ except Exception:
 
 #%%
 
-
-
 # Plot raw->clean matrix (re-usable: change prefixes to plot other matrices)
 try:
     plot_tt_matrix(ctx, 'raw', 'clean', f"raw_to_clean matrix • {STATION} STEP {STEP} TASK {TASK}")
 except Exception:
     print("Could not plot raw -> clean matrix.")
     pass
+
 # %%
 
 

@@ -411,7 +411,7 @@ config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
 
 # Resource gate defaults (overridden by config_global.yaml if present)
 mem_limit_pct=90
-swap_limit_pct=35
+swap_limit_pct=70
 swap_limit_kb=$((4 * 1024 * 1024)) # 4 GB
 cpu_limit_pct=95
 
