@@ -49,7 +49,7 @@ prepare_reprocessing_metadata:
   remote_user: "rpcuser"           # SSH user to connect to the remote host.
   remote_directory_root: "/local/experiments/MINGOS"  # Base path that contains MINGO0{station} folders.
   date_range:
-    start: null    # Earliest UTC datetime to keep (e.g. "2024-01-01" or "2024-01-01T08:00:00"); null disables.
+    start: 2025-11-01    # Earliest UTC datetime to keep (e.g. "2024-01-01" or "2024-01-01T08:00:00"); null disables.
     end: null      # Latest UTC datetime to keep (inclusive); null disables.
 
 # Station-specific size and min-gap thresholds (used by prepare_reprocessing_metadata.sh)
@@ -262,8 +262,8 @@ charge_front_back_debug: false
 
 # Resource limits for STEP_1 pipeline (guide_raw_to_corrected.sh)
 event_data_resource_limits:
-  mem_used_pct_max: 90          # percent
-  swap_used_pct_max: 75         # percent
+  mem_used_pct_max: 95          # percent
+  swap_used_pct_max: 95         # percent
   swap_used_kb_max: 4194304     # 4 GB in kB
   cpu_used_pct_max: 95          # percent
 

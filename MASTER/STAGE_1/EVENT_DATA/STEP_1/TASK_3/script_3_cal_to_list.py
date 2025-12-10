@@ -460,6 +460,8 @@ anc_sts = config["anc_sts"]
 anc_std = config["anc_std"]
 anc_sz = config["anc_sz"]
 
+create_super_essential_plots = False
+
 n_planes_timtrack = config["n_planes_timtrack"]
 
 # Plotting options
@@ -2935,7 +2937,6 @@ if create_super_essential_plots:
 
 
 
-create_super_essential_plots = False
 
 if create_super_essential_plots:
 

@@ -47,6 +47,9 @@ ZOOM_POINT_SIZE = 6
 point_size = DEFAULT_POINT_SIZE
 plot_linestyle = "None"
 HV_DEFAULT_THRESHOLD = 4.5
+STANDARD_PANEL_HEIGHT = 2.2
+REALTIME_Y_PANEL_HEIGHT = 3.5
+REALTIME_Y_HV_WARNING_EMITTED = False
 
 LAB_LOG_DATE_PATTERN = re.compile(r"(\d{4})_(\d{2})_(\d{2})")
 
@@ -818,6 +821,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict the x-axis to the last hour ending at the current time.",
     )
     parser.add_argument(
+        "--real-time-in-y",
+        action="store_true",
+        help="Plot file timestamps on the Y axis instead of runtime/purity series.",
+    )
+    parser.add_argument(
         "--include-step2",
         action="store_true",
         help="Include Stage 1 Step 2 execution metadata in the plots.",
@@ -943,8 +951,15 @@ def compute_month_markers(
     return markers
 
 
-def resolve_output_path(use_real_date: bool, zoom: bool, include_hv: bool) -> Path:
+def resolve_output_path(
+    use_real_date: bool, zoom: bool, include_hv: bool, real_time_in_y: bool
+) -> Path:
     filename = OUTPUT_FILENAME
+    if real_time_in_y:
+        if filename.lower().endswith(".pdf"):
+            filename = f"{filename[:-4]}_files_brought.pdf"
+        else:
+            filename = f"{filename}_files_brought"
     if use_real_date:
         if filename.lower().endswith(".pdf"):
             filename = f"{filename[:-4]}_real_time.pdf"
@@ -969,6 +984,7 @@ def plot_station(
     station_datasets: Iterable[Tuple[str, pd.DataFrame]],
     pdf: PdfPages,
     use_real_date: bool,
+    real_time_in_y: bool,
     time_bounds: Optional[Tuple[datetime, datetime]],
     month_markers: Iterable[datetime],
     current_time: datetime,
@@ -1001,7 +1017,8 @@ def plot_station(
     num_panels = len(station_datasets) + hv_panel_count
     if num_panels == 0:
         num_panels = 1
-    fig_height = max(8.5, num_panels * 2.2)
+    panel_height = REALTIME_Y_PANEL_HEIGHT if real_time_in_y else STANDARD_PANEL_HEIGHT
+    fig_height = max(8.5, num_panels * panel_height)
     fig, axes = plt.subplots(
         num_panels,
         1,
@@ -1030,6 +1047,15 @@ def plot_station(
     else:
         hv_axis = None
         data_axes = axes
+
+    if real_time_in_y and include_hv:
+        global REALTIME_Y_HV_WARNING_EMITTED
+        if not REALTIME_Y_HV_WARNING_EMITTED:
+            print(
+                "Warning: HV shading is disabled when --real-time-in-y mode is active.",
+                file=sys.stderr,
+            )
+            REALTIME_Y_HV_WARNING_EMITTED = True
 
     xlim: Optional[Tuple[datetime, datetime]] = None
     if time_bounds:
@@ -1061,10 +1087,15 @@ def plot_station(
 
     for ax, (label, df) in zip(data_axes, station_datasets):
         ax.set_title(label)
-        ax.set_ylabel("Exec Time (min)")
-        ax.grid(True, axis="y", alpha=0.3)
-        ax.yaxis.label.set_color("tab:blue")
-        ax.tick_params(axis="y", colors="tab:blue")
+        if real_time_in_y:
+            ax.grid(True, axis="both", alpha=0.3)
+            ax.set_ylabel("File timestamp (real time)")
+            ax.yaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M:%S"))
+        else:
+            ax.grid(True, axis="y", alpha=0.3)
+            ax.set_ylabel("Exec Time (min)")
+            ax.yaxis.label.set_color("tab:blue")
+            ax.tick_params(axis="y", colors="tab:blue")
 
         now_line = ax.axvline(
             current_time,
@@ -1086,12 +1117,13 @@ def plot_station(
         axis_upper = minutes_upper_limit
 
         def apply_hv_background(upper: float) -> None:
-            if include_hv and hv_segments is not None:
+            if include_hv and hv_segments is not None and not real_time_in_y:
                 span_background_from_segments(ax, hv_segments, 0, upper, xlim)
 
         if df.empty:
-            ax.set_ylim(0, axis_upper)
-            apply_hv_background(axis_upper)
+            if not real_time_in_y:
+                ax.set_ylim(0, axis_upper)
+                apply_hv_background(axis_upper)
             ax.text(
                 0.5,
                 0.5,
@@ -1102,9 +1134,10 @@ def plot_station(
                 fontsize=10,
                 color="dimgray",
             )
+            annotate_y = ax.get_ylim()[1] if not real_time_in_y else current_time
             ax.annotate(
                 current_time_str_time_only,
-                xy=(current_time, ax.get_ylim()[1]),
+                xy=(current_time, annotate_y),
                 xycoords=("data", "data"),
                 xytext=(15, -20),
                 textcoords="offset points",
@@ -1127,8 +1160,9 @@ def plot_station(
             df_plot = df.sort_values("execution_timestamp")
 
         if df_plot.empty:
-            ax.set_ylim(0, axis_upper)
-            apply_hv_background(axis_upper)
+            if not real_time_in_y:
+                ax.set_ylim(0, axis_upper)
+                apply_hv_background(axis_upper)
             ax.text(
                 0.5,
                 0.5,
@@ -1139,9 +1173,10 @@ def plot_station(
                 fontsize=10,
                 color="dimgray",
             )
+            annotate_y = ax.get_ylim()[1] if not real_time_in_y else current_time
             ax.annotate(
                 current_time_str_time_only,
-                xy=(current_time, ax.get_ylim()[1]),
+                xy=(current_time, annotate_y),
                 xycoords=("data", "data"),
                 xytext=(15, -20),
                 textcoords="offset points",
@@ -1154,6 +1189,90 @@ def plot_station(
             ax.legend([now_line], [now_line.get_label()], loc="upper left")
             continue
 
+        x_column = "file_timestamp" if use_real_date else "execution_timestamp"
+
+        if real_time_in_y:
+            scatter_df = df_plot.dropna(subset=[x_column, "file_timestamp"])
+            if scatter_df.empty:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No basename-derived timestamps available",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                    fontsize=10,
+                    color="dimgray",
+                )
+                ax.legend([now_line], [now_line.get_label()], loc="upper left")
+                ax.annotate(
+                    current_time_str_time_only,
+                    xy=(current_time, current_time),
+                    xycoords=("data", "data"),
+                    xytext=(15, -20),
+                    textcoords="offset points",
+                    rotation=90,
+                    va="top",
+                    ha="center",
+                    color="green",
+                    fontsize=10,
+                )
+                continue
+
+            x_values = scatter_df[x_column]
+            y_values = scatter_df["file_timestamp"]
+            scatter = ax.scatter(
+                x_values,
+                y_values,
+                color="tab:blue",
+                marker="o",
+                s=max(point_size * 3, 12),
+                alpha=0.85,
+                edgecolors="none",
+                label="Bring vs file timestamps",
+            )
+
+            y_lower = y_values.min()
+            y_upper = y_values.max()
+            if y_lower == y_upper:
+                y_upper = y_lower + timedelta(minutes=1)
+            ax.set_ylim(y_lower, y_upper)
+
+            info_lines = [
+                f"Rows: {len(df_plot)}",
+                f"Plotted: {len(scatter_df)}",
+                f"X: {x_values.min():%Y-%m-%d %H:%M} → {x_values.max():%Y-%m-%d %H:%M}",
+                f"Y: {y_lower:%Y-%m-%d %H:%M} → {y_upper:%Y-%m-%d %H:%M}",
+            ]
+            ax.text(
+                0.01,
+                0.02,
+                "\n".join(info_lines),
+                transform=ax.transAxes,
+                va="bottom",
+                ha="left",
+                fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.35", facecolor="white", alpha=0.75),
+            )
+            ax.legend(
+                [scatter, now_line],
+                [scatter.get_label(), now_line.get_label()],
+                loc="upper left",
+            )
+            ax.annotate(
+                current_time_str_time_only,
+                xy=(current_time, y_upper),
+                xycoords=("data", "data"),
+                xytext=(15, -20),
+                textcoords="offset points",
+                rotation=90,
+                va="top",
+                ha="center",
+                color="green",
+                fontsize=10,
+            )
+            continue
+
         runtime_series = df_plot["total_execution_time_minutes"]
         runtime_non_nan = runtime_series.dropna()
         has_runtime_points = not runtime_non_nan.empty
@@ -1161,11 +1280,7 @@ def plot_station(
         ax.set_ylim(0, axis_upper)
         apply_hv_background(axis_upper)
 
-        x = (
-            df_plot["file_timestamp"]
-            if use_real_date
-            else df_plot["execution_timestamp"]
-        )
+        x = df_plot[x_column]
 
         placeholder_runtime = False
         if has_runtime_points:
@@ -1293,7 +1408,9 @@ def main() -> None:
         hv_segments_by_station = {station: None for station in station_pages}
         hv_data_by_station = {station: None for station in station_pages}
 
-    output_path = resolve_output_path(args.real_date, args.zoom, args.include_hv)
+    output_path = resolve_output_path(
+        args.real_date, args.zoom, args.include_hv, args.real_time_in_y
+    )
     ensure_output_directory(output_path)
 
     with PdfPages(output_path) as pdf:
@@ -1303,6 +1420,7 @@ def main() -> None:
                 datasets,
                 pdf,
                 use_real_date=args.real_date,
+                real_time_in_y=args.real_time_in_y,
                 time_bounds=time_bounds,
                 month_markers=month_markers,
                 current_time=current_time,

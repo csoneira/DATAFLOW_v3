@@ -13,6 +13,7 @@ import telebot
 BASE_DIR = Path(__file__).resolve().parents[3]
 TELEGRAM_DIR = Path(__file__).resolve().parent
 TOKEN_PATH = TELEGRAM_DIR / "API_TOKEN.txt"
+RESTART_SCRIPT = TELEGRAM_DIR / "kill_bot_and_restart.sh"
 
 PDF_TARGETS = {
     "fill_factor_timeseries": {
@@ -57,6 +58,28 @@ PDF_TARGETS = {
         / "online_file_count_report.pdf",
         "description": "Online file count report",
     },
+    "execution_report_files_brought": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "EXECUTION"
+        / "PLOTS"
+        / "execution_metadata_report_files_brought.pdf",
+        "description": "Files brought view (execution timestamp on X axis)",
+    },
+    "execution_report_files_brought_real_time": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "EXECUTION"
+        / "PLOTS"
+        / "execution_metadata_report_files_brought_real_time.pdf",
+        "description": "Files brought view (real-time axis on X axis)",
+    },
 }
 
 CLEANER_SCRIPT = (
@@ -74,10 +97,13 @@ HELP_TEXT = (
     "  /fill_factor_timeseries - Fill-factor coverage PDF.\n"
     "  /execution_report_realtime_hv - Execution metadata (real-time HV overlay).\n"
     "  /execution_report_zoomed - Execution metadata (zoomed view).\n"
-    "  /online_file_count - Online file count report.\n\n"
+    "  /online_file_count - Online file count report.\n"
+    "  /execution_report_files_brought - Files brought (execution-time x-axis).\n"
+    "  /execution_report_files_brought_real_time - Files brought (real-time x-axis).\n\n"
     "Maintenance Tools:\n"
     "  /clean_dataflow_status - Run clean_dataflow.sh to show disk usage.\n"
     "  /clean_dataflow_force - Run clean_dataflow.sh --force for cleanup.\n"
+    "  /restart_bot - Restart this Telegram bot.\n"
     "==========================================="
 )
 
@@ -174,6 +200,17 @@ def run_cleaner(force: bool = False) -> str:
     return truncate_message(message)
 
 
+def trigger_restart() -> None:
+    if not RESTART_SCRIPT.exists():
+        raise RuntimeError(f"Restart script not found: {RESTART_SCRIPT}")
+    subprocess.Popen(
+        ["/bin/bash", str(RESTART_SCRIPT)],
+        cwd=str(RESTART_SCRIPT.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def _handle_cleaner_command(message, force: bool) -> None:
     try:
         response = run_cleaner(force)
@@ -193,6 +230,19 @@ def handle_clean_dataflow_status(message):  # type: ignore[misc]
 @bot.message_handler(commands=["clean_dataflow_force"])
 def handle_clean_dataflow_force(message):  # type: ignore[misc]
     _handle_cleaner_command(message, force=True)
+
+
+@bot.message_handler(commands=["restart_bot"])
+def handle_restart_bot(message):  # type: ignore[misc]
+    chat_id = message.chat.id
+    bot.send_message(chat_id, "Restart command received. Attempting to restart bot...")
+    try:
+        trigger_restart()
+    except Exception as exc:  # pragma: no cover
+        logging.exception("Failed to trigger restart")
+        bot.send_message(chat_id, f"Unable to restart bot: {exc}")
+        return
+    # The restart script will terminate this process shortly after this handler returns.
 
 
 @bot.message_handler(func=lambda message: True, content_types=["text"])

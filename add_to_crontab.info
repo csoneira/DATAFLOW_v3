@@ -4,7 +4,7 @@
 # minute hour day_of_month month day_of_week command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Updated at 2025-12-09 10:03
+# Updated at 2025-12-10 18:39
 
 SHELL=/bin/bash
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
@@ -223,11 +223,15 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 */20 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/fill_factor_realtime_plotter.log 2>&1
 
 # EXECUTION METADATA PLOTTER
-*/10 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 --zoom >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
+*/20 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 --zoom >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
 */30 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 -r --include-hv --include-remote-db >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/pipeline_data_status_plotter.log 2>&1
 
 # FILE COUNT TIME SERIES
-*/15 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/ONLINE_FILE_COUNT/online_file_count_plotter.py
+0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/ONLINE_FILE_COUNT/online_file_count_plotter.py
+
+# FILES BROUGHT VIEW (EXECUTION METADATA)
+0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --real-time-in-y >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/files_brought_plotter_execution.log 2>&1
+*/30 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --real-time-in-y -z >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/files_brought_plotter_real_time.log 2>&1
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------

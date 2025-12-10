@@ -23,7 +23,7 @@ log_info() {
 usage() {
   cat <<'USAGE'
 Usage:
-  prepare_reprocessing_metadata.sh <station> [--refresh-metadata|-m] [--plot]
+  prepare_reprocessing_metadata.sh <station> [--refresh-metadata|-m] [--plot] [--update-range]
 
 Options:
   -h, --help            Show this help message and exit.
@@ -31,6 +31,8 @@ Options:
                         Fetch the latest remote listing and update the metadata CSVs.
       --plot            Generate the metadata delta histogram PDF using the
                         current clean metadata CSV.
+      --update-range    Rebuild the clean metadata CSV from the existing remote_database
+                        using the configured thresholds/date range (no remote fetch).
 USAGE
   exit 1
 }
@@ -48,6 +50,7 @@ shift
 
 refresh_metadata=false
 plot_hist=false
+update_range_only=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,6 +62,10 @@ while [[ $# -gt 0 ]]; do
       plot_hist=true
       shift
       ;;
+    --update-range|--update-range-only)
+      update_range_only=true
+      shift
+      ;;
     -h|--help)
       usage
       ;;
@@ -68,7 +75,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! $refresh_metadata && ! $plot_hist; then
+if $update_range_only && $refresh_metadata; then
+  log_info "Cannot combine --update-range with --refresh-metadata; update range uses the existing remote_database only." >&2
+  exit 1
+fi
+
+if ! $refresh_metadata && ! $plot_hist && ! $update_range_only; then
   usage
 fi
 
@@ -119,6 +131,140 @@ strip_suffix() {
   name=${name%.dat}
   printf '%s' "$name"
 }
+
+load_prepare_metadata_config() {
+  local cfg_path="$config_file"
+  [[ -f "$cfg_path" ]] || return 0
+
+  local result
+  if result=$(python3 - "$cfg_path" <<'PY'
+import sys
+import shlex
+import datetime as dt
+
+try:
+  import yaml
+except ImportError:
+  yaml = None
+
+cfg_path = sys.argv[1]
+data = {}
+if yaml is not None:
+  try:
+    with open(cfg_path, "r") as handle:
+      data = yaml.safe_load(handle) or {}
+  except Exception:
+    data = {}
+
+config = data.get("prepare_reprocessing_metadata") or {}
+remote_host = config.get("remote_host") or ""
+remote_user = config.get("remote_user") or ""
+remote_root = config.get("remote_directory_root") or ""
+date_block = config.get("date_range") or {}
+start_raw = date_block.get("start")
+end_raw = date_block.get("end")
+
+def normalize_iso(value: str) -> str:
+  text = value.strip()
+  if text.endswith("Z") and "T" in text:
+    text = text[:-1] + "+00:00"
+  return text
+
+def parse_epoch(value, is_end=False):
+  if value in ("", None):
+    return None
+  text = str(value)
+  if not text.strip():
+    return None
+  text = normalize_iso(text)
+  dt_obj = None
+  parsers = [None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]
+  for fmt in parsers:
+    try:
+      if fmt is None:
+        dt_obj = dt.datetime.fromisoformat(text)
+      else:
+        dt_obj = dt.datetime.strptime(text, fmt)
+      break
+    except Exception:
+      dt_obj = None
+  if dt_obj is None:
+    return None
+  if dt_obj.tzinfo is None:
+    dt_obj = dt_obj.replace(tzinfo=dt.timezone.utc)
+  else:
+    dt_obj = dt_obj.astimezone(dt.timezone.utc)
+  if is_end and "T" not in text and " " not in text:
+    dt_obj = dt_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
+  return int(dt_obj.timestamp())
+
+start_epoch = parse_epoch(start_raw, False)
+end_epoch = parse_epoch(end_raw, True)
+
+def emit(key, value):
+  print(f"{key}={shlex.quote(value if value is not None else '')}")
+
+emit("PREP_REMOTE_HOST", str(remote_host))
+emit("PREP_REMOTE_USER", str(remote_user))
+emit("PREP_REMOTE_ROOT", str(remote_root))
+emit("PREP_DATE_RANGE_START", "" if start_raw in (None, "") else str(start_raw))
+emit("PREP_DATE_RANGE_END", "" if end_raw in (None, "") else str(end_raw))
+emit("PREP_DATE_RANGE_START_EPOCH", "" if start_epoch is None else str(start_epoch))
+emit("PREP_DATE_RANGE_END_EPOCH", "" if end_epoch is None else str(end_epoch))
+PY
+  ); then
+    eval "$result"
+  fi
+
+  local override
+  override="${PREP_REMOTE_HOST:-}"
+  if [[ -n "$override" ]]; then
+    remote_host="$override"
+  fi
+  override="${PREP_REMOTE_USER:-}"
+  if [[ -n "$override" ]]; then
+    remote_user="$override"
+  fi
+  override="${PREP_REMOTE_ROOT:-}"
+  if [[ -n "$override" ]]; then
+    remote_directory_root="$override"
+  fi
+
+  date_range_start_label="${PREP_DATE_RANGE_START:-}"
+  date_range_end_label="${PREP_DATE_RANGE_END:-}"
+  date_range_start_epoch="${PREP_DATE_RANGE_START_EPOCH:-}"
+  date_range_end_epoch="${PREP_DATE_RANGE_END_EPOCH:-}"
+
+  date_range_start_epoch_defined=false
+  date_range_end_epoch_defined=false
+  date_range_filter_enabled=false
+
+  if [[ -n "$date_range_start_epoch" ]]; then
+    date_range_start_epoch_int=$((10#$date_range_start_epoch))
+    date_range_start_epoch_defined=true
+    date_range_filter_enabled=true
+  else
+    date_range_start_epoch_int=0
+  fi
+  if [[ -n "$date_range_end_epoch" ]]; then
+    date_range_end_epoch_int=$((10#$date_range_end_epoch))
+    date_range_end_epoch_defined=true
+    date_range_filter_enabled=true
+  else
+    date_range_end_epoch_int=0
+  fi
+}
+
+load_prepare_metadata_config "$station"
+remote_directory_root="${remote_directory_root%/}"
+remote_dir="${remote_directory_root}/MINGO0${station}/"
+printf -v remote_dir_escaped '%q' "$remote_dir"
+
+if $date_range_filter_enabled; then
+  range_start_display="${date_range_start_label:-"-inf"}"
+  range_end_display="${date_range_end_label:-"+inf"}"
+  log_info "Date range filtering enabled for clean metadata: ${range_start_display} to ${range_end_display} (UTC)."
+fi
 
 load_size_thresholds() {
   local station_id="$1"
@@ -245,15 +391,39 @@ ensure_filtered_plot_csv() {
 
   local tmp_filtered_plot
   tmp_filtered_plot=$(mktemp) || return 1
-  if RAW_CSV="$raw_csv" OUT_CSV="$tmp_filtered_plot" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" python3 <<'PY'
+  if RAW_CSV="$raw_csv" OUT_CSV="$tmp_filtered_plot" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" START_EPOCH="$date_range_start_epoch" END_EPOCH="$date_range_end_epoch" python3 <<'PY'
 import csv
+import datetime as dt
 import os
+import re
 
 raw_path = os.environ["RAW_CSV"]
 out_path = os.environ["OUT_CSV"]
 min_bytes = int(os.environ.get("MIN_BYTES", "0") or 0)
 max_bytes = int(os.environ.get("MAX_BYTES", "0") or 0)
 min_gap = float(os.environ.get("MIN_GAP_MIN", "0") or 0.0)
+start_epoch_env = os.environ.get("START_EPOCH", "").strip()
+end_epoch_env = os.environ.get("END_EPOCH", "").strip()
+start_epoch = int(start_epoch_env) if start_epoch_env else None
+end_epoch = int(end_epoch_env) if end_epoch_env else None
+date_filter_enabled = start_epoch is not None or end_epoch is not None
+
+pattern = re.compile(r"([0-9]{11})$")
+
+def basename_epoch(base: str):
+  match = pattern.search(base)
+  if not match:
+    return None
+  key = match.group(1)
+  yy = int(key[0:2])
+  doy = int(key[2:5])
+  hh = int(key[5:7])
+  mm = int(key[7:9])
+  ss = int(key[9:11])
+  if doy < 1 or doy > 366:
+    return None
+  ts = dt.datetime(2000 + yy, 1, 1, tzinfo=dt.timezone.utc) + dt.timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
+  return int(ts.timestamp())
 
 rows = []
 with open(raw_path, newline="") as handle:
@@ -268,22 +438,30 @@ with open(raw_path, newline="") as handle:
     except Exception:
       continue
     try:
-      dt = float(row[2])
+      dt_val = float(row[2])
     except Exception:
-      dt = None
+      dt_val = None
     if size < min_bytes:
       continue
     if max_bytes > 0 and size > max_bytes:
       continue
-    if dt is not None and dt < min_gap:
+    if dt_val is not None and dt_val < min_gap:
       continue
-    rows.append((base, size, dt))
+    if date_filter_enabled:
+      epoch = basename_epoch(base)
+      if epoch is None:
+        continue
+      if start_epoch is not None and epoch < start_epoch:
+        continue
+      if end_epoch is not None and epoch > end_epoch:
+        continue
+    rows.append((base, size, dt_val))
 
 with open(out_path, "w", newline="") as handle:
   writer = csv.writer(handle)
   writer.writerow(["basename", "filesize_bytes", "minutes_to_next"])
-  for base, size, dt in rows:
-    writer.writerow([base, int(size), "" if dt is None else f"{dt:.3f}"])
+  for base, size, dt_val in rows:
+    writer.writerow([base, int(size), "" if dt_val is None else f"{dt_val:.3f}"])
 PY
   then
     filtered_plot_csv="$tmp_filtered_plot"
@@ -306,8 +484,9 @@ filter_existing_raw_csv() {
   tmp_filtered_plot=$(mktemp) || return 1
   tmp_clean=$(mktemp) || { rm -f "$tmp_filtered_plot"; return 1; }
 
-  if stats=$(RAW_CSV="$raw_csv" OUT_FILTERED="$tmp_filtered_plot" OUT_CLEAN="$tmp_clean" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" python3 <<'PY'
+  if stats=$(RAW_CSV="$raw_csv" OUT_FILTERED="$tmp_filtered_plot" OUT_CLEAN="$tmp_clean" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" START_EPOCH="$date_range_start_epoch" END_EPOCH="$date_range_end_epoch" python3 <<'PY'
 import csv
+import datetime as dt
 import os
 import re
 
@@ -317,8 +496,14 @@ out_clean = os.environ["OUT_CLEAN"]
 min_bytes = int(os.environ.get("MIN_BYTES", "0") or 0)
 max_bytes = int(os.environ.get("MAX_BYTES", "0") or 0)
 min_gap = float(os.environ.get("MIN_GAP_MIN", "0") or 0.0)
+start_epoch_env = os.environ.get("START_EPOCH", "").strip()
+end_epoch_env = os.environ.get("END_EPOCH", "").strip()
+start_epoch = int(start_epoch_env) if start_epoch_env else None
+end_epoch = int(end_epoch_env) if end_epoch_env else None
+date_filter_enabled = start_epoch is not None or end_epoch is not None
 
 pattern = re.compile(r"([0-9]{11})$")
+epoch_zero = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 
 def parse_ts(base: str):
   m = pattern.search(base)
@@ -331,9 +516,8 @@ def parse_ts(base: str):
     return None
   if not (1 <= doy <= 366):
     return None
-  import datetime as dt
   try:
-    return dt.datetime(2000 + yy, 1, 1) + dt.timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
+    return dt.datetime(2000 + yy, 1, 1, tzinfo=dt.timezone.utc) + dt.timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
   except Exception:
     return None
 
@@ -366,6 +550,13 @@ with open(raw_path, newline="") as handle:
 
 total = len(bases)
 timestamps = [parse_ts(b) for b in bases]
+epochs = []
+for ts in timestamps:
+  if ts is None:
+    epochs.append(None)
+  else:
+    delta = ts - epoch_zero
+    epochs.append(int(delta.total_seconds()))
 
 for i in range(total):
   if minutes[i] is None:
@@ -375,8 +566,8 @@ for i in range(total):
         minutes[i] = delta
 
 filtered = []
-removed_low = removed_high = removed_gap = 0
-for base, size, dt_val in zip(bases, sizes, minutes):
+removed_low = removed_high = removed_gap = removed_date = 0
+for base, size, dt_val, epoch in zip(bases, sizes, minutes, epochs):
   if size < min_bytes:
     removed_low += 1
     continue
@@ -386,6 +577,16 @@ for base, size, dt_val in zip(bases, sizes, minutes):
   if dt_val is not None and dt_val < min_gap:
     removed_gap += 1
     continue
+  if date_filter_enabled:
+    if epoch is None:
+      removed_date += 1
+      continue
+    if start_epoch is not None and epoch < start_epoch:
+      removed_date += 1
+      continue
+    if end_epoch is not None and epoch > end_epoch:
+      removed_date += 1
+      continue
   filtered.append((base, int(size), "" if dt_val is None else f"{dt_val:.3f}"))
 
 with open(out_filtered, "w", newline="") as handle:
@@ -399,14 +600,15 @@ with open(out_clean, "w", newline="") as handle:
   for base, _, _ in filtered:
     writer.writerow([base])
 
-print(f"{len(bases)},{len(filtered)},{removed_low},{removed_high},{removed_gap}")
+print(f"{len(bases)},{len(filtered)},{removed_low},{removed_high},{removed_gap},{removed_date}")
 PY
   ); then
-    IFS=',' read -r raw_count clean_count removed_low removed_high removed_gap <<<"$stats"
+    IFS=',' read -r raw_count clean_count removed_low removed_high removed_gap removed_date <<<"$stats"
+    removed_date=${removed_date:-0}
     mv "$tmp_clean" "$clean_csv"
     filtered_plot_csv="$tmp_filtered_plot"
     tmp_files_to_cleanup+=("$filtered_plot_csv")
-    log_info "Metadata filtering (existing raw): raw=${raw_count} entries, clean=${clean_count} entries. Filtered out (size low=${removed_low}, size high=${removed_high}, gap=${removed_gap})."
+    log_info "Metadata filtering (existing raw): raw=${raw_count} entries, clean=${clean_count} entries. Filtered out (size low=${removed_low}, size high=${removed_high}, gap=${removed_gap}, date_range=${removed_date})."
     return 0
   else
     rm -f "$tmp_filtered_plot" "$tmp_clean"
@@ -450,6 +652,29 @@ basename_to_epoch() {
     return 1
   fi
   time_key_to_epoch "$key"
+}
+
+# Returns 0 (true) when the epoch should be skipped due to the configured date range.
+should_skip_due_to_date_range() {
+  local epoch="$1"
+  if ! $date_range_filter_enabled; then
+    return 1
+  fi
+  if [[ -z "$epoch" ]]; then
+    return 0
+  fi
+  local current=$((10#$epoch))
+  if $date_range_start_epoch_defined; then
+    if (( current < date_range_start_epoch_int )); then
+      return 0
+    fi
+  fi
+  if $date_range_end_epoch_defined; then
+    if (( current > date_range_end_epoch_int )); then
+      return 0
+    fi
+  fi
+  return 1
 }
 
 filter_close_metadata_entries() {
@@ -942,8 +1167,8 @@ refresh_metadata_csv() {
 
   local tmp_listing
   tmp_listing=$(mktemp) || return 1
-  if ! ssh -o BatchMode=yes "${remote_user}@backuplip" "cd ${remote_dir_escaped} && find . -maxdepth 1 -type f \\( -name '*.hld' -o -name '*.hld.tar.gz' -o -name '*.hld-tar-gz' -o -name '*.tar.gz' -o -name '*.dat' \\) -printf '%f,%s\n'" > "$tmp_listing"; then
-    log_info "Warning: unable to refresh metadata; could not list remote directory ${remote_user}@backuplip:${remote_dir}" >&2
+  if ! ssh -o BatchMode=yes "${remote_user}@${remote_host}" "cd ${remote_dir_escaped} && find . -maxdepth 1 -type f \\( -name '*.hld' -o -name '*.hld.tar.gz' -o -name '*.hld-tar-gz' -o -name '*.tar.gz' -o -name '*.dat' \\) -printf '%f,%s\n'" > "$tmp_listing"; then
+    log_info "Warning: unable to refresh metadata; could not list remote directory ${remote_user}@${remote_host}:${remote_dir}" >&2
     rm -f "$tmp_listing"
     return 1
   fi
@@ -1032,11 +1257,12 @@ PY
 
   # Filter using size and min-gap (toward next file)
   entries_filtered=()
-  local removed_size_low=0 removed_size_high=0 removed_gap=0 kept=0
+  local removed_size_low=0 removed_size_high=0 removed_gap=0 removed_date=0 kept=0
   for ((i = 0; i < total; i++)); do
     local base="${bases[i]}"
     local size_bytes="${sizes[i]}"
     local dt_min="${minutes_to_next[i]}"
+    local epoch="${epochs[i]}"
 
     if [[ -z "$size_bytes" || ! "$size_bytes" =~ ^[0-9]+$ ]]; then
       ((removed_size_low++))
@@ -1064,6 +1290,11 @@ DT_MIN="$dt_min" MIN_GAP="$min_gap_minutes"
         ((removed_gap++))
         continue
       fi
+    fi
+
+    if should_skip_due_to_date_range "$epoch"; then
+      ((removed_date++))
+      continue
     fi
 
     entries_filtered+=("$base,${size_bytes},${dt_min}")
@@ -1094,7 +1325,7 @@ DT_MIN="$dt_min" MIN_GAP="$min_gap_minutes"
   raw_count=$total
   clean_count=$kept
   log_info "Metadata CSV refreshed: raw=${raw_count} entries, clean=${clean_count} entries."
-  log_info "Filtered out (size low=${removed_size_low}, size high=${removed_size_high}, gap=${removed_gap})."
+  log_info "Filtered out (size low=${removed_size_low}, size high=${removed_size_high}, gap=${removed_gap}, date_range=${removed_date})."
 
   record_metadata_history "$raw_count" "$clean_count"
 
@@ -1105,6 +1336,10 @@ DT_MIN="$dt_min" MIN_GAP="$min_gap_minutes"
 # Load thresholds (overrides defaults with station-specific config if present)
 load_time_thresholds "$station"
 load_size_thresholds "$station"
+
+if $update_range_only; then
+  log_info "Rebuilding clean metadata from existing remote_database_${station}.csv using the configured date range thresholds."
+fi
 
 if $refresh_metadata; then
   if refresh_metadata_csv; then
