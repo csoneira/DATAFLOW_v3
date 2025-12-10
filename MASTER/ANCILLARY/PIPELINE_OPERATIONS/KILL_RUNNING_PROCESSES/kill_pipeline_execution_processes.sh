@@ -84,3 +84,7 @@ for pid in "${!kill_list[@]}"; do
     echo "Failed to kill PID $pid (script match: $script)" >&2
   fi
 done
+
+# Add this
+echo "Killing the guide_raw_to_corrected.sh process specifically"
+sudo pgrep -f 'bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh' | xargs -r kill

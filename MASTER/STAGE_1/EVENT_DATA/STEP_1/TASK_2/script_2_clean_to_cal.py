@@ -2111,55 +2111,9 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     rel_th_cal = calibrate_strip_Q_pedestal_rel_th_cal
     abs_th = calibrate_strip_Q_pedestal_abs_th
     q_quantile = calibrate_strip_Q_pedestal_q_quantile # percentile
-    
-    # First let's tale good values of Time, we want to avoid outliers that might confuse the charge pedestal calibration
-    
-    if self_trigger_mode:
-        T_left_side = T_F_left_pre_cal_ST
-        T_right_side = T_F_right_pre_cal_ST
-    else:
-        T_left_side = T_F_left_pre_cal
-        T_right_side = T_F_right_pre_cal
-        
-    # cond = (T_ch != 0) & (T_ch > T_left_side) & (T_ch < T_right_side)
-    # T_ch = T_ch[cond]
-    # Q_ch = Q_ch[cond]
-    # Q_other = Q_other[cond]
-    
-    # # Condition based on the charge difference: it cannot be too high
-    # Q_dif = Q_ch - Q_other
-    
-    # cond = ( Q_dif > np.percentile(Q_dif, percentile) ) & ( Q_dif < np.percentile(Q_dif, 100 - percentile ) )
-    # T_ch = T_ch[cond]
-    # Q_ch = Q_ch[cond]
-    
-    # counts, bin_edges = np.histogram(T_ch, bins='auto')
-    # max_counts = np.max(counts)
-    # min_counts = np.min(counts[counts > 0])
-    # threshold = max_counts / calibrate_strip_Q_pedestal_thr_factor
-    
-    # indices_above_threshold = np.where(counts > threshold)[0]
 
-    # if indices_above_threshold.size > 0:
-    #     min_bin_edge = bin_edges[indices_above_threshold[0]]
-    #     max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
-    # else:
-    #     print("No bins have counts above the threshold; Q pedestal calibration.")
-    #     threshold = (min_counts + max_counts) / calibrate_strip_Q_pedestal_thr_factor_2
-    #     indices_above_threshold = np.where(counts > threshold)[0]
-    #     min_bin_edge = bin_edges[indices_above_threshold[0]]
-    #     max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]
-    
-    # Q_ch = Q_ch[(T_ch > min_bin_edge) & (T_ch < max_bin_edge)]
-    
     # First take the values that are not zero
     Q_ch = Q_ch[Q_ch != 0]
-    
-    # # Remove the values that are not in (50,500)
-    # Q_ch = Q_ch[(Q_ch > Q_left_side) & (Q_ch < Q_right_side)]
-    
-    # # Quantile filtering
-    # Q_ch = Q_ch[Q_ch > np.percentile(Q_ch, q_quantile)]
     
     # Calculate histogram
     offsets = []
@@ -2358,33 +2312,6 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
         plt.close()
 
     pedestal = offset + offset_cal
-
-    # Calculate histogram
-    # Loop again on the bin_number to find the final offset
-
-    # counts, bin_edges = np.histogram(Q_ch_cal, bins='auto')
-    
-    # # Find the bin with the most counts
-    # max_counts = np.max(counts)
-    # max_bin_index = np.argmax(counts)
-    
-    # # Calculate the threshold
-    # threshold = rel_th_cal * max_counts
-    
-    # # Start from the bin with the most counts and move left
-    # offset_bin_index = max_bin_index
-    # while offset_bin_index > 0 and counts[offset_bin_index] >= threshold:
-    #     offset_bin_index -= 1
-    
-    # # Determine the X value (left edge) of the bin where the threshold is crossed
-    # offset_cal = bin_edges[offset_bin_index]
-    
-    # pedestal = offset + offset_cal
-    # pedestal = offset
-    
-    # if translate_charge_cal:
-    #     pedestal = pedestal - translate_charge_cal
-        
     return pedestal
 
 

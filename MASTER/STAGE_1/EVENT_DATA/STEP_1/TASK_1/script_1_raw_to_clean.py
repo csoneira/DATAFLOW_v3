@@ -2483,7 +2483,7 @@ if create_plots:
 
 
 # Per trigger type
-create_super_essential_plots = True
+create_super_essential_plots = False
 
 if create_plots or create_super_essential_plots:
 
