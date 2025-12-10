@@ -599,6 +599,8 @@ process_single_hld() {
                     echo "  -> Re-processing $(basename "$candidate") (record exists in dat_files_unpacked.csv; unpack_anyway=true)."
                 else
                     echo "  -> Skipping $(basename "$candidate") (already recorded in dat_files_unpacked.csv)."
+                    mv -f "$candidate" "$completed_uncompressed/$(basename "$candidate")"
+                    echo "     Moved to COMPLETED to avoid repeated checks."
                     continue
                 fi
             fi
