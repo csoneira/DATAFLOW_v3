@@ -17,23 +17,29 @@ station_from_path() {
 
 usage() {
   cat <<'EOF'
-Usage: flush_from_unprocessed.sh [--dry-run]
+Usage: flush_from_unprocessed.sh [--dry-run] [--no-filter]
 
 Removes files under STATIONS/*/UNPROCESSED* whose basename (after the first
 underscore, extension trimmed) appears in any *_processed_basenames.csv under
 MASTER/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/OUTPUT_FILES.
 
 Options:
-  --dry-run   Show which files would be removed without deleting them.
-  -h,--help   Show this help message.
+  --dry-run     Show which files would be removed without deleting them.
+  --no-filter   Remove every file under UNPROCESSED directories (ignore processed lists).
+  -h,--help     Show this help message.
 EOF
 }
 
 DRY_RUN=false
+NO_FILTER=false
 while (( $# > 0 )); do
   case "$1" in
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --no-filter)
+      NO_FILTER=true
       shift
       ;;
     -h|--help)
@@ -53,7 +59,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 PROCESSED_DIR="$REPO_ROOT/MASTER/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/OUTPUT_FILES"
 STATIONS_ROOT="$REPO_ROOT/STATIONS"
 
-if [[ ! -d "$PROCESSED_DIR" ]]; then
+if ! $NO_FILTER && [[ ! -d "$PROCESSED_DIR" ]]; then
   log "Processed basenames directory not found: $PROCESSED_DIR"
   exit 1
 fi
@@ -64,19 +70,23 @@ if [[ ! -d "$STATIONS_ROOT" ]]; then
 fi
 
 declare -A PROCESSED=()
-while IFS= read -r -d '' csv_file; do
-  while IFS=, read -r base _rest; do
-    base=${base//$'\r'/}
-    [[ -z "$base" || "$base" == "basename" ]] && continue
-    PROCESSED["$base"]=1
-  done < "$csv_file"
-done < <(find "$PROCESSED_DIR" -type f -name '*_processed_basenames.csv' -print0)
+if ! $NO_FILTER; then
+  while IFS= read -r -d '' csv_file; do
+    while IFS=, read -r base _rest; do
+      base=${base//$'\r'/}
+      [[ -z "$base" || "$base" == "basename" ]] && continue
+      PROCESSED["$base"]=1
+    done < "$csv_file"
+  done < <(find "$PROCESSED_DIR" -type f -name '*_processed_basenames.csv' -print0)
 
-if (( ${#PROCESSED[@]} == 0 )); then
-  log "No processed basenames loaded from $PROCESSED_DIR"
-  exit 1
+  if (( ${#PROCESSED[@]} == 0 )); then
+    log "No processed basenames loaded from $PROCESSED_DIR"
+    exit 1
+  fi
+  log "Loaded ${#PROCESSED[@]} processed basenames"
+else
+  log "No-filter mode enabled: every file in UNPROCESSED directories will be removed."
 fi
-log "Loaded ${#PROCESSED[@]} processed basenames"
 
 dir_count=0
 file_count=0
@@ -94,7 +104,7 @@ while IFS= read -r -d '' unprocessed_dir; do
       candidate="${stem#*_}"
     fi
     candidate=${candidate//$'\r'/}
-    if [[ -n ${PROCESSED[$candidate]:-} ]]; then
+    if $NO_FILTER || [[ -n ${PROCESSED[$candidate]:-} ]]; then
       station="$(station_from_path "$file_path")"
       ((++MATCH_COUNTS["$station"]))
       if $DRY_RUN; then

@@ -1000,6 +1000,7 @@ def plot_station(
     month_markers = list(month_markers)
     current_time_str_full = current_time.strftime("%Y-%m-%d %H:%M:%S")
     current_time_str_time_only = current_time.strftime("%H:%M:%S")
+    placeholder_delta = timedelta(minutes=5)
 
     median_minutes = []
     for _, df in station_datasets:
@@ -1089,8 +1090,8 @@ def plot_station(
         ax.set_title(label)
         if real_time_in_y:
             ax.grid(True, axis="both", alpha=0.3)
-            ax.set_ylabel("File timestamp (real time)")
-            ax.yaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M:%S"))
+            ax.set_ylabel("File date (real time)")
+            ax.yaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
         else:
             ax.grid(True, axis="y", alpha=0.3)
             ax.set_ylabel("Exec Time (min)")
@@ -1121,7 +1122,9 @@ def plot_station(
                 span_background_from_segments(ax, hv_segments, 0, upper, xlim)
 
         if df.empty:
-            if not real_time_in_y:
+            if real_time_in_y:
+                ax.set_ylim(current_time - placeholder_delta, current_time + placeholder_delta)
+            else:
                 ax.set_ylim(0, axis_upper)
                 apply_hv_background(axis_upper)
             ax.text(
@@ -1160,7 +1163,9 @@ def plot_station(
             df_plot = df.sort_values("execution_timestamp")
 
         if df_plot.empty:
-            if not real_time_in_y:
+            if real_time_in_y:
+                ax.set_ylim(current_time - placeholder_delta, current_time + placeholder_delta)
+            else:
                 ax.set_ylim(0, axis_upper)
                 apply_hv_background(axis_upper)
             ax.text(
@@ -1205,9 +1210,10 @@ def plot_station(
                     color="dimgray",
                 )
                 ax.legend([now_line], [now_line.get_label()], loc="upper left")
+                ax.set_ylim(current_time - placeholder_delta, current_time + placeholder_delta)
                 ax.annotate(
                     current_time_str_time_only,
-                    xy=(current_time, current_time),
+                    xy=(current_time, current_time + placeholder_delta),
                     xycoords=("data", "data"),
                     xytext=(15, -20),
                     textcoords="offset points",

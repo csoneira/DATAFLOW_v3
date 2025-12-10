@@ -69,7 +69,7 @@ PDF_TARGETS = {
         / "execution_metadata_report_files_brought.pdf",
         "description": "Files brought view (execution timestamp on X axis)",
     },
-    "execution_report_files_brought_real_time": {
+    "execution_report_files_brought_zoomed": {
         "path": BASE_DIR
         / "MASTER"
         / "ANCILLARY"
@@ -77,8 +77,8 @@ PDF_TARGETS = {
         / "METADATA"
         / "EXECUTION"
         / "PLOTS"
-        / "execution_metadata_report_files_brought_real_time.pdf",
-        "description": "Files brought view (real-time axis on X axis)",
+        / "execution_metadata_report_files_brought_zoomed.pdf",
+        "description": "Files brought view (zoomed real-time window)",
     },
 }
 
@@ -99,7 +99,7 @@ HELP_TEXT = (
     "  /execution_report_zoomed - Execution metadata (zoomed view).\n"
     "  /online_file_count - Online file count report.\n"
     "  /execution_report_files_brought - Files brought (execution-time x-axis).\n"
-    "  /execution_report_files_brought_real_time - Files brought (real-time x-axis).\n\n"
+    "  /execution_report_files_brought_zoomed - Files brought (zoomed real-time window).\n\n"
     "Maintenance Tools:\n"
     "  /clean_dataflow_status - Run clean_dataflow.sh to show disk usage.\n"
     "  /clean_dataflow_force - Run clean_dataflow.sh --force for cleanup.\n"
