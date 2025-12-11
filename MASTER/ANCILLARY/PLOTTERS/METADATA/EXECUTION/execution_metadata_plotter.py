@@ -1283,6 +1283,14 @@ def plot_station(
         runtime_non_nan = runtime_series.dropna()
         has_runtime_points = not runtime_non_nan.empty
 
+        if not real_time_in_y:
+            if has_runtime_points:
+                axis_upper = max(minutes_upper_limit, float(runtime_non_nan.max()))
+            else:
+                axis_upper = minutes_upper_limit
+            if axis_upper <= 0:
+                axis_upper = minutes_upper_limit
+
         ax.set_ylim(0, axis_upper)
         apply_hv_background(axis_upper)
 
