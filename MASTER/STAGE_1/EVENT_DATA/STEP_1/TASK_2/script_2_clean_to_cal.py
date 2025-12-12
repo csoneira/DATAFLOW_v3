@@ -150,6 +150,58 @@ current_conf_number: Optional[int] = None
 found_calibration = False
 
 
+def _normalize_analysis_mode_value(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text in {"", "0", "1"}:
+        return text
+    if text in {"0.0", "1.0"}:
+        return text[0]
+    if "1" in text:
+        return "1"
+    if "0" in text:
+        return "0"
+    return ""
+
+
+def _sanitize_analysis_mode_rows(rows: List[Dict[str, object]]) -> int:
+    fixed = 0
+    for row in rows:
+        if "analysis_mode" not in row:
+            continue
+        clean_value = _normalize_analysis_mode_value(row.get("analysis_mode"))
+        if row.get("analysis_mode") != clean_value:
+            row["analysis_mode"] = clean_value
+            fixed += 1
+    return fixed
+
+
+def _repair_metadata_file(metadata_path: Path) -> int:
+    """Load and rewrite *metadata_path* after clamping oversized analysis_mode fields."""
+
+    original_limit = csv.field_size_limit()
+    csv.field_size_limit(sys.maxsize)
+    try:
+        with metadata_path.open("r", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = list(reader.fieldnames or [])
+            rows = [dict(existing) for existing in reader]
+    finally:
+        csv.field_size_limit(original_limit)
+
+    if not fieldnames:
+        return 0
+
+    fixed = _sanitize_analysis_mode_rows(rows)
+    if fixed:
+        with metadata_path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    return fixed
+
+
 def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
     """Append *row* to *metadata_path*, preserving all existing columns."""
     metadata_path = Path(metadata_path)
@@ -159,13 +211,38 @@ def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
     def _normalise(raw: Dict[str, object]) -> Dict[str, object]:
         return {key: value for key, value in raw.items() if key is not None}
 
-    if metadata_path.exists() and metadata_path.stat().st_size > 0:
+    def _load_existing_rows() -> Tuple[List[str], List[Dict[str, object]]]:
         with metadata_path.open("r", newline="") as csvfile:
             reader = csv.DictReader(csvfile)
-            fieldnames = list(reader.fieldnames or [])
-            rows.extend(_normalise(existing) for existing in reader)
+            existing_fields = list(reader.fieldnames or [])
+            existing_rows = [_normalise(existing) for existing in reader]
+            return existing_fields, existing_rows
+
+    if metadata_path.exists() and metadata_path.stat().st_size > 0:
+        try:
+            fieldnames, existing_rows = _load_existing_rows()
+        except csv.Error as exc:
+            if "field larger than field limit" in str(exc).lower():
+                fixed = _repair_metadata_file(metadata_path)
+                print(
+                    f"Detected oversized analysis_mode entries in {metadata_path}; "
+                    f"normalized {fixed} row(s)."
+                )
+                try:
+                    fieldnames, existing_rows = _load_existing_rows()
+                except csv.Error as err:
+                    raise RuntimeError(
+                        f"Failed to repair metadata file {metadata_path} after detecting oversized fields."
+                    ) from err
+            else:
+                raise
+        rows.extend(existing_rows)
 
     rows.append(_normalise(dict(row)))
+
+    fixed_during_append = _sanitize_analysis_mode_rows(rows)
+    if fixed_during_append:
+        print(f"Clamped analysis_mode to 0/1 in {fixed_during_append} metadata row(s).")
 
     seen = set(fieldnames)
     for item in rows:
@@ -260,9 +337,34 @@ else:
 self_trigger = False
 
 
+not_use_q_semisum = False
+
+stratos_save = config["stratos_save"]
+fast_mode = config["fast_mode"]
+debug_mode = config["debug_mode"]
+last_file_test = config["last_file_test"]
+alternative_fitting = config["alternative_fitting"]
+
+# Accessing all the variables from the configuration
+crontab_execution = config["crontab_execution"]
+create_plots = config["create_plots"]
+create_essential_plots = config["create_essential_plots"]
+save_plots = config["save_plots"]
+show_plots = config["show_plots"]
+create_pdf = config["create_pdf"]
+limit = config["limit"]
+limit_number = config["limit_number"]
+number_of_time_cal_figures = config["number_of_time_cal_figures"]
+save_calibrations = config["save_calibrations"]
+presentation = config["presentation"]
+presentation_plots = config["presentation_plots"]
+force_replacement = config["force_replacement"]
+article_format = config["article_format"]
 
 
-create_super_essential_plots = False
+create_super_essential_plots = True
+save_plots = True
+
 
 print("Creating the necessary directories...")
 
@@ -320,6 +422,9 @@ base_directories = {
 
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
+    # If save_plots is False, skip creating the figure_directory
+    if directory == base_directories["figure_directory"] and not save_plots:
+        continue
     os.makedirs(directory, exist_ok=True)
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
@@ -445,7 +550,7 @@ for file_name in files_to_move:
 
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
-files = os.listdir(figure_directory)
+files = os.listdir(figure_directory) if os.path.exists(figure_directory) else []
 
 if files:  # Check if the directory contains any files
     print("Removing all files in the figure_directory...")
@@ -526,29 +631,6 @@ def write_itineraries_to_file(
 
 
 
-not_use_q_semisum = False
-
-stratos_save = config["stratos_save"]
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
-last_file_test = config["last_file_test"]
-alternative_fitting = config["alternative_fitting"]
-
-# Accessing all the variables from the configuration
-crontab_execution = config["crontab_execution"]
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
-limit = config["limit"]
-limit_number = config["limit_number"]
-number_of_time_cal_figures = config["number_of_time_cal_figures"]
-save_calibrations = config["save_calibrations"]
-presentation = config["presentation"]
-presentation_plots = config["presentation_plots"]
-force_replacement = config["force_replacement"]
-article_format = config["article_format"]
 
 # Charge calibration to fC
 calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
@@ -813,6 +895,9 @@ charge_plot_limit_right = config["charge_plot_limit_right"]
 charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 
 
+
+
+
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
@@ -1002,6 +1087,11 @@ global_variables = {
     'analysis_mode': 0,
 }
 
+
+
+
+
+
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
     def _derive_tt(row: pd.Series) -> str:
@@ -1145,7 +1235,11 @@ def get_file_path(directory, file_name):
     return os.path.join(directory, file_name)
 
 # Create ALL directories if they don't already exist
+# Create ALL directories if they don't already exist
 for directory in base_directories.values():
+    # If save_plots is False, skip creating the figure_directory
+    if directory == base_directories["figure_directory"] and not save_plots:
+        continue
     os.makedirs(directory, exist_ok=True)
 
 unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
@@ -1536,29 +1630,6 @@ def load_itineraries_from_file(file_path: Path, required: bool = True) -> list[l
 
 
 
-not_use_q_semisum = False
-
-stratos_save = config["stratos_save"]
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
-last_file_test = config["last_file_test"]
-alternative_fitting = config["alternative_fitting"]
-
-# Accessing all the variables from the configuration
-crontab_execution = config["crontab_execution"]
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
-limit = config["limit"]
-limit_number = config["limit_number"]
-number_of_time_cal_figures = config["number_of_time_cal_figures"]
-save_calibrations = config["save_calibrations"]
-presentation = config["presentation"]
-presentation_plots = config["presentation_plots"]
-force_replacement = config["force_replacement"]
-article_format = config["article_format"]
 
 # Charge calibration to fC
 calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
@@ -2124,6 +2195,149 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
 
     # First take the values that are not zero
     Q_ch = Q_ch[Q_ch != 0]
+
+    
+    if create_plots:
+        # Histogram accumulated distribution of Q_ch, accumulated please
+        
+        print("Should plot now")
+
+        plt.figure(figsize=(8,6))
+        plt.hist(Q_ch, bins=500, density=True, cumulative=True, histtype='step', color='blue')
+        # I want the not cumulative, but the maximum value of the histogram to be 1
+        hist_vals, bin_edges = np.histogram(Q_ch, bins=500, density=False)
+        hist_vals_normalized = hist_vals / np.max(hist_vals)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        plt.plot(bin_centers, hist_vals_normalized, color='green', drawstyle='steps-mid')
+        plt.title("Cumulative Distribution of Q_ch before Calibration")
+        plt.grid()
+        plt.xlabel("Q_ch")
+        plt.ylabel("Cumulative Probability")
+        if save_plots:
+            name_of_file = 'cumulative_distribution_Q_ch_before_calibration'
+            final_filename = f'{index_of_cal_plot}_{name_of_file}.png'
+
+            index_of_cal_plot += 1
+
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+        plt.close()
+    
+
+    # -----------------------------------------------------------------------------------------
+    
+
+    if create_super_essential_plots:
+        # Histogram accumulated distribution of Q_ch
+
+        print("Should plot now")
+
+        plt.figure(figsize=(8, 6))
+
+        # 1) CDF of all data (as before)
+        plt.hist(Q_ch, bins=500, density=True, cumulative=True,
+                histtype='step', color='blue', label='CDF (all data)')
+
+        # 2) Non-cumulative histogram of all data, normalized to max = 1
+        hist_vals, bin_edges = np.histogram(Q_ch, bins=500, density=False)
+        hist_vals_normalized = hist_vals / np.max(hist_vals)
+        bin_centers_all = (bin_edges[:-1] + bin_edges[1:]) / 2
+        plt.plot(bin_centers_all, hist_vals_normalized,
+                color='green', drawstyle='steps-mid', label='Hist (all data, max=1)')
+
+        # 3) Define 5% and 99% quantiles for fitting
+        q5 = np.quantile(Q_ch, 0.05)
+        q99 = np.quantile(Q_ch, 0.99)
+        Q_ch_filtered = Q_ch[(Q_ch >= q5) & (Q_ch <= q99)]
+
+        # Use the same bin edges for filtered cumulative histogram to keep alignment
+        hist_filtered, _ = np.histogram(
+            Q_ch_filtered,
+            bins=bin_edges,            # same binning as "all data"
+            density=False,
+        )
+        hist_cum_filtered = np.cumsum(hist_filtered)
+        if hist_cum_filtered.size and hist_cum_filtered[-1] != 0:
+            hist_cum_filtered = hist_cum_filtered / hist_cum_filtered[-1]
+        bin_centers_fit = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        # Plot CDF of filtered data on top
+        plt.plot(bin_centers_fit, hist_cum_filtered,
+                color='orange', linewidth=2, label='CDF (5–99% Q_ch)')
+
+        # 4) Define scaled exponential model to capture the gradual transition in the CDF
+        def scaled_exponential_model(x, L, x0, k, y0):
+            x = np.asarray(x)
+            return y0 + L * (1 - np.exp(-k * (x - x0)))
+
+        # Only fit on bins that actually contain data in the filtered range
+        mask_fit = (bin_centers_fit >= q5) & (bin_centers_fit <= q99)
+        x_fit = bin_centers_fit[mask_fit]
+        y_fit = hist_cum_filtered[mask_fit]
+
+        # 5) Initial guess for parameters [L, x0, k, y0]
+        L0 = max(y_fit[-1] - y_fit[0], 1e-6)
+        x0 = x_fit[len(x_fit) // 2]
+        k0 = 1.0 / (np.std(x_fit) + 1e-6)
+        y0 = y_fit[0]
+        p0 = [L0, x0, k0, y0]
+
+        # 6) Fit
+        popt, _ = curve_fit(scaled_exponential_model, x_fit, y_fit, p0=p0, maxfev=10000)
+        L_fit, x0_fit, k_fit, y0_fit = popt
+
+        # 7) Plot fitted function across full x-range for visibility
+        x_model = np.linspace(bin_centers_fit[0], bin_centers_fit[-1], 1000)
+        y_model = scaled_exponential_model(x_model, L_fit, x0_fit, k_fit, y0_fit)
+
+        # Take the offset as the value in which model = 0, that is, where crossed the y = 0 line
+        if L_fit == 0:
+            proposed_offset = float("nan")
+        else:
+            log_term = 1 + (y0_fit / L_fit)
+            if log_term <= 0:
+                proposed_offset = float("nan")
+            else:
+                proposed_offset = x0_fit - (1 / k_fit) * np.log(log_term)
+        print(f"Proposed Q_ch pedestal offset from scaled exponential fit: {proposed_offset}")
+
+        plt.plot(
+            x_model,
+            y_model,
+            "r-",
+            linewidth=2,
+            label="Scaled exponential fit",
+        )
+
+        # Plot a purple vertical line at the proposed offset
+        plt.axvline(x=proposed_offset, color='purple', linestyle='--',
+                    label=f'Proposed Offset: {proposed_offset:.2f}')
+
+        plt.title("Cumulative Distribution of Q_ch before Calibration")
+        plt.grid()
+        plt.xlabel("Q_ch")
+        plt.ylabel("Cumulative probability / normalized counts")
+        plt.legend()
+        # Y axes between 0 and 1
+        plt.ylim(0, 1)
+        plt.xlim(80, 140)
+
+        if save_plots:
+            name_of_file = 'cumulative_distribution_Q_ch_before_calibration'
+            final_filename = f'{index_of_cal_plot}_{name_of_file}.png'
+
+            index_of_cal_plot += 1
+
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format='png')
+
+        plt.close()
+
+
+
+    # -----------------------------------------------------------------------------------------
     
     # Calculate histogram
     offsets = []
@@ -2668,6 +2882,7 @@ if calculate_Q_sum_calibration:
         QB_pedestal.append(QB_pedestal_component)
     QB_pedestal = np.array(QB_pedestal)
 
+    sys.exit("DEBUG EXIT after charge pedestal calibration")
 
     # Change the values for the ones in 
     if global_variables["analysis_mode"] == 1:
@@ -2974,10 +3189,9 @@ if calculate_Q_sum_calibration:
 
 
         # Plot histograms of all the pedestal substractions
-        validate_charge_pedestal_calibration = True
         if validate_charge_pedestal_calibration:
             
-            if create_plots:
+            if create_plots or create_plots:
                 # Create the grand figure for Q values
                 fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
                 axes_Q = axes_Q.flatten()
@@ -3424,7 +3638,7 @@ if time_window_filtering:
     spread_df = pd.concat(spread_results, ignore_index=True)
     spread_df_OG = spread_df.copy()
     
-    if create_super_essential_plots:
+    if create_plots:
         clean_tts = sorted(spread_df["clean_tt"].unique())
         if clean_tts:
             ncols = min(3, len(clean_tts))
@@ -3480,7 +3694,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
     
-    if create_super_essential_plots:
+    if create_plots:
         clean_tts = sorted(spread_df["clean_tt"].unique())
         if clean_tts:
             ncols = min(3, len(clean_tts))
@@ -5698,10 +5912,9 @@ if crosstalk_removal_and_recalibration:
                 working_st_df.loc[mask, f'Q{key}_Q_sum_{j+1}'] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
 
 
-create_super_essential_plots = False
 
 # Fitted the crosstalk or not, the zoom is displayed
-if create_super_essential_plots:
+if create_plots:
 # if create_plots or create_essential_plots:
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_Q = axes_Q.flatten()
@@ -6596,7 +6809,7 @@ if time_window_filtering:
     spread_df = pd.concat(spread_results, ignore_index=True)
     spread_df_OG = spread_df.copy()
     
-    if create_super_essential_plots:
+    if create_plots:
         clean_tts = sorted(spread_df["clean_tt"].unique())
         if clean_tts:
             ncols = min(3, len(clean_tts))
@@ -6651,7 +6864,7 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
     
-    if create_super_essential_plots:
+    if create_plots:
         clean_tts = sorted(spread_df["clean_tt"].unique())
         if clean_tts:
             ncols = min(3, len(clean_tts))

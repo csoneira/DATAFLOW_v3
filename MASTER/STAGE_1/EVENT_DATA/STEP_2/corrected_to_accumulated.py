@@ -387,7 +387,7 @@ big_event_file = os.path.join(working_directory, "big_event_data.csv")
 
 # Erase all files in the figure_directory
 figure_directory = base_directories["figure_directory"]
-files = os.listdir(figure_directory)
+files = os.listdir(figure_directory) if os.path.exists(figure_directory) else []
 
 if files:  # Check if the directory contains any files
     print("Removing all files in the figure_directory...")

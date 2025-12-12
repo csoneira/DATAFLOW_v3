@@ -149,6 +149,57 @@ home_path = config["home_path"]
 # ~/DATAFLOW_v3/MASTER/ANCILLARY/QUALITY_ASSURANCE
 REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "ANCILLARY" / "QUALITY_ASSURANCE" / "REFERENCE_TABLES"
 
+
+def _normalize_analysis_mode_value(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text in {"", "0", "1"}:
+        return text
+    if text in {"0.0", "1.0"}:
+        return text[0]
+    if "1" in text:
+        return "1"
+    if "0" in text:
+        return "0"
+    return ""
+
+
+def _sanitize_analysis_mode_rows(rows: List[Dict[str, object]]) -> int:
+    fixed = 0
+    for row in rows:
+        if "analysis_mode" not in row:
+            continue
+        clean_value = _normalize_analysis_mode_value(row.get("analysis_mode"))
+        if row.get("analysis_mode") != clean_value:
+            row["analysis_mode"] = clean_value
+            fixed += 1
+    return fixed
+
+
+def _repair_metadata_file(metadata_path: Path) -> int:
+    original_limit = csv.field_size_limit()
+    csv.field_size_limit(sys.maxsize)
+    try:
+        with metadata_path.open("r", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = list(reader.fieldnames or [])
+            rows = [dict(existing) for existing in reader]
+    finally:
+        csv.field_size_limit(original_limit)
+
+    if not fieldnames:
+        return 0
+
+    fixed = _sanitize_analysis_mode_rows(rows)
+    if fixed:
+        with metadata_path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    return fixed
+
+
 def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
     """Append *row* to *metadata_path*, preserving all existing columns."""
     metadata_path = Path(metadata_path)
@@ -158,14 +209,38 @@ def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
     def _normalise(raw: Dict[str, object]) -> Dict[str, object]:
         return {key: value for key, value in raw.items() if key is not None}
 
-    if metadata_path.exists() and metadata_path.stat().st_size > 0:
+    def _load_existing_rows() -> Tuple[List[str], List[Dict[str, object]]]:
         with metadata_path.open("r", newline="") as csvfile:
             reader = csv.DictReader(csvfile)
-            fieldnames = list(reader.fieldnames or [])
-            rows.extend(_normalise(existing) for existing in reader)
+            existing_fields = list(reader.fieldnames or [])
+            existing_rows = [_normalise(existing) for existing in reader]
+            return existing_fields, existing_rows
+
+    if metadata_path.exists() and metadata_path.stat().st_size > 0:
+        try:
+            fieldnames, existing_rows = _load_existing_rows()
+        except csv.Error as exc:
+            if "field larger than field limit" in str(exc).lower():
+                fixed = _repair_metadata_file(metadata_path)
+                print(
+                    f"Detected oversized analysis_mode entries in {metadata_path}; normalized {fixed} row(s)."
+                )
+                try:
+                    fieldnames, existing_rows = _load_existing_rows()
+                except csv.Error as err:
+                    raise RuntimeError(
+                        f"Failed to repair metadata file {metadata_path} after detecting oversized fields."
+                    ) from err
+            else:
+                raise
+        rows.extend(existing_rows)
 
     # Append the new row (making a shallow copy to avoid mutating callers).
     rows.append(_normalise(dict(row)))
+
+    fixed_during_append = _sanitize_analysis_mode_rows(rows)
+    if fixed_during_append:
+        print(f"Clamped analysis_mode to 0/1 in {fixed_during_append} metadata row(s).")
 
     # Build the union of all keys while keeping existing order first.
     seen = set(fieldnames)
@@ -290,8 +365,15 @@ base_directories = {
     "metadata_directory": metadata_directory,
 }
 
+
+save_plots = config["save_plots"]
+
+# Create ALL directories if they don't already exist
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
+    # If save_plots is False, skip creating the figure_directory
+    if directory == base_directories["figure_directory"] and not save_plots:
+        continue
     os.makedirs(directory, exist_ok=True)
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
@@ -419,7 +501,7 @@ for file_name in files_to_move:
 
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
-files = os.listdir(figure_directory)
+files = os.listdir(figure_directory) if os.path.exists(figure_directory) else []
 
 if files:  # Check if the directory contains any files
     print("Removing all files in the figure_directory...")
@@ -1557,8 +1639,14 @@ def process_file(source_path, dest_path):
 def get_file_path(directory, file_name):
     return os.path.join(directory, file_name)
 
+
+save_plots = config["save_plots"]
+
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
+    # If save_plots is False, skip creating the figure_directory
+    if directory == base_directories["figure_directory"] and not save_plots:
+        continue
     os.makedirs(directory, exist_ok=True)
 
 unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
@@ -2700,12 +2788,13 @@ if low_value_cols:
     sys.exit(1)
 
 
-
 # Go plane by plane and strip by strip, and if F is zero or B is zero, set the other to zero too, per row.
 for plane in range(1, 5):
     for strip in range(1, 5):
         col_F = f'T{plane}_F_{strip}'
         col_B = f'T{plane}_B_{strip}'
+
+        global_variables[f"zeroed_percentage_P{plane}s{strip}"] = 0
 
         # Create a mask where either front or back is zero
         mask_zero_or = (working_df[col_F] == 0) | (working_df[col_B] == 0)
@@ -2718,8 +2807,9 @@ for plane in range(1, 5):
         # Count how many changes were made, which is the number of True in mask_zero_or - mask_zero_and
         changes_made = mask_zero_or.sum() - mask_zero_and.sum()
         if changes_made > 0:
-            print(f"[P{plane}s{strip}] Set to zero {changes_made} values, {changes_made/len(working_df)*100:.2f}% of total rows.")
-
+            percentage = (changes_made / len(working_df)) * 100
+            print(f"[P{plane}s{strip}] Set to zero {changes_made} values, {percentage:.2f}% of total rows.")
+            global_variables[f"zeroed_percentage_P{plane}s{strip}"] = percentage
 
 
 if time_window_filtering:

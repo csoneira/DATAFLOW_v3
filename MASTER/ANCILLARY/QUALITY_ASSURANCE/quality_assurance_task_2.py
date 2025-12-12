@@ -9,6 +9,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from typing import Optional
 
 from qa_shared import load_metadata, print_columns, plot_tt_pairs, plot_tt_matrix
 
@@ -18,8 +19,9 @@ station = 1
 STATION = f"MINGO0{station}"  # e.g. "MINGO01", "MINGO02", ...
 STEP = 1             # numeric step (1, 2, ...)
 TASK = 2          # for STEP_1 use an int (1-5); keep None for steps without tasks
-START_DATE = "2024-03-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
-END_DATE = "2025-11-20 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
+# START_DATE = "2024-03-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
+START_DATE = "2025-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
+END_DATE = "2025-12-11 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
 # Window used when counting events (ns) and per-combination measured counts.
 # Set WINDOW_NS to the calibration window you used (e.g., coincidence_window_cal_ns),
 # and fill MEASURED_COUNTS with {combo: observed_counts}.
@@ -45,28 +47,29 @@ print_columns(df)
 runs_df = ...
 
 
+#%%
 
 # --- Additional intelligent plotting for STEP 1 TASK 1 ---
 
 # determine time column to use for plotting
 tcol = ctx.time_col
 
-# Example reuse: plot clean -> cal pairs. Uncomment if wanted.
-try:
-    plot_tt_pairs(ctx, 'clean_tt_', 'cal_tt_', f"clean_tt → cal_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=4)
-except Exception:
-    print("Could not plot clean_tt_ -> cal_tt_ pairs.")
-    pass
+# # Example reuse: plot clean -> cal pairs. Uncomment if wanted.
+# try:
+#     plot_tt_pairs(ctx, 'clean_tt_', 'cal_tt_', f"clean_tt → cal_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=4)
+# except Exception:
+#     print("Could not plot clean_tt_ -> cal_tt_ pairs.")
+#     pass
 
-# Plot raw->clean matrix (re-usable: change prefixes to plot other matrices)
-try:
-    plot_tt_matrix(ctx, 'clean', 'cal', f"clean_to_cal matrix • {STATION} STEP {STEP} TASK {TASK}")
-except Exception:
-    print("Could not plot clean -> cal matrix.")
-    pass
+# # Plot raw->clean matrix (re-usable: change prefixes to plot other matrices)
+# try:
+#     plot_tt_matrix(ctx, 'clean', 'cal', f"clean_to_cal matrix • {STATION} STEP {STEP} TASK {TASK}")
+# except Exception:
+#     print("Could not plot clean -> cal matrix.")
+#     pass
 
 
-    #%%
+#%%
 
 # - CRT_avg
 # Plot CRT_avg time series with error bar = CRT_std
@@ -74,7 +77,7 @@ except Exception:
 import matplotlib.pyplot as plt
 
 plt.figure(figsize=(20, 6))
-plt.plot(df["datetime"], df["CRT_avg"], marker='.', linestyle='--', markersize=0.1)
+plt.plot(df["datetime"], df["CRT_avg"], marker='.', linestyle='', markersize=1)
 plt.fill_between(df["datetime"], df["CRT_avg"] + df["CRT_std"]/2, df["CRT_avg"] - df["CRT_std"]/2, alpha=0.2, label='CRT Std Dev')
 plt.title(f"CRT for {STATION} STEP {STEP} TASK {TASK}")
 plt.xlabel("Datetime")
@@ -83,6 +86,1994 @@ plt.ylabel("CRT (ns)")
 plt.grid(True)
 plt.show()
 plotted_cols.update({"CRT_avg", "CRT_std"})
+
+#%%
+
+tt_values = ["12", "13", "14", "23", "24", "34", "123", "124", "134", "234", "1234"]
+
+# Pre-create all required difference columns to avoid dataframe fragmentation
+tsum_diff_columns = []
+for plane_1 in range(1, 5):
+    for plane_2 in range(1, 5):
+        for strip_1 in range(1, 5):
+            for strip_2 in range(1, 5):
+                if plane_1 > plane_2 and strip_1 > strip_2:
+                    continue
+                if plane_1 == plane_2 and strip_1 == strip_2:
+                    continue
+                for tt in tt_values:
+                    tsum_diff_columns.append(f"P{plane_1}s{strip_1}_P{plane_2}s{strip_2}_{tt}")
+tsum_diff_columns = sorted(set(tsum_diff_columns))
+
+#%%
+
+df["P1s1_P3s1_123.0"].dropna()
+
+#%%
+
+# Histogram this:
+plt.figure(figsize=(10, 6))
+plt.hist(df["P1s1_P3s1_123.0"].dropna(), bins=100, alpha=0.7, color='blue')
+plt.title(f"Histogram of Tsum Difference P1s1_P3s1_123 for {STATION} STEP {STEP} TASK {TASK}")
+plt.xlabel("Tsum Difference (ns)")
+plt.ylabel("Counts")
+plt.grid(True)
+plt.show()
+
+
+#%%
+
+
+
+# I want the following plot: the same rows and columns. From P1s1 to P4s4, for all tt combinations
+# and in each combination, you plot the time series of the P{plane}s{strip}_P{plane}s{strip}_{tt} column
+# for all tt combinations.
+
+tt_values = ["12", "13", "14", "23", "24", "34", "123", "124", "134", "234", "1234"]
+
+# Add a .0 to all tt values to match column names
+tt_values = [tt + ".0" for tt in tt_values]
+
+fig, axs = plt.subplots(16, 16, figsize=(40, 30), sharex=True, sharey=True)
+for i, plane_1 in enumerate(range(1, 5)):
+    for j, strip_1 in enumerate(range(1, 5)):
+        for k, plane_2 in enumerate(range(1, 5)):
+            for l, strip_2 in enumerate(range(1, 5)):
+                ax = axs[i*4 + j, k*4 + l]
+                
+                if plane_1 * 4 + strip_1 >= plane_2 * 4 + strip_2:
+                    ax.axis('off')
+                    continue
+                
+                for tt in tt_values:
+                    col_name = f"P{plane_1}s{strip_1}_P{plane_2}s{strip_2}_{tt}"
+                    if col_name in df.columns:
+                        ax.plot(df["datetime"], df[col_name], marker='.', linestyle='--', markersize=3, label=tt)
+                
+                ax.set_title(f"P{plane_1}s{strip_1}-P{plane_2}s{strip_2}")
+                ax.grid(True)
+                
+                # if i == 3 and j == 3:
+                #     ax.legend(fontsize='small', loc='upper right')
+
+plt.suptitle(f"Tsum Differences for {STATION} STEP {STEP} TASK {TASK}", fontsize=16)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.show()
+
+
+#%%
+
+tt_values = ["12", "13", "14", "23", "24", "34", "123", "124", "134", "234", "1234"]
+tt_values = [tt + ".0" for tt in tt_values]
+tt_colors = {tt: plt.get_cmap('tab20', len(tt_values))(idx) for idx, tt in enumerate(tt_values)}
+
+for plane_1 in range(1, 5):
+    for plane_2 in range(plane_1, 5):  # plane_1 <= plane_2 to avoid duplicating plane pairs
+        fig, axs = plt.subplots(4, 4, figsize=(14, 10), sharex=True, sharey=True)
+        legend_handles: dict[str, plt.Line2D] = {}
+
+        for strip_1 in range(1, 5):
+            for strip_2 in range(1, 5):
+                ax = axs[strip_1 - 1, strip_2 - 1]
+
+                if plane_1 == plane_2 and strip_1 <= strip_2:
+                    ax.axis('off')
+                    continue
+
+                # Build column name for this plane/strip pair
+                for tt in tt_values:
+                    col_name = f"P{plane_1}s{strip_1}_P{plane_2}s{strip_2}_{tt}"
+                    if col_name not in df.columns:
+                        continue
+
+                    y = df[col_name]
+                    cond = ~y.isna()
+                    if not cond.any():
+                        continue
+
+                    x = df["datetime"][cond]
+                    y = y[cond]
+                    (line,) = ax.plot(
+                        x,
+                        y,
+                        marker='.',
+                        linestyle='--',
+                        markersize=10,
+                        color=tt_colors[tt],
+                        label=tt,
+                    )
+                    legend_handles.setdefault(tt, line)
+
+                ax.set_title(f"P{plane_1}s{strip_1}-P{plane_2}s{strip_2}", fontsize=8)
+                ax.grid(True)
+
+        fig.suptitle(
+            f"Tsum Differences for {STATION} STEP {STEP} TASK {TASK} | "
+            f"Planes P{plane_1}–P{plane_2}",
+            fontsize=14
+        )
+
+        if legend_handles:
+            fig.legend(
+                legend_handles.values(),
+                legend_handles.keys(),
+                loc='center right',
+                bbox_to_anchor=(1.15, 0.5),
+                fontsize='small'
+            )
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+
+
+
+#%%
+
+
+#  - P1s1_P1s2_123.0
+#  - P1s1_P1s2_12.0
+#  - P1s1_P1s2_34.0
+#  - P1s1_P1s2_1234.0
+#  - P1s1_P1s2_234.0
+#  - P1s1_P1s2_23.0
+#  - P1s1_P1s2_13.0
+#  - P1s1_P1s2_134.0
+#  - P1s1_P1s2_124.0
+#  - P1s1_P1s3_123.0
+#  - P1s1_P1s3_12.0
+#  - P1s1_P1s3_34.0
+#  - P1s1_P1s3_1234.0
+#  - P1s1_P1s3_234.0
+#  - P1s1_P1s3_23.0
+#  - P1s1_P1s3_13.0
+#  - P1s1_P1s3_134.0
+#  - P1s1_P1s3_124.0
+#  - P1s1_P1s4_123.0
+#  - P1s1_P1s4_12.0
+#  - P1s1_P1s4_34.0
+#  - P1s1_P1s4_1234.0
+#  - P1s1_P1s4_234.0
+#  - P1s1_P1s4_23.0
+#  - P1s1_P1s4_13.0
+#  - P1s1_P1s4_134.0
+#  - P1s1_P1s4_124.0
+#  - P1s2_P1s1_123.0
+#  - P1s2_P1s1_12.0
+#  - P1s2_P1s1_34.0
+#  - P1s2_P1s1_1234.0
+#  - P1s2_P1s1_234.0
+#  - P1s2_P1s1_23.0
+#  - P1s2_P1s1_13.0
+#  - P1s2_P1s1_134.0
+#  - P1s2_P1s1_124.0
+#  - P1s2_P1s3_123.0
+#  - P1s2_P1s3_12.0
+#  - P1s2_P1s3_34.0
+#  - P1s2_P1s3_1234.0
+#  - P1s2_P1s3_234.0
+#  - P1s2_P1s3_23.0
+#  - P1s2_P1s3_13.0
+#  - P1s2_P1s3_134.0
+#  - P1s2_P1s3_124.0
+#  - P1s2_P1s4_123.0
+#  - P1s2_P1s4_12.0
+#  - P1s2_P1s4_34.0
+#  - P1s2_P1s4_1234.0
+#  - P1s2_P1s4_234.0
+#  - P1s2_P1s4_23.0
+#  - P1s2_P1s4_13.0
+#  - P1s2_P1s4_134.0
+#  - P1s2_P1s4_124.0
+#  - P1s3_P1s1_123.0
+#  - P1s3_P1s1_12.0
+#  - P1s3_P1s1_34.0
+#  - P1s3_P1s1_1234.0
+#  - P1s3_P1s1_234.0
+#  - P1s3_P1s1_23.0
+#  - P1s3_P1s1_13.0
+#  - P1s3_P1s1_134.0
+#  - P1s3_P1s1_124.0
+#  - P1s3_P1s2_123.0
+#  - P1s3_P1s2_12.0
+#  - P1s3_P1s2_34.0
+#  - P1s3_P1s2_1234.0
+#  - P1s3_P1s2_234.0
+#  - P1s3_P1s2_23.0
+#  - P1s3_P1s2_13.0
+#  - P1s3_P1s2_134.0
+#  - P1s3_P1s2_124.0
+#  - P1s3_P1s4_123.0
+#  - P1s3_P1s4_12.0
+#  - P1s3_P1s4_34.0
+#  - P1s3_P1s4_1234.0
+#  - P1s3_P1s4_234.0
+#  - P1s3_P1s4_23.0
+#  - P1s3_P1s4_13.0
+#  - P1s3_P1s4_134.0
+#  - P1s3_P1s4_124.0
+#  - P1s4_P1s1_123.0
+#  - P1s4_P1s1_12.0
+#  - P1s4_P1s1_34.0
+#  - P1s4_P1s1_1234.0
+#  - P1s4_P1s1_234.0
+#  - P1s4_P1s1_23.0
+#  - P1s4_P1s1_13.0
+#  - P1s4_P1s1_134.0
+#  - P1s4_P1s1_124.0
+#  - P1s4_P1s2_123.0
+#  - P1s4_P1s2_12.0
+#  - P1s4_P1s2_34.0
+#  - P1s4_P1s2_1234.0
+#  - P1s4_P1s2_234.0
+#  - P1s4_P1s2_23.0
+#  - P1s4_P1s2_13.0
+#  - P1s4_P1s2_134.0
+#  - P1s4_P1s2_124.0
+#  - P1s4_P1s3_123.0
+#  - P1s4_P1s3_12.0
+#  - P1s4_P1s3_34.0
+#  - P1s4_P1s3_1234.0
+#  - P1s4_P1s3_234.0
+#  - P1s4_P1s3_23.0
+#  - P1s4_P1s3_13.0
+#  - P1s4_P1s3_134.0
+#  - P1s4_P1s3_124.0
+#  - P1s1_P2s1_123.0
+#  - P1s1_P2s1_12.0
+#  - P1s1_P2s1_34.0
+#  - P1s1_P2s1_1234.0
+#  - P1s1_P2s1_234.0
+#  - P1s1_P2s1_23.0
+#  - P1s1_P2s1_13.0
+#  - P1s1_P2s1_134.0
+#  - P1s1_P2s1_124.0
+#  - P1s1_P2s2_123.0
+#  - P1s1_P2s2_12.0
+#  - P1s1_P2s2_34.0
+#  - P1s1_P2s2_1234.0
+#  - P1s1_P2s2_234.0
+#  - P1s1_P2s2_23.0
+#  - P1s1_P2s2_13.0
+#  - P1s1_P2s2_134.0
+#  - P1s1_P2s2_124.0
+#  - P1s1_P2s3_123.0
+#  - P1s1_P2s3_12.0
+#  - P1s1_P2s3_34.0
+#  - P1s1_P2s3_1234.0
+#  - P1s1_P2s3_234.0
+#  - P1s1_P2s3_23.0
+#  - P1s1_P2s3_13.0
+#  - P1s1_P2s3_134.0
+#  - P1s1_P2s3_124.0
+#  - P1s1_P2s4_123.0
+#  - P1s1_P2s4_12.0
+#  - P1s1_P2s4_34.0
+#  - P1s1_P2s4_1234.0
+#  - P1s1_P2s4_234.0
+#  - P1s1_P2s4_23.0
+#  - P1s1_P2s4_13.0
+#  - P1s1_P2s4_134.0
+#  - P1s1_P2s4_124.0
+#  - P1s2_P2s1_123.0
+#  - P1s2_P2s1_12.0
+#  - P1s2_P2s1_34.0
+#  - P1s2_P2s1_1234.0
+#  - P1s2_P2s1_234.0
+#  - P1s2_P2s1_23.0
+#  - P1s2_P2s1_13.0
+#  - P1s2_P2s1_134.0
+#  - P1s2_P2s1_124.0
+#  - P1s2_P2s2_123.0
+#  - P1s2_P2s2_12.0
+#  - P1s2_P2s2_34.0
+#  - P1s2_P2s2_1234.0
+#  - P1s2_P2s2_234.0
+#  - P1s2_P2s2_23.0
+#  - P1s2_P2s2_13.0
+#  - P1s2_P2s2_134.0
+#  - P1s2_P2s2_124.0
+#  - P1s2_P2s3_123.0
+#  - P1s2_P2s3_12.0
+#  - P1s2_P2s3_34.0
+#  - P1s2_P2s3_1234.0
+#  - P1s2_P2s3_234.0
+#  - P1s2_P2s3_23.0
+#  - P1s2_P2s3_13.0
+#  - P1s2_P2s3_134.0
+#  - P1s2_P2s3_124.0
+#  - P1s2_P2s4_123.0
+#  - P1s2_P2s4_12.0
+#  - P1s2_P2s4_34.0
+#  - P1s2_P2s4_1234.0
+#  - P1s2_P2s4_234.0
+#  - P1s2_P2s4_23.0
+#  - P1s2_P2s4_13.0
+#  - P1s2_P2s4_134.0
+#  - P1s2_P2s4_124.0
+#  - P1s3_P2s1_123.0
+#  - P1s3_P2s1_12.0
+#  - P1s3_P2s1_34.0
+#  - P1s3_P2s1_1234.0
+#  - P1s3_P2s1_234.0
+#  - P1s3_P2s1_23.0
+#  - P1s3_P2s1_13.0
+#  - P1s3_P2s1_134.0
+#  - P1s3_P2s1_124.0
+#  - P1s3_P2s2_123.0
+#  - P1s3_P2s2_12.0
+#  - P1s3_P2s2_34.0
+#  - P1s3_P2s2_1234.0
+#  - P1s3_P2s2_234.0
+#  - P1s3_P2s2_23.0
+#  - P1s3_P2s2_13.0
+#  - P1s3_P2s2_134.0
+#  - P1s3_P2s2_124.0
+#  - P1s3_P2s3_123.0
+#  - P1s3_P2s3_12.0
+#  - P1s3_P2s3_34.0
+#  - P1s3_P2s3_1234.0
+#  - P1s3_P2s3_234.0
+#  - P1s3_P2s3_23.0
+#  - P1s3_P2s3_13.0
+#  - P1s3_P2s3_134.0
+#  - P1s3_P2s3_124.0
+#  - P1s3_P2s4_123.0
+#  - P1s3_P2s4_12.0
+#  - P1s3_P2s4_34.0
+#  - P1s3_P2s4_1234.0
+#  - P1s3_P2s4_234.0
+#  - P1s3_P2s4_23.0
+#  - P1s3_P2s4_13.0
+#  - P1s3_P2s4_134.0
+#  - P1s3_P2s4_124.0
+#  - P1s4_P2s1_123.0
+#  - P1s4_P2s1_12.0
+#  - P1s4_P2s1_34.0
+#  - P1s4_P2s1_1234.0
+#  - P1s4_P2s1_234.0
+#  - P1s4_P2s1_23.0
+#  - P1s4_P2s1_13.0
+#  - P1s4_P2s1_134.0
+#  - P1s4_P2s1_124.0
+#  - P1s4_P2s2_123.0
+#  - P1s4_P2s2_12.0
+#  - P1s4_P2s2_34.0
+#  - P1s4_P2s2_1234.0
+#  - P1s4_P2s2_234.0
+#  - P1s4_P2s2_23.0
+#  - P1s4_P2s2_13.0
+#  - P1s4_P2s2_134.0
+#  - P1s4_P2s2_124.0
+#  - P1s4_P2s3_123.0
+#  - P1s4_P2s3_12.0
+#  - P1s4_P2s3_34.0
+#  - P1s4_P2s3_1234.0
+#  - P1s4_P2s3_234.0
+#  - P1s4_P2s3_23.0
+#  - P1s4_P2s3_13.0
+#  - P1s4_P2s3_134.0
+#  - P1s4_P2s3_124.0
+#  - P1s4_P2s4_123.0
+#  - P1s4_P2s4_12.0
+#  - P1s4_P2s4_34.0
+#  - P1s4_P2s4_1234.0
+#  - P1s4_P2s4_234.0
+#  - P1s4_P2s4_23.0
+#  - P1s4_P2s4_13.0
+#  - P1s4_P2s4_134.0
+#  - P1s4_P2s4_124.0
+#  - P1s1_P3s1_123.0
+#  - P1s1_P3s1_12.0
+#  - P1s1_P3s1_34.0
+#  - P1s1_P3s1_1234.0
+#  - P1s1_P3s1_234.0
+#  - P1s1_P3s1_23.0
+#  - P1s1_P3s1_13.0
+#  - P1s1_P3s1_134.0
+#  - P1s1_P3s1_124.0
+#  - P1s1_P3s2_123.0
+#  - P1s1_P3s2_12.0
+#  - P1s1_P3s2_34.0
+#  - P1s1_P3s2_1234.0
+#  - P1s1_P3s2_234.0
+#  - P1s1_P3s2_23.0
+#  - P1s1_P3s2_13.0
+#  - P1s1_P3s2_134.0
+#  - P1s1_P3s2_124.0
+#  - P1s1_P3s3_123.0
+#  - P1s1_P3s3_12.0
+#  - P1s1_P3s3_34.0
+#  - P1s1_P3s3_1234.0
+#  - P1s1_P3s3_234.0
+#  - P1s1_P3s3_23.0
+#  - P1s1_P3s3_13.0
+#  - P1s1_P3s3_134.0
+#  - P1s1_P3s3_124.0
+#  - P1s1_P3s4_123.0
+#  - P1s1_P3s4_12.0
+#  - P1s1_P3s4_34.0
+#  - P1s1_P3s4_1234.0
+#  - P1s1_P3s4_234.0
+#  - P1s1_P3s4_23.0
+#  - P1s1_P3s4_13.0
+#  - P1s1_P3s4_134.0
+#  - P1s1_P3s4_124.0
+#  - P1s2_P3s1_123.0
+#  - P1s2_P3s1_12.0
+#  - P1s2_P3s1_34.0
+#  - P1s2_P3s1_1234.0
+#  - P1s2_P3s1_234.0
+#  - P1s2_P3s1_23.0
+#  - P1s2_P3s1_13.0
+#  - P1s2_P3s1_134.0
+#  - P1s2_P3s1_124.0
+#  - P1s2_P3s2_123.0
+#  - P1s2_P3s2_12.0
+#  - P1s2_P3s2_34.0
+#  - P1s2_P3s2_1234.0
+#  - P1s2_P3s2_234.0
+#  - P1s2_P3s2_23.0
+#  - P1s2_P3s2_13.0
+#  - P1s2_P3s2_134.0
+#  - P1s2_P3s2_124.0
+#  - P1s2_P3s3_123.0
+#  - P1s2_P3s3_12.0
+#  - P1s2_P3s3_34.0
+#  - P1s2_P3s3_1234.0
+#  - P1s2_P3s3_234.0
+#  - P1s2_P3s3_23.0
+#  - P1s2_P3s3_13.0
+#  - P1s2_P3s3_134.0
+#  - P1s2_P3s3_124.0
+#  - P1s2_P3s4_123.0
+#  - P1s2_P3s4_12.0
+#  - P1s2_P3s4_34.0
+#  - P1s2_P3s4_1234.0
+#  - P1s2_P3s4_234.0
+#  - P1s2_P3s4_23.0
+#  - P1s2_P3s4_13.0
+#  - P1s2_P3s4_134.0
+#  - P1s2_P3s4_124.0
+#  - P1s3_P3s1_123.0
+#  - P1s3_P3s1_12.0
+#  - P1s3_P3s1_34.0
+#  - P1s3_P3s1_1234.0
+#  - P1s3_P3s1_234.0
+#  - P1s3_P3s1_23.0
+#  - P1s3_P3s1_13.0
+#  - P1s3_P3s1_134.0
+#  - P1s3_P3s1_124.0
+#  - P1s3_P3s2_123.0
+#  - P1s3_P3s2_12.0
+#  - P1s3_P3s2_34.0
+#  - P1s3_P3s2_1234.0
+#  - P1s3_P3s2_234.0
+#  - P1s3_P3s2_23.0
+#  - P1s3_P3s2_13.0
+#  - P1s3_P3s2_134.0
+#  - P1s3_P3s2_124.0
+#  - P1s3_P3s3_123.0
+#  - P1s3_P3s3_12.0
+#  - P1s3_P3s3_34.0
+#  - P1s3_P3s3_1234.0
+#  - P1s3_P3s3_234.0
+#  - P1s3_P3s3_23.0
+#  - P1s3_P3s3_13.0
+#  - P1s3_P3s3_134.0
+#  - P1s3_P3s3_124.0
+#  - P1s3_P3s4_123.0
+#  - P1s3_P3s4_12.0
+#  - P1s3_P3s4_34.0
+#  - P1s3_P3s4_1234.0
+#  - P1s3_P3s4_234.0
+#  - P1s3_P3s4_23.0
+#  - P1s3_P3s4_13.0
+#  - P1s3_P3s4_134.0
+#  - P1s3_P3s4_124.0
+#  - P1s4_P3s1_123.0
+#  - P1s4_P3s1_12.0
+#  - P1s4_P3s1_34.0
+#  - P1s4_P3s1_1234.0
+#  - P1s4_P3s1_234.0
+#  - P1s4_P3s1_23.0
+#  - P1s4_P3s1_13.0
+#  - P1s4_P3s1_134.0
+#  - P1s4_P3s1_124.0
+#  - P1s4_P3s2_123.0
+#  - P1s4_P3s2_12.0
+#  - P1s4_P3s2_34.0
+#  - P1s4_P3s2_1234.0
+#  - P1s4_P3s2_234.0
+#  - P1s4_P3s2_23.0
+#  - P1s4_P3s2_13.0
+#  - P1s4_P3s2_134.0
+#  - P1s4_P3s2_124.0
+#  - P1s4_P3s3_123.0
+#  - P1s4_P3s3_12.0
+#  - P1s4_P3s3_34.0
+#  - P1s4_P3s3_1234.0
+#  - P1s4_P3s3_234.0
+#  - P1s4_P3s3_23.0
+#  - P1s4_P3s3_13.0
+#  - P1s4_P3s3_134.0
+#  - P1s4_P3s3_124.0
+#  - P1s4_P3s4_123.0
+#  - P1s4_P3s4_12.0
+#  - P1s4_P3s4_34.0
+#  - P1s4_P3s4_1234.0
+#  - P1s4_P3s4_234.0
+#  - P1s4_P3s4_23.0
+#  - P1s4_P3s4_13.0
+#  - P1s4_P3s4_134.0
+#  - P1s4_P3s4_124.0
+#  - P1s1_P4s1_123.0
+#  - P1s1_P4s1_12.0
+#  - P1s1_P4s1_34.0
+#  - P1s1_P4s1_1234.0
+#  - P1s1_P4s1_234.0
+#  - P1s1_P4s1_23.0
+#  - P1s1_P4s1_13.0
+#  - P1s1_P4s1_134.0
+#  - P1s1_P4s1_124.0
+#  - P1s1_P4s2_123.0
+#  - P1s1_P4s2_12.0
+#  - P1s1_P4s2_34.0
+#  - P1s1_P4s2_1234.0
+#  - P1s1_P4s2_234.0
+#  - P1s1_P4s2_23.0
+#  - P1s1_P4s2_13.0
+#  - P1s1_P4s2_134.0
+#  - P1s1_P4s2_124.0
+#  - P1s1_P4s3_123.0
+#  - P1s1_P4s3_12.0
+#  - P1s1_P4s3_34.0
+#  - P1s1_P4s3_1234.0
+#  - P1s1_P4s3_234.0
+#  - P1s1_P4s3_23.0
+#  - P1s1_P4s3_13.0
+#  - P1s1_P4s3_134.0
+#  - P1s1_P4s3_124.0
+#  - P1s1_P4s4_123.0
+#  - P1s1_P4s4_12.0
+#  - P1s1_P4s4_34.0
+#  - P1s1_P4s4_1234.0
+#  - P1s1_P4s4_234.0
+#  - P1s1_P4s4_23.0
+#  - P1s1_P4s4_13.0
+#  - P1s1_P4s4_134.0
+#  - P1s1_P4s4_124.0
+#  - P1s2_P4s1_123.0
+#  - P1s2_P4s1_12.0
+#  - P1s2_P4s1_34.0
+#  - P1s2_P4s1_1234.0
+#  - P1s2_P4s1_234.0
+#  - P1s2_P4s1_23.0
+#  - P1s2_P4s1_13.0
+#  - P1s2_P4s1_134.0
+#  - P1s2_P4s1_124.0
+#  - P1s2_P4s2_123.0
+#  - P1s2_P4s2_12.0
+#  - P1s2_P4s2_34.0
+#  - P1s2_P4s2_1234.0
+#  - P1s2_P4s2_234.0
+#  - P1s2_P4s2_23.0
+#  - P1s2_P4s2_13.0
+#  - P1s2_P4s2_134.0
+#  - P1s2_P4s2_124.0
+#  - P1s2_P4s3_123.0
+#  - P1s2_P4s3_12.0
+#  - P1s2_P4s3_34.0
+#  - P1s2_P4s3_1234.0
+#  - P1s2_P4s3_234.0
+#  - P1s2_P4s3_23.0
+#  - P1s2_P4s3_13.0
+#  - P1s2_P4s3_134.0
+#  - P1s2_P4s3_124.0
+#  - P1s2_P4s4_123.0
+#  - P1s2_P4s4_12.0
+#  - P1s2_P4s4_34.0
+#  - P1s2_P4s4_1234.0
+#  - P1s2_P4s4_234.0
+#  - P1s2_P4s4_23.0
+#  - P1s2_P4s4_13.0
+#  - P1s2_P4s4_134.0
+#  - P1s2_P4s4_124.0
+#  - P1s3_P4s1_123.0
+#  - P1s3_P4s1_12.0
+#  - P1s3_P4s1_34.0
+#  - P1s3_P4s1_1234.0
+#  - P1s3_P4s1_234.0
+#  - P1s3_P4s1_23.0
+#  - P1s3_P4s1_13.0
+#  - P1s3_P4s1_134.0
+#  - P1s3_P4s1_124.0
+#  - P1s3_P4s2_123.0
+#  - P1s3_P4s2_12.0
+#  - P1s3_P4s2_34.0
+#  - P1s3_P4s2_1234.0
+#  - P1s3_P4s2_234.0
+#  - P1s3_P4s2_23.0
+#  - P1s3_P4s2_13.0
+#  - P1s3_P4s2_134.0
+#  - P1s3_P4s2_124.0
+#  - P1s3_P4s3_123.0
+#  - P1s3_P4s3_12.0
+#  - P1s3_P4s3_34.0
+#  - P1s3_P4s3_1234.0
+#  - P1s3_P4s3_234.0
+#  - P1s3_P4s3_23.0
+#  - P1s3_P4s3_13.0
+#  - P1s3_P4s3_134.0
+#  - P1s3_P4s3_124.0
+#  - P1s3_P4s4_123.0
+#  - P1s3_P4s4_12.0
+#  - P1s3_P4s4_34.0
+#  - P1s3_P4s4_1234.0
+#  - P1s3_P4s4_234.0
+#  - P1s3_P4s4_23.0
+#  - P1s3_P4s4_13.0
+#  - P1s3_P4s4_134.0
+#  - P1s3_P4s4_124.0
+#  - P1s4_P4s1_123.0
+#  - P1s4_P4s1_12.0
+#  - P1s4_P4s1_34.0
+#  - P1s4_P4s1_1234.0
+#  - P1s4_P4s1_234.0
+#  - P1s4_P4s1_23.0
+#  - P1s4_P4s1_13.0
+#  - P1s4_P4s1_134.0
+#  - P1s4_P4s1_124.0
+#  - P1s4_P4s2_123.0
+#  - P1s4_P4s2_12.0
+#  - P1s4_P4s2_34.0
+#  - P1s4_P4s2_1234.0
+#  - P1s4_P4s2_234.0
+#  - P1s4_P4s2_23.0
+#  - P1s4_P4s2_13.0
+#  - P1s4_P4s2_134.0
+#  - P1s4_P4s2_124.0
+#  - P1s4_P4s3_123.0
+#  - P1s4_P4s3_12.0
+#  - P1s4_P4s3_34.0
+#  - P1s4_P4s3_1234.0
+#  - P1s4_P4s3_234.0
+#  - P1s4_P4s3_23.0
+#  - P1s4_P4s3_13.0
+#  - P1s4_P4s3_134.0
+#  - P1s4_P4s3_124.0
+#  - P1s4_P4s4_123.0
+#  - P1s4_P4s4_12.0
+#  - P1s4_P4s4_34.0
+#  - P1s4_P4s4_1234.0
+#  - P1s4_P4s4_234.0
+#  - P1s4_P4s4_23.0
+#  - P1s4_P4s4_13.0
+#  - P1s4_P4s4_134.0
+#  - P1s4_P4s4_124.0
+#  - P2s1_P1s1_123.0
+#  - P2s1_P1s1_12.0
+#  - P2s1_P1s1_34.0
+#  - P2s1_P1s1_1234.0
+#  - P2s1_P1s1_234.0
+#  - P2s1_P1s1_23.0
+#  - P2s1_P1s1_13.0
+#  - P2s1_P1s1_134.0
+#  - P2s1_P1s1_124.0
+#  - P2s1_P1s2_123.0
+#  - P2s1_P1s2_12.0
+#  - P2s1_P1s2_34.0
+#  - P2s1_P1s2_1234.0
+#  - P2s1_P1s2_234.0
+#  - P2s1_P1s2_23.0
+#  - P2s1_P1s2_13.0
+#  - P2s1_P1s2_134.0
+#  - P2s1_P1s2_124.0
+#  - P2s1_P1s3_123.0
+#  - P2s1_P1s3_12.0
+#  - P2s1_P1s3_34.0
+#  - P2s1_P1s3_1234.0
+#  - P2s1_P1s3_234.0
+#  - P2s1_P1s3_23.0
+#  - P2s1_P1s3_13.0
+#  - P2s1_P1s3_134.0
+#  - P2s1_P1s3_124.0
+#  - P2s1_P1s4_123.0
+#  - P2s1_P1s4_12.0
+#  - P2s1_P1s4_34.0
+#  - P2s1_P1s4_1234.0
+#  - P2s1_P1s4_234.0
+#  - P2s1_P1s4_23.0
+#  - P2s1_P1s4_13.0
+#  - P2s1_P1s4_134.0
+#  - P2s1_P1s4_124.0
+#  - P2s2_P1s2_123.0
+#  - P2s2_P1s2_12.0
+#  - P2s2_P1s2_34.0
+#  - P2s2_P1s2_1234.0
+#  - P2s2_P1s2_234.0
+#  - P2s2_P1s2_23.0
+#  - P2s2_P1s2_13.0
+#  - P2s2_P1s2_134.0
+#  - P2s2_P1s2_124.0
+#  - P2s2_P1s3_123.0
+#  - P2s2_P1s3_12.0
+#  - P2s2_P1s3_34.0
+#  - P2s2_P1s3_1234.0
+#  - P2s2_P1s3_234.0
+#  - P2s2_P1s3_23.0
+#  - P2s2_P1s3_13.0
+#  - P2s2_P1s3_134.0
+#  - P2s2_P1s3_124.0
+#  - P2s2_P1s4_123.0
+#  - P2s2_P1s4_12.0
+#  - P2s2_P1s4_34.0
+#  - P2s2_P1s4_1234.0
+#  - P2s2_P1s4_234.0
+#  - P2s2_P1s4_23.0
+#  - P2s2_P1s4_13.0
+#  - P2s2_P1s4_134.0
+#  - P2s2_P1s4_124.0
+#  - P2s3_P1s3_123.0
+#  - P2s3_P1s3_12.0
+#  - P2s3_P1s3_34.0
+#  - P2s3_P1s3_1234.0
+#  - P2s3_P1s3_234.0
+#  - P2s3_P1s3_23.0
+#  - P2s3_P1s3_13.0
+#  - P2s3_P1s3_134.0
+#  - P2s3_P1s3_124.0
+#  - P2s3_P1s4_123.0
+#  - P2s3_P1s4_12.0
+#  - P2s3_P1s4_34.0
+#  - P2s3_P1s4_1234.0
+#  - P2s3_P1s4_234.0
+#  - P2s3_P1s4_23.0
+#  - P2s3_P1s4_13.0
+#  - P2s3_P1s4_134.0
+#  - P2s3_P1s4_124.0
+#  - P2s4_P1s4_123.0
+#  - P2s4_P1s4_12.0
+#  - P2s4_P1s4_34.0
+#  - P2s4_P1s4_1234.0
+#  - P2s4_P1s4_234.0
+#  - P2s4_P1s4_23.0
+#  - P2s4_P1s4_13.0
+#  - P2s4_P1s4_134.0
+#  - P2s4_P1s4_124.0
+#  - P2s1_P2s2_123.0
+#  - P2s1_P2s2_12.0
+#  - P2s1_P2s2_34.0
+#  - P2s1_P2s2_1234.0
+#  - P2s1_P2s2_234.0
+#  - P2s1_P2s2_23.0
+#  - P2s1_P2s2_13.0
+#  - P2s1_P2s2_134.0
+#  - P2s1_P2s2_124.0
+#  - P2s1_P2s3_123.0
+#  - P2s1_P2s3_12.0
+#  - P2s1_P2s3_34.0
+#  - P2s1_P2s3_1234.0
+#  - P2s1_P2s3_234.0
+#  - P2s1_P2s3_23.0
+#  - P2s1_P2s3_13.0
+#  - P2s1_P2s3_134.0
+#  - P2s1_P2s3_124.0
+#  - P2s1_P2s4_123.0
+#  - P2s1_P2s4_12.0
+#  - P2s1_P2s4_34.0
+#  - P2s1_P2s4_1234.0
+#  - P2s1_P2s4_234.0
+#  - P2s1_P2s4_23.0
+#  - P2s1_P2s4_13.0
+#  - P2s1_P2s4_134.0
+#  - P2s1_P2s4_124.0
+#  - P2s2_P2s1_123.0
+#  - P2s2_P2s1_12.0
+#  - P2s2_P2s1_34.0
+#  - P2s2_P2s1_1234.0
+#  - P2s2_P2s1_234.0
+#  - P2s2_P2s1_23.0
+#  - P2s2_P2s1_13.0
+#  - P2s2_P2s1_134.0
+#  - P2s2_P2s1_124.0
+#  - P2s2_P2s3_123.0
+#  - P2s2_P2s3_12.0
+#  - P2s2_P2s3_34.0
+#  - P2s2_P2s3_1234.0
+#  - P2s2_P2s3_234.0
+#  - P2s2_P2s3_23.0
+#  - P2s2_P2s3_13.0
+#  - P2s2_P2s3_134.0
+#  - P2s2_P2s3_124.0
+#  - P2s2_P2s4_123.0
+#  - P2s2_P2s4_12.0
+#  - P2s2_P2s4_34.0
+#  - P2s2_P2s4_1234.0
+#  - P2s2_P2s4_234.0
+#  - P2s2_P2s4_23.0
+#  - P2s2_P2s4_13.0
+#  - P2s2_P2s4_134.0
+#  - P2s2_P2s4_124.0
+#  - P2s3_P2s1_123.0
+#  - P2s3_P2s1_12.0
+#  - P2s3_P2s1_34.0
+#  - P2s3_P2s1_1234.0
+#  - P2s3_P2s1_234.0
+#  - P2s3_P2s1_23.0
+#  - P2s3_P2s1_13.0
+#  - P2s3_P2s1_134.0
+#  - P2s3_P2s1_124.0
+#  - P2s3_P2s2_123.0
+#  - P2s3_P2s2_12.0
+#  - P2s3_P2s2_34.0
+#  - P2s3_P2s2_1234.0
+#  - P2s3_P2s2_234.0
+#  - P2s3_P2s2_23.0
+#  - P2s3_P2s2_13.0
+#  - P2s3_P2s2_134.0
+#  - P2s3_P2s2_124.0
+#  - P2s3_P2s4_123.0
+#  - P2s3_P2s4_12.0
+#  - P2s3_P2s4_34.0
+#  - P2s3_P2s4_1234.0
+#  - P2s3_P2s4_234.0
+#  - P2s3_P2s4_23.0
+#  - P2s3_P2s4_13.0
+#  - P2s3_P2s4_134.0
+#  - P2s3_P2s4_124.0
+#  - P2s4_P2s1_123.0
+#  - P2s4_P2s1_12.0
+#  - P2s4_P2s1_34.0
+#  - P2s4_P2s1_1234.0
+#  - P2s4_P2s1_234.0
+#  - P2s4_P2s1_23.0
+#  - P2s4_P2s1_13.0
+#  - P2s4_P2s1_134.0
+#  - P2s4_P2s1_124.0
+#  - P2s4_P2s2_123.0
+#  - P2s4_P2s2_12.0
+#  - P2s4_P2s2_34.0
+#  - P2s4_P2s2_1234.0
+#  - P2s4_P2s2_234.0
+#  - P2s4_P2s2_23.0
+#  - P2s4_P2s2_13.0
+#  - P2s4_P2s2_134.0
+#  - P2s4_P2s2_124.0
+#  - P2s4_P2s3_123.0
+#  - P2s4_P2s3_12.0
+#  - P2s4_P2s3_34.0
+#  - P2s4_P2s3_1234.0
+#  - P2s4_P2s3_234.0
+#  - P2s4_P2s3_23.0
+#  - P2s4_P2s3_13.0
+#  - P2s4_P2s3_134.0
+#  - P2s4_P2s3_124.0
+#  - P2s1_P3s1_123.0
+#  - P2s1_P3s1_12.0
+#  - P2s1_P3s1_34.0
+#  - P2s1_P3s1_1234.0
+#  - P2s1_P3s1_234.0
+#  - P2s1_P3s1_23.0
+#  - P2s1_P3s1_13.0
+#  - P2s1_P3s1_134.0
+#  - P2s1_P3s1_124.0
+#  - P2s1_P3s2_123.0
+#  - P2s1_P3s2_12.0
+#  - P2s1_P3s2_34.0
+#  - P2s1_P3s2_1234.0
+#  - P2s1_P3s2_234.0
+#  - P2s1_P3s2_23.0
+#  - P2s1_P3s2_13.0
+#  - P2s1_P3s2_134.0
+#  - P2s1_P3s2_124.0
+#  - P2s1_P3s3_123.0
+#  - P2s1_P3s3_12.0
+#  - P2s1_P3s3_34.0
+#  - P2s1_P3s3_1234.0
+#  - P2s1_P3s3_234.0
+#  - P2s1_P3s3_23.0
+#  - P2s1_P3s3_13.0
+#  - P2s1_P3s3_134.0
+#  - P2s1_P3s3_124.0
+#  - P2s1_P3s4_123.0
+#  - P2s1_P3s4_12.0
+#  - P2s1_P3s4_34.0
+#  - P2s1_P3s4_1234.0
+#  - P2s1_P3s4_234.0
+#  - P2s1_P3s4_23.0
+#  - P2s1_P3s4_13.0
+#  - P2s1_P3s4_134.0
+#  - P2s1_P3s4_124.0
+#  - P2s2_P3s1_123.0
+#  - P2s2_P3s1_12.0
+#  - P2s2_P3s1_34.0
+#  - P2s2_P3s1_1234.0
+#  - P2s2_P3s1_234.0
+#  - P2s2_P3s1_23.0
+#  - P2s2_P3s1_13.0
+#  - P2s2_P3s1_134.0
+#  - P2s2_P3s1_124.0
+#  - P2s2_P3s2_123.0
+#  - P2s2_P3s2_12.0
+#  - P2s2_P3s2_34.0
+#  - P2s2_P3s2_1234.0
+#  - P2s2_P3s2_234.0
+#  - P2s2_P3s2_23.0
+#  - P2s2_P3s2_13.0
+#  - P2s2_P3s2_134.0
+#  - P2s2_P3s2_124.0
+#  - P2s2_P3s3_123.0
+#  - P2s2_P3s3_12.0
+#  - P2s2_P3s3_34.0
+#  - P2s2_P3s3_1234.0
+#  - P2s2_P3s3_234.0
+#  - P2s2_P3s3_23.0
+#  - P2s2_P3s3_13.0
+#  - P2s2_P3s3_134.0
+#  - P2s2_P3s3_124.0
+#  - P2s2_P3s4_123.0
+#  - P2s2_P3s4_12.0
+#  - P2s2_P3s4_34.0
+#  - P2s2_P3s4_1234.0
+#  - P2s2_P3s4_234.0
+#  - P2s2_P3s4_23.0
+#  - P2s2_P3s4_13.0
+#  - P2s2_P3s4_134.0
+#  - P2s2_P3s4_124.0
+#  - P2s3_P3s1_123.0
+#  - P2s3_P3s1_12.0
+#  - P2s3_P3s1_34.0
+#  - P2s3_P3s1_1234.0
+#  - P2s3_P3s1_234.0
+#  - P2s3_P3s1_23.0
+#  - P2s3_P3s1_13.0
+#  - P2s3_P3s1_134.0
+#  - P2s3_P3s1_124.0
+#  - P2s3_P3s2_123.0
+#  - P2s3_P3s2_12.0
+#  - P2s3_P3s2_34.0
+#  - P2s3_P3s2_1234.0
+#  - P2s3_P3s2_234.0
+#  - P2s3_P3s2_23.0
+#  - P2s3_P3s2_13.0
+#  - P2s3_P3s2_134.0
+#  - P2s3_P3s2_124.0
+#  - P2s3_P3s3_123.0
+#  - P2s3_P3s3_12.0
+#  - P2s3_P3s3_34.0
+#  - P2s3_P3s3_1234.0
+#  - P2s3_P3s3_234.0
+#  - P2s3_P3s3_23.0
+#  - P2s3_P3s3_13.0
+#  - P2s3_P3s3_134.0
+#  - P2s3_P3s3_124.0
+#  - P2s3_P3s4_123.0
+#  - P2s3_P3s4_12.0
+#  - P2s3_P3s4_34.0
+#  - P2s3_P3s4_1234.0
+#  - P2s3_P3s4_234.0
+#  - P2s3_P3s4_23.0
+#  - P2s3_P3s4_13.0
+#  - P2s3_P3s4_134.0
+#  - P2s3_P3s4_124.0
+#  - P2s4_P3s1_123.0
+#  - P2s4_P3s1_12.0
+#  - P2s4_P3s1_34.0
+#  - P2s4_P3s1_1234.0
+#  - P2s4_P3s1_234.0
+#  - P2s4_P3s1_23.0
+#  - P2s4_P3s1_13.0
+#  - P2s4_P3s1_134.0
+#  - P2s4_P3s1_124.0
+#  - P2s4_P3s2_123.0
+#  - P2s4_P3s2_12.0
+#  - P2s4_P3s2_34.0
+#  - P2s4_P3s2_1234.0
+#  - P2s4_P3s2_234.0
+#  - P2s4_P3s2_23.0
+#  - P2s4_P3s2_13.0
+#  - P2s4_P3s2_134.0
+#  - P2s4_P3s2_124.0
+#  - P2s4_P3s3_123.0
+#  - P2s4_P3s3_12.0
+#  - P2s4_P3s3_34.0
+#  - P2s4_P3s3_1234.0
+#  - P2s4_P3s3_234.0
+#  - P2s4_P3s3_23.0
+#  - P2s4_P3s3_13.0
+#  - P2s4_P3s3_134.0
+#  - P2s4_P3s3_124.0
+#  - P2s4_P3s4_123.0
+#  - P2s4_P3s4_12.0
+#  - P2s4_P3s4_34.0
+#  - P2s4_P3s4_1234.0
+#  - P2s4_P3s4_234.0
+#  - P2s4_P3s4_23.0
+#  - P2s4_P3s4_13.0
+#  - P2s4_P3s4_134.0
+#  - P2s4_P3s4_124.0
+#  - P2s1_P4s1_123.0
+#  - P2s1_P4s1_12.0
+#  - P2s1_P4s1_34.0
+#  - P2s1_P4s1_1234.0
+#  - P2s1_P4s1_234.0
+#  - P2s1_P4s1_23.0
+#  - P2s1_P4s1_13.0
+#  - P2s1_P4s1_134.0
+#  - P2s1_P4s1_124.0
+#  - P2s1_P4s2_123.0
+#  - P2s1_P4s2_12.0
+#  - P2s1_P4s2_34.0
+#  - P2s1_P4s2_1234.0
+#  - P2s1_P4s2_234.0
+#  - P2s1_P4s2_23.0
+#  - P2s1_P4s2_13.0
+#  - P2s1_P4s2_134.0
+#  - P2s1_P4s2_124.0
+#  - P2s1_P4s3_123.0
+#  - P2s1_P4s3_12.0
+#  - P2s1_P4s3_34.0
+#  - P2s1_P4s3_1234.0
+#  - P2s1_P4s3_234.0
+#  - P2s1_P4s3_23.0
+#  - P2s1_P4s3_13.0
+#  - P2s1_P4s3_134.0
+#  - P2s1_P4s3_124.0
+#  - P2s1_P4s4_123.0
+#  - P2s1_P4s4_12.0
+#  - P2s1_P4s4_34.0
+#  - P2s1_P4s4_1234.0
+#  - P2s1_P4s4_234.0
+#  - P2s1_P4s4_23.0
+#  - P2s1_P4s4_13.0
+#  - P2s1_P4s4_134.0
+#  - P2s1_P4s4_124.0
+#  - P2s2_P4s1_123.0
+#  - P2s2_P4s1_12.0
+#  - P2s2_P4s1_34.0
+#  - P2s2_P4s1_1234.0
+#  - P2s2_P4s1_234.0
+#  - P2s2_P4s1_23.0
+#  - P2s2_P4s1_13.0
+#  - P2s2_P4s1_134.0
+#  - P2s2_P4s1_124.0
+#  - P2s2_P4s2_123.0
+#  - P2s2_P4s2_12.0
+#  - P2s2_P4s2_34.0
+#  - P2s2_P4s2_1234.0
+#  - P2s2_P4s2_234.0
+#  - P2s2_P4s2_23.0
+#  - P2s2_P4s2_13.0
+#  - P2s2_P4s2_134.0
+#  - P2s2_P4s2_124.0
+#  - P2s2_P4s3_123.0
+#  - P2s2_P4s3_12.0
+#  - P2s2_P4s3_34.0
+#  - P2s2_P4s3_1234.0
+#  - P2s2_P4s3_234.0
+#  - P2s2_P4s3_23.0
+#  - P2s2_P4s3_13.0
+#  - P2s2_P4s3_134.0
+#  - P2s2_P4s3_124.0
+#  - P2s2_P4s4_123.0
+#  - P2s2_P4s4_12.0
+#  - P2s2_P4s4_34.0
+#  - P2s2_P4s4_1234.0
+#  - P2s2_P4s4_234.0
+#  - P2s2_P4s4_23.0
+#  - P2s2_P4s4_13.0
+#  - P2s2_P4s4_134.0
+#  - P2s2_P4s4_124.0
+#  - P2s3_P4s1_123.0
+#  - P2s3_P4s1_12.0
+#  - P2s3_P4s1_34.0
+#  - P2s3_P4s1_1234.0
+#  - P2s3_P4s1_234.0
+#  - P2s3_P4s1_23.0
+#  - P2s3_P4s1_13.0
+#  - P2s3_P4s1_134.0
+#  - P2s3_P4s1_124.0
+#  - P2s3_P4s2_123.0
+#  - P2s3_P4s2_12.0
+#  - P2s3_P4s2_34.0
+#  - P2s3_P4s2_1234.0
+#  - P2s3_P4s2_234.0
+#  - P2s3_P4s2_23.0
+#  - P2s3_P4s2_13.0
+#  - P2s3_P4s2_134.0
+#  - P2s3_P4s2_124.0
+#  - P2s3_P4s3_123.0
+#  - P2s3_P4s3_12.0
+#  - P2s3_P4s3_34.0
+#  - P2s3_P4s3_1234.0
+#  - P2s3_P4s3_234.0
+#  - P2s3_P4s3_23.0
+#  - P2s3_P4s3_13.0
+#  - P2s3_P4s3_134.0
+#  - P2s3_P4s3_124.0
+#  - P2s3_P4s4_123.0
+#  - P2s3_P4s4_12.0
+#  - P2s3_P4s4_34.0
+#  - P2s3_P4s4_1234.0
+#  - P2s3_P4s4_234.0
+#  - P2s3_P4s4_23.0
+#  - P2s3_P4s4_13.0
+#  - P2s3_P4s4_134.0
+#  - P2s3_P4s4_124.0
+#  - P2s4_P4s1_123.0
+#  - P2s4_P4s1_12.0
+#  - P2s4_P4s1_34.0
+#  - P2s4_P4s1_1234.0
+#  - P2s4_P4s1_234.0
+#  - P2s4_P4s1_23.0
+#  - P2s4_P4s1_13.0
+#  - P2s4_P4s1_134.0
+#  - P2s4_P4s1_124.0
+#  - P2s4_P4s2_123.0
+#  - P2s4_P4s2_12.0
+#  - P2s4_P4s2_34.0
+#  - P2s4_P4s2_1234.0
+#  - P2s4_P4s2_234.0
+#  - P2s4_P4s2_23.0
+#  - P2s4_P4s2_13.0
+#  - P2s4_P4s2_134.0
+#  - P2s4_P4s2_124.0
+#  - P2s4_P4s3_123.0
+#  - P2s4_P4s3_12.0
+#  - P2s4_P4s3_34.0
+#  - P2s4_P4s3_1234.0
+#  - P2s4_P4s3_234.0
+#  - P2s4_P4s3_23.0
+#  - P2s4_P4s3_13.0
+#  - P2s4_P4s3_134.0
+#  - P2s4_P4s3_124.0
+#  - P2s4_P4s4_123.0
+#  - P2s4_P4s4_12.0
+#  - P2s4_P4s4_34.0
+#  - P2s4_P4s4_1234.0
+#  - P2s4_P4s4_234.0
+#  - P2s4_P4s4_23.0
+#  - P2s4_P4s4_13.0
+#  - P2s4_P4s4_134.0
+#  - P2s4_P4s4_124.0
+#  - P3s1_P1s1_123.0
+#  - P3s1_P1s1_12.0
+#  - P3s1_P1s1_34.0
+#  - P3s1_P1s1_1234.0
+#  - P3s1_P1s1_234.0
+#  - P3s1_P1s1_23.0
+#  - P3s1_P1s1_13.0
+#  - P3s1_P1s1_134.0
+#  - P3s1_P1s1_124.0
+#  - P3s1_P1s2_123.0
+#  - P3s1_P1s2_12.0
+#  - P3s1_P1s2_34.0
+#  - P3s1_P1s2_1234.0
+#  - P3s1_P1s2_234.0
+#  - P3s1_P1s2_23.0
+#  - P3s1_P1s2_13.0
+#  - P3s1_P1s2_134.0
+#  - P3s1_P1s2_124.0
+#  - P3s1_P1s3_123.0
+#  - P3s1_P1s3_12.0
+#  - P3s1_P1s3_34.0
+#  - P3s1_P1s3_1234.0
+#  - P3s1_P1s3_234.0
+#  - P3s1_P1s3_23.0
+#  - P3s1_P1s3_13.0
+#  - P3s1_P1s3_134.0
+#  - P3s1_P1s3_124.0
+#  - P3s1_P1s4_123.0
+#  - P3s1_P1s4_12.0
+#  - P3s1_P1s4_34.0
+#  - P3s1_P1s4_1234.0
+#  - P3s1_P1s4_234.0
+#  - P3s1_P1s4_23.0
+#  - P3s1_P1s4_13.0
+#  - P3s1_P1s4_134.0
+#  - P3s1_P1s4_124.0
+#  - P3s2_P1s2_123.0
+#  - P3s2_P1s2_12.0
+#  - P3s2_P1s2_34.0
+#  - P3s2_P1s2_1234.0
+#  - P3s2_P1s2_234.0
+#  - P3s2_P1s2_23.0
+#  - P3s2_P1s2_13.0
+#  - P3s2_P1s2_134.0
+#  - P3s2_P1s2_124.0
+#  - P3s2_P1s3_123.0
+#  - P3s2_P1s3_12.0
+#  - P3s2_P1s3_34.0
+#  - P3s2_P1s3_1234.0
+#  - P3s2_P1s3_234.0
+#  - P3s2_P1s3_23.0
+#  - P3s2_P1s3_13.0
+#  - P3s2_P1s3_134.0
+#  - P3s2_P1s3_124.0
+#  - P3s2_P1s4_123.0
+#  - P3s2_P1s4_12.0
+#  - P3s2_P1s4_34.0
+#  - P3s2_P1s4_1234.0
+#  - P3s2_P1s4_234.0
+#  - P3s2_P1s4_23.0
+#  - P3s2_P1s4_13.0
+#  - P3s2_P1s4_134.0
+#  - P3s2_P1s4_124.0
+#  - P3s3_P1s3_123.0
+#  - P3s3_P1s3_12.0
+#  - P3s3_P1s3_34.0
+#  - P3s3_P1s3_1234.0
+#  - P3s3_P1s3_234.0
+#  - P3s3_P1s3_23.0
+#  - P3s3_P1s3_13.0
+#  - P3s3_P1s3_134.0
+#  - P3s3_P1s3_124.0
+#  - P3s3_P1s4_123.0
+#  - P3s3_P1s4_12.0
+#  - P3s3_P1s4_34.0
+#  - P3s3_P1s4_1234.0
+#  - P3s3_P1s4_234.0
+#  - P3s3_P1s4_23.0
+#  - P3s3_P1s4_13.0
+#  - P3s3_P1s4_134.0
+#  - P3s3_P1s4_124.0
+#  - P3s4_P1s4_123.0
+#  - P3s4_P1s4_12.0
+#  - P3s4_P1s4_34.0
+#  - P3s4_P1s4_1234.0
+#  - P3s4_P1s4_234.0
+#  - P3s4_P1s4_23.0
+#  - P3s4_P1s4_13.0
+#  - P3s4_P1s4_134.0
+#  - P3s4_P1s4_124.0
+#  - P3s1_P2s1_123.0
+#  - P3s1_P2s1_12.0
+#  - P3s1_P2s1_34.0
+#  - P3s1_P2s1_1234.0
+#  - P3s1_P2s1_234.0
+#  - P3s1_P2s1_23.0
+#  - P3s1_P2s1_13.0
+#  - P3s1_P2s1_134.0
+#  - P3s1_P2s1_124.0
+#  - P3s1_P2s2_123.0
+#  - P3s1_P2s2_12.0
+#  - P3s1_P2s2_34.0
+#  - P3s1_P2s2_1234.0
+#  - P3s1_P2s2_234.0
+#  - P3s1_P2s2_23.0
+#  - P3s1_P2s2_13.0
+#  - P3s1_P2s2_134.0
+#  - P3s1_P2s2_124.0
+#  - P3s1_P2s3_123.0
+#  - P3s1_P2s3_12.0
+#  - P3s1_P2s3_34.0
+#  - P3s1_P2s3_1234.0
+#  - P3s1_P2s3_234.0
+#  - P3s1_P2s3_23.0
+#  - P3s1_P2s3_13.0
+#  - P3s1_P2s3_134.0
+#  - P3s1_P2s3_124.0
+#  - P3s1_P2s4_123.0
+#  - P3s1_P2s4_12.0
+#  - P3s1_P2s4_34.0
+#  - P3s1_P2s4_1234.0
+#  - P3s1_P2s4_234.0
+#  - P3s1_P2s4_23.0
+#  - P3s1_P2s4_13.0
+#  - P3s1_P2s4_134.0
+#  - P3s1_P2s4_124.0
+#  - P3s2_P2s2_123.0
+#  - P3s2_P2s2_12.0
+#  - P3s2_P2s2_34.0
+#  - P3s2_P2s2_1234.0
+#  - P3s2_P2s2_234.0
+#  - P3s2_P2s2_23.0
+#  - P3s2_P2s2_13.0
+#  - P3s2_P2s2_134.0
+#  - P3s2_P2s2_124.0
+#  - P3s2_P2s3_123.0
+#  - P3s2_P2s3_12.0
+#  - P3s2_P2s3_34.0
+#  - P3s2_P2s3_1234.0
+#  - P3s2_P2s3_234.0
+#  - P3s2_P2s3_23.0
+#  - P3s2_P2s3_13.0
+#  - P3s2_P2s3_134.0
+#  - P3s2_P2s3_124.0
+#  - P3s2_P2s4_123.0
+#  - P3s2_P2s4_12.0
+#  - P3s2_P2s4_34.0
+#  - P3s2_P2s4_1234.0
+#  - P3s2_P2s4_234.0
+#  - P3s2_P2s4_23.0
+#  - P3s2_P2s4_13.0
+#  - P3s2_P2s4_134.0
+#  - P3s2_P2s4_124.0
+#  - P3s3_P2s3_123.0
+#  - P3s3_P2s3_12.0
+#  - P3s3_P2s3_34.0
+#  - P3s3_P2s3_1234.0
+#  - P3s3_P2s3_234.0
+#  - P3s3_P2s3_23.0
+#  - P3s3_P2s3_13.0
+#  - P3s3_P2s3_134.0
+#  - P3s3_P2s3_124.0
+#  - P3s3_P2s4_123.0
+#  - P3s3_P2s4_12.0
+#  - P3s3_P2s4_34.0
+#  - P3s3_P2s4_1234.0
+#  - P3s3_P2s4_234.0
+#  - P3s3_P2s4_23.0
+#  - P3s3_P2s4_13.0
+#  - P3s3_P2s4_134.0
+#  - P3s3_P2s4_124.0
+#  - P3s4_P2s4_123.0
+#  - P3s4_P2s4_12.0
+#  - P3s4_P2s4_34.0
+#  - P3s4_P2s4_1234.0
+#  - P3s4_P2s4_234.0
+#  - P3s4_P2s4_23.0
+#  - P3s4_P2s4_13.0
+#  - P3s4_P2s4_134.0
+#  - P3s4_P2s4_124.0
+#  - P3s1_P3s2_123.0
+#  - P3s1_P3s2_12.0
+#  - P3s1_P3s2_34.0
+#  - P3s1_P3s2_1234.0
+#  - P3s1_P3s2_234.0
+#  - P3s1_P3s2_23.0
+#  - P3s1_P3s2_13.0
+#  - P3s1_P3s2_134.0
+#  - P3s1_P3s2_124.0
+#  - P3s1_P3s3_123.0
+#  - P3s1_P3s3_12.0
+#  - P3s1_P3s3_34.0
+#  - P3s1_P3s3_1234.0
+#  - P3s1_P3s3_234.0
+#  - P3s1_P3s3_23.0
+#  - P3s1_P3s3_13.0
+#  - P3s1_P3s3_134.0
+#  - P3s1_P3s3_124.0
+#  - P3s1_P3s4_123.0
+#  - P3s1_P3s4_12.0
+#  - P3s1_P3s4_34.0
+#  - P3s1_P3s4_1234.0
+#  - P3s1_P3s4_234.0
+#  - P3s1_P3s4_23.0
+#  - P3s1_P3s4_13.0
+#  - P3s1_P3s4_134.0
+#  - P3s1_P3s4_124.0
+#  - P3s2_P3s1_123.0
+#  - P3s2_P3s1_12.0
+#  - P3s2_P3s1_34.0
+#  - P3s2_P3s1_1234.0
+#  - P3s2_P3s1_234.0
+#  - P3s2_P3s1_23.0
+#  - P3s2_P3s1_13.0
+#  - P3s2_P3s1_134.0
+#  - P3s2_P3s1_124.0
+#  - P3s2_P3s3_123.0
+#  - P3s2_P3s3_12.0
+#  - P3s2_P3s3_34.0
+#  - P3s2_P3s3_1234.0
+#  - P3s2_P3s3_234.0
+#  - P3s2_P3s3_23.0
+#  - P3s2_P3s3_13.0
+#  - P3s2_P3s3_134.0
+#  - P3s2_P3s3_124.0
+#  - P3s2_P3s4_123.0
+#  - P3s2_P3s4_12.0
+#  - P3s2_P3s4_34.0
+#  - P3s2_P3s4_1234.0
+#  - P3s2_P3s4_234.0
+#  - P3s2_P3s4_23.0
+#  - P3s2_P3s4_13.0
+#  - P3s2_P3s4_134.0
+#  - P3s2_P3s4_124.0
+#  - P3s3_P3s1_123.0
+#  - P3s3_P3s1_12.0
+#  - P3s3_P3s1_34.0
+#  - P3s3_P3s1_1234.0
+#  - P3s3_P3s1_234.0
+#  - P3s3_P3s1_23.0
+#  - P3s3_P3s1_13.0
+#  - P3s3_P3s1_134.0
+#  - P3s3_P3s1_124.0
+#  - P3s3_P3s2_123.0
+#  - P3s3_P3s2_12.0
+#  - P3s3_P3s2_34.0
+#  - P3s3_P3s2_1234.0
+#  - P3s3_P3s2_234.0
+#  - P3s3_P3s2_23.0
+#  - P3s3_P3s2_13.0
+#  - P3s3_P3s2_134.0
+#  - P3s3_P3s2_124.0
+#  - P3s3_P3s4_123.0
+#  - P3s3_P3s4_12.0
+#  - P3s3_P3s4_34.0
+#  - P3s3_P3s4_1234.0
+#  - P3s3_P3s4_234.0
+#  - P3s3_P3s4_23.0
+#  - P3s3_P3s4_13.0
+#  - P3s3_P3s4_134.0
+#  - P3s3_P3s4_124.0
+#  - P3s4_P3s1_123.0
+#  - P3s4_P3s1_12.0
+#  - P3s4_P3s1_34.0
+#  - P3s4_P3s1_1234.0
+#  - P3s4_P3s1_234.0
+#  - P3s4_P3s1_23.0
+#  - P3s4_P3s1_13.0
+#  - P3s4_P3s1_134.0
+#  - P3s4_P3s1_124.0
+#  - P3s4_P3s2_123.0
+#  - P3s4_P3s2_12.0
+#  - P3s4_P3s2_34.0
+#  - P3s4_P3s2_1234.0
+#  - P3s4_P3s2_234.0
+#  - P3s4_P3s2_23.0
+#  - P3s4_P3s2_13.0
+#  - P3s4_P3s2_134.0
+#  - P3s4_P3s2_124.0
+#  - P3s4_P3s3_123.0
+#  - P3s4_P3s3_12.0
+#  - P3s4_P3s3_34.0
+#  - P3s4_P3s3_1234.0
+#  - P3s4_P3s3_234.0
+#  - P3s4_P3s3_23.0
+#  - P3s4_P3s3_13.0
+#  - P3s4_P3s3_134.0
+#  - P3s4_P3s3_124.0
+#  - P3s1_P4s1_123.0
+#  - P3s1_P4s1_12.0
+#  - P3s1_P4s1_34.0
+#  - P3s1_P4s1_1234.0
+#  - P3s1_P4s1_234.0
+#  - P3s1_P4s1_23.0
+#  - P3s1_P4s1_13.0
+#  - P3s1_P4s1_134.0
+#  - P3s1_P4s1_124.0
+#  - P3s1_P4s2_123.0
+#  - P3s1_P4s2_12.0
+#  - P3s1_P4s2_34.0
+#  - P3s1_P4s2_1234.0
+#  - P3s1_P4s2_234.0
+#  - P3s1_P4s2_23.0
+#  - P3s1_P4s2_13.0
+#  - P3s1_P4s2_134.0
+#  - P3s1_P4s2_124.0
+#  - P3s1_P4s3_123.0
+#  - P3s1_P4s3_12.0
+#  - P3s1_P4s3_34.0
+#  - P3s1_P4s3_1234.0
+#  - P3s1_P4s3_234.0
+#  - P3s1_P4s3_23.0
+#  - P3s1_P4s3_13.0
+#  - P3s1_P4s3_134.0
+#  - P3s1_P4s3_124.0
+#  - P3s1_P4s4_123.0
+#  - P3s1_P4s4_12.0
+#  - P3s1_P4s4_34.0
+#  - P3s1_P4s4_1234.0
+#  - P3s1_P4s4_234.0
+#  - P3s1_P4s4_23.0
+#  - P3s1_P4s4_13.0
+#  - P3s1_P4s4_134.0
+#  - P3s1_P4s4_124.0
+#  - P3s2_P4s1_123.0
+#  - P3s2_P4s1_12.0
+#  - P3s2_P4s1_34.0
+#  - P3s2_P4s1_1234.0
+#  - P3s2_P4s1_234.0
+#  - P3s2_P4s1_23.0
+#  - P3s2_P4s1_13.0
+#  - P3s2_P4s1_134.0
+#  - P3s2_P4s1_124.0
+#  - P3s2_P4s2_123.0
+#  - P3s2_P4s2_12.0
+#  - P3s2_P4s2_34.0
+#  - P3s2_P4s2_1234.0
+#  - P3s2_P4s2_234.0
+#  - P3s2_P4s2_23.0
+#  - P3s2_P4s2_13.0
+#  - P3s2_P4s2_134.0
+#  - P3s2_P4s2_124.0
+#  - P3s2_P4s3_123.0
+#  - P3s2_P4s3_12.0
+#  - P3s2_P4s3_34.0
+#  - P3s2_P4s3_1234.0
+#  - P3s2_P4s3_234.0
+#  - P3s2_P4s3_23.0
+#  - P3s2_P4s3_13.0
+#  - P3s2_P4s3_134.0
+#  - P3s2_P4s3_124.0
+#  - P3s2_P4s4_123.0
+#  - P3s2_P4s4_12.0
+#  - P3s2_P4s4_34.0
+#  - P3s2_P4s4_1234.0
+#  - P3s2_P4s4_234.0
+#  - P3s2_P4s4_23.0
+#  - P3s2_P4s4_13.0
+#  - P3s2_P4s4_134.0
+#  - P3s2_P4s4_124.0
+#  - P3s3_P4s1_123.0
+#  - P3s3_P4s1_12.0
+#  - P3s3_P4s1_34.0
+#  - P3s3_P4s1_1234.0
+#  - P3s3_P4s1_234.0
+#  - P3s3_P4s1_23.0
+#  - P3s3_P4s1_13.0
+#  - P3s3_P4s1_134.0
+#  - P3s3_P4s1_124.0
+#  - P3s3_P4s2_123.0
+#  - P3s3_P4s2_12.0
+#  - P3s3_P4s2_34.0
+#  - P3s3_P4s2_1234.0
+#  - P3s3_P4s2_234.0
+#  - P3s3_P4s2_23.0
+#  - P3s3_P4s2_13.0
+#  - P3s3_P4s2_134.0
+#  - P3s3_P4s2_124.0
+#  - P3s3_P4s3_123.0
+#  - P3s3_P4s3_12.0
+#  - P3s3_P4s3_34.0
+#  - P3s3_P4s3_1234.0
+#  - P3s3_P4s3_234.0
+#  - P3s3_P4s3_23.0
+#  - P3s3_P4s3_13.0
+#  - P3s3_P4s3_134.0
+#  - P3s3_P4s3_124.0
+#  - P3s3_P4s4_123.0
+#  - P3s3_P4s4_12.0
+#  - P3s3_P4s4_34.0
+#  - P3s3_P4s4_1234.0
+#  - P3s3_P4s4_234.0
+#  - P3s3_P4s4_23.0
+#  - P3s3_P4s4_13.0
+#  - P3s3_P4s4_134.0
+#  - P3s3_P4s4_124.0
+#  - P3s4_P4s1_123.0
+#  - P3s4_P4s1_12.0
+#  - P3s4_P4s1_34.0
+#  - P3s4_P4s1_1234.0
+#  - P3s4_P4s1_234.0
+#  - P3s4_P4s1_23.0
+#  - P3s4_P4s1_13.0
+#  - P3s4_P4s1_134.0
+#  - P3s4_P4s1_124.0
+#  - P3s4_P4s2_123.0
+#  - P3s4_P4s2_12.0
+#  - P3s4_P4s2_34.0
+#  - P3s4_P4s2_1234.0
+#  - P3s4_P4s2_234.0
+#  - P3s4_P4s2_23.0
+#  - P3s4_P4s2_13.0
+#  - P3s4_P4s2_134.0
+#  - P3s4_P4s2_124.0
+#  - P3s4_P4s3_123.0
+#  - P3s4_P4s3_12.0
+#  - P3s4_P4s3_34.0
+#  - P3s4_P4s3_1234.0
+#  - P3s4_P4s3_234.0
+#  - P3s4_P4s3_23.0
+#  - P3s4_P4s3_13.0
+#  - P3s4_P4s3_134.0
+#  - P3s4_P4s3_124.0
+#  - P3s4_P4s4_123.0
+#  - P3s4_P4s4_12.0
+#  - P3s4_P4s4_34.0
+#  - P3s4_P4s4_1234.0
+#  - P3s4_P4s4_234.0
+#  - P3s4_P4s4_23.0
+#  - P3s4_P4s4_13.0
+#  - P3s4_P4s4_134.0
+#  - P3s4_P4s4_124.0
+#  - P4s1_P1s1_123.0
+#  - P4s1_P1s1_12.0
+#  - P4s1_P1s1_34.0
+#  - P4s1_P1s1_1234.0
+#  - P4s1_P1s1_234.0
+#  - P4s1_P1s1_23.0
+#  - P4s1_P1s1_13.0
+#  - P4s1_P1s1_134.0
+#  - P4s1_P1s1_124.0
+#  - P4s1_P1s2_123.0
+#  - P4s1_P1s2_12.0
+#  - P4s1_P1s2_34.0
+#  - P4s1_P1s2_1234.0
+#  - P4s1_P1s2_234.0
+#  - P4s1_P1s2_23.0
+#  - P4s1_P1s2_13.0
+#  - P4s1_P1s2_134.0
+#  - P4s1_P1s2_124.0
+#  - P4s1_P1s3_123.0
+#  - P4s1_P1s3_12.0
+#  - P4s1_P1s3_34.0
+#  - P4s1_P1s3_1234.0
+#  - P4s1_P1s3_234.0
+#  - P4s1_P1s3_23.0
+#  - P4s1_P1s3_13.0
+#  - P4s1_P1s3_134.0
+#  - P4s1_P1s3_124.0
+#  - P4s1_P1s4_123.0
+#  - P4s1_P1s4_12.0
+#  - P4s1_P1s4_34.0
+#  - P4s1_P1s4_1234.0
+#  - P4s1_P1s4_234.0
+#  - P4s1_P1s4_23.0
+#  - P4s1_P1s4_13.0
+#  - P4s1_P1s4_134.0
+#  - P4s1_P1s4_124.0
+#  - P4s2_P1s2_123.0
+#  - P4s2_P1s2_12.0
+#  - P4s2_P1s2_34.0
+#  - P4s2_P1s2_1234.0
+#  - P4s2_P1s2_234.0
+#  - P4s2_P1s2_23.0
+#  - P4s2_P1s2_13.0
+#  - P4s2_P1s2_134.0
+#  - P4s2_P1s2_124.0
+#  - P4s2_P1s3_123.0
+#  - P4s2_P1s3_12.0
+#  - P4s2_P1s3_34.0
+#  - P4s2_P1s3_1234.0
+#  - P4s2_P1s3_234.0
+#  - P4s2_P1s3_23.0
+#  - P4s2_P1s3_13.0
+#  - P4s2_P1s3_134.0
+#  - P4s2_P1s3_124.0
+#  - P4s2_P1s4_123.0
+#  - P4s2_P1s4_12.0
+#  - P4s2_P1s4_34.0
+#  - P4s2_P1s4_1234.0
+#  - P4s2_P1s4_234.0
+#  - P4s2_P1s4_23.0
+#  - P4s2_P1s4_13.0
+#  - P4s2_P1s4_134.0
+#  - P4s2_P1s4_124.0
+#  - P4s3_P1s3_123.0
+#  - P4s3_P1s3_12.0
+#  - P4s3_P1s3_34.0
+#  - P4s3_P1s3_1234.0
+#  - P4s3_P1s3_234.0
+#  - P4s3_P1s3_23.0
+#  - P4s3_P1s3_13.0
+#  - P4s3_P1s3_134.0
+#  - P4s3_P1s3_124.0
+#  - P4s3_P1s4_123.0
+#  - P4s3_P1s4_12.0
+#  - P4s3_P1s4_34.0
+#  - P4s3_P1s4_1234.0
+#  - P4s3_P1s4_234.0
+#  - P4s3_P1s4_23.0
+#  - P4s3_P1s4_13.0
+#  - P4s3_P1s4_134.0
+#  - P4s3_P1s4_124.0
+#  - P4s4_P1s4_123.0
+#  - P4s4_P1s4_12.0
+#  - P4s4_P1s4_34.0
+#  - P4s4_P1s4_1234.0
+#  - P4s4_P1s4_234.0
+#  - P4s4_P1s4_23.0
+#  - P4s4_P1s4_13.0
+#  - P4s4_P1s4_134.0
+#  - P4s4_P1s4_124.0
+#  - P4s1_P2s1_123.0
+#  - P4s1_P2s1_12.0
+#  - P4s1_P2s1_34.0
+#  - P4s1_P2s1_1234.0
+#  - P4s1_P2s1_234.0
+#  - P4s1_P2s1_23.0
+#  - P4s1_P2s1_13.0
+#  - P4s1_P2s1_134.0
+#  - P4s1_P2s1_124.0
+#  - P4s1_P2s2_123.0
+#  - P4s1_P2s2_12.0
+#  - P4s1_P2s2_34.0
+#  - P4s1_P2s2_1234.0
+#  - P4s1_P2s2_234.0
+#  - P4s1_P2s2_23.0
+#  - P4s1_P2s2_13.0
+#  - P4s1_P2s2_134.0
+#  - P4s1_P2s2_124.0
+#  - P4s1_P2s3_123.0
+#  - P4s1_P2s3_12.0
+#  - P4s1_P2s3_34.0
+#  - P4s1_P2s3_1234.0
+#  - P4s1_P2s3_234.0
+#  - P4s1_P2s3_23.0
+#  - P4s1_P2s3_13.0
+#  - P4s1_P2s3_134.0
+#  - P4s1_P2s3_124.0
+#  - P4s1_P2s4_123.0
+#  - P4s1_P2s4_12.0
+#  - P4s1_P2s4_34.0
+#  - P4s1_P2s4_1234.0
+#  - P4s1_P2s4_234.0
+#  - P4s1_P2s4_23.0
+#  - P4s1_P2s4_13.0
+#  - P4s1_P2s4_134.0
+#  - P4s1_P2s4_124.0
+#  - P4s2_P2s2_123.0
+#  - P4s2_P2s2_12.0
+#  - P4s2_P2s2_34.0
+#  - P4s2_P2s2_1234.0
+#  - P4s2_P2s2_234.0
+#  - P4s2_P2s2_23.0
+#  - P4s2_P2s2_13.0
+#  - P4s2_P2s2_134.0
+#  - P4s2_P2s2_124.0
+#  - P4s2_P2s3_123.0
+#  - P4s2_P2s3_12.0
+#  - P4s2_P2s3_34.0
+#  - P4s2_P2s3_1234.0
+#  - P4s2_P2s3_234.0
+#  - P4s2_P2s3_23.0
+#  - P4s2_P2s3_13.0
+#  - P4s2_P2s3_134.0
+#  - P4s2_P2s3_124.0
+#  - P4s2_P2s4_123.0
+#  - P4s2_P2s4_12.0
+#  - P4s2_P2s4_34.0
+#  - P4s2_P2s4_1234.0
+#  - P4s2_P2s4_234.0
+#  - P4s2_P2s4_23.0
+#  - P4s2_P2s4_13.0
+#  - P4s2_P2s4_134.0
+#  - P4s2_P2s4_124.0
+#  - P4s3_P2s3_123.0
+#  - P4s3_P2s3_12.0
+#  - P4s3_P2s3_34.0
+#  - P4s3_P2s3_1234.0
+#  - P4s3_P2s3_234.0
+#  - P4s3_P2s3_23.0
+#  - P4s3_P2s3_13.0
+#  - P4s3_P2s3_134.0
+#  - P4s3_P2s3_124.0
+#  - P4s3_P2s4_123.0
+#  - P4s3_P2s4_12.0
+#  - P4s3_P2s4_34.0
+#  - P4s3_P2s4_1234.0
+#  - P4s3_P2s4_234.0
+#  - P4s3_P2s4_23.0
+#  - P4s3_P2s4_13.0
+#  - P4s3_P2s4_134.0
+#  - P4s3_P2s4_124.0
+#  - P4s4_P2s4_123.0
+#  - P4s4_P2s4_12.0
+#  - P4s4_P2s4_34.0
+#  - P4s4_P2s4_1234.0
+#  - P4s4_P2s4_234.0
+#  - P4s4_P2s4_23.0
+#  - P4s4_P2s4_13.0
+#  - P4s4_P2s4_134.0
+#  - P4s4_P2s4_124.0
+#  - P4s1_P3s1_123.0
+#  - P4s1_P3s1_12.0
+#  - P4s1_P3s1_34.0
+#  - P4s1_P3s1_1234.0
+#  - P4s1_P3s1_234.0
+#  - P4s1_P3s1_23.0
+#  - P4s1_P3s1_13.0
+#  - P4s1_P3s1_134.0
+#  - P4s1_P3s1_124.0
+#  - P4s1_P3s2_123.0
+#  - P4s1_P3s2_12.0
+#  - P4s1_P3s2_34.0
+#  - P4s1_P3s2_1234.0
+#  - P4s1_P3s2_234.0
+#  - P4s1_P3s2_23.0
+#  - P4s1_P3s2_13.0
+#  - P4s1_P3s2_134.0
+#  - P4s1_P3s2_124.0
+#  - P4s1_P3s3_123.0
+#  - P4s1_P3s3_12.0
+#  - P4s1_P3s3_34.0
+#  - P4s1_P3s3_1234.0
+#  - P4s1_P3s3_234.0
+#  - P4s1_P3s3_23.0
+#  - P4s1_P3s3_13.0
+#  - P4s1_P3s3_134.0
+#  - P4s1_P3s3_124.0
+#  - P4s1_P3s4_123.0
+#  - P4s1_P3s4_12.0
+#  - P4s1_P3s4_34.0
+#  - P4s1_P3s4_1234.0
+#  - P4s1_P3s4_234.0
+#  - P4s1_P3s4_23.0
+#  - P4s1_P3s4_13.0
+#  - P4s1_P3s4_134.0
+#  - P4s1_P3s4_124.0
+#  - P4s2_P3s2_123.0
+#  - P4s2_P3s2_12.0
+#  - P4s2_P3s2_34.0
+#  - P4s2_P3s2_1234.0
+#  - P4s2_P3s2_234.0
+#  - P4s2_P3s2_23.0
+#  - P4s2_P3s2_13.0
+#  - P4s2_P3s2_134.0
+#  - P4s2_P3s2_124.0
+#  - P4s2_P3s3_123.0
+#  - P4s2_P3s3_12.0
+#  - P4s2_P3s3_34.0
+#  - P4s2_P3s3_1234.0
+#  - P4s2_P3s3_234.0
+#  - P4s2_P3s3_23.0
+#  - P4s2_P3s3_13.0
+#  - P4s2_P3s3_134.0
+#  - P4s2_P3s3_124.0
+#  - P4s2_P3s4_123.0
+#  - P4s2_P3s4_12.0
+#  - P4s2_P3s4_34.0
+#  - P4s2_P3s4_1234.0
+#  - P4s2_P3s4_234.0
+#  - P4s2_P3s4_23.0
+#  - P4s2_P3s4_13.0
+#  - P4s2_P3s4_134.0
+#  - P4s2_P3s4_124.0
+#  - P4s3_P3s3_123.0
+#  - P4s3_P3s3_12.0
+#  - P4s3_P3s3_34.0
+#  - P4s3_P3s3_1234.0
+#  - P4s3_P3s3_234.0
+#  - P4s3_P3s3_23.0
+#  - P4s3_P3s3_13.0
+#  - P4s3_P3s3_134.0
+#  - P4s3_P3s3_124.0
+#  - P4s3_P3s4_123.0
+#  - P4s3_P3s4_12.0
+#  - P4s3_P3s4_34.0
+#  - P4s3_P3s4_1234.0
+#  - P4s3_P3s4_234.0
+#  - P4s3_P3s4_23.0
+#  - P4s3_P3s4_13.0
+#  - P4s3_P3s4_134.0
+#  - P4s3_P3s4_124.0
+#  - P4s4_P3s4_123.0
+#  - P4s4_P3s4_12.0
+#  - P4s4_P3s4_34.0
+#  - P4s4_P3s4_1234.0
+#  - P4s4_P3s4_234.0
+#  - P4s4_P3s4_23.0
+#  - P4s4_P3s4_13.0
+#  - P4s4_P3s4_134.0
+#  - P4s4_P3s4_124.0
+#  - P4s1_P4s2_123.0
+#  - P4s1_P4s2_12.0
+#  - P4s1_P4s2_34.0
+#  - P4s1_P4s2_1234.0
+#  - P4s1_P4s2_234.0
+#  - P4s1_P4s2_23.0
+#  - P4s1_P4s2_13.0
+#  - P4s1_P4s2_134.0
+#  - P4s1_P4s2_124.0
+#  - P4s1_P4s3_123.0
+#  - P4s1_P4s3_12.0
+#  - P4s1_P4s3_34.0
+#  - P4s1_P4s3_1234.0
+#  - P4s1_P4s3_234.0
+#  - P4s1_P4s3_23.0
+#  - P4s1_P4s3_13.0
+#  - P4s1_P4s3_134.0
+#  - P4s1_P4s3_124.0
+#  - P4s1_P4s4_123.0
+#  - P4s1_P4s4_12.0
+#  - P4s1_P4s4_34.0
+#  - P4s1_P4s4_1234.0
+#  - P4s1_P4s4_234.0
+#  - P4s1_P4s4_23.0
+#  - P4s1_P4s4_13.0
+#  - P4s1_P4s4_134.0
+#  - P4s1_P4s4_124.0
+#  - P4s2_P4s1_123.0
+#  - P4s2_P4s1_12.0
+#  - P4s2_P4s1_34.0
+#  - P4s2_P4s1_1234.0
+#  - P4s2_P4s1_234.0
+#  - P4s2_P4s1_23.0
+#  - P4s2_P4s1_13.0
+#  - P4s2_P4s1_134.0
+#  - P4s2_P4s1_124.0
+#  - P4s2_P4s3_123.0
+#  - P4s2_P4s3_12.0
+#  - P4s2_P4s3_34.0
+#  - P4s2_P4s3_1234.0
+#  - P4s2_P4s3_234.0
+#  - P4s2_P4s3_23.0
+#  - P4s2_P4s3_13.0
+#  - P4s2_P4s3_134.0
+#  - P4s2_P4s3_124.0
+#  - P4s2_P4s4_123.0
+#  - P4s2_P4s4_12.0
+#  - P4s2_P4s4_34.0
+#  - P4s2_P4s4_1234.0
+#  - P4s2_P4s4_234.0
+#  - P4s2_P4s4_23.0
+#  - P4s2_P4s4_13.0
+#  - P4s2_P4s4_134.0
+#  - P4s2_P4s4_124.0
+#  - P4s3_P4s1_123.0
+#  - P4s3_P4s1_12.0
+#  - P4s3_P4s1_34.0
+#  - P4s3_P4s1_1234.0
+#  - P4s3_P4s1_234.0
+#  - P4s3_P4s1_23.0
+#  - P4s3_P4s1_13.0
+#  - P4s3_P4s1_134.0
+#  - P4s3_P4s1_124.0
+#  - P4s3_P4s2_123.0
+#  - P4s3_P4s2_12.0
+#  - P4s3_P4s2_34.0
+#  - P4s3_P4s2_1234.0
+#  - P4s3_P4s2_234.0
+#  - P4s3_P4s2_23.0
+#  - P4s3_P4s2_13.0
+#  - P4s3_P4s2_134.0
+#  - P4s3_P4s2_124.0
+#  - P4s3_P4s4_123.0
+#  - P4s3_P4s4_12.0
+#  - P4s3_P4s4_34.0
+#  - P4s3_P4s4_1234.0
+#  - P4s3_P4s4_234.0
+#  - P4s3_P4s4_23.0
+#  - P4s3_P4s4_13.0
+#  - P4s3_P4s4_134.0
+#  - P4s3_P4s4_124.0
+#  - P4s4_P4s1_123.0
+#  - P4s4_P4s1_12.0
+#  - P4s4_P4s1_34.0
+#  - P4s4_P4s1_1234.0
+#  - P4s4_P4s1_234.0
+#  - P4s4_P4s1_23.0
+#  - P4s4_P4s1_13.0
+#  - P4s4_P4s1_134.0
+#  - P4s4_P4s1_124.0
+#  - P4s4_P4s2_123.0
+#  - P4s4_P4s2_12.0
+#  - P4s4_P4s2_34.0
+#  - P4s4_P4s2_1234.0
+#  - P4s4_P4s2_234.0
+#  - P4s4_P4s2_23.0
+#  - P4s4_P4s2_13.0
+#  - P4s4_P4s2_134.0
+#  - P4s4_P4s2_124.0
+#  - P4s4_P4s3_123.0
+#  - P4s4_P4s3_12.0
+#  - P4s4_P4s3_34.0
+#  - P4s4_P4s3_1234.0
+#  - P4s4_P4s3_234.0
+#  - P4s4_P4s3_23.0
+#  - P4s4_P4s3_13.0
+#  - P4s4_P4s3_134.0
+#  - P4s4_P4s3_124.0
+
+
+
+
+
+
+
+
 
 
 
