@@ -52,12 +52,6 @@ station_code=$(printf "%02d" "$station")
 station_prefix=$(printf "mi0%d" "$station")
 station_prefix_lower="${station_prefix,,}"
 
-unpack_anyway=false
-config_key="unpack_anyway_station_${station}"
-config_setting=$(read_config_value "$config_key" | tr '[:upper:]' '[:lower:]')
-if [[ "$config_setting" == "true" ]]; then
-    unpack_anyway=true
-fi
 
 loop_mode=false
 newest_mode=false
@@ -123,6 +117,14 @@ PY
 }
 
 
+unpack_anyway=false
+config_key="unpack_anyway_station_${station}"
+config_setting=$(read_config_value "$config_key" | tr '[:upper:]' '[:lower:]')
+if [[ "$config_setting" == "true" ]]; then
+    unpack_anyway=true
+fi
+
+
 # --------------------------------------------------------------------------------------------
 # Prevent the script from running multiple instances -----------------------------------------
 # --------------------------------------------------------------------------------------------
@@ -186,7 +188,7 @@ mkdir -p \
     "$stage0_to_1_directory"
 
 dat_unpacked_csv="${metadata_directory}/dat_files_unpacked.csv"
-dat_unpacked_header="dat_name,execution_timestamp,execution_duration_s"
+dat_unpacked_header="dat_name,execution_timestamp,execution_duration_s,actually_unpacked"
 declare -A dat_unpacked_basenames=()
 
 # csv_path="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/database_status_${station}.csv"
@@ -195,7 +197,33 @@ csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_d
 ensure_dat_unpacked_csv() {
     if [[ ! -f "$dat_unpacked_csv" || ! -s "$dat_unpacked_csv" ]]; then
         printf '%s\n' "$dat_unpacked_header" > "$dat_unpacked_csv"
+        return
     fi
+    local current_header
+    current_header=$(head -n 1 "$dat_unpacked_csv")
+    if [[ "$current_header" != "$dat_unpacked_header" ]]; then
+        local tmp_file
+        tmp_file=$(mktemp)
+        printf '%s\n' "$dat_unpacked_header" > "$tmp_file"
+        if [[ "$current_header" == *"actually_unpacked"* ]]; then
+            tail -n +2 "$dat_unpacked_csv" >> "$tmp_file"
+        else
+            tail -n +2 "$dat_unpacked_csv" | while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                printf '%s,1\n' "$line"
+            done >> "$tmp_file"
+        fi
+        mv "$tmp_file" "$dat_unpacked_csv"
+    fi
+}
+
+record_dat_unpacked_entry() {
+    local dat_name="$1"
+    local exec_timestamp="$2"
+    local exec_duration="$3"
+    local actual_flag="${4:-1}"
+    ensure_dat_unpacked_csv
+    printf '%s,%s,%s,%s\n' "$dat_name" "$exec_timestamp" "$exec_duration" "$actual_flag" >> "$dat_unpacked_csv"
 }
 
 load_dat_unpacked_basenames() {
@@ -601,6 +629,9 @@ process_single_hld() {
                     echo "  -> Skipping $(basename "$candidate") (already recorded in dat_files_unpacked.csv)."
                     mv -f "$candidate" "$completed_uncompressed/$(basename "$candidate")"
                     echo "     Moved to COMPLETED to avoid repeated checks."
+                    local skip_timestamp
+                    skip_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+                    record_dat_unpacked_entry "$candidate_base" "$skip_timestamp" 0 0
                     continue
                 fi
             fi
@@ -801,12 +832,15 @@ process_single_hld() {
     fi
 
     if (( ${#new_dat_files[@]} > 0 )); then
-        ensure_dat_unpacked_csv
         local dat_name dat_base
         for dat_name in "${new_dat_files[@]}"; do
             dat_base=$(strip_suffix "$dat_name")
             [[ -z "$dat_base" ]] && dat_base="$dat_name"
-            printf '%s,%s,%s\n' "$dat_base" "$script_start_time" "$script_duration" >> "$dat_unpacked_csv"
+            local actual_flag=1
+            if [[ -n ${dat_unpacked_basenames["$dat_base"]+_} ]]; then
+                actual_flag=2
+            fi
+            record_dat_unpacked_entry "$dat_base" "$script_start_time" "$script_duration" "$actual_flag"
         done
     fi
 

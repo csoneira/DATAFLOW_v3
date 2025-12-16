@@ -651,8 +651,10 @@ base_directories = {
     "metadata_directory": metadata_directory,
 }
 
+
 # Create ALL directories if they don't already exist
-# Create ALL directories if they don't already exist
+save_plots = config["save_plots"]
+
 for directory in base_directories.values():
     # If save_plots is False, skip creating the figure_directory
     if directory == base_directories["figure_directory"] and not save_plots:
@@ -726,8 +728,10 @@ def process_file(source_path, dest_path):
 def get_file_path(directory, file_name):
     return os.path.join(directory, file_name)
 
+
 # Create ALL directories if they don't already exist
-# Create ALL directories if they don't already exist
+save_plots = config["save_plots"]
+
 for directory in base_directories.values():
     # If save_plots is False, skip creating the figure_directory
     if directory == base_directories["figure_directory"] and not save_plots:

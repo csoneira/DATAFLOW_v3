@@ -13,10 +13,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from collections import Counter
 from datetime import datetime, timezone
 import re
 from pathlib import Path
-from typing import Iterable, List, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, Sequence, Set, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 LOG_DIR = PROJECT_ROOT / "EXECUTION_LOGS" / "CRON_LOGS"
@@ -24,6 +25,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_DIR / "ERROR_SUMMARIES"
 OUTPUT_FILE = OUTPUT_DIR / "cron_tracebacks.log"
 STATE_FILE = OUTPUT_DIR / "error_finder_state.json"
+TRACEBACK_CATALOG_FILE = OUTPUT_DIR / "traceback_catalog.json"
 
 ENTRY_DIVIDER = "# --------------------"
 MARKER_PREFIX = "### REVISED BY ERROR_FINDER AT "
@@ -53,6 +55,26 @@ def load_known_hashes(state_path: Path) -> Set[str]:
 def save_known_hashes(state_path: Path, hashes: Set[str]) -> None:
     state_path.write_text(
         json.dumps({"known_hashes": sorted(hashes)}, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_traceback_catalog(catalog_path: Path) -> Dict[str, Dict[str, str]]:
+    if not catalog_path.exists():
+        return {}
+    try:
+        with catalog_path.open("r", encoding="utf-8") as fp:
+            data = json.load(fp)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def save_traceback_catalog(catalog_path: Path, catalog: Dict[str, Dict[str, str]]) -> None:
+    catalog_path.write_text(
+        json.dumps(catalog, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -115,12 +137,12 @@ def append_marker(log_path: Path, timestamp: str) -> None:
         fp.write(f"\n{MARKER_PREFIX}{timestamp} ###\n")
 
 
-def append_entries(entries: Iterable[Tuple[str, str, str]]) -> None:
+def append_entries(entries: Iterable[Tuple[str, str, str, str]]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     with OUTPUT_FILE.open("a", encoding="utf-8") as fp:
-        for timestamp, log_name, traceback_text in entries:
+        for timestamp, log_name, digest, traceback_text in entries:
             fp.write(f"{ENTRY_DIVIDER}\n")
-            fp.write(f"{timestamp} | {log_name}\n")
+            fp.write(f"{timestamp} | {log_name} | HASH {digest}\n")
             fp.write(f"{traceback_text}\n\n")
 
 
@@ -129,6 +151,21 @@ def append_no_error_entry(timestamp: str) -> None:
     with OUTPUT_FILE.open("a", encoding="utf-8") as fp:
         fp.write(f"{ENTRY_DIVIDER}\n")
         fp.write(f"{timestamp} | NO ERRORS FOUND\n\n")
+
+
+def append_pending_entry(timestamp: str, pending_counts: Counter) -> None:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    total_occurrences = sum(pending_counts.values())
+    unique = len(pending_counts)
+    with OUTPUT_FILE.open("a", encoding="utf-8") as fp:
+        fp.write(f"{ENTRY_DIVIDER}\n")
+        fp.write(
+            f"{timestamp} | NO NEW ERRORS, BUT STILL THESE ERRORS PENDING: "
+            f"{total_occurrences} occurrences across {unique} tracebacks\n"
+        )
+        for digest, count in pending_counts.most_common():
+            fp.write(f"  - {digest}: {count} occurrences (see {TRACEBACK_CATALOG_FILE.name})\n")
+        fp.write("\n")
 
 
 def process_log(log_path: Path, *, full_scan: bool = False) -> Tuple[List[str], bool]:
@@ -159,26 +196,65 @@ def main() -> None:
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     known_hashes = set() if args.full_scan else load_known_hashes(STATE_FILE)
-    entries_to_write: List[Tuple[str, str, str]] = []
+    catalog = load_traceback_catalog(TRACEBACK_CATALOG_FILE)
+    catalog_modified = False
+    entries_to_write: List[Tuple[str, str, str, str]] = []
+    pending_counts: Counter = Counter()
+    encountered_hashes: Set[str] = set()
+    state_modified = args.full_scan
 
     for log_path in sorted(LOG_DIR.glob("*.log")):
         tracebacks, has_new_content = process_log(log_path, full_scan=args.full_scan)
         for tb in tracebacks:
             digest = hashlib.sha1(tb.encode("utf-8")).hexdigest()
+            encountered_hashes.add(digest)
+            existing_entry = catalog.get(digest)
+            if existing_entry:
+                if existing_entry.get("traceback") != tb:
+                    existing_entry["traceback"] = tb
+                    catalog_modified = True
+            else:
+                catalog[digest] = {
+                    "traceback": tb,
+                    "first_seen": now,
+                    "source_log": log_path.name,
+                }
+                catalog_modified = True
             if digest in known_hashes:
+                pending_counts[digest] += 1
                 continue
             known_hashes.add(digest)
-            entries_to_write.append((now, log_path.name, tb))
+            state_modified = True
+            entries_to_write.append((now, log_path.name, digest, tb))
         if has_new_content and not args.full_scan:
             append_marker(log_path, now)
 
+    # Only treat hashes as resolved when performing a full scan. During the normal
+    # incremental runs we only inspect the portion of the log written after our
+    # previous marker, so the absence of a digest does not mean the error stopped
+    # occurring. Deleting hashes in that situation caused the same traceback to be
+    # reported repeatedly.
+    if args.full_scan:
+        resolved_hashes = {digest for digest in known_hashes if digest not in encountered_hashes}
+        if resolved_hashes:
+            known_hashes.difference_update(resolved_hashes)
+            state_modified = True
+            for digest in resolved_hashes:
+                if digest in catalog:
+                    del catalog[digest]
+                    catalog_modified = True
+
     if entries_to_write:
         append_entries(entries_to_write)
-        save_known_hashes(STATE_FILE, known_hashes)
     else:
-        append_no_error_entry(now)
-        if args.full_scan:
-            save_known_hashes(STATE_FILE, known_hashes)
+        if pending_counts:
+            append_pending_entry(now, pending_counts)
+        else:
+            append_no_error_entry(now)
+    if state_modified:
+        save_known_hashes(STATE_FILE, known_hashes)
+    if catalog_modified:
+        save_traceback_catalog(TRACEBACK_CATALOG_FILE, catalog)
 
 
 if __name__ == "__main__":

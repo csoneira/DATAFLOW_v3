@@ -1,3 +1,5 @@
+#%%
+
 #!/usr/bin/env python3
 """
 Generate calibration plots and per-configuration medians for STEP_1 TASK_2.
@@ -25,12 +27,12 @@ from qa_shared import load_metadata, print_columns
 # ---------------------------------------------------------------------------
 # User-tunable defaults (used when running from notebooks)
 # ---------------------------------------------------------------------------
-DEFAULT_STATION = 3
+DEFAULT_STATION = 1
 STEP = 1
 TASK = 2
-START_DATE = "2024-03-01 00:00:00"
-END_DATE = "2025-11-20 00:00:00"
-PDF_GENERATE_DEFAULT = False
+START_DATE = "2025-11-01 00:00:00"
+END_DATE = "2025-12-11 00:00:00"
+PDF_GENERATE_DEFAULT = True
 
 # Variables used for calibration lookups
 CALIBRATION_VARIABLES = ["T_sum", "T_dif", "Q_sum"] + [f"Q_FB_coeff_{i}" for i in range(1, 6)]

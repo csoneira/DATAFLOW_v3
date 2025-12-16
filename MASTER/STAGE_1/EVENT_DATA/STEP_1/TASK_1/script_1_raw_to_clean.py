@@ -2187,6 +2187,13 @@ raw_tt_counts = working_df["raw_tt"].value_counts()
 for tt_value, count in raw_tt_counts.items():
     global_variables[f"raw_tt_{tt_value}_count"] = int(count)
 
+# Print the counts of each raw_tt value and the percentage
+total_events = len(working_df)
+print("Raw TT counts and percentages:")
+for tt_value, count in sorted(raw_tt_counts.items()):
+    percentage = (count / total_events) * 100
+    print(f"  Raw TT {tt_value}: {count} events ({percentage:.2f}%)")
+
 if self_trigger:
     working_st_df = compute_tt(working_st_df, "raw_tt")
 
@@ -3151,6 +3158,10 @@ print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 print("Columns before saving cleaned parquet:")
 for col in working_df.columns:
     print(f" - {col}")
+
+# Ensure datetime column is stored with a pandas datetime64 dtype to satisfy pyarrow
+if "datetime" in working_df.columns:
+    working_df["datetime"] = pd.to_datetime(working_df["datetime"], errors="coerce")
 
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)

@@ -363,8 +363,8 @@ force_replacement = config["force_replacement"]
 article_format = config["article_format"]
 
 
-create_super_essential_plots = True
-save_plots = True
+create_super_essential_plots = False
+save_plots = False
 
 
 print("Creating the necessary directories...")
@@ -2255,7 +2255,7 @@ def _compute_derivative_pedestal_metrics(
     derivative_offset = float("nan")
     exp_fit_x = None
     exp_fit_y = None
-    min_peak_height = 0.05
+    min_peak_height = 0.01
     if np.any(positive_mask):
         positive_indices = np.where(positive_mask)[0]
         first_positive = int(positive_indices[0])
@@ -2321,9 +2321,17 @@ def _compute_derivative_pedestal_metrics(
                     bounds=bounds,
                     maxfev=20000,
                 )
-                derivative_offset = float(popt[2])
                 exp_fit_x = np.linspace(x_segment[0], x_segment[-1], 300)
                 exp_fit_y = rising_exponential(exp_fit_x, *popt)
+                y_min = float(np.min(exp_fit_y))
+                y_max = float(np.max(exp_fit_y))
+                if y_max - y_min > 1e-9:
+                    target_fraction = 0.05
+                    target_y = y_min + target_fraction * (y_max - y_min)
+                    # exp_fit_y is monotonic, so interpolation yields x at 5% height.
+                    derivative_offset = float(np.interp(target_y, exp_fit_y, exp_fit_x))
+                else:
+                    derivative_offset = x_smooth_axis[first_positive]
             except RuntimeError:
                 derivative_offset = x_smooth_axis[first_positive]
         else:
@@ -2358,7 +2366,14 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     q_quantile = calibrate_strip_Q_pedestal_q_quantile # percentile
 
     # First take the values that are not zero
-    Q_ch = Q_ch[Q_ch != 0]
+    pre_cond = (Q_ch != 0) & (T_ch != 0) & (Q_other != 0)
+    Q_ch = Q_ch[pre_cond]
+    Q_other = Q_other[pre_cond]
+
+    cond = (abs( Q_other - Q_ch ) < Q_dif_pre_cal_threshold)
+    Q_ch = Q_ch[cond]
+
+    print(f"Percentage of events affected by condition: {100 * (1 - len(Q_ch) / len(Q_other)):.2f}%")
 
     derivative_metrics = _compute_derivative_pedestal_metrics(Q_ch)
     derivative_offset = None
@@ -2367,7 +2382,7 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     
     # -----------------------------------------------------------------------------------------
     
-    if create_essential_plots:
+    if create_plots:
         # Histogram accumulated distribution of Q_ch
 
         print("Should plot now")
@@ -3233,7 +3248,12 @@ if calculate_Q_sum_calibration:
 
 
     # Plot histograms of all the pedestal substractions
+    validate_charge_pedestal_calibration = False
+    create_super_essential_plots = False
+    
     if validate_charge_pedestal_calibration:
+
+        print("Validating charge pedestal calibration.")
         
         if create_plots:
             # Create the grand figure for Q values
@@ -3274,7 +3294,7 @@ if calculate_Q_sum_calibration:
             plt.close(fig_Q)
             
             
-        if create_plots:
+        if create_plots or create_super_essential_plots:
         
             # ZOOOOOOOOOOOOOOOOOOOM ------------------------------------------------
             # Create the grand figure for Q values
@@ -3289,7 +3309,7 @@ if calculate_Q_sum_calibration:
                     y_B = charge_test[col_B]
                     
                     Q_clip_min = pedestal_left
-                    Q_clip_max = pedestal_right
+                    Q_clip_max = pedestal_right * 5
                     
                     # Plot histograms with Q-specific clipping and bins
                     axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
@@ -3319,6 +3339,7 @@ if calculate_Q_sum_calibration:
             if show_plots: plt.show()
             plt.close(fig_Q)
         
+        # sys.exit("DEBUG plot")
         
         if create_plots:
         
@@ -6033,7 +6054,7 @@ if crosstalk_removal_and_recalibration:
                     gaussian_linear, 
                     bin_centers, 
                     hist_vals, 
-                    p0=[max(hist_vals), 0, 1, 0, min(hist_vals)], 
+                    p0=[max(hist_vals), 1, 0.75, 0, 0], 
                     bounds=([a_min, mu_min, sigma_min, -np.inf, -np.inf], [a_max, mu_max, sigma_max, np.inf, np.inf])
                 )
                 
@@ -6075,7 +6096,7 @@ if crosstalk_removal_and_recalibration:
     print(_format_dict_for_print(crosstalk_pedestal))
     
     
-    if create_plots:
+    if create_super_essential_plots:
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
 
@@ -6129,6 +6150,7 @@ if crosstalk_removal_and_recalibration:
         if show_plots: plt.show()
         plt.close(fig_Q)
     
+    # sys.exit("DEBUG EXIT after crosstalk fitting")
 
     print("----------------------------------------------------------------------")
     print("-------------- Filter 5: charge sum crosstalk filtering --------------")
@@ -6277,7 +6299,7 @@ print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after p
 
 
 # Per trigger type
-if create_super_essential_plots:
+if create_plots:
 # if create_plots or create_essential_plots:
     for tt_value in working_df['clean_tt'].unique():
 

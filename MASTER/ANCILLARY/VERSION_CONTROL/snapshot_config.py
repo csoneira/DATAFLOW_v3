@@ -64,7 +64,9 @@ def load_config_as_json(config_path: Path) -> str:
     except FileNotFoundError as exc:
         raise SystemExit(f"Config file not found: {config_path}") from exc
 
-    return json.dumps(config_data, indent=2, sort_keys=True)
+    # YAML can deserialize certain scalars (e.g., dates) into native Python
+    # objects, so ensure everything is serializable before saving snapshots.
+    return json.dumps(config_data, indent=2, sort_keys=True, default=str)
 
 
 def load_csv_as_json(config_path: Path) -> str:

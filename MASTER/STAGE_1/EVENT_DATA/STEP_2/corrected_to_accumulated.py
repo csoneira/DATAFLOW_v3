@@ -382,6 +382,30 @@ directories_to_create = {
 for directory in directories_to_create.values():
     os.makedirs(directory, exist_ok=True)
 
+
+def _is_valid_parquet_file(path: str) -> bool:
+    """Lightweight parquet validation based on magic bytes."""
+    try:
+        with open(path, "rb") as handle:
+            header = handle.read(4)
+            if len(header) < 4:
+                return False
+            handle.seek(-4, os.SEEK_END)
+            footer = handle.read(4)
+    except OSError:
+        return False
+    return header == footer == b"PAR1"
+
+
+def _quarantine_invalid_input(path: str, error_directory: str, reason: str) -> None:
+    """Move a problematic input file to the error directory and abort execution."""
+    destination = os.path.join(error_directory, os.path.basename(path))
+    shutil.move(path, destination)
+    sys.exit(
+        f"{reason}. The file was moved to '{destination}' for inspection before re-running STEP_2."
+    )
+
+
 # Path to big_event_data.csv
 big_event_file = os.path.join(working_directory, "big_event_data.csv")
 
@@ -695,7 +719,21 @@ import sys
 KEY = "df"
 
 # Load dataframe
-df = pd.read_parquet(file_path, engine="pyarrow")
+if not _is_valid_parquet_file(file_path):
+    _quarantine_invalid_input(
+        file_path,
+        error_directory,
+        "The selected input file is not a valid Parquet file (magic bytes missing)"
+    )
+
+try:
+    df = pd.read_parquet(file_path, engine="pyarrow")
+except pa.lib.ArrowInvalid as exc:
+    _quarantine_invalid_input(
+        file_path,
+        error_directory,
+        f"Failed to read '{file_path}' as Parquet: {exc}"
+    )
 initial_event_count = len(df)
 final_event_count = initial_event_count
 print(f"Listed dataframe reloaded from: {file_path}")

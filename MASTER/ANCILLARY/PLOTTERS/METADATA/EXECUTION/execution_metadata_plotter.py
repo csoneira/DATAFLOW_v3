@@ -677,6 +677,12 @@ def load_stage0_step2_metadata(station: str) -> pd.DataFrame:
         df["execution_duration_s"], errors="coerce"
     ).div(60)
     df["data_purity_percentage"] = float("nan")
+    if "actually_unpacked" in df.columns:
+        df["actually_unpacked"] = pd.to_numeric(
+            df["actually_unpacked"], errors="coerce"
+        ).fillna(1).astype(int)
+    else:
+        df["actually_unpacked"] = 1
     df = df.dropna(subset=["execution_timestamp"]).sort_values(
         "execution_timestamp"
     )
@@ -687,6 +693,7 @@ def load_stage0_step2_metadata(station: str) -> pd.DataFrame:
             "file_timestamp",
             "total_execution_time_minutes",
             "data_purity_percentage",
+            "actually_unpacked",
         ]
     ].reset_index(drop=True)
 

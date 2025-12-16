@@ -15,11 +15,11 @@ import matplotlib.pyplot as plt
 from qa_shared import load_metadata, print_columns, plot_tt_pairs, plot_tt_matrix
 
 # --- knobs to tweak ---
-STATION = "MINGO04"  # e.g. "MINGO01", "MINGO02", ...
+STATION = "MINGO01"  # e.g. "MINGO01", "MINGO02", ...
 STEP = 1             # numeric step (1, 2, ...)
 TASK = 1          # for STEP_1 use an int (1-5); keep None for steps without tasks
-START_DATE = "2025-02-15 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
-END_DATE = "2025-11-20 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
+START_DATE = "2025-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
+END_DATE = "2025-12-11 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
 # Window used when counting events (ns) and per-combination measured counts.
 # Set WINDOW_NS to the calibration window you used (e.g., coincidence_window_cal_ns),
 # and fill MEASURED_COUNTS with {combo: observed_counts}.
@@ -188,12 +188,235 @@ print(COLUMN_FAMILY_DOC)
 # determine time column to use for plotting
 tcol = ctx.time_col
 
+#%%
+
 # Example reuse: plot clean -> cal pairs. Uncomment if wanted.
 try:
     plot_tt_pairs(ctx, 'raw_tt_', 'clean_tt_', f"raw_tt → clean_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=5)
 except Exception:
     print("Could not plot raw_tt_ -> clean_tt_ pairs.")
     pass
+
+
+#%%
+
+
+
+
+
+#%%
+
+
+
+# Loop on col_name = f'raw_tt_{tt_value}_count' and calculate the % respect to the total counts in all the columns per each time
+
+tt_values = ['1234', '123', '234', 
+             '124', '134', '13',
+             '12', '23', '34']
+
+# Total should mean the sum of all raw_tt_*_count columns
+total_counts = np.zeros(len(df))
+for tt_value in tt_values:
+    col_name = f'raw_tt_{tt_value}_count'
+    if col_name in df.columns:
+        ser = df[col_name].fillna(0)
+        total_counts += ser.values
+
+# Now calculate percentages
+for tt_value in tt_values:
+    col_name = f'raw_tt_{tt_value}_count'
+    perc_col_name = f'raw_tt_{tt_value}_percentage'
+    if col_name in df.columns:
+        ser = df[col_name].fillna(0)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            percentages = np.where(total_counts > 0, (ser.values / total_counts) * 100, 0)
+        df[perc_col_name] = percentages
+        plotted_cols.add(perc_col_name)
+
+
+
+
+#%%
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+
+measured_counts_df = pd.read_csv(
+    '/home/mingo/DATAFLOW_v3/TESTS/SIMULATION/measured_type_counts.csv'
+)
+
+
+
+markers = ['o', 's', '^', 'D', 'v', 'P', '*', 'X', '<', '>', 'h']
+
+n_plots = len(tt_values)
+
+# Grid geometry (near-square)
+n_cols = 3
+n_rows = math.ceil(n_plots / n_cols)
+
+fig, axes = plt.subplots(
+    n_rows, n_cols,
+    figsize=(4.5 * n_cols, 3.0 * n_rows),
+    sharex=True,
+    sharey=True
+)
+
+axes = np.asarray(axes).ravel()
+
+# Continuous colormap without repetition
+cmap = plt.cm.viridis
+colors = cmap(np.linspace(0.05, 0.95, n_plots))
+
+for ax, tt_value, marker, color in zip(axes, tt_values, markers, colors):
+    col_name = f'raw_tt_{tt_value}_percentage'
+    if col_name not in df.columns:
+        ax.set_visible(False)
+        continue
+
+    ref = measured_counts_df.loc[
+        measured_counts_df['measured_type'] == int(tt_value),
+        'percentage'
+    ]
+    if ref.empty:
+        ax.set_visible(False)
+        continue
+
+    ref_value = ref.values[0]
+
+    ser = df[[tcol, col_name]].dropna()
+    if ser.empty:
+        ax.set_visible(False)
+        continue
+
+    ax.plot(
+        ser[tcol],
+        ser[col_name],
+        linestyle='-',
+        marker=marker,
+        markersize=3,
+        color=color
+    )
+
+    ax.axhline(
+        y=ref_value,
+        linestyle='--',
+        linewidth=3,
+        color=color
+    )
+
+    ax.set_title(tt_value)
+    ax.grid(True)
+
+# Hide unused axes
+for ax in axes[n_plots:]:
+    ax.set_visible(False)
+
+fig.suptitle(f"Raw TT counts • {STATION} STEP {STEP} TASK {TASK} · Measured vs. simulated", fontsize=14)
+fig.supxlabel("Datetime")
+fig.supylabel("Count")
+
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+plt.show()
+
+
+
+#%%
+
+
+
+
+
+# Calculate the efficiency of planes 2 and 3 using the number of counts in 134 / 1234 and 124 / 1234, in time series, in the same plot,
+# and calculate, plot and print the median of each efficiency over the time series.
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+if tcol:
+    try:
+        needed = [
+            tcol,
+            'raw_tt_1234_count',
+            'raw_tt_123_count',
+            'raw_tt_124_count',
+            'raw_tt_134_count',
+            'raw_tt_234_count',
+        ]
+
+        missing = [c for c in needed if c not in df.columns]
+        if missing:
+            raise KeyError(f"Missing columns in df: {missing}")
+
+        data = df[needed].dropna().sort_values(tcol).copy()
+
+        # Avoid division by zero
+        denom = data['raw_tt_1234_count'].replace(0, np.nan)
+
+        eff_1 = 1.0 - data['raw_tt_234_count'] / denom  # Plane 1 (missing 1 -> 234)
+        eff_2 = 1.0 - data['raw_tt_134_count'] / denom  # Plane 2 (missing 2 -> 134)
+        eff_3 = 1.0 - data['raw_tt_124_count'] / denom  # Plane 3 (missing 3 -> 124)
+        eff_4 = 1.0 - data['raw_tt_123_count'] / denom  # Plane 4 (missing 4 -> 123)
+
+        # Optional: keep efficiencies within [0,1] if occasional fluctuations produce small negatives/overshoots
+        # eff_1 = eff_1.clip(0, 1)
+        # eff_2 = eff_2.clip(0, 1)
+        # eff_3 = eff_3.clip(0, 1)
+        # eff_4 = eff_4.clip(0, 1)
+
+        med_1 = eff_1.median()
+        med_2 = eff_2.median()
+        med_3 = eff_3.median()
+        med_4 = eff_4.median()
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(data[tcol], eff_1, label='Plane 1: 1 - 234/1234', marker='^', markersize=3, linestyle='-')
+        plt.plot(data[tcol], eff_2, label='Plane 2: 1 - 134/1234', marker='o', markersize=3, linestyle='-')
+        plt.plot(data[tcol], eff_3, label='Plane 3: 1 - 124/1234', marker='s', markersize=3, linestyle='-')
+        plt.plot(data[tcol], eff_4, label='Plane 4: 1 - 123/1234', marker='x', markersize=3, linestyle='-')
+
+        plt.axhline(y=med_1, linestyle='--', label=f'Median Plane 1: {med_1:.3f}')
+        plt.axhline(y=med_2, linestyle='--', label=f'Median Plane 2: {med_2:.3f}')
+        plt.axhline(y=med_3, linestyle='--', label=f'Median Plane 3: {med_3:.3f}')
+        plt.axhline(y=med_4, linestyle='--', label=f'Median Plane 4: {med_4:.3f}')
+
+        plt.title(f'Plane Efficiencies Over Time • {STATION} STEP {STEP} TASK {TASK}')
+        plt.xlabel('Datetime')
+        plt.ylabel('Efficiency')
+        # plt.ylim(0, 1)
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+        print(f'Median Efficiency Plane 1: {med_1:.3f}')
+        print(f'Median Efficiency Plane 2: {med_2:.3f}')
+        print(f'Median Efficiency Plane 3: {med_3:.3f}')
+        print(f'Median Efficiency Plane 4: {med_4:.3f}')
+
+    except Exception as e:
+        print(f"Could not calculate or plot plane efficiencies: {e}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #%%
