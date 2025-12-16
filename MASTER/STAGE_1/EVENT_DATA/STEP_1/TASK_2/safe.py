@@ -3233,7 +3233,12 @@ if calculate_Q_sum_calibration:
 
 
     # Plot histograms of all the pedestal substractions
+    validate_charge_pedestal_calibration = True
+    create_super_essential_plots = True
+    
     if validate_charge_pedestal_calibration:
+
+        print("Validating charge pedestal calibration.")
         
         if create_plots:
             # Create the grand figure for Q values
@@ -3274,7 +3279,7 @@ if calculate_Q_sum_calibration:
             plt.close(fig_Q)
             
             
-        if create_plots:
+        if create_plots or create_super_essential_plots:
         
             # ZOOOOOOOOOOOOOOOOOOOM ------------------------------------------------
             # Create the grand figure for Q values
@@ -3319,6 +3324,7 @@ if calculate_Q_sum_calibration:
             if show_plots: plt.show()
             plt.close(fig_Q)
         
+        sys.exit("DEBUG plot")
         
         if create_plots:
         

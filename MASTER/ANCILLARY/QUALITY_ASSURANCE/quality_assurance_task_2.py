@@ -197,8 +197,8 @@ for plane_1 in range(1, 5):
                         x,
                         y,
                         marker='.',
-                        linestyle='--',
-                        markersize=10,
+                        linestyle='-',
+                        markersize=3,
                         color=tt_colors[tt],
                         label=tt,
                     )
