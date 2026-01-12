@@ -99,6 +99,20 @@ def rebuild_big_csv(output_dir: Path, destination: Path) -> None:
     combined.to_csv(destination, index=False, float_format="%.5g")
 
 
+def _netcdf_ready(path: Path, label: str) -> bool:
+    if not path.exists():
+        print(f"  Warning: {label} NetCDF missing at {path}")
+        return False
+    if path.stat().st_size == 0:
+        print(f"  Warning: {label} NetCDF is empty; removing {path}")
+        try:
+            path.unlink()
+        except OSError as exc:
+            print(f"  Warning: unable to remove empty {label} NetCDF: {exc}")
+        return False
+    return True
+
+
 def write_daily_outputs(df: pd.DataFrame, output_dir: Path) -> List[date]:
     written_days: List[date] = []
     if df.empty:
@@ -257,55 +271,74 @@ def main() -> int:
         else:
             if not ground_file.exists():
                 print("  Downloading ground level temperature")
-                client.retrieve(
-                    "reanalysis-era5-single-levels",
-                    {
-                        "product_type": "reanalysis",
-                        "variable": ["2m_temperature"],
-                        "year": f"{day_value:%Y}",
-                        "month": f"{day_value:%m}",
-                        "day": f"{day_value:%d}",
-                        "time": times,
-                        "area": [
-                            latitude + degree_apotema,
-                            longitude - degree_apotema,
-                            latitude - degree_apotema,
-                            longitude + degree_apotema,
-                        ],
-                        "format": "netcdf",
-                    },
-                    str(ground_file),
-                )
+                try:
+                    client.retrieve(
+                        "reanalysis-era5-single-levels",
+                        {
+                            "product_type": "reanalysis",
+                            "variable": ["2m_temperature"],
+                            "year": f"{day_value:%Y}",
+                            "month": f"{day_value:%m}",
+                            "day": f"{day_value:%d}",
+                            "time": times,
+                            "area": [
+                                latitude + degree_apotema,
+                                longitude - degree_apotema,
+                                latitude - degree_apotema,
+                                longitude + degree_apotema,
+                            ],
+                            "format": "netcdf",
+                        },
+                        str(ground_file),
+                    )
+                except Exception as exc:
+                    print(f"  Warning: ground level download failed: {exc}")
             else:
                 print("  Ground level NetCDF already present.")
 
             if not pressure_file.exists():
                 print("  Downloading 100 mbar temperature & geopotential")
-                client.retrieve(
-                    "reanalysis-era5-pressure-levels",
-                    {
-                        "product_type": "reanalysis",
-                        "variable": ["temperature", "geopotential"],
-                        "pressure_level": ["100"],
-                        "year": f"{day_value:%Y}",
-                        "month": f"{day_value:%m}",
-                        "day": f"{day_value:%d}",
-                        "time": times,
-                        "area": [
-                            latitude + degree_apotema,
-                            longitude - degree_apotema,
-                            latitude - degree_apotema,
-                            longitude + degree_apotema,
-                        ],
-                        "format": "netcdf",
-                    },
-                    str(pressure_file),
-                )
+                try:
+                    client.retrieve(
+                        "reanalysis-era5-pressure-levels",
+                        {
+                            "product_type": "reanalysis",
+                            "variable": ["temperature", "geopotential"],
+                            "pressure_level": ["100"],
+                            "year": f"{day_value:%Y}",
+                            "month": f"{day_value:%m}",
+                            "day": f"{day_value:%d}",
+                            "time": times,
+                            "area": [
+                                latitude + degree_apotema,
+                                longitude - degree_apotema,
+                                latitude - degree_apotema,
+                                longitude + degree_apotema,
+                            ],
+                            "format": "netcdf",
+                        },
+                        str(pressure_file),
+                    )
+                except Exception as exc:
+                    print(f"  Warning: pressure level download failed: {exc}")
             else:
                 print("  Pressure level NetCDF already present.")
 
-        ds_2m = xr.open_dataset(ground_file).rename({"valid_time": "Time"})
-        ds_100 = xr.open_dataset(pressure_file).rename({"valid_time": "Time"})
+        if not _netcdf_ready(ground_file, "ground level") or not _netcdf_ready(
+            pressure_file, "pressure level"
+        ):
+            continue
+
+        try:
+            ds_2m = xr.open_dataset(ground_file, engine="netcdf4").rename(
+                {"valid_time": "Time"}
+            )
+            ds_100 = xr.open_dataset(pressure_file, engine="netcdf4").rename(
+                {"valid_time": "Time"}
+            )
+        except Exception as exc:
+            print(f"  Warning: failed to open NetCDF files: {exc}")
+            continue
 
         df_ground = (ds_2m["t2m"] - 273.15).to_dataframe().reset_index()
         df_temp100 = (ds_100["t"] - 273.15).to_dataframe().reset_index()

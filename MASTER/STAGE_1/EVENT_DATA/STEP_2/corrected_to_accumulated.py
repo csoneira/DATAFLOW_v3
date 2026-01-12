@@ -5290,12 +5290,13 @@ print(f"Accumulated CSV saved as {save_filename}. Path is {save_path}")
 
 # Move the original file in file_path to completed_directory
 print("Moving file to COMPLETED directory...")
-shutil.move(file_path, completed_file_path)
-
-now = time.time()
-os.utime(completed_file_path, (now, now))
-
-print(f"File moved to: {completed_file_path}")
+if os.path.exists(file_path):
+    shutil.move(file_path, completed_file_path)
+    now = time.time()
+    os.utime(completed_file_path, (now, now))
+    print(f"File moved to: {completed_file_path}")
+else:
+    print(f"Warning: processing file not found for completion move: {file_path}")
 
 # -----------------------------------------------------------------------------
 # Record execution metadata

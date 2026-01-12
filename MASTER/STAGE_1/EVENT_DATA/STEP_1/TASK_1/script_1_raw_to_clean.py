@@ -516,8 +516,12 @@ if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
     
     # It is a csv
-    input_file = pd.read_csv(input_file_config_path, skiprows=1)
-    
+    try:
+        input_file = pd.read_csv(input_file_config_path, skiprows=1)
+    except pd.errors.EmptyDataError:
+        input_file = pd.DataFrame()
+        print("Input configuration file is empty.")
+
     if not input_file.empty:
         print("Input configuration file found and is not empty.")
         exists_input_file = True
@@ -3162,6 +3166,10 @@ for col in working_df.columns:
 # Ensure datetime column is stored with a pandas datetime64 dtype to satisfy pyarrow
 if "datetime" in working_df.columns:
     working_df["datetime"] = pd.to_datetime(working_df["datetime"], errors="coerce")
+    if working_df["datetime"].dtype == object:
+        working_df["datetime"] = pd.to_datetime(
+            working_df["datetime"].astype(str), errors="coerce"
+        )
 
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)

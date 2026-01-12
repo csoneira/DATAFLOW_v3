@@ -314,8 +314,12 @@ if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
     
     # It is a csv
-    input_file = pd.read_csv(input_file_config_path, skiprows=1)
-    
+    try:
+        input_file = pd.read_csv(input_file_config_path, skiprows=1)
+    except pd.errors.EmptyDataError:
+        input_file = pd.DataFrame()
+        print("Input configuration file is empty.")
+
     if not input_file.empty:
         print("Input configuration file found and is not empty.")
         exists_input_file = True
@@ -7615,9 +7619,12 @@ print(f"Calibrated dataframe saved to: {OUT_PATH}")
 print("Moving file to COMPLETED directory...")
 
 if user_file_selection == False:
-    shutil.move(file_path, completed_file_path)
-    now = time.time()
-    os.utime(completed_file_path, (now, now))
-    print("************************************************************")
-    print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
-    print("************************************************************")
+    if os.path.exists(file_path):
+        shutil.move(file_path, completed_file_path)
+        now = time.time()
+        os.utime(completed_file_path, (now, now))
+        print("************************************************************")
+        print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
+        print("************************************************************")
+    else:
+        print(f"Warning: processing file not found for completion move: {file_path}")

@@ -5544,7 +5544,21 @@ if time_window_fitting:
             continue
         
         # Then fit
-        popt, pcov = curve_fit(signal_plus_background, widths_clean, counts_clean, p0=p0)
+        try:
+            popt, pcov = curve_fit(
+                signal_plus_background,
+                widths_clean,
+                counts_clean,
+                p0=p0,
+                maxfev=10000,
+            )
+        except RuntimeError as exc:
+            print(f"[Warning] Fit failed for definitive_tt {definitive_tt}: {exc}")
+            global_variables[f'sigmoid_width_{definitive_tt}'] = np.nan
+            global_variables[f'background_slope_{definitive_tt}'] = np.nan
+            global_variables[f'sigmoid_amplitude_{definitive_tt}'] = np.nan
+            global_variables[f'sigmoid_center_{definitive_tt}'] = np.nan
+            continue
                 
         S_fit, w0_fit, tau_fit, B_fit = popt
         print(f"definitive_tt {definitive_tt} - Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Transition center w0 = {w0_fit:.4f} ns\n  Transition width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
@@ -6771,6 +6785,25 @@ for col in working_df.select_dtypes(include=[np.floating]).columns:
 #     print(f"Datafile saved in {save_full_filename}.")
 
 # Save the main columns, relevant for the posterior analysis ------------------
+missing_charge_cols = []
+for module in ['1', '2', '3', '4']:
+    for strip in range(1, 5):
+        no_crstlk = f'Q{module}_Q_sum_{strip}_no_crstlk'
+        with_crstlk = f'Q{module}_Q_sum_{strip}_with_crstlk'
+        if no_crstlk not in working_df.columns:
+            working_df[no_crstlk] = np.nan
+            missing_charge_cols.append(no_crstlk)
+        if with_crstlk not in working_df.columns:
+            working_df[with_crstlk] = np.nan
+            missing_charge_cols.append(with_crstlk)
+
+if missing_charge_cols:
+    unique_missing = sorted(set(missing_charge_cols))
+    print(
+        "Warning: missing charge columns; created with NaN defaults: "
+        + ", ".join(unique_missing)
+    )
+
 for i, module in enumerate(['1', '2', '3', '4']):
     for j in range(4):
         strip = j + 1
@@ -6781,7 +6814,11 @@ if self_trigger:
     for i, module in enumerate(['1', '2', '3', '4']):
         for j in range(4):
             strip = j + 1
-            working_st_df[f'Q_P{module}s{strip}'] = working_st_df[f'Q{module}_Q_sum_{strip}']
+            source_col = f'Q{module}_Q_sum_{strip}'
+            if source_col not in working_st_df.columns:
+                working_st_df[source_col] = np.nan
+                print(f"Warning: missing self-trigger charge column; created NaN: {source_col}")
+            working_st_df[f'Q_P{module}s{strip}'] = working_st_df[source_col]
 
 # Charge checking --------------------------------------------------------------------------------------------------------
 if self_trigger:

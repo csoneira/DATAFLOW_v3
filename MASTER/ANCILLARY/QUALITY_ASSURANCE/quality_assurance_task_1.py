@@ -18,8 +18,8 @@ from qa_shared import load_metadata, print_columns, plot_tt_pairs, plot_tt_matri
 STATION = "MINGO01"  # e.g. "MINGO01", "MINGO02", ...
 STEP = 1             # numeric step (1, 2, ...)
 TASK = 1          # for STEP_1 use an int (1-5); keep None for steps without tasks
-START_DATE = "2025-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
-END_DATE = "2025-12-11 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
+START_DATE = "2024-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
+END_DATE = "2026-01-11 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
 # Window used when counting events (ns) and per-combination measured counts.
 # Set WINDOW_NS to the calibration window you used (e.g., coincidence_window_cal_ns),
 # and fill MEASURED_COUNTS with {combo: observed_counts}.
@@ -191,15 +191,11 @@ tcol = ctx.time_col
 #%%
 
 # Example reuse: plot clean -> cal pairs. Uncomment if wanted.
-try:
-    plot_tt_pairs(ctx, 'raw_tt_', 'clean_tt_', f"raw_tt → clean_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=5)
-except Exception:
-    print("Could not plot raw_tt_ -> clean_tt_ pairs.")
-    pass
-
-
-#%%
-
+# try:
+#     plot_tt_pairs(ctx, 'raw_tt_', 'clean_tt_', f"raw_tt → clean_tt • {STATION} STEP {STEP} TASK {TASK}", ncols=5)
+# except Exception:
+#     print("Could not plot raw_tt_ -> clean_tt_ pairs.")
+#     pass
 
 
 
@@ -248,6 +244,39 @@ measured_counts_df = pd.read_csv(
 )
 
 
+# Calculate the ratio of events so eff2 = 1 - 134 / 1234 in the measured counts
+# in the measured_counts_df DataFrame, also the eff3 = 1 - 124 / 1234 ratio, also
+# eff1 = 1 - 234 / 1234 and eff4 = 1 - 123 / 1234
+measured_counts_df['eff1'] = 1.0 - measured_counts_df.loc[
+    measured_counts_df['measured_type'] == 234,
+    'count'
+].values[0] / measured_counts_df.loc[
+    measured_counts_df['measured_type'] == 1234,
+    'count'
+].values[0]
+measured_counts_df['eff2'] = 1.0 - measured_counts_df.loc[
+    measured_counts_df['measured_type'] == 134,
+    'count'
+].values[0] / measured_counts_df.loc[
+    measured_counts_df['measured_type'] == 1234,
+    'count'
+].values[0]
+measured_counts_df['eff3'] = 1.0 - measured_counts_df.loc[
+    measured_counts_df['measured_type'] == 124,
+    'count'
+].values[0] / measured_counts_df.loc[
+    measured_counts_df['measured_type'] == 1234,
+    'count'
+].values[0]
+measured_counts_df['eff4'] = 1.0 - measured_counts_df.loc[
+    measured_counts_df['measured_type'] == 123,
+    'count'
+].values[0] / measured_counts_df.loc[
+    measured_counts_df['measured_type'] == 1234,
+    'count'
+].values[0]
+
+#%%
 
 markers = ['o', 's', '^', 'D', 'v', 'P', '*', 'X', '<', '>', 'h']
 
@@ -382,11 +411,23 @@ if tcol:
         plt.axhline(y=med_3, linestyle='--', label=f'Median Plane 3: {med_3:.3f}')
         plt.axhline(y=med_4, linestyle='--', label=f'Median Plane 4: {med_4:.3f}')
 
+        # Now put h lines for the measured efficiencies from measured_counts_df
+        measured_eff_1 = measured_counts_df['eff1'].values[0]
+        measured_eff_2 = measured_counts_df['eff2'].values[0]
+        measured_eff_3 = measured_counts_df['eff3'].values[0]
+        measured_eff_4 = measured_counts_df['eff4'].values[0]
+
+        plt.axhline(y=measured_eff_1, linestyle='-', color='blue', label=f'Measured Plane 1: {measured_eff_1:.3f}')
+        plt.axhline(y=measured_eff_2, linestyle='-', color='orange', label=f'Measured Plane 2: {measured_eff_2:.3f}')
+        plt.axhline(y=measured_eff_3, linestyle='-', color='green', label=f'Measured Plane 3: {measured_eff_3:.3f}')
+        plt.axhline(y=measured_eff_4, linestyle='-', color='red', label=f'Measured Plane 4: {measured_eff_4:.3f}')
+
         plt.title(f'Plane Efficiencies Over Time • {STATION} STEP {STEP} TASK {TASK}')
         plt.xlabel('Datetime')
         plt.ylabel('Efficiency')
         # plt.ylim(0, 1)
-        plt.legend()
+        # Put legend outside the plot
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.grid(True)
         plt.show()
 
@@ -397,14 +438,6 @@ if tcol:
 
     except Exception as e:
         print(f"Could not calculate or plot plane efficiencies: {e}")
-
-
-
-
-
-
-
-
 
 
 

@@ -1,3 +1,5 @@
+#!/bin/env python3
+
 #%%
 from __future__ import annotations
 
@@ -95,8 +97,8 @@ CROSS_EVS_UPP = 7
 number_of_rates = 1
 
 # Flux, area and counts calculations, keep generation area comparable to detector acceptance
-z_plane = 6000 # mm
-ylim = 0.5 * z_plane # mm
+z_plane = 100 # mm
+ylim = 50 * z_plane # mm
 xlim = ylim # mm
 
 cut_soon = False
@@ -151,7 +153,7 @@ def num_strips_for_plane(plane_idx: int) -> int:
     return len(y_width)
 
 # ----------------------------------------------
-N_TRACKS = 100_000
+N_TRACKS = 10_000_000
 # ----------------------------------------------
 
 VALID_CROSSING_TYPES = ['1234', '123', '234', '12',  '23', '34']
@@ -404,6 +406,11 @@ else:
                 df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
                 df[col] = df[col].astype(str).str.strip()
                 df[col] = df[col].replace('nan', np.nan)
+    
+    # 4. Filter based on trigger type
+    # Take only the events in which any TRIGGER_SELECTED is contained in the measured_type
+    df_triggered = df[df['measured_type'].apply(lambda mt: any(ts in mt for ts in TRIGGER_SELECTED))].copy()
+    print(f"After trigger selection, {len(df_triggered)} tracks remain, which is a {len(df_triggered)/len(df):.2%} of the crossing tracks.")
 
 #%%
 
@@ -449,6 +456,17 @@ def plot_scatter_grid(data: pd.DataFrame, columns: list[str], title: str, filena
         plt.show()
     else:
         plt.close('all')
+
+#%%
+
+
+# Represent theta and phi generated in df, no matter the measured type
+plot_scatter_grid(
+    df,
+    columns=['Theta_gen', 'Phi_gen'],
+    title='Generated Angles (Theta vs Phi) for Triggered Tracks',
+    filename='scatter_generated_angles_triggered.png'
+)
 
 
 

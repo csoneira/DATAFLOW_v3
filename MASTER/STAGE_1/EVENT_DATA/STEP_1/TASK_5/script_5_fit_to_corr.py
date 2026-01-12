@@ -614,8 +614,12 @@ if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
     
     # It is a csv
-    input_file = pd.read_csv(input_file_config_path, skiprows=1)
-    
+    try:
+        input_file = pd.read_csv(input_file_config_path, skiprows=1)
+    except pd.errors.EmptyDataError:
+        input_file = pd.DataFrame()
+        print("Input configuration file is empty.")
+
     if not input_file.empty:
         print("Input configuration file found and is not empty.")
         exists_input_file = True
