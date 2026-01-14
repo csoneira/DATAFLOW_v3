@@ -1,7 +1,7 @@
 Step 11 (DAQ to Detector Format)
 
 Purpose:
-- Convert DAQ outputs into the detector text format used by real data files.
+- Convert DAQ outputs into the detector text format used by real data files the date of the event (thick time) is set to a placeholder.
 
 Inputs:
 - config: config_step_11.yaml
@@ -9,8 +9,8 @@ Inputs:
 
 Outputs:
 - ../STEP_11_TO_12/sim_run_registry.json
-- ../STEP_11_TO_12/SIM_RUN_<N>/mi00YYYYDDDHHMMSS.dat
-- ../STEP_11_TO_12/SIM_RUN_<N>/mi00YYYYDDDHHMMSS.dat.meta.json
+- ../STEP_11_TO_12/SIM_RUN_<N>/mi00YYDDDHHMMSS.dat
+- ../STEP_11_TO_12/SIM_RUN_<N>/mi00YYDDDHHMMSS.dat.meta.json
 
 Format:
 - YYYY MM DD HH MM SS event_type then vectors in order:

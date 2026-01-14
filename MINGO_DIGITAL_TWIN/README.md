@@ -53,8 +53,13 @@ Overview
 
 - STEP_11: DAQ -> Detector Text
   - Script: STEP_11/step_11_daq_to_detector_format.py
-  - Output: STEP_11_TO_12/SIM_RUN_<N>/geom_<G>_detector.dat
+  - Output: STEP_11_TO_12/SIM_RUN_<N>/mi00YYDDDHHMMSS.dat
   - Key fields: detector text format (date/time, event_type, per-strip T/Q)
+
+- STEP_12: Detector Text -> Station Dat
+  - Script: STEP_12/step_12_detector_to_station_dat.py
+  - Output: STEP_12_TO_13/SIM_RUN_<N>/mi0XYYDDDHHMMSS.dat
+  - Key fields: station/conf selection, Poisson timestamps, real-data filename format
 
 Notes
 - Geometry IDs are global across stations: identical (P1,P2,P3,P4) share geometry_id.

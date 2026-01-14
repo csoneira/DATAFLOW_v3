@@ -59,15 +59,17 @@ def read_station_config(csv_path: Path) -> pd.DataFrame:
 
 def build_geometry_map(station_df: pd.DataFrame) -> pd.DataFrame:
     geom_cols = ["P1", "P2", "P3", "P4"]
+    extra_cols = [col for col in ("start", "end") if col in station_df.columns]
     unique_geoms = (
-        station_df[geom_cols]
+        station_df[geom_cols + extra_cols]
         .dropna()
         .drop_duplicates()
         .reset_index(drop=True)
     )
     unique_geoms["geometry_id"] = np.arange(len(unique_geoms), dtype=int)
     merged = station_df.merge(unique_geoms, on=geom_cols, how="left")
-    return merged[["station", "conf", "geometry_id", "P1", "P2", "P3", "P4"]]
+    cols = ["station", "conf", "geometry_id", "P1", "P2", "P3", "P4"] + extra_cols
+    return merged[cols]
 
 
 def build_global_geometry_registry(station_dfs: List[pd.DataFrame]) -> pd.DataFrame:
@@ -80,8 +82,10 @@ def build_global_geometry_registry(station_dfs: List[pd.DataFrame]) -> pd.DataFr
 
 def map_station_to_geometry(station_df: pd.DataFrame, registry: pd.DataFrame) -> pd.DataFrame:
     geom_cols = ["P1", "P2", "P3", "P4"]
+    extra_cols = [col for col in ("start", "end") if col in station_df.columns]
     merged = station_df.merge(registry, on=geom_cols, how="left")
-    return merged[["station", "conf", "geometry_id", "P1", "P2", "P3", "P4"]]
+    cols = ["station", "conf", "geometry_id", "P1", "P2", "P3", "P4"] + extra_cols
+    return merged[cols]
 
 
 def iter_geometries(geom_map: pd.DataFrame) -> Iterable[Tuple[int, Tuple[float, float, float, float]]]:

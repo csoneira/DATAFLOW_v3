@@ -21,6 +21,7 @@ case "$STEP" in
   9) python3 "$DT/STEP_9/step_9_threshold_to_trigger.py" --config "$DT/STEP_9/config_step_9.yaml" ;;
   10) python3 "$DT/STEP_10/step_10_triggered_to_jitter.py" --config "$DT/STEP_10/config_step_10.yaml" ;;
   11) python3 "$DT/STEP_11/step_11_daq_to_detector_format.py" --config "$DT/STEP_11/config_step_11.yaml" ;;
+  12) python3 "$DT/STEP_12/step_12_detector_to_station_dat.py" --config "$DT/STEP_12/config_step_12.yaml" ;;
   *)
     echo "Unknown step: $STEP"
     exit 1

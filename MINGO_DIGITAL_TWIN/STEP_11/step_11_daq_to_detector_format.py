@@ -43,7 +43,7 @@ def extract_timestamp(cfg: dict) -> tuple[int, int, int, int, int, int]:
 def build_output_name(cfg: dict) -> str:
     year, month, day, hour, minute, second = extract_timestamp(cfg)
     day_of_year = datetime(year, month, day).timetuple().tm_yday
-    return f"mi00{year:04d}{day_of_year:03d}{hour:02d}{minute:02d}{second:02d}.dat"
+    return f"mi00{year % 100:02d}{day_of_year:03d}{hour:02d}{minute:02d}{second:02d}.dat"
 
 
 def write_event_rows(df: pd.DataFrame, cfg: dict, output_path: Path) -> None:
@@ -63,12 +63,12 @@ def write_event_rows(df: pd.DataFrame, cfg: dict, output_path: Path) -> None:
         for row in df.itertuples(index=False):
             row_dict = row._asdict()
             parts = [
-                f"{year:04d}",
-                f"{month:02d}",
-                f"{day:02d}",
-                f"{hour:02d}",
-                f"{minute:02d}",
-                f"{second:02d}",
+                "0000",
+                "00",
+                "00",
+                "00",
+                "00",
+                "00",
                 str(event_type),
             ]
 
