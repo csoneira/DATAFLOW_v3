@@ -1,7 +1,7 @@
-Step 8 (Threshold)
+Step 8 (Threshold at FEE)
 
 Purpose:
-- Apply charge threshold to Q_front/Q_back; values below threshold become 0.
+- Apply FEE effects: smear T_front/T_back and transform Q_front/Q_back to ns, then apply threshold.
 
 Inputs:
 - config: config_step_8.yaml

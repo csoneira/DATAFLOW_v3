@@ -51,6 +51,11 @@ Overview
   - Output: STEP_10_TO_11/SIM_RUN_<N>/geom_<G>_daq.(pkl|csv)
   - Key fields: daq_jitter_ns, jittered T_front/T_back
 
+- STEP_11: DAQ -> Detector Text
+  - Script: STEP_11/step_11_daq_to_detector_format.py
+  - Output: STEP_11_TO_12/SIM_RUN_<N>/geom_<G>_detector.dat
+  - Key fields: detector text format (date/time, event_type, per-strip T/Q)
+
 Notes
 - Geometry IDs are global across stations: identical (P1,P2,P3,P4) share geometry_id.
 - Steps 1-4 write outputs under SIM_RUN_<N> directories; mappings live in sim_run_registry.json per STEP_X_TO_Y.

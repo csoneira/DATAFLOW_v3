@@ -59,26 +59,52 @@ def apply_jitter(df: pd.DataFrame, jitter_width_ns: float, rng: np.random.Genera
 
 def plot_jitter_summary(df: pd.DataFrame, output_path: Path) -> None:
     with PdfPages(output_path) as pdf:
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+                tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+                if tf_col not in df.columns and tb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if tf_col in df.columns:
+                    vals = df[tf_col].to_numpy(dtype=float)
+                    vals = vals[~np.isnan(vals)]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if tb_col in df.columns:
+                    vals = df[tb_col].to_numpy(dtype=float)
+                    vals = vals[~np.isnan(vals)]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("time (ns)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
 
-        jitter_vals = df["daq_jitter_ns"].to_numpy(dtype=float) if "daq_jitter_ns" in df.columns else np.array([])
-        axes[0].hist(jitter_vals, bins=60, color="steelblue", alpha=0.8)
-        axes[0].set_title("DAQ jitter")
-        axes[0].set_xlabel("daq_jitter_ns")
-
-        tfront_cols = [c for c in df.columns if c.startswith("T_front_")]
-        tback_cols = [c for c in df.columns if c.startswith("T_back_")]
-        tfront_vals = df[tfront_cols].to_numpy(dtype=float).ravel() if tfront_cols else np.array([])
-        tback_vals = df[tback_cols].to_numpy(dtype=float).ravel() if tback_cols else np.array([])
-        tfront_vals = tfront_vals[~np.isnan(tfront_vals)]
-        tback_vals = tback_vals[~np.isnan(tback_vals)]
-        axes[1].hist(tfront_vals, bins=60, color="seagreen", alpha=0.6, label="T_front")
-        axes[1].hist(tback_vals, bins=60, color="darkorange", alpha=0.6, label="T_back")
-        axes[1].set_title("T_front / T_back (jittered)")
-        axes[1].set_xlabel("time (ns)")
-        axes[1].legend()
-
-        for ax in axes:
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+                qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+                if qf_col not in df.columns and qb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if qf_col in df.columns:
+                    vals = df[qf_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if qb_col in df.columns:
+                    vals = df[qb_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("charge")
+        for ax in axes.flatten():
             for patch in ax.patches:
                 patch.set_rasterized(True)
         fig.tight_layout()

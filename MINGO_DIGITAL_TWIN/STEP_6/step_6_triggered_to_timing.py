@@ -56,38 +56,52 @@ def compute_front_back(df: pd.DataFrame) -> pd.DataFrame:
 
 def plot_frontback_summary(df: pd.DataFrame, output_path: Path) -> None:
     with PdfPages(output_path) as pdf:
-        fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-        axes = axes.flatten()
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+                tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+                if tf_col not in df.columns and tb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if tf_col in df.columns:
+                    vals = df[tf_col].to_numpy(dtype=float)
+                    vals = vals[~np.isnan(vals)]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if tb_col in df.columns:
+                    vals = df[tb_col].to_numpy(dtype=float)
+                    vals = vals[~np.isnan(vals)]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("time (ns)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
 
-        tfront_cols = [c for c in df.columns if c.startswith("T_front_")]
-        tfront_vals = df[tfront_cols].to_numpy(dtype=float).ravel() if tfront_cols else np.array([])
-        tfront_vals = tfront_vals[~np.isnan(tfront_vals)]
-        axes[0].hist(tfront_vals, bins=60, color="steelblue", alpha=0.8)
-        axes[0].set_title("T_front (all strips)")
-        axes[0].set_xlabel("T_front (ns)")
-
-        tback_cols = [c for c in df.columns if c.startswith("T_back_")]
-        tback_vals = df[tback_cols].to_numpy(dtype=float).ravel() if tback_cols else np.array([])
-        tback_vals = tback_vals[~np.isnan(tback_vals)]
-        axes[1].hist(tback_vals, bins=60, color="seagreen", alpha=0.8)
-        axes[1].set_title("T_back (all strips)")
-        axes[1].set_xlabel("T_back (ns)")
-
-        qfront_cols = [c for c in df.columns if c.startswith("Q_front_")]
-        qfront_vals = df[qfront_cols].to_numpy(dtype=float).ravel() if qfront_cols else np.array([])
-        qfront_vals = qfront_vals[qfront_vals != 0]
-        axes[2].hist(qfront_vals, bins=60, color="darkorange", alpha=0.8)
-        axes[2].set_title("Q_front (all strips)")
-        axes[2].set_xlabel("Q_front")
-
-        qback_cols = [c for c in df.columns if c.startswith("Q_back_")]
-        qback_vals = df[qback_cols].to_numpy(dtype=float).ravel() if qback_cols else np.array([])
-        qback_vals = qback_vals[qback_vals != 0]
-        axes[3].hist(qback_vals, bins=60, color="slateblue", alpha=0.8)
-        axes[3].set_title("Q_back (all strips)")
-        axes[3].set_xlabel("Q_back")
-
-        for ax in axes:
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+                qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+                if qf_col not in df.columns and qb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if qf_col in df.columns:
+                    vals = df[qf_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if qb_col in df.columns:
+                    vals = df[qb_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("charge")
+        for ax in axes.flatten():
             for patch in ax.patches:
                 patch.set_rasterized(True)
         fig.tight_layout()

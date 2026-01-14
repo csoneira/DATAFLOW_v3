@@ -1,4 +1,4 @@
-Step 9 (Trigger)
+Step 9 (Trigger at DAQ)
 
 Purpose:
 - Apply trigger combinations using per-plane channel activity.

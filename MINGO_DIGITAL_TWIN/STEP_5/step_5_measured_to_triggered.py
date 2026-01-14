@@ -96,6 +96,86 @@ def plot_signal_summary(df: pd.DataFrame, output_path: Path) -> None:
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                col = f"T_diff_{plane_idx}_s{strip_idx}"
+                if col not in df.columns:
+                    ax.axis("off")
+                    continue
+                vals = df[col].to_numpy(dtype=float)
+                vals = vals[~np.isnan(vals)]
+                ax.hist(vals, bins=80, color="darkorange", alpha=0.8)
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("T_diff (ns)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                col = f"T_sum_meas_{plane_idx}_s{strip_idx}"
+                if col not in df.columns:
+                    ax.axis("off")
+                    continue
+                vals = df[col].to_numpy(dtype=float)
+                vals = vals[~np.isnan(vals)]
+                ax.hist(vals, bins=80, color="slateblue", alpha=0.8)
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("T_sum_meas (ns)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                col = f"Y_mea_{plane_idx}_s{strip_idx}"
+                if col not in df.columns:
+                    ax.axis("off")
+                    continue
+                vals = df[col].to_numpy(dtype=float)
+                vals = vals[vals > 0]
+                ax.hist(vals, bins=80, color="seagreen", alpha=0.8)
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("qsum")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                col = f"q_diff_{plane_idx}_s{strip_idx}"
+                if col not in df.columns:
+                    ax.axis("off")
+                    continue
+                vals = df[col].to_numpy(dtype=float)
+                vals = vals[vals != 0]
+                ax.hist(vals, bins=80, color="steelblue", alpha=0.8)
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("q_diff")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 5: compute T_diff and q_diff.")

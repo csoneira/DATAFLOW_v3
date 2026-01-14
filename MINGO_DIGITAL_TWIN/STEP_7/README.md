@@ -1,7 +1,7 @@
 Step 7 (Front/Back to Calibrated)
 
 Purpose:
-- Apply per-strip offsets to T_front/T_back and Q_front/Q_back.
+- Apply per-strip offsets to T_front/T_back (cable propagation).
 
 Inputs:
 - config: config_step_7.yaml

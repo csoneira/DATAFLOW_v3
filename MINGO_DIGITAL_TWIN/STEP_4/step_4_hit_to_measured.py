@@ -415,11 +415,31 @@ def plot_step4_summary(df: pd.DataFrame, output_path: Path) -> None:
             if not strip_cols:
                 ax.axis("off")
                 continue
-            vals = df[strip_cols].to_numpy(dtype=float).ravel()
+            vals = df[strip_cols].to_numpy(dtype=float).sum(axis=1)
             vals = vals[vals > 0]
             ax.hist(vals, bins=120, color="seagreen", alpha=0.8)
-            ax.set_title(f"Plane {plane_idx} qsum")
-            ax.set_xlabel("qsum")
+            ax.set_title(f"Plane {plane_idx} qsum total")
+            ax.set_xlabel("qsum total")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                col = f"Y_mea_{plane_idx}_s{strip_idx}"
+                if col not in df.columns:
+                    ax.axis("off")
+                    continue
+                vals = df[col].to_numpy(dtype=float)
+                vals = vals[vals > 0]
+                ax.hist(vals, bins=80, color="seagreen", alpha=0.8)
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("qsum")
         for ax in axes.flatten():
             for patch in ax.patches:
                 patch.set_rasterized(True)
@@ -445,6 +465,26 @@ def plot_step4_summary(df: pd.DataFrame, output_path: Path) -> None:
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                col = f"X_mea_{plane_idx}_s{strip_idx}"
+                if col not in df.columns:
+                    ax.axis("off")
+                    continue
+                vals = df[col].to_numpy(dtype=float)
+                vals = vals[~np.isnan(vals)]
+                ax.hist(vals, bins=80, color="darkorange", alpha=0.8)
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("X_mea (mm)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
         fig, axes = plt.subplots(2, 2, figsize=(10, 8))
         for plane_idx, ax in enumerate(axes.flatten(), start=1):
             strip_cols = [c for c in df.columns if c.startswith(f"T_sum_meas_{plane_idx}_s")]
@@ -456,6 +496,26 @@ def plot_step4_summary(df: pd.DataFrame, output_path: Path) -> None:
             ax.hist(vals, bins=80, color="slateblue", alpha=0.8)
             ax.set_title(f"Plane {plane_idx} T_sum_meas")
             ax.set_xlabel("T_sum_meas (ns)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                col = f"T_sum_meas_{plane_idx}_s{strip_idx}"
+                if col not in df.columns:
+                    ax.axis("off")
+                    continue
+                vals = df[col].to_numpy(dtype=float)
+                vals = vals[~np.isnan(vals)]
+                ax.hist(vals, bins=80, color="slateblue", alpha=0.8)
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("T_sum_meas (ns)")
         for ax in axes.flatten():
             for patch in ax.patches:
                 patch.set_rasterized(True)

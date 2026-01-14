@@ -27,6 +27,54 @@ from STEP_SHARED.sim_utils import (
 )
 
 
+def apply_fee(
+    df: pd.DataFrame,
+    t_fee_sigma_ns: float,
+    q_to_time_factor: float,
+    qfront_offsets: list[list[float]],
+    qback_offsets: list[list[float]],
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    out = df.copy()
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+            tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+            qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+            qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+
+            if tf_col in out.columns:
+                vals = out[tf_col].to_numpy(dtype=float)
+                mask = ~np.isnan(vals)
+                if mask.any():
+                    vals[mask] = vals[mask] + rng.normal(0.0, t_fee_sigma_ns, mask.sum())
+                out[tf_col] = vals
+            if tb_col in out.columns:
+                vals = out[tb_col].to_numpy(dtype=float)
+                mask = ~np.isnan(vals)
+                if mask.any():
+                    vals[mask] = vals[mask] + rng.normal(0.0, t_fee_sigma_ns, mask.sum())
+                out[tb_col] = vals
+
+            if qf_col in out.columns:
+                vals = out[qf_col].to_numpy(dtype=float)
+                mask = vals != 0
+                if mask.any():
+                    vals[mask] = vals[mask] * q_to_time_factor + float(
+                        qfront_offsets[plane_idx - 1][strip_idx - 1]
+                    )
+                out[qf_col] = vals
+            if qb_col in out.columns:
+                vals = out[qb_col].to_numpy(dtype=float)
+                mask = vals != 0
+                if mask.any():
+                    vals[mask] = vals[mask] * q_to_time_factor + float(
+                        qback_offsets[plane_idx - 1][strip_idx - 1]
+                    )
+                out[qb_col] = vals
+    return out
+
+
 def apply_threshold(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
     out = df.copy()
     for plane_idx in range(1, 5):
@@ -41,11 +89,45 @@ def apply_threshold(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
     return out
 
 
-def plot_threshold_summary(df: pd.DataFrame, output_path: Path, threshold: float) -> None:
+def plot_threshold_summary(
+    df: pd.DataFrame,
+    output_path: Path,
+    threshold: float,
+    qfront_offsets: list[list[float]],
+    qback_offsets: list[list[float]],
+) -> None:
     with PdfPages(output_path) as pdf:
-        fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-        axes = axes.flatten()
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+                qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+                if qf_col not in df.columns and qb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if qf_col in df.columns:
+                    vals = df[qf_col].to_numpy(dtype=float)
+                    mask = vals != 0
+                    if mask.any():
+                        vals = vals[mask] - float(qfront_offsets[plane_idx - 1][strip_idx - 1])
+                        ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if qb_col in df.columns:
+                    vals = df[qb_col].to_numpy(dtype=float)
+                    mask = vals != 0
+                    if mask.any():
+                        vals = vals[mask] - float(qback_offsets[plane_idx - 1][strip_idx - 1])
+                        ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("a*x only")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
 
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         qfront_cols = [c for c in df.columns if c.startswith("Q_front_")]
         qfront_vals = df[qfront_cols].to_numpy(dtype=float).ravel() if qfront_cols else np.array([])
         axes[0].hist(qfront_vals, bins=60, color="steelblue", alpha=0.8)
@@ -60,17 +142,59 @@ def plot_threshold_summary(df: pd.DataFrame, output_path: Path, threshold: float
         axes[1].set_title("Q_back (thresholded)")
         axes[1].set_xlabel("Q_back")
 
-        zero_front = (qfront_vals == 0).sum()
-        nonzero_front = (qfront_vals != 0).sum()
-        axes[2].bar(["zero", "nonzero"], [zero_front, nonzero_front], color="darkorange", alpha=0.8)
-        axes[2].set_title("Q_front zeros")
-
-        zero_back = (qback_vals == 0).sum()
-        nonzero_back = (qback_vals != 0).sum()
-        axes[3].bar(["zero", "nonzero"], [zero_back, nonzero_back], color="slateblue", alpha=0.8)
-        axes[3].set_title("Q_back zeros")
-
         for ax in axes:
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+                tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+                if tf_col not in df.columns and tb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if tf_col in df.columns:
+                    vals = df[tf_col].to_numpy(dtype=float)
+                    vals = vals[(~np.isnan(vals)) & (vals != 0)]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if tb_col in df.columns:
+                    vals = df[tb_col].to_numpy(dtype=float)
+                    vals = vals[(~np.isnan(vals)) & (vals != 0)]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("time (ns)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+                qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+                if qf_col not in df.columns and qb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if qf_col in df.columns:
+                    vals = df[qf_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if qb_col in df.columns:
+                    vals = df[qb_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("charge")
+        for ax in axes.flatten():
             for patch in ax.patches:
                 patch.set_rasterized(True)
         fig.tight_layout()
@@ -99,6 +223,11 @@ def main() -> None:
 
     output_format = str(cfg.get("output_format", "pkl")).lower()
     threshold = float(cfg.get("charge_threshold", 0.01))
+    t_fee_sigma_ns = float(cfg.get("t_fee_sigma_ns", 0.01))
+    q_to_time_factor = float(cfg.get("q_to_time_factor", 1.0e-5))
+    qfront_offsets = cfg.get("qfront_offsets", [[0, 0, 0, 0]] * 4)
+    qback_offsets = cfg.get("qback_offsets", [[0, 0, 0, 0]] * 4)
+    rng = np.random.default_rng(cfg.get("seed"))
 
     input_glob = cfg.get("input_glob", "**/geom_*_calibrated.pkl")
     geometry_id = cfg.get("geometry_id")
@@ -129,6 +258,7 @@ def main() -> None:
     print(f"Processing: {input_path}")
     df, upstream_meta = load_with_metadata(input_path)
     out = apply_threshold(df, threshold)
+    out = apply_fee(out, t_fee_sigma_ns, q_to_time_factor, qfront_offsets, qback_offsets, rng)
 
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
         output_dir, "STEP_8", config_path, cfg, upstream_meta
@@ -149,7 +279,7 @@ def main() -> None:
     }
     save_with_metadata(out, out_path, metadata, output_format)
     plot_path = sim_run_dir / f"{out_path.stem}_summary.pdf"
-    plot_threshold_summary(out, plot_path, threshold)
+    plot_threshold_summary(out, plot_path, threshold, qfront_offsets, qback_offsets)
     print(f"Saved {out_path}")
 
 

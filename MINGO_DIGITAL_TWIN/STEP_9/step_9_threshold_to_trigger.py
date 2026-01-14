@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import List
 
+import numpy as np
 import pandas as pd
 import yaml
 import matplotlib
@@ -79,6 +80,58 @@ def plot_trigger_summary(df: pd.DataFrame, output_path: Path) -> None:
         ax.set_title("tt_trigger counts")
         ax.set_xlabel("tt_trigger")
         ax.set_ylabel("Counts")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+                tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+                if tf_col not in df.columns and tb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if tf_col in df.columns:
+                    vals = df[tf_col].to_numpy(dtype=float)
+                    vals = vals[(~np.isnan(vals)) & (vals != 0)]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if tb_col in df.columns:
+                    vals = df[tb_col].to_numpy(dtype=float)
+                    vals = vals[(~np.isnan(vals)) & (vals != 0)]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("time (ns)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+                qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+                if qf_col not in df.columns and qb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if qf_col in df.columns:
+                    vals = df[qf_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if qb_col in df.columns:
+                    vals = df[qb_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("charge")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
