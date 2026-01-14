@@ -153,7 +153,7 @@ def num_strips_for_plane(plane_idx: int) -> int:
     return len(y_width)
 
 # ----------------------------------------------
-N_TRACKS = 10_000_000
+N_TRACKS = 1_000_000
 # ----------------------------------------------
 
 VALID_CROSSING_TYPES = ['1234', '123', '234', '12',  '23', '34']

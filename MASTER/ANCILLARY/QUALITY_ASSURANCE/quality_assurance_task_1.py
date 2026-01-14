@@ -290,7 +290,7 @@ fig, axes = plt.subplots(
     n_rows, n_cols,
     figsize=(4.5 * n_cols, 3.0 * n_rows),
     sharex=True,
-    sharey=True
+    # sharey=True
 )
 
 axes = np.asarray(axes).ravel()
@@ -316,6 +316,12 @@ for ax, tt_value, marker, color in zip(axes, tt_values, markers, colors):
     ref_value = ref.values[0]
 
     ser = df[[tcol, col_name]].dropna()
+    if ser.empty:
+        ax.set_visible(False)
+        continue
+
+    # Remote zero values
+    ser = ser[ser[col_name] > 0]
     if ser.empty:
         ax.set_visible(False)
         continue

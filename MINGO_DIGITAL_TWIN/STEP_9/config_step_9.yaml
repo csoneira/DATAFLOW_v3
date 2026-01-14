@@ -1,0 +1,7 @@
+input_dir: ../STEP_8_TO_9
+input_glob: "**/geom_*_threshold.pkl"
+input_sim_run: latest
+geometry_id: 0
+output_format: pkl
+output_dir: ../STEP_9_TO_10
+trigger_combinations: ["12", "23", "34", "13"]
