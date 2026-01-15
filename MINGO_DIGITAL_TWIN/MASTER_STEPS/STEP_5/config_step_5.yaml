@@ -1,0 +1,10 @@
+input_dir: ../../INTERSTEPS/STEP_4_TO_5
+input_glob: "**/geom_*_hit.pkl"
+input_sim_run: latest
+geometry_id: auto
+output_format: pkl
+output_dir: ../../INTERSTEPS/STEP_5_TO_6
+chunk_rows: 50000
+plot_sample_rows: true
+c_mm_per_ns: 299.792458
+qdiff_frac: 0.01

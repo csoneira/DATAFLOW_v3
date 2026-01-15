@@ -1,0 +1,12 @@
+input_dir: ../../INTERSTEPS/STEP_11_TO_12
+input_glob: "*.dat"
+input_sim_run: latest
+input_collect: matching
+geometry_id: auto
+geometry_map_dir: ../../INTERSTEPS/STEP_2_TO_3
+geometry_map_sim_run: latest
+output_dir: ../../SIMULATED_DATA
+step10_dir: ../../INTERSTEPS/STEP_10_TO_11
+rate_hz: 5.0
+target_rows: 50000
+seed: null

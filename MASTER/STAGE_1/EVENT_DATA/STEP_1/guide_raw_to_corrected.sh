@@ -344,10 +344,10 @@ validate_stations() {
   local arr=("$@")
   local validated=()
   for s in "${arr[@]}"; do
-    if [[ "$s" =~ ^[1-4]$ ]]; then
+    if [[ "$s" =~ ^[1-5]$ ]]; then
       validated+=("$s")
     else
-      echo "Warning: ignoring invalid station '$s' (must be 1-4)" >&2
+      echo "Warning: ignoring invalid station '$s' (must be 1-5)" >&2
     fi
   done
   if [[ ${#validated[@]} -eq 0 ]]; then
@@ -644,6 +644,7 @@ while true; do
       continue
     fi
     echo "Running station $station task${task_id} (${task_label}) ..."
+
     if ! python3 -u "$task_script" "$station"; then
       echo "Task $(basename "$task_script") failed for station $station; continuing to next pair."
       echo '------------------------------------------------------'

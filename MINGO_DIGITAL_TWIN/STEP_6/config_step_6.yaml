@@ -1,6 +1,0 @@
-input_dir: ../STEP_5_TO_6
-input_glob: "**/geom_*_signal.pkl"
-input_sim_run: latest
-geometry_id: 0
-output_format: pkl
-output_dir: ../STEP_6_TO_7

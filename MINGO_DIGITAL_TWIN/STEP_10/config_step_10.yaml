@@ -1,7 +1,0 @@
-input_dir: ../STEP_9_TO_10
-input_glob: "**/geom_*_triggered.pkl"
-input_sim_run: latest
-geometry_id: 0
-output_format: pkl
-output_dir: ../STEP_10_TO_11
-jitter_width_ns: 10.0

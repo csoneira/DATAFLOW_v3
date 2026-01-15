@@ -287,8 +287,8 @@ else:
     # Get the station argument
     station = sys.argv[1]
 
-if station not in ["1", "2", "3", "4"]:
-    print("Error: Invalid station. Please provide a valid station (1, 2, 3, or 4).")
+if station not in ["1", "2", "3", "4", "5"]:
+    print("Error: Invalid station. Please provide a valid station (1, 2, 3, 4, or 5).")
     sys.exit(1)
 # print(f"Station: {station}")
 
@@ -4061,10 +4061,10 @@ if time_window_filtering:
             fig.tight_layout(rect=[0, 0, 1, 0.95])
             if save_plots:
                 hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered_OG.png'
+                hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
+                plot_list.append(hist_path)
+                fig.savefig(hist_path, format='png')
             fig_idx += 1
-            hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
-            plot_list.append(hist_path)
-            fig.savefig(hist_path, format='png')
         if show_plots: plt.show()
         plt.close(fig)
 

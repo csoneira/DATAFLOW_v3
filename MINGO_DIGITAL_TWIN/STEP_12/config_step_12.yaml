@@ -1,9 +1,0 @@
-input_dir: ../STEP_11_TO_12
-input_glob: "*.dat"
-input_sim_run: latest
-geometry_id: 0
-geometry_map_dir: ../STEP_2_TO_3
-geometry_map_sim_run: latest
-output_dir: ../STEP_12_TO_13
-rate_hz: 5.0
-seed: null

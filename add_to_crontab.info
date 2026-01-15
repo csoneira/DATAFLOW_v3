@@ -90,11 +90,21 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
+# SIMULATION
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# STAGE_0 - SIMULATION - COPY SIMULATED DATA -------------------------------------
+* * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/simulate_station_data.py --station 5 --source-station 1 --only-station 5 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/simulate_station_5.log 2>&1
+
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
 # NEW_FILES
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
 
-# STAGE_0 - NEW_FILES - BRING CURRENT ----------------------------------------
+# STAGE_0 - NEW_FILES - BRING CURRENT --------------------------------------------
 */15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_1.log 2>&1
 */15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_2.log 2>&1
 */15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/bring_data_and_config_files_3.log 2>&1
@@ -171,6 +181,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_2.log 2>&1
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_3.log 2>&1
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_4.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 5 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_5.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_2

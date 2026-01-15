@@ -1,0 +1,369 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Iterable
+
+import numpy as np
+import pandas as pd
+import yaml
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+sys.path.append(str(ROOT_DIR))
+sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
+
+from STEP_SHARED.sim_utils import (
+    ensure_dir,
+    iter_input_frames,
+    latest_sim_run,
+    load_with_metadata,
+    now_iso,
+    resolve_sim_run,
+    reset_dir,
+    save_with_metadata,
+    write_chunked_output,
+)
+
+
+def apply_fee(
+    df: pd.DataFrame,
+    t_fee_sigma_ns: float,
+    q_to_time_factor: float,
+    qfront_offsets: list[list[float]],
+    qback_offsets: list[list[float]],
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    out = df.copy()
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+            tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+            qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+            qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+
+            if tf_col in out.columns:
+                vals = out[tf_col].to_numpy(dtype=float)
+                mask = ~np.isnan(vals)
+                if mask.any():
+                    vals[mask] = vals[mask] + rng.normal(0.0, t_fee_sigma_ns, mask.sum())
+                out[tf_col] = vals
+            if tb_col in out.columns:
+                vals = out[tb_col].to_numpy(dtype=float)
+                mask = ~np.isnan(vals)
+                if mask.any():
+                    vals[mask] = vals[mask] + rng.normal(0.0, t_fee_sigma_ns, mask.sum())
+                out[tb_col] = vals
+
+            if qf_col in out.columns:
+                vals = out[qf_col].to_numpy(dtype=float)
+                mask = vals != 0
+                if mask.any():
+                    vals[mask] = vals[mask] * q_to_time_factor + float(
+                        qfront_offsets[plane_idx - 1][strip_idx - 1]
+                    )
+                out[qf_col] = vals
+            if qb_col in out.columns:
+                vals = out[qb_col].to_numpy(dtype=float)
+                mask = vals != 0
+                if mask.any():
+                    vals[mask] = vals[mask] * q_to_time_factor + float(
+                        qback_offsets[plane_idx - 1][strip_idx - 1]
+                    )
+                out[qb_col] = vals
+    return out
+
+
+def apply_threshold(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    out = df.copy()
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            for prefix in ("Q_front", "Q_back"):
+                col = f"{prefix}_{plane_idx}_s{strip_idx}"
+                if col not in out.columns:
+                    continue
+                vals = out[col].to_numpy(dtype=float)
+                vals[vals < threshold] = 0.0
+                out[col] = vals
+    return out
+
+
+def plot_threshold_summary(
+    df: pd.DataFrame,
+    output_path: Path,
+    threshold: float,
+    qfront_offsets: list[list[float]],
+    qback_offsets: list[list[float]],
+) -> None:
+    with PdfPages(output_path) as pdf:
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+                qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+                if qf_col not in df.columns and qb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if qf_col in df.columns:
+                    vals = df[qf_col].to_numpy(dtype=float)
+                    mask = vals != 0
+                    if mask.any():
+                        vals = vals[mask] - float(qfront_offsets[plane_idx - 1][strip_idx - 1])
+                        ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if qb_col in df.columns:
+                    vals = df[qb_col].to_numpy(dtype=float)
+                    mask = vals != 0
+                    if mask.any():
+                        vals = vals[mask] - float(qback_offsets[plane_idx - 1][strip_idx - 1])
+                        ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("a*x only")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        qfront_cols = [c for c in df.columns if c.startswith("Q_front_")]
+        qfront_vals = df[qfront_cols].to_numpy(dtype=float).ravel() if qfront_cols else np.array([])
+        axes[0].hist(qfront_vals, bins=60, color="steelblue", alpha=0.8)
+        axes[0].axvline(threshold, color="red", linestyle="--", linewidth=1)
+        axes[0].set_title("Q_front (thresholded)")
+        axes[0].set_xlabel("Q_front")
+
+        qback_cols = [c for c in df.columns if c.startswith("Q_back_")]
+        qback_vals = df[qback_cols].to_numpy(dtype=float).ravel() if qback_cols else np.array([])
+        axes[1].hist(qback_vals, bins=60, color="seagreen", alpha=0.8)
+        axes[1].axvline(threshold, color="red", linestyle="--", linewidth=1)
+        axes[1].set_title("Q_back (thresholded)")
+        axes[1].set_xlabel("Q_back")
+
+        for ax in axes:
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+                tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+                if tf_col not in df.columns and tb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if tf_col in df.columns:
+                    vals = df[tf_col].to_numpy(dtype=float)
+                    vals = vals[(~np.isnan(vals)) & (vals != 0)]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if tb_col in df.columns:
+                    vals = df[tb_col].to_numpy(dtype=float)
+                    vals = vals[(~np.isnan(vals)) & (vals != 0)]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("time (ns)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+                qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+                if qf_col not in df.columns and qb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if qf_col in df.columns:
+                    vals = df[qf_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6, label="front")
+                if qb_col in df.columns:
+                    vals = df[qb_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6, label="back")
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("charge")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Step 8: apply charge threshold.")
+    parser.add_argument("--config", default="config_step_8.yaml", help="Path to step config YAML")
+    parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing outputs")
+    parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
+    args = parser.parse_args()
+
+    config_path = Path(args.config)
+    if not config_path.is_absolute():
+        config_path = Path(__file__).resolve().parent / config_path
+    with config_path.open("r") as handle:
+        cfg = yaml.safe_load(handle)
+
+    input_dir = Path(cfg["input_dir"])
+    if not input_dir.is_absolute():
+        input_dir = Path(__file__).resolve().parent / input_dir
+    output_dir = Path(cfg["output_dir"])
+    if not output_dir.is_absolute():
+        output_dir = Path(__file__).resolve().parent / output_dir
+    ensure_dir(output_dir)
+
+    output_format = str(cfg.get("output_format", "pkl")).lower()
+    chunk_rows = cfg.get("chunk_rows")
+    plot_sample_rows = cfg.get("plot_sample_rows")
+    threshold = float(cfg.get("charge_threshold", 0.01))
+    t_fee_sigma_ns = float(cfg.get("t_fee_sigma_ns", 0.01))
+    q_to_time_factor = float(cfg.get("q_to_time_factor", 1.0e-5))
+    qfront_offsets = cfg.get("qfront_offsets", [[0, 0, 0, 0]] * 4)
+    qback_offsets = cfg.get("qback_offsets", [[0, 0, 0, 0]] * 4)
+    rng = np.random.default_rng(cfg.get("seed"))
+
+    input_glob = cfg.get("input_glob", "**/geom_*_calibrated.pkl")
+    geometry_id = cfg.get("geometry_id")
+    if geometry_id is not None and str(geometry_id).lower() != "auto":
+        geometry_id = int(geometry_id)
+    else:
+        geometry_id = None
+    input_sim_run = cfg.get("input_sim_run", "latest")
+
+    print("Step 8 starting...")
+    print(f"Input dir: {input_dir}")
+    print(f"Output dir: {output_dir}")
+    print(f"charge_threshold: {threshold}")
+
+    if args.plot_only:
+        if args.no_plots:
+            print("Plot-only requested with --no-plots; skipping plots.")
+            return
+        for out_file in sorted(output_dir.rglob(f"SIM_RUN_*/geom_*_threshold.{output_format}")):
+            df, _ = load_with_metadata(out_file)
+            plot_path = out_file.with_name(f"{out_file.stem}_plots.pdf")
+            plot_threshold_summary(df, plot_path, threshold, qfront_offsets, qback_offsets)
+            print(f"Saved {plot_path}")
+        for manifest_path in sorted(output_dir.rglob("SIM_RUN_*/geom_*_threshold.chunks.json")):
+            manifest = json.loads(manifest_path.read_text())
+            chunks = manifest.get("chunks", [])
+            if not chunks:
+                continue
+            last_chunk = Path(chunks[-1])
+            if last_chunk.suffix == ".csv":
+                df = pd.read_csv(last_chunk)
+            else:
+                df = pd.read_pickle(last_chunk)
+            plot_path = manifest_path.with_name(f"{manifest_path.stem}_plots.pdf")
+            plot_threshold_summary(df, plot_path, threshold, qfront_offsets, qback_offsets)
+            print(f"Saved {plot_path}")
+        return
+
+    if input_sim_run == "latest":
+        input_sim_run = latest_sim_run(input_dir)
+
+    input_run_dir = input_dir / str(input_sim_run)
+    if "**" in input_glob:
+        input_paths = sorted(input_run_dir.rglob(input_glob.replace("**/", "")))
+    else:
+        input_paths = sorted(input_run_dir.glob(input_glob))
+    def normalize_stem(path: Path) -> str:
+        name = path.name
+        if name.endswith(".chunks.json"):
+            name = name[: -len(".chunks.json")]
+        stem = Path(name).stem
+        return stem.replace(".chunks", "")
+
+    if geometry_id is not None:
+        geom_key = f"geom_{geometry_id}"
+        input_paths = [
+            p for p in input_paths if normalize_stem(p) == f"{geom_key}_calibrated"
+        ]
+        if not input_paths:
+            fallback_path = input_run_dir / f"{geom_key}_calibrated.chunks.json"
+            if fallback_path.exists():
+                input_paths = [fallback_path]
+    elif not input_paths:
+        input_paths = sorted(input_run_dir.glob("geom_*_calibrated.chunks.json"))
+    if len(input_paths) != 1:
+        raise FileNotFoundError(f"Expected 1 input for geometry {geometry_id}, found {len(input_paths)}.")
+
+    input_path = input_paths[0]
+    normalized_stem = normalize_stem(input_path)
+    if geometry_id is None:
+        parts = normalized_stem.split("_")
+        if len(parts) < 2 or parts[0] != "geom":
+            raise ValueError(f"Unable to infer geometry_id from {input_path.stem}")
+        geometry_id = int(parts[1])
+    print(f"Processing: {input_path}")
+    input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
+
+    sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
+        output_dir, "STEP_8", config_path, cfg, upstream_meta
+    )
+    reset_dir(sim_run_dir)
+
+    out_stem = normalized_stem.replace("_calibrated", "") + "_threshold"
+    metadata = {
+        "created_at": now_iso(),
+        "step": "STEP_8",
+        "config": cfg,
+        "sim_run": sim_run,
+        "config_hash": config_hash,
+        "upstream_hash": upstream_hash,
+        "source_dataset": str(input_path),
+        "upstream": upstream_meta,
+    }
+    if chunk_rows:
+        def _iter_out() -> Iterable[pd.DataFrame]:
+            for chunk in input_iter:
+                out_chunk = apply_threshold(chunk, threshold)
+                yield apply_fee(out_chunk, t_fee_sigma_ns, q_to_time_factor, qfront_offsets, qback_offsets, rng)
+
+        manifest_path, last_chunk, row_count = write_chunked_output(
+            _iter_out(),
+            sim_run_dir,
+            out_stem,
+            output_format,
+            int(chunk_rows),
+            metadata,
+        )
+        plot_df = last_chunk
+        if plot_sample_rows and plot_df is not None:
+            sample_n = len(plot_df) if plot_sample_rows is True else int(plot_sample_rows)
+            sample_n = min(sample_n, len(plot_df))
+            plot_df = plot_df.sample(n=sample_n, random_state=cfg.get("seed"))
+        if not args.no_plots and plot_df is not None:
+            plot_path = sim_run_dir / f"{out_stem}_plots.pdf"
+            plot_threshold_summary(plot_df, plot_path, threshold, qfront_offsets, qback_offsets)
+        print(f"Saved {manifest_path}")
+    else:
+        df, upstream_meta = load_with_metadata(input_path)
+        out = apply_threshold(df, threshold)
+        out = apply_fee(out, t_fee_sigma_ns, q_to_time_factor, qfront_offsets, qback_offsets, rng)
+        out_path = sim_run_dir / f"{out_stem}.{output_format}"
+        save_with_metadata(out, out_path, metadata, output_format)
+        if not args.no_plots:
+            plot_path = sim_run_dir / f"{out_path.stem}_plots.pdf"
+            plot_threshold_summary(out, plot_path, threshold, qfront_offsets, qback_offsets)
+        print(f"Saved {out_path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -65,7 +65,6 @@ max_size_mb_3: 3.3
 min_size_mb_4: 4.5
 max_size_mb_4: 6.1
 
-
 min_gap_minutes_1: 5
 max_gap_minutes_1: 120
 
@@ -173,6 +172,7 @@ logbook:
     "2": 600987525
     "3": 376764978
     "4": 1268265225
+    "5": 1331842924
 
 
 # -----------------------------------------------------------------------------
@@ -189,7 +189,7 @@ debug_mode: false # Only 10000 rows with all detail
 last_file_test: false
 alternative_fitting: true
 not_use_q_semisum_for_slew_corr: true
-residue_plots: false
+residue_plots: true
 
 # Plots and savings -------------------------
 crontab_execution: true

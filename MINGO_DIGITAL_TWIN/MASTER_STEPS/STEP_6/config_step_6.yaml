@@ -1,0 +1,8 @@
+input_dir: ../../INTERSTEPS/STEP_5_TO_6
+input_glob: "**/geom_*_signal.pkl"
+input_sim_run: latest
+geometry_id: auto
+output_format: pkl
+output_dir: ../../INTERSTEPS/STEP_6_TO_7
+chunk_rows: 100000
+plot_sample_rows: true
