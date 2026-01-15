@@ -1,11 +1,3 @@
-input_dir: ../../INTERSTEPS/STEP_7_TO_8
-input_glob: "**/geom_*_calibrated.pkl"
-input_sim_run: latest
-geometry_id: auto
-output_format: pkl
-output_dir: ../../INTERSTEPS/STEP_8_TO_9
-chunk_rows: 100000
-plot_sample_rows: true
 charge_threshold: 0.01
 t_fee_sigma_ns: 0.030
 q_to_time_factor: 0.00001

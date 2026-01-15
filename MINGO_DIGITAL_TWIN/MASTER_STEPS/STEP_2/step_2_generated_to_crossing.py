@@ -25,6 +25,7 @@ from STEP_SHARED.sim_utils import (
     build_geometry_map,
     build_global_geometry_registry,
     ensure_dir,
+    load_step_configs,
     latest_sim_run,
     list_station_config_files,
     load_with_metadata,
@@ -179,7 +180,12 @@ def plot_step2_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 2: expand muon sample for each station geometry.")
-    parser.add_argument("--config", default="config_step_2.yaml", help="Path to step config YAML")
+    parser.add_argument("--config", default="config_step_2_physics.yaml", help="Path to step physics config YAML")
+    parser.add_argument(
+        "--runtime-config",
+        default=None,
+        help="Path to step runtime config YAML (defaults to *_runtime.yaml)",
+    )
     parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing outputs")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
     args = parser.parse_args()
@@ -187,8 +193,11 @@ def main() -> None:
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = Path(__file__).resolve().parent / config_path
-    with config_path.open("r") as handle:
-        cfg = yaml.safe_load(handle)
+    runtime_path = Path(args.runtime_config) if args.runtime_config else None
+    if runtime_path is not None and not runtime_path.is_absolute():
+        runtime_path = Path(__file__).resolve().parent / runtime_path
+
+    physics_cfg, runtime_cfg, cfg, runtime_path = load_step_configs(config_path, runtime_path)
 
     input_path_cfg = cfg.get("input_muon_sample")
     if input_path_cfg:
@@ -301,7 +310,7 @@ def main() -> None:
     else:
         muon_df, upstream_meta = load_with_metadata(input_path)
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-        output_dir, "STEP_2", config_path, cfg, upstream_meta
+        output_dir, "STEP_2", config_path, physics_cfg, upstream_meta
     )
     reset_dir(sim_run_dir)
     c_mm_per_ns = float(cfg.get("c_mm_per_ns", upstream_meta.get("config", {}).get("c_mm_per_ns", 299.792458)))
@@ -352,7 +361,8 @@ def main() -> None:
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_2",
-        "config": cfg,
+        "config": physics_cfg,
+        "runtime_config": runtime_cfg,
         "sim_run": sim_run,
         "config_hash": config_hash,
         "upstream_hash": upstream_hash,

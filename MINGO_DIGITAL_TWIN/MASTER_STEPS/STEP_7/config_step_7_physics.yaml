@@ -1,12 +1,3 @@
-input_dir: ../../INTERSTEPS/STEP_6_TO_7
-input_glob: "**/geom_*_frontback.pkl"
-input_sim_run: latest
-geometry_id: auto
-output_format: pkl
-output_dir: ../../INTERSTEPS/STEP_7_TO_8
-chunk_rows: 100000
-plot_sample_rows: true
-
 tfront_offsets:
   - [-130, -128, -126, -124]
   - [-129, -127, -125, -123]

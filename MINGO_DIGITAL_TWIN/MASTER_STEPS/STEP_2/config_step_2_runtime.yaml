@@ -2,16 +2,7 @@ input_dir: ../../INTERSTEPS/STEP_1_TO_2
 input_sim_run: latest
 input_basename: null
 station_config_root: /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY
-# geometry_id: 0
-geometry_id: "random"
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_2_TO_3
-normalize_to_first_plane: true
-c_mm_per_ns: 299.792458
 chunk_rows: 200000
 plot_sample_rows: true
-bounds_mm:
-  x_min: -150.0
-  x_max: 150.0
-  y_min: -143.5
-  y_max: 143.5

@@ -3,5 +3,4 @@ input_glob: "**/geom_*_daq.pkl"
 input_sim_run: latest
 geometry_id: auto
 output_dir: ../../INTERSTEPS/STEP_11_TO_12
-event_type: 1
 chunk_rows: 100000

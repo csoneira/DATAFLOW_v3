@@ -5,7 +5,9 @@ Purpose:
 - For the selected geometry_id, intersect muon tracks with planes and save a per-geometry dataset.
 
 Inputs:
-- config: config_step_2.yaml
+- config:
+- config_step_2_physics.yaml
+- config_step_2_runtime.yaml
 - muon sample from Step 1 (via input_dir/input_sim_run/input_basename or input_muon_sample)
 - station configs: /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY
   - chunk_rows: when set and output_format=csv, process in chunks to reduce memory
@@ -25,5 +27,5 @@ Outputs:
 - ../../INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/geom_<G>_plots.pdf
 
 Run:
-- python3 step_2_generated_to_crossing.py --config config_step_2.yaml
-- python3 step_2_generated_to_crossing.py --config config_step_2.yaml --plot-only
+- python3 step_2_generated_to_crossing.py --config config_step_2_physics.yaml
+- python3 step_2_generated_to_crossing.py --config config_step_2_physics.yaml --plot-only

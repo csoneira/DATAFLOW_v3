@@ -23,6 +23,7 @@ from STEP_SHARED.sim_utils import (
     ensure_dir,
     iter_input_frames,
     latest_sim_run,
+    load_step_configs,
     load_with_metadata,
     now_iso,
     resolve_sim_run,
@@ -179,12 +180,30 @@ def plot_signal_summary(df: pd.DataFrame, output_path: Path) -> None:
                 patch.set_rasterized(True)
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
-        plt.close(fig)
+    plt.close(fig)
+
+
+def resolve_c_mm_per_ns(cfg: dict, upstream_meta: dict | None) -> float:
+    cfg_value = cfg.get("c_mm_per_ns")
+    if cfg_value is not None:
+        return float(cfg_value)
+    meta = upstream_meta or {}
+    while isinstance(meta, dict):
+        meta_cfg = meta.get("config", {})
+        if "c_mm_per_ns" in meta_cfg:
+            return float(meta_cfg["c_mm_per_ns"])
+        meta = meta.get("upstream")
+    return 299.792458
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 5: compute T_diff and q_diff.")
-    parser.add_argument("--config", default="config_step_5.yaml", help="Path to step config YAML")
+    parser.add_argument("--config", default="config_step_5_physics.yaml", help="Path to step physics config YAML")
+    parser.add_argument(
+        "--runtime-config",
+        default=None,
+        help="Path to step runtime config YAML (defaults to *_runtime.yaml)",
+    )
     parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing outputs")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
     args = parser.parse_args()
@@ -192,8 +211,11 @@ def main() -> None:
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = Path(__file__).resolve().parent / config_path
-    with config_path.open("r") as handle:
-        cfg = yaml.safe_load(handle)
+    runtime_path = Path(args.runtime_config) if args.runtime_config else None
+    if runtime_path is not None and not runtime_path.is_absolute():
+        runtime_path = Path(__file__).resolve().parent / runtime_path
+
+    physics_cfg, runtime_cfg, cfg, runtime_path = load_step_configs(config_path, runtime_path)
 
     input_dir = Path(cfg["input_dir"])
     if not input_dir.is_absolute():
@@ -206,7 +228,6 @@ def main() -> None:
     output_format = str(cfg.get("output_format", "pkl")).lower()
     chunk_rows = cfg.get("chunk_rows")
     plot_sample_rows = cfg.get("plot_sample_rows")
-    c_mm_per_ns = float(cfg.get("c_mm_per_ns", 299.792458))
     qdiff_frac = float(cfg.get("qdiff_frac", 0.01))
     rng = np.random.default_rng(cfg.get("seed"))
 
@@ -284,9 +305,10 @@ def main() -> None:
         geometry_id = int(parts[1])
     print(f"Processing: {input_path}")
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
+    c_mm_per_ns = resolve_c_mm_per_ns(cfg, upstream_meta)
 
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-        output_dir, "STEP_5", config_path, cfg, upstream_meta
+        output_dir, "STEP_5", config_path, physics_cfg, upstream_meta
     )
     reset_dir(sim_run_dir)
 
@@ -294,7 +316,8 @@ def main() -> None:
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_5",
-        "config": cfg,
+        "config": physics_cfg,
+        "runtime_config": runtime_cfg,
         "sim_run": sim_run,
         "config_hash": config_hash,
         "upstream_hash": upstream_hash,

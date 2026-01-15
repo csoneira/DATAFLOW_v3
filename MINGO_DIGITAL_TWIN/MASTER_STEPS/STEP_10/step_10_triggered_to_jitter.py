@@ -23,6 +23,7 @@ from STEP_SHARED.sim_utils import (
     ensure_dir,
     iter_input_frames,
     latest_sim_run,
+    load_step_configs,
     load_with_metadata,
     now_iso,
     resolve_sim_run,
@@ -32,7 +33,12 @@ from STEP_SHARED.sim_utils import (
 )
 
 
-def apply_jitter(df: pd.DataFrame, jitter_width_ns: float, rng: np.random.Generator) -> pd.DataFrame:
+def apply_jitter(
+    df: pd.DataFrame,
+    jitter_width_ns: float,
+    tdc_sigma_ns: float,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
     out = df.copy()
     n = len(out)
     jitter = rng.uniform(-jitter_width_ns / 2, jitter_width_ns / 2, size=n)
@@ -55,6 +61,8 @@ def apply_jitter(df: pd.DataFrame, jitter_width_ns: float, rng: np.random.Genera
                     continue
                 vals = out[col].to_numpy(dtype=float)
                 mask = active_mask & ~np.isnan(vals)
+                if tdc_sigma_ns > 0 and mask.any():
+                    vals[mask] = vals[mask] + rng.normal(0.0, tdc_sigma_ns, size=mask.sum())
                 vals[mask] = vals[mask] + jitter[mask]
                 out[col] = vals
 
@@ -119,7 +127,12 @@ def plot_jitter_summary(df: pd.DataFrame, output_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 10: apply DAQ jitter to T_front/T_back.")
-    parser.add_argument("--config", default="config_step_10.yaml", help="Path to step config YAML")
+    parser.add_argument("--config", default="config_step_10_physics.yaml", help="Path to step physics config YAML")
+    parser.add_argument(
+        "--runtime-config",
+        default=None,
+        help="Path to step runtime config YAML (defaults to *_runtime.yaml)",
+    )
     parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing outputs")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
     args = parser.parse_args()
@@ -127,8 +140,11 @@ def main() -> None:
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = Path(__file__).resolve().parent / config_path
-    with config_path.open("r") as handle:
-        cfg = yaml.safe_load(handle)
+    runtime_path = Path(args.runtime_config) if args.runtime_config else None
+    if runtime_path is not None and not runtime_path.is_absolute():
+        runtime_path = Path(__file__).resolve().parent / runtime_path
+
+    physics_cfg, runtime_cfg, cfg, runtime_path = load_step_configs(config_path, runtime_path)
 
     input_dir = Path(cfg["input_dir"])
     if not input_dir.is_absolute():
@@ -142,6 +158,7 @@ def main() -> None:
     chunk_rows = cfg.get("chunk_rows")
     plot_sample_rows = cfg.get("plot_sample_rows")
     jitter_width_ns = float(cfg.get("jitter_width_ns", 10.0))
+    tdc_sigma_ns = float(cfg.get("tdc_sigma_ns", 0.016))
     rng = np.random.default_rng(cfg.get("seed"))
 
     input_glob = cfg.get("input_glob", "**/geom_*_triggered.pkl")
@@ -156,6 +173,7 @@ def main() -> None:
     print(f"Input dir: {input_dir}")
     print(f"Output dir: {output_dir}")
     print(f"jitter_width_ns: {jitter_width_ns}")
+    print(f"tdc_sigma_ns: {tdc_sigma_ns}")
 
     if args.plot_only:
         if args.no_plots:
@@ -221,7 +239,7 @@ def main() -> None:
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
 
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-        output_dir, "STEP_10", config_path, cfg, upstream_meta
+        output_dir, "STEP_10", config_path, physics_cfg, upstream_meta
     )
     reset_dir(sim_run_dir)
 
@@ -229,7 +247,8 @@ def main() -> None:
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_10",
-        "config": cfg,
+        "config": physics_cfg,
+        "runtime_config": runtime_cfg,
         "sim_run": sim_run,
         "config_hash": config_hash,
         "upstream_hash": upstream_hash,
@@ -239,7 +258,7 @@ def main() -> None:
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:
             for chunk in input_iter:
-                yield apply_jitter(chunk, jitter_width_ns, rng)
+                yield apply_jitter(chunk, jitter_width_ns, tdc_sigma_ns, rng)
 
         manifest_path, last_chunk, row_count = write_chunked_output(
             _iter_out(),
@@ -260,7 +279,7 @@ def main() -> None:
         print(f"Saved {manifest_path}")
     else:
         df, upstream_meta = load_with_metadata(input_path)
-        out = apply_jitter(df, jitter_width_ns, rng)
+        out = apply_jitter(df, jitter_width_ns, tdc_sigma_ns, rng)
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         save_with_metadata(out, out_path, metadata, output_format)
         if not args.no_plots:

@@ -6,4 +6,3 @@ output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_9_TO_10
 chunk_rows: 100000
 plot_sample_rows: true
-trigger_combinations: ["12", "23", "34", "13"]

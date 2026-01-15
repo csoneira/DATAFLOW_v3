@@ -1,0 +1,6 @@
+xlim_mm: 5000
+ylim_mm: 5000
+z_plane_mm: 100
+cos_n: 2
+seed: null
+c_mm_per_ns: 299.792458

@@ -25,6 +25,7 @@ from STEP_SHARED.sim_utils import (
     get_strip_geometry,
     iter_input_frames,
     latest_sim_run,
+    load_step_configs,
     load_with_metadata,
     now_iso,
     resolve_sim_run,
@@ -527,7 +528,12 @@ def plot_step4_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 4: avalanche -> induced signal (hit vectors).")
-    parser.add_argument("--config", default="config_step_4.yaml", help="Path to step config YAML")
+    parser.add_argument("--config", default="config_step_4_physics.yaml", help="Path to step physics config YAML")
+    parser.add_argument(
+        "--runtime-config",
+        default=None,
+        help="Path to step runtime config YAML (defaults to *_runtime.yaml)",
+    )
     parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing outputs")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
     args = parser.parse_args()
@@ -535,8 +541,11 @@ def main() -> None:
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = Path(__file__).resolve().parent / config_path
-    with config_path.open("r") as handle:
-        cfg = yaml.safe_load(handle)
+    runtime_path = Path(args.runtime_config) if args.runtime_config else None
+    if runtime_path is not None and not runtime_path.is_absolute():
+        runtime_path = Path(__file__).resolve().parent / runtime_path
+
+    physics_cfg, runtime_cfg, cfg, runtime_path = load_step_configs(config_path, runtime_path)
 
     input_dir = Path(cfg["input_dir"])
     if not input_dir.is_absolute():
@@ -640,7 +649,7 @@ def main() -> None:
     print("Inducing strip signals...")
 
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-        output_dir, "STEP_4", config_path, cfg, upstream_meta
+        output_dir, "STEP_4", config_path, physics_cfg, upstream_meta
     )
     print(f"Resolved output sim_run: {sim_run}")
     reset_dir(sim_run_dir)
@@ -650,7 +659,8 @@ def main() -> None:
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_4",
-        "config": cfg,
+        "config": physics_cfg,
+        "runtime_config": runtime_cfg,
         "sim_run": sim_run,
         "config_hash": config_hash,
         "upstream_hash": upstream_hash,

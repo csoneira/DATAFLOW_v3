@@ -5,7 +5,9 @@ Purpose:
   and assign per-event timestamps using a Poisson process (rate_hz).
 
 Inputs:
-- config: config_step_12.yaml
+- config:
+- config_step_12_physics.yaml
+- config_step_12_runtime.yaml
 - Step 11 outputs in ../../INTERSTEPS/STEP_11_TO_12/SIM_RUN_<N>
 - geometry_map_all.csv from Step 2 outputs (via geometry_map_dir/geometry_map_sim_run)
   - target_rows: number of events to sample into the output file
@@ -19,4 +21,4 @@ Outputs:
     config_hash and upstream_hash as the baseline input_sim_run.
 
 Run:
-- python3 step_12_detector_to_station_dat.py --config config_step_12.yaml
+- python3 step_12_detector_to_station_dat.py --config config_step_12_physics.yaml

@@ -4,7 +4,9 @@ Purpose:
 - Convert DAQ outputs into the detector text format used by real data files the date of the event (thick time) is set to a placeholder.
 
 Inputs:
-- config: config_step_11.yaml
+- config:
+- config_step_11_physics.yaml
+- config_step_11_runtime.yaml
 - Step 10 outputs in ../../INTERSTEPS/STEP_10_TO_11/SIM_RUN_<N> (via input_sim_run)
   - chunk_rows: when set, write chunked .dat outputs and a .chunks.json manifest
 
@@ -19,4 +21,4 @@ Format:
   (each is 4 components per strip).
 
 Run:
-- python3 step_11_daq_to_detector_format.py --config config_step_11.yaml
+- python3 step_11_daq_to_detector_format.py --config config_step_11_physics.yaml

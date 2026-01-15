@@ -6,4 +6,3 @@ output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_10_TO_11
 chunk_rows: 100000
 plot_sample_rows: true
-jitter_width_ns: 10.0

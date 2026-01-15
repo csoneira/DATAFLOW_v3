@@ -6,9 +6,3 @@ output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_4_TO_5
 chunk_rows: 50000
 plot_sample_rows: true
-x_noise_mm: 5.0
-time_sigma_ns: 0.4
-avalanche_width_mm: 40.0
-charge_share_points: 2000
-width_scale_exponent: 0.1
-width_scale_max: 2.0

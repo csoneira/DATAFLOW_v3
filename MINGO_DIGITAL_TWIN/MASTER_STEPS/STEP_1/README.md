@@ -4,7 +4,9 @@ Purpose:
 - Generate independent muon start points and directions (X, Y, Z, theta, phi).
 
 Inputs:
-- config: config_step_1.yaml
+- config:
+- config_step_1_physics.yaml
+- config_step_1_runtime.yaml
   - chunk_rows: when set, write in batches to reduce memory usage (csv or pkl chunked output)
   - plot_sample_rows: plot only a sample from the last chunk when chunk_rows is set
   - partial chunks are dropped unless the dataset fits in a single chunk
@@ -16,5 +18,5 @@ Outputs:
 - ../../INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/plots/muon_sample_<N>_plots.pdf
 
 Run:
-- python3 step_1_blank_to_generated.py --config config_step_1.yaml
-- python3 step_1_blank_to_generated.py --config config_step_1.yaml --plot-only
+- python3 step_1_blank_to_generated.py --config config_step_1_physics.yaml
+- python3 step_1_blank_to_generated.py --config config_step_1_physics.yaml --plot-only

@@ -6,9 +6,3 @@ output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_3_TO_4
 chunk_rows: 100000
 plot_sample_rows: true
-efficiencies: [0.90, 0.91, 0.87, 0.90]
-avalanche_gain: 1.0
-townsend_alpha_per_mm: 4.836
-avalanche_gap_mm: 3.0
-avalanche_electron_sigma: 0.4
-seed: null

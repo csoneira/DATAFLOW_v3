@@ -7,6 +7,3 @@ geometry_map_dir: ../../INTERSTEPS/STEP_2_TO_3
 geometry_map_sim_run: latest
 output_dir: ../../SIMULATED_DATA
 step10_dir: ../../INTERSTEPS/STEP_10_TO_11
-rate_hz: 5.0
-target_rows: 50000
-seed: null

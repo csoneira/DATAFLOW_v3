@@ -35,6 +35,38 @@ def load_global_home_path() -> str:
     return config["home_path"]
 
 
+def load_step_configs(
+    physics_path: Path,
+    runtime_path: Optional[Path] = None,
+) -> Tuple[Dict, Dict, Dict, Path]:
+    if not physics_path.exists():
+        raise FileNotFoundError(f"Physics config not found: {physics_path}")
+    if runtime_path is None:
+        if physics_path.name.endswith("_physics.yaml"):
+            runtime_path = physics_path.with_name(physics_path.name.replace("_physics.yaml", "_runtime.yaml"))
+        else:
+            raise ValueError("Runtime config path not provided and cannot infer from physics config name.")
+    if not runtime_path.exists():
+        raise FileNotFoundError(f"Runtime config not found: {runtime_path}")
+
+    with physics_path.open("r") as handle:
+        physics_cfg = yaml.safe_load(handle) or {}
+    with runtime_path.open("r") as handle:
+        runtime_cfg = yaml.safe_load(handle) or {}
+
+    if not isinstance(physics_cfg, dict) or not isinstance(runtime_cfg, dict):
+        raise ValueError("Both physics and runtime configs must be YAML mappings.")
+
+    overlap = set(physics_cfg.keys()) & set(runtime_cfg.keys())
+    if overlap:
+        overlap_list = ", ".join(sorted(overlap))
+        raise ValueError(f"Config keys overlap between physics and runtime configs: {overlap_list}")
+
+    merged_cfg = dict(runtime_cfg)
+    merged_cfg.update(physics_cfg)
+    return physics_cfg, runtime_cfg, merged_cfg, runtime_path
+
+
 def list_station_config_files(root_dir: Path) -> Dict[int, Path]:
     station_files: Dict[int, Path] = {}
     for station_dir in sorted(root_dir.glob("STATION_*")):
