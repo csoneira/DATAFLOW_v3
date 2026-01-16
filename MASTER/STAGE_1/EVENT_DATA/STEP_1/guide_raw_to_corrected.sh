@@ -344,10 +344,10 @@ validate_stations() {
   local arr=("$@")
   local validated=()
   for s in "${arr[@]}"; do
-    if [[ "$s" =~ ^[1-5]$ ]]; then
+    if [[ "$s" =~ ^[1-8]$ ]]; then
       validated+=("$s")
     else
-      echo "Warning: ignoring invalid station '$s' (must be 1-5)" >&2
+      echo "Warning: ignoring invalid station '$s' (must be 1-8)" >&2
     fi
   done
   if [[ ${#validated[@]} -eq 0 ]]; then

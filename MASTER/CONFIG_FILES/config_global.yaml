@@ -296,11 +296,11 @@ run_jupyter_notebook: false
 remove_outliers: false
 
 # Plot settings
-create_plots: true
-create_plots_task_4: true
-create_essential_plots: true
-save_plots: true
-create_pdf: true
+create_plots: false
+create_plots_task_4: false
+create_essential_plots: false
+save_plots: false
+create_pdf: false
 force_replacement: true  # Creates a new datafile even if there is already one that looks complete
 show_plots: false
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+"""Summarize SIM_RUN registries under INTERSTEPS and report row counts.
 from __future__ import annotations
+"""
 
 import argparse
 import json

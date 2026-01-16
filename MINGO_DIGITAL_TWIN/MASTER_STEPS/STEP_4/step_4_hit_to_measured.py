@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Step 4: induce strip signals and measured hit quantities.
+
+Inputs: geom_<G>_avalanche from Step 3.
+Outputs: geom_<G>_hit.(pkl|csv) with per-strip charges/positions/times and metadata.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -22,6 +28,8 @@ sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
 from STEP_SHARED.sim_utils import (
     ensure_dir,
+    find_latest_data_path,
+    find_sim_run_dir,
     get_strip_geometry,
     iter_input_frames,
     latest_sim_run,
@@ -116,8 +124,15 @@ def induce_signal(
     width_scale_exponent: float,
     width_scale_max: float,
     rng: np.random.Generator,
+    debug_event_index: int | None,
+    debug_points: dict | None,
+    debug_rng: np.random.Generator | None,
 ) -> pd.DataFrame:
-    base_cols = [c for c in ("X_gen", "Y_gen", "Theta_gen", "Phi_gen") if c in df.columns]
+    base_cols = [
+        c
+        for c in ("X_gen", "Y_gen", "Theta_gen", "Phi_gen", "T0_ns", "T_thick_s")
+        if c in df.columns
+    ]
     out = df[base_cols].copy()
     n = len(df)
     tt_array = np.full(n, "", dtype=object)
@@ -159,6 +174,28 @@ def induce_signal(
         plane_detected = np.zeros(n, dtype=bool)
         remaining = np.full(n, charge_share_points, dtype=np.int32)
         cumulative_p = np.zeros(n, dtype=np.float32)
+        debug_counts = None
+        if (
+            debug_event_index is not None
+            and 0 <= debug_event_index < n
+            and valid[debug_event_index]
+        ):
+            sigma = float(scaled_width[debug_event_index])
+            center_x = float(aval_x[debug_event_index])
+            center_y = float(aval_y[debug_event_index])
+            points_rng = debug_rng or rng
+            x_pts = center_x + points_rng.normal(0.0, sigma, int(charge_share_points))
+            y_pts = center_y + points_rng.normal(0.0, sigma, int(charge_share_points))
+            if debug_points is not None:
+                debug_points[plane_idx] = {
+                    "x": x_pts,
+                    "y": y_pts,
+                    "charge": float(aval_q[debug_event_index]),
+                }
+            debug_counts = []
+            for strip_idx in range(len(lower_edges)):
+                in_strip = (y_pts >= lower_edges[strip_idx]) & (y_pts < upper_edges[strip_idx])
+                debug_counts.append(int(in_strip.sum()))
 
         for strip_idx in range(len(lower_edges)):
             frac = np.zeros(n, dtype=np.float32)
@@ -175,6 +212,8 @@ def induce_signal(
                 denom_mask = denom > 0
                 adj[denom_mask] = p_strip[denom_mask] / denom[denom_mask]
                 counts = rng.binomial(remaining, np.clip(adj, 0.0, 1.0))
+                if debug_counts is not None:
+                    counts[debug_event_index] = debug_counts[strip_idx]
                 remaining -= counts
                 cumulative_p += p_strip
                 frac = counts.astype(np.float32, copy=False) / float(charge_share_points)
@@ -222,7 +261,15 @@ def plot_hit_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     plt.close(fig)
 
 
-def plot_step4_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
+def plot_step4_summary(
+    df: pd.DataFrame,
+    pdf: PdfPages,
+    include_thrown_points: bool,
+    points_per_plane: int,
+    point_seed: int | None,
+    thrown_points: dict | None,
+    examples_df: pd.DataFrame | None = None,
+) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
     axes = axes.flatten()
 
@@ -257,6 +304,78 @@ def plot_step4_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
+    if "Theta_gen" in df.columns and "Phi_gen" in df.columns and "tt_hit" in df.columns:
+        tt_series = normalize_tt(df["tt_hit"]).dropna().astype(str)
+        for tt_value in sorted(tt_series.unique()):
+            tt_df = df[df["tt_hit"] == tt_value]
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+            axes[0].scatter(
+                tt_df["Theta_gen"],
+                tt_df["Phi_gen"],
+                s=6,
+                alpha=0.25,
+                rasterized=True,
+            )
+            axes[0].set_title(f"Theta vs Phi (tt_hit={tt_value})")
+            axes[0].set_xlabel("Theta (rad)")
+            axes[0].set_ylabel("Phi (rad)")
+            axes[0].set_xlim(0, np.pi / 2)
+            axes[0].set_ylim(-np.pi, np.pi)
+
+            axes[1].hist2d(tt_df["Theta_gen"], tt_df["Phi_gen"], bins=60, cmap="magma")
+            axes[1].set_title(f"Theta vs Phi density (tt_hit={tt_value})")
+            axes[1].set_xlabel("Theta (rad)")
+            axes[1].set_ylabel("Phi (rad)")
+            axes[1].set_xlim(0, np.pi / 2)
+            axes[1].set_ylim(-np.pi, np.pi)
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
+
+    strip_cols_all = [col for col in df.columns if col.startswith("Y_mea_") and "_s" in col]
+    examples_source = examples_df if examples_df is not None else df
+    if strip_cols_all and examples_source is not None and not examples_source.empty:
+        rng = np.random.default_rng(0)
+        fig, axes = plt.subplots(5, 3, figsize=(12, 14), sharex=True, sharey=False)
+        strip_positions = np.arange(1, 5)
+        for ax in axes.flatten():
+            plane = int(rng.integers(1, 5))
+            strip_cols = [f"Y_mea_{plane}_s{s}" for s in range(1, 5)]
+            if not all(col in examples_source.columns for col in strip_cols):
+                ax.axis("off")
+                continue
+            qsum_matrix = examples_source[strip_cols].to_numpy(dtype=float)
+            aval_col = f"avalanche_size_electrons_{plane}"
+            if aval_col in examples_source.columns:
+                aval_mask = examples_source[aval_col].to_numpy(dtype=float) >= 1.0
+            else:
+                aval_mask = np.ones(len(examples_source), dtype=bool)
+            if "tt_hit" in examples_source.columns:
+                tt_series = normalize_tt(examples_source["tt_hit"]).astype(str)
+                tt_mask = tt_series == "1234"
+            else:
+                tt_series = None
+                tt_mask = np.ones(len(examples_source), dtype=bool)
+            hit_mask = (qsum_matrix > 0).any(axis=1) & aval_mask & tt_mask
+            hit_indices = np.where(hit_mask)[0]
+            if len(hit_indices) == 0:
+                ax.axis("off")
+                continue
+            idx = int(rng.choice(hit_indices))
+            vals = examples_source.loc[idx, strip_cols].to_numpy(dtype=float)
+            bars = ax.bar(strip_positions, vals, width=0.6, alpha=0.8)
+            for patch in bars:
+                patch.set_rasterized(True)
+            tt_label = tt_series.iloc[idx] if tt_series is not None else ""
+            ax.set_title(f"P{plane} row {idx} tt={tt_label}")
+            ax.set_xticks(strip_positions)
+            ax.set_xlabel("Strip")
+        axes[0, 0].set_ylabel("qsum")
+        fig.suptitle("Charge sharing examples (single plane per event)")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
     fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
     for plane_idx, ax in enumerate(axes, start=1):
         aval_col = f"avalanche_size_electrons_{plane_idx}"
@@ -271,6 +390,9 @@ def plot_step4_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
         ratios = np.zeros_like(aval_vals)
         ratios[mask] = qsum_total[mask] / aval_vals[mask]
         ratios = ratios[ratios > 0]
+        if len(ratios) == 0:
+            ax.axis("off")
+            continue
         ax.hist(ratios, bins=80, color="steelblue", alpha=0.8)
         ax.set_title(f"Plane {plane_idx} qsum / avalanche size")
         ax.set_xlim(left=0)
@@ -280,6 +402,34 @@ def plot_step4_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
+
+    if include_thrown_points and thrown_points:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 9))
+        for plane_idx in range(1, 5):
+            ax = axes[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+            points = thrown_points.get(plane_idx)
+            if not points:
+                ax.axis("off")
+                continue
+            x_pts = points["x"]
+            y_pts = points["y"]
+            charge = points.get("charge")
+            ax.scatter(x_pts, y_pts, s=8, alpha=0.5, rasterized=True)
+            ax.scatter([np.mean(x_pts)], [np.mean(y_pts)], s=40, color="black", marker="x")
+            _, _, lower_edges, upper_edges = get_strip_geometry(plane_idx)
+            for edge in np.concatenate([lower_edges, upper_edges]):
+                ax.axhline(edge, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
+            if charge is not None:
+                ax.set_title(f"Plane {plane_idx} thrown points (Q={charge:,.0f})")
+            else:
+                ax.set_title(f"Plane {plane_idx} thrown points")
+            ax.set_xlabel("X (mm)")
+            ax.set_ylabel("Y (mm)")
+            ax.set_xlim(-150, 150)
+            ax.set_ylim(-150, 150)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
 
     fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
     for plane_idx, ax in enumerate(axes, start=1):
@@ -343,20 +493,22 @@ def plot_step4_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
         mask = (aval_vals > 0) & (qsum_total > 0)
         aval_vals = aval_vals[mask]
         qsum_total = qsum_total[mask]
-        if len(aval_vals) > 0:
-            ax.scatter(
-                aval_vals,
-                qsum_total,
-                s=2,
-                alpha=0.2,
-                rasterized=True,
-            )
+        if len(aval_vals) == 0:
+            ax.axis("off")
+            continue
+        ax.scatter(
+            aval_vals,
+            qsum_total,
+            s=2,
+            alpha=0.2,
+            rasterized=True,
+        )
         ax.set_title(f"Plane {plane_idx} qsum total vs avalanche size")
         ax.set_xlabel("avalanche size")
         ax.set_ylabel("qsum total")
-        fig.tight_layout()
-        pdf.savefig(fig, dpi=150)
-        plt.close(fig)
+    fig.tight_layout()
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
 
     fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
     for plane_idx, ax in enumerate(axes, start=1):
@@ -584,28 +736,26 @@ def main() -> None:
         if args.no_plots:
             print("Plot-only requested with --no-plots; skipping plots.")
             return
-        for out_file in sorted(output_dir.rglob(f"SIM_RUN_*/geom_*_hit.{output_format}")):
-            df, _ = load_with_metadata(out_file)
-            plot_path = out_file.with_name(f"{out_file.stem}_plots.pdf")
-            with PdfPages(plot_path) as pdf:
-                plot_hit_summary(df, pdf)
-                plot_step4_summary(df, pdf)
-            print(f"Saved {plot_path}")
-        for manifest_path in sorted(output_dir.rglob("SIM_RUN_*/geom_*_hit.chunks.json")):
-            manifest = json.loads(manifest_path.read_text())
-            chunks = manifest.get("chunks", [])
-            if not chunks:
-                continue
-            last_chunk = Path(chunks[-1])
-            if last_chunk.suffix == ".csv":
-                df = pd.read_csv(last_chunk)
-            else:
-                df = pd.read_pickle(last_chunk)
-            plot_path = manifest_path.with_name(f"{manifest_path.stem}_plots.pdf")
-            with PdfPages(plot_path) as pdf:
-                plot_hit_summary(df, pdf)
-                plot_step4_summary(df, pdf)
-            print(f"Saved {plot_path}")
+        latest_path = find_latest_data_path(output_dir)
+        if latest_path is None:
+            raise FileNotFoundError(f"No existing outputs found in {output_dir} for plot-only.")
+        df, _ = load_with_metadata(latest_path)
+        sim_run_dir = find_sim_run_dir(latest_path)
+        plot_dir = (sim_run_dir or latest_path.parent) / "PLOTS"
+        ensure_dir(plot_dir)
+        plot_path = plot_dir / f"{latest_path.stem}_plots.pdf"
+        with PdfPages(plot_path) as pdf:
+            plot_hit_summary(df, pdf)
+            plot_step4_summary(
+                df,
+                pdf,
+                include_thrown_points=False,
+                points_per_plane=charge_share_points,
+                point_seed=cfg.get("seed"),
+                thrown_points=None,
+                examples_df=df,
+            )
+        print(f"Saved {plot_path}")
         return
 
     if input_sim_run == "latest":
@@ -667,7 +817,23 @@ def main() -> None:
         "source_dataset": str(input_path),
         "upstream": upstream_meta,
     }
-    def prepare_chunk(chunk: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def select_debug_event(frame: pd.DataFrame, chooser: np.random.Generator) -> int | None:
+        required_cols = [f"avalanche_size_electrons_{i}" for i in range(1, 5)]
+        for col in required_cols:
+            if col not in frame.columns:
+                return None
+        mask = np.ones(len(frame), dtype=bool)
+        for col in required_cols:
+            mask &= frame[col].to_numpy(dtype=float) > 0
+        if not mask.any():
+            return None
+        indices = np.where(mask)[0]
+        return int(chooser.choice(indices))
+
+    def prepare_chunk(
+        chunk: pd.DataFrame,
+        debug_state: dict,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         needed_cols = {"X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
         for plane_idx in range(1, 5):
             needed_cols.update(
@@ -680,6 +846,9 @@ def main() -> None:
             )
         keep_cols = [col for col in chunk.columns if col in needed_cols]
         chunk = chunk[keep_cols]
+        debug_event_index = None
+        if not debug_state["captured"]:
+            debug_event_index = select_debug_event(chunk, debug_rng)
         out_full = induce_signal(
             chunk,
             x_noise,
@@ -689,13 +858,24 @@ def main() -> None:
             width_scale_exponent,
             width_scale_max,
             rng,
+            debug_event_index,
+            debug_state["points"] if debug_event_index is not None else None,
+            debug_rng if debug_event_index is not None else None,
         )
         plot_cols = [
             col
             for col in out_full.columns
             if col == "tt_hit"
             or col.startswith(("Y_mea_", "X_mea_", "T_sum_meas_"))
-            or col.startswith(("avalanche_size_electrons_", "avalanche_width_scale_", "avalanche_scaled_width_"))
+            or col.startswith(
+                (
+                    "avalanche_size_electrons_",
+                    "avalanche_width_scale_",
+                    "avalanche_scaled_width_",
+                    "avalanche_x_",
+                    "avalanche_y_",
+                )
+            )
         ]
         plot_df = out_full[plot_cols]
         keep_cols = {
@@ -710,7 +890,13 @@ def main() -> None:
                 keep_cols.add(col)
         drop_cols = [col for col in out_full.columns if col not in keep_cols]
         out_full = out_full.drop(columns=drop_cols)
+        if debug_event_index is not None and debug_state["points"]:
+            debug_state["captured"] = True
+            debug_state["plot_df"] = plot_df
         return out_full, plot_df
+
+    debug_state = {"captured": False, "points": {}, "plot_df": None}
+    debug_rng = np.random.default_rng()
 
     if chunk_rows:
         chunks_dir = sim_run_dir / f"{out_stem}_chunks"
@@ -751,7 +937,7 @@ def main() -> None:
 
         total_rows = 0
         for chunk in input_iter:
-            out_chunk, plot_chunk = prepare_chunk(chunk)
+            out_chunk, plot_chunk = prepare_chunk(chunk, debug_state)
             if out_chunk.empty:
                 continue
             total_rows += len(out_chunk)
@@ -780,18 +966,29 @@ def main() -> None:
         print("Signal induction complete.")
         print(f"Saved data: {manifest_path}")
 
-        plot_df = last_plot_df
+        plot_df = debug_state["plot_df"] if debug_state["plot_df"] is not None else last_plot_df
+        plot_df_examples = plot_df
         if plot_sample_rows and plot_df is not None:
             sample_n = len(plot_df) if plot_sample_rows is True else int(plot_sample_rows)
             sample_n = min(sample_n, len(plot_df))
             plot_df = plot_df.sample(n=sample_n, random_state=cfg.get("seed"))
 
         if not args.no_plots and plot_df is not None:
-            plot_path = sim_run_dir / f"{out_stem}_plots.pdf"
+            plot_dir = sim_run_dir / "PLOTS"
+            ensure_dir(plot_dir)
+            plot_path = plot_dir / f"{out_stem}_plots.pdf"
             print("Plotting plots...")
             with PdfPages(plot_path) as pdf:
                 plot_hit_summary(plot_df, pdf)
-                plot_step4_summary(plot_df, pdf)
+                plot_step4_summary(
+                    plot_df,
+                    pdf,
+                    include_thrown_points=True,
+                    points_per_plane=charge_share_points,
+                    point_seed=cfg.get("seed"),
+                    thrown_points=debug_state["points"],
+                    examples_df=plot_df_examples,
+                )
             print(f"Saved plots: {plot_path}")
     else:
         df, upstream_meta = load_with_metadata(input_path)
@@ -808,6 +1005,7 @@ def main() -> None:
             )
         keep_cols = [col for col in df.columns if col in needed_cols]
         df = df[keep_cols]
+        debug_event_index = select_debug_event(df, debug_rng)
         out = induce_signal(
             df,
             x_noise,
@@ -817,6 +1015,9 @@ def main() -> None:
             width_scale_exponent,
             width_scale_max,
             rng,
+            debug_event_index,
+            debug_state["points"] if debug_event_index is not None else None,
+            debug_rng if debug_event_index is not None else None,
         )
         print("Signal induction complete.")
 
@@ -826,9 +1027,18 @@ def main() -> None:
             for col in out.columns
             if col == "tt_hit"
             or col.startswith(("Y_mea_", "X_mea_", "T_sum_meas_"))
-            or col.startswith(("avalanche_size_electrons_", "avalanche_width_scale_", "avalanche_scaled_width_"))
+            or col.startswith(
+                (
+                    "avalanche_size_electrons_",
+                    "avalanche_width_scale_",
+                    "avalanche_scaled_width_",
+                    "avalanche_x_",
+                    "avalanche_y_",
+                )
+            )
         ]
         plot_df = out[plot_cols]
+        plot_df_examples = plot_df
         plot_sample_size = cfg.get("plot_sample_size", 200000)
         if plot_sample_size:
             plot_sample_size = int(plot_sample_size)
@@ -856,11 +1066,21 @@ def main() -> None:
         gc.collect()
 
         if not args.no_plots:
-            plot_path = sim_run_dir / f"{out_path.stem}_plots.pdf"
+            plot_dir = sim_run_dir / "PLOTS"
+            ensure_dir(plot_dir)
+            plot_path = plot_dir / f"{out_path.stem}_plots.pdf"
             print("Plotting plots...")
             with PdfPages(plot_path) as pdf:
                 plot_hit_summary(plot_df, pdf)
-                plot_step4_summary(plot_df, pdf)
+                plot_step4_summary(
+                    plot_df,
+                    pdf,
+                    include_thrown_points=True,
+                    points_per_plane=charge_share_points,
+                    point_seed=cfg.get("seed"),
+                    thrown_points=debug_state["points"],
+                    examples_df=plot_df_examples,
+                )
             print(f"Saved plots: {plot_path}")
         print(f"Saved {out_path}")
 

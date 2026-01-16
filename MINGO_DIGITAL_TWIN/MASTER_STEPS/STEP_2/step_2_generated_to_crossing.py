@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Step 2: propagate muons through station geometry and compute plane crossings.
+
+Inputs: muon_sample from Step 1 and geometry registry.
+Outputs: geom_<G>.(pkl|csv) with crossing coordinates/times and metadata.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -25,6 +31,8 @@ from STEP_SHARED.sim_utils import (
     build_geometry_map,
     build_global_geometry_registry,
     ensure_dir,
+    find_latest_data_path,
+    find_sim_run_dir,
     load_step_configs,
     latest_sim_run,
     list_station_config_files,
@@ -115,28 +123,23 @@ def plot_geometry_summary(df: pd.DataFrame, pdf: PdfPages, title: str) -> None:
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    counts = df["tt_crossing"].value_counts().sort_index()
-    bars = ax.bar(counts.index.astype(str), counts.values, color="slateblue", alpha=0.8)
-    for patch in bars:
-        patch.set_rasterized(True)
-    ax.set_title("Crossing type counts")
-    ax.set_xlabel("tt_crossing")
-    ax.set_ylabel("Counts")
-    fig.tight_layout()
-    pdf.savefig(fig, dpi=150)
-    plt.close(fig)
-
     crossing_values = pd.Series(df["tt_crossing"]).dropna().astype(str)
     for ct in sorted(crossing_values.unique()):
         ct_df = df[df["tt_crossing"] == ct]
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.scatter(ct_df["Theta_gen"], ct_df["Phi_gen"], s=6, alpha=0.25, rasterized=True)
-        ax.set_title(f"Theta vs Phi (tt_crossing={ct})")
-        ax.set_xlabel("Theta (rad)")
-        ax.set_ylabel("Phi (rad)")
-        ax.set_xlim(0, np.pi / 2)
-        ax.set_ylim(-np.pi, np.pi)
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        axes[0].scatter(ct_df["Theta_gen"], ct_df["Phi_gen"], s=6, alpha=0.25, rasterized=True)
+        axes[0].set_title(f"Theta vs Phi (tt_crossing={ct})")
+        axes[0].set_xlabel("Theta (rad)")
+        axes[0].set_ylabel("Phi (rad)")
+        axes[0].set_xlim(0, np.pi / 2)
+        axes[0].set_ylim(-np.pi, np.pi)
+
+        axes[1].hist2d(ct_df["Theta_gen"], ct_df["Phi_gen"], bins=60, cmap="magma")
+        axes[1].set_title(f"Theta vs Phi density (tt_crossing={ct})")
+        axes[1].set_xlabel("Theta (rad)")
+        axes[1].set_ylabel("Phi (rad)")
+        axes[1].set_xlim(0, np.pi / 2)
+        axes[1].set_ylim(-np.pi, np.pi)
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
@@ -199,6 +202,34 @@ def main() -> None:
 
     physics_cfg, runtime_cfg, cfg, runtime_path = load_step_configs(config_path, runtime_path)
 
+    output_dir = Path(cfg["output_dir"])
+    if not output_dir.is_absolute():
+        output_dir = Path(__file__).resolve().parent / output_dir
+    ensure_dir(output_dir)
+
+    output_format = str(cfg.get("output_format", "pkl")).lower()
+
+    if args.plot_only:
+        if args.no_plots:
+            print("Plot-only requested with --no-plots; skipping plots.")
+            return
+        latest_path = find_latest_data_path(output_dir)
+        if latest_path is None:
+            raise FileNotFoundError(f"No existing outputs found in {output_dir} for plot-only.")
+        print(f"Plot-only: {latest_path}")
+        df, _ = load_with_metadata(latest_path)
+        if "tt_crossing" in df.columns:
+            df = df[df["tt_crossing"].notna()].reset_index(drop=True)
+        sim_run_dir = find_sim_run_dir(latest_path)
+        plot_dir = (sim_run_dir or latest_path.parent) / "PLOTS"
+        ensure_dir(plot_dir)
+        plot_path = plot_dir / f"{latest_path.stem}_plots.pdf"
+        with PdfPages(plot_path) as pdf:
+            plot_geometry_summary(df, pdf, latest_path.stem)
+            plot_step2_summary(df, pdf)
+        print(f"Saved {plot_path}")
+        return
+
     input_path_cfg = cfg.get("input_muon_sample")
     if input_path_cfg:
         input_path = Path(input_path_cfg).expanduser()
@@ -231,19 +262,19 @@ def main() -> None:
             )
             if len(candidates) != 1:
                 manifest_candidates = sorted(input_run_dir.glob("muon_sample_*.chunks.json"))
+                if not manifest_candidates:
+                    manifest_candidates = sorted(input_run_dir.glob("muon_sample_*/chunks"))
                 if len(manifest_candidates) != 1:
                     raise FileNotFoundError(
                         f"Expected 1 muon_sample file in {input_run_dir}, found {len(candidates)}."
                     )
                 manifest_path = manifest_candidates[0]
-                input_path = Path(str(manifest_path)[: -len(".chunks.json")] + ".pkl")
+                if manifest_path.name == "chunks":
+                    input_path = manifest_path.parent
+                else:
+                    input_path = Path(str(manifest_path)[: -len(".chunks.json")] + ".pkl")
             else:
                 input_path = candidates[0]
-    output_dir = Path(cfg["output_dir"])
-    if not output_dir.is_absolute():
-        output_dir = Path(__file__).resolve().parent / output_dir
-    ensure_dir(output_dir)
-
     bounds_cfg = cfg.get("bounds_mm", {})
     bounds = DetectorBounds(
         x_min=float(bounds_cfg.get("x_min", DEFAULT_BOUNDS.x_min)),
@@ -252,7 +283,6 @@ def main() -> None:
         y_max=float(bounds_cfg.get("y_max", DEFAULT_BOUNDS.y_max)),
     )
 
-    output_format = str(cfg.get("output_format", "pkl")).lower()
     normalize = bool(cfg.get("normalize_to_first_plane", True))
     chunk_rows = cfg.get("chunk_rows")
     rng = np.random.default_rng(cfg.get("seed"))
@@ -268,37 +298,21 @@ def main() -> None:
         if args.no_plots:
             print("Plot-only requested with --no-plots; skipping plots.")
             return
-        output_glob = f"SIM_RUN_*/geom_*.{output_format}"
-        for geom_file in sorted(output_dir.rglob(output_glob)):
-            print(f"Plot-only: {geom_file}")
-            df, _ = load_with_metadata(geom_file)
-            if "tt_crossing" in df.columns:
-                df = df[df["tt_crossing"].notna()].reset_index(drop=True)
-            plot_path = geom_file.with_name(f"{geom_file.stem}_plots.pdf")
-            with PdfPages(plot_path) as pdf:
-                plot_geometry_summary(df, pdf, geom_file.stem)
-                plot_step2_summary(df, pdf)
-            print(f"Saved {plot_path}")
-
-        manifest_glob = "SIM_RUN_*/geom_*.chunks.json"
-        for manifest_path in sorted(output_dir.rglob(manifest_glob)):
-            print(f"Plot-only (chunked): {manifest_path}")
-            manifest = json.loads(manifest_path.read_text())
-            chunks = manifest.get("chunks", [])
-            if not chunks:
-                continue
-            last_chunk = Path(chunks[-1])
-            if last_chunk.suffix == ".csv":
-                df = pd.read_csv(last_chunk)
-            else:
-                df = pd.read_pickle(last_chunk)
-            if "tt_crossing" in df.columns:
-                df = df[df["tt_crossing"].notna()].reset_index(drop=True)
-            plot_path = manifest_path.with_name(f"{manifest_path.stem}_plots.pdf")
-            with PdfPages(plot_path) as pdf:
-                plot_geometry_summary(df, pdf, manifest_path.stem)
-                plot_step2_summary(df, pdf)
-            print(f"Saved {plot_path}")
+        latest_path = find_latest_data_path(output_dir)
+        if latest_path is None:
+            raise FileNotFoundError(f"No existing outputs found in {output_dir} for plot-only.")
+        print(f"Plot-only: {latest_path}")
+        df, _ = load_with_metadata(latest_path)
+        if "tt_crossing" in df.columns:
+            df = df[df["tt_crossing"].notna()].reset_index(drop=True)
+        sim_run_dir = find_sim_run_dir(latest_path)
+        plot_dir = (sim_run_dir or latest_path.parent) / "PLOTS"
+        ensure_dir(plot_dir)
+        plot_path = plot_dir / f"{latest_path.stem}_plots.pdf"
+        with PdfPages(plot_path) as pdf:
+            plot_geometry_summary(df, pdf, latest_path.stem)
+            plot_step2_summary(df, pdf)
+        print(f"Saved {plot_path}")
         return
 
     if stream_csv:
@@ -343,6 +357,8 @@ def main() -> None:
         raise ValueError("config geometry_id is required for Step 2.")
     if str(geometry_id).lower() == "random":
         geometry_id = int(rng.choice(registry["geometry_id"].to_numpy(dtype=int)))
+        cfg["geometry_id"] = geometry_id
+        physics_cfg["geometry_id"] = geometry_id
         print(f"Selected random geometry_id: {geometry_id}")
     else:
         geometry_id = int(geometry_id)
@@ -456,7 +472,9 @@ def main() -> None:
                 sample_n = len(last_full_chunk) if plot_sample_rows is True else int(plot_sample_rows)
                 sample_n = min(sample_n, len(last_full_chunk))
                 sample_df = last_full_chunk.sample(n=sample_n, random_state=0)
-                plot_path = sim_run_dir / f"geom_{geometry_id}_plots.pdf"
+                plot_dir = sim_run_dir / "PLOTS"
+                ensure_dir(plot_dir)
+                plot_path = plot_dir / f"geom_{geometry_id}_plots.pdf"
                 with PdfPages(plot_path) as pdf:
                     plot_geometry_summary(sample_df, pdf, f"Geometry {geometry_id} (sample)")
                     plot_step2_summary(sample_df, pdf)
@@ -469,7 +487,9 @@ def main() -> None:
 
         save_with_metadata(geom_df, out_path, metadata, output_format)
         if not args.no_plots:
-            plot_path = sim_run_dir / f"geom_{geometry_id}_plots.pdf"
+            plot_dir = sim_run_dir / "PLOTS"
+            ensure_dir(plot_dir)
+            plot_path = plot_dir / f"geom_{geometry_id}_plots.pdf"
             with PdfPages(plot_path) as pdf:
                 plot_geometry_summary(geom_df, pdf, f"Geometry {geometry_id}")
                 plot_step2_summary(geom_df, pdf)

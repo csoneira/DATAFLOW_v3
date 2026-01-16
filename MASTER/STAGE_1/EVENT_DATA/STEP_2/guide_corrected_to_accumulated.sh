@@ -9,7 +9,7 @@ Usage:
   guide_corrected_to_accumulated.sh [--station <list>] [--run-anyway]
 
 Options:
-  -s, --station   Station numbers (1-4). Comma/space-separated. Default: all.
+  -s, --station   Station numbers (1-8). Comma/space-separated. Default: all.
   --run-anyway    Skip the check that prevents overlapping runs.
   -h, --help      Show this help message and exit.
 
@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
       print_help
       exit 0
       ;;
-    [1-4])
+    [1-8])
       station_filter_raw="$1"
       station_filter_overridden=true
       shift
@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-ALL_STATIONS=(1 2 3 4)
+ALL_STATIONS=(1 2 3 4 5 6 7 8)
 TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/TRAFFIC_LIGHT"
 TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step2_station_queue.txt"
 
@@ -239,7 +239,7 @@ validate_stations() {
   local arr=("$@")
   local validated=()
   for st in "${arr[@]}"; do
-    if [[ "$st" =~ ^[1-4]$ ]]; then
+    if [[ "$st" =~ ^[1-8]$ ]]; then
       validated+=("$st")
     else
       echo "Warning: ignoring invalid station '$st'" >&2

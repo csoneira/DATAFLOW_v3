@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Step 1: generate primary muon parameters (x, y, z, theta, phi) in batch form.
+
+Inputs: physics/runtime configs.
+Outputs: muon_sample_<N>.(pkl|csv) with metadata and optional plots.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -38,10 +44,18 @@ def generate_muon_sample(
     z_plane: float,
     cos_n: float,
     seed: Optional[int],
+    thick_rate_hz: float | None = None,
+    drop_last_second: bool = False,
     batch_size: int = 200_000,
 ) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
+    time_rng = np.random.default_rng()
     exponent = 1.0 / (cos_n + 1.0)
+
+    if thick_rate_hz and thick_rate_hz > 0:
+        t_thick_s = generate_thick_times(n_tracks, float(thick_rate_hz), time_rng)
+    else:
+        t_thick_s = np.zeros(n_tracks, dtype=float)
 
     x_out = np.empty(n_tracks)
     y_out = np.empty(n_tracks)
@@ -60,14 +74,19 @@ def generate_muon_sample(
         theta_out[filled:filled + n_batch] = np.arccos(rand[:, 4] ** exponent)
         filled += n_batch
 
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "X_gen": x_out,
         "Y_gen": y_out,
         "Z_gen": z_out,
         "Theta_gen": theta_out,
         "Phi_gen": phi_out,
         "T0_ns": np.zeros(n_tracks, dtype=float),
+        "T_thick_s": t_thick_s,
     })
+    if drop_last_second and len(df) > 0:
+        last_second = df["T_thick_s"].max()
+        df = df[df["T_thick_s"] != last_second].reset_index(drop=True)
+    return df
 
 
 def generate_muon_batches(
@@ -77,10 +96,15 @@ def generate_muon_batches(
     z_plane: float,
     cos_n: float,
     seed: Optional[int],
+    thick_rate_hz: float | None,
+    drop_last_second: bool,
     batch_size: int,
 ) -> Iterable[pd.DataFrame]:
     rng = np.random.default_rng(seed)
+    time_rng = np.random.default_rng()
     exponent = 1.0 / (cos_n + 1.0)
+
+    thick_seq = ThickSecondSequencer(float(thick_rate_hz or 0.0), time_rng)
 
     filled = 0
     while filled < n_tracks:
@@ -91,14 +115,23 @@ def generate_muon_batches(
         y_out = (rand[:, 1] * 2 - 1) * ylim
         phi_out = rand[:, 3] * (2 * np.pi) - np.pi
         theta_out = np.arccos(rand[:, 4] ** exponent)
-        yield pd.DataFrame({
+        if thick_rate_hz and thick_rate_hz > 0:
+            t_thick_s = thick_seq.next(n_batch)
+        else:
+            t_thick_s = np.zeros(n_batch, dtype=float)
+        df = pd.DataFrame({
             "X_gen": x_out,
             "Y_gen": y_out,
             "Z_gen": np.full(n_batch, z_plane),
             "Theta_gen": theta_out,
             "Phi_gen": phi_out,
             "T0_ns": np.zeros(n_batch, dtype=float),
+            "T_thick_s": t_thick_s,
         })
+        if drop_last_second and filled + n_batch >= n_tracks and len(df) > 0:
+            last_second = df["T_thick_s"].max()
+            df = df[df["T_thick_s"] != last_second].reset_index(drop=True)
+        yield df
         filled += n_batch
 
 
@@ -145,20 +178,118 @@ def plot_muon_sample(df: pd.DataFrame, pdf: PdfPages) -> None:
 
 def plot_step1_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-    axes[0, 0].hist(df["X_gen"], bins=80, color="steelblue", alpha=0.8)
-    axes[0, 0].set_title("X_gen")
-    axes[0, 1].hist(df["Y_gen"], bins=80, color="seagreen", alpha=0.8)
-    axes[0, 1].set_title("Y_gen")
-    axes[1, 0].hist(df["Theta_gen"], bins=80, color="darkorange", alpha=0.8)
-    axes[1, 0].set_title("Theta_gen")
-    axes[1, 1].hist(df["Phi_gen"], bins=80, color="slateblue", alpha=0.8)
-    axes[1, 1].set_title("Phi_gen")
+    axes[0, 0].hist2d(df["X_gen"], df["Y_gen"], bins=60, cmap="viridis")
+    axes[0, 0].set_title("X_gen vs Y_gen (density)")
+    axes[0, 0].set_xlabel("X (mm)")
+    axes[0, 0].set_ylabel("Y (mm)")
+
+    h = axes[0, 1].hist2d(df["Theta_gen"], df["Phi_gen"], bins=60, cmap="magma")
+    axes[0, 1].set_title("Theta_gen vs Phi_gen (density)")
+    axes[0, 1].set_xlabel("Theta (rad)")
+    axes[0, 1].set_ylabel("Phi (rad)")
+    for quad in h[3].get_paths():
+        quad._interpolation_steps = 1
+
+    cos_theta = np.cos(df["Theta_gen"].to_numpy(dtype=float))
+    axes[1, 0].hist(cos_theta, bins=80, color="darkorange", alpha=0.8)
+    axes[1, 0].set_title("cos(Theta_gen)")
+    axes[1, 0].set_xlabel("cos(theta)")
+
+    r = np.hypot(df["X_gen"].to_numpy(dtype=float), df["Y_gen"].to_numpy(dtype=float))
+    axes[1, 1].hist(r, bins=80, color="slateblue", alpha=0.8)
+    axes[1, 1].set_title("Radial distance")
+    axes[1, 1].set_xlabel("sqrt(X^2+Y^2) (mm)")
+
     for ax in axes.flatten():
         for patch in ax.patches:
             patch.set_rasterized(True)
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
+
+
+def plot_thick_time_summary(df: pd.DataFrame, pdf: PdfPages, rate_hz: float | None) -> bool:
+    if "T_thick_s" not in df.columns:
+        return False
+    t0_s = df["T_thick_s"].to_numpy(dtype=float)
+    t0_s = t0_s[np.isfinite(t0_s)]
+    if t0_s.size < 2:
+        return False
+    t0_s = np.sort(t0_s.astype(int))
+    if t0_s.size == 0:
+        return False
+    sec_min = int(t0_s[0])
+    sec_max = int(t0_s[-1])
+    counts = np.bincount(t0_s - sec_min)
+    seconds = np.arange(sec_min, sec_min + len(counts))
+    if len(counts) > 1:
+        counts = counts[1:]
+        seconds = seconds[1:]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    axes[0].plot(seconds, counts, linewidth=1.0, color="slateblue")
+    axes[0].set_title("Counts per second")
+    axes[0].set_xlabel("Second")
+    axes[0].set_ylabel("Events")
+
+    axes[1].hist(counts, bins=60, color="teal", alpha=0.8)
+    axes[1].set_title("Histogram of counts per second")
+    axes[1].set_xlabel("Events per second")
+    axes[1].set_ylabel("Counts")
+    if rate_hz and rate_hz > 0:
+        axes[1].axvline(rate_hz, color="black", linestyle="--", linewidth=1.0)
+
+    fig.tight_layout()
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+    return True
+
+
+def generate_thick_times(n_tracks: int, rate_hz: float, rng: np.random.Generator) -> np.ndarray:
+    if n_tracks <= 0:
+        return np.zeros(0, dtype=float)
+    if rate_hz <= 0:
+        return np.zeros(n_tracks, dtype=float)
+    times: list[float] = []
+    second = 0
+    while len(times) < n_tracks:
+        count = int(rng.poisson(rate_hz))
+        if count <= 0:
+            second += 1
+            continue
+        remaining = n_tracks - len(times)
+        take = min(count, remaining)
+        times.extend([float(second)] * take)
+        second += 1
+    return np.asarray(times, dtype=float)
+
+
+class ThickSecondSequencer:
+    def __init__(self, rate_hz: float, rng: np.random.Generator) -> None:
+        self.rate_hz = rate_hz
+        self.rng = rng
+        self.current_second = 0
+        self.remaining_in_second = 0
+
+    def next(self, n: int) -> np.ndarray:
+        if n <= 0:
+            return np.zeros(0, dtype=float)
+        if self.rate_hz <= 0:
+            return np.zeros(n, dtype=float)
+        out: list[float] = []
+        while len(out) < n:
+            if self.remaining_in_second <= 0:
+                self.remaining_in_second = int(self.rng.poisson(self.rate_hz))
+                if self.remaining_in_second <= 0:
+                    self.current_second += 1
+                    continue
+            remaining = n - len(out)
+            take = min(self.remaining_in_second, remaining)
+            out.extend([float(self.current_second)] * take)
+            self.remaining_in_second -= take
+            if self.remaining_in_second <= 0:
+                self.current_second += 1
+        return np.asarray(out, dtype=float)
 
 
 def main() -> None:
@@ -191,11 +322,19 @@ def main() -> None:
     chunk_rows = cfg.get("chunk_rows")
     plot_sample_rows = cfg.get("plot_sample_rows")
     output_name = f"{cfg.get('output_basename', 'muon_sample')}_{int(cfg['n_tracks'])}.{output_format}"
+    output_base = cfg.get("output_basename", "muon_sample")
     if args.plot_only:
         sim_run = find_sim_run(output_dir, physics_cfg, None)
         if sim_run is None:
-            raise FileNotFoundError("No matching SIM_RUN found for this config.")
-        sim_run_dir = output_dir / sim_run
+            sim_run_dirs = sorted(
+                output_dir.glob("SIM_RUN_*"),
+                key=lambda p: p.stat().st_mtime,
+            )
+            if not sim_run_dirs:
+                raise FileNotFoundError("No SIM_RUN directories found for plot-only.")
+            sim_run_dir = sim_run_dirs[-1]
+        else:
+            sim_run_dir = output_dir / sim_run
         output_path = sim_run_dir / output_name
         config_hash = None
         upstream_hash = None
@@ -209,28 +348,99 @@ def main() -> None:
         f"Step 1 config: n_tracks={cfg['n_tracks']}, xlim={cfg['xlim_mm']}, "
         f"ylim={cfg['ylim_mm']}, z_plane={cfg['z_plane_mm']}, c={cfg.get('c_mm_per_ns', 299.792458)}"
     )
+    flux_cm2_min = float(cfg.get("flux_cm2_min", 1.0))
+    area_cm2 = (2.0 * float(cfg["xlim_mm"])) * (2.0 * float(cfg["ylim_mm"])) / 100.0
+    rate_per_min = flux_cm2_min * area_cm2
+    rate_hz = rate_per_min / 60.0
+    drop_last_second = True
+    print(
+        f"Step 1 timing: flux={flux_cm2_min} count/cm^2/min, area_cm2={area_cm2:.2f}, "
+        f"rate_hz={rate_hz:.4f}"
+    )
+    if rate_hz > 0:
+        total_time_s = float(cfg["n_tracks"]) / rate_hz
+        print(f"Step 1 timing: estimated total time ~{total_time_s:.2f}s")
+    if drop_last_second:
+        print("Step 1 timing: dropping events from the last second.")
     if args.plot_only:
         if args.no_plots:
             print("Plot-only requested with --no-plots; skipping plots.")
             return
         plot_sample_rows = cfg.get("plot_sample_rows")
-        chunk_manifest = output_path.with_suffix(".chunks.json")
-        if chunk_manifest.exists():
-            manifest = json.loads(chunk_manifest.read_text())
-            chunks = manifest.get("chunks", [])
-            if not chunks:
-                raise FileNotFoundError(f"No chunks listed in {chunk_manifest}")
-            last_chunk = Path(chunks[-1])
-            if last_chunk.suffix == ".csv":
-                df = pd.read_csv(last_chunk)
-            else:
-                df = pd.read_pickle(last_chunk)
-            if plot_sample_rows:
-                sample_n = len(df) if plot_sample_rows is True else int(plot_sample_rows)
-                sample_n = min(sample_n, len(df))
-                df = df.sample(n=sample_n, random_state=0)
-        else:
-            df, _ = load_with_metadata(output_path)
+        def load_latest_from_dir(target_dir: Path) -> pd.DataFrame | None:
+            chunk_dirs = sorted(
+                target_dir.glob(f"{output_base}_*/chunks"),
+                key=lambda p: p.stat().st_mtime,
+            )
+            if chunk_dirs:
+                chunk_dir = chunk_dirs[-1]
+                part_files = sorted(
+                    list(chunk_dir.glob("part_*.pkl")) + list(chunk_dir.glob("part_*.csv")),
+                    key=lambda p: p.stat().st_mtime,
+                )
+                if not part_files:
+                    raise FileNotFoundError(f"No part files found in {chunk_dir}")
+                for part_path in reversed(part_files):
+                    try:
+                        if part_path.suffix == ".csv":
+                            df_local = pd.read_csv(part_path)
+                        else:
+                            df_local = pd.read_pickle(part_path)
+                    except Exception:
+                        continue
+                    print(f"Plot-only: using chunk file {part_path.name}")
+                    if plot_sample_rows:
+                        sample_n = len(df_local) if plot_sample_rows is True else int(plot_sample_rows)
+                        sample_n = min(sample_n, len(df_local))
+                        df_local = df_local.sample(n=sample_n, random_state=0)
+                    return df_local
+            chunk_candidates = sorted(
+                target_dir.glob(f"{output_base}_*.chunks.json"),
+                key=lambda p: p.stat().st_mtime,
+            )
+            if chunk_candidates:
+                chunk_manifest = chunk_candidates[-1]
+                manifest = json.loads(chunk_manifest.read_text())
+                chunks = manifest.get("chunks", [])
+                if not chunks:
+                    raise FileNotFoundError(f"No chunks listed in {chunk_manifest}")
+                last_chunk = Path(chunks[-1])
+                print(f"Plot-only: using chunk manifest {chunk_manifest.name}")
+                if last_chunk.suffix == ".csv":
+                    df_local = pd.read_csv(last_chunk)
+                else:
+                    df_local = pd.read_pickle(last_chunk)
+                if plot_sample_rows:
+                    sample_n = len(df_local) if plot_sample_rows is True else int(plot_sample_rows)
+                    sample_n = min(sample_n, len(df_local))
+                    df_local = df_local.sample(n=sample_n, random_state=0)
+                return df_local
+            data_candidates = []
+            data_candidates.extend(target_dir.glob(f"{output_base}_*.pkl"))
+            data_candidates.extend(target_dir.glob(f"{output_base}_*.csv"))
+            data_candidates = sorted(data_candidates, key=lambda p: p.stat().st_mtime)
+            if not data_candidates:
+                return None
+            output_path_local = data_candidates[-1]
+            print(f"Plot-only: using output file {output_path_local.name}")
+            df_local, _ = load_with_metadata(output_path_local)
+            return df_local
+
+        df = load_latest_from_dir(sim_run_dir)
+        if df is None:
+            sim_run_dirs = sorted(
+                output_dir.glob("SIM_RUN_*"),
+                key=lambda p: p.stat().st_mtime,
+            )
+            for candidate_dir in reversed(sim_run_dirs):
+                df = load_latest_from_dir(candidate_dir)
+                if df is not None:
+                    sim_run_dir = candidate_dir
+                    break
+        if df is None:
+            raise FileNotFoundError(
+                f"No existing outputs found in {sim_run_dir} for plot-only."
+            )
     else:
         stream_csv = bool(chunk_rows) and output_format == "csv"
         stream_pkl = bool(chunk_rows) and output_format == "pkl"
@@ -256,10 +466,10 @@ def main() -> None:
                 z_plane=float(cfg["z_plane_mm"]),
                 cos_n=float(cfg["cos_n"]),
                 seed=cfg.get("seed"),
+                thick_rate_hz=rate_hz,
+                drop_last_second=drop_last_second,
                 batch_size=int(chunk_rows),
             ):
-                if len(batch) < int(chunk_rows) and int(cfg["n_tracks"]) >= int(chunk_rows):
-                    continue
                 total_rows += len(batch)
                 batch.to_csv(output_path, mode="a", index=False, header=not header_written)
                 header_written = True
@@ -274,12 +484,18 @@ def main() -> None:
                     sample_n = len(last_full_batch) if plot_sample_rows is True else int(plot_sample_rows)
                     sample_n = min(sample_n, len(last_full_batch))
                     sample_df = last_full_batch.sample(n=sample_n, random_state=0)
-                    plot_dir = output_path.parent / "plots"
+                    plot_dir = output_path.parent / "PLOTS"
                     ensure_dir(plot_dir)
                     plot_path = plot_dir / f"{output_path.stem}_plots.pdf"
                     with PdfPages(plot_path) as pdf:
                         plot_muon_sample(sample_df, pdf)
                         plot_step1_summary(sample_df, pdf)
+                        added = plot_thick_time_summary(sample_df, pdf, rate_hz)
+                    if added:
+                        print("Step 1 plots: added thick-time summary page.")
+                    else:
+                        print("Step 1 plots: skipped thick-time summary page.")
+                    print("Step 1 sample head:\n", sample_df.head())
                 else:
                     print("Chunked CSV mode enabled; skipping plots to limit memory usage.")
         elif stream_pkl:
@@ -296,11 +512,11 @@ def main() -> None:
                     z_plane=float(cfg["z_plane_mm"]),
                     cos_n=float(cfg["cos_n"]),
                     seed=cfg.get("seed"),
+                    thick_rate_hz=rate_hz,
+                    drop_last_second=drop_last_second,
                     batch_size=int(chunk_rows),
                 )
             ):
-                if len(batch) < int(chunk_rows) and int(cfg["n_tracks"]) >= int(chunk_rows):
-                    continue
                 chunk_path = chunks_dir / f"part_{idx:04d}.pkl"
                 batch.to_pickle(chunk_path)
                 chunks.append(str(chunk_path))
@@ -323,12 +539,18 @@ def main() -> None:
                     sample_n = len(last_full_batch) if plot_sample_rows is True else int(plot_sample_rows)
                     sample_n = min(sample_n, len(last_full_batch))
                     sample_df = last_full_batch.sample(n=sample_n, random_state=0)
-                    plot_dir = output_path.parent / "plots"
+                    plot_dir = output_path.parent / "PLOTS"
                     ensure_dir(plot_dir)
                     plot_path = plot_dir / f"{output_path.stem}_plots.pdf"
                     with PdfPages(plot_path) as pdf:
                         plot_muon_sample(sample_df, pdf)
                         plot_step1_summary(sample_df, pdf)
+                        added = plot_thick_time_summary(sample_df, pdf, rate_hz)
+                    if added:
+                        print("Step 1 plots: added thick-time summary page.")
+                    else:
+                        print("Step 1 plots: skipped thick-time summary page.")
+                    print("Step 1 sample head:\n", sample_df.head())
                 else:
                     print("Chunked PKL mode enabled; skipping plots to limit memory usage.")
         else:
@@ -339,17 +561,25 @@ def main() -> None:
                 z_plane=float(cfg["z_plane_mm"]),
                 cos_n=float(cfg["cos_n"]),
                 seed=cfg.get("seed"),
+                thick_rate_hz=rate_hz,
+                drop_last_second=drop_last_second,
             )
             save_with_metadata(df, output_path, metadata, output_format)
             generated_rows = len(df)
 
     if not args.no_plots and df is not None:
-        plot_dir = output_path.parent / "plots"
+        plot_dir = output_path.parent / "PLOTS"
         ensure_dir(plot_dir)
         plot_path = plot_dir / f"{output_path.stem}_plots.pdf"
         with PdfPages(plot_path) as pdf:
             plot_muon_sample(df, pdf)
             plot_step1_summary(df, pdf)
+            added = plot_thick_time_summary(df, pdf, rate_hz)
+        if added:
+            print("Step 1 plots: added thick-time summary page.")
+        else:
+            print("Step 1 plots: skipped thick-time summary page.")
+        print("Step 1 sample head:\n", df.head())
 
     if args.plot_only and not args.no_plots:
         print(f"Plotted {output_path.stem} -> {plot_path}")

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Step 6: build front/back timing and charge vectors per strip.
+
+Inputs: geom_<G>_signal from Step 5.
+Outputs: geom_<G>_frontback.(pkl|csv) with T_front/T_back/Q_front/Q_back.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -21,6 +27,8 @@ sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
 from STEP_SHARED.sim_utils import (
     ensure_dir,
+    find_latest_data_path,
+    find_sim_run_dir,
     iter_input_frames,
     latest_sim_run,
     load_step_configs,
@@ -60,8 +68,29 @@ def compute_front_back(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def pick_tt_column(df: pd.DataFrame) -> str | None:
+    for col in ("tt_trigger", "tt_hit", "tt_avalanche", "tt_crossing"):
+        if col in df.columns:
+            return col
+    return None
+
+
 def plot_frontback_summary(df: pd.DataFrame, output_path: Path) -> None:
     with PdfPages(output_path) as pdf:
+        tt_col = pick_tt_column(df)
+        if tt_col:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            counts = df[tt_col].astype("string").fillna("").value_counts().sort_index()
+            bars = ax.bar(counts.index.astype(str), counts.values, color="slateblue", alpha=0.8)
+            for patch in bars:
+                patch.set_rasterized(True)
+            ax.set_title(f"{tt_col} counts")
+            ax.set_xlabel(tt_col)
+            ax.set_ylabel("Counts")
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
+
         fig, axes = plt.subplots(4, 4, figsize=(12, 10))
         for plane_idx in range(1, 5):
             for strip_idx in range(1, 5):
@@ -164,24 +193,16 @@ def main() -> None:
         if args.no_plots:
             print("Plot-only requested with --no-plots; skipping plots.")
             return
-        for out_file in sorted(output_dir.rglob(f"SIM_RUN_*/geom_*_frontback.{output_format}")):
-            df, _ = load_with_metadata(out_file)
-            plot_path = out_file.with_name(f"{out_file.stem}_plots.pdf")
-            plot_frontback_summary(df, plot_path)
-            print(f"Saved {plot_path}")
-        for manifest_path in sorted(output_dir.rglob("SIM_RUN_*/geom_*_frontback.chunks.json")):
-            manifest = json.loads(manifest_path.read_text())
-            chunks = manifest.get("chunks", [])
-            if not chunks:
-                continue
-            last_chunk = Path(chunks[-1])
-            if last_chunk.suffix == ".csv":
-                df = pd.read_csv(last_chunk)
-            else:
-                df = pd.read_pickle(last_chunk)
-            plot_path = manifest_path.with_name(f"{manifest_path.stem}_plots.pdf")
-            plot_frontback_summary(df, plot_path)
-            print(f"Saved {plot_path}")
+        latest_path = find_latest_data_path(output_dir)
+        if latest_path is None:
+            raise FileNotFoundError(f"No existing outputs found in {output_dir} for plot-only.")
+        df, _ = load_with_metadata(latest_path)
+        sim_run_dir = find_sim_run_dir(latest_path)
+        plot_dir = (sim_run_dir or latest_path.parent) / "PLOTS"
+        ensure_dir(plot_dir)
+        plot_path = plot_dir / f"{latest_path.stem}_plots.pdf"
+        plot_frontback_summary(df, plot_path)
+        print(f"Saved {plot_path}")
         return
 
     if input_sim_run == "latest":
@@ -259,7 +280,9 @@ def main() -> None:
             sample_n = min(sample_n, len(plot_df))
             plot_df = plot_df.sample(n=sample_n, random_state=cfg.get("seed"))
         if not args.no_plots and plot_df is not None:
-            plot_path = sim_run_dir / f"{out_stem}_plots.pdf"
+            plot_dir = sim_run_dir / "PLOTS"
+            ensure_dir(plot_dir)
+            plot_path = plot_dir / f"{out_stem}_plots.pdf"
             plot_frontback_summary(plot_df, plot_path)
         print(f"Saved {manifest_path}")
     else:
@@ -268,7 +291,9 @@ def main() -> None:
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         save_with_metadata(out, out_path, metadata, output_format)
         if not args.no_plots:
-            plot_path = sim_run_dir / f"{out_path.stem}_plots.pdf"
+            plot_dir = sim_run_dir / "PLOTS"
+            ensure_dir(plot_dir)
+            plot_path = plot_dir / f"{out_path.stem}_plots.pdf"
             plot_frontback_summary(out, plot_path)
         print(f"Saved {out_path}")
 

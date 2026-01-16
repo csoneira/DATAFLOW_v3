@@ -578,8 +578,8 @@ else:
     # Get the station argument
     station = sys.argv[1]
 
-if station not in ["1", "2", "3", "4", "5"]:
-    print("Error: Invalid station. Please provide a valid station (1, 2, 3, 4, or 5).")
+if station not in ["1", "2", "3", "4", "5", "6", "7", "8"]:
+    print("Error: Invalid station. Please provide a valid station (1, 2, 3, 4, 5, 6, 7 or 8).")
     sys.exit(1)
 # print(f"Station: {station}")
 
@@ -2759,7 +2759,7 @@ create_plots = config["create_plots"]
 create_plots_task_4 = config.get("create_plots_task_4", False)
 if create_plots_task_4:
     # Force plotting in Task 4 only, even if global flag is off.
-    create_plots = False
+    create_plots = True
     create_essential_plots = True
     save_plots = True
     create_pdf = True

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Step 9: evaluate trigger combinations and retain passing events.
+
+Inputs: geom_<G>_threshold from Step 8.
+Outputs: geom_<G>_triggered.(pkl|csv) with trigger tags.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -22,6 +28,8 @@ sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
 from STEP_SHARED.sim_utils import (
     ensure_dir,
+    find_latest_data_path,
+    find_sim_run_dir,
     iter_input_frames,
     latest_sim_run,
     load_step_configs,
@@ -194,24 +202,16 @@ def main() -> None:
         if args.no_plots:
             print("Plot-only requested with --no-plots; skipping plots.")
             return
-        for out_file in sorted(output_dir.rglob(f"SIM_RUN_*/geom_*_triggered.{output_format}")):
-            df, _ = load_with_metadata(out_file)
-            plot_path = out_file.with_name(f"{out_file.stem}_plots.pdf")
-            plot_trigger_summary(df, plot_path)
-            print(f"Saved {plot_path}")
-        for manifest_path in sorted(output_dir.rglob("SIM_RUN_*/geom_*_triggered.chunks.json")):
-            manifest = json.loads(manifest_path.read_text())
-            chunks = manifest.get("chunks", [])
-            if not chunks:
-                continue
-            last_chunk = Path(chunks[-1])
-            if last_chunk.suffix == ".csv":
-                df = pd.read_csv(last_chunk)
-            else:
-                df = pd.read_pickle(last_chunk)
-            plot_path = manifest_path.with_name(f"{manifest_path.stem}_plots.pdf")
-            plot_trigger_summary(df, plot_path)
-            print(f"Saved {plot_path}")
+        latest_path = find_latest_data_path(output_dir)
+        if latest_path is None:
+            raise FileNotFoundError(f"No existing outputs found in {output_dir} for plot-only.")
+        df, _ = load_with_metadata(latest_path)
+        sim_run_dir = find_sim_run_dir(latest_path)
+        plot_dir = (sim_run_dir or latest_path.parent) / "PLOTS"
+        ensure_dir(plot_dir)
+        plot_path = plot_dir / f"{latest_path.stem}_plots.pdf"
+        plot_trigger_summary(df, plot_path)
+        print(f"Saved {plot_path}")
         return
 
     if input_sim_run == "latest":
@@ -289,7 +289,9 @@ def main() -> None:
             sample_n = min(sample_n, len(plot_df))
             plot_df = plot_df.sample(n=sample_n, random_state=cfg.get("seed"))
         if not args.no_plots and plot_df is not None:
-            plot_path = sim_run_dir / f"{out_stem}_plots.pdf"
+            plot_dir = sim_run_dir / "PLOTS"
+            ensure_dir(plot_dir)
+            plot_path = plot_dir / f"{out_stem}_plots.pdf"
             plot_trigger_summary(plot_df, plot_path)
         print(f"Saved {manifest_path}")
     else:
@@ -298,7 +300,9 @@ def main() -> None:
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         save_with_metadata(filtered, out_path, metadata, output_format)
         if not args.no_plots:
-            plot_path = sim_run_dir / f"{out_path.stem}_plots.pdf"
+            plot_dir = sim_run_dir / "PLOTS"
+            ensure_dir(plot_dir)
+            plot_path = plot_dir / f"{out_path.stem}_plots.pdf"
             plot_trigger_summary(filtered, plot_path)
         print(f"Saved {out_path} (kept {len(filtered):,}/{len(df):,})")
 

@@ -3,6 +3,6 @@ input_glob: "**/geom_*_triggered.pkl"
 input_sim_run: latest
 geometry_id: auto
 output_format: pkl
-output_dir: ../../INTERSTEPS/STEP_10_TO_11
+output_dir: ../../INTERSTEPS/STEP_10_TO_FINAL
 chunk_rows: 100000
 plot_sample_rows: true

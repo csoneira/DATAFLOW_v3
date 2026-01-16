@@ -1,22 +1,19 @@
 Step 1 (Muon Sample)
 
 Purpose:
-- Generate independent muon start points and directions (X, Y, Z, theta, phi).
+- Generate primary muon parameters (position/direction/time) for the simulation.
 
 Inputs:
 - config:
-- config_step_1_physics.yaml
-- config_step_1_runtime.yaml
-  - chunk_rows: when set, write in batches to reduce memory usage (csv or pkl chunked output)
-  - plot_sample_rows: plot only a sample from the last chunk when chunk_rows is set
-  - partial chunks are dropped unless the dataset fits in a single chunk
+  - config_step_1_physics.yaml
+  - config_step_1_runtime.yaml
+- data: No upstream input; uses physics parameters to generate tracks.
 
 Outputs:
-- ../../INTERSTEPS/STEP_1_TO_2/sim_run_registry.json
-- ../../INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/muon_sample_<N>.pkl (or .csv)
-- ../../INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/muon_sample_<N>.pkl.meta.json
-- ../../INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/plots/muon_sample_<N>_plots.pdf
+- INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/muon_sample_<N>.(pkl|csv)
+- INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/PLOTS/muon_sample_<N>_plots.pdf
 
 Run:
 - python3 step_1_blank_to_generated.py --config config_step_1_physics.yaml
+- python3 step_1_blank_to_generated.py --config config_step_1_physics.yaml --runtime-config config_step_1_runtime.yaml
 - python3 step_1_blank_to_generated.py --config config_step_1_physics.yaml --plot-only

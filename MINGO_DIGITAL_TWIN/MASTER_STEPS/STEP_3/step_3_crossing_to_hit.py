@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Step 3: apply efficiencies and avalanche model to crossings.
+
+Inputs: geom_<G> from Step 2.
+Outputs: geom_<G>_avalanche.(pkl|csv) with avalanche size/position and metadata.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -22,6 +28,8 @@ sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
 from STEP_SHARED.sim_utils import (
     ensure_dir,
+    find_latest_data_path,
+    find_sim_run_dir,
     load_step_configs,
     iter_input_frames,
     latest_sim_run,
@@ -109,27 +117,8 @@ def plot_avalanche_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
-    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
-    for plane_idx, ax in enumerate(axes, start=1):
-        col = f"avalanche_ion_{plane_idx}"
-        if col not in df.columns:
-            ax.axis("off")
-            continue
-        vals = df[col].to_numpy(dtype=float)
-        vals = vals[vals > 0]
-        ax.hist(vals, bins=60, color="slateblue", alpha=0.8)
-        ax.set_title(f"Plane {plane_idx} avalanche_ion")
-        ax.set_xlim(left=0)
-    axes[-1].set_xlabel("ionizations")
-    for ax in axes:
-        for patch in ax.patches:
-            patch.set_rasterized(True)
-    fig.tight_layout()
-    pdf.savefig(fig, dpi=150)
-    plt.close(fig)
-
-    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
-    for plane_idx, ax in enumerate(axes, start=1):
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharex=True, sharey=True)
+    for plane_idx, ax in enumerate(axes.flatten(), start=1):
         col = f"avalanche_size_electrons_{plane_idx}"
         if col not in df.columns:
             ax.axis("off")
@@ -139,43 +128,73 @@ def plot_avalanche_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
         ax.hist(vals, bins=120, color="darkorange", alpha=0.8)
         ax.set_title(f"Plane {plane_idx} avalanche size")
         ax.set_xlim(left=0)
-    axes[-1].set_xlabel("avalanche size (electrons)")
-    for ax in axes:
+        ax.set_yscale("log")
         for patch in ax.patches:
             patch.set_rasterized(True)
+    fig.suptitle("Avalanche size per plane (log scale)")
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
-
-def plot_step3_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
-    fig, axes = plt.subplots(5, 1, figsize=(8, 12))
-
-    counts = normalize_tt_series(df["tt_avalanche"]).value_counts().sort_index()
-    bars = axes[0].bar(counts.index, counts.values, color="steelblue", alpha=0.8)
-    for patch in bars:
-        patch.set_rasterized(True)
-    axes[0].set_title("tt_avalanche")
-
-    for plane_idx in range(1, 5):
-        col = f"avalanche_size_electrons_{plane_idx}"
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharex=True, sharey=True)
+    for plane_idx, ax in enumerate(axes.flatten(), start=1):
+        col = f"avalanche_ion_{plane_idx}"
         if col not in df.columns:
-            axes[plane_idx].axis("off")
+            ax.axis("off")
             continue
         vals = df[col].to_numpy(dtype=float)
         vals = vals[vals > 0]
-        axes[plane_idx].hist(vals, bins=120, color="darkorange", alpha=0.8)
-        axes[plane_idx].set_title(f"Plane {plane_idx} avalanche size")
-        if plane_idx > 1:
-            axes[plane_idx].sharex(axes[1])
-        axes[plane_idx].set_xlim(left=0)
-        for patch in axes[plane_idx].patches:
+        ax.hist(vals, bins=80, color="slateblue", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx} avalanche_ion")
+        ax.set_xlim(left=0)
+        ax.set_yscale("log")
+        for patch in ax.patches:
             patch.set_rasterized(True)
-    axes[-1].set_xlabel("avalanche size (electrons)")
-
+    fig.suptitle("Ionizations per plane (log scale)")
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    for plane_idx, ax in enumerate(axes.flatten(), start=1):
+        x_col = f"avalanche_x_{plane_idx}"
+        y_col = f"avalanche_y_{plane_idx}"
+        if x_col not in df.columns or y_col not in df.columns:
+            ax.axis("off")
+            continue
+        x_vals = df[x_col].to_numpy(dtype=float)
+        y_vals = df[y_col].to_numpy(dtype=float)
+        mask = ~np.isnan(x_vals) & ~np.isnan(y_vals)
+        ax.hist2d(x_vals[mask], y_vals[mask], bins=60, cmap="viridis")
+        ax.set_title(f"Plane {plane_idx} avalanche center")
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+    fig.suptitle("Avalanche center positions")
+    fig.tight_layout()
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    for plane_idx, ax in enumerate(axes.flatten(), start=1):
+        size_col = f"avalanche_size_electrons_{plane_idx}"
+        ion_col = f"avalanche_ion_{plane_idx}"
+        if size_col not in df.columns or ion_col not in df.columns:
+            ax.axis("off")
+            continue
+        size_vals = df[size_col].to_numpy(dtype=float)
+        ion_vals = df[ion_col].to_numpy(dtype=float)
+        mask = (size_vals > 0) & (ion_vals > 0)
+        ax.scatter(ion_vals[mask], size_vals[mask], s=2, alpha=0.2, rasterized=True)
+        ax.set_title(f"Plane {plane_idx} size vs ion")
+        ax.set_xlabel("ionizations")
+        ax.set_ylabel("avalanche size")
+        ax.set_xscale("linear")
+        ax.set_yscale("linear")
+    fig.suptitle("Avalanche size vs ionizations")
+    fig.tight_layout()
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
 
 
 
@@ -237,29 +256,17 @@ def main() -> None:
         if args.no_plots:
             print("Plot-only requested with --no-plots; skipping plots.")
             return
-        for out_file in sorted(output_dir.rglob(f"SIM_RUN_*/geom_*_avalanche.{output_format}")):
-            df, _ = load_with_metadata(out_file)
-            plot_path = out_file.with_name(f"{out_file.stem}_plots.pdf")
-            with PdfPages(plot_path) as pdf:
-                plot_avalanche_summary(df, pdf)
-                plot_step3_summary(df, pdf)
-            print(f"Saved {plot_path}")
-
-        for manifest_path in sorted(output_dir.rglob("SIM_RUN_*/geom_*_avalanche.chunks.json")):
-            manifest = json.loads(manifest_path.read_text())
-            chunks = manifest.get("chunks", [])
-            if not chunks:
-                continue
-            last_chunk = Path(chunks[-1])
-            if last_chunk.suffix == ".csv":
-                df = pd.read_csv(last_chunk)
-            else:
-                df = pd.read_pickle(last_chunk)
-            plot_path = manifest_path.with_name(f"{manifest_path.stem}_plots.pdf")
-            with PdfPages(plot_path) as pdf:
-                plot_avalanche_summary(df, pdf)
-                plot_step3_summary(df, pdf)
-            print(f"Saved {plot_path}")
+        latest_path = find_latest_data_path(output_dir)
+        if latest_path is None:
+            raise FileNotFoundError(f"No existing outputs found in {output_dir} for plot-only.")
+        df, _ = load_with_metadata(latest_path)
+        sim_run_dir = find_sim_run_dir(latest_path)
+        plot_dir = (sim_run_dir or latest_path.parent) / "PLOTS"
+        ensure_dir(plot_dir)
+        plot_path = plot_dir / f"{latest_path.stem}_plots.pdf"
+        with PdfPages(plot_path) as pdf:
+            plot_avalanche_summary(df, pdf)
+        print(f"Saved {plot_path}")
         return
 
     if input_sim_run == "latest":
@@ -340,10 +347,11 @@ def main() -> None:
             plot_df = plot_df.sample(n=sample_n, random_state=cfg.get("seed"))
         print(f"Saved data: {manifest_path}")
         if not args.no_plots and plot_df is not None:
-            plot_path = sim_run_dir / f"{out_stem}_plots.pdf"
+            plot_dir = sim_run_dir / "PLOTS"
+            ensure_dir(plot_dir)
+            plot_path = plot_dir / f"{out_stem}_plots.pdf"
             with PdfPages(plot_path) as pdf:
                 plot_avalanche_summary(plot_df, pdf)
-                plot_step3_summary(plot_df, pdf)
             print(f"Saved plots: {plot_path}")
     else:
         df, upstream_meta = load_with_metadata(input_path)
@@ -366,10 +374,11 @@ def main() -> None:
         gc.collect()
 
         if not args.no_plots:
-            plot_path = sim_run_dir / f"{out_path.stem}_plots.pdf"
+            plot_dir = sim_run_dir / "PLOTS"
+            ensure_dir(plot_dir)
+            plot_path = plot_dir / f"{out_path.stem}_plots.pdf"
             with PdfPages(plot_path) as pdf:
                 plot_avalanche_summary(plot_df, pdf)
-                plot_step3_summary(plot_df, pdf)
             print(f"Saved plots: {plot_path}")
         print(f"Saved {out_path}")
 

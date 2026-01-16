@@ -4,7 +4,7 @@
 # minute hour day_of_month month day_of_week command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Updated at 2025-12-10 18:39
+# Updated at 2026-01-16 15:00
 
 SHELL=/bin/bash
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
@@ -36,7 +36,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 0 * * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/VERSION_CONTROL/snapshot_config.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_snapshot_config.log 2>&1
 
 # Collect Tracebacks from cron logs
-*/1 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/SEARCH_FOR_ERRORS/error_finder.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/error_finder.log 2>&1
+*/10 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/SEARCH_FOR_ERRORS/error_finder.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/error_finder.log 2>&1
 
 # Clean files if storage in /home is larger than 50% (force with --force)
 0 1 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_clean_dataflow.log 2>&1
@@ -95,7 +95,13 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - SIMULATION - COPY SIMULATED DATA -------------------------------------
-* * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/simulate_station_data.py --station 5 --source-station 1 --only-station 5 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/simulate_station_5.log 2>&1
+
+# MINGO_DIGITAL_TWIN - RUN STEPS 2+ EVERY 15 MINUTES ------------------------------
+*/15 * * * * /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh --from 2 --no-plots
+*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/simulate_station_data.py --station 5 --source-station 1 --only-station 5 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/simulate_station_5.log 2>&1
+*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/simulate_station_data.py --station 6 --source-station 2 --only-station 6 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/simulate_station_5.log 2>&1
+*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/simulate_station_data.py --station 7 --source-station 3 --only-station 7 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/simulate_station_5.log 2>&1
+*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/simulate_station_data.py --station 8 --source-station 4 --only-station 8 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/simulate_station_5.log 2>&1
 
 
 # --------------------------------------------------------------------------------
@@ -182,6 +188,9 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_3.log 2>&1
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_4.log 2>&1
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 5 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_5.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 6 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_6.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 7 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_7.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 8 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/guide_raw_to_corrected_8.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_2

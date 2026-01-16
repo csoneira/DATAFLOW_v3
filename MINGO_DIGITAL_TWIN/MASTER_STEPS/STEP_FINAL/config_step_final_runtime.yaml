@@ -1,0 +1,10 @@
+input_dir: ../../INTERSTEPS/STEP_10_TO_FINAL
+input_glob: "**/geom_*_daq.pkl"
+input_sim_run: latest
+input_collect: matching
+geometry_id: auto
+geometry_map_dir: ../../INTERSTEPS/STEP_2_TO_3
+geometry_map_sim_run: latest
+output_dir: ../../SIMULATED_DATA
+chunk_rows: 100000
+target_rows: 50000

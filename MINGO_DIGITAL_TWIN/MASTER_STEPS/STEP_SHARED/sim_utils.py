@@ -1,4 +1,6 @@
+"""Shared helpers for sim-run bookkeeping, metadata, chunked I/O, and geometry utilities.
 from __future__ import annotations
+"""
 
 from dataclasses import dataclass
 import hashlib
@@ -195,6 +197,25 @@ def iter_input_frames(path: Path, chunk_rows: Optional[int]) -> Tuple[Iterable[p
 
     df, meta = load_with_metadata(path)
     return [df], meta, False
+
+
+def find_latest_data_path(root_dir: Path) -> Optional[Path]:
+    """Return the most recently modified data file under root_dir."""
+    candidates = list(root_dir.rglob("*.pkl"))
+    if candidates:
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+    candidates = list(root_dir.rglob("*.csv"))
+    if candidates:
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+    return None
+
+
+def find_sim_run_dir(path: Path) -> Optional[Path]:
+    """Return the nearest SIM_RUN_* parent directory for a given path."""
+    for parent in path.parents:
+        if parent.name.startswith("SIM_RUN_"):
+            return parent
+    return None
 
 
 def write_chunked_output(
