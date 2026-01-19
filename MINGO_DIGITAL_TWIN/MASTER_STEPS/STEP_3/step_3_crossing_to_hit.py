@@ -29,10 +29,12 @@ sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 from STEP_SHARED.sim_utils import (
     ensure_dir,
     find_latest_data_path,
+    find_sim_run,
     find_sim_run_dir,
     load_step_configs,
     iter_input_frames,
     latest_sim_run,
+    random_sim_run,
     load_with_metadata,
     now_iso,
     resolve_sim_run,
@@ -48,6 +50,25 @@ def normalize_tt_series(series: pd.Series) -> pd.Series:
     tt = tt.str.replace(r"\.0$", "", regex=True)
     tt = tt.replace({"0": "", "0.0": "", "nan": "", "<NA>": ""})
     return tt
+
+
+def normalize_efficiency_vectors(value: object) -> list[list[float]]:
+    if value is None:
+        return [[0.9, 0.9, 0.9, 0.9]]
+    if not isinstance(value, list):
+        raise ValueError("efficiencies must be a list or list of lists.")
+    if len(value) == 4 and all(isinstance(v, (int, float)) for v in value):
+        return [[float(v) for v in value]]
+    if all(isinstance(v, list) for v in value):
+        vectors: list[list[float]] = []
+        for vec in value:
+            if len(vec) != 4 or not all(isinstance(v, (int, float)) for v in vec):
+                raise ValueError("Each efficiencies vector must contain 4 numeric values.")
+            vectors.append([float(v) for v in vec])
+        return vectors
+    raise ValueError("efficiencies must be a 4-value list or a list of 4-value lists.")
+
+
 
 
 def build_avalanche(
@@ -208,6 +229,7 @@ def main() -> None:
     )
     parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing outputs")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
+    parser.add_argument("--force", action="store_true", help="Recompute even if sim_run exists")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -230,12 +252,16 @@ def main() -> None:
     output_format = str(cfg.get("output_format", "pkl")).lower()
     chunk_rows = cfg.get("chunk_rows")
     plot_sample_rows = cfg.get("plot_sample_rows")
-    efficiencies = [float(x) for x in cfg.get("efficiencies", [0.9, 0.9, 0.9, 0.9])]
+    efficiency_vectors = normalize_efficiency_vectors(cfg.get("efficiencies"))
     gain = float(cfg.get("avalanche_gain", 1.0))
     townsend_alpha = float(cfg.get("townsend_alpha_per_mm", 0.1))
     gap_mm = float(cfg.get("avalanche_gap_mm", 1.0))
     electron_sigma = float(cfg.get("avalanche_electron_sigma", 0.2))
     rng = np.random.default_rng(cfg.get("seed"))
+    eff_idx = int(rng.integers(0, len(efficiency_vectors)))
+    efficiencies = efficiency_vectors[eff_idx]
+    physics_cfg_run = dict(physics_cfg)
+    physics_cfg_run["efficiencies"] = efficiencies
 
     input_glob = cfg.get("input_glob", "**/geom_*.pkl")
     geometry_id = cfg.get("geometry_id")
@@ -248,6 +274,8 @@ def main() -> None:
     print("Step 3 starting...")
     print(f"Input dir: {input_dir}")
     print(f"Output dir: {output_dir}")
+    if len(efficiency_vectors) > 1:
+        print(f"efficiencies candidates: {len(efficiency_vectors)} (selected index {eff_idx})")
     print(f"efficiencies: {efficiencies}")
     print(f"geometry_id: {geometry_id}")
     print(f"input_sim_run: {input_sim_run}")
@@ -271,6 +299,8 @@ def main() -> None:
 
     if input_sim_run == "latest":
         input_sim_run = latest_sim_run(input_dir)
+    elif input_sim_run == "random":
+        input_sim_run = random_sim_run(input_dir, cfg.get("seed"))
 
     input_run_dir = input_dir / str(input_sim_run)
     if "**" in input_glob:
@@ -307,9 +337,14 @@ def main() -> None:
         geometry_id = int(parts[1])
     print(f"Processing: {input_path}")
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
+    if not args.force:
+        existing = find_sim_run(output_dir, physics_cfg_run, upstream_meta)
+        if existing:
+            print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
+            return
 
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-        output_dir, "STEP_3", config_path, physics_cfg, upstream_meta
+        output_dir, "STEP_3", config_path, physics_cfg_run, upstream_meta
     )
     print(f"Resolved output sim_run: {sim_run}")
     reset_dir(sim_run_dir)
@@ -319,7 +354,7 @@ def main() -> None:
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_3",
-        "config": physics_cfg,
+        "config": physics_cfg_run,
         "runtime_config": runtime_cfg,
         "sim_run": sim_run,
         "config_hash": config_hash,

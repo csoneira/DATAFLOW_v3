@@ -1,7 +1,7 @@
 Step 5 (Hit -> Signal)
 
 Purpose:
-- Compute per-strip T_diff and q_diff from measured signals.
+- Complete readout quantities: charge imbalance and time-difference derived from X position within strips.
 
 Inputs:
 - config:
@@ -17,3 +17,7 @@ Run:
 - python3 step_5_measured_to_triggered.py --config config_step_5_physics.yaml
 - python3 step_5_measured_to_triggered.py --config config_step_5_physics.yaml --runtime-config config_step_5_runtime.yaml
 - python3 step_5_measured_to_triggered.py --config config_step_5_physics.yaml --plot-only
+
+Notes:
+- input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).
+- The step skips if the matching SIM_RUN exists unless --force is provided.

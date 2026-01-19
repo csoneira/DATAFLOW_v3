@@ -1,7 +1,7 @@
 Step 10 (DAQ Timing)
 
 Purpose:
-- Apply TDC timing smear and DAQ jitter to front/back times.
+- Apply TDC timing smear and DAQ clock jitter to coincidence events.
 
 Inputs:
 - config:
@@ -17,3 +17,7 @@ Run:
 - python3 step_10_triggered_to_jitter.py --config config_step_10_physics.yaml
 - python3 step_10_triggered_to_jitter.py --config config_step_10_physics.yaml --runtime-config config_step_10_runtime.yaml
 - python3 step_10_triggered_to_jitter.py --config config_step_10_physics.yaml --plot-only
+
+Notes:
+- input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).
+- The step skips if the matching SIM_RUN exists unless --force is provided.

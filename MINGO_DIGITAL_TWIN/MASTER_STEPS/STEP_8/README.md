@@ -1,7 +1,7 @@
-Step 8 (Threshold / FEE)
+Step 8 (Threshold / FEE, uncalibration)
 
 Purpose:
-- Apply charge threshold and front-end conversion to time units.
+- Simulate the FEE: apply charge thresholds and convert charge to timing (uncalibration/decalibration step).
 
 Inputs:
 - config:
@@ -17,3 +17,7 @@ Run:
 - python3 step_8_calibrated_to_threshold.py --config config_step_8_physics.yaml
 - python3 step_8_calibrated_to_threshold.py --config config_step_8_physics.yaml --runtime-config config_step_8_runtime.yaml
 - python3 step_8_calibrated_to_threshold.py --config config_step_8_physics.yaml --plot-only
+
+Notes:
+- input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).
+- The step skips if the matching SIM_RUN exists unless --force is provided.

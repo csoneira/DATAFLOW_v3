@@ -1,7 +1,12 @@
+# Fixed
 xlim_mm: 5000
 ylim_mm: 5000
 z_plane_mm: 100
-cos_n: 2
 seed: null
 c_mm_per_ns: 299.792458
-flux_cm2_min: 1.0
+
+# Semifixed
+cos_n: 2
+
+# Variable (to loop on)
+flux_cm2_min: [0.95, 1.0, 1.05]

@@ -9,3 +9,4 @@
 - [ ] Add the dark rate of the detector.
 - [ ] Add the crosstalk.
 - [ ] Add the one side measurements.
+- [ ] Put the Townsend coeff from the HV, pressure and Temperature, if possible.

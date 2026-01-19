@@ -1,7 +1,7 @@
 Step 1 (Muon Sample)
 
 Purpose:
-- Generate primary muon parameters (position/direction/time) for the simulation.
+- Generate primary muon tracks (position, direction, time) using the standard angular/flux distributions.
 
 Inputs:
 - config:
@@ -17,3 +17,7 @@ Run:
 - python3 step_1_blank_to_generated.py --config config_step_1_physics.yaml
 - python3 step_1_blank_to_generated.py --config config_step_1_physics.yaml --runtime-config config_step_1_runtime.yaml
 - python3 step_1_blank_to_generated.py --config config_step_1_physics.yaml --plot-only
+
+Notes:
+- flux_cm2_min can be a list; one value is selected per run (seeded) and defines the SIM_RUN identity.
+- The step skips if the matching SIM_RUN exists unless --force is provided.

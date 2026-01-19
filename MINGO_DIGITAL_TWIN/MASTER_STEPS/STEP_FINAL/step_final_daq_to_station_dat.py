@@ -30,6 +30,7 @@ from STEP_SHARED.sim_utils import (
     load_step_configs,
     load_with_metadata,
     now_iso,
+    random_sim_run,
 )
 
 
@@ -337,6 +338,8 @@ def main() -> None:
     input_sim_run = cfg.get("input_sim_run", "latest")
     if input_sim_run == "latest":
         input_sim_run = latest_sim_run(input_dir)
+    elif input_sim_run == "random":
+        input_sim_run = random_sim_run(input_dir, cfg.get("seed"))
     input_glob = cfg.get("input_glob", "**/geom_*_daq.pkl")
     input_collect = str(cfg.get("input_collect", "matching")).lower()
     input_paths, baseline_meta = select_input_paths(
@@ -349,6 +352,8 @@ def main() -> None:
     map_sim_run = cfg.get("geometry_map_sim_run", "latest")
     if map_sim_run == "latest":
         map_sim_run = latest_sim_run(map_dir)
+    elif map_sim_run == "random":
+        map_sim_run = random_sim_run(map_dir, cfg.get("seed"))
     geom_map_path = map_dir / str(map_sim_run) / "geometry_map_all.csv"
     geom_map = pd.read_csv(geom_map_path)
 

@@ -32,9 +32,11 @@ from STEP_SHARED.sim_utils import (
     build_global_geometry_registry,
     ensure_dir,
     find_latest_data_path,
+    find_sim_run,
     find_sim_run_dir,
     load_step_configs,
     latest_sim_run,
+    random_sim_run,
     list_station_config_files,
     load_with_metadata,
     map_station_to_geometry,
@@ -92,8 +94,6 @@ def calculate_intersections(
     crossing_series = pd.Series(crossing_array, dtype="string")
     crossing_series = crossing_series.replace("", pd.NA)
     out["tt_crossing"] = crossing_series
-    if "crossing_type" in out.columns:
-        out = out.drop(columns=["crossing_type"])
     return out
 
 
@@ -191,6 +191,7 @@ def main() -> None:
     )
     parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing outputs")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
+    parser.add_argument("--force", action="store_true", help="Recompute even if sim_run exists")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -240,8 +241,10 @@ def main() -> None:
         if not input_dir.is_absolute():
             input_dir = Path(__file__).resolve().parent / input_dir
         input_sim_run = cfg.get("input_sim_run", "latest")
-        if input_sim_run == "latest":
-            input_sim_run = latest_sim_run(input_dir)
+    if input_sim_run == "latest":
+        input_sim_run = latest_sim_run(input_dir)
+    elif input_sim_run == "random":
+        input_sim_run = random_sim_run(input_dir, cfg.get("seed"))
         input_run_dir = input_dir / str(input_sim_run)
         input_basename = cfg.get("input_basename")
         if input_basename:
@@ -283,7 +286,7 @@ def main() -> None:
         y_max=float(bounds_cfg.get("y_max", DEFAULT_BOUNDS.y_max)),
     )
 
-    normalize = bool(cfg.get("normalize_to_first_plane", True))
+    normalize = bool(runtime_cfg.get("normalize_to_first_plane", True))
     chunk_rows = cfg.get("chunk_rows")
     rng = np.random.default_rng(cfg.get("seed"))
     plot_sample_rows = cfg.get("plot_sample_rows")
@@ -323,6 +326,11 @@ def main() -> None:
         upstream_meta = manifest.get("metadata", {})
     else:
         muon_df, upstream_meta = load_with_metadata(input_path)
+    if not args.force:
+        existing = find_sim_run(output_dir, physics_cfg, upstream_meta)
+        if existing:
+            print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
+            return
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
         output_dir, "STEP_2", config_path, physics_cfg, upstream_meta
     )

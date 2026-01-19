@@ -1,6 +1,6 @@
 input_dir: ../../INTERSTEPS/STEP_8_TO_9
 input_glob: "**/geom_*_threshold.pkl"
-input_sim_run: latest
+input_sim_run: random
 geometry_id: auto
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_9_TO_10

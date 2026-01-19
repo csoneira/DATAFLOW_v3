@@ -1,6 +1,7 @@
 input_dir: ../../INTERSTEPS/STEP_1_TO_2
-input_sim_run: latest
+input_sim_run: random
 input_basename: null
+normalize_to_first_plane: true
 station_config_root: /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_2_TO_3

@@ -1,7 +1,7 @@
-Step 7 (Front/Back -> Calibrated)
+Step 7 (Front/Back -> Uncalibrated)
 
 Purpose:
-- Apply per-strip timing offsets.
+- Apply cable/connector propagation delays (uncalibration/decalibration step).
 
 Inputs:
 - config:
@@ -17,3 +17,7 @@ Run:
 - python3 step_7_timing_to_calibrated.py --config config_step_7_physics.yaml
 - python3 step_7_timing_to_calibrated.py --config config_step_7_physics.yaml --runtime-config config_step_7_runtime.yaml
 - python3 step_7_timing_to_calibrated.py --config config_step_7_physics.yaml --plot-only
+
+Notes:
+- input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).
+- The step skips if the matching SIM_RUN exists unless --force is provided.

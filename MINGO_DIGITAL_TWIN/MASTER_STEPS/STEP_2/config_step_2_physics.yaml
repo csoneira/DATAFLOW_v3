@@ -1,8 +1,10 @@
-geometry_id: "random"
-normalize_to_first_plane: true
-c_mm_per_ns: 299.792458
+# Fixed
 bounds_mm:
   x_min: -150.0
   x_max: 150.0
   y_min: -143.5
   y_max: 143.5
+
+# Variable (to loop on)
+# geometry_id: "random"
+geometry_id: 0

@@ -245,6 +245,20 @@ def plot_thick_time_summary(df: pd.DataFrame, pdf: PdfPages, rate_hz: float | No
     return True
 
 
+def normalize_flux_values(value: object) -> list[float]:
+    if value is None:
+        return [1.0]
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, list):
+        if not value:
+            return [1.0]
+        if not all(isinstance(v, (int, float)) for v in value):
+            raise ValueError("flux_cm2_min must be a number or list of numbers.")
+        return [float(v) for v in value]
+    raise ValueError("flux_cm2_min must be a number or list of numbers.")
+
+
 def generate_thick_times(n_tracks: int, rate_hz: float, rng: np.random.Generator) -> np.ndarray:
     if n_tracks <= 0:
         return np.zeros(0, dtype=float)
@@ -302,6 +316,7 @@ def main() -> None:
     )
     parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing output")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
+    parser.add_argument("--force", action="store_true", help="Recompute even if sim_run exists")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -323,8 +338,16 @@ def main() -> None:
     plot_sample_rows = cfg.get("plot_sample_rows")
     output_name = f"{cfg.get('output_basename', 'muon_sample')}_{int(cfg['n_tracks'])}.{output_format}"
     output_base = cfg.get("output_basename", "muon_sample")
+    flux_candidates = normalize_flux_values(cfg.get("flux_cm2_min"))
+    rng = np.random.default_rng(cfg.get("seed"))
+    flux_idx = int(rng.integers(0, len(flux_candidates)))
+    flux_cm2_min = float(flux_candidates[flux_idx])
+    physics_cfg_run = dict(physics_cfg)
+    physics_cfg_run["flux_cm2_min"] = flux_cm2_min
+    if len(flux_candidates) > 1:
+        print(f"flux_cm2_min candidates: {len(flux_candidates)} (selected index {flux_idx})")
     if args.plot_only:
-        sim_run = find_sim_run(output_dir, physics_cfg, None)
+        sim_run = find_sim_run(output_dir, physics_cfg_run, None)
         if sim_run is None:
             sim_run_dirs = sorted(
                 output_dir.glob("SIM_RUN_*"),
@@ -339,8 +362,13 @@ def main() -> None:
         config_hash = None
         upstream_hash = None
     else:
+        if not args.force:
+            existing = find_sim_run(output_dir, physics_cfg_run, None)
+            if existing:
+                print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
+                return
         sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-            output_dir, "STEP_1", config_path, physics_cfg, None
+            output_dir, "STEP_1", config_path, physics_cfg_run, None
         )
         reset_dir(sim_run_dir)
         output_path = sim_run_dir / output_name
@@ -348,7 +376,7 @@ def main() -> None:
         f"Step 1 config: n_tracks={cfg['n_tracks']}, xlim={cfg['xlim_mm']}, "
         f"ylim={cfg['ylim_mm']}, z_plane={cfg['z_plane_mm']}, c={cfg.get('c_mm_per_ns', 299.792458)}"
     )
-    flux_cm2_min = float(cfg.get("flux_cm2_min", 1.0))
+    flux_cm2_min = float(physics_cfg_run.get("flux_cm2_min", 1.0))
     area_cm2 = (2.0 * float(cfg["xlim_mm"])) * (2.0 * float(cfg["ylim_mm"])) / 100.0
     rate_per_min = flux_cm2_min * area_cm2
     rate_hz = rate_per_min / 60.0
@@ -447,7 +475,7 @@ def main() -> None:
         metadata = {
             "created_at": now_iso(),
             "step": "STEP_1",
-            "config": physics_cfg,
+            "config": physics_cfg_run,
             "runtime_config": runtime_cfg,
             "sim_run": sim_run,
             "config_hash": config_hash,

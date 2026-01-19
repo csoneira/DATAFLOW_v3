@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import random
 import shutil
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Optional
@@ -304,6 +305,20 @@ def _json_fingerprint(payload: Dict) -> str:
     return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
 
+def _upstream_fingerprint(upstream_meta: Optional[Dict]) -> Optional[str]:
+    if upstream_meta is None:
+        return None
+    if isinstance(upstream_meta, dict):
+        return _json_fingerprint(
+            {
+                "step": upstream_meta.get("step"),
+                "config_hash": upstream_meta.get("config_hash"),
+                "upstream_hash": upstream_meta.get("upstream_hash"),
+            }
+        )
+    return _json_fingerprint({"upstream_meta": upstream_meta})
+
+
 def load_sim_run_registry(output_dir: Path) -> Dict:
     registry_path = output_dir / "sim_run_registry.json"
     if registry_path.exists():
@@ -324,7 +339,7 @@ def resolve_sim_run(
     upstream_meta: Optional[Dict],
 ) -> Tuple[str, Path, str, Optional[str], Dict]:
     config_hash = _json_fingerprint(cfg)
-    upstream_hash = _json_fingerprint(upstream_meta) if upstream_meta is not None else None
+    upstream_hash = _upstream_fingerprint(upstream_meta)
     registry = load_sim_run_registry(output_dir)
 
     for entry in registry.get("runs", []):
@@ -359,7 +374,7 @@ def resolve_sim_run(
 
 def find_sim_run(output_dir: Path, cfg: Dict, upstream_meta: Optional[Dict]) -> Optional[str]:
     config_hash = _json_fingerprint(cfg)
-    upstream_hash = _json_fingerprint(upstream_meta) if upstream_meta is not None else None
+    upstream_hash = _upstream_fingerprint(upstream_meta)
     registry = load_sim_run_registry(output_dir)
     for entry in registry.get("runs", []):
         if entry.get("config_hash") == config_hash and entry.get("upstream_hash") == upstream_hash:
@@ -377,6 +392,19 @@ def latest_sim_run(output_dir: Path) -> str:
         raise FileNotFoundError("No SIM_RUN entries found in input_dir registry.")
     runs_sorted = sorted(runs, key=lambda r: r.get("created_at", ""))
     return runs_sorted[-1]["sim_run"]
+
+
+def random_sim_run(output_dir: Path, seed: Optional[int] = None) -> str:
+    registry_path = output_dir / "sim_run_registry.json"
+    if not registry_path.exists():
+        raise FileNotFoundError("sim_run_registry.json not found in input_dir.")
+    registry = json.loads(registry_path.read_text())
+    runs = [entry.get("sim_run") for entry in registry.get("runs", []) if entry.get("sim_run")]
+    if not runs:
+        raise FileNotFoundError("No SIM_RUN entries found in input_dir registry.")
+    runs_sorted = sorted(runs)
+    rng = random.Random(seed)
+    return rng.choice(runs_sorted)
 
 
 def reset_dir(path: Path) -> None:

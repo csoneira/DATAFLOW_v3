@@ -1,1 +1,6 @@
+# Fixed
+
+# Semifixed
 trigger_combinations: ["12", "23", "34", "13"]
+
+# Variable (to loop on)

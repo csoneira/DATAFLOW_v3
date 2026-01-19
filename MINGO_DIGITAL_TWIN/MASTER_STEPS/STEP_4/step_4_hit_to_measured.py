@@ -36,6 +36,8 @@ from STEP_SHARED.sim_utils import (
     load_step_configs,
     load_with_metadata,
     now_iso,
+    find_sim_run,
+    random_sim_run,
     resolve_sim_run,
     reset_dir,
     save_with_metadata,
@@ -128,12 +130,7 @@ def induce_signal(
     debug_points: dict | None,
     debug_rng: np.random.Generator | None,
 ) -> pd.DataFrame:
-    base_cols = [
-        c
-        for c in ("X_gen", "Y_gen", "Theta_gen", "Phi_gen", "T0_ns", "T_thick_s")
-        if c in df.columns
-    ]
-    out = df[base_cols].copy()
+    out = df.copy()
     n = len(df)
     tt_array = np.full(n, "", dtype=object)
 
@@ -238,10 +235,6 @@ def induce_signal(
                     ).astype(np.float32, copy=False)
                 out[f"T_sum_meas_{plane_idx}_s{strip_idx + 1}"] = t_strip
         tt_array[plane_detected] = tt_array[plane_detected] + str(plane_idx)
-
-        drop_cols = [c for c in (aval_q_col, aval_x_col, aval_y_col, t_sum_col) if c in df.columns]
-        if drop_cols:
-            df = df.drop(columns=drop_cols)
 
     out["tt_hit"] = pd.Series(tt_array, dtype="string").replace("", pd.NA)
     return out
@@ -688,6 +681,7 @@ def main() -> None:
     )
     parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing outputs")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
+    parser.add_argument("--force", action="store_true", help="Recompute even if sim_run exists")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -760,6 +754,8 @@ def main() -> None:
 
     if input_sim_run == "latest":
         input_sim_run = latest_sim_run(input_dir)
+    elif input_sim_run == "random":
+        input_sim_run = random_sim_run(input_dir, cfg.get("seed"))
 
     input_run_dir = input_dir / str(input_sim_run)
     if "**" in input_glob:
@@ -796,6 +792,11 @@ def main() -> None:
         geometry_id = int(parts[1])
     print(f"Processing: {input_path}")
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
+    if not args.force:
+        existing = find_sim_run(output_dir, physics_cfg, upstream_meta)
+        if existing:
+            print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
+            return
     print("Inducing strip signals...")
 
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
@@ -834,7 +835,7 @@ def main() -> None:
         chunk: pd.DataFrame,
         debug_state: dict,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        needed_cols = {"X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
+        needed_cols = {"X_gen", "Y_gen", "Theta_gen", "Phi_gen", "T0_ns", "T_thick_s"}
         for plane_idx in range(1, 5):
             needed_cols.update(
                 {
@@ -878,18 +879,6 @@ def main() -> None:
             )
         ]
         plot_df = out_full[plot_cols]
-        keep_cols = {
-            "X_gen",
-            "Y_gen",
-            "Theta_gen",
-            "Phi_gen",
-            "tt_hit",
-        }
-        for col in out_full.columns:
-            if col.startswith(("Y_mea_", "X_mea_", "T_sum_meas_")):
-                keep_cols.add(col)
-        drop_cols = [col for col in out_full.columns if col not in keep_cols]
-        out_full = out_full.drop(columns=drop_cols)
         if debug_event_index is not None and debug_state["points"]:
             debug_state["captured"] = True
             debug_state["plot_df"] = plot_df
@@ -1045,19 +1034,6 @@ def main() -> None:
             if 0 < plot_sample_size < len(plot_df):
                 plot_df = plot_df.sample(n=plot_sample_size, random_state=cfg.get("seed"))
                 print(f"Plotting with sample size: {len(plot_df):,}")
-
-        keep_cols = {
-            "X_gen",
-            "Y_gen",
-            "Theta_gen",
-            "Phi_gen",
-            "tt_hit",
-        }
-        for col in out.columns:
-            if col.startswith(("Y_mea_", "X_mea_", "T_sum_meas_")):
-                keep_cols.add(col)
-        drop_cols = [col for col in out.columns if col not in keep_cols]
-        out = out.drop(columns=drop_cols)
 
         save_with_metadata(out, out_path, metadata, output_format)
         print(f"Saved data: {out_path}")

@@ -1,7 +1,7 @@
 Step 2 (Generated -> Crossing)
 
 Purpose:
-- Propagate muons through station geometry and compute plane crossings/times.
+- Propagate muon trajectories through the station geometry and compute per-plane incidence time and position.
 
 Inputs:
 - config:
@@ -17,3 +17,8 @@ Run:
 - python3 step_2_generated_to_crossing.py --config config_step_2_physics.yaml
 - python3 step_2_generated_to_crossing.py --config config_step_2_physics.yaml --runtime-config config_step_2_runtime.yaml
 - python3 step_2_generated_to_crossing.py --config config_step_2_physics.yaml --plot-only
+
+Notes:
+- input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).
+- normalize_to_first_plane is configured in the runtime config.
+- The step skips if the matching SIM_RUN exists unless --force is provided.

@@ -1,6 +1,6 @@
 input_dir: ../../INTERSTEPS/STEP_6_TO_7
 input_glob: "**/geom_*_frontback.pkl"
-input_sim_run: latest
+input_sim_run: random
 geometry_id: auto
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_7_TO_8

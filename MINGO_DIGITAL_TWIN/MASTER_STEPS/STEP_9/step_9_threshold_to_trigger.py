@@ -29,9 +29,11 @@ sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 from STEP_SHARED.sim_utils import (
     ensure_dir,
     find_latest_data_path,
+    find_sim_run,
     find_sim_run_dir,
     iter_input_frames,
     latest_sim_run,
+    random_sim_run,
     load_step_configs,
     load_with_metadata,
     now_iso,
@@ -161,6 +163,7 @@ def main() -> None:
     )
     parser.add_argument("--plot-only", action="store_true", help="Only generate plots from existing outputs")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
+    parser.add_argument("--force", action="store_true", help="Recompute even if sim_run exists")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -216,6 +219,8 @@ def main() -> None:
 
     if input_sim_run == "latest":
         input_sim_run = latest_sim_run(input_dir)
+    elif input_sim_run == "random":
+        input_sim_run = random_sim_run(input_dir, cfg.get("seed"))
 
     input_run_dir = input_dir / str(input_sim_run)
     if "**" in input_glob:
@@ -252,6 +257,11 @@ def main() -> None:
         geometry_id = int(parts[1])
     print(f"Processing: {input_path}")
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
+    if not args.force:
+        existing = find_sim_run(output_dir, physics_cfg, upstream_meta)
+        if existing:
+            print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
+            return
 
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
         output_dir, "STEP_9", config_path, physics_cfg, upstream_meta

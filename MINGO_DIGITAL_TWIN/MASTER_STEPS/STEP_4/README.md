@@ -1,7 +1,7 @@
 Step 4 (Avalanche -> Hit)
 
 Purpose:
-- Induce strip charges and measured positions/times per plane.
+- Use avalanche centers and sizes to estimate induction area and affected strips (readout starts here).
 
 Inputs:
 - config:
@@ -17,3 +17,7 @@ Run:
 - python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml
 - python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml --runtime-config config_step_4_runtime.yaml
 - python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml --plot-only
+
+Notes:
+- input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).
+- The step skips if the matching SIM_RUN exists unless --force is provided.

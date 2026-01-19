@@ -1,6 +1,6 @@
 input_dir: ../../INTERSTEPS/STEP_3_TO_4
 input_glob: "**/geom_*_avalanche.pkl"
-input_sim_run: latest
+input_sim_run: random
 geometry_id: auto
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_4_TO_5
