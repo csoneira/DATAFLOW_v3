@@ -14,9 +14,9 @@ Outputs:
 - INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/PLOTS/geom_<G>_calibrated_plots.pdf
 
 Run:
-- python3 step_7_timing_to_calibrated.py --config config_step_7_physics.yaml
-- python3 step_7_timing_to_calibrated.py --config config_step_7_physics.yaml --runtime-config config_step_7_runtime.yaml
-- python3 step_7_timing_to_calibrated.py --config config_step_7_physics.yaml --plot-only
+- python3 step_7_timing_to_uncalibrated.py --config config_step_7_physics.yaml
+- python3 step_7_timing_to_uncalibrated.py --config config_step_7_physics.yaml --runtime-config config_step_7_runtime.yaml
+- python3 step_7_timing_to_uncalibrated.py --config config_step_7_physics.yaml --plot-only
 
 Notes:
 - input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).

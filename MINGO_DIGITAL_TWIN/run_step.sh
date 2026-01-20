@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <step_number|all|final|--from> [--no-plots|--plot-only|--final|--loop|--force]"
+  echo "Usage: $0 <step_number|all|final|--from> [--no-plots|--plot-only|--loop|--force]"
 }
 
 NO_PLOTS=""
@@ -48,15 +48,11 @@ run_step() {
     4) python3 "$DT/MASTER_STEPS/STEP_4/step_4_hit_to_measured.py" --config "$DT/MASTER_STEPS/STEP_4/config_step_4_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE ;;
     5) python3 "$DT/MASTER_STEPS/STEP_5/step_5_measured_to_triggered.py" --config "$DT/MASTER_STEPS/STEP_5/config_step_5_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE ;;
     6) python3 "$DT/MASTER_STEPS/STEP_6/step_6_triggered_to_timing.py" --config "$DT/MASTER_STEPS/STEP_6/config_step_6_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE ;;
-    7) python3 "$DT/MASTER_STEPS/STEP_7/step_7_timing_to_calibrated.py" --config "$DT/MASTER_STEPS/STEP_7/config_step_7_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE ;;
-    8) python3 "$DT/MASTER_STEPS/STEP_8/step_8_calibrated_to_threshold.py" --config "$DT/MASTER_STEPS/STEP_8/config_step_8_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE ;;
+    7) python3 "$DT/MASTER_STEPS/STEP_7/step_7_timing_to_uncalibrated.py" --config "$DT/MASTER_STEPS/STEP_7/config_step_7_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE ;;
+    8) python3 "$DT/MASTER_STEPS/STEP_8/step_8_uncalibrated_to_threshold.py" --config "$DT/MASTER_STEPS/STEP_8/config_step_8_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE ;;
     9) python3 "$DT/MASTER_STEPS/STEP_9/step_9_threshold_to_trigger.py" --config "$DT/MASTER_STEPS/STEP_9/config_step_9_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE ;;
     10) python3 "$DT/MASTER_STEPS/STEP_10/step_10_triggered_to_jitter.py" --config "$DT/MASTER_STEPS/STEP_10/config_step_10_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE ;;
     final)
-      if [[ -z "$FINAL_STEP" ]]; then
-        echo "Error: final step requires --final flag."
-        exit 1
-      fi
       python3 "$DT/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py" --config "$DT/MASTER_STEPS/STEP_FINAL/config_step_final_physics.yaml" $NO_PLOTS $PLOT_ONLY $FORCE
       ;;
     *)

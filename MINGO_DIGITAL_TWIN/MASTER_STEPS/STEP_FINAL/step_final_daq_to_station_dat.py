@@ -118,6 +118,18 @@ def load_input_meta(path: Path) -> dict:
     return meta
 
 
+def find_upstream_config(meta: dict, step: str) -> dict | None:
+    current = meta
+    while isinstance(current, dict):
+        if current.get("step") == step:
+            cfg = current.get("config")
+            if isinstance(cfg, dict):
+                return cfg
+            return None
+        current = current.get("upstream")
+    return None
+
+
 def parse_geometry_id(meta: dict) -> int | None:
     if "geometry_id" in meta:
         try:
@@ -411,6 +423,29 @@ def main() -> None:
     }
     registry["files"].append(registry_entry)
     save_output_registry(registry_path, registry)
+
+    sim_params_path = output_dir / "step_13_simulation_params.csv"
+    step1_cfg = find_upstream_config(baseline_meta, "STEP_1") or {}
+    step3_cfg = find_upstream_config(baseline_meta, "STEP_3") or {}
+    step9_cfg = find_upstream_config(baseline_meta, "STEP_9") or {}
+    row = {
+        "file_name": out_name,
+        "cos_n": step1_cfg.get("cos_n"),
+        "flux_cm2_min": step1_cfg.get("flux_cm2_min"),
+        "z_plane_1": selection.get("P1"),
+        "z_plane_2": selection.get("P2"),
+        "z_plane_3": selection.get("P3"),
+        "z_plane_4": selection.get("P4"),
+        "efficiencies": json.dumps(step3_cfg.get("efficiencies", [])),
+        "trigger_combinations": json.dumps(step9_cfg.get("trigger_combinations", [])),
+    }
+    if sim_params_path.exists():
+        df_params = pd.read_csv(sim_params_path)
+        df_params = df_params[df_params["file_name"] != out_name]
+        df_params = pd.concat([df_params, pd.DataFrame([row])], ignore_index=True)
+    else:
+        df_params = pd.DataFrame([row])
+    df_params.to_csv(sim_params_path, index=False)
     print(f"Saved {out_path}")
 
 

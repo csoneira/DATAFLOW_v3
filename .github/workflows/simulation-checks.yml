@@ -1,0 +1,57 @@
+name: Simulation Checks
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  simulation-checks:
+    runs-on: ubuntu-latest
+    env:
+      GEOMETRY_ID: "0"
+      EVENT_ID: "0"
+      MAX_EVENTS: "50000"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.list
+
+      - name: Run timing closure and event microscope
+        run: |
+          set -e
+          BASE_DIR="MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_10_TO_FINAL"
+          if [ ! -d "$BASE_DIR" ]; then
+            echo "No simulation outputs in $BASE_DIR; skipping checks."
+            exit 0
+          fi
+          SIM_RUN_DIR=$(ls -d "$BASE_DIR"/SIM_RUN_* 2>/dev/null | sort | tail -n 1 || true)
+          if [ -z "$SIM_RUN_DIR" ]; then
+            echo "No SIM_RUN_* outputs in $BASE_DIR; skipping checks."
+            exit 0
+          fi
+          SIM_RUN=$(basename "$SIM_RUN_DIR")
+          echo "Using SIM_RUN=$SIM_RUN"
+
+          python3 MINGO_DIGITAL_TWIN/tools/timing_closure.py \
+            --sim-run "$SIM_RUN" \
+            --geometry-id "$GEOMETRY_ID" \
+            --max-events "$MAX_EVENTS" \
+            --fail-on-bad
+
+          python3 MINGO_DIGITAL_TWIN/tools/event_microscope.py \
+            --sim-run "$SIM_RUN" \
+            --geometry-id "$GEOMETRY_ID" \
+            --event-id "$EVENT_ID"

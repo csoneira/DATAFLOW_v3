@@ -14,9 +14,9 @@ Outputs:
 - INTERSTEPS/STEP_8_TO_9/SIM_RUN_<N>/PLOTS/geom_<G>_threshold_plots.pdf
 
 Run:
-- python3 step_8_calibrated_to_threshold.py --config config_step_8_physics.yaml
-- python3 step_8_calibrated_to_threshold.py --config config_step_8_physics.yaml --runtime-config config_step_8_runtime.yaml
-- python3 step_8_calibrated_to_threshold.py --config config_step_8_physics.yaml --plot-only
+- python3 step_8_uncalibrated_to_threshold.py --config config_step_8_physics.yaml
+- python3 step_8_uncalibrated_to_threshold.py --config config_step_8_physics.yaml --runtime-config config_step_8_runtime.yaml
+- python3 step_8_uncalibrated_to_threshold.py --config config_step_8_physics.yaml --plot-only
 
 Notes:
 - input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).

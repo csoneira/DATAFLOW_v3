@@ -75,6 +75,7 @@ def generate_muon_sample(
         filled += n_batch
 
     df = pd.DataFrame({
+        "event_id": np.arange(n_tracks, dtype=np.int64),
         "X_gen": x_out,
         "Y_gen": y_out,
         "Z_gen": z_out,
@@ -120,6 +121,7 @@ def generate_muon_batches(
         else:
             t_thick_s = np.zeros(n_batch, dtype=float)
         df = pd.DataFrame({
+            "event_id": np.arange(filled, filled + n_batch, dtype=np.int64),
             "X_gen": x_out,
             "Y_gen": y_out,
             "Z_gen": np.full(n_batch, z_plane),
