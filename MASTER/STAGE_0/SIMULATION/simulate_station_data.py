@@ -20,7 +20,7 @@ def main() -> None:
     if not source_dir.exists():
         raise FileNotFoundError(f"Source dir not found: {source_dir}")
 
-    for dat_file in sorted(source_dir.glob("*.dat")):
+    for dat_file in sorted(source_dir.rglob("*.dat")):
         name = dat_file.name
         if not name.startswith("mi0"):
             continue

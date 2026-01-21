@@ -17,7 +17,11 @@ Propagate generated muons through station geometry and compute per-plane crossin
 - Required metadata: none (metadata is produced by this step).
 
 ## Schema (guaranteed outputs)
-All STEP 01 columns plus the following per-plane columns (plane index i = 1..4):
+Retained columns:
+- `event_id` (int)
+- `T_thick_s` (s) if present upstream
+
+Per-plane columns (plane index i = 1..4):
 - `X_gen_i` (mm): projected crossing x for plane i (NaN if out of bounds).
 - `Y_gen_i` (mm): projected crossing y for plane i (NaN if out of bounds).
 - `Z_gen_i` (mm): plane z position for plane i (NaN if out of bounds).

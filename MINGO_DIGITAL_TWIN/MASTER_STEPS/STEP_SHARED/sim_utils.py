@@ -123,6 +123,46 @@ def map_station_to_geometry(station_df: pd.DataFrame, registry: pd.DataFrame) ->
     return merged[cols]
 
 
+def resolve_sim_run_name(base_dir: Path, sim_run: str, seed: Optional[int] = None) -> str:
+    if sim_run == "latest":
+        return latest_sim_run(base_dir)
+    if sim_run == "random":
+        return random_sim_run(base_dir, seed)
+    return str(sim_run)
+
+
+def load_parameter_mesh(
+    base_dir: Path,
+    sim_run: str,
+    seed: Optional[int] = None,
+) -> Tuple[pd.DataFrame, Path, str]:
+    resolved_sim_run = resolve_sim_run_name(base_dir, sim_run, seed)
+    mesh_dir = base_dir / resolved_sim_run
+    mesh_path = mesh_dir / "param_mesh.csv"
+    if not mesh_path.exists():
+        alt_path = mesh_dir / "parameter_mesh.csv"
+        if alt_path.exists():
+            mesh_path = alt_path
+        else:
+            raise FileNotFoundError(f"param_mesh.csv not found in {mesh_dir}")
+    mesh_df = pd.read_csv(mesh_path)
+    return mesh_df, mesh_dir, resolved_sim_run
+
+
+def find_param_set_id(meta: Optional[Dict]) -> Optional[int]:
+    if not meta or not isinstance(meta, dict):
+        return None
+    if "param_set_id" in meta:
+        try:
+            return int(meta["param_set_id"])
+        except (TypeError, ValueError):
+            return None
+    upstream = meta.get("upstream")
+    if isinstance(upstream, dict):
+        return find_param_set_id(upstream)
+    return None
+
+
 def iter_geometries(geom_map: pd.DataFrame) -> Iterable[Tuple[int, Tuple[float, float, float, float]]]:
     geom_cols = ["P1", "P2", "P3", "P4"]
     for geometry_id, group in geom_map.dropna(subset=["geometry_id"]).groupby("geometry_id"):
@@ -198,6 +238,51 @@ def iter_input_frames(path: Path, chunk_rows: Optional[int]) -> Tuple[Iterable[p
 
     df, meta = load_with_metadata(path)
     return [df], meta, False
+
+
+def resolve_param_mesh(
+    mesh_dir: Path,
+    mesh_sim_run: Optional[str],
+    seed: Optional[int],
+) -> Tuple[pd.DataFrame, Path]:
+    if mesh_sim_run is None:
+        mesh_sim_run = "latest"
+    if mesh_sim_run == "latest":
+        mesh_sim_run = latest_sim_run(mesh_dir)
+    elif mesh_sim_run == "random":
+        mesh_sim_run = random_sim_run(mesh_dir, seed)
+    mesh_path = mesh_dir / str(mesh_sim_run) / "param_mesh.csv"
+    if not mesh_path.exists():
+        raise FileNotFoundError(f"param_mesh.csv not found in {mesh_path.parent}")
+    mesh = pd.read_csv(mesh_path)
+    if "param_set_id" not in mesh.columns:
+        raise ValueError("param_mesh.csv is missing required column: param_set_id")
+    return mesh, mesh_path
+
+
+def select_param_row(
+    mesh: pd.DataFrame,
+    rng: np.random.Generator,
+    param_set_id: Optional[int],
+) -> pd.Series:
+    if param_set_id is not None:
+        match = mesh[mesh["param_set_id"] == int(param_set_id)]
+        if match.empty:
+            raise ValueError(f"param_set_id {param_set_id} not found in param_mesh.csv")
+        return match.iloc[0]
+    idx = int(rng.integers(0, len(mesh)))
+    return mesh.iloc[idx]
+
+
+def extract_param_set(meta: Optional[Dict]) -> Tuple[Optional[int], Optional[str]]:
+    if not isinstance(meta, dict):
+        return None, None
+    if "param_set_id" in meta:
+        return meta.get("param_set_id"), meta.get("param_date")
+    upstream = meta.get("upstream")
+    if isinstance(upstream, dict):
+        return upstream.get("param_set_id"), upstream.get("param_date")
+    return None, None
 
 
 def find_latest_data_path(root_dir: Path) -> Optional[Path]:

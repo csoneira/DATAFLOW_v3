@@ -14,10 +14,12 @@ Apply front-end electronics effects: per-channel time jitter, charge-to-time con
 - Required metadata: none (metadata is produced by this step).
 
 ## Schema (guaranteed outputs)
-- No new columns are added.
-- `T_front_i_sj` and `T_back_i_sj` are updated with Gaussian jitter.
-- `Q_front_i_sj` and `Q_back_i_sj` are converted to time-walk units and thresholded:
-  - values below `threshold` are set to 0.
+Retained columns:
+- `event_id` (int)
+- `T_thick_s` (s) if present upstream
+- `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`
+
+`T_front_i_sj` and `T_back_i_sj` are updated with Gaussian jitter. `Q_front_i_sj` and `Q_back_i_sj` are converted to time-walk units and thresholded (values below `threshold` are set to 0).
 
 Time reference: same as STEP 07, with additional per-channel FEE timing jitter.
 

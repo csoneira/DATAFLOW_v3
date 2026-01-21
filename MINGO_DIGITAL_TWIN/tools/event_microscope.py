@@ -34,7 +34,7 @@ def fmt(val: object, digits: int = 4) -> str:
 
 
 def rows_match(base: pd.Series, other: pd.Series, tol: float) -> bool:
-    keys = ("X_gen", "Y_gen", "Z_gen", "Theta_gen", "Phi_gen", "T0_ns", "T_thick_s")
+    keys = ("event_id", "X_gen", "Y_gen", "Z_gen", "Theta_gen", "Phi_gen", "T_thick_s")
     matched = 0
     compared = 0
     for key in keys:
@@ -53,7 +53,7 @@ def rows_match(base: pd.Series, other: pd.Series, tol: float) -> bool:
         if abs(float(a) - float(b)) <= tol:
             matched += 1
     if compared == 0:
-        return False
+        return True
     return matched == compared
 
 
@@ -112,6 +112,10 @@ def resolve_upstream_chain(step10_path: Path) -> dict:
                                 step2 = meta3.get("source_dataset")
                                 if step2:
                                     chain["step2"] = Path(step2)
+                                    meta2 = load_metadata(chain["step2"])
+                                    step1 = meta2.get("source_dataset")
+                                    if step1:
+                                        chain["step1"] = Path(step1)
     return chain
 
 
@@ -204,12 +208,16 @@ def list_active_strips(row: pd.Series, prefix: str) -> list[tuple[int, int]]:
 
 
 def describe_generation(row: pd.Series) -> list[str]:
-    return [
+    lines = [
         "Muon generation",
         f"X_gen={fmt(row.get('X_gen'))} mm, Y_gen={fmt(row.get('Y_gen'))} mm, Z_gen={fmt(row.get('Z_gen'))} mm",
         f"Theta_gen={fmt(row.get('Theta_gen'), 5)} rad, Phi_gen={fmt(row.get('Phi_gen'), 5)} rad",
-        f"T0_ns={fmt(row.get('T0_ns'))} ns, T_thick_s={fmt(row.get('T_thick_s'), 6)} s",
     ]
+    if "T0_ns" in row:
+        lines.append(f"T0_ns={fmt(row.get('T0_ns'))} ns, T_thick_s={fmt(row.get('T_thick_s'), 6)} s")
+    else:
+        lines.append(f"T_thick_s={fmt(row.get('T_thick_s'), 6)} s")
+    return lines
 
 
 def describe_crossings(row: pd.Series) -> list[str]:
@@ -473,6 +481,7 @@ def main() -> None:
     row4 = row_for_step("step4", mismatch_notes)
     row3 = row_for_step("step3", mismatch_notes)
     row2 = row_for_step("step2", mismatch_notes)
+    row1 = row_for_step("step1", mismatch_notes)
 
     cfg7 = None
     cfg9 = None
@@ -495,7 +504,7 @@ def main() -> None:
         header.append("upstream_warnings=" + "; ".join(mismatch_notes))
 
     sections = []
-    gen_row = row2 if row2 is not None else row10
+    gen_row = row1 if row1 is not None else row2 if row2 is not None else row10
     cross_row = row2 if row2 is not None else row10
     avalanche_row = row3 if row3 is not None else row10
     induced_row = row4 if row4 is not None else row10

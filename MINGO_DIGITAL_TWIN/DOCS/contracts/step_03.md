@@ -6,19 +6,23 @@ Apply gas-gap efficiency and avalanche modeling to crossing events, producing pe
 ## Required inputs
 - Input data (from STEP 02):
   - `event_id` (int)
-  - `X_gen_i`, `Y_gen_i`, `Z_gen_i`, `T_sum_i_ns` for planes i = 1..4.
+  - `X_gen_i`, `Y_gen_i`, `T_sum_i_ns` for planes i = 1..4.
   - `tt_crossing` (optional but used for summary plots).
 - Config inputs:
   - `efficiencies` (per plane), `gain`, `townsend_alpha`, `gap_mm`, `electron_sigma`.
 - Required metadata: none (metadata is produced by this step).
 
 ## Schema (guaranteed outputs)
-All STEP 02 columns plus the following per-plane columns (i = 1..4):
+Retained columns:
+- `event_id` (int)
+- `T_thick_s` (s) if present upstream
+- `T_sum_i_ns` (ns) for planes i = 1..4
+
+Per-plane avalanche columns (i = 1..4):
 - `avalanche_ion_i` (count): number of primary ionizations.
 - `avalanche_exists_i` (bool): True if at least one ionization occurred.
 - `avalanche_x_i` (mm): avalanche centroid x (NaN if no avalanche).
 - `avalanche_y_i` (mm): avalanche centroid y (NaN if no avalanche).
-- `avalanche_qsum_i` (arb charge): ionizations * gain.
 - `avalanche_size_electrons_i` (electrons): avalanche size after gain + smearing.
 - `tt_avalanche` (string): concatenation of planes with avalanche_exists_i == True.
 

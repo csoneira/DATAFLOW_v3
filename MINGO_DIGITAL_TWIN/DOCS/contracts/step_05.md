@@ -13,7 +13,13 @@ Derive per-strip time-difference and charge-difference observables from measured
 - Required metadata: none (metadata is produced by this step).
 
 ## Schema (guaranteed outputs)
-All STEP 04 columns plus:
+Retained columns:
+- `event_id` (int)
+- `T_thick_s` (s) if present upstream
+- `Y_mea_i_sj` (arb charge)
+- `T_sum_meas_i_sj` (ns)
+
+Derived columns:
 - `T_diff_i_sj` (ns): time-difference proxy from strip x-position.
 - `q_diff_i_sj` (arb charge): charge-difference proxy (zero if no strip charge).
 

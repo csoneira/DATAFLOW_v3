@@ -523,7 +523,7 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     
     
     # Sum in 10 minute columns, not 1 minute ones
-    events_df = events_df.set_index("Time").resample("120T").sum().reset_index()
+    events_df = events_df.set_index("Time").resample("10T").sum().reset_index()
     
     # Example: sum detector regions (12, 23, 34, etc.) and re-plot using those
     # derived columns. Edit the `regions` list to fit your detector layout.

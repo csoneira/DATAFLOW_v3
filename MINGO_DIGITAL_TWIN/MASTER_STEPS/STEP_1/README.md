@@ -20,4 +20,5 @@ Run:
 
 Notes:
 - flux_cm2_min can be a list; one value is selected per run (seeded) and defines the SIM_RUN identity.
+- cos_n can be a list; one value is selected per run (seeded) and defines the SIM_RUN identity.
 - The step skips if the matching SIM_RUN exists unless --force is provided.

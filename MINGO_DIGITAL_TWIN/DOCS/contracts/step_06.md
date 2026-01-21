@@ -11,7 +11,11 @@ Convert per-strip sum/difference observables into end-specific times and charges
 - Required metadata: none (metadata is produced by this step).
 
 ## Schema (guaranteed outputs)
-All STEP 05 columns plus:
+Retained columns:
+- `event_id` (int)
+- `T_thick_s` (s) if present upstream
+
+Derived columns:
 - `T_front_i_sj` (ns): `T_sum_meas_i_sj - T_diff_i_sj`.
 - `T_back_i_sj` (ns): `T_sum_meas_i_sj + T_diff_i_sj`.
 - `Q_front_i_sj` (arb charge): `Y_mea_i_sj - q_diff_i_sj`.

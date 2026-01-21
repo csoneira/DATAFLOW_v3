@@ -12,11 +12,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # --- knobs to tweak ---
-STATION = "MINGO04"  # e.g. MINGO01, MINGO02, ...
+STATION = "MINGO01"  # e.g. MINGO01, MINGO02, ...
 STEP = 1             # numeric step (1, 2, ...)
 TASK = 1          # for STEP_1 use an int (1-5); keep None for steps without tasks
-START_DATE = "2025-03-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
-END_DATE = "2025-11-20 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
+START_DATE = "2023-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
+END_DATE = "2026-01-20 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
 # Window used when counting events (ns) and per-combination measured counts.
 # Set WINDOW_NS to the calibration window you used (e.g., coincidence_window_cal_ns),
 # and fill MEASURED_COUNTS with {combo: observed_counts}.
@@ -92,7 +92,7 @@ if filter_col and (START_DATE or END_DATE):
 print(f"Loaded: {metadata_path}")
 print(f"Rows: {len(df)}")
 
-tt_count_cols = [c for c in df.columns if "_tt_" in c and c.endswith("_count")]
+tt_count_cols = [c for c in df.columns if "raw_tt_" in c and c.endswith("_count")]
 if tt_count_cols and filter_col:
     plot_df = df[[filter_col] + tt_count_cols].dropna(subset=[filter_col]).copy()
     plot_df = plot_df.set_index(filter_col)

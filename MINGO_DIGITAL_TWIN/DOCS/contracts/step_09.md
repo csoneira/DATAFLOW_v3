@@ -13,9 +13,11 @@ Apply coincidence trigger logic and retain only events that satisfy configured p
 
 ## Schema (guaranteed outputs)
 - Output is a subset of input rows that pass the trigger.
-- Added column:
-  - `tt_trigger` (string): concatenation of active planes for each retained event.
-- All other columns are preserved from STEP 08.
+- Retained columns:
+  - `event_id` (int)
+  - `T_thick_s` (s) if present upstream
+  - `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`
+- Added column: `tt_trigger` (string): concatenation of active planes for each retained event.
 
 Time reference: unchanged from STEP 08.
 

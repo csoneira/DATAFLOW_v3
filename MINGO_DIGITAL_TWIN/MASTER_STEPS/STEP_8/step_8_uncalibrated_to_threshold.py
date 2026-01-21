@@ -105,6 +105,18 @@ def apply_threshold(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
     return out
 
 
+def prune_step8(df: pd.DataFrame) -> pd.DataFrame:
+    keep = {"event_id", "T_thick_s"}
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            keep.add(f"T_front_{plane_idx}_s{strip_idx}")
+            keep.add(f"T_back_{plane_idx}_s{strip_idx}")
+            keep.add(f"Q_front_{plane_idx}_s{strip_idx}")
+            keep.add(f"Q_back_{plane_idx}_s{strip_idx}")
+    keep_cols = [col for col in df.columns if col in keep]
+    return df[keep_cols]
+
+
 def pick_tt_column(df: pd.DataFrame) -> str | None:
     for col in ("tt_trigger", "tt_hit", "tt_avalanche", "tt_crossing"):
         if col in df.columns:
@@ -375,7 +387,8 @@ def main() -> None:
         def _iter_out() -> Iterable[pd.DataFrame]:
             for chunk in input_iter:
                 out_chunk = apply_threshold(chunk, threshold)
-                yield apply_fee(out_chunk, t_fee_sigma_ns, q_to_time_factor, qfront_offsets, qback_offsets, rng)
+                out_chunk = apply_fee(out_chunk, t_fee_sigma_ns, q_to_time_factor, qfront_offsets, qback_offsets, rng)
+                yield prune_step8(out_chunk)
 
         manifest_path, last_chunk, row_count = write_chunked_output(
             _iter_out(),
@@ -400,6 +413,7 @@ def main() -> None:
         df, upstream_meta = load_with_metadata(input_path)
         out = apply_threshold(df, threshold)
         out = apply_fee(out, t_fee_sigma_ns, q_to_time_factor, qfront_offsets, qback_offsets, rng)
+        out = prune_step8(out)
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         save_with_metadata(out, out_path, metadata, output_format)
         if not args.no_plots:

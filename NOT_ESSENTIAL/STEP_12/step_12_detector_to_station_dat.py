@@ -298,7 +298,7 @@ def main() -> None:
     out_path = output_dir / out_name
     write_with_timestamps(payloads, out_path, start_time, rate_hz, rng, offsets_s=thick_offsets)
 
-    registry_path = output_dir / "step_13_output_registry.json"
+    registry_path = output_dir / "step_final_output_registry.json"
     registry = load_output_registry(registry_path)
     step10_dir = Path(cfg.get("step10_dir", "../../INTERSTEPS/STEP_10_TO_11"))
     if not step10_dir.is_absolute():

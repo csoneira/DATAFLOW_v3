@@ -1,6 +1,8 @@
 output_format: pkl
 output_basename: muon_sample
 output_dir: ../../INTERSTEPS/STEP_1_TO_2
+param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
+param_mesh_sim_run: latest
 chunk_rows: 200000
 plot_sample_rows: true
-n_tracks: 150000000
+n_tracks: 50000000

@@ -8,5 +8,5 @@ c_mm_per_ns: 299.792458
 # Semifixed
 
 # Variable (to loop on)
-cos_n: 2
-flux_cm2_min: [0.95, 1.0, 1.05]
+cos_n: random
+flux_cm2_min: random

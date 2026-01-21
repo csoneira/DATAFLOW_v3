@@ -70,6 +70,18 @@ def compute_front_back(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def prune_step6(df: pd.DataFrame) -> pd.DataFrame:
+    keep = {"event_id", "T_thick_s"}
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            keep.add(f"T_front_{plane_idx}_s{strip_idx}")
+            keep.add(f"T_back_{plane_idx}_s{strip_idx}")
+            keep.add(f"Q_front_{plane_idx}_s{strip_idx}")
+            keep.add(f"Q_back_{plane_idx}_s{strip_idx}")
+    keep_cols = [col for col in df.columns if col in keep]
+    return df[keep_cols]
+
+
 def pick_tt_column(df: pd.DataFrame) -> str | None:
     for col in ("tt_trigger", "tt_hit", "tt_avalanche", "tt_crossing"):
         if col in df.columns:
@@ -274,7 +286,7 @@ def main() -> None:
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:
             for chunk in input_iter:
-                yield compute_front_back(chunk)
+                yield prune_step6(compute_front_back(chunk))
 
         manifest_path, last_chunk, row_count = write_chunked_output(
             _iter_out(),
@@ -297,7 +309,7 @@ def main() -> None:
         print(f"Saved {manifest_path}")
     else:
         df, upstream_meta = load_with_metadata(input_path)
-        out = compute_front_back(df)
+        out = prune_step6(compute_front_back(df))
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         save_with_metadata(out, out_path, metadata, output_format)
         if not args.no_plots:

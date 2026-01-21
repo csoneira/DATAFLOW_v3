@@ -97,6 +97,17 @@ def calculate_intersections(
     return out
 
 
+def prune_step2(df: pd.DataFrame) -> pd.DataFrame:
+    keep = {"event_id", "T_thick_s", "tt_crossing"}
+    for plane_idx in range(1, 5):
+        keep.add(f"X_gen_{plane_idx}")
+        keep.add(f"Y_gen_{plane_idx}")
+        keep.add(f"Z_gen_{plane_idx}")
+        keep.add(f"T_sum_{plane_idx}_ns")
+    keep_cols = [col for col in df.columns if col in keep]
+    return df[keep_cols]
+
+
 def normalize_positions(z_positions: Tuple[float, float, float, float], normalize: bool) -> np.ndarray:
     z_array = np.array(z_positions, dtype=float)
     if normalize:
@@ -337,28 +348,45 @@ def main() -> None:
     reset_dir(sim_run_dir)
     c_mm_per_ns = float(cfg.get("c_mm_per_ns", upstream_meta.get("config", {}).get("c_mm_per_ns", 299.792458)))
     print(f"c_mm_per_ns: {c_mm_per_ns}")
-    station_root = Path(cfg["station_config_root"]).expanduser()
-    if not station_root.is_absolute():
-        station_root = Path(__file__).resolve().parent / station_root
-    station_files = list_station_config_files(station_root)
-    station_dfs = []
-    for csv_path in station_files.values():
-        station_dfs.append(read_station_config(csv_path))
+    geometry_source_dir = None
+    geometry_map = None
+    geometry_map_dir = cfg.get("geometry_map_dir")
+    if geometry_map_dir:
+        map_dir = Path(geometry_map_dir)
+        if not map_dir.is_absolute():
+            map_dir = Path(__file__).resolve().parent / map_dir
+        map_sim_run = cfg.get("geometry_map_sim_run", "latest")
+        if map_sim_run == "latest":
+            map_sim_run = latest_sim_run(map_dir)
+        elif map_sim_run == "random":
+            map_sim_run = random_sim_run(map_dir, cfg.get("seed"))
+        geometry_source_dir = map_dir / str(map_sim_run)
+        registry_path = geometry_source_dir / "geometry_registry.csv"
+        geom_map_path = geometry_source_dir / "geometry_map_all.csv"
+        if not registry_path.exists():
+            raise FileNotFoundError(f"geometry_registry.csv not found in {geometry_source_dir}")
+        registry = pd.read_csv(registry_path)
+        if geom_map_path.exists():
+            geometry_map = pd.read_csv(geom_map_path)
+    else:
+        station_root = Path(cfg["station_config_root"]).expanduser()
+        if not station_root.is_absolute():
+            station_root = Path(__file__).resolve().parent / station_root
+        station_files = list_station_config_files(station_root)
+        station_dfs = []
+        for csv_path in station_files.values():
+            station_dfs.append(read_station_config(csv_path))
+        registry = build_global_geometry_registry(station_dfs)
+        geometry_map = pd.concat(
+            [map_station_to_geometry(df, registry) for df in station_dfs],
+            ignore_index=True,
+        )
 
-    registry = build_global_geometry_registry(station_dfs)
     registry_path = sim_run_dir / "geometry_registry.csv"
     registry.to_csv(registry_path, index=False)
-    registry_json_path = sim_run_dir / "geometry_registry.json"
-    registry_json_path.write_text(json.dumps(registry.to_dict(orient="records"), indent=2))
-
-    geometry_map = pd.concat(
-        [map_station_to_geometry(df, registry) for df in station_dfs],
-        ignore_index=True,
-    )
-    geom_map_path = sim_run_dir / "geometry_map_all.csv"
-    geometry_map.to_csv(geom_map_path, index=False)
-    geom_json_path = sim_run_dir / "geometry_map_all.json"
-    geom_json_path.write_text(json.dumps(geometry_map.to_dict(orient="records"), indent=2))
+    if geometry_map is not None:
+        geom_map_path = sim_run_dir / "geometry_map_all.csv"
+        geometry_map.to_csv(geom_map_path, index=False)
 
     geometry_id = cfg.get("geometry_id")
     if geometry_id is None:
@@ -393,6 +421,7 @@ def main() -> None:
         "geometry_id": int(geometry_id),
         "z_positions_mm": [float(z) for z in z_positions],
         "geometry_dir": str(sim_run_dir),
+        "geometry_source_dir": str(geometry_source_dir) if geometry_source_dir else None,
         "upstream": upstream_meta,
     }
 
@@ -449,6 +478,7 @@ def main() -> None:
             geom_chunk = calculate_intersections(chunk_df, z_positions, bounds, c_mm_per_ns)
             if "tt_crossing" in geom_chunk.columns:
                 geom_chunk = geom_chunk[geom_chunk["tt_crossing"].notna()].reset_index(drop=True)
+            geom_chunk = prune_step2(geom_chunk)
             total_rows += len(geom_chunk)
             if not geom_chunk.empty:
                 buffer.append(geom_chunk)
@@ -492,6 +522,7 @@ def main() -> None:
         geom_df = calculate_intersections(muon_df, z_positions, bounds, c_mm_per_ns)
         if "tt_crossing" in geom_df.columns:
             geom_df = geom_df[geom_df["tt_crossing"].notna()].reset_index(drop=True)
+        geom_df = prune_step2(geom_df)
 
         save_with_metadata(geom_df, out_path, metadata, output_format)
         if not args.no_plots:

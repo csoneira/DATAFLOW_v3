@@ -13,14 +13,15 @@ Induce per-strip signals from avalanche centroids and sizes, producing strip-lev
 - Required metadata: none (metadata is produced by this step).
 
 ## Schema (guaranteed outputs)
-All STEP 03 columns plus the following:
-- `avalanche_width_scale_i` (unitless): width scale factor for plane i.
-- `avalanche_scaled_width_i` (mm): induced width used for charge sharing.
-- Per-plane, per-strip columns (plane i = 1..4, strip j = 1..4):
+Retained columns:
+- `event_id` (int)
+- `T_thick_s` (s) if present upstream
+- `tt_hit` (string): concatenation of planes with at least one strip hit.
+
+Per-plane, per-strip columns (plane i = 1..4, strip j = 1..4):
   - `Y_mea_i_sj` (arb charge): induced charge on strip j.
   - `X_mea_i_sj` (mm): inferred x position along strip j (NaN if no hit).
   - `T_sum_meas_i_sj` (ns): measured sum-time per strip (NaN if no hit).
-- `tt_hit` (string): concatenation of planes with at least one strip hit.
 
 Time reference: `T_sum_meas_i_sj` is derived from `T_sum_i_ns` with added Gaussian noise; time zero remains the earliest plane crossing per event.
 

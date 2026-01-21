@@ -30,7 +30,6 @@ This document is the authoritative reference for coordinate axes, plane/strip or
 - As a result, positive `X_mea` implies `T_front < T_back`.
 
 ## Timing reference and offsets
-- `T0_ns` is the initial event time in STEP 1 and is currently set to 0 for all events.
 - STEP 2 defines per-plane incidence times `T_sum_i_ns`, then subtracts the minimum valid plane time so that the earliest crossing in each event is at 0.
 - STEP 4 builds `T_sum_meas_i_sj` by adding Gaussian noise (`time_sigma_ns`) to `T_sum_i_ns`.
 - STEP 7 applies fixed connector/cable offsets to `T_front_i_sj` and `T_back_i_sj`.

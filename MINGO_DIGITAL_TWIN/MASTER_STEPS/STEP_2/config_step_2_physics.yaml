@@ -6,5 +6,4 @@ bounds_mm:
   y_max: 143.5
 
 # Variable (to loop on)
-# geometry_id: "random"
-geometry_id: 0
+geometry_id: random

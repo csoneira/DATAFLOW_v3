@@ -1,6 +1,7 @@
 # To do list
 
 - [ ] Validation of the simulation.
+- [X] Change the name of the json and csv in the SIMULATED_DATA so it does not say STEP_13, which does not exist.
 - [ ] Add the energy value to the muons according to the spectrum used in the simulation. And its velocity calculated with it.
 - [ ] Add the Moliére Multiple Coulomb scattering.
 - [ ] Add the lead above the detector.

@@ -14,7 +14,12 @@ Apply TDC smear and DAQ clock jitter to front/back times for triggered events.
 - Required metadata: none (metadata is produced by this step).
 
 ## Schema (guaranteed outputs)
-All STEP 09 columns plus:
+Retained columns:
+- `event_id` (int)
+- `T_thick_s` (s) if present upstream
+- `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`
+
+Added column:
 - `daq_jitter_ns` (ns): per-event jitter applied to active channels (0 if no active channels).
 
 Time reference: unchanged from STEP 09, with additional TDC smear and event-level jitter.

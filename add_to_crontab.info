@@ -4,10 +4,11 @@
 # minute hour day_of_month month day_of_week command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Updated at 2026-01-16 15:00
+# Updated at 2026-01-20 14:26
 
 SHELL=/bin/bash
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
+* * * * * /bin/mkdir -p /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS
 
 # Replace current crontab with the contents of ~/DATAFLOW_v3/add_to_crontab.info
 * * * * * /usr/bin/crontab /home/mingo/DATAFLOW_v3/add_to_crontab.info
@@ -97,9 +98,9 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # STAGE_0 - SIMULATION - COPY SIMULATED DATA -------------------------------------
 
 # MINGO_DIGITAL_TWIN - RUN STEPS 2+ EVERY 15 MINUTES ------------------------------
-*/2 * * * * /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh all --no-plots
-*/2 * * * * /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh final
-*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/simulate_station_data.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/simulate_station_data.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh all --no-plots
+*/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh final
+*/25 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/simulate_station_data.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/simulate_station_data.log 2>&1
 
 
 # --------------------------------------------------------------------------------

@@ -31,9 +31,11 @@ from STEP_SHARED.sim_utils import (
     load_step_configs,
     load_with_metadata,
     now_iso,
+    resolve_param_mesh,
     resolve_sim_run,
     reset_dir,
     save_with_metadata,
+    select_param_row,
 )
 
 
@@ -135,6 +137,20 @@ def generate_muon_batches(
             df = df[df["T_thick_s"] != last_second].reset_index(drop=True)
         yield df
         filled += n_batch
+
+
+def prune_step1(df: pd.DataFrame) -> pd.DataFrame:
+    keep = {
+        "event_id",
+        "X_gen",
+        "Y_gen",
+        "Z_gen",
+        "Theta_gen",
+        "Phi_gen",
+        "T_thick_s",
+    }
+    keep_cols = [col for col in df.columns if col in keep]
+    return df[keep_cols]
 
 
 def plot_muon_sample(df: pd.DataFrame, pdf: PdfPages) -> None:
@@ -261,6 +277,24 @@ def normalize_flux_values(value: object) -> list[float]:
     raise ValueError("flux_cm2_min must be a number or list of numbers.")
 
 
+def normalize_cos_values(value: object) -> list[float]:
+    if value is None:
+        return [2.0]
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, list):
+        if not value:
+            return [2.0]
+        if not all(isinstance(v, (int, float)) for v in value):
+            raise ValueError("cos_n must be a number or list of numbers.")
+        return [float(v) for v in value]
+    raise ValueError("cos_n must be a number or list of numbers.")
+
+
+def is_random_value(value: object) -> bool:
+    return isinstance(value, str) and value.lower() == "random"
+
+
 def generate_thick_times(n_tracks: int, rate_hz: float, rng: np.random.Generator) -> np.ndarray:
     if n_tracks <= 0:
         return np.zeros(0, dtype=float)
@@ -340,14 +374,55 @@ def main() -> None:
     plot_sample_rows = cfg.get("plot_sample_rows")
     output_name = f"{cfg.get('output_basename', 'muon_sample')}_{int(cfg['n_tracks'])}.{output_format}"
     output_base = cfg.get("output_basename", "muon_sample")
-    flux_candidates = normalize_flux_values(cfg.get("flux_cm2_min"))
     rng = np.random.default_rng(cfg.get("seed"))
-    flux_idx = int(rng.integers(0, len(flux_candidates)))
-    flux_cm2_min = float(flux_candidates[flux_idx])
+    param_row = None
+    param_set_id = None
+    param_date = None
+    param_mesh_path = None
+    if is_random_value(cfg.get("flux_cm2_min")) or is_random_value(cfg.get("cos_n")):
+        mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+        if not mesh_dir.is_absolute():
+            mesh_dir = Path(__file__).resolve().parent / mesh_dir
+        mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "latest"), cfg.get("seed"))
+        param_row = select_param_row(mesh, rng, cfg.get("param_set_id"))
+        param_set_id = int(param_row["param_set_id"])
+        if "param_date" in param_row:
+            param_date = str(param_row["param_date"])
+        param_mesh_path = mesh_path
+
+    flux_cfg = cfg.get("flux_cm2_min")
+    if is_random_value(flux_cfg):
+        if param_row is None or "flux_cm2_min" not in param_row:
+            raise ValueError("flux_cm2_min is random but not found in param_mesh.csv.")
+        flux_cm2_min = float(param_row["flux_cm2_min"])
+        flux_idx = None
+        flux_candidates = []
+    else:
+        flux_candidates = normalize_flux_values(flux_cfg)
+        flux_idx = int(rng.integers(0, len(flux_candidates)))
+        flux_cm2_min = float(flux_candidates[flux_idx])
+
+    cos_cfg = cfg.get("cos_n")
+    if is_random_value(cos_cfg):
+        if param_row is None or "cos_n" not in param_row:
+            raise ValueError("cos_n is random but not found in param_mesh.csv.")
+        cos_n = float(param_row["cos_n"])
+        cos_idx = None
+        cos_candidates = []
+    else:
+        cos_candidates = normalize_cos_values(cos_cfg)
+        cos_idx = int(rng.integers(0, len(cos_candidates)))
+        cos_n = float(cos_candidates[cos_idx])
+
     physics_cfg_run = dict(physics_cfg)
     physics_cfg_run["flux_cm2_min"] = flux_cm2_min
-    if len(flux_candidates) > 1:
+    physics_cfg_run["cos_n"] = cos_n
+    if flux_candidates and len(flux_candidates) > 1:
         print(f"flux_cm2_min candidates: {len(flux_candidates)} (selected index {flux_idx})")
+    if cos_candidates and len(cos_candidates) > 1:
+        print(f"cos_n candidates: {len(cos_candidates)} (selected index {cos_idx})")
+    if param_set_id is not None:
+        print(f"param_set_id: {param_set_id} (date {param_date})")
     if args.plot_only:
         sim_run = find_sim_run(output_dir, physics_cfg_run, None)
         if sim_run is None:
@@ -482,6 +557,9 @@ def main() -> None:
             "sim_run": sim_run,
             "config_hash": config_hash,
             "upstream_hash": upstream_hash,
+            "param_set_id": param_set_id,
+            "param_date": param_date,
+            "param_mesh_path": str(param_mesh_path) if param_mesh_path else None,
         }
         generated_rows = None
         generated_path = output_path
@@ -494,16 +572,17 @@ def main() -> None:
                 xlim=float(cfg["xlim_mm"]),
                 ylim=float(cfg["ylim_mm"]),
                 z_plane=float(cfg["z_plane_mm"]),
-                cos_n=float(cfg["cos_n"]),
+                cos_n=cos_n,
                 seed=cfg.get("seed"),
                 thick_rate_hz=rate_hz,
                 drop_last_second=drop_last_second,
                 batch_size=int(chunk_rows),
             ):
                 total_rows += len(batch)
-                batch.to_csv(output_path, mode="a", index=False, header=not header_written)
+                batch_out = prune_step1(batch)
+                batch_out.to_csv(output_path, mode="a", index=False, header=not header_written)
                 header_written = True
-                last_full_batch = batch
+                last_full_batch = batch_out
             metadata["row_count"] = total_rows
             meta_path = output_path.with_suffix(output_path.suffix + ".meta.json")
             meta_path.write_text(json.dumps(metadata, indent=2))
@@ -540,7 +619,7 @@ def main() -> None:
                     xlim=float(cfg["xlim_mm"]),
                     ylim=float(cfg["ylim_mm"]),
                     z_plane=float(cfg["z_plane_mm"]),
-                    cos_n=float(cfg["cos_n"]),
+                    cos_n=cos_n,
                     seed=cfg.get("seed"),
                     thick_rate_hz=rate_hz,
                     drop_last_second=drop_last_second,
@@ -548,10 +627,11 @@ def main() -> None:
                 )
             ):
                 chunk_path = chunks_dir / f"part_{idx:04d}.pkl"
-                batch.to_pickle(chunk_path)
+                batch_out = prune_step1(batch)
+                batch_out.to_pickle(chunk_path)
                 chunks.append(str(chunk_path))
-                total_rows += len(batch)
-                last_full_batch = batch
+                total_rows += len(batch_out)
+                last_full_batch = batch_out
             manifest = {
                 "version": 1,
                 "chunks": chunks,
@@ -589,11 +669,12 @@ def main() -> None:
                 xlim=float(cfg["xlim_mm"]),
                 ylim=float(cfg["ylim_mm"]),
                 z_plane=float(cfg["z_plane_mm"]),
-                cos_n=float(cfg["cos_n"]),
+                cos_n=cos_n,
                 seed=cfg.get("seed"),
                 thick_rate_hz=rate_hz,
                 drop_last_second=drop_last_second,
             )
+            df = prune_step1(df)
             save_with_metadata(df, output_path, metadata, output_format)
             generated_rows = len(df)
 

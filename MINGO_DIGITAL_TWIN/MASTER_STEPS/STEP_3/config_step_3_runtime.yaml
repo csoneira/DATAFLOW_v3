@@ -2,6 +2,8 @@ input_dir: ../../INTERSTEPS/STEP_2_TO_3
 input_glob: "**/geom_*.pkl"
 input_sim_run: random
 geometry_id: auto
+param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
+param_mesh_sim_run: latest
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_3_TO_4
 chunk_rows: 100000

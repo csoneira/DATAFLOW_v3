@@ -86,6 +86,18 @@ def apply_trigger(df: pd.DataFrame, triggers: List[str]) -> pd.DataFrame:
     return filtered
 
 
+def prune_step9(df: pd.DataFrame) -> pd.DataFrame:
+    keep = {"event_id", "T_thick_s", "tt_trigger"}
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            keep.add(f"T_front_{plane_idx}_s{strip_idx}")
+            keep.add(f"T_back_{plane_idx}_s{strip_idx}")
+            keep.add(f"Q_front_{plane_idx}_s{strip_idx}")
+            keep.add(f"Q_back_{plane_idx}_s{strip_idx}")
+    keep_cols = [col for col in df.columns if col in keep]
+    return df[keep_cols]
+
+
 def plot_trigger_summary(df: pd.DataFrame, output_path: Path) -> None:
     with PdfPages(output_path) as pdf:
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -283,7 +295,7 @@ def main() -> None:
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:
             for chunk in input_iter:
-                yield apply_trigger(chunk, triggers)
+                yield prune_step9(apply_trigger(chunk, triggers))
 
         manifest_path, last_chunk, row_count = write_chunked_output(
             _iter_out(),
@@ -306,7 +318,7 @@ def main() -> None:
         print(f"Saved {manifest_path}")
     else:
         df, upstream_meta = load_with_metadata(input_path)
-        filtered = apply_trigger(df, triggers)
+        filtered = prune_step9(apply_trigger(df, triggers))
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         save_with_metadata(filtered, out_path, metadata, output_format)
         if not args.no_plots:

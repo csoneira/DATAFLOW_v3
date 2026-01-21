@@ -1,7 +1,7 @@
 # STEP 01 Interface Contract (Blank -> Generated)
 
 ## Purpose
-Generate primary muon parameters (position, direction, and start time) for downstream transport and detector simulation.
+Generate primary muon parameters (position, direction, and thick-time tags) for downstream transport and detector simulation.
 
 ## Required inputs
 - Input data: none (this step is the pipeline start).
@@ -16,10 +16,9 @@ Generate primary muon parameters (position, direction, and start time) for downs
 - `Z_gen` (mm): generated z position (constant per run).
 - `Theta_gen` (rad): polar angle from +Z, in [0, pi/2].
 - `Phi_gen` (rad): azimuth in [-pi, pi].
-- `T0_ns` (ns): reference time, currently 0 for all events.
 - `T_thick_s` (s): wall-clock-like time for thick-rate sequencing (0 if unused).
 
-Time reference: `T0_ns` is the event time origin used to define downstream flight times; it is set to 0 in the current implementation.
+Time reference: this step does not persist a per-event time origin; downstream times are defined relative to the earliest plane crossing in STEP 2.
 
 ## Invariants & checks
 - `event_id` is unique within the output file and 0-based.

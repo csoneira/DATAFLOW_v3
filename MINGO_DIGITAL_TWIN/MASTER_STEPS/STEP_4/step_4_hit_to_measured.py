@@ -38,9 +38,12 @@ from STEP_SHARED.sim_utils import (
     now_iso,
     find_sim_run,
     random_sim_run,
+    resolve_param_mesh,
     resolve_sim_run,
     reset_dir,
     save_with_metadata,
+    select_param_row,
+    extract_param_set,
 )
 
 
@@ -50,6 +53,10 @@ def normalize_tt(series: pd.Series) -> pd.Series:
     tt = tt.str.replace(r"\.0$", "", regex=True)
     tt = tt.replace({"0": "", "0.0": "", "nan": "", "<NA>": ""})
     return tt
+
+
+def is_random_value(value: object) -> bool:
+    return isinstance(value, str) and value.lower() == "random"
 
 
 def compute_strip_signals(
@@ -671,6 +678,17 @@ def plot_step4_summary(
     plt.close(fig)
 
 
+def prune_step4(df: pd.DataFrame) -> pd.DataFrame:
+    keep = {"event_id", "T_thick_s", "tt_hit"}
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            keep.add(f"Y_mea_{plane_idx}_s{strip_idx}")
+            keep.add(f"X_mea_{plane_idx}_s{strip_idx}")
+            keep.add(f"T_sum_meas_{plane_idx}_s{strip_idx}")
+    keep_cols = [col for col in df.columns if col in keep]
+    return df[keep_cols]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 4: avalanche -> induced signal (hit vectors).")
     parser.add_argument("--config", default="config_step_4_physics.yaml", help="Path to step physics config YAML")
@@ -835,7 +853,7 @@ def main() -> None:
         chunk: pd.DataFrame,
         debug_state: dict,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        needed_cols = {"event_id", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "T0_ns", "T_thick_s"}
+        needed_cols = {"event_id", "T_thick_s"}
         for plane_idx in range(1, 5):
             needed_cols.update(
                 {
@@ -882,7 +900,7 @@ def main() -> None:
         if debug_event_index is not None and debug_state["points"]:
             debug_state["captured"] = True
             debug_state["plot_df"] = plot_df
-        return out_full, plot_df
+        return prune_step4(out_full), plot_df
 
     debug_state = {"captured": False, "points": {}, "plot_df": None}
     debug_rng = np.random.default_rng()
@@ -995,7 +1013,7 @@ def main() -> None:
         keep_cols = [col for col in df.columns if col in needed_cols]
         df = df[keep_cols]
         debug_event_index = select_debug_event(df, debug_rng)
-        out = induce_signal(
+        out_full = induce_signal(
             df,
             x_noise,
             time_sigma_ns,
@@ -1010,10 +1028,11 @@ def main() -> None:
         )
         print("Signal induction complete.")
 
+        out = prune_step4(out_full)
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         plot_cols = [
             col
-            for col in out.columns
+            for col in out_full.columns
             if col == "tt_hit"
             or col.startswith(("Y_mea_", "X_mea_", "T_sum_meas_"))
             or col.startswith(
@@ -1026,7 +1045,7 @@ def main() -> None:
                 )
             )
         ]
-        plot_df = out[plot_cols]
+        plot_df = out_full[plot_cols]
         plot_df_examples = plot_df
         plot_sample_size = cfg.get("plot_sample_size", 200000)
         if plot_sample_size:

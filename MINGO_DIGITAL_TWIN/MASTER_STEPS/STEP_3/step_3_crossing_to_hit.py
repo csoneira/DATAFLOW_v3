@@ -37,9 +37,12 @@ from STEP_SHARED.sim_utils import (
     random_sim_run,
     load_with_metadata,
     now_iso,
+    resolve_param_mesh,
     resolve_sim_run,
     reset_dir,
     save_with_metadata,
+    select_param_row,
+    extract_param_set,
     write_chunked_output,
 )
 
@@ -69,6 +72,10 @@ def normalize_efficiency_vectors(value: object) -> list[list[float]]:
     raise ValueError("efficiencies must be a 4-value list or a list of 4-value lists.")
 
 
+def is_random_value(value: object) -> bool:
+    return isinstance(value, str) and value.lower() == "random"
+
+
 
 
 def build_avalanche(
@@ -95,8 +102,10 @@ def build_avalanche(
         hit_mask = ~np.isnan(x_vals) & ~np.isnan(y_vals)
 
         eff = float(efficiencies[plane_idx - 1])
-        if not (0.0 < eff < 1.0):
-            raise ValueError(f"Efficiency must be in (0,1) for plane {plane_idx}, got {eff}")
+        if not (0.0 < eff <= 1.0):
+            raise ValueError(f"Efficiency must be in (0,1] for plane {plane_idx}, got {eff}")
+        if eff >= 1.0:
+            eff = 1.0 - 1e-6
         ion_lambda = -np.log(1.0 - eff)
         ions = np.zeros(n, dtype=int)
         ions[hit_mask] = rng.poisson(ion_lambda, size=hit_mask.sum())
@@ -123,6 +132,19 @@ def build_avalanche(
     tt_series = pd.Series(tt_array, dtype="string").replace("", pd.NA)
     out["tt_avalanche"] = tt_series
     return out
+
+
+def prune_step3(df: pd.DataFrame) -> pd.DataFrame:
+    keep = {"event_id", "T_thick_s", "tt_avalanche"}
+    for plane_idx in range(1, 5):
+        keep.add(f"T_sum_{plane_idx}_ns")
+        keep.add(f"avalanche_ion_{plane_idx}")
+        keep.add(f"avalanche_exists_{plane_idx}")
+        keep.add(f"avalanche_x_{plane_idx}")
+        keep.add(f"avalanche_y_{plane_idx}")
+        keep.add(f"avalanche_size_electrons_{plane_idx}")
+    keep_cols = [col for col in df.columns if col in keep]
+    return df[keep_cols]
 
 
 def plot_avalanche_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
@@ -252,16 +274,11 @@ def main() -> None:
     output_format = str(cfg.get("output_format", "pkl")).lower()
     chunk_rows = cfg.get("chunk_rows")
     plot_sample_rows = cfg.get("plot_sample_rows")
-    efficiency_vectors = normalize_efficiency_vectors(cfg.get("efficiencies"))
     gain = float(cfg.get("avalanche_gain", 1.0))
     townsend_alpha = float(cfg.get("townsend_alpha_per_mm", 0.1))
     gap_mm = float(cfg.get("avalanche_gap_mm", 1.0))
     electron_sigma = float(cfg.get("avalanche_electron_sigma", 0.2))
     rng = np.random.default_rng(cfg.get("seed"))
-    eff_idx = int(rng.integers(0, len(efficiency_vectors)))
-    efficiencies = efficiency_vectors[eff_idx]
-    physics_cfg_run = dict(physics_cfg)
-    physics_cfg_run["efficiencies"] = efficiencies
 
     input_glob = cfg.get("input_glob", "**/geom_*.pkl")
     geometry_id = cfg.get("geometry_id")
@@ -274,9 +291,6 @@ def main() -> None:
     print("Step 3 starting...")
     print(f"Input dir: {input_dir}")
     print(f"Output dir: {output_dir}")
-    if len(efficiency_vectors) > 1:
-        print(f"efficiencies candidates: {len(efficiency_vectors)} (selected index {eff_idx})")
-    print(f"efficiencies: {efficiencies}")
     print(f"geometry_id: {geometry_id}")
     print(f"input_sim_run: {input_sim_run}")
 
@@ -297,16 +311,13 @@ def main() -> None:
         print(f"Saved {plot_path}")
         return
 
+    picked_random = False
     if input_sim_run == "latest":
         input_sim_run = latest_sim_run(input_dir)
     elif input_sim_run == "random":
         input_sim_run = random_sim_run(input_dir, cfg.get("seed"))
+        picked_random = True
 
-    input_run_dir = input_dir / str(input_sim_run)
-    if "**" in input_glob:
-        input_paths = sorted(input_run_dir.rglob(input_glob.replace("**/", "")))
-    else:
-        input_paths = sorted(input_run_dir.glob(input_glob))
     def normalize_stem(path: Path) -> str:
         name = path.name
         if name.endswith(".chunks.json"):
@@ -314,17 +325,36 @@ def main() -> None:
         stem = Path(name).stem
         return stem.replace(".chunks", "")
 
-    if geometry_id is not None:
-        geom_key = f"geom_{geometry_id}"
-        input_paths = [p for p in input_paths if normalize_stem(p) == geom_key]
-        if not input_paths:
-            fallback_path = input_run_dir / f"{geom_key}.chunks.json"
-            if fallback_path.exists():
-                input_paths = [fallback_path]
-    else:
-        input_paths = sorted(input_run_dir.glob("geom_*.pkl"))
-        if not input_paths:
-            input_paths = sorted(input_run_dir.glob("geom_*.chunks.json"))
+    def collect_input_paths(run_dir: Path) -> list[Path]:
+        if "**" in input_glob:
+            input_paths = sorted(run_dir.rglob(input_glob.replace("**/", "")))
+        else:
+            input_paths = sorted(run_dir.glob(input_glob))
+        if geometry_id is not None:
+            geom_key = f"geom_{geometry_id}"
+            input_paths = [p for p in input_paths if normalize_stem(p) == geom_key]
+            if not input_paths:
+                fallback_path = run_dir / f"{geom_key}.chunks.json"
+                if fallback_path.exists():
+                    input_paths = [fallback_path]
+        else:
+            input_paths = sorted(run_dir.glob("geom_*.pkl"))
+            if not input_paths:
+                input_paths = sorted(run_dir.glob("geom_*.chunks.json"))
+        return input_paths
+
+    input_run_dir = input_dir / str(input_sim_run)
+    input_paths = collect_input_paths(input_run_dir)
+    if not input_paths and picked_random:
+        fallback_sim_run = latest_sim_run(input_dir)
+        if fallback_sim_run != input_sim_run:
+            print(
+                f"Warning: no inputs found in {input_run_dir}; "
+                f"falling back to latest SIM_RUN {fallback_sim_run}."
+            )
+            input_sim_run = fallback_sim_run
+            input_run_dir = input_dir / str(input_sim_run)
+            input_paths = collect_input_paths(input_run_dir)
     if len(input_paths) != 1:
         raise FileNotFoundError(f"Expected 1 input for geometry {geometry_id}, found {len(input_paths)}.")
 
@@ -337,6 +367,36 @@ def main() -> None:
         geometry_id = int(parts[1])
     print(f"Processing: {input_path}")
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
+    param_set_id, param_date = extract_param_set(upstream_meta)
+    param_mesh_path = None
+    eff_idx = None
+    efficiency_vectors = None
+    if is_random_value(cfg.get("efficiencies")):
+        mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+        if not mesh_dir.is_absolute():
+            mesh_dir = Path(__file__).resolve().parent / mesh_dir
+        mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "latest"), cfg.get("seed"))
+        param_row = select_param_row(mesh, rng, param_set_id)
+        param_set_id = int(param_row["param_set_id"])
+        if "param_date" in param_row:
+            param_date = str(param_row["param_date"])
+        param_mesh_path = mesh_path
+        required = ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
+        if not all(col in param_row.index for col in required):
+            raise ValueError("param_mesh.csv is missing eff_p1..eff_p4 required for efficiencies.")
+        efficiencies = [float(param_row[col]) for col in required]
+    else:
+        efficiency_vectors = normalize_efficiency_vectors(cfg.get("efficiencies"))
+        eff_idx = int(rng.integers(0, len(efficiency_vectors)))
+        efficiencies = efficiency_vectors[eff_idx]
+
+    physics_cfg_run = dict(physics_cfg)
+    physics_cfg_run["efficiencies"] = efficiencies
+    if efficiency_vectors is not None and len(efficiency_vectors) > 1:
+        print(f"efficiencies candidates: {len(efficiency_vectors)} (selected index {eff_idx})")
+    print(f"efficiencies: {efficiencies}")
+    if param_set_id is not None:
+        print(f"param_set_id: {param_set_id} (date {param_date})")
     if not args.force:
         existing = find_sim_run(output_dir, physics_cfg_run, upstream_meta)
         if existing:
@@ -361,11 +421,14 @@ def main() -> None:
         "upstream_hash": upstream_hash,
         "source_dataset": str(input_path),
         "upstream": upstream_meta,
+        "param_set_id": param_set_id,
+        "param_date": param_date,
+        "param_mesh_path": str(param_mesh_path) if param_mesh_path else None,
     }
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:
             for chunk in input_iter:
-                yield build_avalanche(chunk, efficiencies, gain, townsend_alpha, gap_mm, electron_sigma, rng)
+                yield prune_step3(build_avalanche(chunk, efficiencies, gain, townsend_alpha, gap_mm, electron_sigma, rng))
 
         manifest_path, last_chunk, row_count = write_chunked_output(
             _iter_out(),
@@ -391,7 +454,7 @@ def main() -> None:
     else:
         df, upstream_meta = load_with_metadata(input_path)
         print(f"Loaded {len(df):,} rows from {input_path.name}")
-        out = build_avalanche(df, efficiencies, gain, townsend_alpha, gap_mm, electron_sigma, rng)
+        out = prune_step3(build_avalanche(df, efficiencies, gain, townsend_alpha, gap_mm, electron_sigma, rng))
         print("Avalanche build complete.")
         out_name = f"{out_stem}.{output_format}"
         out_path = sim_run_dir / out_name

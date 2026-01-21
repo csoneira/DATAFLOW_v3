@@ -12,9 +12,12 @@ Apply per-channel connector/cable timing offsets (uncalibration/decalibration) t
 - Required metadata: none (metadata is produced by this step).
 
 ## Schema (guaranteed outputs)
-- No new columns are added.
-- `T_front_i_sj` and `T_back_i_sj` are updated in-place with the configured offsets.
-- Charges are preserved unchanged.
+Retained columns:
+- `event_id` (int)
+- `T_thick_s` (s) if present upstream
+- `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`
+
+`T_front_i_sj` and `T_back_i_sj` are updated in-place with the configured offsets. Charges are preserved unchanged.
 
 Time reference: same as STEP 06, plus per-channel cable offsets.
 

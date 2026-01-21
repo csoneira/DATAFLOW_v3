@@ -15,7 +15,7 @@ Format STEP 10 DAQ-like rows into station-style `.dat` files with timestamps and
 ## Schema (guaranteed outputs)
 - Output files:
   - `SIMULATED_DATA/mi0XYYDDDHHMMSS.dat` (ASCII text).
-  - `SIMULATED_DATA/step_13_output_registry.json` (registry of emitted files).
+  - `SIMULATED_DATA/step_final_output_registry.json` (registry of emitted files).
 - Each `.dat` line contains (per event):
   - 64 formatted values for planes ordered [4,3,2,1], fields ordered [T_front, T_back, Q_front, Q_back], strips ordered [1..4].
   - Optional `T_thick_s` appended if present in inputs.
