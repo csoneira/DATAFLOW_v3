@@ -385,7 +385,8 @@ def main() -> None:
             mesh_dir = Path(__file__).resolve().parent / mesh_dir
         mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "latest"), cfg.get("seed"))
         param_row = select_param_row(mesh, rng, cfg.get("param_set_id"))
-        param_set_id = int(param_row["param_set_id"])
+        if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
+            param_set_id = int(param_row["param_set_id"])
         if "param_date" in param_row:
             param_date = str(param_row["param_date"])
         param_mesh_path = mesh_path

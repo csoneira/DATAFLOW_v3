@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Step 4: induce strip signals and measured hit quantities.
 
-Inputs: geom_<G>_avalanche from Step 3.
-Outputs: geom_<G>_hit.(pkl|csv) with per-strip charges/positions/times and metadata.
+Inputs: Step 3 output.
+Outputs: step_4.(pkl|csv) or step_4_chunks.chunks.json with per-strip charges/positions/times and metadata.
 """
 
 from __future__ import annotations
@@ -730,18 +730,12 @@ def main() -> None:
     width_scale_max = float(cfg.get("width_scale_max", 2.0))
     rng = np.random.default_rng(cfg.get("seed"))
 
-    input_glob = cfg.get("input_glob", "**/geom_*_avalanche.pkl")
-    geometry_id = cfg.get("geometry_id")
-    if geometry_id is not None and str(geometry_id).lower() != "auto":
-        geometry_id = int(geometry_id)
-    else:
-        geometry_id = None
+    input_glob = cfg.get("input_glob", "**/step_3_chunks.chunks.json")
     input_sim_run = cfg.get("input_sim_run", "latest")
 
-    print("Step 4 starting...")
+    print("\n-----\nStep 4 starting...\n-----")
     print(f"Input dir: {input_dir}")
     print(f"Output dir: {output_dir}")
-    print(f"geometry_id: {geometry_id}")
     print(f"input_sim_run: {input_sim_run}")
 
     if args.plot_only:
@@ -787,27 +781,11 @@ def main() -> None:
         stem = Path(name).stem
         return stem.replace(".chunks", "")
 
-    if geometry_id is not None:
-        geom_key = f"geom_{geometry_id}"
-        input_paths = [
-            p for p in input_paths if normalize_stem(p).startswith(f"{geom_key}_avalanche")
-        ]
-        if not input_paths:
-            fallback_path = input_run_dir / f"{geom_key}_avalanche.chunks.json"
-            if fallback_path.exists():
-                input_paths = [fallback_path]
-    elif not input_paths:
-        input_paths = sorted(input_run_dir.glob("geom_*_avalanche.chunks.json"))
     if len(input_paths) != 1:
-        raise FileNotFoundError(f"Expected 1 input for geometry {geometry_id}, found {len(input_paths)}.")
+        raise FileNotFoundError(f"Expected 1 input, found {len(input_paths)}.")
 
     input_path = input_paths[0]
     normalized_stem = normalize_stem(input_path)
-    if geometry_id is None:
-        parts = normalized_stem.split("_")
-        if len(parts) < 2 or parts[0] != "geom":
-            raise ValueError(f"Unable to infer geometry_id from {input_path.stem}")
-        geometry_id = int(parts[1])
     print(f"Processing: {input_path}")
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
     if not args.force:
@@ -824,7 +802,8 @@ def main() -> None:
     reset_dir(sim_run_dir)
     print(f"Output dir reset: {sim_run_dir}")
 
-    out_stem = normalized_stem.replace("_avalanche", "") + "_hit"
+    out_stem_base = "step_4"
+    out_stem = f"{out_stem_base}_chunks" if chunk_rows else out_stem_base
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_4",
@@ -906,7 +885,7 @@ def main() -> None:
     debug_rng = np.random.default_rng()
 
     if chunk_rows:
-        chunks_dir = sim_run_dir / f"{out_stem}_chunks"
+        chunks_dir = sim_run_dir / (out_stem if out_stem.endswith("_chunks") else f"{out_stem}_chunks")
         ensure_dir(chunks_dir)
         chunk_paths = []
         buffer_full = []
@@ -983,7 +962,7 @@ def main() -> None:
         if not args.no_plots and plot_df is not None:
             plot_dir = sim_run_dir / "PLOTS"
             ensure_dir(plot_dir)
-            plot_path = plot_dir / f"{out_stem}_plots.pdf"
+            plot_path = plot_dir / f"{out_stem_base}_plots.pdf"
             print("Plotting plots...")
             with PdfPages(plot_path) as pdf:
                 plot_hit_summary(plot_df, pdf)

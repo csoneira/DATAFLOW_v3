@@ -7,11 +7,11 @@ Inputs:
 - config:
   - config_step_4_physics.yaml
   - config_step_4_runtime.yaml
-- data: INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/geom_<G>_avalanche.(pkl|csv)
+- data: INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/step_3.(pkl|csv|chunks.json)
 
 Outputs:
-- INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/geom_<G>_hit.(pkl|csv)
-- INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/PLOTS/geom_<G>_hit_plots.pdf
+- INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/step_4.(pkl|csv|chunks.json)
+- INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/PLOTS/step_4_plots.pdf
 
 Run:
 - python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml

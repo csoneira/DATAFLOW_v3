@@ -10,8 +10,8 @@ Inputs:
 - data: INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/muon_sample_<N>.(pkl|csv)
 
 Outputs:
-- INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/geom_<G>.(pkl|csv)
-- INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/PLOTS/geom_<G>_plots.pdf
+- INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/step_2.(pkl|csv|chunks.json)
+- INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/PLOTS/step_2_plots.pdf
 
 Run:
 - python3 step_2_generated_to_crossing.py --config config_step_2_physics.yaml

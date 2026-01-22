@@ -3,8 +3,8 @@ input_sim_run: random
 input_basename: null
 normalize_to_first_plane: true
 station_config_root: /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY
-geometry_map_dir: ../../INTERSTEPS/STEP_0_TO_1
-geometry_map_sim_run: latest
+param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
+param_mesh_sim_run: none
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_2_TO_3
 chunk_rows: 200000

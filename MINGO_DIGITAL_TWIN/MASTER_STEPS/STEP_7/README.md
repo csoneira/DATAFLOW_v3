@@ -7,11 +7,11 @@ Inputs:
 - config:
   - config_step_7_physics.yaml
   - config_step_7_runtime.yaml
-- data: INTERSTEPS/STEP_6_TO_7/SIM_RUN_<N>/geom_<G>_frontback.(pkl|csv)
+- data: INTERSTEPS/STEP_6_TO_7/SIM_RUN_<N>/step_6.(pkl|csv|chunks.json)
 
 Outputs:
-- INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/geom_<G>_calibrated.(pkl|csv)
-- INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/PLOTS/geom_<G>_calibrated_plots.pdf
+- INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/step_7.(pkl|csv|chunks.json)
+- INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/PLOTS/step_7_plots.pdf
 
 Run:
 - python3 step_7_timing_to_uncalibrated.py --config config_step_7_physics.yaml

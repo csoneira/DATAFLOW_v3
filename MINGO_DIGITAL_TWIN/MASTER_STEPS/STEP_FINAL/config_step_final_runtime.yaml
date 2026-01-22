@@ -1,12 +1,11 @@
 input_dir: ../../INTERSTEPS/STEP_10_TO_FINAL
-input_glob: "**/geom_*_daq.chunks.json"
+input_glob: "**/step_10_chunks.chunks.json"
 input_sim_run: all
 input_collect: matching
-geometry_id: auto
-geometry_map_dir: ../../INTERSTEPS/STEP_0_TO_1
-geometry_map_sim_run: latest
+param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
+param_mesh_sim_run: none
 output_dir: ../../SIMULATED_DATA
 chunk_rows: 100000
 target_rows: 35000
-files_per_station_conf: 5
+files_per_station_conf: 1
 payload_sampling: sequential_random_start

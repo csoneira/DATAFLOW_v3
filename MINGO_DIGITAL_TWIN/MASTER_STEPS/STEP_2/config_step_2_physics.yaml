@@ -6,4 +6,5 @@ bounds_mm:
   y_max: 143.5
 
 # Variable (to loop on)
-geometry_id: random
+# z_positions: [z1, z2, z3, z4]
+z_positions: random

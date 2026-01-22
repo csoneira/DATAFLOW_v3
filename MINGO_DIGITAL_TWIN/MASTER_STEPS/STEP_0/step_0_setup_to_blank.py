@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""STEP_0: build geometry registry and station-to-geometry map.
+"""STEP_0: append one parameter row with sampled z positions.
 
 Inputs: station configuration CSVs in ONLINE_RUN_DICTIONARY.
-Outputs: geometry_registry.(csv|json) and geometry_map_all.(csv|json) in STEP_0_TO_1.
+Outputs: param_mesh.csv in STEP_0_TO_1.
 """
 
 from __future__ import annotations
@@ -10,8 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date, timedelta
-from itertools import product
 from pathlib import Path
 
 import numpy as np
@@ -22,94 +20,116 @@ sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
 from STEP_SHARED.sim_utils import (
-    build_global_geometry_registry,
     ensure_dir,
     list_station_config_files,
     load_step_configs,
-    map_station_to_geometry,
     now_iso,
     read_station_config,
-    reset_dir,
-    resolve_sim_run,
 )
 
 
-def _is_points_key(key: str) -> bool:
-    return key.endswith("_points")
+def _sample_range(rng: np.random.Generator, value: object, name: str) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, list) and len(value) == 2:
+        lo, hi = float(value[0]), float(value[1])
+        return float(rng.uniform(lo, hi))
+    raise ValueError(f"{name} must be a number or a 2-value list [min, max].")
 
 
-def _build_axis(min_max: object, points: int, name: str) -> list[float]:
-    if not isinstance(min_max, list) or len(min_max) != 2:
-        raise ValueError(f"{name} must be a 2-value list [min, max].")
-    if not all(isinstance(v, (int, float)) for v in min_max):
-        raise ValueError(f"{name} must contain numeric values.")
-    if points <= 0:
-        raise ValueError(f"{name}_points must be a positive integer.")
-    return [float(v) for v in np.linspace(float(min_max[0]), float(min_max[1]), int(points))]
+def _collect_z_positions(station_files: dict[int, Path]) -> pd.DataFrame:
+    station_dfs = [read_station_config(path) for path in station_files.values()]
+    geom_cols = ["P1", "P2", "P3", "P4"]
+    all_geoms = pd.concat([df[geom_cols] for df in station_dfs], ignore_index=True)
+    unique_geoms = all_geoms.dropna().drop_duplicates().reset_index(drop=True)
+    return unique_geoms
 
 
-def build_param_mesh(physics_cfg: dict) -> tuple[pd.DataFrame, dict]:
-    axes: list[tuple[str, list[float]]] = []
+def _append_param_row(
+    mesh_path: Path,
+    meta_path: Path,
+    physics_cfg: dict,
+    rng: np.random.Generator,
+    z_positions: pd.DataFrame,
+) -> None:
     efficiencies_identical = bool(physics_cfg.get("efficiencies_identical", False))
+    cos_n = _sample_range(rng, physics_cfg.get("cos_n"), "cos_n")
+    flux_cm2_min = _sample_range(rng, physics_cfg.get("flux_cm2_min"), "flux_cm2_min")
+    eff_range = physics_cfg.get("efficiencies")
+    if eff_range is None:
+        raise ValueError("efficiencies must be set in config_step_0_physics.yaml.")
+    eff_base = _sample_range(rng, eff_range, "efficiencies")
+    if efficiencies_identical:
+        effs = [eff_base] * 4
+    else:
+        if not isinstance(eff_range, list) or len(eff_range) != 2:
+            raise ValueError("efficiencies must be a 2-value list [min, max] when not identical.")
+        effs = [float(rng.uniform(float(eff_range[0]), float(eff_range[1]))) for _ in range(4)]
 
-    key_aliases = {
-        "flux": "flux_cm2_min",
-        "cos_n": "cos_n",
-        "efficiencies": "efficiencies",
+    if mesh_path.exists():
+        mesh = pd.read_csv(mesh_path)
+        if "done" not in mesh.columns:
+            mesh["done"] = 0
+    else:
+        mesh = pd.DataFrame()
+        mesh["done"] = []
+
+    if z_positions.empty:
+        raise ValueError("No z positions found in station configs; cannot select z positions.")
+
+    for col in ("z_p1", "z_p2", "z_p3", "z_p4"):
+        if col not in mesh.columns:
+            mesh[col] = np.nan
+
+    if not mesh.empty:
+        missing_mask = mesh[["z_p1", "z_p2", "z_p3", "z_p4"]].isna().any(axis=1)
+        if missing_mask.any():
+            for idx in mesh.index[missing_mask]:
+                geom_row = z_positions.sample(
+                    n=1, random_state=rng.integers(0, 2**32 - 1)
+                ).iloc[0]
+                mesh.at[idx, "z_p1"] = float(geom_row["P1"])
+                mesh.at[idx, "z_p2"] = float(geom_row["P2"])
+                mesh.at[idx, "z_p3"] = float(geom_row["P3"])
+                mesh.at[idx, "z_p4"] = float(geom_row["P4"])
+
+    geom_row = z_positions.sample(n=1, random_state=rng.integers(0, 2**32 - 1)).iloc[0]
+
+    new_row = {
+        "done": 0,
+        "cos_n": float(cos_n),
+        "flux_cm2_min": float(flux_cm2_min),
+        "eff_p1": float(effs[0]),
+        "eff_p2": float(effs[1]),
+        "eff_p3": float(effs[2]),
+        "eff_p4": float(effs[3]),
+        "z_p1": float(geom_row["P1"]),
+        "z_p2": float(geom_row["P2"]),
+        "z_p3": float(geom_row["P3"]),
+        "z_p4": float(geom_row["P4"]),
     }
-    for key, value in physics_cfg.items():
-        if not _is_points_key(key):
-            continue
-        param = key[: -len("_points")]
-        param = key_aliases.get(param, param)
-        points = int(value)
-        if param not in physics_cfg:
-            raise ValueError(f"{key} is set but {param} is missing.")
-        values = _build_axis(physics_cfg[param], points, param)
-        if param == "efficiencies":
-            if efficiencies_identical:
-                axes.append(("efficiency_base", values))
-            else:
-                for plane_idx in range(1, 5):
-                    axes.append((f"eff_p{plane_idx}", values))
-        else:
-            axes.append((param, values))
+    mesh = pd.concat([mesh, pd.DataFrame([new_row])], ignore_index=True)
+    if "param_set_id" in mesh.columns:
+        mesh = mesh.sort_values("param_set_id").reset_index(drop=True)
+    z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
+    head_cols = ["done", "param_set_id", "param_date"]
+    ordered_cols = [c for c in head_cols if c in mesh.columns] + [
+        c for c in mesh.columns if c not in head_cols and c not in z_cols
+    ] + [c for c in z_cols if c in mesh.columns]
+    mesh = mesh[ordered_cols]
+    mesh.to_csv(mesh_path, index=False)
 
-    if not axes:
-        raise ValueError("No mesh axes defined. Add *_points keys to config_step_0_physics.yaml.")
-
-    axis_names = [name for name, _ in axes]
-    axis_values = [vals for _, vals in axes]
-    rows: list[dict] = []
-    start_date = date(1970, 1, 1)
-    for idx, combo in enumerate(product(*axis_values), start=1):
-        row: dict = {}
-        for name, val in zip(axis_names, combo):
-            if name == "efficiency_base":
-                row["eff_p1"] = float(val)
-                row["eff_p2"] = float(val)
-                row["eff_p3"] = float(val)
-                row["eff_p4"] = float(val)
-            else:
-                row[name] = float(val)
-        row["param_set_id"] = idx
-        row["param_date"] = (start_date + timedelta(days=idx - 1)).isoformat()
-        rows.append(row)
-
-    mesh = pd.DataFrame(rows)
     meta = {
-        "created_at": now_iso(),
-        "mesh_axes": axis_names,
+        "updated_at": now_iso(),
+        "row_count": int(len(mesh)),
         "efficiencies_identical": efficiencies_identical,
-        "row_count": len(mesh),
-        "start_date": start_date.isoformat(),
         "step": "STEP_0",
     }
-    return mesh, meta
+    meta_path.write_text(json.dumps(meta, indent=2))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="STEP_0: build geometry registry/map.")
+    parser = argparse.ArgumentParser(description="STEP_0: append one parameter row and update mesh.")
     parser.add_argument(
         "--config",
         default="config_step_0_physics.yaml",
@@ -151,48 +171,23 @@ def main() -> None:
     if not station_files:
         raise FileNotFoundError(f"No station config CSVs found under {station_root}")
 
-    station_dfs = [read_station_config(path) for path in station_files.values()]
-    registry = build_global_geometry_registry(station_dfs)
-    geometry_map = pd.concat(
-        [map_station_to_geometry(df, registry) for df in station_dfs],
-        ignore_index=True,
-    )
+    z_positions = _collect_z_positions(station_files)
 
-    sim_run, sim_run_dir, config_hash, _, _ = resolve_sim_run(
-        output_dir, "STEP_0", config_path, physics_cfg, None
-    )
-    reset_dir(sim_run_dir)
-
-    registry_path = sim_run_dir / "geometry_registry.csv"
-    registry.to_csv(registry_path, index=False)
-    geom_map_path = sim_run_dir / "geometry_map_all.csv"
-    geometry_map.to_csv(geom_map_path, index=False)
-
-    mesh, mesh_meta = build_param_mesh(physics_cfg)
-    mesh_path = sim_run_dir / "param_mesh.csv"
-    mesh.to_csv(mesh_path, index=False)
-    mesh_meta.update(
-        {
-            "config": physics_cfg,
-            "config_hash": config_hash,
-            "sim_run": sim_run,
-            "output_path": str(mesh_path),
-        }
-    )
-    (sim_run_dir / "param_mesh_metadata.json").write_text(json.dumps(mesh_meta, indent=2))
+    rng = np.random.default_rng(cfg.get("seed"))
+    mesh_path = output_dir / "param_mesh.csv"
+    mesh_meta_path = output_dir / "param_mesh_metadata.json"
+    _append_param_row(mesh_path, mesh_meta_path, physics_cfg, rng, z_positions)
 
     meta = {
         "created_at": now_iso(),
         "step": "STEP_0",
         "config": physics_cfg,
         "runtime_config": runtime_cfg,
-        "config_hash": config_hash,
-        "sim_run": sim_run,
         "station_config_root": str(station_root),
     }
-    (sim_run_dir / "geometry_map_metadata.json").write_text(json.dumps(meta, indent=2))
+    mesh_meta_path.write_text(json.dumps(meta, indent=2))
 
-    print(f"Saved geometry registry/map and param mesh to {sim_run_dir}")
+    print(f"Updated param mesh in {output_dir}")
 
 
 if __name__ == "__main__":

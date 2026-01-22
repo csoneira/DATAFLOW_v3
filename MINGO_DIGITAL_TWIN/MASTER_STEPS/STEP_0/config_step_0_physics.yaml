@@ -1,13 +1,10 @@
 # Step 1
 ## Angular distribution
-cos_n: [1.8, 2.2]
-cos_n_points: 3
+cos_n: [1.8, 2.1]
 ## Flux
 flux_cm2_min: [0.9, 1.1]
-flux_points: 5
 
 # Step 3
 ## Efficiencies
-efficiencies: [0.8, 1]
-efficiencies_points: 7
+efficiencies: [0.7, 1]
 efficiencies_identical: false

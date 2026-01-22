@@ -7,11 +7,11 @@ Inputs:
 - config:
   - config_step_5_physics.yaml
   - config_step_5_runtime.yaml
-- data: INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/geom_<G>_hit.(pkl|csv)
+- data: INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/step_4.(pkl|csv|chunks.json)
 
 Outputs:
-- INTERSTEPS/STEP_5_TO_6/SIM_RUN_<N>/geom_<G>_signal.(pkl|csv)
-- INTERSTEPS/STEP_5_TO_6/SIM_RUN_<N>/PLOTS/geom_<G>_signal_plots.pdf
+- INTERSTEPS/STEP_5_TO_6/SIM_RUN_<N>/step_5.(pkl|csv|chunks.json)
+- INTERSTEPS/STEP_5_TO_6/SIM_RUN_<N>/PLOTS/step_5_plots.pdf
 
 Run:
 - python3 step_5_measured_to_triggered.py --config config_step_5_physics.yaml

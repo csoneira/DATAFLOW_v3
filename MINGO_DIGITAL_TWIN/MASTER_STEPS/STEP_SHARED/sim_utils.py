@@ -245,18 +245,22 @@ def resolve_param_mesh(
     mesh_sim_run: Optional[str],
     seed: Optional[int],
 ) -> Tuple[pd.DataFrame, Path]:
-    if mesh_sim_run is None:
-        mesh_sim_run = "latest"
-    if mesh_sim_run == "latest":
-        mesh_sim_run = latest_sim_run(mesh_dir)
-    elif mesh_sim_run == "random":
-        mesh_sim_run = random_sim_run(mesh_dir, seed)
-    mesh_path = mesh_dir / str(mesh_sim_run) / "param_mesh.csv"
+    direct_tokens = {None, "", "none", "direct"}
+    if mesh_sim_run in direct_tokens:
+        mesh_path = mesh_dir / "param_mesh.csv"
+    else:
+        if mesh_sim_run == "latest":
+            mesh_sim_run = latest_sim_run(mesh_dir)
+        elif mesh_sim_run == "random":
+            mesh_sim_run = random_sim_run(mesh_dir, seed)
+        mesh_path = mesh_dir / str(mesh_sim_run) / "param_mesh.csv"
+        if not mesh_path.exists():
+            fallback = mesh_dir / "param_mesh.csv"
+            if fallback.exists():
+                mesh_path = fallback
     if not mesh_path.exists():
         raise FileNotFoundError(f"param_mesh.csv not found in {mesh_path.parent}")
     mesh = pd.read_csv(mesh_path)
-    if "param_set_id" not in mesh.columns:
-        raise ValueError("param_mesh.csv is missing required column: param_set_id")
     return mesh, mesh_path
 
 
@@ -265,13 +269,44 @@ def select_param_row(
     rng: np.random.Generator,
     param_set_id: Optional[int],
 ) -> pd.Series:
+    if "done" not in mesh.columns:
+        mesh = mesh.copy()
+        mesh["done"] = 0
     if param_set_id is not None:
+        if "param_set_id" not in mesh.columns:
+            raise ValueError("param_set_id is not available in param_mesh.csv")
         match = mesh[mesh["param_set_id"] == int(param_set_id)]
         if match.empty:
             raise ValueError(f"param_set_id {param_set_id} not found in param_mesh.csv")
+        if int(match.iloc[0].get("done", 0)) == 1:
+            raise ValueError(f"param_set_id {param_set_id} is marked done in param_mesh.csv")
         return match.iloc[0]
-    idx = int(rng.integers(0, len(mesh)))
-    return mesh.iloc[idx]
+    available = mesh[mesh["done"] != 1]
+    if "param_set_id" in available.columns:
+        available = available[available["param_set_id"].isna()]
+    if available.empty:
+        raise ValueError("No available param_set rows; all are marked done or already assigned.")
+    idx = int(rng.integers(0, len(available)))
+    return available.iloc[idx]
+
+
+def mark_param_set_done(mesh_path: Path, param_set_id: int) -> None:
+    if not mesh_path.exists():
+        raise FileNotFoundError(f"param_mesh.csv not found at {mesh_path}")
+    mesh = pd.read_csv(mesh_path)
+    if "done" not in mesh.columns:
+        mesh["done"] = 0
+    match = mesh["param_set_id"] == int(param_set_id)
+    if not match.any():
+        raise ValueError(f"param_set_id {param_set_id} not found in param_mesh.csv")
+    mesh.loc[match, "done"] = 1
+    z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
+    head_cols = ["done", "param_set_id", "param_date"]
+    ordered_cols = [c for c in head_cols if c in mesh.columns] + [
+        c for c in mesh.columns if c not in head_cols and c not in z_cols
+    ] + [c for c in z_cols if c in mesh.columns]
+    mesh = mesh[ordered_cols]
+    mesh.to_csv(mesh_path, index=False)
 
 
 def extract_param_set(meta: Optional[Dict]) -> Tuple[Optional[int], Optional[str]]:
@@ -312,7 +347,8 @@ def write_chunked_output(
     chunk_rows: int,
     metadata: Dict,
 ) -> Tuple[Path, Optional[pd.DataFrame], int]:
-    chunks_dir = output_dir / f"{out_stem}_chunks"
+    chunks_dir_name = out_stem if out_stem.endswith("_chunks") else f"{out_stem}_chunks"
+    chunks_dir = output_dir / chunks_dir_name
     ensure_dir(chunks_dir)
 
     chunk_paths: List[str] = []

@@ -1,7 +1,6 @@
 input_dir: ../../INTERSTEPS/STEP_8_TO_9
-input_glob: "**/geom_*_threshold.pkl"
+input_glob: "**/step_8_chunks.chunks.json"
 input_sim_run: random
-geometry_id: auto
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_9_TO_10
 chunk_rows: 100000

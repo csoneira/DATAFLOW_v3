@@ -285,8 +285,8 @@ else:
     # Get the station argument
     station = sys.argv[1]
 
-if station not in ["1", "2", "3", "4", "5", "6", "7", "8"]:
-    print("Error: Invalid station. Please provide a valid station (1, 2, 3, 4, 5, 6, 7 or 8).")
+if station not in ["0", "1", "2", "3", "4"]:
+    print("Error: Invalid station. Please provide a valid station (0, 1, 2, 3 or 4).")
     sys.exit(1)
 # print(f"Station: {station}")
 
@@ -1978,8 +1978,8 @@ else:
     # Get the station argument
     station = sys.argv[1]
 
-if station not in ["1", "2", "3", "4", "5", "6", "7", "8"]:
-    print("Error: Invalid station. Please provide a valid station (1, 2, 3, 4, 5, 6, 7 or 8).")
+if station not in ["0", "1", "2", "3", "4"]:
+    print("Error: Invalid station. Please provide a valid station (0, 1, 2, 3 or 4).")
     sys.exit(1)
 # print(f"Station: {station}")
 

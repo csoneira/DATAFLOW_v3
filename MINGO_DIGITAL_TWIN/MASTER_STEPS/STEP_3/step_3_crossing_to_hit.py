@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Step 3: apply efficiencies and avalanche model to crossings.
 
-Inputs: geom_<G> from Step 2.
-Outputs: geom_<G>_avalanche.(pkl|csv) with avalanche size/position and metadata.
+Inputs: Step 2 output.
+Outputs: step_3.(pkl|csv) or step_3_chunks.chunks.json with avalanche size/position and metadata.
 """
 
 from __future__ import annotations
@@ -280,18 +280,12 @@ def main() -> None:
     electron_sigma = float(cfg.get("avalanche_electron_sigma", 0.2))
     rng = np.random.default_rng(cfg.get("seed"))
 
-    input_glob = cfg.get("input_glob", "**/geom_*.pkl")
-    geometry_id = cfg.get("geometry_id")
-    if geometry_id is not None and str(geometry_id).lower() != "auto":
-        geometry_id = int(geometry_id)
-    else:
-        geometry_id = None
+    input_glob = cfg.get("input_glob", "**/step_2_chunks.chunks.json")
     input_sim_run = cfg.get("input_sim_run", "latest")
 
-    print("Step 3 starting...")
+    print("\n-----\nStep 3 starting...\n-----")
     print(f"Input dir: {input_dir}")
     print(f"Output dir: {output_dir}")
-    print(f"geometry_id: {geometry_id}")
     print(f"input_sim_run: {input_sim_run}")
 
     if args.plot_only:
@@ -330,17 +324,6 @@ def main() -> None:
             input_paths = sorted(run_dir.rglob(input_glob.replace("**/", "")))
         else:
             input_paths = sorted(run_dir.glob(input_glob))
-        if geometry_id is not None:
-            geom_key = f"geom_{geometry_id}"
-            input_paths = [p for p in input_paths if normalize_stem(p) == geom_key]
-            if not input_paths:
-                fallback_path = run_dir / f"{geom_key}.chunks.json"
-                if fallback_path.exists():
-                    input_paths = [fallback_path]
-        else:
-            input_paths = sorted(run_dir.glob("geom_*.pkl"))
-            if not input_paths:
-                input_paths = sorted(run_dir.glob("geom_*.chunks.json"))
         return input_paths
 
     input_run_dir = input_dir / str(input_sim_run)
@@ -356,15 +339,9 @@ def main() -> None:
             input_run_dir = input_dir / str(input_sim_run)
             input_paths = collect_input_paths(input_run_dir)
     if len(input_paths) != 1:
-        raise FileNotFoundError(f"Expected 1 input for geometry {geometry_id}, found {len(input_paths)}.")
+        raise FileNotFoundError(f"Expected 1 input, found {len(input_paths)}.")
 
     input_path = input_paths[0]
-    normalized_stem = normalize_stem(input_path)
-    if geometry_id is None:
-        parts = normalized_stem.split("_")
-        if len(parts) < 2 or parts[0] != "geom":
-            raise ValueError(f"Unable to infer geometry_id from {input_path.name}")
-        geometry_id = int(parts[1])
     print(f"Processing: {input_path}")
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
     param_set_id, param_date = extract_param_set(upstream_meta)
@@ -377,7 +354,8 @@ def main() -> None:
             mesh_dir = Path(__file__).resolve().parent / mesh_dir
         mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "latest"), cfg.get("seed"))
         param_row = select_param_row(mesh, rng, param_set_id)
-        param_set_id = int(param_row["param_set_id"])
+        if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
+            param_set_id = int(param_row["param_set_id"])
         if "param_date" in param_row:
             param_date = str(param_row["param_date"])
         param_mesh_path = mesh_path
@@ -410,7 +388,8 @@ def main() -> None:
     reset_dir(sim_run_dir)
     print(f"Output dir reset: {sim_run_dir}")
 
-    out_stem = f"{normalized_stem}_avalanche"
+    out_stem_base = "step_3"
+    out_stem = f"{out_stem_base}_chunks" if chunk_rows else out_stem_base
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_3",
@@ -447,7 +426,7 @@ def main() -> None:
         if not args.no_plots and plot_df is not None:
             plot_dir = sim_run_dir / "PLOTS"
             ensure_dir(plot_dir)
-            plot_path = plot_dir / f"{out_stem}_plots.pdf"
+            plot_path = plot_dir / f"{out_stem_base}_plots.pdf"
             with PdfPages(plot_path) as pdf:
                 plot_avalanche_summary(plot_df, pdf)
             print(f"Saved plots: {plot_path}")
@@ -456,7 +435,7 @@ def main() -> None:
         print(f"Loaded {len(df):,} rows from {input_path.name}")
         out = prune_step3(build_avalanche(df, efficiencies, gain, townsend_alpha, gap_mm, electron_sigma, rng))
         print("Avalanche build complete.")
-        out_name = f"{out_stem}.{output_format}"
+        out_name = f"{out_stem_base}.{output_format}"
         out_path = sim_run_dir / out_name
         save_with_metadata(out, out_path, metadata, output_format)
         print(f"Saved data: {out_path}")

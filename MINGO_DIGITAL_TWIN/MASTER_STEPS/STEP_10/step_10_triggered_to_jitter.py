@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Step 10: apply TDC smear and DAQ jitter to front/back times.
 
-Inputs: geom_<G>_triggered from Step 9.
-Outputs: geom_<G>_daq.(pkl|csv) with jittered timing.
+Inputs: Step 9 output.
+Outputs: step_10.(pkl|csv) or step_10_chunks.chunks.json with jittered timing.
 """
 
 from __future__ import annotations
@@ -465,15 +465,10 @@ def main() -> None:
     tdc_sigma_ns = float(cfg.get("tdc_sigma_ns", 0.016))
     rng = np.random.default_rng(cfg.get("seed"))
 
-    input_glob = cfg.get("input_glob", "**/geom_*_triggered.pkl")
-    geometry_id = cfg.get("geometry_id")
-    if geometry_id is not None and str(geometry_id).lower() != "auto":
-        geometry_id = int(geometry_id)
-    else:
-        geometry_id = None
+    input_glob = cfg.get("input_glob", "**/step_9_chunks.chunks.json")
     input_sim_run = cfg.get("input_sim_run", "latest")
 
-    print("Step 10 starting...")
+    print("\n-----\nStep 10 starting...\n-----")
     print(f"Input dir: {input_dir}")
     print(f"Output dir: {output_dir}")
     print(f"jitter_width_ns: {jitter_width_ns}")
@@ -489,12 +484,6 @@ def main() -> None:
         df, _ = load_with_metadata(latest_path)
         sim_run_dir = find_sim_run_dir(latest_path)
         sim_run = sim_run_dir.name if sim_run_dir else "latest"
-        geom_id = None
-        stem = latest_path.stem
-        if stem.startswith("geom_"):
-            parts = stem.split("_")
-            if len(parts) > 1 and parts[1].isdigit():
-                geom_id = int(parts[1])
         plot_dir = (sim_run_dir or latest_path.parent) / "PLOTS"
         ensure_dir(plot_dir)
         plot_path = plot_dir / f"{latest_path.stem}_plots.pdf"
@@ -531,27 +520,11 @@ def main() -> None:
         stem = Path(name).stem
         return stem.replace(".chunks", "")
 
-    if geometry_id is not None:
-        geom_key = f"geom_{geometry_id}"
-        input_paths = [
-            p for p in input_paths if normalize_stem(p) == f"{geom_key}_triggered"
-        ]
-        if not input_paths:
-            fallback_path = input_run_dir / f"{geom_key}_triggered.chunks.json"
-            if fallback_path.exists():
-                input_paths = [fallback_path]
-    elif not input_paths:
-        input_paths = sorted(input_run_dir.glob("geom_*_triggered.chunks.json"))
     if len(input_paths) != 1:
-        raise FileNotFoundError(f"Expected 1 input for geometry {geometry_id}, found {len(input_paths)}.")
+        raise FileNotFoundError(f"Expected 1 input, found {len(input_paths)}.")
 
     input_path = input_paths[0]
     normalized_stem = normalize_stem(input_path)
-    if geometry_id is None:
-        parts = normalized_stem.split("_")
-        if len(parts) < 2 or parts[0] != "geom":
-            raise ValueError(f"Unable to infer geometry_id from {input_path.stem}")
-        geometry_id = int(parts[1])
     print(f"Processing: {input_path}")
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
     if not args.force:
@@ -565,7 +538,8 @@ def main() -> None:
     )
     reset_dir(sim_run_dir)
 
-    out_stem = normalized_stem.replace("_triggered", "") + "_daq"
+    out_stem_base = "step_10"
+    out_stem = f"{out_stem_base}_chunks" if chunk_rows else out_stem_base
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_10",
@@ -577,7 +551,6 @@ def main() -> None:
         "source_dataset": str(input_path),
         "upstream": upstream_meta,
     }
-    metadata["geometry_id"] = geometry_id
     cfg7 = yaml.safe_load((ROOT_DIR / "MASTER_STEPS/STEP_7/config_step_7_physics.yaml").read_text())
     cfg10 = physics_cfg
     if chunk_rows:
@@ -612,7 +585,7 @@ def main() -> None:
         if not args.no_plots and plot_df is not None:
             plot_dir = sim_run_dir / "PLOTS"
             ensure_dir(plot_dir)
-            plot_path = plot_dir / f"{out_stem}_plots.pdf"
+            plot_path = plot_dir / f"{out_stem_base}_plots.pdf"
             plot_jitter_summary(plot_df, plot_path, rate_df=rate_df, closure_dfs=closure_dfs, cfg7=cfg7, cfg10=cfg10)
         print(f"Saved {manifest_path}")
     else:

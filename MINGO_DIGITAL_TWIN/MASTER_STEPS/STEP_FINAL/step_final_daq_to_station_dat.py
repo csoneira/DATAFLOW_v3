@@ -2,8 +2,8 @@
 """
 STEP_FINAL: format DAQ data and emit station .dat files with assigned date ranges.
 
-Inputs: geom_<G>_daq from Step 10.
-Outputs: SIMULATED_DATA/SIM_RUN_<N>/STATION_<S>_CONFIG_<C>/mi0XYYDDDHHMMSS.dat
+Inputs: Step 10 output (step_10 or step_10_chunks).
+Outputs: SIMULATED_DATA/SIM_RUN_<N>/mi00YYDDDHHMMSS.dat
          + step_final_output_registry.json.
 """
 
@@ -13,7 +13,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +28,7 @@ from STEP_SHARED.sim_utils import (
     ensure_dir,
     iter_input_frames,
     latest_sim_run,
+    resolve_param_mesh,
     load_sim_run_registry,
     load_step_configs,
     load_with_metadata,
@@ -54,66 +55,23 @@ def parse_date(date_str: str) -> datetime:
     return datetime.strptime(date_str, "%Y-%m-%d")
 
 
-def select_station_confs(geom_map: pd.DataFrame, geometry_id: int) -> list[dict]:
-    subset = geom_map[geom_map["geometry_id"] == geometry_id].copy()
-    if subset.empty:
-        raise ValueError(f"geometry_id {geometry_id} not found in geometry_map_all.")
-    if "start" in subset.columns and "end" in subset.columns:
-        subset = subset[subset["start"].notna() & subset["end"].notna()]
-        subset = subset[(subset["start"].astype(str) != "nan") & (subset["end"].astype(str) != "nan")]
-    if subset.empty:
-        raise ValueError(f"geometry_id {geometry_id} has no valid start/end dates in geometry_map_all.")
-    sort_cols = [col for col in ("station", "conf", "start", "end") if col in subset.columns]
-    if sort_cols:
-        subset = subset.sort_values(sort_cols)
-    return subset.to_dict(orient="records")
-
-
-def select_station_conf(geom_map: pd.DataFrame, geometry_id: int, rng: np.random.Generator) -> dict:
-    rows = select_station_confs(geom_map, geometry_id)
-    idx = int(rng.integers(0, len(rows)))
-    return rows[idx]
-
-
-def random_start_datetime(
-    start_date: str,
-    end_date: str,
-    rng: np.random.Generator,
-    used_dates: set | None = None,
-) -> datetime | None:
-    start_dt = parse_date(start_date)
-    end_dt = parse_date(end_date)
-    if end_dt < start_dt:
-        end_dt = start_dt
-    if used_dates is not None:
-        total_days = (end_dt - start_dt).days
-        available_days = [
-            start_dt + timedelta(days=offset)
-            for offset in range(total_days + 1)
-            if (start_dt + timedelta(days=offset)).date() not in used_dates
-        ]
-        if available_days:
-            day = available_days[int(rng.integers(0, len(available_days)))]
-            offset = int(rng.integers(0, 24 * 60 * 60))
-            return day + timedelta(seconds=offset)
-        print(
-            "WARNING: No unused dates available between "
-            f"{start_dt.date()} and {end_dt.date()}, skipping.",
-            file=sys.stderr,
-        )
-        return None
-    end_dt = end_dt + timedelta(hours=23, minutes=59, seconds=59)
-    if end_dt <= start_dt:
-        return start_dt
-    span_seconds = (end_dt - start_dt).total_seconds()
-    offset = rng.uniform(0.0, span_seconds)
-    return start_dt + timedelta(seconds=offset)
+def parse_param_datetime(date_str: str) -> datetime:
+    try:
+        return datetime.fromisoformat(date_str)
+    except ValueError:
+        return parse_date(date_str)
 
 
 def build_filename(station_id: int, timestamp: datetime) -> str:
     station_id = station_id + 4
     day_of_year = timestamp.timetuple().tm_yday
     return f"mi0{station_id}{timestamp.year % 100:02d}{day_of_year:03d}{timestamp:%H%M%S}.dat"
+
+
+def build_sim_filename(base_date: datetime, time_source: datetime) -> str:
+    day_of_year = base_date.timetuple().tm_yday
+    year = base_date.year
+    return f"mi00{year % 100:02d}{day_of_year:03d}{time_source:%H%M%S}.dat"
 
 
 def load_output_registry(path: Path) -> dict:
@@ -231,20 +189,13 @@ def find_upstream_config(meta: dict, step: str) -> dict | None:
     return None
 
 
-def parse_geometry_id(meta: dict) -> int | None:
-    if "geometry_id" in meta:
-        try:
-            return int(meta["geometry_id"])
-        except (TypeError, ValueError):
-            return None
-    meta_cfg = meta.get("config", {})
-    geom_val = meta_cfg.get("geometry_id")
-    if geom_val is None or str(geom_val).lower() == "auto":
-        return None
-    try:
-        return int(geom_val)
-    except (TypeError, ValueError):
-        return None
+def find_upstream_value(meta: dict, key: str):
+    current = meta
+    while isinstance(current, dict):
+        if key in current:
+            return current.get(key)
+        current = current.get("upstream")
+    return None
 
 
 def list_paths(run_dir: Path, input_glob: str) -> list[Path]:
@@ -256,23 +207,11 @@ def list_paths(run_dir: Path, input_glob: str) -> list[Path]:
 def select_input_paths(
     input_dir: Path,
     input_sim_run: str,
-    geometry_id: int | None,
     input_glob: str,
     input_collect: str,
 ) -> tuple[list[Path], dict]:
     input_run_dir = input_dir / str(input_sim_run)
     baseline_paths = list_paths(input_run_dir, input_glob)
-    if geometry_id is not None:
-        geom_key = f"geom_{geometry_id}"
-        baseline_paths = [
-            p for p in baseline_paths if normalize_stem(p) == f"{geom_key}_daq"
-        ]
-        if not baseline_paths:
-            fallback_path = input_run_dir / f"{geom_key}_daq.chunks.json"
-            if fallback_path.exists():
-                baseline_paths = [fallback_path]
-    elif not baseline_paths:
-        baseline_paths = sorted(input_run_dir.glob("geom_*_daq.chunks.json"))
     if not baseline_paths:
         raise FileNotFoundError(f"Expected at least 1 input in {input_run_dir}, found 0.")
 
@@ -289,10 +228,6 @@ def select_input_paths(
     selected: list[Path] = []
     for path in candidates:
         meta = load_input_meta(path)
-        if geometry_id is not None:
-            meta_geom = parse_geometry_id(meta)
-            if meta_geom != geometry_id:
-                continue
         if input_collect == "matching":
             if meta.get("config_hash") != baseline_config_hash:
                 continue
@@ -348,6 +283,26 @@ def ensure_unique_out_name(
             return out_name, candidate
 
     raise RuntimeError(f"Unable to find unique output name for station {station_id}.")
+
+
+def ensure_unique_sim_name(
+    base_date: datetime,
+    start_time: datetime,
+    output_dir: Path,
+    used_names: set[str],
+) -> tuple[str, datetime]:
+    out_name = build_sim_filename(base_date, start_time)
+    if out_name not in used_names:
+        used_names.add(out_name)
+        return out_name, start_time
+    candidate = start_time
+    for _ in range(24 * 60 * 60):
+        candidate = candidate + timedelta(seconds=1)
+        out_name = build_sim_filename(base_date, candidate)
+        if out_name not in used_names:
+            used_names.add(out_name)
+            return out_name, candidate
+    raise RuntimeError("Unable to find unique output name for simulation day.")
 
 
 def build_payload(row_dict: dict) -> str:
@@ -494,7 +449,7 @@ def write_with_timestamps(
     rate_hz: float,
     rng: np.random.Generator,
     offsets_s: list[float] | None = None,
-) -> None:
+) -> datetime:
     with output_path.open("w", encoding="ascii") as dst:
         current_time = start_time
         for idx, payload in enumerate(payloads):
@@ -519,6 +474,7 @@ def write_with_timestamps(
             if offsets_s is None and rate_hz > 0:
                 delta = rng.exponential(1.0 / rate_hz)
                 current_time = current_time + timedelta(seconds=float(delta))
+    return current_time
 
 
 def main() -> None:
@@ -560,18 +516,13 @@ def main() -> None:
         output_dir = Path(__file__).resolve().parent / output_dir
     ensure_dir(output_dir)
 
-    geometry_id_cfg = cfg.get("geometry_id")
-    if geometry_id_cfg is None or str(geometry_id_cfg).lower() == "auto":
-        geometry_id = None
-    else:
-        geometry_id = int(geometry_id_cfg)
     rate_hz = float(cfg.get("rate_hz", 0.0))
     chunk_rows = cfg.get("chunk_rows")
     payload_sampling = str(cfg.get("payload_sampling", "random")).lower()
     if payload_sampling not in {"random", "sequential_random_start"}:
         raise ValueError("payload_sampling must be 'random' or 'sequential_random_start'.")
 
-    input_glob = cfg.get("input_glob", "**/geom_*_daq.pkl")
+    input_glob = cfg.get("input_glob", "**/step_10_chunks.chunks.json")
     input_collect = str(cfg.get("input_collect", "matching")).lower()
     input_sim_run = cfg.get("input_sim_run", "latest")
     sim_runs = resolve_input_sim_runs(input_dir, input_sim_run, cfg.get("seed"))
@@ -579,16 +530,9 @@ def main() -> None:
         print("Multiple SIM_RUNs requested; using baseline_only input collection per SIM_RUN.")
         input_collect = "baseline_only"
 
-    map_dir = Path(cfg["geometry_map_dir"])
-    if not map_dir.is_absolute():
-        map_dir = Path(__file__).resolve().parent / map_dir
-    map_sim_run = cfg.get("geometry_map_sim_run", "latest")
-    if map_sim_run == "latest":
-        map_sim_run = latest_sim_run(map_dir)
-    elif map_sim_run == "random":
-        map_sim_run = random_sim_run(map_dir, cfg.get("seed"))
-    geom_map_path = map_dir / str(map_sim_run) / "geometry_map_all.csv"
-    geom_map = pd.read_csv(geom_map_path)
+    mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+    if not mesh_dir.is_absolute():
+        mesh_dir = Path(__file__).resolve().parent / mesh_dir
 
     requested_rows = int(cfg.get("target_rows", 50000))
     if requested_rows <= 0:
@@ -596,34 +540,167 @@ def main() -> None:
 
     registry_path = output_dir / "step_final_output_registry.json"
     registry = load_output_registry(registry_path)
-    existing_counts, existing_dates_by_sim_run_station = _load_existing_outputs(registry)
     used_output_names: dict[Path, set[str]] = defaultdict(set)
     for existing_file in output_dir.rglob("mi0*.dat"):
         used_output_names[existing_file.parent].add(existing_file.name)
     rng = np.random.default_rng(cfg.get("seed"))
-    target_per_conf = int(cfg.get("files_per_station_conf", 1))
-    if target_per_conf <= 0:
+    target_files = int(cfg.get("files_per_station_conf", 1))
+    if target_files <= 0:
         raise ValueError("config files_per_station_conf must be a positive integer.")
 
     for sim_run in sim_runs:
         input_paths, baseline_meta = select_input_paths(
-            input_dir, str(sim_run), geometry_id, input_glob, input_collect
+            input_dir, str(sim_run), input_glob, input_collect
         )
-        run_geometry_id = geometry_id
-        if run_geometry_id is None:
-            meta_geom = baseline_meta.get("geometry_id")
-            if meta_geom is None:
-                meta_cfg = baseline_meta.get("config", {})
-                meta_geom = meta_cfg.get("geometry_id")
-            if meta_geom is None:
-                raise ValueError("geometry_id not set in config and not found in Step 10 metadata.")
-            run_geometry_id = int(meta_geom)
-
-        selections = select_station_confs(geom_map, run_geometry_id)
-        used_dates_by_station: dict[int, set] = defaultdict(set)
-        for (sim_key, station_id), dates in existing_dates_by_sim_run_station.items():
-            if sim_key == str(sim_run):
-                used_dates_by_station[station_id].update(dates)
+        step1_cfg = find_upstream_config(baseline_meta, "STEP_1") or {}
+        step3_cfg = find_upstream_config(baseline_meta, "STEP_3") or {}
+        z_positions = find_upstream_value(baseline_meta, "z_positions_raw_mm")
+        if z_positions is None:
+            z_positions = find_upstream_value(baseline_meta, "z_positions_mm")
+        if z_positions is None or len(z_positions) != 4:
+            raise ValueError("z_positions_mm not found in upstream metadata.")
+        effs = step3_cfg.get("efficiencies") or []
+        if not isinstance(effs, list) or len(effs) != 4:
+            raise ValueError("efficiencies not found in STEP_3 metadata.")
+        mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed"))
+        if "done" not in mesh.columns:
+            mesh["done"] = 0
+        has_param_set_id = "param_set_id" in mesh.columns
+        has_param_date = "param_date" in mesh.columns
+        if has_param_set_id:
+            pending_mask = mesh["param_set_id"].isna()
+        else:
+            pending_mask = pd.Series(True, index=mesh.index)
+        mask = (mesh["done"] != 1) & pending_mask
+        mask &= np.isclose(mesh["cos_n"].astype(float), float(step1_cfg.get("cos_n")))
+        mask &= np.isclose(mesh["flux_cm2_min"].astype(float), float(step1_cfg.get("flux_cm2_min")))
+        mask &= np.isclose(mesh["eff_p1"].astype(float), float(effs[0]))
+        mask &= np.isclose(mesh["eff_p2"].astype(float), float(effs[1]))
+        mask &= np.isclose(mesh["eff_p3"].astype(float), float(effs[2]))
+        mask &= np.isclose(mesh["eff_p4"].astype(float), float(effs[3]))
+        abs_mask = mask.copy()
+        abs_mask &= np.isclose(mesh["z_p1"].astype(float), float(z_positions[0]))
+        abs_mask &= np.isclose(mesh["z_p2"].astype(float), float(z_positions[1]))
+        abs_mask &= np.isclose(mesh["z_p3"].astype(float), float(z_positions[2]))
+        abs_mask &= np.isclose(mesh["z_p4"].astype(float), float(z_positions[3]))
+        candidates = mesh[abs_mask]
+        if candidates.empty:
+            base = mesh["z_p1"].astype(float)
+            rel_mask = mask.copy()
+            rel_mask &= np.isclose(mesh["z_p1"].astype(float) - base, float(z_positions[0]))
+            rel_mask &= np.isclose(mesh["z_p2"].astype(float) - base, float(z_positions[1]))
+            rel_mask &= np.isclose(mesh["z_p3"].astype(float) - base, float(z_positions[2]))
+            rel_mask &= np.isclose(mesh["z_p4"].astype(float) - base, float(z_positions[3]))
+            candidates = mesh[rel_mask]
+        if candidates.empty:
+            full_mask = (
+                np.isclose(mesh["cos_n"].astype(float), float(step1_cfg.get("cos_n")))
+                & np.isclose(mesh["flux_cm2_min"].astype(float), float(step1_cfg.get("flux_cm2_min")))
+                & np.isclose(mesh["eff_p1"].astype(float), float(effs[0]))
+                & np.isclose(mesh["eff_p2"].astype(float), float(effs[1]))
+                & np.isclose(mesh["eff_p3"].astype(float), float(effs[2]))
+                & np.isclose(mesh["eff_p4"].astype(float), float(effs[3]))
+            )
+            base = mesh["z_p1"].astype(float)
+            abs_full = full_mask.copy()
+            abs_full &= np.isclose(mesh["z_p1"].astype(float), float(z_positions[0]))
+            abs_full &= np.isclose(mesh["z_p2"].astype(float), float(z_positions[1]))
+            abs_full &= np.isclose(mesh["z_p3"].astype(float), float(z_positions[2]))
+            abs_full &= np.isclose(mesh["z_p4"].astype(float), float(z_positions[3]))
+            rel_full = full_mask.copy()
+            rel_full &= np.isclose(mesh["z_p1"].astype(float) - base, float(z_positions[0]))
+            rel_full &= np.isclose(mesh["z_p2"].astype(float) - base, float(z_positions[1]))
+            rel_full &= np.isclose(mesh["z_p3"].astype(float) - base, float(z_positions[2]))
+            rel_full &= np.isclose(mesh["z_p4"].astype(float) - base, float(z_positions[3]))
+            candidates = mesh[abs_full]
+            if candidates.empty:
+                candidates = mesh[rel_full]
+        if candidates.empty:
+            print("Warning: no matching param_mesh row found for this parameter set; skipping.")
+            continue
+        if len(candidates) > 1:
+            raise ValueError("Multiple matching param_mesh rows found; cannot assign param_set_id.")
+        param_row = candidates.iloc[0]
+        existing_param_set_id = param_row.get("param_set_id") if has_param_set_id else pd.NA
+        existing_param_date = param_row.get("param_date") if has_param_date else pd.NA
+        sim_params_path = output_dir / "step_final_simulation_params.csv"
+        sim_params_df = None
+        if sim_params_path.exists():
+            sim_params_df = pd.read_csv(sim_params_path)
+        if pd.isna(existing_param_set_id) or pd.isna(existing_param_date):
+            if has_param_set_id:
+                existing_ids = mesh["param_set_id"].dropna()
+            elif sim_params_df is not None and "param_set_id" in sim_params_df.columns:
+                existing_ids = sim_params_df["param_set_id"].dropna()
+            else:
+                existing_ids = pd.Series([], dtype="float64")
+            next_id = int(existing_ids.max()) + 1 if not existing_ids.empty else 1
+            if sim_params_df is not None and "param_date" in sim_params_df.columns:
+                existing_dates = sim_params_df["param_date"].dropna()
+            elif has_param_date:
+                existing_dates = mesh["param_date"].dropna()
+            else:
+                existing_dates = pd.Series([], dtype="object")
+            if not existing_dates.empty:
+                last_date = parse_param_datetime(str(existing_dates.iloc[-1])).date()
+                next_date = last_date + timedelta(days=1)
+            else:
+                next_date = date(2000, 1, 1)
+            if has_param_set_id:
+                mesh.loc[param_row.name, "param_set_id"] = next_id
+            if has_param_date:
+                mesh.loc[param_row.name, "param_date"] = next_date.isoformat()
+            mesh.loc[param_row.name, "done"] = 1
+            param_set_id = next_id
+            param_date = next_date.isoformat()
+        else:
+            param_set_id = int(existing_param_set_id)
+            param_date = str(existing_param_date)
+        z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
+        head_cols = ["done", "param_set_id", "param_date"]
+        ordered_cols = [c for c in head_cols if c in mesh.columns] + [
+            c for c in mesh.columns if c not in head_cols and c not in z_cols
+        ] + [c for c in z_cols if c in mesh.columns]
+        mesh = mesh[ordered_cols]
+        mesh.to_csv(mesh_path, index=False)
+        if param_date is None or pd.isna(param_date):
+            raise ValueError("param_date is missing; enable param_date column or ensure it is populated.")
+        base_time = parse_param_datetime(str(param_date))
+        z_vals = [
+            float(param_row["z_p1"]),
+            float(param_row["z_p2"]),
+            float(param_row["z_p3"]),
+            float(param_row["z_p4"]),
+        ]
+        step1_cfg = find_upstream_config(baseline_meta, "STEP_1") or {}
+        step3_cfg = find_upstream_config(baseline_meta, "STEP_3") or {}
+        step9_cfg = find_upstream_config(baseline_meta, "STEP_9") or {}
+        if sim_params_df is not None:
+            eff_key = json.dumps(step3_cfg.get("efficiencies", []))
+            trig_key = json.dumps(step9_cfg.get("trigger_combinations", []))
+            matches = sim_params_df.copy()
+            for col, val in [
+                ("cos_n", step1_cfg.get("cos_n")),
+                ("flux_cm2_min", step1_cfg.get("flux_cm2_min")),
+                ("z_plane_1", z_vals[0]),
+                ("z_plane_2", z_vals[1]),
+                ("z_plane_3", z_vals[2]),
+                ("z_plane_4", z_vals[3]),
+                ("efficiencies", eff_key),
+                ("trigger_combinations", trig_key),
+            ]:
+                if col not in matches.columns:
+                    matches = matches.iloc[0:0]
+                    break
+                if col in {"efficiencies", "trigger_combinations"}:
+                    matches = matches[matches[col].astype(str) == str(val)]
+                else:
+                    matches = matches[np.isclose(matches[col].astype(float), float(val))]
+            if not matches.empty:
+                mesh.loc[param_row.name, "done"] = 1
+                mesh.to_csv(mesh_path, index=False)
+                print("Skipping existing output for matching parameter set in step_final_simulation_params.csv.")
+                continue
         if payload_sampling == "sequential_random_start":
             payloads, total_rows, thick_offsets = sample_payloads_sequential(
                 input_paths, requested_rows, chunk_rows, rng
@@ -636,100 +713,87 @@ def main() -> None:
         if selected_rows < requested_rows:
             print(f"Selected {selected_rows} rows out of requested {requested_rows}.")
 
-        for selection in selections:
-            start_date = selection.get("start")
-            end_date = selection.get("end")
-            if not start_date or not end_date:
-                raise ValueError("start/end date columns are required in geometry_map_all.csv.")
+        existing_for_run = sum(
+            1
+            for entry in registry.get("files", [])
+            if entry.get("param_set_id") == int(param_set_id)
+        )
+        if existing_for_run >= target_files:
+            print(
+                "Skipping existing output for "
+                f"param_set_id={param_set_id} "
+                f"({existing_for_run}/{target_files})."
+            )
+            continue
 
-            station_id = int(selection.get("station", 0))
-            conf_value = selection.get("conf")
-            triad_key = (str(sim_run), str(station_id), str(conf_value))
-            existing_count = existing_counts.get(triad_key, 0)
-            if existing_count >= target_per_conf:
-                print(
-                    "Skipping existing output for "
-                    f"sim_run={sim_run}, station={station_id}, conf={conf_value} "
-                    f"({existing_count}/{target_per_conf})."
-                )
-                continue
+        sim_dir = output_dir
+        ensure_dir(sim_dir)
+        dir_used_names = used_output_names[sim_dir]
 
-            for _ in range(target_per_conf - existing_count):
-                start_time = random_start_datetime(
-                    str(start_date), str(end_date), rng, used_dates_by_station[station_id]
-                )
-                if start_time is None:
-                    continue
-                station_conf_dir = output_dir / str(sim_run) / f"STATION_{station_id}_CONFIG_{conf_value}"
-                ensure_dir(station_conf_dir)
-                dir_used_names = used_output_names[station_conf_dir]
-                out_name, start_time = ensure_unique_out_name(
-                    station_id, start_time, station_conf_dir, dir_used_names, rng
-                )
-                used_dates_by_station[station_id].add(start_time.date())
-                existing_counts[triad_key] = existing_counts.get(triad_key, 0) + 1
+        next_start = base_time
+        for _ in range(target_files - existing_for_run):
+            out_name, start_time = ensure_unique_sim_name(base_time, next_start, sim_dir, dir_used_names)
+            out_path = sim_dir / out_name
+            last_time = write_with_timestamps(
+                payloads, out_path, start_time, rate_hz, rng, offsets_s=thick_offsets
+            )
+            next_start = last_time + timedelta(seconds=1)
 
-                out_path = station_conf_dir / out_name
-                write_with_timestamps(payloads, out_path, start_time, rate_hz, rng, offsets_s=thick_offsets)
+            registry_entry = {
+                "file_name": out_name,
+                "file_path": str(out_path.relative_to(output_dir)),
+                "created_at": now_iso(),
+                "step": "STEP_FINAL",
+                "config": physics_cfg,
+                "runtime_config": runtime_cfg,
+                "param_set_id": int(param_set_id),
+                "param_date": str(param_date),
+                "source_dataset": [str(path) for path in input_paths],
+                "param_mesh": str(mesh_path),
+                "start_time": start_time.isoformat(),
+                "rate_hz": rate_hz,
+                "target_rows": requested_rows,
+                "selected_rows": selected_rows,
+                "total_source_rows": total_rows,
+                "input_collect": input_collect,
+                "thick_time_mode": "offset" if thick_offsets is not None else "poisson",
+                "baseline_meta": baseline_meta,
+                "sim_run_configs": {
+                    "STEP_10_TO_FINAL": collect_sim_run_configs(input_dir),
+                },
+            }
+            registry["files"].append(registry_entry)
+            save_output_registry(registry_path, registry)
 
-                registry_entry = {
-                    "file_name": out_name,
-                    "file_path": str(out_path.relative_to(output_dir)),
-                    "created_at": now_iso(),
-                    "step": "STEP_FINAL",
-                    "config": physics_cfg,
-                    "runtime_config": runtime_cfg,
-                    "input_sim_run": str(sim_run),
-                    "geometry_id": run_geometry_id,
-                    "source_dataset": [str(path) for path in input_paths],
-                    "geometry_map": str(geom_map_path),
-                    "station_selection": selection,
-                    "start_time": start_time.isoformat(),
-                    "rate_hz": rate_hz,
-                    "target_rows": requested_rows,
-                    "selected_rows": selected_rows,
-                    "total_source_rows": total_rows,
-                    "input_collect": input_collect,
-                    "thick_time_mode": "offset" if thick_offsets is not None else "poisson",
-                    "baseline_meta": baseline_meta,
-                    "sim_run_configs": {
-                        "STEP_2_TO_3": collect_sim_run_configs(Path(cfg["geometry_map_dir"])),
-                        "STEP_10_TO_FINAL": collect_sim_run_configs(input_dir),
-                    },
-                }
-                registry["files"].append(registry_entry)
-                save_output_registry(registry_path, registry)
-
-                sim_params_path = output_dir / "step_final_simulation_params.csv"
-                step1_cfg = find_upstream_config(baseline_meta, "STEP_1") or {}
-                step3_cfg = find_upstream_config(baseline_meta, "STEP_3") or {}
-                step9_cfg = find_upstream_config(baseline_meta, "STEP_9") or {}
-                row = {
-                    "file_name": out_name,
-                    "file_path": str(out_path.relative_to(output_dir)),
-                    "input_sim_run": str(sim_run),
-                    "geometry_id": run_geometry_id,
-                    "station": selection.get("station"),
-                    "conf": selection.get("conf"),
-                    "cos_n": step1_cfg.get("cos_n"),
-                    "flux_cm2_min": step1_cfg.get("flux_cm2_min"),
-                    "z_plane_1": selection.get("P1"),
-                    "z_plane_2": selection.get("P2"),
-                    "z_plane_3": selection.get("P3"),
-                    "z_plane_4": selection.get("P4"),
-                    "efficiencies": json.dumps(step3_cfg.get("efficiencies", [])),
-                    "trigger_combinations": json.dumps(step9_cfg.get("trigger_combinations", [])),
-                    "requested_rows": requested_rows,
-                    "selected_rows": selected_rows,
-                }
-                if sim_params_path.exists():
-                    df_params = pd.read_csv(sim_params_path)
-                    df_params = df_params[df_params["file_name"] != out_name]
-                    df_params = pd.concat([df_params, pd.DataFrame([row])], ignore_index=True)
-                else:
-                    df_params = pd.DataFrame([row])
-                df_params.to_csv(sim_params_path, index=False)
-                print(f"Saved {out_path} (sim_run={sim_run}, station={station_id}, conf={conf_value})")
+            row = {
+                "file_name": out_name,
+                "param_set_id": int(param_set_id),
+                "param_date": str(param_date),
+                "cos_n": step1_cfg.get("cos_n"),
+                "flux_cm2_min": step1_cfg.get("flux_cm2_min"),
+                "z_plane_1": z_vals[0],
+                "z_plane_2": z_vals[1],
+                "z_plane_3": z_vals[2],
+                "z_plane_4": z_vals[3],
+                "efficiencies": json.dumps(step3_cfg.get("efficiencies", [])),
+                "trigger_combinations": json.dumps(step9_cfg.get("trigger_combinations", [])),
+                "selected_rows": selected_rows,
+            }
+            if sim_params_df is not None:
+                df_params = sim_params_df
+                drop_cols = [
+                    col
+                    for col in ("file_path", "input_sim_run", "requested_rows")
+                    if col in df_params.columns
+                ]
+                if drop_cols:
+                    df_params = df_params.drop(columns=drop_cols)
+                df_params = df_params[df_params["file_name"] != out_name]
+                df_params = pd.concat([df_params, pd.DataFrame([row])], ignore_index=True)
+            else:
+                df_params = pd.DataFrame([row])
+            df_params.to_csv(sim_params_path, index=False)
+            print(f"Saved {out_path} (param_set_id={param_set_id})")
 
 
 if __name__ == "__main__":

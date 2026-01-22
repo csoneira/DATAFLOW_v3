@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Step 2: propagate muons through station geometry and compute plane crossings.
 
-Inputs: muon_sample from Step 1 and geometry registry.
-Outputs: geom_<G>.(pkl|csv) with crossing coordinates/times and metadata.
+Inputs: muon_sample from Step 1.
+Outputs: step_2.(pkl|csv) with crossing coordinates/times and metadata.
 """
 
 from __future__ import annotations
@@ -28,23 +28,21 @@ sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 from STEP_SHARED.sim_utils import (
     DEFAULT_BOUNDS,
     DetectorBounds,
-    build_geometry_map,
-    build_global_geometry_registry,
     ensure_dir,
+    extract_param_set,
     find_latest_data_path,
     find_sim_run,
     find_sim_run_dir,
     load_step_configs,
     latest_sim_run,
     random_sim_run,
-    list_station_config_files,
     load_with_metadata,
-    map_station_to_geometry,
     now_iso,
-    read_station_config,
+    resolve_param_mesh,
     resolve_sim_run,
     reset_dir,
     save_with_metadata,
+    select_param_row,
 )
 
 
@@ -116,6 +114,11 @@ def normalize_positions(z_positions: Tuple[float, float, float, float], normaliz
 
 
 def plot_geometry_summary(df: pd.DataFrame, pdf: PdfPages, title: str) -> None:
+    required = {"Theta_gen", "Phi_gen", "tt_crossing"}
+    if not required.issubset(df.columns):
+        missing = ", ".join(sorted(required - set(df.columns)))
+        print(f"Skipping geometry summary plot (missing columns: {missing})")
+        return
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
     plane_cols = [(f"X_gen_{i}", f"Y_gen_{i}") for i in range(1, 5)]
     for ax, (x_col, y_col) in zip(axes.flatten(), plane_cols):
@@ -175,6 +178,7 @@ def plot_step2_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     t_cols = [c for c in df.columns if c.startswith("T_sum_") and c.endswith("_ns")]
     t_vals = df[t_cols].to_numpy(dtype=float).ravel() if t_cols else np.array([])
     t_vals = t_vals[~np.isnan(t_vals)]
+    t_vals = t_vals[t_vals != 0]
     axes[2].hist(t_vals, bins=80, color="darkorange", alpha=0.8)
     axes[2].set_title("T_sum_i_ns")
 
@@ -305,7 +309,7 @@ def main() -> None:
     chunk_manifest = input_path.with_suffix(".chunks.json")
     stream_chunks = chunk_manifest.exists()
 
-    print("Step 2 starting...")
+    print("\n-----\nStep 2 starting...\n-----")
     print(f"Input: {input_path}")
     print(f"Output dir: {output_dir}")
     if args.plot_only:
@@ -342,73 +346,52 @@ def main() -> None:
         if existing:
             print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
             return
-    sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-        output_dir, "STEP_2", config_path, physics_cfg, upstream_meta
-    )
-    reset_dir(sim_run_dir)
     c_mm_per_ns = float(cfg.get("c_mm_per_ns", upstream_meta.get("config", {}).get("c_mm_per_ns", 299.792458)))
     print(f"c_mm_per_ns: {c_mm_per_ns}")
-    geometry_source_dir = None
-    geometry_map = None
-    geometry_map_dir = cfg.get("geometry_map_dir")
-    if geometry_map_dir:
-        map_dir = Path(geometry_map_dir)
-        if not map_dir.is_absolute():
-            map_dir = Path(__file__).resolve().parent / map_dir
-        map_sim_run = cfg.get("geometry_map_sim_run", "latest")
-        if map_sim_run == "latest":
-            map_sim_run = latest_sim_run(map_dir)
-        elif map_sim_run == "random":
-            map_sim_run = random_sim_run(map_dir, cfg.get("seed"))
-        geometry_source_dir = map_dir / str(map_sim_run)
-        registry_path = geometry_source_dir / "geometry_registry.csv"
-        geom_map_path = geometry_source_dir / "geometry_map_all.csv"
-        if not registry_path.exists():
-            raise FileNotFoundError(f"geometry_registry.csv not found in {geometry_source_dir}")
-        registry = pd.read_csv(registry_path)
-        if geom_map_path.exists():
-            geometry_map = pd.read_csv(geom_map_path)
+    z_positions_cfg = cfg.get("z_positions")
+    param_set_id, param_date = extract_param_set(upstream_meta)
+    param_mesh_path = None
+    if z_positions_cfg is None:
+        raise ValueError("config z_positions is required for Step 2.")
+    if isinstance(z_positions_cfg, str) and z_positions_cfg.lower() == "random":
+        mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+        if not mesh_dir.is_absolute():
+            mesh_dir = Path(__file__).resolve().parent / mesh_dir
+        mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed"))
+        param_row = select_param_row(mesh, rng, param_set_id)
+        if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
+            param_set_id = int(param_row["param_set_id"])
+        if "param_date" in param_row:
+            param_date = str(param_row["param_date"])
+        param_mesh_path = mesh_path
+        required_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
+        if not all(col in param_row.index for col in required_cols):
+            raise ValueError("param_mesh.csv is missing z_p1..z_p4 required for geometry selection.")
+        z_values = [float(param_row[col]) for col in required_cols]
+        physics_cfg["z_positions"] = z_values
+        cfg["z_positions"] = z_values
+        print(f"Selected z_positions from mesh (param_set_id={param_set_id})")
     else:
-        station_root = Path(cfg["station_config_root"]).expanduser()
-        if not station_root.is_absolute():
-            station_root = Path(__file__).resolve().parent / station_root
-        station_files = list_station_config_files(station_root)
-        station_dfs = []
-        for csv_path in station_files.values():
-            station_dfs.append(read_station_config(csv_path))
-        registry = build_global_geometry_registry(station_dfs)
-        geometry_map = pd.concat(
-            [map_station_to_geometry(df, registry) for df in station_dfs],
-            ignore_index=True,
-        )
+        if (
+            isinstance(z_positions_cfg, (list, tuple))
+            and len(z_positions_cfg) == 4
+        ):
+            z_values = [float(v) for v in z_positions_cfg]
+            physics_cfg["z_positions"] = z_values
+            cfg["z_positions"] = z_values
+            param_set_id = None
+            param_date = None
+        else:
+            raise ValueError("z_positions must be 'random' or a 4-value list [z1, z2, z3, z4].")
+    z_positions = normalize_positions(tuple(z_values), normalize)
+    print(f"z_positions={z_positions.tolist()}")
 
-    registry_path = sim_run_dir / "geometry_registry.csv"
-    registry.to_csv(registry_path, index=False)
-    if geometry_map is not None:
-        geom_map_path = sim_run_dir / "geometry_map_all.csv"
-        geometry_map.to_csv(geom_map_path, index=False)
-
-    geometry_id = cfg.get("geometry_id")
-    if geometry_id is None:
-        raise ValueError("config geometry_id is required for Step 2.")
-    if str(geometry_id).lower() == "random":
-        geometry_id = int(rng.choice(registry["geometry_id"].to_numpy(dtype=int)))
-        cfg["geometry_id"] = geometry_id
-        physics_cfg["geometry_id"] = geometry_id
-        print(f"Selected random geometry_id: {geometry_id}")
-    else:
-        geometry_id = int(geometry_id)
-    match = registry[registry["geometry_id"] == geometry_id]
-    if match.empty:
-        raise ValueError(f"geometry_id {geometry_id} not found in registry.")
-
-    row = match.iloc[0]
-    z_positions = normalize_positions(
-        (row["P1"], row["P2"], row["P3"], row["P4"]),
-        normalize,
+    sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
+        output_dir, "STEP_2", config_path, cfg, upstream_meta
     )
-    print(f"Geometry {geometry_id}: z_positions={z_positions.tolist()}")
-    out_name = f"geom_{geometry_id}.{output_format}"
+    reset_dir(sim_run_dir)
+    out_stem_base = "step_2"
+    out_name = f"{out_stem_base}.{output_format}"
     out_path = sim_run_dir / out_name
     metadata = {
         "created_at": now_iso(),
@@ -418,10 +401,11 @@ def main() -> None:
         "sim_run": sim_run,
         "config_hash": config_hash,
         "upstream_hash": upstream_hash,
-        "geometry_id": int(geometry_id),
         "z_positions_mm": [float(z) for z in z_positions],
-        "geometry_dir": str(sim_run_dir),
-        "geometry_source_dir": str(geometry_source_dir) if geometry_source_dir else None,
+        "z_positions_raw_mm": [float(v) for v in z_values],
+        "param_set_id": param_set_id,
+        "param_date": param_date,
+        "param_mesh_path": str(param_mesh_path) if param_mesh_path else None,
         "upstream": upstream_meta,
     }
 
@@ -429,7 +413,8 @@ def main() -> None:
         if output_format not in ("csv", "pkl"):
             raise ValueError("Chunked input requires output_format=csv or pkl.")
 
-        chunks_dir = sim_run_dir / f"{out_path.stem}_chunks"
+        out_stem = f"{out_stem_base}_chunks"
+        chunks_dir = sim_run_dir / out_stem
         ensure_dir(chunks_dir)
         chunk_paths = []
         buffer = []
@@ -502,7 +487,7 @@ def main() -> None:
             "row_count": metadata["row_count"],
             "metadata": metadata,
         }
-        manifest_path = out_path.with_suffix(".chunks.json")
+        manifest_path = sim_run_dir / f"{out_stem}.chunks.json"
         manifest_path.write_text(json.dumps(manifest_out, indent=2))
 
         if not args.no_plots:
@@ -512,9 +497,9 @@ def main() -> None:
                 sample_df = last_full_chunk.sample(n=sample_n, random_state=0)
                 plot_dir = sim_run_dir / "PLOTS"
                 ensure_dir(plot_dir)
-                plot_path = plot_dir / f"geom_{geometry_id}_plots.pdf"
+                plot_path = plot_dir / f"{out_stem_base}_plots.pdf"
                 with PdfPages(plot_path) as pdf:
-                    plot_geometry_summary(sample_df, pdf, f"Geometry {geometry_id} (sample)")
+                    plot_geometry_summary(sample_df, pdf, f"Step 2 (sample)")
                     plot_step2_summary(sample_df, pdf)
             else:
                 print("Chunked mode enabled; skipping plots to limit memory usage.")
@@ -528,9 +513,9 @@ def main() -> None:
         if not args.no_plots:
             plot_dir = sim_run_dir / "PLOTS"
             ensure_dir(plot_dir)
-            plot_path = plot_dir / f"geom_{geometry_id}_plots.pdf"
+            plot_path = plot_dir / f"{out_stem_base}_plots.pdf"
             with PdfPages(plot_path) as pdf:
-                plot_geometry_summary(geom_df, pdf, f"Geometry {geometry_id}")
+                plot_geometry_summary(geom_df, pdf, "Step 2")
                 plot_step2_summary(geom_df, pdf)
     print(f"Saved {out_path}")
 
