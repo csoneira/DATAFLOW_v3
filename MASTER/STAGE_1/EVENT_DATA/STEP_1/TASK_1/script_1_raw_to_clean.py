@@ -1834,7 +1834,7 @@ MULTI_SPACE_PATTERN = re.compile(r" +")
 XYEAR_PATTERN = re.compile(r"X(20\d{2})")
 NEG_GAP_PATTERN = re.compile(r"(\w)-(\d)")
 MALFORMED_NUMBER_PATTERN = re.compile(r"-?\d+\.\d+\.\d+")
-VALID_YEARS = set(range(2022, 2033))
+VALID_YEARS = set(range(1999, 2100))
 
 T_FRONT_PATTERN = re.compile(r"^T\d+_F_\d+$")
 T_BACK_PATTERN = re.compile(r"^T\d+_B_\d+$")
@@ -1927,6 +1927,15 @@ with open(file_path, 'r') as infile, open(temp_file, 'w') as outfile, open(rejec
             outfile.write(cleaned_line + '\n')  # Save valid row
         else:
             rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")  # Save rejected row
+
+if written_lines == 0:
+    print("No valid lines found after preprocessing; skipping file.")
+    if user_file_selection == False:
+        error_file_path = os.path.join(base_directories["error_directory"], file_name)
+        process_file(file_path, error_file_path)
+    if os.path.exists(temp_file):
+        os.remove(temp_file)
+    sys.exit("Empty temp file generated; no valid data to process.")
 
 read_df = pd.read_csv(
     temp_file,

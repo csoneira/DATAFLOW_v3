@@ -662,6 +662,7 @@ def main() -> None:
             c for c in mesh.columns if c not in head_cols and c not in z_cols
         ] + [c for c in z_cols if c in mesh.columns]
         mesh = mesh[ordered_cols]
+        mesh["done"] = mesh["done"].fillna(0).astype(int)
         mesh.to_csv(mesh_path, index=False)
         if param_date is None or pd.isna(param_date):
             raise ValueError("param_date is missing; enable param_date column or ensure it is populated.")

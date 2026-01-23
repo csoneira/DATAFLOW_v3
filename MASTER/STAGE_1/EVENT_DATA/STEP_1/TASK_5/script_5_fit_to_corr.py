@@ -796,9 +796,9 @@ KEY = "df"
 working_df = pd.read_parquet(file_path, engine="pyarrow")
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 print(f"Listed dataframe reloaded from: {file_path}")
-print("Columns loaded from parquet:")
-for col in working_df.columns:
-    print(f" - {col}")
+# print("Columns loaded from parquet:")
+# for col in working_df.columns:
+#     print(f" - {col}")
 
 # Helper: compute trigger types based on non-zero charge columns
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:

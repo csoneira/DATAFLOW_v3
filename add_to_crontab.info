@@ -75,7 +75,30 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
-# MAIN PIPELINE
+# MAIN SIMULATION PIPELINE
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# SANITIZE RUNS TO CLEAN FOR NOT NECESARY FILES
+*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py --apply
+
+# ADD NEW RUNS TO THE SIMULATION IF THE OTHERS ARE COMPLETED
+*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py
+
+# DO THE SIMULATION
+*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh all --no-plots
+
+# CONVERT THE SIMULATED DATA INTO THE DETECTOR DATA FORMAT 
+*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py
+
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# MAIN ANALYSIS PIPELINE
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
@@ -96,11 +119,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - SIMULATION - COPY SIMULATED DATA -------------------------------------
-
-# MINGO_DIGITAL_TWIN - RUN STEPS 2+ EVERY 15 MINUTES ------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh all --no-plots
-*/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh final
-*/25 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/simulate_station_data.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/simulate_station_data.log 2>&1
+*/25 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/ingest_simulated_station_data.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ingest_simulated_station_data.log 2>&1
 
 
 # --------------------------------------------------------------------------------

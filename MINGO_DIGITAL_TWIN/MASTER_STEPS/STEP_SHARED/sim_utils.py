@@ -268,10 +268,17 @@ def select_param_row(
     mesh: pd.DataFrame,
     rng: np.random.Generator,
     param_set_id: Optional[int],
+    param_row_id: Optional[int] = None,
 ) -> pd.Series:
     if "done" not in mesh.columns:
         mesh = mesh.copy()
         mesh["done"] = 0
+    if param_row_id is not None:
+        try:
+            row = mesh.loc[int(param_row_id)]
+        except (KeyError, ValueError, TypeError):
+            raise ValueError(f"param_row_id {param_row_id} not found in param_mesh.csv")
+        return row
     if param_set_id is not None:
         if "param_set_id" not in mesh.columns:
             raise ValueError("param_set_id is not available in param_mesh.csv")
@@ -288,6 +295,89 @@ def select_param_row(
         raise ValueError("No available param_set rows; all are marked done or already assigned.")
     idx = int(rng.integers(0, len(available)))
     return available.iloc[idx]
+
+
+def compute_step_param_id(values: Iterable[float], prefix: str) -> str:
+    rounded = [round(float(val), 6) for val in values]
+    payload = json.dumps({"values": rounded}, sort_keys=True, default=str, ensure_ascii=True)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"{prefix}:{digest}"
+
+
+def build_sim_run_name(step_ids: Iterable[str]) -> str:
+    parts = []
+    for val in step_ids:
+        if val is None or val == "":
+            continue
+        try:
+            num = int(float(val))
+            parts.append(f"{num:03d}")
+            continue
+        except (ValueError, TypeError):
+            parts.append(str(val))
+    return "SIM_RUN_" + "_".join(parts)
+
+
+def select_next_step_id(
+    output_dir: Path,
+    mesh_dir: Path,
+    mesh_sim_run: Optional[str],
+    step_col: str,
+    prefix_ids: Iterable[str],
+    seed: Optional[int],
+    override_id: Optional[str] = None,
+) -> Optional[str]:
+    if override_id not in (None, "", "auto"):
+        candidates = [str(override_id)]
+    else:
+        try:
+            mesh, _ = resolve_param_mesh(mesh_dir, mesh_sim_run, seed)
+        except FileNotFoundError:
+            mesh = pd.DataFrame()
+        if step_col in mesh.columns:
+            candidates = sorted(mesh[step_col].dropna().astype(str).unique().tolist())
+        else:
+            candidates = ["001"]
+    if not candidates:
+        return None
+    rng = np.random.default_rng(seed)
+    start_idx = int(rng.integers(0, len(candidates)))
+    order = list(range(start_idx, len(candidates))) + list(range(0, start_idx))
+    for idx in order:
+        step_id = candidates[idx]
+        sim_run = build_sim_run_name(list(prefix_ids) + [step_id])
+        if not (output_dir / sim_run).exists():
+            return step_id
+    return None
+
+
+def register_sim_run(
+    output_dir: Path,
+    step: str,
+    config_path: Path,
+    cfg: Dict,
+    upstream_meta: Optional[Dict],
+    sim_run: str,
+) -> Tuple[str, Path, str, Optional[str], Dict]:
+    config_hash = _json_fingerprint(cfg)
+    upstream_hash = _upstream_fingerprint(upstream_meta)
+    registry = load_sim_run_registry(output_dir)
+    for entry in registry.get("runs", []):
+        if entry.get("sim_run") == sim_run:
+            return sim_run, output_dir / sim_run, config_hash, upstream_hash, registry
+    registry.setdefault("runs", []).append(
+        {
+            "sim_run": sim_run,
+            "created_at": now_iso(),
+            "step": step,
+            "config_path": str(config_path),
+            "config_hash": config_hash,
+            "upstream_hash": upstream_hash,
+            "config": cfg,
+        }
+    )
+    save_sim_run_registry(output_dir, registry)
+    return sim_run, output_dir / sim_run, config_hash, upstream_hash, registry
 
 
 def mark_param_set_done(mesh_path: Path, param_set_id: int) -> None:
@@ -318,6 +408,51 @@ def extract_param_set(meta: Optional[Dict]) -> Tuple[Optional[int], Optional[str
     if isinstance(upstream, dict):
         return upstream.get("param_set_id"), upstream.get("param_date")
     return None, None
+
+
+def extract_param_row_id(meta: Optional[Dict]) -> Optional[int]:
+    if not isinstance(meta, dict):
+        return None
+    if "param_row_id" in meta:
+        try:
+            return int(meta.get("param_row_id"))
+        except (TypeError, ValueError):
+            return None
+    upstream = meta.get("upstream")
+    if isinstance(upstream, dict):
+        try:
+            return int(upstream.get("param_row_id"))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def extract_step_param_ids(meta: Optional[Dict]) -> Dict[str, str]:
+    ids: Dict[str, str] = {}
+    current = meta
+    while isinstance(current, dict):
+        for key in ("step_1_param_id", "step_2_param_id", "step_3_param_id"):
+            if key in current and key not in ids:
+                ids[key] = str(current.get(key))
+        current = current.get("upstream")
+    return ids
+
+
+def extract_step_id_chain(meta: Optional[Dict]) -> list[str]:
+    chain: dict[str, str] = {}
+    current = meta
+    while isinstance(current, dict):
+        for idx in range(1, 11):
+            key = f"step_{idx}_id"
+            if key in current and key not in chain:
+                chain[key] = str(current.get(key))
+        current = current.get("upstream")
+    ordered = []
+    for idx in range(1, 11):
+        key = f"step_{idx}_id"
+        if key in chain:
+            ordered.append(chain[key])
+    return ordered
 
 
 def find_latest_data_path(root_dir: Path) -> Optional[Path]:

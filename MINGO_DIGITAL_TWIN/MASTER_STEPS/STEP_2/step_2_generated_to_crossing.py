@@ -30,6 +30,7 @@ from STEP_SHARED.sim_utils import (
     DetectorBounds,
     ensure_dir,
     extract_param_set,
+    extract_param_row_id,
     find_latest_data_path,
     find_sim_run,
     find_sim_run_dir,
@@ -38,6 +39,8 @@ from STEP_SHARED.sim_utils import (
     random_sim_run,
     load_with_metadata,
     now_iso,
+    build_sim_run_name,
+    register_sim_run,
     resolve_param_mesh,
     resolve_sim_run,
     reset_dir,
@@ -196,6 +199,52 @@ def plot_step2_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     plt.close(fig)
 
 
+def _resolve_input_path(run_dir: Path, input_basename: str | None) -> Path:
+    if input_basename:
+        input_path = run_dir / input_basename
+        if input_path.exists():
+            return input_path
+        manifest_path = input_path.with_suffix(".chunks.json")
+        if manifest_path.exists():
+            print(f"Using chunk manifest: {manifest_path}")
+            return manifest_path
+        chunks_dir = input_path.with_suffix("") / "chunks"
+        if chunks_dir.exists():
+            return chunks_dir
+    candidates = (
+        sorted(run_dir.glob("muon_sample_*.chunks.json"))
+        + sorted(run_dir.glob("muon_sample_*.pkl"))
+        + sorted(run_dir.glob("muon_sample_*.csv"))
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    manifest_candidates = sorted(run_dir.glob("muon_sample_*.chunks.json"))
+    if not manifest_candidates:
+        manifest_candidates = sorted(run_dir.glob("muon_sample_*/chunks"))
+    if len(manifest_candidates) != 1:
+        raise FileNotFoundError(f"Expected 1 muon_sample file in {run_dir}, found {len(candidates)}.")
+    manifest_path = manifest_candidates[0]
+    if manifest_path.name == "chunks":
+        return manifest_path.parent
+    return Path(str(manifest_path)[: -len(".chunks.json")] + ".pkl")
+
+
+def _load_input_meta(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    if path.name.endswith(".chunks.json"):
+        return json.loads(path.read_text()).get("metadata", {})
+    if path.is_dir() and path.name == "chunks":
+        manifest_path = path.parent.with_suffix(".chunks.json")
+        if manifest_path.exists():
+            return json.loads(manifest_path.read_text()).get("metadata", {})
+    meta_path = path.with_suffix(path.suffix + ".meta.json")
+    if meta_path.exists():
+        return json.loads(meta_path.read_text())
+    _, meta = load_with_metadata(path)
+    return meta
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 2: expand muon sample for each station geometry.")
     parser.add_argument("--config", default="config_step_2_physics.yaml", help="Path to step physics config YAML")
@@ -259,40 +308,54 @@ def main() -> None:
     if input_sim_run == "latest":
         input_sim_run = latest_sim_run(input_dir)
     elif input_sim_run == "random":
-        input_sim_run = random_sim_run(input_dir, cfg.get("seed"))
+        mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+        if not mesh_dir.is_absolute():
+            mesh_dir = Path(__file__).resolve().parent / mesh_dir
+        try:
+            mesh, _ = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed"))
+        except FileNotFoundError:
+            mesh = None
+        fully_done_step1 = set()
+        if mesh is not None:
+            tmp = mesh.copy()
+            tmp["done"] = tmp.get("done", 0).fillna(0).astype(int)
+            if "step_1_id" not in tmp.columns:
+                tmp["step_1_id"] = 1
+            grouped = tmp.groupby("step_1_id")["done"].apply(lambda s: (s == 1).all())
+            fully_done_step1 = set(int(val) for val in grouped[grouped].index.tolist())
+        input_basename = cfg.get("input_basename")
+        sim_run_dirs = sorted(input_dir.glob("SIM_RUN_*"))
+        if not sim_run_dirs:
+            raise FileNotFoundError(f"No SIM_RUN_* directories found in {input_dir}.")
+        rng = np.random.default_rng(cfg.get("seed"))
+        rng.shuffle(sim_run_dirs)
+        input_path = None
+        input_sim_run = None
+        for sim_run_dir in sim_run_dirs:
+            try:
+                candidate_path = _resolve_input_path(sim_run_dir, input_basename)
+            except FileNotFoundError:
+                continue
+            meta = _load_input_meta(candidate_path)
+            if not meta:
+                continue
+            step1_id = meta.get("step_1_id")
+            try:
+                step1_id_norm = int(float(step1_id))
+            except (TypeError, ValueError):
+                step1_id_norm = None
+            if step1_id_norm is not None and step1_id_norm in fully_done_step1:
+                continue
+            input_path = candidate_path
+            input_sim_run = sim_run_dir.name
+            break
+        if input_path is None:
+            raise ValueError("No available input SIM_RUNs with param_row_id not marked done.")
+        print(f"Selected input SIM_RUN: {input_sim_run}")
+    if input_sim_run is not None and input_sim_run != "random":
         input_run_dir = input_dir / str(input_sim_run)
         input_basename = cfg.get("input_basename")
-        if input_basename:
-            input_path = input_run_dir / input_basename
-            if not input_path.exists():
-                manifest_path = input_path.with_suffix(".chunks.json")
-                if manifest_path.exists():
-                    print(f"Using chunk manifest: {manifest_path}")
-                else:
-                    print(f"Warning: input_basename not found: {input_path}")
-                    input_path = None
-        else:
-            input_path = None
-
-        if input_path is None:
-            candidates = sorted(input_run_dir.glob("muon_sample_*.pkl")) + sorted(
-                input_run_dir.glob("muon_sample_*.csv")
-            )
-            if len(candidates) != 1:
-                manifest_candidates = sorted(input_run_dir.glob("muon_sample_*.chunks.json"))
-                if not manifest_candidates:
-                    manifest_candidates = sorted(input_run_dir.glob("muon_sample_*/chunks"))
-                if len(manifest_candidates) != 1:
-                    raise FileNotFoundError(
-                        f"Expected 1 muon_sample file in {input_run_dir}, found {len(candidates)}."
-                    )
-                manifest_path = manifest_candidates[0]
-                if manifest_path.name == "chunks":
-                    input_path = manifest_path.parent
-                else:
-                    input_path = Path(str(manifest_path)[: -len(".chunks.json")] + ".pkl")
-            else:
-                input_path = candidates[0]
+        input_path = _resolve_input_path(input_run_dir, input_basename)
     bounds_cfg = cfg.get("bounds_mm", {})
     bounds = DetectorBounds(
         x_min=float(bounds_cfg.get("x_min", DEFAULT_BOUNDS.x_min)),
@@ -306,7 +369,10 @@ def main() -> None:
     rng = np.random.default_rng(cfg.get("seed"))
     plot_sample_rows = cfg.get("plot_sample_rows")
     stream_csv = bool(chunk_rows) and input_path.suffix == ".csv" and output_format == "csv"
-    chunk_manifest = input_path.with_suffix(".chunks.json")
+    if input_path.name.endswith(".chunks.json"):
+        chunk_manifest = input_path
+    else:
+        chunk_manifest = input_path.with_suffix(".chunks.json")
     stream_chunks = chunk_manifest.exists()
 
     print("\n-----\nStep 2 starting...\n-----")
@@ -350,6 +416,8 @@ def main() -> None:
     print(f"c_mm_per_ns: {c_mm_per_ns}")
     z_positions_cfg = cfg.get("z_positions")
     param_set_id, param_date = extract_param_set(upstream_meta)
+    param_row_id = extract_param_row_id(upstream_meta)
+    step_1_id = upstream_meta.get("step_1_id")
     param_mesh_path = None
     if z_positions_cfg is None:
         raise ValueError("config z_positions is required for Step 2.")
@@ -358,11 +426,45 @@ def main() -> None:
         if not mesh_dir.is_absolute():
             mesh_dir = Path(__file__).resolve().parent / mesh_dir
         mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed"))
-        param_row = select_param_row(mesh, rng, param_set_id)
+        mesh = mesh.copy()
+        mesh["done"] = mesh.get("done", 0).fillna(0).astype(int)
+        step_1_id_norm = None
+        if step_1_id is not None:
+            try:
+                step_1_id_norm = int(float(step_1_id))
+            except (TypeError, ValueError):
+                step_1_id_norm = None
+        if step_1_id_norm is not None and "step_1_id" in mesh.columns:
+            candidates = mesh[(mesh["step_1_id"].astype(int) == step_1_id_norm) & (mesh["done"] != 1)]
+        else:
+            candidates = mesh[mesh["done"] != 1]
+        if candidates.empty:
+            print("Skipping STEP_2: no available rows for this step_1_id.")
+            return
+        candidates = candidates.reset_index(drop=True)
+        if len(candidates) == 0:
+            print("Skipping STEP_2: no available rows for this step_1_id.")
+            return
+        start_idx = int(rng.integers(0, len(candidates)))
+        order = list(range(start_idx, len(candidates))) + list(range(0, start_idx))
+        param_row = None
+        for idx in order:
+            row = candidates.iloc[idx]
+            step_2_id_candidate = str(row.get("step_2_id")) if "step_2_id" in row.index else None
+            if not step_1_id or not step_2_id_candidate:
+                continue
+            sim_run_candidate = build_sim_run_name([step_1_id, step_2_id_candidate])
+            if not (output_dir / sim_run_candidate).exists():
+                param_row = row
+                break
+        if param_row is None:
+            print("Skipping STEP_2: all step_2_id combinations already exist.")
+            return
         if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
             param_set_id = int(param_row["param_set_id"])
         if "param_date" in param_row:
             param_date = str(param_row["param_date"])
+        param_row_id = int(param_row.name)
         param_mesh_path = mesh_path
         required_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
         if not all(col in param_row.index for col in required_cols):
@@ -385,9 +487,19 @@ def main() -> None:
             raise ValueError("z_positions must be 'random' or a 4-value list [z1, z2, z3, z4].")
     z_positions = normalize_positions(tuple(z_values), normalize)
     print(f"z_positions={z_positions.tolist()}")
+    step_2_id = str(param_row.get("step_2_id")) if param_row is not None and "step_2_id" in param_row.index else None
+    if not step_1_id or not step_2_id:
+        raise ValueError("step_1_id or step_2_id missing; ensure param_mesh.csv has step IDs.")
+    cfg["step_1_id"] = step_1_id
+    cfg["step_2_id"] = step_2_id
 
-    sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-        output_dir, "STEP_2", config_path, cfg, upstream_meta
+    sim_run = build_sim_run_name([step_1_id, step_2_id])
+    sim_run_dir = output_dir / sim_run
+    if not args.force and sim_run_dir.exists():
+        print(f"SIM_RUN {sim_run} already exists; skipping (use --force to regenerate).")
+        return
+    sim_run, sim_run_dir, config_hash, upstream_hash, _ = register_sim_run(
+        output_dir, "STEP_2", config_path, cfg, upstream_meta, sim_run
     )
     reset_dir(sim_run_dir)
     out_stem_base = "step_2"
@@ -405,6 +517,9 @@ def main() -> None:
         "z_positions_raw_mm": [float(v) for v in z_values],
         "param_set_id": param_set_id,
         "param_date": param_date,
+        "param_row_id": param_row_id,
+        "step_1_id": step_1_id,
+        "step_2_id": step_2_id,
         "param_mesh_path": str(param_mesh_path) if param_mesh_path else None,
         "upstream": upstream_meta,
     }

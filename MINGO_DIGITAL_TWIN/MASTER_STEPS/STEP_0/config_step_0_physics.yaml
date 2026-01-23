@@ -8,3 +8,8 @@ flux_cm2_min: [0.9, 1.1]
 ## Efficiencies
 efficiencies: [0.7, 1]
 efficiencies_identical: false
+
+# Optional: generate multiple rows per run, sharing selected columns.
+repeat_samples: 5
+shared_columns: [cos_n, flux_cm2_min]  # also supports efficiencies or z_positions
+expand_z_positions: true  # when true, use all z positions for each sampled row

@@ -651,9 +651,36 @@ base_directories = {
     "metadata_directory": metadata_directory,
 }
 
+create_plots = config["create_plots"]
+create_plots_task_4 = config.get("create_plots_task_4", False)
+if create_plots_task_4:
+    # Force plotting in Task 4 only, even if global flag is off.
+    create_plots = True
+    create_essential_plots = True
+    save_plots = True
+    create_pdf = True
+
+create_plots_task_4 = config.get("create_plots_task_4", False)
+create_plots_task_4_station_0 = config.get("create_plots_task_4_station_0", False)
+
+# Accessing all the variables from the configuration
+crontab_execution = config["crontab_execution"]
+create_plots = config["create_plots"]
+create_essential_plots = config["create_essential_plots"]
+save_plots = config["save_plots"]
+show_plots = config["show_plots"]
+create_pdf = config["create_pdf"]
 
 # Create ALL directories if they don't already exist
 save_plots = config["save_plots"]
+
+if station == "0" and create_plots_task_4_station_0:
+    print("Overriding global create_plots to True due to Task 4 setting for station 0.")
+    create_plots_task_4 = True
+    create_plots = True
+    create_essential_plots = True
+    save_plots = True
+    create_pdf = True
 
 for directory in base_directories.values():
     # If save_plots is False, skip creating the figure_directory
@@ -730,7 +757,6 @@ def get_file_path(directory, file_name):
 
 
 # Create ALL directories if they don't already exist
-save_plots = config["save_plots"]
 
 for directory in base_directories.values():
     # If save_plots is False, skip creating the figure_directory
@@ -1054,9 +1080,9 @@ KEY = "df"
 working_df = pd.read_parquet(file_path, engine="pyarrow")
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 print(f"Listed dataframe reloaded from: {file_path}")
-print("Columns loaded from parquet:")
-for col in working_df.columns:
-    print(f" - {col}")
+# print("Columns loaded from parquet:")
+# for col in working_df.columns:
+#     print(f" - {col}")
 # Backward compatibility: if old original_tt exists but raw_tt is missing, reuse it.
 if "raw_tt" not in working_df.columns and "original_tt" in working_df.columns:
     working_df = working_df.rename(columns={"original_tt": "raw_tt"})
@@ -1207,19 +1233,16 @@ debug_mode = config["debug_mode"]
 last_file_test = config["last_file_test"]
 alternative_fitting = config["alternative_fitting"]
 
-# Accessing all the variables from the configuration
-crontab_execution = config["crontab_execution"]
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
+
 
 # Allow Task 4 to force plotting even when global plotting is disabled.
 # This keeps other tasks fast while still generating Task 4 plots when desired.
-create_plots_task_4 = config.get("create_plots_task_4", False)
+
 if create_plots_task_4:
+    print("Overriding global create_plots to True due to Task 4 setting.")
     create_plots = True
+
+
 limit = config["limit"]
 limit_number = config["limit_number"]
 number_of_time_cal_figures = config["number_of_time_cal_figures"]
@@ -1286,7 +1309,6 @@ charge_front_back = config["charge_front_back"]
 charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
-create_plots = config["create_plots"]
 
 
 complete_reanalysis = config["complete_reanalysis"]
@@ -2009,11 +2031,7 @@ alternative_fitting = config["alternative_fitting"]
 
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
+
 limit = config["limit"]
 limit_number = config["limit_number"]
 number_of_time_cal_figures = config["number_of_time_cal_figures"]
@@ -2080,7 +2098,6 @@ charge_front_back = config["charge_front_back"]
 charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
-create_plots = config["create_plots"]
 
 
 
@@ -2352,7 +2369,6 @@ if fast_mode:
     timtrack_iteration = timtrack_iteration_fast
     time_calibration = time_calibration_fast
     charge_front_back = charge_front_back_fast
-    create_plots = create_plots_fast
     limit = limit_fast
     limit_number = limit_number_fast
 
@@ -2362,7 +2378,6 @@ if debug_mode:
     timtrack_iteration = timtrack_iteration_debug
     time_calibration = time_calibration_debug
     charge_front_back = charge_front_back_debug
-    create_plots = create_plots_debug
     limit = limit_debug
     limit_number = limit_number_debug
 
@@ -2567,7 +2582,11 @@ if exists_input_file:
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
-    matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
+    start_day = pd.to_datetime(start_time).normalize()
+    end_day = pd.to_datetime(end_time).normalize()
+    input_file["start_day"] = input_file["start"].dt.normalize()
+    input_file["end_day"] = input_file["end"].dt.normalize()
+    matching_confs = input_file[(input_file["start_day"] <= start_day) & (input_file["end_day"] >= end_day)]
     print(matching_confs)
     
     if not matching_confs.empty:
@@ -2579,18 +2598,39 @@ if exists_input_file:
         found_matching_conf = True
         print(selected_conf['conf'])
     else:
-        print("Error: No matching configuration found for the given date range. Using default z_positions.")
-        found_matching_conf = False
-        z_positions = np.array([0, 150, 300, 450])  # In mm
+        print("Warning: No matching configuration for the date range; selecting closest configuration.")
+        before = input_file[input_file["start_day"] <= end_day].sort_values("start_day", ascending=False)
+        if not before.empty:
+            selected_conf = before.iloc[0]
+        else:
+            selected_conf = input_file.sort_values("start", ascending=True).iloc[0]
+        print(f"Selected configuration: {selected_conf['conf']}")
+        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
+        found_matching_conf = True
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
 
 
-# If any of the z_positions is NaN, use default values
-if np.isnan(z_positions).any():
-    print("Error: Incomplete z_positions in the selected configuration. Using default z_positions.")
-    z_positions = np.array([0, 150, 300, 450])  # In mm
+def _zpos_from_conf(row):
+    return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
+
+# If any z_positions is NaN or all zeros, find the closest non-zero configuration.
+if np.isnan(z_positions).any() or np.all(z_positions == 0):
+    print("Warning: Invalid z_positions in selected configuration; searching for closest non-zero configuration.")
+    valid_rows = input_file.dropna(subset=["start"]).copy()
+    valid_rows["has_nonzero_z"] = valid_rows.apply(
+        lambda r: np.any(_zpos_from_conf(r) != 0), axis=1
+    )
+    valid_rows = valid_rows[valid_rows["has_nonzero_z"]]
+    if not valid_rows.empty:
+        valid_rows["delta"] = (valid_rows["start_day"] - start_day).abs()
+        selected_conf = valid_rows.sort_values("delta").iloc[0]
+        print(f"Selected non-zero configuration: {selected_conf['conf']}")
+        z_positions = _zpos_from_conf(selected_conf)
+    else:
+        print("Error: No non-zero z_positions available. Using default z_positions.")
+        z_positions = np.array([0, 150, 300, 450])  # In mm
 
 
 # Print the resulting z_positions
@@ -2684,11 +2724,8 @@ alternative_fitting = config["alternative_fitting"]
 
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
-create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
+
 limit = config["limit"]
 limit_number = config["limit_number"]
 number_of_time_cal_figures = config["number_of_time_cal_figures"]
@@ -2755,14 +2792,8 @@ charge_front_back = config["charge_front_back"]
 charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
-create_plots = config["create_plots"]
-create_plots_task_4 = config.get("create_plots_task_4", False)
-if create_plots_task_4:
-    # Force plotting in Task 4 only, even if global flag is off.
-    create_plots = True
-    create_essential_plots = True
-    save_plots = True
-    create_pdf = True
+
+
 
 limit = config["limit"]
 limit_fast = config["limit_fast"]
@@ -3032,7 +3063,6 @@ if fast_mode:
     timtrack_iteration = timtrack_iteration_fast
     time_calibration = time_calibration_fast
     charge_front_back = charge_front_back_fast
-    create_plots = create_plots_fast
     limit = limit_fast
     limit_number = limit_number_fast
 
@@ -3042,7 +3072,6 @@ if debug_mode:
     timtrack_iteration = timtrack_iteration_debug
     time_calibration = time_calibration_debug
     charge_front_back = charge_front_back_debug
-    create_plots = create_plots_debug
     limit = limit_debug
     limit_number = limit_number_debug
 

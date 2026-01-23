@@ -31,6 +31,8 @@ from STEP_SHARED.sim_utils import (
     load_step_configs,
     load_with_metadata,
     now_iso,
+    build_sim_run_name,
+    register_sim_run,
     resolve_param_mesh,
     resolve_sim_run,
     reset_dir,
@@ -378,17 +380,37 @@ def main() -> None:
     param_row = None
     param_set_id = None
     param_date = None
+    param_row_id = None
     param_mesh_path = None
     if is_random_value(cfg.get("flux_cm2_min")) or is_random_value(cfg.get("cos_n")):
         mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
         if not mesh_dir.is_absolute():
             mesh_dir = Path(__file__).resolve().parent / mesh_dir
         mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "latest"), cfg.get("seed"))
-        param_row = select_param_row(mesh, rng, cfg.get("param_set_id"))
+        mesh = mesh.copy()
+        mesh["done"] = mesh.get("done", 0).fillna(0).astype(int)
+        candidates = mesh[mesh["done"] != 1].reset_index(drop=True)
+        if candidates.empty:
+            raise ValueError("No available rows in param_mesh.csv (all done).")
+        start_idx = int(rng.integers(0, len(candidates)))
+        order = list(range(start_idx, len(candidates))) + list(range(0, start_idx))
+        param_row = None
+        for idx in order:
+            row = candidates.iloc[idx]
+            step_1_id_candidate = str(row.get("step_1_id")) if "step_1_id" in row.index else None
+            if not step_1_id_candidate:
+                continue
+            sim_run_candidate = build_sim_run_name([step_1_id_candidate])
+            if not (output_dir / sim_run_candidate).exists():
+                param_row = row
+                break
+        if param_row is None:
+            raise ValueError("All step_1_id combinations already exist.")
         if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
             param_set_id = int(param_row["param_set_id"])
         if "param_date" in param_row:
             param_date = str(param_row["param_date"])
+        param_row_id = int(param_row.name)
         param_mesh_path = mesh_path
 
     flux_cfg = cfg.get("flux_cm2_min")
@@ -418,6 +440,10 @@ def main() -> None:
     physics_cfg_run = dict(physics_cfg)
     physics_cfg_run["flux_cm2_min"] = flux_cm2_min
     physics_cfg_run["cos_n"] = cos_n
+    step_1_id = None
+    if param_row is not None and "step_1_id" in param_row.index:
+        step_1_id = str(param_row["step_1_id"])
+    physics_cfg_run["step_1_id"] = step_1_id
     if flux_candidates and len(flux_candidates) > 1:
         print(f"flux_cm2_min candidates: {len(flux_candidates)} (selected index {flux_idx})")
     if cos_candidates and len(cos_candidates) > 1:
@@ -440,13 +466,15 @@ def main() -> None:
         config_hash = None
         upstream_hash = None
     else:
-        if not args.force:
-            existing = find_sim_run(output_dir, physics_cfg_run, None)
-            if existing:
-                print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
-                return
-        sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-            output_dir, "STEP_1", config_path, physics_cfg_run, None
+        if not step_1_id:
+            raise ValueError("step_1_id is missing in param_mesh.csv.")
+        sim_run = build_sim_run_name([step_1_id])
+        sim_run_dir = output_dir / sim_run
+        if not args.force and sim_run_dir.exists():
+            print(f"SIM_RUN {sim_run} already exists; skipping (use --force to regenerate).")
+            return
+        sim_run, sim_run_dir, config_hash, upstream_hash, _ = register_sim_run(
+            output_dir, "STEP_1", config_path, physics_cfg_run, None, sim_run
         )
         reset_dir(sim_run_dir)
         output_path = sim_run_dir / output_name
@@ -560,6 +588,8 @@ def main() -> None:
             "upstream_hash": upstream_hash,
             "param_set_id": param_set_id,
             "param_date": param_date,
+            "param_row_id": param_row_id,
+            "step_1_id": step_1_id,
             "param_mesh_path": str(param_mesh_path) if param_mesh_path else None,
         }
         generated_rows = None

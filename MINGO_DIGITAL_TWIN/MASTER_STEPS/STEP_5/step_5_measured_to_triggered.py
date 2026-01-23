@@ -36,6 +36,10 @@ from STEP_SHARED.sim_utils import (
     load_step_configs,
     load_with_metadata,
     now_iso,
+    build_sim_run_name,
+    register_sim_run,
+    extract_step_id_chain,
+    select_next_step_id,
     resolve_sim_run,
     reset_dir,
     save_with_metadata,
@@ -322,15 +326,34 @@ def main() -> None:
     normalized_stem = normalize_stem(input_path)
     print(f"Processing: {input_path}")
     input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
-    if not args.force:
-        existing = find_sim_run(output_dir, physics_cfg, upstream_meta)
-        if existing:
-            print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
-            return
+    step_chain = extract_step_id_chain(upstream_meta)
+    if not step_chain:
+        raise ValueError("No step IDs found in upstream metadata.")
+    mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+    if not mesh_dir.is_absolute():
+        mesh_dir = Path(__file__).resolve().parent / mesh_dir
+    step_5_id = select_next_step_id(
+        output_dir,
+        mesh_dir,
+        cfg.get("param_mesh_sim_run", "none"),
+        "step_5_id",
+        step_chain,
+        cfg.get("seed"),
+        physics_cfg.get("step_5_id"),
+    )
+    if step_5_id is None:
+        print("Skipping STEP_5: all step_5_id combinations already exist.")
+        return
+    sim_run = build_sim_run_name(step_chain + [step_5_id])
+    sim_run_dir = output_dir / sim_run
+    if not args.force and sim_run_dir.exists():
+        print(f"SIM_RUN {sim_run} already exists; skipping (use --force to regenerate).")
+        return
     c_mm_per_ns = resolve_c_mm_per_ns(cfg, upstream_meta)
 
-    sim_run, sim_run_dir, config_hash, upstream_hash, _ = resolve_sim_run(
-        output_dir, "STEP_5", config_path, physics_cfg, upstream_meta
+    physics_cfg["step_5_id"] = step_5_id
+    sim_run, sim_run_dir, config_hash, upstream_hash, _ = register_sim_run(
+        output_dir, "STEP_5", config_path, physics_cfg, upstream_meta, sim_run
     )
     reset_dir(sim_run_dir)
 
@@ -346,6 +369,7 @@ def main() -> None:
         "upstream_hash": upstream_hash,
         "source_dataset": str(input_path),
         "upstream": upstream_meta,
+        "step_5_id": step_5_id,
     }
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:

@@ -67,7 +67,9 @@ while true; do
     all)
       start_time=$(date +%s)
       for step in $(seq 1 10); do
-        run_step "$step"
+        if ! run_step "$step"; then
+          echo "Step $step failed; continuing..." >&2
+        fi
       done
       end_time=$(date +%s)
       elapsed=$((end_time - start_time))
@@ -81,7 +83,9 @@ while true; do
       fi
       start_time=$(date +%s)
       for step in $(seq "$start_step" 10); do
-        run_step "$step"
+        if ! run_step "$step"; then
+          echo "Step $step failed; continuing..." >&2
+        fi
       done
       end_time=$(date +%s)
       elapsed=$((end_time - start_time))
