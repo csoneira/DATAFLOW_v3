@@ -308,12 +308,7 @@ def main() -> None:
         print(f"Saved {plot_path}")
         return
 
-    picked_random = False
-    if input_sim_run == "latest":
-        input_sim_run = latest_sim_run(input_dir)
-    elif input_sim_run == "random":
-        input_sim_run = random_sim_run(input_dir, cfg.get("seed"))
-        picked_random = True
+    input_sim_run_mode = input_sim_run
 
     def normalize_stem(path: Path) -> str:
         name = path.name
@@ -322,101 +317,137 @@ def main() -> None:
         stem = Path(name).stem
         return stem.replace(".chunks", "")
 
-    def collect_input_paths(run_dir: Path) -> list[Path]:
-        if "**" in input_glob:
-            input_paths = sorted(run_dir.rglob(input_glob.replace("**/", "")))
-        else:
-            input_paths = sorted(run_dir.glob(input_glob))
-        return input_paths
-
-    input_run_dir = input_dir / str(input_sim_run)
-    input_paths = collect_input_paths(input_run_dir)
-    if not input_paths and picked_random:
-        fallback_sim_run = latest_sim_run(input_dir)
-        if fallback_sim_run != input_sim_run:
-            print(
-                f"Warning: no inputs found in {input_run_dir}; "
-                f"falling back to latest SIM_RUN {fallback_sim_run}."
+    if "**" in input_glob:
+        candidates = sorted(input_dir.rglob(input_glob.replace("**/", "")))
+    else:
+        candidates = sorted(input_dir.rglob(input_glob))
+    if input_sim_run_mode not in ("latest", "random"):
+        input_run_dir = input_dir / str(input_sim_run_mode)
+        candidates = [path for path in candidates if input_run_dir in path.parents]
+        if not candidates:
+            raise FileNotFoundError(
+                f"No inputs found for {input_glob} under {input_run_dir}."
             )
-            input_sim_run = fallback_sim_run
-            input_run_dir = input_dir / str(input_sim_run)
-            input_paths = collect_input_paths(input_run_dir)
-    if len(input_paths) != 1:
-        raise FileNotFoundError(f"Expected 1 input, found {len(input_paths)}.")
+    if not candidates:
+        raise FileNotFoundError(f"No inputs found for {input_glob} under {input_dir}.")
 
-    input_path = input_paths[0]
-    print(f"Processing: {input_path}")
-    input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
-    param_set_id, param_date = extract_param_set(upstream_meta)
-    param_row_id = extract_param_row_id(upstream_meta)
-    step_1_id = upstream_meta.get("step_1_id")
-    step_2_id = upstream_meta.get("step_2_id")
+    if input_sim_run_mode == "latest":
+        candidates = sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
+    elif input_sim_run_mode == "random":
+        rng.shuffle(candidates)
+
+    input_iter = None
+    upstream_meta = None
+    chunked_input = False
+    input_path = None
+    param_row = None
     param_mesh_path = None
+    param_set_id = None
+    param_date = None
+    param_row_id = None
+    step_1_id = None
+    step_2_id = None
     eff_idx = None
     efficiency_vectors = None
-    if is_random_value(cfg.get("efficiencies")):
+    efficiencies = None
+    mesh = None
+    mesh_path = None
+    random_eff = is_random_value(cfg.get("efficiencies"))
+    if random_eff:
         mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
         if not mesh_dir.is_absolute():
             mesh_dir = Path(__file__).resolve().parent / mesh_dir
         mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "latest"), cfg.get("seed"))
         mesh = mesh.copy()
         mesh["done"] = mesh.get("done", 0).fillna(0).astype(int)
-        step_1_id_norm = None
-        step_2_id_norm = None
-        if step_1_id is not None:
-            try:
-                step_1_id_norm = int(float(step_1_id))
-            except (TypeError, ValueError):
-                step_1_id_norm = None
-        if step_2_id is not None:
-            try:
-                step_2_id_norm = int(float(step_2_id))
-            except (TypeError, ValueError):
-                step_2_id_norm = None
-        if step_1_id_norm is not None and step_2_id_norm is not None and "step_1_id" in mesh.columns and "step_2_id" in mesh.columns:
-            candidates = mesh[
-                (mesh["step_1_id"].astype(int) == step_1_id_norm)
-                & (mesh["step_2_id"].astype(int) == step_2_id_norm)
-                & (mesh["done"] != 1)
-            ]
-        else:
-            candidates = mesh[mesh["done"] != 1]
-        if candidates.empty:
-            print("Skipping STEP_3: no available rows for this step_1_id/step_2_id.")
-            return
-        candidates = candidates.reset_index(drop=True)
-        if len(candidates) == 0:
-            print("Skipping STEP_3: no available rows for this step_1_id/step_2_id.")
-            return
-        start_idx = int(rng.integers(0, len(candidates)))
-        order = list(range(start_idx, len(candidates))) + list(range(0, start_idx))
-        param_row = None
-        for idx in order:
-            row = candidates.iloc[idx]
-            step_3_id_candidate = str(row.get("step_3_id")) if "step_3_id" in row.index else None
-            if not step_1_id or not step_2_id or not step_3_id_candidate:
-                continue
-            sim_run_candidate = build_sim_run_name([step_1_id, step_2_id, step_3_id_candidate])
-            if not (output_dir / sim_run_candidate).exists():
-                param_row = row
-                break
-        if param_row is None:
-            print("Skipping STEP_3: all step_3_id combinations already exist.")
-            return
-        if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
-            param_set_id = int(param_row["param_set_id"])
-        if "param_date" in param_row:
-            param_date = str(param_row["param_date"])
-        param_row_id = int(param_row.name)
-        param_mesh_path = mesh_path
-        required = ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
-        if not all(col in param_row.index for col in required):
-            raise ValueError("param_mesh.csv is missing eff_p1..eff_p4 required for efficiencies.")
-        efficiencies = [float(param_row[col]) for col in required]
     else:
         efficiency_vectors = normalize_efficiency_vectors(cfg.get("efficiencies"))
         eff_idx = int(rng.integers(0, len(efficiency_vectors)))
         efficiencies = efficiency_vectors[eff_idx]
+
+    for candidate in candidates:
+        candidate_iter, candidate_meta, candidate_chunked = iter_input_frames(candidate, chunk_rows)
+        candidate_param_set_id, candidate_param_date = extract_param_set(candidate_meta)
+        candidate_param_row_id = extract_param_row_id(candidate_meta)
+        candidate_step_1_id = candidate_meta.get("step_1_id")
+        candidate_step_2_id = candidate_meta.get("step_2_id")
+        candidate_param_row = None
+        candidate_param_mesh_path = None
+        candidate_efficiencies = efficiencies
+        if random_eff:
+            step_1_id_norm = None
+            step_2_id_norm = None
+            if candidate_step_1_id is not None:
+                try:
+                    step_1_id_norm = int(float(candidate_step_1_id))
+                except (TypeError, ValueError):
+                    step_1_id_norm = None
+            if candidate_step_2_id is not None:
+                try:
+                    step_2_id_norm = int(float(candidate_step_2_id))
+                except (TypeError, ValueError):
+                    step_2_id_norm = None
+            if (
+                step_1_id_norm is not None
+                and step_2_id_norm is not None
+                and "step_1_id" in mesh.columns
+                and "step_2_id" in mesh.columns
+            ):
+                mesh_candidates = mesh[
+                    (mesh["step_1_id"].astype(int) == step_1_id_norm)
+                    & (mesh["step_2_id"].astype(int) == step_2_id_norm)
+                    & (mesh["done"] != 1)
+                ]
+            else:
+                mesh_candidates = mesh[mesh["done"] != 1]
+            if mesh_candidates.empty:
+                continue
+            mesh_candidates = mesh_candidates.reset_index(drop=True)
+            start_idx = int(rng.integers(0, len(mesh_candidates)))
+            order = list(range(start_idx, len(mesh_candidates))) + list(range(0, start_idx))
+            for idx in order:
+                row = mesh_candidates.iloc[idx]
+                step_3_id_candidate = str(row.get("step_3_id")) if "step_3_id" in row.index else None
+                if not candidate_step_1_id or not candidate_step_2_id or not step_3_id_candidate:
+                    continue
+                sim_run_candidate = build_sim_run_name(
+                    [candidate_step_1_id, candidate_step_2_id, step_3_id_candidate]
+                )
+                if not (output_dir / sim_run_candidate).exists():
+                    candidate_param_row = row
+                    break
+            if candidate_param_row is None:
+                continue
+            if "param_set_id" in candidate_param_row.index and pd.notna(candidate_param_row["param_set_id"]):
+                candidate_param_set_id = int(candidate_param_row["param_set_id"])
+            if "param_date" in candidate_param_row:
+                candidate_param_date = str(candidate_param_row["param_date"])
+            candidate_param_row_id = int(candidate_param_row.name)
+            candidate_param_mesh_path = mesh_path
+            required = ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
+            if not all(col in candidate_param_row.index for col in required):
+                raise ValueError("param_mesh.csv is missing eff_p1..eff_p4 required for efficiencies.")
+            candidate_efficiencies = [float(candidate_param_row[col]) for col in required]
+
+        input_path = candidate
+        input_iter = candidate_iter
+        upstream_meta = candidate_meta
+        chunked_input = candidate_chunked
+        param_set_id = candidate_param_set_id
+        param_date = candidate_param_date
+        param_row_id = candidate_param_row_id
+        step_1_id = candidate_step_1_id
+        step_2_id = candidate_step_2_id
+        param_row = candidate_param_row
+        param_mesh_path = candidate_param_mesh_path
+        efficiencies = candidate_efficiencies
+        break
+
+    if input_path is None or upstream_meta is None:
+        print("Skipping STEP_3: all step_3_id combinations already exist.")
+        return
+
+    print(f"Processing: {input_path}")
 
     physics_cfg_run = dict(physics_cfg)
     physics_cfg_run["efficiencies"] = efficiencies

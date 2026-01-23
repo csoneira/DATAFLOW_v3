@@ -319,16 +319,18 @@ def main() -> None:
         print(f"Saved {plot_path}")
         return
 
-    if input_sim_run == "latest":
-        input_sim_run = latest_sim_run(input_dir)
-    elif input_sim_run == "random":
-        input_sim_run = random_sim_run(input_dir, cfg.get("seed"))
-
-    input_run_dir = input_dir / str(input_sim_run)
+    input_sim_run_mode = input_sim_run
     if "**" in input_glob:
-        input_paths = sorted(input_run_dir.rglob(input_glob.replace("**/", "")))
+        candidates = sorted(input_dir.rglob(input_glob.replace("**/", "")))
     else:
-        input_paths = sorted(input_run_dir.glob(input_glob))
+        candidates = sorted(input_dir.rglob(input_glob))
+    if input_sim_run_mode not in ("latest", "random"):
+        input_run_dir = input_dir / str(input_sim_run_mode)
+        candidates = [path for path in candidates if input_run_dir in path.parents]
+        if not candidates:
+            raise FileNotFoundError(
+                f"No inputs found for {input_glob} under {input_run_dir}."
+            )
     def normalize_stem(path: Path) -> str:
         name = path.name
         if name.endswith(".chunks.json"):
@@ -336,31 +338,54 @@ def main() -> None:
         stem = Path(name).stem
         return stem.replace(".chunks", "")
 
-    if len(input_paths) != 1:
-        raise FileNotFoundError(f"Expected 1 input, found {len(input_paths)}.")
+    if not candidates:
+        raise FileNotFoundError(f"No inputs found for {input_glob} under {input_dir}.")
 
-    input_path = input_paths[0]
-    normalized_stem = normalize_stem(input_path)
-    print(f"Processing: {input_path}")
-    input_iter, upstream_meta, chunked_input = iter_input_frames(input_path, chunk_rows)
-    step_chain = extract_step_id_chain(upstream_meta)
-    if not step_chain:
-        raise ValueError("No step IDs found in upstream metadata.")
+    if input_sim_run_mode == "latest":
+        candidates = sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
+    elif input_sim_run_mode == "random":
+        rng.shuffle(candidates)
+
+    input_iter = None
+    upstream_meta = None
+    chunked_input = False
+    step_chain = None
+    step_8_id = None
+    input_path = None
     mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
     if not mesh_dir.is_absolute():
         mesh_dir = Path(__file__).resolve().parent / mesh_dir
-    step_8_id = select_next_step_id(
-        output_dir,
-        mesh_dir,
-        cfg.get("param_mesh_sim_run", "none"),
-        "step_8_id",
-        step_chain,
-        cfg.get("seed"),
-        physics_cfg.get("step_8_id"),
-    )
-    if step_8_id is None:
+
+    for candidate in candidates:
+        candidate_iter, candidate_meta, candidate_chunked = iter_input_frames(candidate, chunk_rows)
+        candidate_chain = extract_step_id_chain(candidate_meta)
+        if not candidate_chain:
+            continue
+        candidate_step_8_id = select_next_step_id(
+            output_dir,
+            mesh_dir,
+            cfg.get("param_mesh_sim_run", "none"),
+            "step_8_id",
+            candidate_chain,
+            cfg.get("seed"),
+            physics_cfg.get("step_8_id"),
+        )
+        if candidate_step_8_id is None:
+            continue
+        input_path = candidate
+        input_iter = candidate_iter
+        upstream_meta = candidate_meta
+        chunked_input = candidate_chunked
+        step_chain = candidate_chain
+        step_8_id = candidate_step_8_id
+        break
+
+    if input_path is None or input_iter is None or upstream_meta is None or step_chain is None or step_8_id is None:
         print("Skipping STEP_8: all step_8_id combinations already exist.")
         return
+
+    normalized_stem = normalize_stem(input_path)
+    print(f"Processing: {input_path}")
     sim_run = build_sim_run_name(step_chain + [step_8_id])
     sim_run_dir = output_dir / sim_run
     if not args.force and sim_run_dir.exists():

@@ -368,16 +368,16 @@ def main() -> None:
 
     if mesh_path.exists() and not args.force:
         mesh = pd.read_csv(mesh_path)
-        total_pct, total_dirs, total_expected_dirs = _total_generation_pct(output_dir.parent, mesh)
-        should_skip = False
-        if total_expected_dirs == 0 and not mesh.empty:
-            should_skip = True
-        elif total_expected_dirs and total_dirs < total_expected_dirs:
-            should_skip = True
-        if should_skip:
+        if "done" not in mesh.columns:
+            mesh["done"] = 0
+        done_series = mesh["done"].fillna(0).astype(int)
+        total_rows = len(mesh)
+        done_rows = int((done_series == 1).sum())
+        if total_rows > 0 and done_rows < total_rows:
+            done_pct = done_rows / total_rows * 100.0
             print(
-                "Skipping append: total completion "
-                f"{total_pct:.1f}% ({total_dirs}/{total_expected_dirs} dirs) is below 100%."
+                "Skipping append: mesh completion "
+                f"{done_pct:.1f}% ({done_rows}/{total_rows} rows done) is below 100%."
             )
             return
 

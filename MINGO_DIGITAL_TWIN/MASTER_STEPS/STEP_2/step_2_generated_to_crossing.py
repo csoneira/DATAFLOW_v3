@@ -296,66 +296,65 @@ def main() -> None:
         return
 
     input_path_cfg = cfg.get("input_muon_sample")
+    input_candidates = []
+    input_sim_run_mode = None
     if input_path_cfg:
         input_path = Path(input_path_cfg).expanduser()
         if not input_path.is_absolute():
             input_path = Path(__file__).resolve().parent / input_path
+        input_candidates = [(input_path, None)]
     else:
         input_dir = Path(cfg["input_dir"])
         if not input_dir.is_absolute():
             input_dir = Path(__file__).resolve().parent / input_dir
-        input_sim_run = cfg.get("input_sim_run", "latest")
-    if input_sim_run == "latest":
-        input_sim_run = latest_sim_run(input_dir)
-    elif input_sim_run == "random":
-        mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
-        if not mesh_dir.is_absolute():
-            mesh_dir = Path(__file__).resolve().parent / mesh_dir
-        try:
-            mesh, _ = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed"))
-        except FileNotFoundError:
-            mesh = None
-        fully_done_step1 = set()
-        if mesh is not None:
-            tmp = mesh.copy()
-            tmp["done"] = tmp.get("done", 0).fillna(0).astype(int)
-            if "step_1_id" not in tmp.columns:
-                tmp["step_1_id"] = 1
-            grouped = tmp.groupby("step_1_id")["done"].apply(lambda s: (s == 1).all())
-            fully_done_step1 = set(int(val) for val in grouped[grouped].index.tolist())
+        input_sim_run_mode = cfg.get("input_sim_run", "latest")
         input_basename = cfg.get("input_basename")
         sim_run_dirs = sorted(input_dir.glob("SIM_RUN_*"))
         if not sim_run_dirs:
             raise FileNotFoundError(f"No SIM_RUN_* directories found in {input_dir}.")
-        rng = np.random.default_rng(cfg.get("seed"))
-        rng.shuffle(sim_run_dirs)
-        input_path = None
-        input_sim_run = None
+        if input_sim_run_mode == "latest":
+            sim_run_dirs = sorted(sim_run_dirs, key=lambda path: path.stat().st_mtime, reverse=True)
+        elif input_sim_run_mode == "random":
+            mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+            if not mesh_dir.is_absolute():
+                mesh_dir = Path(__file__).resolve().parent / mesh_dir
+            try:
+                mesh, _ = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed"))
+            except FileNotFoundError:
+                mesh = None
+            fully_done_step1 = set()
+            if mesh is not None:
+                tmp = mesh.copy()
+                tmp["done"] = tmp.get("done", 0).fillna(0).astype(int)
+                if "step_1_id" not in tmp.columns:
+                    tmp["step_1_id"] = 1
+                grouped = tmp.groupby("step_1_id")["done"].apply(lambda s: (s == 1).all())
+                fully_done_step1 = set(int(val) for val in grouped[grouped].index.tolist())
+            rng = np.random.default_rng(cfg.get("seed"))
+            rng.shuffle(sim_run_dirs)
+        else:
+            sim_run_dirs = [input_dir / str(input_sim_run_mode)]
         for sim_run_dir in sim_run_dirs:
             try:
                 candidate_path = _resolve_input_path(sim_run_dir, input_basename)
             except FileNotFoundError:
                 continue
-            meta = _load_input_meta(candidate_path)
-            if not meta:
-                continue
-            step1_id = meta.get("step_1_id")
-            try:
-                step1_id_norm = int(float(step1_id))
-            except (TypeError, ValueError):
-                step1_id_norm = None
-            if step1_id_norm is not None and step1_id_norm in fully_done_step1:
-                continue
-            input_path = candidate_path
-            input_sim_run = sim_run_dir.name
-            break
-        if input_path is None:
-            raise ValueError("No available input SIM_RUNs with param_row_id not marked done.")
-        print(f"Selected input SIM_RUN: {input_sim_run}")
-    if input_sim_run is not None and input_sim_run != "random":
-        input_run_dir = input_dir / str(input_sim_run)
-        input_basename = cfg.get("input_basename")
-        input_path = _resolve_input_path(input_run_dir, input_basename)
+            if input_sim_run_mode == "random":
+                meta = _load_input_meta(candidate_path)
+                if not meta:
+                    continue
+                step1_id = meta.get("step_1_id")
+                try:
+                    step1_id_norm = int(float(step1_id))
+                except (TypeError, ValueError):
+                    step1_id_norm = None
+                if step1_id_norm is not None and step1_id_norm in fully_done_step1:
+                    continue
+            input_candidates.append((candidate_path, sim_run_dir.name))
+        if not input_candidates:
+            if input_sim_run_mode == "random":
+                raise ValueError("No available input SIM_RUNs with param_row_id not marked done.")
+            raise FileNotFoundError(f"No inputs found under {input_dir}.")
     bounds_cfg = cfg.get("bounds_mm", {})
     bounds = DetectorBounds(
         x_min=float(bounds_cfg.get("x_min", DEFAULT_BOUNDS.x_min)),
@@ -368,15 +367,7 @@ def main() -> None:
     chunk_rows = cfg.get("chunk_rows")
     rng = np.random.default_rng(cfg.get("seed"))
     plot_sample_rows = cfg.get("plot_sample_rows")
-    stream_csv = bool(chunk_rows) and input_path.suffix == ".csv" and output_format == "csv"
-    if input_path.name.endswith(".chunks.json"):
-        chunk_manifest = input_path
-    else:
-        chunk_manifest = input_path.with_suffix(".chunks.json")
-    stream_chunks = chunk_manifest.exists()
-
     print("\n-----\nStep 2 starting...\n-----")
-    print(f"Input: {input_path}")
     print(f"Output dir: {output_dir}")
     if args.plot_only:
         if args.no_plots:
@@ -399,99 +390,141 @@ def main() -> None:
         print(f"Saved {plot_path}")
         return
 
-    if stream_csv:
-        meta_path = input_path.with_suffix(input_path.suffix + ".meta.json")
-        upstream_meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-    elif stream_chunks:
-        manifest = json.loads(chunk_manifest.read_text())
-        upstream_meta = manifest.get("metadata", {})
-    else:
-        muon_df, upstream_meta = load_with_metadata(input_path)
-    if not args.force:
-        existing = find_sim_run(output_dir, physics_cfg, upstream_meta)
-        if existing:
-            print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
-            return
-    c_mm_per_ns = float(cfg.get("c_mm_per_ns", upstream_meta.get("config", {}).get("c_mm_per_ns", 299.792458)))
-    print(f"c_mm_per_ns: {c_mm_per_ns}")
-    z_positions_cfg = cfg.get("z_positions")
-    param_set_id, param_date = extract_param_set(upstream_meta)
-    param_row_id = extract_param_row_id(upstream_meta)
-    step_1_id = upstream_meta.get("step_1_id")
+    input_path = None
+    upstream_meta = None
+    manifest = None
+    muon_df = None
+    stream_csv = False
+    stream_chunks = False
+    chunk_manifest = None
+    c_mm_per_ns = None
+    param_row = None
     param_mesh_path = None
-    if z_positions_cfg is None:
-        raise ValueError("config z_positions is required for Step 2.")
-    if isinstance(z_positions_cfg, str) and z_positions_cfg.lower() == "random":
-        mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
-        if not mesh_dir.is_absolute():
-            mesh_dir = Path(__file__).resolve().parent / mesh_dir
-        mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed"))
-        mesh = mesh.copy()
-        mesh["done"] = mesh.get("done", 0).fillna(0).astype(int)
-        step_1_id_norm = None
-        if step_1_id is not None:
-            try:
-                step_1_id_norm = int(float(step_1_id))
-            except (TypeError, ValueError):
-                step_1_id_norm = None
-        if step_1_id_norm is not None and "step_1_id" in mesh.columns:
-            candidates = mesh[(mesh["step_1_id"].astype(int) == step_1_id_norm) & (mesh["done"] != 1)]
+    param_set_id = None
+    param_date = None
+    param_row_id = None
+    step_1_id = None
+    z_values = None
+
+    for candidate_path, candidate_sim_run in input_candidates:
+        stream_csv = bool(chunk_rows) and candidate_path.suffix == ".csv" and output_format == "csv"
+        if candidate_path.name.endswith(".chunks.json"):
+            chunk_manifest = candidate_path
         else:
-            candidates = mesh[mesh["done"] != 1]
-        if candidates.empty:
-            print("Skipping STEP_2: no available rows for this step_1_id.")
-            return
-        candidates = candidates.reset_index(drop=True)
-        if len(candidates) == 0:
-            print("Skipping STEP_2: no available rows for this step_1_id.")
-            return
-        start_idx = int(rng.integers(0, len(candidates)))
-        order = list(range(start_idx, len(candidates))) + list(range(0, start_idx))
+            chunk_manifest = candidate_path.with_suffix(".chunks.json")
+        stream_chunks = chunk_manifest.exists()
+
+        if stream_csv:
+            meta_path = candidate_path.with_suffix(candidate_path.suffix + ".meta.json")
+            upstream_meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+            manifest = None
+            muon_df = None
+        elif stream_chunks:
+            manifest = json.loads(chunk_manifest.read_text())
+            upstream_meta = manifest.get("metadata", {})
+            muon_df = None
+        else:
+            muon_df, upstream_meta = load_with_metadata(candidate_path)
+            manifest = None
+
+        if not args.force:
+            existing = find_sim_run(output_dir, physics_cfg, upstream_meta)
+            if existing:
+                if len(input_candidates) > 1:
+                    continue
+                print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
+                return
+
+        c_mm_per_ns = float(
+            cfg.get("c_mm_per_ns", upstream_meta.get("config", {}).get("c_mm_per_ns", 299.792458))
+        )
+        z_positions_cfg = cfg.get("z_positions")
+        param_set_id, param_date = extract_param_set(upstream_meta)
+        param_row_id = extract_param_row_id(upstream_meta)
+        step_1_id = upstream_meta.get("step_1_id")
+        param_mesh_path = None
         param_row = None
-        for idx in order:
-            row = candidates.iloc[idx]
-            step_2_id_candidate = str(row.get("step_2_id")) if "step_2_id" in row.index else None
-            if not step_1_id or not step_2_id_candidate:
+        if z_positions_cfg is None:
+            raise ValueError("config z_positions is required for Step 2.")
+        if isinstance(z_positions_cfg, str) and z_positions_cfg.lower() == "random":
+            mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+            if not mesh_dir.is_absolute():
+                mesh_dir = Path(__file__).resolve().parent / mesh_dir
+            mesh, mesh_path = resolve_param_mesh(
+                mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed")
+            )
+            mesh = mesh.copy()
+            mesh["done"] = mesh.get("done", 0).fillna(0).astype(int)
+            step_1_id_norm = None
+            if step_1_id is not None:
+                try:
+                    step_1_id_norm = int(float(step_1_id))
+                except (TypeError, ValueError):
+                    step_1_id_norm = None
+            if step_1_id_norm is not None and "step_1_id" in mesh.columns:
+                mesh_candidates = mesh[
+                    (mesh["step_1_id"].astype(int) == step_1_id_norm) & (mesh["done"] != 1)
+                ]
+            else:
+                mesh_candidates = mesh[mesh["done"] != 1]
+            if mesh_candidates.empty:
                 continue
-            sim_run_candidate = build_sim_run_name([step_1_id, step_2_id_candidate])
-            if not (output_dir / sim_run_candidate).exists():
-                param_row = row
-                break
-        if param_row is None:
-            print("Skipping STEP_2: all step_2_id combinations already exist.")
-            return
-        if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
-            param_set_id = int(param_row["param_set_id"])
-        if "param_date" in param_row:
-            param_date = str(param_row["param_date"])
-        param_row_id = int(param_row.name)
-        param_mesh_path = mesh_path
-        required_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
-        if not all(col in param_row.index for col in required_cols):
-            raise ValueError("param_mesh.csv is missing z_p1..z_p4 required for geometry selection.")
-        z_values = [float(param_row[col]) for col in required_cols]
-        physics_cfg["z_positions"] = z_values
-        cfg["z_positions"] = z_values
-        print(f"Selected z_positions from mesh (param_set_id={param_set_id})")
-    else:
-        if (
-            isinstance(z_positions_cfg, (list, tuple))
-            and len(z_positions_cfg) == 4
-        ):
-            z_values = [float(v) for v in z_positions_cfg]
+            mesh_candidates = mesh_candidates.reset_index(drop=True)
+            start_idx = int(rng.integers(0, len(mesh_candidates)))
+            order = list(range(start_idx, len(mesh_candidates))) + list(range(0, start_idx))
+            for idx in order:
+                row = mesh_candidates.iloc[idx]
+                step_2_id_candidate = str(row.get("step_2_id")) if "step_2_id" in row.index else None
+                if not step_1_id or not step_2_id_candidate:
+                    continue
+                sim_run_candidate = build_sim_run_name([step_1_id, step_2_id_candidate])
+                if not (output_dir / sim_run_candidate).exists():
+                    param_row = row
+                    break
+            if param_row is None:
+                continue
+            if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
+                param_set_id = int(param_row["param_set_id"])
+            if "param_date" in param_row:
+                param_date = str(param_row["param_date"])
+            param_row_id = int(param_row.name)
+            param_mesh_path = mesh_path
+            required_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
+            if not all(col in param_row.index for col in required_cols):
+                raise ValueError("param_mesh.csv is missing z_p1..z_p4 required for geometry selection.")
+            z_values = [float(param_row[col]) for col in required_cols]
             physics_cfg["z_positions"] = z_values
             cfg["z_positions"] = z_values
-            param_set_id = None
-            param_date = None
+            print(f"Selected z_positions from mesh (param_set_id={param_set_id})")
         else:
-            raise ValueError("z_positions must be 'random' or a 4-value list [z1, z2, z3, z4].")
+            if isinstance(z_positions_cfg, (list, tuple)) and len(z_positions_cfg) == 4:
+                z_values = [float(v) for v in z_positions_cfg]
+                physics_cfg["z_positions"] = z_values
+                cfg["z_positions"] = z_values
+                param_set_id = None
+                param_date = None
+            else:
+                raise ValueError("z_positions must be 'random' or a 4-value list [z1, z2, z3, z4].")
+
+        step_2_id = str(param_row.get("step_2_id")) if param_row is not None and "step_2_id" in param_row.index else None
+        if not step_1_id or not step_2_id:
+            raise ValueError("step_1_id or step_2_id missing; ensure param_mesh.csv has step IDs.")
+        cfg["step_1_id"] = step_1_id
+        cfg["step_2_id"] = step_2_id
+
+        input_path = candidate_path
+        if input_sim_run_mode == "random" and candidate_sim_run:
+            print(f"Selected input SIM_RUN: {candidate_sim_run}")
+        break
+
+    if input_path is None:
+        print("Skipping STEP_2: all step_2_id combinations already exist.")
+        return
+
+    print(f"Input: {input_path}")
+    print(f"c_mm_per_ns: {c_mm_per_ns}")
     z_positions = normalize_positions(tuple(z_values), normalize)
     print(f"z_positions={z_positions.tolist()}")
-    step_2_id = str(param_row.get("step_2_id")) if param_row is not None and "step_2_id" in param_row.index else None
-    if not step_1_id or not step_2_id:
-        raise ValueError("step_1_id or step_2_id missing; ensure param_mesh.csv has step IDs.")
-    cfg["step_1_id"] = step_1_id
-    cfg["step_2_id"] = step_2_id
 
     sim_run = build_sim_run_name([step_1_id, step_2_id])
     sim_run_dir = output_dir / sim_run

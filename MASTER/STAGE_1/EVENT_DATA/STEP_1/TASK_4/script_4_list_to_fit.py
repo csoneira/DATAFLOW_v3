@@ -400,6 +400,23 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
 
 
 # Time series + histogram helper ------------------------------------------------
+def _safe_hist_params(series, max_bins=50):
+    """Return (bins, range) for hist; avoid zero-range/invalid bins."""
+    finite_series = series[np.isfinite(series)]
+    if finite_series.empty:
+        return None, None
+    vmin = finite_series.min()
+    vmax = finite_series.max()
+    if not np.isfinite(vmin) or not np.isfinite(vmax):
+        return None, None
+    if vmin == vmax:
+        pad = 0.5 if vmin == 0 else 0.05 * abs(vmin)
+        return 1, (vmin - pad, vmax + pad)
+    unique_count = int(finite_series.nunique())
+    bins = int(min(max_bins, max(1, unique_count)))
+    return bins, (vmin, vmax)
+
+
 def plot_ts_with_side_hist(df, columns, time_col, title, width_ratios=(3, 1)):
     """Plot time series with side histograms for each column."""
     global fig_idx
@@ -420,6 +437,7 @@ def plot_ts_with_side_hist(df, columns, time_col, title, width_ratios=(3, 1)):
             hist_ax.set_visible(False)
             continue
         series = df[col].dropna()
+        series = series[np.isfinite(series)]
         if series.empty:
             ts_ax.set_visible(False)
             hist_ax.set_visible(False)
@@ -427,7 +445,18 @@ def plot_ts_with_side_hist(df, columns, time_col, title, width_ratios=(3, 1)):
         ts_ax.plot(df[time_col], df[col], ".", ms=1, alpha=0.8)
         ts_ax.set_ylabel(col)
         ts_ax.grid(True, alpha=0.3)
-        hist_ax.hist(series, bins=50, orientation="horizontal", color="C1", alpha=0.8)
+        bins, hist_range = _safe_hist_params(series, max_bins=50)
+        if bins is None:
+            hist_ax.set_visible(False)
+            continue
+        hist_ax.hist(
+            series,
+            bins=bins,
+            range=hist_range,
+            orientation="horizontal",
+            color="C1",
+            alpha=0.8,
+        )
         # Let each histogram choose its own x-limits so peaks don't compress other panels
         hist_ax.set_autoscale_on(True)
         hist_ax.autoscale_view()
@@ -490,8 +519,28 @@ def plot_residuals_ts_hist(df, prefixes, time_col, title):
                 ts_ax.set_ylabel(f"P{plane}")
             ts_ax.grid(True, alpha=0.3)
             ts_ax.legend(fontsize="x-small")
-            hist_ax.hist(sub[col_ext], bins=50, orientation="horizontal", alpha=0.5, label=f"{label}_ext")
-            hist_ax.hist(sub[col_usual], bins=50, orientation="horizontal", alpha=0.8, label=f"{label}")
+            ext_series = sub[col_ext][np.isfinite(sub[col_ext])]
+            usual_series = sub[col_usual][np.isfinite(sub[col_usual])]
+            ext_bins, ext_range = _safe_hist_params(ext_series, max_bins=50)
+            usual_bins, usual_range = _safe_hist_params(usual_series, max_bins=50)
+            if ext_bins is not None:
+                hist_ax.hist(
+                    ext_series,
+                    bins=ext_bins,
+                    range=ext_range,
+                    orientation="horizontal",
+                    alpha=0.5,
+                    label=f"{label}_ext",
+                )
+            if usual_bins is not None:
+                hist_ax.hist(
+                    usual_series,
+                    bins=usual_bins,
+                    range=usual_range,
+                    orientation="horizontal",
+                    alpha=0.8,
+                    label=f"{label}",
+                )
             hist_ax.set_xlabel("count")
             hist_ax.grid(True, alpha=0.2)
     axes[-1, 0].set_xlabel(time_col)
@@ -4224,24 +4273,45 @@ def plot_ts_err_with_hist(df, base_cols, time_col, title):
                 ax.set_visible(False)
             continue
         series = df[col].dropna()
+        series = series[np.isfinite(series)]
         if series.empty:
             for ax in (ts_ax, hist_ax, ts_err_ax, hist_err_ax):
                 ax.set_visible(False)
             continue
         err_col = f"{col}_err"
         err_series = df[err_col].dropna() if err_col in df.columns else None
+        if err_series is not None:
+            err_series = err_series[np.isfinite(err_series)]
         yerr = err_series.abs() if err_series is not None else None
         ts_ax.errorbar(df[time_col], df[col], yerr=yerr, fmt=".", ms=1, alpha=0.85)
         ts_ax.set_ylabel(col)
         ts_ax.grid(True, alpha=0.3)
-        hist_ax.hist(series, bins=50, orientation="horizontal", color="C2", alpha=0.8)
+        bins, hist_range = _safe_hist_params(series, max_bins=50)
+        if bins is not None:
+            hist_ax.hist(
+                series,
+                bins=bins,
+                range=hist_range,
+                orientation="horizontal",
+                color="C2",
+                alpha=0.8,
+            )
         hist_ax.set_xlabel("count")
         hist_ax.grid(True, alpha=0.2)
         if err_series is not None and not err_series.empty:
             ts_err_ax.plot(df[time_col], err_series, ".", ms=1, alpha=0.8, label=f"{col}_err")
             ts_err_ax.grid(True, alpha=0.3)
             ts_err_ax.legend(fontsize="x-small")
-            hist_err_ax.hist(err_series, bins=50, orientation="horizontal", color="C4", alpha=0.7)
+            err_bins, err_range = _safe_hist_params(err_series, max_bins=50)
+            if err_bins is not None:
+                hist_err_ax.hist(
+                    err_series,
+                    bins=err_bins,
+                    range=err_range,
+                    orientation="horizontal",
+                    color="C4",
+                    alpha=0.7,
+                )
             hist_err_ax.set_autoscale_on(True)
             hist_err_ax.autoscale_view()
             hist_err_ax.set_xscale("log")

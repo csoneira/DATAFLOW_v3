@@ -88,7 +88,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 */5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py
 
 # DO THE SIMULATION
-*/2 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh all --no-plots
+*/1 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh all --no-plots
 
 # CONVERT THE SIMULATED DATA INTO THE DETECTOR DATA FORMAT 
 */5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py

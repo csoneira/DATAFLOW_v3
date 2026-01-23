@@ -261,7 +261,46 @@ def resolve_param_mesh(
     if not mesh_path.exists():
         raise FileNotFoundError(f"param_mesh.csv not found in {mesh_path.parent}")
     mesh = pd.read_csv(mesh_path)
+    mesh = normalize_param_mesh_ids(mesh)
+    if _mesh_ids_changed(mesh, mesh_path):
+        mesh.to_csv(mesh_path, index=False)
     return mesh, mesh_path
+
+
+def normalize_param_mesh_ids(mesh: pd.DataFrame, width: int = 3) -> pd.DataFrame:
+    normalized = mesh.copy()
+    for idx in range(1, 11):
+        col = f"step_{idx}_id"
+        if col not in normalized.columns:
+            continue
+
+        def _fmt(value: object) -> object:
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                return pd.NA
+            try:
+                num = int(float(value))
+                return f"{num:0{width}d}"
+            except (TypeError, ValueError):
+                return str(value)
+
+        normalized[col] = normalized[col].apply(_fmt).astype("string")
+    return normalized
+
+
+def _mesh_ids_changed(mesh: pd.DataFrame, mesh_path: Path) -> bool:
+    try:
+        original = pd.read_csv(mesh_path)
+    except OSError:
+        return True
+    for idx in range(1, 11):
+        col = f"step_{idx}_id"
+        if col not in mesh.columns and col not in original.columns:
+            continue
+        left = mesh.get(col, pd.Series(dtype="object")).fillna("").astype(str)
+        right = original.get(col, pd.Series(dtype="object")).fillna("").astype(str)
+        if not left.equals(right):
+            return True
+    return False
 
 
 def select_param_row(
@@ -327,6 +366,14 @@ def select_next_step_id(
     seed: Optional[int],
     override_id: Optional[str] = None,
 ) -> Optional[str]:
+    def _normalize_step_id(value: object) -> str:
+        if value is None or value == "":
+            return ""
+        try:
+            return f"{int(float(value)):03d}"
+        except (TypeError, ValueError):
+            return str(value)
+
     if override_id not in (None, "", "auto"):
         candidates = [str(override_id)]
     else:
@@ -335,7 +382,17 @@ def select_next_step_id(
         except FileNotFoundError:
             mesh = pd.DataFrame()
         if step_col in mesh.columns:
-            candidates = sorted(mesh[step_col].dropna().astype(str).unique().tolist())
+            filtered = mesh
+            prefix_list = list(prefix_ids)
+            for idx, prefix_val in enumerate(prefix_list):
+                col = f"step_{idx + 1}_id"
+                if col not in filtered.columns:
+                    break
+                prefix_norm = _normalize_step_id(prefix_val)
+                if not prefix_norm:
+                    continue
+                filtered = filtered[filtered[col].astype(str) == prefix_norm]
+            candidates = sorted(filtered[step_col].dropna().astype(str).unique().tolist())
         else:
             candidates = ["001"]
     if not candidates:

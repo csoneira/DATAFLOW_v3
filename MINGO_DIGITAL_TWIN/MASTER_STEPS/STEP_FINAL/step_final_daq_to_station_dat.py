@@ -28,6 +28,7 @@ from STEP_SHARED.sim_utils import (
     ensure_dir,
     iter_input_frames,
     latest_sim_run,
+    normalize_param_mesh_ids,
     resolve_param_mesh,
     load_sim_run_registry,
     load_step_configs,
@@ -663,6 +664,7 @@ def main() -> None:
         ] + [c for c in z_cols if c in mesh.columns]
         mesh = mesh[ordered_cols]
         mesh["done"] = mesh["done"].fillna(0).astype(int)
+        mesh = normalize_param_mesh_ids(mesh)
         mesh.to_csv(mesh_path, index=False)
         if param_date is None or pd.isna(param_date):
             raise ValueError("param_date is missing; enable param_date column or ensure it is populated.")
@@ -699,6 +701,7 @@ def main() -> None:
                     matches = matches[np.isclose(matches[col].astype(float), float(val))]
             if not matches.empty:
                 mesh.loc[param_row.name, "done"] = 1
+                mesh = normalize_param_mesh_ids(mesh)
                 mesh.to_csv(mesh_path, index=False)
                 print("Skipping existing output for matching parameter set in step_final_simulation_params.csv.")
                 continue
