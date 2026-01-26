@@ -1,32 +1,32 @@
 # STEP 06 Interface Contract (Signal -> Front/Back)
 
 ## Purpose
-Convert per-strip sum/difference observables into end-specific times and charges (front/back).
+Convert sum/difference observables into front/back times and charges.
 
 ## Required inputs
 - Input data (from STEP 05):
-  - `event_id` (int)
-  - `T_sum_meas_i_sj` (ns), `T_diff_i_sj` (ns)
-  - `Y_mea_i_sj` (arb charge), `q_diff_i_sj` (arb charge)
-- Required metadata: none (metadata is produced by this step).
+  - `event_id`.
+  - `T_sum_meas_i_sj`, `T_diff_i_sj`.
+  - `Y_mea_i_sj`, `q_diff_i_sj`.
 
-## Schema (guaranteed outputs)
-Retained columns:
-- `event_id` (int)
-- `T_thick_s` (s) if present upstream
+## Output schema
+Outputs:
+- `INTERSTEPS/STEP_6_TO_7/SIM_RUN_<N>/step_6.(pkl|csv|chunks.json)`
 
-Derived columns:
-- `T_front_i_sj` (ns): `T_sum_meas_i_sj - T_diff_i_sj`.
-- `T_back_i_sj` (ns): `T_sum_meas_i_sj + T_diff_i_sj`.
-- `Q_front_i_sj` (arb charge): `Y_mea_i_sj - q_diff_i_sj`.
-- `Q_back_i_sj` (arb charge): `Y_mea_i_sj + q_diff_i_sj`.
+Columns:
+- `event_id`, `T_thick_s`.
+- Per-plane per-strip:
+  - `T_front_i_sj`, `T_back_i_sj` (ns).
+  - `Q_front_i_sj`, `Q_back_i_sj` (arb).
 
-Time reference: same event time origin as STEP 02; only per-strip differences are introduced.
+## Behavior
+- `T_front = T_sum_meas - T_diff`.
+- `T_back  = T_sum_meas + T_diff`.
+- `Q_front = Y_mea - q_diff`.
+- `Q_back  = Y_mea + q_diff`.
 
-## Invariants & checks
-- For finite `T_sum_meas_i_sj` and `T_diff_i_sj`, `(T_front_i_sj + T_back_i_sj) / 2 == T_sum_meas_i_sj`.
-- For finite `Y_mea_i_sj` and `q_diff_i_sj`, `(Q_front_i_sj + Q_back_i_sj) / 2 == Y_mea_i_sj`.
+## Metadata
+- Common fields plus `source_dataset` and `step_6_id`.
 
-## Failure modes & validation behavior
-- Missing required strip columns cause that strip to be skipped.
-- No explicit warnings are emitted; NaNs propagate for missing inputs.
+## Failure modes
+- Missing strip columns are skipped without warnings.

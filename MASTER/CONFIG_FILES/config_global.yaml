@@ -203,7 +203,7 @@ presentation_plots: false
 force_replacement: false # Creates a new datafile even if there is already one that looks complete
 article_format: false
 
-complete_reanalysis: true
+complete_reanalysis: false
 
 calibrate_charge_ns_to_fc: true
 

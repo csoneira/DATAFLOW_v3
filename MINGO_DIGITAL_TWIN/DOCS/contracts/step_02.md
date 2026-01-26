@@ -1,41 +1,40 @@
 # STEP 02 Interface Contract (Generated -> Crossing)
 
 ## Purpose
-Propagate generated muons through station geometry and compute per-plane crossing positions and times.
+Propagate muons through geometry and compute per-plane crossing positions and times.
 
 ## Required inputs
 - Input data (from STEP 01):
-  - `event_id` (int)
-  - `X_gen`, `Y_gen`, `Z_gen` (mm)
-  - `Theta_gen`, `Phi_gen` (rad)
-  - `T0_ns` (ns)
-  - `T_thick_s` (s) is optional and preserved if present.
+  - `event_id`, `X_gen`, `Y_gen`, `Z_gen`, `Theta_gen`, `Phi_gen`.
+  - `T_thick_s` is preserved if present.
 - Config inputs:
-  - Geometry registry/station config and `geometry_id` selection.
-  - `c_mm_per_ns` (defaults to 299.792458 if not in config).
-  - `bounds_mm` for active area acceptance.
-- Required metadata: none (metadata is produced by this step).
+  - `z_positions` (4 values) or `random` (param mesh).
+  - `bounds_mm` (x/y acceptance).
+  - `c_mm_per_ns` (speed of light in mm/ns).
 
-## Schema (guaranteed outputs)
-Retained columns:
+## Output schema
+Outputs:
+- `INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/step_2.(pkl|csv|chunks.json)`
+
+Columns:
 - `event_id` (int)
-- `T_thick_s` (s) if present upstream
+- `T_thick_s` (s)
+- Per-plane (i = 1..4):
+  - `X_gen_i`, `Y_gen_i` (mm)
+  - `Z_gen_i` (mm)
+  - `T_sum_i_ns` (ns)
+- `tt_crossing` (string): planes with in-bounds crossings.
 
-Per-plane columns (plane index i = 1..4):
-- `X_gen_i` (mm): projected crossing x for plane i (NaN if out of bounds).
-- `Y_gen_i` (mm): projected crossing y for plane i (NaN if out of bounds).
-- `Z_gen_i` (mm): plane z position for plane i (NaN if out of bounds).
-- `T_sum_i_ns` (ns): flight time to plane i, shifted so the earliest valid plane has time 0.
-- `tt_crossing` (string): concatenation of plane indices where the muon crosses within bounds (NaN if none).
+## Behavior
+- Crossings are computed by straight-line projection and filtered by `bounds_mm`.
+- `T_sum_i_ns` is normalized so the earliest valid plane per event is at time 0.
+- Events with no valid crossings are dropped.
 
-Time reference: `T_sum_i_ns` is relative to the earliest in-bounds plane crossing within each event.
+## Metadata
+Stored in `.meta.json` or chunk manifest:
+- Common fields plus `z_positions_mm`, `z_positions_raw_mm`.
+- `param_set_id`, `param_date`, `param_row_id`, `step_1_id`, `step_2_id` (mesh-driven).
 
-## Invariants & checks
-- If `X_gen_i` or `Y_gen_i` is NaN, then `Z_gen_i` and `T_sum_i_ns` are NaN for that plane.
-- `tt_crossing` contains only digits in {1,2,3,4} and reflects planes with non-NaN crossings.
-- `T_sum_i_ns` are all >= 0 for valid planes (after normalization).
-
-## Failure modes & validation behavior
-- Missing geometry or station config raises `FileNotFoundError`.
-- If all planes are out of bounds, the row is dropped and not written to output.
-- No explicit warnings are emitted for out-of-geometry cases; values are set to NaN and filtered.
+## Failure modes
+- Missing mesh rows for `random` z positions raise `ValueError`.
+- If all candidate step_2_id combinations are already simulated, the step is skipped.

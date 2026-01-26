@@ -2,7 +2,25 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <step_number|all|final|--from> [--no-plots|--plot-only|--loop|--force]"
+  cat <<'EOF'
+Usage:
+  run_step.sh <step_number|all|final|from> [options]
+  run_step.sh from <step_number> [options]
+  run_step.sh -c|--continuous [options]
+
+Options:
+  --no-plots           Skip plot generation
+  --plot-only          Only generate plots from existing outputs
+  --loop               Repeat the selected run in a loop
+  --force              Recompute even if SIM_RUN exists
+  -c, --continuous     Run "all" in a loop with a lock to prevent overlaps (implies --no-plots)
+  -fc, --force-continuous  Terminate the active continuous run and start a new one
+  -h, --help           Show this help and exit
+
+Notes:
+  -c/--continuous implies "all", "--loop", and "--no-plots" and uses a lock in /tmp.
+  --force-continuous is only valid with -c/--continuous.
+EOF
 }
 
 NO_PLOTS=""
@@ -10,9 +28,14 @@ PLOT_ONLY=""
 FINAL_STEP=""
 LOOP=""
 FORCE=""
+CONTINUOUS=""
+FORCE_CONTINUOUS=""
 ARGS=()
 for arg in "$@"; do
-  if [[ "$arg" == "--no-plots" ]]; then
+  if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+    usage
+    exit 0
+  elif [[ "$arg" == "--no-plots" ]]; then
     NO_PLOTS="--no-plots"
   elif [[ "$arg" == "--plot-only" ]]; then
     PLOT_ONLY="--plot-only"
@@ -22,22 +45,67 @@ for arg in "$@"; do
     LOOP="1"
   elif [[ "$arg" == "--force" ]]; then
     FORCE="--force"
+  elif [[ "$arg" == "-c" || "$arg" == "--continuous" ]]; then
+    CONTINUOUS="1"
+  elif [[ "$arg" == "-fc" || "$arg" == "--force-continuous" ]]; then
+    FORCE_CONTINUOUS="1"
   else
     ARGS+=("$arg")
   fi
 done
 
-if [[ ${#ARGS[@]} -lt 1 ]]; then
+if [[ -n "$FORCE_CONTINUOUS" && -z "$CONTINUOUS" ]]; then
+  echo "Error: --force-continuous requires -c/--continuous."
   usage
   exit 1
 fi
 
-STEP="${ARGS[0]}"
+if [[ -z "$CONTINUOUS" && ${#ARGS[@]} -lt 1 ]]; then
+  usage
+  exit 1
+fi
+
+if [[ -n "$CONTINUOUS" ]]; then
+  STEP="all"
+  LOOP="1"
+  NO_PLOTS="--no-plots"
+else
+  STEP="${ARGS[0]}"
+fi
 DT="$(cd "$(dirname "$0")" && pwd)"
 
 if [[ -n "$NO_PLOTS" && -n "$PLOT_ONLY" ]]; then
   echo "Error: --no-plots and --plot-only cannot be used together."
   exit 1
+fi
+
+if [[ -n "$CONTINUOUS" ]]; then
+  LOCK_DIR="/tmp/mingo_digital_twin_run_step_continuous.lock"
+  PID_FILE="$LOCK_DIR/pid"
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    if [[ -n "$FORCE_CONTINUOUS" ]]; then
+      if [[ -f "$PID_FILE" ]]; then
+        LOCK_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+        if [[ -n "$LOCK_PID" ]] && kill -0 "$LOCK_PID" 2>/dev/null; then
+          CMDLINE="$(tr '\0' ' ' < "/proc/$LOCK_PID/cmdline" 2>/dev/null || true)"
+          if [[ "$CMDLINE" == *"run_step.sh"* ]]; then
+            kill "$LOCK_PID" 2>/dev/null || true
+            sleep 1
+            if kill -0 "$LOCK_PID" 2>/dev/null; then
+              kill -9 "$LOCK_PID" 2>/dev/null || true
+            fi
+          fi
+        fi
+      fi
+      rm -rf "$LOCK_DIR"
+      mkdir "$LOCK_DIR"
+    else
+      echo "Continuous operation already running; exiting."
+      exit 0
+    fi
+  fi
+  echo "$$" > "$PID_FILE"
+  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 fi
 
 run_step() {
@@ -63,6 +131,9 @@ run_step() {
 }
 
 while true; do
+  if [[ -n "$CONTINUOUS" ]]; then
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") run_step.sh continuous loop start"
+  fi
   case "$STEP" in
     all)
       start_time=$(date +%s)
@@ -75,10 +146,10 @@ while true; do
       elapsed=$((end_time - start_time))
       echo "All steps completed in ${elapsed}s"
       ;;
-    --from)
+    from)
       start_step="${ARGS[1]:-}"
       if [[ -z "$start_step" ]]; then
-        echo "Usage: $0 --from <step_number> [--no-plots]"
+        echo "Usage: $0 from <step_number> [--no-plots]"
         exit 1
       fi
       start_time=$(date +%s)

@@ -1,29 +1,30 @@
-# STEP 07 Interface Contract (Front/Back -> Calibrated)
+# STEP 07 Interface Contract (Front/Back -> Uncalibrated)
 
 ## Purpose
-Apply per-channel connector/cable timing offsets (uncalibration/decalibration) to front/back times.
+Apply per-channel cable/connector offsets to front/back times.
 
 ## Required inputs
 - Input data (from STEP 06):
-  - `event_id` (int)
+  - `event_id`.
   - `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`.
 - Config inputs:
-  - `tfront_offsets` and `tback_offsets` arrays (4x4, ns).
-- Required metadata: none (metadata is produced by this step).
+  - `tfront_offsets`, `tback_offsets` (4x4 arrays, ns).
 
-## Schema (guaranteed outputs)
-Retained columns:
-- `event_id` (int)
-- `T_thick_s` (s) if present upstream
-- `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`
+## Output schema
+Outputs:
+- `INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/step_7.(pkl|csv|chunks.json)`
 
-`T_front_i_sj` and `T_back_i_sj` are updated in-place with the configured offsets. Charges are preserved unchanged.
+Columns:
+- `event_id`, `T_thick_s`.
+- Per-plane per-strip: `T_front`, `T_back`, `Q_front`, `Q_back`.
 
-Time reference: same as STEP 06, plus per-channel cable offsets.
+## Behavior
+- Offsets are added to nonzero, finite `T_front` and `T_back` values.
+- Charges are preserved unchanged.
 
-## Invariants & checks
-- For nonzero, finite times, `T_front_i_sj` and `T_back_i_sj` increase by the configured offsets.
+## Metadata
+- Common fields plus `source_dataset` and `step_7_id`.
 
-## Failure modes & validation behavior
-- Offsets with incorrect dimensions may raise `IndexError` during application.
-- Missing input columns are skipped without warnings.
+## Failure modes
+- Offset arrays with incorrect dimensions may raise `IndexError`.
+- Missing strip columns are skipped without warnings.

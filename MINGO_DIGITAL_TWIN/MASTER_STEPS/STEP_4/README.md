@@ -1,23 +1,30 @@
-Step 4 (Avalanche -> Hit)
+# STEP 4 (Avalanche -> Hit)
 
 Purpose:
-- Use avalanche centers and sizes to estimate induction area and affected strips (readout starts here).
+- Induce strip signals from avalanche centroids and sizes (readout coupling begins).
 
 Inputs:
-- config:
-  - config_step_4_physics.yaml
-  - config_step_4_runtime.yaml
-- data: INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/step_3.(pkl|csv|chunks.json)
+- Physics config: `config_step_4_physics.yaml`
+- Runtime config: `config_step_4_runtime.yaml`
+- Data: `INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/step_3.(pkl|csv|chunks.json)`
 
 Outputs:
-- INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/step_4.(pkl|csv|chunks.json)
-- INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/PLOTS/step_4_plots.pdf
+- `INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/step_4.(pkl|csv|chunks.json)`
+- `INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/PLOTS/step_4_plots.pdf`
+
+Algorithm highlights:
+- Avalanche size sets an effective induction width scaled by a power law.
+- A uniform disk model is used to compute strip overlap fractions.
+- Charge sharing is sampled with `charge_share_points` binomial draws.
+- `X_mea` and `T_sum_meas` receive Gaussian noise.
 
 Run:
-- python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml
-- python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml --runtime-config config_step_4_runtime.yaml
-- python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml --plot-only
+```
+python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml
+python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml --runtime-config config_step_4_runtime.yaml
+python3 step_4_hit_to_measured.py --config config_step_4_physics.yaml --plot-only
+```
 
 Notes:
-- input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).
-- The step skips if the matching SIM_RUN exists unless --force is provided.
+- The step skips if the target SIM_RUN exists unless `--force` is provided.
+- Output columns are per-plane per-strip: `Y_mea`, `X_mea`, `T_sum_meas`.

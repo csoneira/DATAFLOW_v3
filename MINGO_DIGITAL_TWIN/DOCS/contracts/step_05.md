@@ -1,34 +1,34 @@
 # STEP 05 Interface Contract (Hit -> Signal)
 
 ## Purpose
-Derive per-strip time-difference and charge-difference observables from measured strip hits.
+Derive time-difference and charge-difference observables from per-strip measurements.
 
 ## Required inputs
 - Input data (from STEP 04):
-  - `event_id` (int)
-  - `X_mea_i_sj` (mm), `Y_mea_i_sj` (arb charge), `T_sum_meas_i_sj` (ns) for planes i = 1..4, strips j = 1..4.
+  - `event_id`.
+  - `X_mea_i_sj`, `Y_mea_i_sj`, `T_sum_meas_i_sj`.
 - Config inputs:
-  - `c_mm_per_ns` (propagation speed for T_diff calculation).
-  - `qdiff_frac` (fractional charge noise).
-- Required metadata: none (metadata is produced by this step).
+  - `qdiff_frac`.
+  - Optional `c_mm_per_ns` (otherwise inherited from upstream metadata).
 
-## Schema (guaranteed outputs)
-Retained columns:
-- `event_id` (int)
-- `T_thick_s` (s) if present upstream
-- `Y_mea_i_sj` (arb charge)
-- `T_sum_meas_i_sj` (ns)
+## Output schema
+Outputs:
+- `INTERSTEPS/STEP_5_TO_6/SIM_RUN_<N>/step_5.(pkl|csv|chunks.json)`
 
-Derived columns:
-- `T_diff_i_sj` (ns): time-difference proxy from strip x-position.
-- `q_diff_i_sj` (arb charge): charge-difference proxy (zero if no strip charge).
+Columns:
+- `event_id`, `T_thick_s`.
+- Per-plane per-strip:
+  - `Y_mea_i_sj` (arb).
+  - `T_sum_meas_i_sj` (ns).
+  - `T_diff_i_sj` (ns): `X_mea * (3 / (2 * c_mm_per_ns))`.
+  - `q_diff_i_sj` (arb): Gaussian noise with sigma `qdiff_frac * Y_mea`.
 
-Time reference: `T_diff_i_sj` is relative to strip center (zero at X = 0) and preserves the STEP 02 time origin.
+## Behavior
+- `q_diff` is zero where `Y_mea <= 0`.
+- `T_diff` follows `X_mea` and is NaN when `X_mea` is NaN.
 
-## Invariants & checks
-- If `Y_mea_i_sj` == 0, then `q_diff_i_sj` == 0.
-- `T_diff_i_sj` is finite where `X_mea_i_sj` is finite.
+## Metadata
+- Common fields plus `source_dataset` and `step_5_id`.
 
-## Failure modes & validation behavior
-- Missing required strip columns cause that strip to be skipped (no new columns).
-- No explicit warnings are emitted; NaNs propagate for missing inputs.
+## Failure modes
+- Missing strip columns are skipped without warnings.

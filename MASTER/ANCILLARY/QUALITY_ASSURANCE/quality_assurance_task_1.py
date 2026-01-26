@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from qa_shared import load_metadata, print_columns, plot_tt_pairs, plot_tt_matrix
 
 # --- knobs to tweak ---
-STATION = "MINGO01"  # e.g. "MINGO01", "MINGO02", ...
+STATION = "MINGO00"  # e.g. "MINGO01", "MINGO02", ...
 STEP = 1             # numeric step (1, 2, ...)
 TASK = 1          # for STEP_1 use an int (1-5); keep None for steps without tasks
 START_DATE = "2024-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None

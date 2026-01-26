@@ -1,24 +1,29 @@
-Step 3 (Crossing -> Avalanche)
+# STEP 3 (Crossing -> Avalanche)
 
 Purpose:
-- Simulate RPC gas ionization in the active volume (avalanche size, position, time); no readout effects.
+- Apply per-plane efficiencies and generate avalanche sizes/centroids.
 
 Inputs:
-- config:
-  - config_step_3_physics.yaml
-  - config_step_3_runtime.yaml
-- data: INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/step_2.(pkl|csv|chunks.json)
+- Physics config: `config_step_3_physics.yaml`
+- Runtime config: `config_step_3_runtime.yaml`
+- Data: `INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/step_2.(pkl|csv|chunks.json)`
 
 Outputs:
-- INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/step_3.(pkl|csv|chunks.json)
-- INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/PLOTS/step_3_plots.pdf
+- `INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/step_3.(pkl|csv|chunks.json)`
+- `INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/PLOTS/step_3_plots.pdf`
+
+Algorithm highlights:
+- Ionization count: `ions ~ Poisson(lambda)`, with `lambda = -ln(1 - eff)`.
+- Avalanche size: `ions * exp(alpha * gap_mm) * LogNormal(0, electron_sigma)`.
+- Avalanche x/y positions follow plane crossings.
 
 Run:
-- python3 step_3_crossing_to_hit.py --config config_step_3_physics.yaml
-- python3 step_3_crossing_to_hit.py --config config_step_3_physics.yaml --runtime-config config_step_3_runtime.yaml
-- python3 step_3_crossing_to_hit.py --config config_step_3_physics.yaml --plot-only
+```
+python3 step_3_crossing_to_hit.py --config config_step_3_physics.yaml
+python3 step_3_crossing_to_hit.py --config config_step_3_physics.yaml --runtime-config config_step_3_runtime.yaml
+python3 step_3_crossing_to_hit.py --config config_step_3_physics.yaml --plot-only
+```
 
 Notes:
-- efficiencies can be a single 4-value list or a list of 4-value lists; one is selected per run (seeded).
-- input_sim_run supports explicit SIM_RUN_<N>, latest, or random (runtime config).
-- The step skips if the matching SIM_RUN exists unless --force is provided.
+- `efficiencies` can be a 4-value list, list of lists, or `random` from `param_mesh.csv`.
+- The step skips if the target SIM_RUN exists unless `--force` is provided.

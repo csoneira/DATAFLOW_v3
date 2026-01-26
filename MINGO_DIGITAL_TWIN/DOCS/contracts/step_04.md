@@ -1,34 +1,36 @@
 # STEP 04 Interface Contract (Avalanche -> Hit)
 
 ## Purpose
-Induce per-strip signals from avalanche centroids and sizes, producing strip-level charge and time measurements.
+Induce per-strip signals from avalanche centroids and sizes.
 
 ## Required inputs
 - Input data (from STEP 03):
-  - `event_id` (int)
-  - `avalanche_size_electrons_i`, `avalanche_x_i`, `avalanche_y_i` for planes i = 1..4.
-  - `T_sum_i_ns` for planes i = 1..4 (used to build per-strip times).
+  - `event_id`.
+  - `avalanche_size_electrons_i`, `avalanche_x_i`, `avalanche_y_i`.
+  - `T_sum_i_ns` (for time assignment).
 - Config inputs:
-  - strip geometry (from `STEP_SHARED.get_strip_geometry`), charge sharing settings, `time_sigma_ns`, `x_noise`.
-- Required metadata: none (metadata is produced by this step).
+  - `charge_share_points`, `avalanche_width_mm`, `width_scale_exponent`, `width_scale_max`.
+  - `x_noise_mm`, `time_sigma_ns`.
 
-## Schema (guaranteed outputs)
-Retained columns:
-- `event_id` (int)
-- `T_thick_s` (s) if present upstream
-- `tt_hit` (string): concatenation of planes with at least one strip hit.
+## Output schema
+Outputs:
+- `INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/step_4.(pkl|csv|chunks.json)`
 
-Per-plane, per-strip columns (plane i = 1..4, strip j = 1..4):
-  - `Y_mea_i_sj` (arb charge): induced charge on strip j.
-  - `X_mea_i_sj` (mm): inferred x position along strip j (NaN if no hit).
-  - `T_sum_meas_i_sj` (ns): measured sum-time per strip (NaN if no hit).
+Columns:
+- `event_id`, `T_thick_s`.
+- `tt_hit` (string): planes with any strip hit.
+- Per-plane per-strip (i = 1..4, j = 1..4):
+  - `Y_mea_i_sj` (arb): induced charge on strip j.
+  - `X_mea_i_sj` (mm): x position (NaN if no hit on strip j).
+  - `T_sum_meas_i_sj` (ns): noisy sum time (NaN if no hit on strip j).
 
-Time reference: `T_sum_meas_i_sj` is derived from `T_sum_i_ns` with added Gaussian noise; time zero remains the earliest plane crossing per event.
+## Behavior
+- A disk-overlap model computes the fraction of avalanche charge per strip.
+- `Y_mea` is charge (not a Y position).
+- `X_mea` and `T_sum_meas` are only assigned for strips with `Y_mea > 0`.
 
-## Invariants & checks
-- `Y_mea_i_sj` is >= 0; if 0, `X_mea_i_sj` and `T_sum_meas_i_sj` are NaN.
-- If any `Y_mea_i_sj` > 0 for plane i, then plane i appears in `tt_hit`.
+## Metadata
+- Common fields plus `source_dataset` and `step_4_id`.
 
-## Failure modes & validation behavior
-- Missing avalanche inputs for a plane cause that plane to be skipped.
-- No explicit validation beyond basic numeric operations; NaNs propagate for missing inputs.
+## Failure modes
+- Missing avalanche columns for a plane cause that plane to be skipped.

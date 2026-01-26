@@ -44,12 +44,12 @@ class StationPaths:
 
 def normalize_station_name(station: str) -> str:
     token = station.strip().upper()
-    if re.fullmatch(r"[1-4]", token):
+    if re.fullmatch(r"[0-4]", token):
         return f"MINGO0{token}"
-    if re.fullmatch(r"MINGO0?[1-4]", token):
+    if re.fullmatch(r"MINGO0?[0-4]", token):
         digits = token[-1]
         return f"MINGO0{digits}"
-    raise ValueError("Station must be 1-4 or like 'MINGO01'")
+    raise ValueError("Station must be 0-4 or like 'MINGO00'")
 
 
 def build_station_paths(station: str) -> StationPaths:

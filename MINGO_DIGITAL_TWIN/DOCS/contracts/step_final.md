@@ -1,31 +1,43 @@
 # STEP FINAL Interface Contract (DAQ -> Station .dat)
 
 ## Purpose
-Format STEP 10 DAQ-like rows into station-style `.dat` files with timestamps and registry entries.
+Format STEP 10 outputs into station-style .dat files and register outputs.
 
 ## Required inputs
 - Input data (from STEP 10):
-  - `event_id` (int) is preserved in input tables but not emitted in `.dat`.
-  - `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj` for planes i = 1..4, strips j = 1..4.
-  - `T_thick_s` (optional; used for event timing if present).
+  - `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`.
+  - `T_thick_s` (optional; used for timestamp offsets).
 - Config inputs:
-  - station geometry map, output selection criteria, and date range.
-- Required metadata: geometry_id and sim-run metadata (provided by upstream steps).
+  - Runtime selection (`input_dir`, `input_sim_run`, `input_collect`).
+  - Sampling (`target_rows`, `payload_sampling`).
+  - Output control (`files_per_station_conf`, `rate_hz`).
+  - Parameter mesh location (`param_mesh_dir`).
 
-## Schema (guaranteed outputs)
-- Output files:
-  - `SIMULATED_DATA/mi0XYYDDDHHMMSS.dat` (ASCII text).
-  - `SIMULATED_DATA/step_final_output_registry.json` (registry of emitted files).
-- Each `.dat` line contains (per event):
-  - 64 formatted values for planes ordered [4,3,2,1], fields ordered [T_front, T_back, Q_front, Q_back], strips ordered [1..4].
-  - Optional `T_thick_s` appended if present in inputs.
+## Output schema
+Outputs:
+- `SIMULATED_DATA/mi00YYDDDHHMMSS.dat` (ASCII text).
+- `SIMULATED_DATA/step_final_output_registry.json`.
+- `SIMULATED_DATA/step_final_simulation_params.csv`.
 
-Time reference: uses STEP 10 times; optional `T_thick_s` drives timestamp offsets when present.
+Each .dat line contains:
+- Timestamp header: `YYYY MM DD HH MM SS 1`.
+- 64 channel values ordered by plane [4,3,2,1], field [T_front, T_back, Q_front, Q_back],
+  strip [1..4].
 
-## Invariants & checks
-- Output line ordering follows plane order [4,3,2,1] and strip order [1,2,3,4].
-- Non-finite values are rendered as 0.0 in the output format.
+## Behavior
+- Samples rows from STEP 10 via reservoir (`random`) or contiguous block
+  (`sequential_random_start`).
+- If `T_thick_s` is present, timestamps are offsets from a base date; otherwise
+  inter-arrival times follow an exponential distribution with mean `1 / rate_hz`.
+- Updates `param_mesh.csv` with `param_set_id`, `param_date`, and `done=1` for
+  matched parameter rows.
 
-## Failure modes & validation behavior
-- Missing geometry/station metadata raises `ValueError` or `FileNotFoundError`.
-- Inconsistent presence of `T_thick_s` across input files raises `ValueError`.
+## Metadata
+- Registry entries include:
+  - `param_set_id`, `param_date`, `source_dataset`, `target_rows`, `selected_rows`.
+  - `baseline_meta` (upstream metadata snapshot).
+
+## Failure modes
+- Missing upstream metadata (z positions or efficiencies) raises `ValueError`.
+- Inconsistent presence of `T_thick_s` across input chunks raises `ValueError`.
+- Ambiguous param mesh matches raise `ValueError`.

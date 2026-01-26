@@ -1,32 +1,33 @@
-# STEP 08 Interface Contract (Calibrated -> Threshold)
+# STEP 08 Interface Contract (Uncalibrated -> Threshold)
 
 ## Purpose
-Apply front-end electronics effects: per-channel time jitter, charge-to-time conversion, and thresholding.
+Apply front-end electronics effects: timing jitter, time-walk conversion, and thresholding.
 
 ## Required inputs
 - Input data (from STEP 07):
-  - `event_id` (int)
+  - `event_id`.
   - `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`.
 - Config inputs:
-  - `t_fee_sigma_ns` (time jitter per channel).
-  - `q_to_time_factor`, `qfront_offsets`, `qback_offsets` (charge-to-time conversion).
-  - `threshold` (minimum Q to keep channel active).
-- Required metadata: none (metadata is produced by this step).
+  - `t_fee_sigma_ns`.
+  - `q_to_time_factor`, `qfront_offsets`, `qback_offsets`.
+  - `charge_threshold`.
 
-## Schema (guaranteed outputs)
-Retained columns:
-- `event_id` (int)
-- `T_thick_s` (s) if present upstream
-- `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`
+## Output schema
+Outputs:
+- `INTERSTEPS/STEP_8_TO_9/SIM_RUN_<N>/step_8.(pkl|csv|chunks.json)`
 
-`T_front_i_sj` and `T_back_i_sj` are updated with Gaussian jitter. `Q_front_i_sj` and `Q_back_i_sj` are converted to time-walk units and thresholded (values below `threshold` are set to 0).
+Columns:
+- `event_id`, `T_thick_s`.
+- Per-plane per-strip: `T_front`, `T_back`, `Q_front`, `Q_back`.
 
-Time reference: same as STEP 07, with additional per-channel FEE timing jitter.
+## Behavior
+- `T_front` and `T_back` receive Gaussian jitter on all non-NaN entries.
+- `Q_front` and `Q_back` are converted to time-walk units and offset per channel.
+- Values below `charge_threshold` are set to 0.
 
-## Invariants & checks
-- `Q_front_i_sj` and `Q_back_i_sj` are zero for channels below threshold.
-- Converted Q values reflect `q_to_time_factor` and per-channel offsets when above threshold.
+## Metadata
+- Common fields plus `source_dataset` and `step_8_id`.
 
-## Failure modes & validation behavior
-- Missing input columns are skipped without warnings.
-- No explicit validation is performed on threshold sign or offset array dimensions.
+## Failure modes
+- Missing strip columns are skipped without warnings.
+- No explicit validation is performed on threshold sign or offset dimensions.

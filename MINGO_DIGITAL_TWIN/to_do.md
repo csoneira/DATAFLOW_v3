@@ -1,5 +1,6 @@
 # To do list
 
+- [ ] Validate the method using different sample sizes with different statistics. Build the dictionary with a lot of data, then try to estimate the parameters using different sample sizes to see how stable the estimation is.
 - [ ] Validation of the simulation.
 - [X] Change the name of the json and csv in the SIMULATED_DATA so it does not say STEP_13, which does not exist.
 - [ ] Add the energy value to the muons according to the spectrum used in the simulation. And its velocity calculated with it.

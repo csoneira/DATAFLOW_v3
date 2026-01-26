@@ -1,30 +1,33 @@
 # STEP 09 Interface Contract (Threshold -> Trigger)
 
 ## Purpose
-Apply coincidence trigger logic and retain only events that satisfy configured plane combinations.
+Apply coincidence trigger logic and retain only passing events.
 
 ## Required inputs
 - Input data (from STEP 08):
-  - `event_id` (int)
-  - `Q_front_i_sj` and/or `Q_back_i_sj` to determine per-plane activity.
+  - `event_id`.
+  - `Q_front_i_sj` and/or `Q_back_i_sj`.
 - Config inputs:
-  - `trigger_combinations` (list of strings such as "1234").
-- Required metadata: none (metadata is produced by this step).
+  - `trigger_combinations` (list of plane strings, e.g., "12").
 
-## Schema (guaranteed outputs)
-- Output is a subset of input rows that pass the trigger.
-- Retained columns:
-  - `event_id` (int)
-  - `T_thick_s` (s) if present upstream
-  - `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`
-- Added column: `tt_trigger` (string): concatenation of active planes for each retained event.
+## Output schema
+Outputs:
+- `INTERSTEPS/STEP_9_TO_10/SIM_RUN_<N>/step_9.(pkl|csv|chunks.json)`
 
-Time reference: unchanged from STEP 08.
+Columns:
+- `event_id`, `T_thick_s`.
+- Per-plane per-strip: `T_front`, `T_back`, `Q_front`, `Q_back`.
+- `tt_trigger` (string): concatenation of active planes.
 
-## Invariants & checks
-- Every output row satisfies at least one configured trigger combination.
-- `tt_trigger` contains only digits in {1,2,3,4}.
+## Behavior
+- A plane is active if any strip has `Q_front > 0` or `Q_back > 0`.
+- `tt_trigger` is a string of active planes in ascending order.
+- An event passes if any trigger string is a subset of the active planes.
+- Events that do not pass are dropped.
 
-## Failure modes & validation behavior
-- If `trigger_combinations` is empty, output will be empty (no events retained).
-- Missing Q columns for a plane imply that plane cannot contribute to triggering.
+## Metadata
+- Common fields plus `source_dataset` and `step_9_id`.
+
+## Failure modes
+- Empty `trigger_combinations` yields empty output.
+- Missing Q columns for a plane prevent that plane from contributing to the trigger.

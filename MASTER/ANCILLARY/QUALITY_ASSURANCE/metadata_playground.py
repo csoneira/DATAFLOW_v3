@@ -12,10 +12,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # --- knobs to tweak ---
-STATION = "MINGO01"  # e.g. MINGO01, MINGO02, ...
+STATION = "MINGO00"  # e.g. MINGO01, MINGO02, ...
 STEP = 1             # numeric step (1, 2, ...)
-TASK = 1          # for STEP_1 use an int (1-5); keep None for steps without tasks
-START_DATE = "2023-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
+TASK = 2          # for STEP_1 use an int (1-5); keep None for steps without tasks
+START_DATE = "1900-11-01 00:00:00"    # e.g. "2025-11-06 18:00:00" or leave None
 END_DATE = "2026-01-20 00:00:00"      # e.g. "2025-11-06 19:00:00" or leave None
 # Window used when counting events (ns) and per-combination measured counts.
 # Set WINDOW_NS to the calibration window you used (e.g., coincidence_window_cal_ns),

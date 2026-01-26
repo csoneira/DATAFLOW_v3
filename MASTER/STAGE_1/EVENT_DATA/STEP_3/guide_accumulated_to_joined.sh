@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
       print_help
       exit 0
       ;;
-    [1-8])
+    [0-4])
       station_filter_raw="$1"
       station_filter_overridden=true
       shift
@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-ALL_STATIONS=(1 2 3 4 5 6 7 8)
+ALL_STATIONS=(0 1 2 3 4)
 TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/TRAFFIC_LIGHT"
 TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step3_station_queue.txt"
 
