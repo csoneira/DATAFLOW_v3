@@ -6,6 +6,6 @@ param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
 param_mesh_sim_run: none
 output_dir: ../../SIMULATED_DATA
 chunk_rows: 100000
-target_rows: 35000
+target_rows: 100000
 files_per_station_conf: 1
 payload_sampling: sequential_random_start

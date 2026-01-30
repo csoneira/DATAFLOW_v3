@@ -1,13 +1,13 @@
 # Step 1
 ## Angular distribution
-cos_n: [1.8, 2.1]
+cos_n: [2, 2]
 ## Flux
 flux_cm2_min: [0.9, 1.1]
 
 # Step 3
 ## Efficiencies
-efficiencies: [0.7, 1]
-efficiencies_identical: false
+efficiencies: [0.8, 1]
+efficiencies_identical: true
 
 # Optional: generate multiple rows per run, sharing selected columns.
 repeat_samples: 5

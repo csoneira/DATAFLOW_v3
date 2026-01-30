@@ -105,7 +105,11 @@ def _sample_efficiencies(
         return [eff_base] * 4
     if not isinstance(eff_range, list) or len(eff_range) != 2:
         raise ValueError("efficiencies must be a 2-value list [min, max] when not identical.")
-    return [float(rng.uniform(float(eff_range[0]), float(eff_range[1]))) for _ in range(4)]
+    min_val, max_val = float(eff_range[0]), float(eff_range[1])
+    # Keep per-plane efficiencies within +/-0.05 of a base value (max spread 0.10).
+    lo = max(min_val, eff_base - 0.05)
+    hi = min(max_val, eff_base + 0.05)
+    return [float(rng.uniform(lo, hi)) for _ in range(4)]
 
 
 def _collect_z_positions(station_files: dict[int, Path]) -> pd.DataFrame:

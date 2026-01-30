@@ -7,5 +7,5 @@ param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
 param_mesh_sim_run: none
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_2_TO_3
-chunk_rows: 200000
+chunk_rows: 100000
 plot_sample_rows: true
