@@ -466,6 +466,7 @@ for directory in base_directories.values():
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
+csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
@@ -902,6 +903,20 @@ fit_tt_columns = {
 global_variables = {
     'analysis_mode': 0,
 }
+
+FILTER_METRIC_NAMES: tuple[str, ...] = (
+    "total_rows_removed_pct",
+)
+
+filter_metrics: dict[str, float] = {}
+
+
+def record_filter_metric(name: str, removed: float, total: float) -> None:
+    """Record percentage removed for a filter."""
+    pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
+    filter_metrics[name] = round(pct, 4)
+    print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+
 working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
 fit_tt_counts_initial = working_df["fit_tt"].value_counts()
 for tt_value, count in fit_tt_counts_initial.items():
@@ -3534,6 +3549,11 @@ print(f"Original number of events in the dataframe: {original_number_of_events}"
 # Final number of events
 final_number_of_events = len(working_df)
 print(f"Final number of events in the dataframe: {final_number_of_events}")
+record_filter_metric(
+    "total_rows_removed_pct",
+    original_number_of_events - final_number_of_events,
+    original_number_of_events if original_number_of_events else 0,
+)
 corr_tt_columns = {
     i_plane: [
         f"P{i_plane}_T_sum_final",
@@ -3592,6 +3612,23 @@ execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
 
+
+
+# -------------------------------------------------------------------------------
+# Filter metadata (ancillary) ---------------------------------------------------
+# -------------------------------------------------------------------------------
+filter_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+}
+for name in FILTER_METRIC_NAMES:
+    filter_row[name] = filter_metrics.get(name, "")
+
+metadata_filter_csv_path = save_metadata(
+    csv_path_filter,
+    filter_row,
+)
+print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
 
 # -------------------------------------------------------------------------------

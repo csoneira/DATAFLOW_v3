@@ -762,6 +762,14 @@ base_directories = {
     "metadata_directory": metadata_directory,
 }
 
+# Accessing all the variables from the configuration
+crontab_execution = config["crontab_execution"]
+create_plots = config["create_plots"]
+create_essential_plots = config["create_essential_plots"]
+save_plots = config["save_plots"]
+show_plots = config["show_plots"]
+create_pdf = config["create_pdf"]
+
 create_plots = config["create_plots"]
 create_plots_task_4 = config.get("create_plots_task_4", False)
 if create_plots_task_4:
@@ -774,18 +782,13 @@ if create_plots_task_4:
 create_plots_task_4 = config.get("create_plots_task_4", False)
 create_plots_task_4_station_0 = config.get("create_plots_task_4_station_0", False)
 
-# Accessing all the variables from the configuration
-crontab_execution = config["crontab_execution"]
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
+
 
 # Create ALL directories if they don't already exist
 save_plots = config["save_plots"]
 
-if station == "0" and create_plots_task_4_station_0:
+# if station == "0" and create_plots_task_4_station_0:
+if create_plots_task_4_station_0:
     print("Overriding global create_plots to True due to Task 4 setting for station 0.")
     create_plots_task_4 = True
     create_plots = True
@@ -796,7 +799,9 @@ if station == "0" and create_plots_task_4_station_0:
 for directory in base_directories.values():
     # If save_plots is False, skip creating the figure_directory
     if directory == base_directories["figure_directory"] and not save_plots:
+        print("\n\nSKIPPING THE FIGURE DICTIONARY CREATION\n\n")
         continue
+    print(f"Created {directory}")
     os.makedirs(directory, exist_ok=True)
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
@@ -1826,9 +1831,18 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "det_residual_zeroed_event_pct",
     "residual_zeroed_event_pct",
     "small_values_zeroed_value_pct",
+    "small_values_zeroed_event_pct",
     "det_bounds_zeroed_event_pct",
     "definitive_small_values_zeroed_value_pct",
+    "definitive_small_values_zeroed_event_pct",
+    "definitive_x_zero_rows_pct",
+    "definitive_y_zero_rows_pct",
+    "definitive_s_zero_rows_pct",
+    "definitive_t0_zero_rows_pct",
+    "definitive_theta_zero_rows_pct",
+    "definitive_phi_zero_rows_pct",
     "definitive_rows_removed_pct",
+    "ancillary_charge_filtered_rows_pct",
 )
 
 reprocessing_parameters = pd.DataFrame()
@@ -4401,11 +4415,18 @@ if remove_small:
     # Filter the small values ----------------------------------------------------
     mask = working_df.map(is_small_nonzero)  # Create mask of small, non-zero numeric values
     nonzero_numeric_mask = working_df.map(lambda x: isinstance(x, (int, float)) and x != 0)  # Count total non-zero numeric entries
+    n_events = len(working_df)
+    rows_with_small = int(mask.any(axis=1).sum())
     n_total = nonzero_numeric_mask.sum().sum()
     n_small = mask.sum().sum()
     working_df = working_df.mask(mask, 0)  # Apply the replacement
     pct = 100 * n_small / n_total if n_total > 0 else 0
     print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")  # Report
+    record_filter_metric(
+        "small_values_zeroed_event_pct",
+        rows_with_small,
+        n_events if n_events else 0,
+    )
     record_filter_metric(
         "small_values_zeroed_value_pct",
         n_small,
@@ -5916,11 +5937,18 @@ if remove_small:
     # Remove small, non-zero values -----------------------------------------------
     mask = working_df.map(is_small_nonzero)
     nonzero_numeric_mask = working_df.map(lambda x: isinstance(x, (int, float)) and x != 0)
+    n_events = len(working_df)
+    rows_with_small = int(mask.any(axis=1).sum())
     n_total = nonzero_numeric_mask.sum().sum()
     n_small = mask.sum().sum()
     working_df = working_df.mask(mask, 0)
     pct = 100 * n_small / n_total if n_total > 0 else 0
     print(f"\nIn working_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
+    record_filter_metric(
+        "definitive_small_values_zeroed_event_pct",
+        rows_with_small,
+        n_events if n_events else 0,
+    )
     record_filter_metric(
         "definitive_small_values_zeroed_value_pct",
         n_small,
@@ -5929,6 +5957,16 @@ if remove_small:
 
 # Remove rows with zeros in key places ----------------------------------------
 cols_to_check = ['x', 'y', 's', 't0', 'theta', 'phi']
+
+n_before_zero_counts = len(working_df)
+for col in cols_to_check:
+    if col in working_df.columns:
+        zero_rows = int((working_df[col] == 0).sum())
+        record_filter_metric(
+            f"definitive_{col}_zero_rows_pct",
+            zero_rows,
+            n_before_zero_counts if n_before_zero_counts else 0,
+        )
 
 cond = (working_df[cols_to_check[0]] != 0)
 for col in cols_to_check[1:]:
@@ -5964,6 +6002,7 @@ print("----------------------- Calculating some stuff -----------------------")
 print("----------------------------------------------------------------------")
 
 df_plot_ancillary = working_df.copy()
+ancillary_before = len(df_plot_ancillary)
 
 cond = ( df_plot_ancillary['charge_1'] < charge_plot_limit_right ) &\
     ( df_plot_ancillary['charge_2'] < charge_plot_limit_right ) &\
@@ -5972,6 +6011,11 @@ cond = ( df_plot_ancillary['charge_1'] < charge_plot_limit_right ) &\
     ( df_plot_ancillary['charge_event'] > charge_plot_limit_left )
 
 df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
+record_filter_metric(
+    "ancillary_charge_filtered_rows_pct",
+    ancillary_before - len(df_plot_ancillary),
+    ancillary_before if ancillary_before else 0,
+)
 
 
 # -----------------------------------------------------------------------------------------------------------------------------

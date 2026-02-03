@@ -705,6 +705,20 @@ global_variables = {
     'analysis_mode': 0,
 }
 
+FILTER_METRIC_NAMES: tuple[str, ...] = (
+    "filter6_new_zero_rows_pct",
+    "q_sum_all_zero_rows_removed_pct",
+)
+
+filter_metrics: dict[str, float] = {}
+
+
+def record_filter_metric(name: str, removed: float, total: float) -> None:
+    """Record percentage removed for a filter."""
+    pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
+    filter_metrics[name] = round(pct, 4)
+    print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
     def _derive_tt(row: pd.Series) -> str:
@@ -888,6 +902,7 @@ for directory in base_directories.values():
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
+csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
@@ -4324,6 +4339,20 @@ def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
                 global_variables[f"P{i_plane}_{label}_nonzero_{tag}"] = count
 
 
+filter6_cols: list[str] = []
+for i_plane in range(1, 5):
+    filter6_cols.extend([
+        f"P{i_plane}_Y_final",
+        f"P{i_plane}_T_sum_final",
+        f"P{i_plane}_T_dif_final",
+        f"P{i_plane}_Q_sum_final",
+        f"P{i_plane}_Q_dif_final",
+    ])
+filter6_cols = [col for col in filter6_cols if col in working_df.columns]
+filter6_before_zero_mask = None
+if filter6_cols:
+    filter6_before_zero_mask = (working_df[filter6_cols] == 0).any(axis=1)
+
 record_filter6_counts(working_df, "before_filter6")
 
 print("--------------------- Filter 6: calibrated data ----------------------")
@@ -4358,6 +4387,15 @@ for i_plane in range(1, 5):
 
     # Apply zeroing
     working_df.loc[mask, cols] = 0
+
+if filter6_cols and filter6_before_zero_mask is not None:
+    filter6_after_zero_mask = (working_df[filter6_cols] == 0).any(axis=1)
+    newly_zeroed = int((filter6_after_zero_mask & ~filter6_before_zero_mask).sum())
+    record_filter_metric(
+        "filter6_new_zero_rows_pct",
+        newly_zeroed,
+        len(working_df) if len(working_df) else 0,
+    )
 
 record_filter6_counts(working_df, "after_filter6")
 
@@ -4601,7 +4639,14 @@ Q_SUM_PATTERN = re.compile(r'^P[1-4]_Q_sum_.*$')
 
 # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
 Q_cols = _collect_columns(working_df.columns, Q_SUM_PATTERN)
-working_df = working_df[(working_df[Q_cols] != 0).any(axis=1)]
+qsum_total = len(working_df)
+qsum_mask = (working_df[Q_cols] != 0).any(axis=1)
+working_df = working_df[qsum_mask]
+record_filter_metric(
+    "q_sum_all_zero_rows_removed_pct",
+    qsum_total - int(qsum_mask.sum()),
+    qsum_total if qsum_total else 0,
+)
 
 
 
@@ -4659,6 +4704,23 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
+
+
+# -------------------------------------------------------------------------------
+# Filter metadata (ancillary) ---------------------------------------------------
+# -------------------------------------------------------------------------------
+filter_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+}
+for name in FILTER_METRIC_NAMES:
+    filter_row[name] = filter_metrics.get(name, "")
+
+metadata_filter_csv_path = save_metadata(
+    csv_path_filter,
+    filter_row,
+)
+print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
 
 print("----------\nExecution metadata to be saved:")
