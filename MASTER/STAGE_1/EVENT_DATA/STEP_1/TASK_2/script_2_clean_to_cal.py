@@ -203,7 +203,11 @@ def _repair_metadata_file(metadata_path: Path) -> int:
     return fixed
 
 
-def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
+def save_metadata(
+    metadata_path: str,
+    row: Dict[str, object],
+    preferred_fieldnames: Iterable[str] | None = None,
+) -> Path:
     """Append *row* to *metadata_path*, preserving all existing columns."""
     metadata_path = Path(metadata_path)
     rows: List[Dict[str, object]] = []
@@ -251,6 +255,16 @@ def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
             if key not in seen:
                 fieldnames.append(key)
                 seen.add(key)
+
+    if preferred_fieldnames:
+        preferred = [name for name in preferred_fieldnames if name in seen]
+        remainder = [name for name in fieldnames if name not in preferred]
+        fieldnames = preferred + remainder
+        # Keep purity last for readability in filter metadata CSVs.
+        if "data_purity_percentage" in fieldnames:
+            fieldnames = [name for name in fieldnames if name != "data_purity_percentage"] + [
+                "data_purity_percentage"
+            ]
 
     with metadata_path.open("w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -334,6 +348,53 @@ def build_events_per_second_metadata(
             metadata[f"events_per_second_{events_count_int}_count"] = int(seconds_count)
 
     return metadata
+
+
+def add_normalized_count_metadata(
+    metadata: Dict[str, object],
+    denominator_seconds: object,
+) -> None:
+    """
+    Add per-second normalized versions of *_count columns to *metadata*.
+
+    - For typical event-count columns: *_count -> *_rate_hz (count / seconds).
+    - For events_per_second_{k}_count (seconds with k events): -> *_fraction (seconds / seconds).
+    """
+    try:
+        denom = float(denominator_seconds) if denominator_seconds is not None else 0.0
+    except (TypeError, ValueError):
+        denom = 0.0
+
+    metadata["count_rate_denominator_seconds"] = int(denom) if denom > 0 else 0
+
+    if denom <= 0:
+        print("[count-rates] Denominator seconds is 0; skipping normalized count columns.")
+        return
+
+    for key, value in list(metadata.items()):
+        if not isinstance(key, str):
+            continue
+
+        is_count = key.endswith("_count")
+        is_entries = key.endswith(("_entries", "_entries_final", "_entries_initial"))
+        if not (is_count or is_entries):
+            continue
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(num):
+            continue
+
+        if is_count:
+            if key.startswith("events_per_second_"):
+                out_key = key[: -len("_count")] + "_fraction"
+            else:
+                out_key = key[: -len("_count")] + "_rate_hz"
+        else:
+            out_key = key + "_rate_hz"
+
+        metadata[out_key] = round(num / denom, 6)
 
 
 # -----------------------------------------------------------------------------
@@ -1162,6 +1223,7 @@ global_variables = {
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "clean_tt_nan_rows_removed_pct",
     "q_sum_all_zero_rows_removed_pct",
+    "data_purity_percentage",
 )
 
 filter_metrics: dict[str, float] = {}
@@ -1494,6 +1556,9 @@ print(f"Cleaned dataframe reloaded from: {file_path}")
 # for col in working_df.columns:
 #     print(f" - {col}")
 
+original_number_of_events = len(working_df)
+print(f"Original number of events in the dataframe: {original_number_of_events}")
+
 working_df = compute_tt(working_df, "clean_tt")
 
 # Remove rows in which clean_tt is NaN (invalid TT)
@@ -1502,16 +1567,13 @@ working_df = working_df.dropna(subset=["clean_tt"])
 record_filter_metric(
     "clean_tt_nan_rows_removed_pct",
     n_before_clean_tt - len(working_df),
-    n_before_clean_tt if n_before_clean_tt else 0,
+    original_number_of_events if original_number_of_events else 0,
 )
 
 
 clean_tt_counts_initial = working_df["clean_tt"].value_counts()
 for tt_value, count in clean_tt_counts_initial.items():
     global_variables[f"clean_tt_{tt_value}_count"] = int(count)
-
-original_number_of_events = len(working_df)
-print(f"Original number of events in the dataframe: {original_number_of_events}")
 
 
 # --- Continue your calibration or analysis code here ---
@@ -6832,7 +6894,11 @@ if time_study_tsum:
                     tsum_diff_columns.append(f"P{plane_1}s{strip_1}_minus_P{plane_2}s{strip_2}")
     missing_cols = {col: np.nan for col in tsum_diff_columns if col not in working_df.columns}
     if missing_cols:
-        working_df = working_df.assign(**missing_cols)
+        # Avoid DataFrame fragmentation from repeated insert/assign calls.
+        working_df = pd.concat(
+            [working_df, pd.DataFrame(missing_cols, index=working_df.index)],
+            axis=1,
+        ).copy()
 
     for plane_1 in range(1, 5):
         for plane_2 in range(1, 5):
@@ -7563,7 +7629,7 @@ working_df = working_df[qsum_mask]
 record_filter_metric(
     "q_sum_all_zero_rows_removed_pct",
     qsum_total - int(qsum_mask.sum()),
-    qsum_total if qsum_total else 0,
+    original_number_of_events if original_number_of_events else 0,
 )
 
 
@@ -7658,6 +7724,7 @@ total_execution_time_minutes = execution_time_minutes
 # -------------------------------------------------------------------------------
 # Filter metadata (ancillary) ---------------------------------------------------
 # -------------------------------------------------------------------------------
+filter_metrics["data_purity_percentage"] = round(float(data_purity_percentage), 4)
 filter_row = {
     "filename_base": filename_base,
     "execution_timestamp": execution_timestamp,
@@ -7668,6 +7735,7 @@ for name in FILTER_METRIC_NAMES:
 metadata_filter_csv_path = save_metadata(
     csv_path_filter,
     filter_row,
+    preferred_fieldnames=("filename_base", "execution_timestamp", *FILTER_METRIC_NAMES),
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
@@ -7700,6 +7768,10 @@ print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
+add_normalized_count_metadata(
+    global_variables,
+    global_variables.get("events_per_second_total_seconds", 0),
+)
 
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp

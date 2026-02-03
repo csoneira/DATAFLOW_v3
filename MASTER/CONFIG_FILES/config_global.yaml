@@ -1,111 +1,98 @@
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# GLOBAL
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
+# DATAFLOW_v3 - Global Configuration
+# Keep keys stable: many pipeline scripts read this file directly.
 
+# -----------------------------------------------------------------------------
+# Paths
+# -----------------------------------------------------------------------------
 home_path: "/home/mingo"
 config_files_directory: "/home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES"
 
+# -----------------------------------------------------------------------------
+# STAGE_1 / EVENT_DATA / STEP_1 runner control (guide_raw_to_corrected.sh)
+# -----------------------------------------------------------------------------
+# This section lets the continuously running STEP_1 pipeline enable/disable
+# specific (station, task) pairs without restarting the script.
+#
+# If `enabled: false`, guide_raw_to_corrected.sh behaves as usual.
+# If `enabled: true`:
+# - mode: "whitelist" -> run only the listed pairs.
+# - mode: "blacklist" -> run everything except the listed pairs.
+#
+# Example: only run station 0 tasks 1-4
+# event_data_step1_run_matrix:
+#   enabled: true
+#   mode: "whitelist"
+#   stations:
+#     "0": [1, 2, 3, 4]
+#
+# Example: run everything except station 2 task 4
+# event_data_step1_run_matrix:
+#   enabled: true
+#   mode: "blacklist"
+#   stations:
+#     "2": [4]
+
+event_data_step1_run_matrix:
+  enabled: false
+  mode: "whitelist"     # whitelist | blacklist
+  default_tasks: []      # whitelist only: [] (none) | "all" | [1,2,3,4,5]
+  stations:
+    "0": [1, 2, 3, 4] #, 5]
+    "1": [1, 2, 3, 4] #, 5]
+    #"2": [1, 2, 3, 4, 5]
+    #"3": [1, 2, 3, 4, 5]
+    #"4": [1, 2, 3, 4, 5]
+
+# Resource limits for STEP_1 runner (guide_raw_to_corrected.sh)
+event_data_resource_limits:
+  mem_used_pct_max: 95          # percent
+  swap_used_pct_max: 95         # percent
+  swap_used_kb_max: 4194304     # 4 GB in kB
+  cpu_used_pct_max: 95          # percent
 
 # -----------------------------------------------------------------------------
+# STAGE_0 / REPROCESSING (prepare_reprocessing_metadata.sh)
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# ANCILLARY
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# METADATA PLOTTER (metadata_plotter.py)
-new_just_to_check: 0
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# ZERO STAGE
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# STAGE_0 - REPROCESSING
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# prepare_reprocessing_metadata.sh configuration
 prepare_reprocessing_metadata:
-  remote_host: "backuplip"         # SSH host with the remote raw listings.
-  remote_user: "rpcuser"           # SSH user to connect to the remote host.
+  remote_host: "backuplip"                   # SSH host with the remote raw listings.
+  remote_user: "rpcuser"                     # SSH user to connect to the remote host.
   remote_directory_root: "/local/experiments/MINGOS"  # Base path that contains MINGO0{station} folders.
   date_range:
-    start: 2026-01-01    # Earliest UTC datetime to keep (e.g. "2024-01-01" or "2024-01-01T08:00:00"); null disables.
-    end: 2026-02-01      # Latest UTC datetime to keep (inclusive); null disables.
+    start: 2026-01-01
+    end: 2026-02-01
 
 # Station-specific size and min-gap thresholds (used by prepare_reprocessing_metadata.sh)
 min_size_mb_1: 5.0
 max_size_mb_1: 8.0
+min_gap_minutes_1: 5
+max_gap_minutes_1: 120
+use_processed_as_reject_list_1: true
+unpack_anyway_station_1: true
 
 min_size_mb_2: 2.2
 max_size_mb_2: 3.7
+min_gap_minutes_2: 5
+max_gap_minutes_2: 140
+use_processed_as_reject_list_2: true
+unpack_anyway_station_2: true
 
 min_size_mb_3: 2.2
 max_size_mb_3: 3.3
+min_gap_minutes_3: 5
+max_gap_minutes_3: 40
+use_processed_as_reject_list_3: true
+unpack_anyway_station_3: true
 
 min_size_mb_4: 4.5
 max_size_mb_4: 6.1
-
-min_gap_minutes_1: 5
-max_gap_minutes_1: 120
-
-min_gap_minutes_2: 5
-max_gap_minutes_2: 140
-
-min_gap_minutes_3: 5
-max_gap_minutes_3: 40
-
 min_gap_minutes_4: 5
 max_gap_minutes_4: 140
-
-use_processed_as_reject_list_1: true
-use_processed_as_reject_list_2: true
-use_processed_as_reject_list_3: true
 use_processed_as_reject_list_4: true
-
-unpack_anyway_station_1: true
-unpack_anyway_station_2: true
-unpack_anyway_station_3: true
 unpack_anyway_station_4: true
 
-
 # -----------------------------------------------------------------------------
+# STAGE_1 / LAB_LOGS (log_bring_and_clean.sh)
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# FIRST STAGE
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# STAGE_1 - LAB_LOGS (log_bring_and_clean.sh)
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
 create_new_csv: true
 
 outlier_limits:
@@ -136,35 +123,17 @@ outlier_limits:
   hv_HVneg: [-0.1, 20]
   hv_HVpos: [-0.1, 20]
 
-
 # -----------------------------------------------------------------------------
+# STAGE_1 / COPERNICUS (copernicus.py)
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# STAGE_1 - COPERNICUS (copernicus.py)
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
 test_mode: false
 weeks_behind_requested: 1
-max_weeks_allowed: 2  # Maximum admitted by CDS is 21, but this is faster
+max_weeks_allowed: 2
 degree_apotema: 0.25
 
-
 # -----------------------------------------------------------------------------
+# STAGE_1 / EVENT_DATA - BRING (bring_data_and_config_files.sh)
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# EVENT_DATA
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# STAGE_1 - EVENT_DATA - BRING (bring_data_and_config_files.sh)
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
 logbook:
   sheet_id: "1ato36QkIXCxFkDT_LtAaLjPP7pvLcor-xZAP4fy00l0"
   gid_by_station:
@@ -174,139 +143,113 @@ logbook:
     "4": 1268265225
     "5": 1331842924
 
-
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# STAGE_1 - EVENT_DATA - RAW_TO_LIST (raw_to_list_events.sh)
-# -----------------------------------------------------------------------------
+# STAGE_1 / EVENT_DATA / STEP_1 (Tasks 1-5)
+# RAW -> CLEAN -> CAL -> LIST -> FIT -> CORR
 # -----------------------------------------------------------------------------
 
-try_to_use_reprocessing_table: false
-
-stratos_save: false
-fast_mode: false # Do not iterate TimTrack, neither save figures, etc.
-debug_mode: false # Only 10000 rows with all detail
-last_file_test: true
-alternative_fitting: true
-not_use_q_semisum_for_slew_corr: true
-residue_plots: true
-
-# Plots and savings -------------------------
+# Execution modes
 crontab_execution: true
-limit: false
-limit_number: 10000
-number_of_time_cal_figures: 3
-save_calibrations: true
-# save_full_data: false
-presentation: false
-presentation_plots: false
-force_replacement: false # Creates a new datafile even if there is already one that looks complete
-article_format: false
+fast_mode: false
+debug_mode: false
+last_file_test: true
 
+# Reprocessing
+try_to_use_reprocessing_table: false
 complete_reanalysis: false
 
+# Output behavior
+force_replacement: true          # overwrite outputs even if an output already exists
+article_format: false
+presentation: false
+presentation_plots: false
+stratos_save: false
+
+# Plots / saving (used by STEP_1 tasks + corrected_to_accumulated.py)
+create_plots: false
+create_essential_plots: false
+save_plots: false
+create_pdf: false
+show_plots: false
+
+# Task-specific plot switches
+create_plots_task_4: false
+create_plots_task_4_station_0: false
+
+# Limit rows (applied inside task scripts depending on mode)
+limit: false
+limit_number: 10000
+limit_fast: false
+limit_number_fast: 10000
+limit_debug: true
+limit_number_debug: 10000
+
+# Calibration / figure outputs
+save_calibrations: true
+number_of_time_cal_figures: 3
+
+# Core reconstruction toggles
 calibrate_charge_ns_to_fc: true
-
-# Charge front-back --------------------------------
-charge_front_back: true
-
-# Slewing correction -------------------------------
-slewing_correction: false
-
-# Time filtering -----------------------------------
-time_window_filtering: true
-
-# Time calibration ---------------------------------
-time_calibration: true
-old_timing_method: true
-brute_force_analysis_time_calibration_path_finding: false
-
-# Y position ---------------------------------------
-y_position_complex_method: false
-uniform_y_method: true
-uniform_weighted_method: false
-
-# RPC variables ------------------------------------
-y_new_method: true
-blur_y: true
-
-# Alternative --------------------------------------
-alternative_iteration: false
-number_of_det_executions: 2
-
-# TimTrack -----------------------------------------
-fixed_speed: false
-res_ana_removing_planes: true
-timtrack_iteration: false
-number_of_TT_executions: 1
-
 validate_charge_pedestal_calibration: true
-
 EXPECTED_COLUMNS_config: 71
 
+# Residual diagnostic plots
 residual_plots: false
 residual_plots_fast: false
 residual_plots_debug: false
 
-timtrack_iteration: true
-timtrack_iteration_fast: false
-timtrack_iteration_debug: false
-
-time_calibration: true
-time_calibration_fast: false
-time_calibration_debug: false
-
+# Charge front-back
 charge_front_back: true
 charge_front_back_fast: false
 charge_front_back_debug: false
 
-# Resource limits for STEP_1 pipeline (guide_raw_to_corrected.sh)
-event_data_resource_limits:
-  mem_used_pct_max: 95          # percent
-  swap_used_pct_max: 95         # percent
-  swap_used_kb_max: 4194304     # 4 GB in kB
-  cpu_used_pct_max: 95          # percent
+# Slewing correction
+slewing_correction: false
 
-limit: false
-limit_fast: false
-limit_debug: true
+# Time filtering
+time_window_filtering: true
 
-limit_number: None
-limit_number_fast: 10000
-limit_number_debug: 10000
+# Time calibration
+time_calibration: true
+time_calibration_fast: false
+time_calibration_debug: false
+old_timing_method: true
+brute_force_analysis_time_calibration_path_finding: false
 
+# Y reconstruction
+# (keep in sync with the Task 1/2/3/4 scripts)
+y_position_complex_method: false
+uniform_y_method: true
+uniform_weighted_method: false
+y_new_method: true
+blur_y: true
 
-# ALL THE VARIABLES THAT WERE HERE ARE NOW IN THE PARAMETER CSV FILE
-# ~/DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv
+# Alternative fitter
+alternative_fitting: true
+alternative_iteration: false
+number_of_det_executions: 2
 
-
+# TimTrack
+fixed_speed: false
+res_ana_removing_planes: true
+timtrack_iteration: true
+timtrack_iteration_fast: false
+timtrack_iteration_debug: false
+number_of_TT_executions: 1
 
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# STAGE_1 - EVENT_DATA - EVENT_ACCUMULATOR (ev_accumulator.sh)
-# -----------------------------------------------------------------------------
+# STAGE_1 / EVENT_DATA / STEP_2 (corrected_to_accumulated.py)
+# CORR -> ACC
 # -----------------------------------------------------------------------------
 
 # General settings
 correct_angle: false
 update_big_event_file: false
-
 multiple_files: true
 run_jupyter_notebook: false
-remove_outliers: false
+remove_outliers: true
 
-# Plot settings
-create_plots: false
-create_plots_task_4: false
-create_plots_task_4_station_0: false
-create_essential_plots: false
-save_plots: false
-create_pdf: false
-force_replacement: true  # Creates a new datafile even if there is already one that looks complete
-show_plots: false
-
-
-# Particular analysis
+# Particular analyses
 side_calculations: false
 eff_vs_charge: false
 eff_vs_angle_and_pos: false
@@ -320,156 +263,28 @@ crosstalk_probability: false
 n_study_fit: false
 topology_plots: false
 
-# Configuration for multiple files in corrected_to_accumulated
-cluster_of_files: 0  # Adjust as needed
-time_window_in_hours: 10  # Time window in hours to look for files
-time_tolerance_in_minutes: 10  # Tolerance in minutes for overlapping time ranges
+# Multi-file / windowing
+cluster_of_files: 0
+time_window_in_hours: 10
+time_tolerance_in_minutes: 10
 
+# Limits / constants
 three_plane_eff: false
-
-# Limits
 crosstalk_limit: 1
 streamer_limit: 100
+q_e: 1.602e-4
 
-# Constants
-q_e: 1.602e-4  # fC
-
+# Smoothing / blurring
 blurring_angular: true
 blurring_sigma_angular: 2
-
 blurring_xy: false
 blurring_sigma_xy: 0.05
 
 draw_angular_regions: true
 time_to_min: false
 
-
 # -----------------------------------------------------------------------------
+# Note
 # -----------------------------------------------------------------------------
-# STAGE_1 - EVENT_DATA - BIG EVENT FILE JOINER (big_event_file_joiner.py)
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-load_big_event_file: false
-significant_digits: 6
-
-suffixes: # These are the columns to average, the others are summing
-  # Summary metrics and quality flags
-  - CRT_avg
-  - sigmoid_width
-  - background_slope
-  - one_side_events
-  - purity_of_data_percentage
-  - unc_y
-  - unc_tsum
-  - unc_tdif
-
-  # Reconstruction outputs
-  - x
-  - y
-  - theta
-  - phi
-  - s
-  - th_chi
-  - x_std
-  - y_std
-  - theta_std
-  - phi_std
-  - s_std
-  - th_chi_std
-
-  # Streamer fractions
-  - streamer_percent_1
-  - streamer_percent_2
-  - streamer_percent_3
-  - streamer_percent_4
-
-  # Config
-  - over_P1
-  - P1-P2
-  - P2-P3
-  - P3-P4
-  - phi_north
-
-
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# SECOND STAGE
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# STAGE_2 - MERGE INTO LARGE TABLE
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-DECIMAL_PLACES: 2
-
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# STAGE_2 - CORRECTOR
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Touch -----------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-use_two_planes_too: false
-date_selection: true  # Set to true if you want to filter by date
-start_date_filter: "2025-01-01"
-end_date_filter: "2025-12-31"
-
-# Aesthetic -------------------------------------
-show_errorbar: false
-
-# Execution -------------------------------------
-only_all: true
-recalculate_pressure_coeff: true
-remove_outliers: true
-
-rolling_effs: true
-mean_window: 5
-med_window: 3
-rolling_mean: false
-rolling_median: true
-
-outlier_gaussian_quantile: 0.02 # 2%
-
-res_win_min: 60 # 180 Resampling window minutes
-HMF_ker: 3 # It must be odd. Horizontal Median Filter
-MAF_ker: 0 # Moving Average Filter
-acceptance_corr: false
-high_order_correction: false
-
-
-# -----------------------------------------------------------------------------
-# To not touch unless necesary ------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# This should come from an input file
-eta_P: -0.162 # pressure_coeff_input
-unc_eta_P: 0.013 # unc_pressure_coeff_input
-set_a: -0.11357 # pressure_intercept_input
-mean_pressure_used_for_the_fit: 940
-
-low_lim_eff_plot: 0
-systematic_unc:
-  - 0
-  - 0
-  - 0
-  - 0 # From simulation
-
-systematic_unc_corr_to_real_rate: 0
-
-remove_non_data_points: true
-repeat_efficiency_calculation: true
-decorrelate: true
-fit_efficiencies: true
-significant_digits: 4
+# Many reconstruction thresholds are stored in:
+#   /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv

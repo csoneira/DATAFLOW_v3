@@ -68,6 +68,10 @@ FILENAME_PATTERNS: Sequence[Tuple[re.Pattern[str], str]] = (
     (re.compile(r"(?<!\d)(?P<year>\d{2})[-_]?((?P<month>\d{2})[-_]?)(?P<day>\d{2})(?!\d)"), "y2md"),
 )
 
+# MINGO-style: mi0<station><YY><DDD><HH><MM><SS>
+# Example: mi0005265000001 -> YY=05, DDD=265, HH=00, MM=00, SS=01
+MI_FILENAME_PATTERN = re.compile(r"mi0\d(?P<digits>\d{11})$", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class MetadataSource:
@@ -155,10 +159,13 @@ def read_csv_tail(path: Path, n_rows: int, usecols: Optional[Sequence[str]]) -> 
 
 
 def ensure_rate_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
-    for col in columns:
-        if col not in df.columns:
-            df[col] = 0
-    return df
+    """Ensure all *columns* exist, adding missing ones in a non-fragmenting way."""
+    missing = [col for col in columns if col not in df.columns]
+    if not missing:
+        return df
+    missing_df = pd.DataFrame(0, index=df.index, columns=missing)
+    # pd.concat avoids the repeated frame.insert() pattern that fragments DataFrames.
+    return pd.concat([df, missing_df], axis=1)
 
 
 def metadata_sources(
@@ -255,6 +262,21 @@ def parse_time_value(value: object) -> Optional[pd.Timestamp]:
 def parse_time_from_filename(filename: str) -> Optional[pd.Timestamp]:
     if not filename:
         return None
+
+    # Prefer explicit MINGO basename decoding (YY + day-of-year + time).
+    match = MI_FILENAME_PATTERN.search(filename)
+    if match:
+        digits = match.group("digits")
+        try:
+            year = 2000 + int(digits[0:2])
+            doy = int(digits[2:5])
+            hour = int(digits[5:7])
+            minute = int(digits[7:9])
+            second = int(digits[9:11])
+            base = datetime(year, 1, 1) + timedelta(days=doy - 1)
+            return pd.Timestamp(base.replace(hour=hour, minute=minute, second=second))
+        except (ValueError, OverflowError):
+            pass
 
     for pattern, kind in FILENAME_PATTERNS:
         match = pattern.search(filename)
@@ -354,6 +376,7 @@ def plot_rate_heatmap(
     title: str,
     log_color: bool,
     fallback_seconds: float,
+    x_limits: Optional[Tuple[float, float]] = None,
 ) -> None:
     if times.size == 0:
         return
@@ -390,6 +413,8 @@ def plot_rate_heatmap(
     ax.set_xlabel("Center time of file")
     ax.set_ylabel("Events per second")
     ax.set_ylim(rate_values.min(), rate_values.max())
+    if x_limits is not None:
+        ax.set_xlim(x_limits[0], x_limits[1])
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
     ax.grid(False)
 
@@ -423,6 +448,7 @@ def plot_global_rate_trend(
     times: np.ndarray,
     rates: np.ndarray,
     title: str,
+    x_limits: Optional[Tuple[float, float]] = None,
 ) -> None:
     if times.size == 0:
         return
@@ -438,6 +464,8 @@ def plot_global_rate_trend(
     ax.set_title(title)
     ax.set_xlabel("Center time of file")
     ax.set_ylabel("Global rate (events / second)")
+    if x_limits is not None:
+        ax.set_xlim(x_limits[0], x_limits[1])
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
     ax.grid(True, alpha=0.3)
     fig.autofmt_xdate()
@@ -449,6 +477,7 @@ def plot_task_rate_trends(
     pdf: PdfPages,
     df: pd.DataFrame,
     title: str,
+    x_limits: Optional[Tuple[float, float]] = None,
 ) -> None:
     if "task" not in df.columns or df.empty:
         return
@@ -497,10 +526,96 @@ def plot_task_rate_trends(
     ax.set_title(title)
     ax.set_xlabel("Center time of file")
     ax.set_ylabel("Global rate (events / second)")
+    if x_limits is not None:
+        ax.set_xlim(x_limits[0], x_limits[1])
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
     ax.grid(True, alpha=0.3)
     ax.legend(loc="upper right", fontsize="small")
     fig.autofmt_xdate()
+    pdf_save_rasterized_page(pdf, fig)
+    plt.close(fig)
+
+
+def build_file_key(df: pd.DataFrame) -> pd.Series:
+    """Return a stable per-file key for matching across tasks."""
+    filename = df.get("filename_base")
+    if filename is None:
+        return pd.Series([pd.NA] * len(df), index=df.index, dtype="string")
+
+    if "station" in df.columns:
+        station = df["station"].astype("string")
+        return station.fillna("") + ":" + filename.astype("string").fillna("")
+
+    return filename.astype("string").fillna("")
+
+
+def filter_to_common_files_across_tasks(
+    df: pd.DataFrame,
+    tasks: Sequence[object],
+    file_key_col: str,
+) -> pd.DataFrame:
+    """Keep only rows whose file key exists for *all* tasks in *tasks*."""
+    if df.empty or not tasks:
+        return df
+
+    task_sets: List[set[str]] = []
+    for task in tasks:
+        subset = df[df["task"] == task]
+        keys = subset[file_key_col].dropna().astype(str)
+        task_sets.append(set(keys.tolist()))
+
+    if not task_sets:
+        return df.iloc[0:0].copy()
+
+    common = set.intersection(*task_sets)
+    if not common:
+        return df.iloc[0:0].copy()
+
+    return df[df[file_key_col].astype(str).isin(common)].copy()
+
+
+def plot_matched_file_traces(
+    pdf: PdfPages,
+    df: pd.DataFrame,
+    tasks: Sequence[object],
+    value_col: str,
+    title: str,
+    ylabel: str,
+) -> None:
+    if df.empty or not tasks or value_col not in df.columns:
+        return
+
+    pivot = df.pivot_table(index="_file_key", columns="task", values=value_col, aggfunc="last")
+    ordered_tasks = [task for task in tasks if task in pivot.columns]
+    if not ordered_tasks:
+        return
+    pivot = pivot[ordered_tasks].dropna(axis=0, how="any")
+    if pivot.empty:
+        return
+
+    x = np.arange(len(ordered_tasks))
+    fig, ax = plt.subplots(figsize=(12, 5))
+    for _, row in pivot.iterrows():
+        ax.plot(
+            x,
+            row.to_numpy(dtype=float),
+            color="0.55",
+            alpha=0.25,
+            linewidth=1.0,
+        )
+
+    median = pivot.median(axis=0).to_numpy(dtype=float)
+    mean = pivot.mean(axis=0).to_numpy(dtype=float)
+    ax.plot(x, median, color="#264653", linewidth=2.2, label="Median")
+    ax.plot(x, mean, color="#2a9d8f", linewidth=1.8, linestyle="--", label="Mean")
+
+    ax.set_title(f"{title} (matched files: {len(pivot)})")
+    ax.set_xlabel("Task")
+    ax.set_ylabel(ylabel)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{t}" for t in ordered_tasks])
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(loc="best", fontsize="small")
     pdf_save_rasterized_page(pdf, fig)
     plt.close(fig)
 
@@ -587,6 +702,11 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated list of preferred time columns (overrides defaults).",
     )
     parser.add_argument(
+        "--x-from-basename",
+        action="store_true",
+        help="Use timestamp parsed from filename_base for the x-axis (falls back to other columns if parsing fails).",
+    )
+    parser.add_argument(
         "--linear-color",
         action="store_true",
         help="Use linear color scale instead of log.",
@@ -639,10 +759,20 @@ def main() -> int:
     max_rate = max(0, args.max_rate)
     rate_cols = rate_columns(max_rate)
     df = ensure_rate_columns(df, rate_cols)
+    # De-fragment after loading/column-normalization to avoid slowdowns + warnings.
+    df = df.copy()
 
-    df["center_time"] = df.apply(
-        lambda row: derive_center_time(row, preferred_time_columns), axis=1
-    )
+    if args.x_from_basename and "filename_base" in df.columns:
+        df["center_time"] = df["filename_base"].astype(str).map(parse_time_from_filename)
+        missing = df["center_time"].isna()
+        if missing.any():
+            df.loc[missing, "center_time"] = df.loc[missing].apply(
+                lambda row: derive_center_time(row, preferred_time_columns), axis=1
+            )
+    else:
+        df["center_time"] = df.apply(
+            lambda row: derive_center_time(row, preferred_time_columns), axis=1
+        )
     df = df[~df["center_time"].isna()].copy()
     if df.empty:
         print("No rows with a usable center time. Use --time-columns to specify a time column.")
@@ -677,6 +807,34 @@ def main() -> int:
     total_counts = summarize_rate_counts(df, rate_cols)
     global_times, global_rate_matrix, global_total_seconds = build_rate_arrays(df, rate_cols)
     fallback_seconds = float(df["events_per_second_total_seconds"].median())
+    # Share time-axis bounds across all time-series plots for easier comparison.
+    x_limits: Optional[Tuple[float, float]] = None
+    if global_times.size:
+        x_limits = (float(np.nanmin(global_times)), float(np.nanmax(global_times)))
+
+    tasks = (
+        sort_task_values(df["task"].dropna().unique())
+        if "task" in df.columns
+        else []
+    )
+    df_rate_dedup = df
+    df_rate_matched = pd.DataFrame()
+    matched_file_count = 0
+    if tasks and "filename_base" in df.columns and "task" in df.columns:
+        df_rate_dedup = df.copy()
+        df_rate_dedup["_file_key"] = build_file_key(df_rate_dedup)
+        df_rate_dedup = df_rate_dedup[
+            df_rate_dedup["_file_key"].notna()
+            & (df_rate_dedup["_file_key"].astype(str).str.len() > 0)
+        ].copy()
+        # Keep the latest entry per (task, file) from the metadata CSVs.
+        df_rate_dedup = df_rate_dedup.drop_duplicates(subset=["task", "_file_key"], keep="last")
+        if len(tasks) > 1:
+            df_rate_matched = filter_to_common_files_across_tasks(
+                df_rate_dedup, tasks=tasks, file_key_col="_file_key"
+            )
+            if not df_rate_matched.empty:
+                matched_file_count = int(df_rate_matched["_file_key"].nunique())
 
     report_path = output_dir / args.output_name
 
@@ -687,6 +845,10 @@ def main() -> int:
             f"Tasks: {', '.join(sorted(df['task'].dropna().unique())) if 'task' in df.columns else 'n/a'}",
             f"Total seconds (sum): {int(df['events_per_second_total_seconds'].sum())}",
         ]
+        if matched_file_count and len(tasks) > 1:
+            summary_lines.append(
+                f"Matched files across tasks ({', '.join(str(t) for t in tasks)}): {matched_file_count}"
+            )
         fig, ax = plt.subplots(figsize=(10, 4))
         ax.axis("off")
         ax.text(0.02, 0.95, "Events-per-second metadata report", fontsize=14, weight="bold", va="top")
@@ -694,11 +856,6 @@ def main() -> int:
         pdf_save_rasterized_page(pdf, fig)
         plt.close(fig)
 
-        tasks = (
-            sort_task_values(df["task"].dropna().unique())
-            if "task" in df.columns
-            else []
-        )
         if len(tasks) > 1:
             for task in tasks:
                 task_df = df[df["task"] == task].copy()
@@ -715,6 +872,7 @@ def main() -> int:
                     title=f"Events per second occurrence rate per file (Task {task})",
                     log_color=not args.linear_color,
                     fallback_seconds=task_fallback,
+                    x_limits=x_limits,
                 )
         else:
             plot_rate_heatmap(
@@ -726,6 +884,7 @@ def main() -> int:
                 title="Events per second occurrence rate per file",
                 log_color=not args.linear_color,
                 fallback_seconds=fallback_seconds,
+                x_limits=x_limits,
             )
 
         plot_global_histogram(
@@ -740,13 +899,62 @@ def main() -> int:
             times=global_times,
             rates=df["events_per_second_global_rate"].to_numpy(dtype=float),
             title="Global rate per file",
+            x_limits=x_limits,
         )
 
         plot_task_rate_trends(
             pdf,
             df=df,
             title="Global event rate per file by task",
+            x_limits=x_limits,
         )
+
+        if len(tasks) > 1 and matched_file_count == 0 and "filename_base" in df.columns and "task" in df.columns:
+            fig, ax = plt.subplots(figsize=(11, 3))
+            ax.axis("off")
+            ax.text(
+                0.02,
+                0.75,
+                "Matched-by-filename view",
+                fontsize=13,
+                weight="bold",
+                va="top",
+            )
+            ax.text(
+                0.02,
+                0.45,
+                "No filenames were found in common across all selected tasks.\n"
+                "Try increasing --tail (or reading full files) so each task includes the same filenames,\n"
+                "or restrict --tasks to those you want to compare.",
+                fontsize=11,
+                va="top",
+            )
+            pdf_save_rasterized_page(pdf, fig)
+            plt.close(fig)
+
+        if len(tasks) > 1 and not df_rate_matched.empty:
+            plot_task_rate_trends(
+                pdf,
+                df=df_rate_matched,
+                title="Global event rate per file by task (matched by filename_base)",
+                x_limits=x_limits,
+            )
+            plot_matched_file_traces(
+                pdf,
+                df=df_rate_matched,
+                tasks=tasks,
+                value_col="events_per_second_global_rate",
+                title="Global rate per file across tasks",
+                ylabel="Global rate (events / second)",
+            )
+            plot_matched_file_traces(
+                pdf,
+                df=df_rate_matched,
+                tasks=tasks,
+                value_col="events_per_second_total_seconds",
+                title="Time span per file across tasks",
+                ylabel="Total seconds (start-to-end window)",
+            )
 
     print(f"Saved report to {report_path}")
 

@@ -200,7 +200,11 @@ def _repair_metadata_file(metadata_path: Path) -> int:
     return fixed
 
 
-def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
+def save_metadata(
+    metadata_path: str,
+    row: Dict[str, object],
+    preferred_fieldnames: Iterable[str] | None = None,
+) -> Path:
     """Append *row* to *metadata_path*, preserving all existing columns."""
     metadata_path = Path(metadata_path)
     rows: List[Dict[str, object]] = []
@@ -247,6 +251,16 @@ def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
             if key not in seen:
                 fieldnames.append(key)
                 seen.add(key)
+
+    if preferred_fieldnames:
+        preferred = [name for name in preferred_fieldnames if name in seen]
+        remainder = [name for name in fieldnames if name not in preferred]
+        fieldnames = preferred + remainder
+        # Keep purity last for readability in filter metadata CSVs.
+        if "data_purity_percentage" in fieldnames:
+            fieldnames = [name for name in fieldnames if name != "data_purity_percentage"] + [
+                "data_purity_percentage"
+            ]
 
     with metadata_path.open("w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -326,6 +340,53 @@ def build_events_per_second_metadata(
             metadata[f"events_per_second_{events_count_int}_count"] = int(seconds_count)
 
     return metadata
+
+
+def add_normalized_count_metadata(
+    metadata: Dict[str, object],
+    denominator_seconds: object,
+) -> None:
+    """
+    Add per-second normalized versions of *_count columns to *metadata*.
+
+    - For typical event-count columns: *_count -> *_rate_hz (count / seconds).
+    - For events_per_second_{k}_count (seconds with k events): -> *_fraction (seconds / seconds).
+    """
+    try:
+        denom = float(denominator_seconds) if denominator_seconds is not None else 0.0
+    except (TypeError, ValueError):
+        denom = 0.0
+
+    metadata["count_rate_denominator_seconds"] = int(denom) if denom > 0 else 0
+
+    if denom <= 0:
+        print("[count-rates] Denominator seconds is 0; skipping normalized count columns.")
+        return
+
+    for key, value in list(metadata.items()):
+        if not isinstance(key, str):
+            continue
+
+        is_count = key.endswith("_count")
+        is_entries = key.endswith(("_entries", "_entries_final", "_entries_initial"))
+        if not (is_count or is_entries):
+            continue
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(num):
+            continue
+
+        if is_count:
+            if key.startswith("events_per_second_"):
+                out_key = key[: -len("_count")] + "_fraction"
+            else:
+                out_key = key[: -len("_count")] + "_rate_hz"
+        else:
+            out_key = key + "_rate_hz"
+
+        metadata[out_key] = round(num / denom, 6)
 
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
@@ -1829,20 +1890,29 @@ RESIDUAL_SERIES: tuple[str, ...] = (
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "det_residual_zeroed_event_pct",
-    "residual_zeroed_event_pct",
-    "small_values_zeroed_value_pct",
-    "small_values_zeroed_event_pct",
     "det_bounds_zeroed_event_pct",
-    "definitive_small_values_zeroed_value_pct",
+    "residual_zeroed_event_pct",
+    "small_values_zeroed_event_pct",
+    "small_values_zeroed_value_pct",
     "definitive_small_values_zeroed_event_pct",
+    "definitive_small_values_zeroed_value_pct",
+    "definitive_rows_removed_pct",
+    "definitive_removed_single_zero_rows_pct",
+    "definitive_removed_multi_zero_rows_pct",
+    "definitive_removed_primary_x_zero_rows_pct",
+    "definitive_removed_primary_y_zero_rows_pct",
+    "definitive_removed_primary_s_zero_rows_pct",
+    "definitive_removed_primary_t0_zero_rows_pct",
+    "definitive_removed_primary_theta_zero_rows_pct",
+    "definitive_removed_primary_phi_zero_rows_pct",
     "definitive_x_zero_rows_pct",
     "definitive_y_zero_rows_pct",
     "definitive_s_zero_rows_pct",
     "definitive_t0_zero_rows_pct",
     "definitive_theta_zero_rows_pct",
     "definitive_phi_zero_rows_pct",
-    "definitive_rows_removed_pct",
     "ancillary_charge_filtered_rows_pct",
+    "data_purity_percentage",
 )
 
 reprocessing_parameters = pd.DataFrame()
@@ -5958,19 +6028,51 @@ if remove_small:
 # Remove rows with zeros in key places ----------------------------------------
 cols_to_check = ['x', 'y', 's', 't0', 'theta', 'phi']
 
-n_before_zero_counts = len(working_df)
+baseline_events = original_number_of_events if original_number_of_events else len(working_df)
 for col in cols_to_check:
     if col in working_df.columns:
         zero_rows = int((working_df[col] == 0).sum())
         record_filter_metric(
             f"definitive_{col}_zero_rows_pct",
             zero_rows,
-            n_before_zero_counts if n_before_zero_counts else 0,
+            baseline_events if baseline_events else 0,
         )
 
 cond = (working_df[cols_to_check[0]] != 0)
 for col in cols_to_check[1:]:
     cond &= (working_df[col] != 0)
+
+removed_mask = ~cond
+removed_total = int(removed_mask.sum())
+zero_counts = np.zeros(len(working_df), dtype=int)
+for col in cols_to_check:
+    if col in working_df.columns:
+        zero_counts += (working_df[col].to_numpy(copy=False) == 0)
+
+single_zero = removed_mask & (zero_counts == 1)
+multi_zero = removed_mask & (zero_counts >= 2)
+record_filter_metric(
+    "definitive_removed_single_zero_rows_pct",
+    int(single_zero.sum()),
+    baseline_events if baseline_events else 0,
+)
+record_filter_metric(
+    "definitive_removed_multi_zero_rows_pct",
+    int(multi_zero.sum()),
+    baseline_events if baseline_events else 0,
+)
+
+remaining = removed_mask.copy()
+for col in cols_to_check:
+    if col not in working_df.columns:
+        continue
+    primary_mask = remaining & (working_df[col] == 0)
+    record_filter_metric(
+        f"definitive_removed_primary_{col}_zero_rows_pct",
+        int(primary_mask.sum()),
+        baseline_events if baseline_events else 0,
+    )
+    remaining &= ~primary_mask
 
 n_before = len(working_df)
 working_df = working_df[cond]
@@ -5983,8 +6085,8 @@ print(f"Rows after: {n_after}")
 print(f"Retained: {percentage_retained:.2f}%")
 record_filter_metric(
     "definitive_rows_removed_pct",
-    n_before - n_after,
-    n_before if n_before else 0,
+    removed_total,
+    baseline_events if baseline_events else 0,
 )
 
 print("----------------------------------------------------------------------")
@@ -7478,6 +7580,7 @@ total_execution_time_minutes = execution_time_minutes
 # -------------------------------------------------------------------------------
 # Filter metadata (ancillary) ----------------------------------------------------
 # -------------------------------------------------------------------------------
+filter_metrics["data_purity_percentage"] = round(float(data_purity_percentage), 4)
 filter_row = {
     "filename_base": filename_base,
     "execution_timestamp": execution_timestamp,
@@ -7488,6 +7591,7 @@ for name in FILTER_METRIC_NAMES:
 metadata_filter_csv_path = save_metadata(
     csv_path_filter,
     filter_row,
+    preferred_fieldnames=("filename_base", "execution_timestamp", *FILTER_METRIC_NAMES),
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
@@ -7519,6 +7623,10 @@ print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
+add_normalized_count_metadata(
+    global_variables,
+    global_variables.get("events_per_second_total_seconds", 0),
+)
 
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp

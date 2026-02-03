@@ -15,7 +15,7 @@ Usage:
   guide_raw_to_corrected.sh [--station <list>] [--task <list>] [--run-anyway]
 
 Options:
-  -s, --station   Station numbers (1-4). Comma-separated or space-separated. Default: all.
+  -s, --station   Station numbers (0-4). Comma-separated or space-separated. Default: all.
   -t, --task      Task IDs to run: 1-5 or "all" (default: all tasks).
   --run-anyway    Skip the check that prevents overlapping guide_raw_to_corrected.sh runs.
   -h, --help      Show this help message and exit.
@@ -24,6 +24,9 @@ When multiple stations and tasks are provided, tasks are executed in task-major
 order (e.g., stations 1,2 and tasks 3,4,5 run as: 1-3, 2-3, 1-4, 2-4, 1-5, 2-5),
 looping continuously. If another guide_raw_to_corrected.sh is already running
 for a station, that station is skipped for this invocation.
+
+This script also re-reads config_global.yaml on every outer loop iteration to
+optionally enable/disable station-task pairs via `event_data_step1_run_matrix`.
 EOF
 }
 
@@ -90,15 +93,11 @@ TASK_LABELS=(
 
 TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/TRAFFIC_LIGHT"
 TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step1_station_task_queue.txt"
+config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
 
 build_default_queue_order() {
   local -n out_arr=$1
-  out_arr=()
-  for task_id in "${ALL_TASK_IDS[@]}"; do
-    for station in "${ALL_STATIONS[@]}"; do
-      out_arr+=("${station}-${task_id}")
-    done
-  done
+  out_arr=("${execution_pairs[@]}")
 }
 
 sanitize_queue_file() {
@@ -240,7 +239,7 @@ parse_list() {
   eval "$out_var=(\"\${tmp[@]}\")"
 }
 
-ALL_STATIONS=(1 2 3 4)
+ALL_STATIONS=(0 1 2 3 4)
 ALL_TASK_IDS=(1 2 3 4 5)
 
 LOCK_BASE_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/guide_raw_to_corrected"
@@ -347,7 +346,7 @@ validate_stations() {
     if [[ "$s" =~ ^[0-4]$ ]]; then
       validated+=("$s")
     else
-      echo "Warning: ignoring invalid station '$s' (must be 1-8)" >&2
+      echo "Warning: ignoring invalid station '$s' (must be 0-4)" >&2
     fi
   done
   if [[ ${#validated[@]} -eq 0 ]]; then
@@ -377,6 +376,138 @@ validate_tasks() {
 validate_stations "${stations_requested[@]}"
 validate_tasks "${tasks_requested[@]}"
 
+refresh_execution_pairs_from_config() {
+  local cfg_path="$config_file"
+  local stations_csv tasks_csv result
+  stations_csv="$(IFS=,; echo "${stations_requested[*]}")"
+  tasks_csv="$(IFS=,; echo "${tasks_requested[*]}")"
+
+  execution_pairs=()
+
+  if [[ ! -f "$cfg_path" ]]; then
+    for task_id in "${tasks_requested[@]}"; do
+      for st in "${stations_requested[@]}"; do
+        execution_pairs+=("${st}-${task_id}")
+      done
+    done
+    return 0
+  fi
+
+  result=$(python3 - "$cfg_path" "$stations_csv" "$tasks_csv" <<'PY'
+import sys
+
+cfg_path, stations_csv, tasks_csv = sys.argv[1:4]
+
+stations = [s.strip() for s in stations_csv.split(",") if s.strip()]
+tasks_raw = [t.strip() for t in tasks_csv.split(",") if t.strip()]
+
+try:
+    import yaml
+except ImportError:
+    for t in tasks_raw:
+        for s in stations:
+            print(f"{s}-{t}")
+    raise SystemExit(0)
+
+try:
+    data = yaml.safe_load(open(cfg_path)) or {}
+except Exception:
+    data = {}
+
+node = data.get("event_data_step1_run_matrix") or {}
+enabled = bool(node.get("enabled", False))
+
+def normalize_tasks(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text == "all":
+            return "all"
+        if not text:
+            return []
+        parts = [p.strip() for p in text.replace(";", ",").split(",") if p.strip()]
+        out = []
+        for part in parts:
+            try:
+                out.append(int(part))
+            except ValueError:
+                continue
+        return out
+    if isinstance(value, (list, tuple)):
+        out = []
+        for item in value:
+            try:
+                out.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return out
+    if isinstance(value, (int, float)):
+        try:
+            return [int(value)]
+        except (TypeError, ValueError):
+            return []
+    return []
+
+tasks = []
+for token in tasks_raw:
+    try:
+        tasks.append(int(token))
+    except ValueError:
+        continue
+
+if not enabled:
+    for t in tasks:
+        for s in stations:
+            print(f"{s}-{t}")
+    raise SystemExit(0)
+
+mode = str(node.get("mode", "whitelist")).strip().lower()
+stations_node = node.get("stations") or {}
+default_tasks = normalize_tasks(node.get("default_tasks", []))
+station_tasks = {str(k): normalize_tasks(v) for k, v in stations_node.items()}
+
+for t in tasks:
+    for s in stations:
+        key = str(s)
+        st_val = station_tasks.get(key)
+
+        if mode == "blacklist":
+            disabled = False
+            if st_val == "all":
+                disabled = True
+            elif isinstance(st_val, list) and t in st_val:
+                disabled = True
+            if not disabled:
+                print(f"{s}-{t}")
+            continue
+
+        # whitelist (default)
+        allowed = False
+        if st_val is None:
+            if default_tasks == "all":
+                allowed = True
+            elif isinstance(default_tasks, list) and t in default_tasks:
+                allowed = True
+        else:
+            if st_val == "all":
+                allowed = True
+            elif isinstance(st_val, list) and t in st_val:
+                allowed = True
+
+        if allowed:
+            print(f"{s}-{t}")
+PY
+  )
+
+  while IFS= read -r line; do
+    line="${line//$'\r'/}"
+    line="${line//[$'\t ']/}"
+    [[ -z "$line" ]] && continue
+    execution_pairs+=("$line")
+  done <<<"$result"
+}
+
 # Max runtime watchdog (minutes); override with STEP1_MAX_RUNTIME_MIN env
 MAX_RUNTIME_MIN=${STEP1_MAX_RUNTIME_MIN:-120}
 watchdog_pid=""
@@ -394,20 +525,12 @@ echo "------------------------------------------------------"
 echo "guide_raw_to_corrected.sh started on: $(date)"
 echo "Stations: ${stations_requested[*]}"
 echo "Tasks: ${tasks_requested[*]}"
-echo -n "Execution order: "
-execution_pairs=()
-for task_id in "${tasks_requested[@]}"; do
-  for st in "${stations_requested[@]}"; do
-    execution_pairs+=("${st}-${task_id}")
-  done
-done
-echo "${execution_pairs[*]}"
+refresh_execution_pairs_from_config
+echo "Enabled station-task pairs: ${execution_pairs[*]}"
 echo "------------------------------------------------------"
 
 
 # dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
-
-config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
 
 # Resource gate defaults (overridden by config_global.yaml if present)
 mem_limit_pct=90
@@ -619,11 +742,33 @@ fi
 
 
 while true; do
+  refresh_execution_pairs_from_config
+  if [[ ${#execution_pairs[@]} -eq 0 ]]; then
+    echo "No enabled station-task pairs (event_data_step1_run_matrix). Sleeping 60s..."
+    echo '------------------------------------------------------'
+    sleep 60
+    iteration=$((iteration + 1))
+    continue
+  fi
+  sanitize_queue_file
   echo "Pipeline iteration $iteration started at: $(date '+%Y-%m-%d %H:%M:%S')"
   build_iteration_pairs_from_queue iteration_pairs
   echo "Traffic-light queue snapshot: ${iteration_pairs[*]}"
   for pair in "${iteration_pairs[@]}"; do
     IFS='-' read -r station task_id <<<"$pair"
+    refresh_execution_pairs_from_config
+    allowed=false
+    for allowed_pair in "${execution_pairs[@]}"; do
+      if [[ "$allowed_pair" == "$pair" ]]; then
+        allowed=true
+        break
+      fi
+    done
+    if [[ "$allowed" != true ]]; then
+      echo "Skipping station $station task${task_id} due to event_data_step1_run_matrix."
+      echo '------------------------------------------------------'
+      continue
+    fi
     task_index=$((task_id - 1))
     task_script="${TASK_SCRIPTS[$task_index]}"
     task_label="${TASK_LABELS[$task_index]}"
