@@ -1120,6 +1120,13 @@ def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
         for item in rows:
             formatted = {}
             for key in fieldnames:
+                if key in EVENTS_PER_SECOND_COLUMNS:
+                    value = item.get(key, 0)
+                    if value in ("", None) or (isinstance(value, float) and math.isnan(value)):
+                        formatted[key] = 0
+                    else:
+                        formatted[key] = value
+                    continue
                 value = item.get(key, "")
                 if value is None or (isinstance(value, float) and math.isnan(value)):
                     formatted[key] = ""
@@ -1130,6 +1137,65 @@ def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
             writer.writerow(formatted)
 
     return metadata_path
+
+
+# -----------------------------------------------------------------------------
+# Events per second metadata helpers ------------------------------------------
+# -----------------------------------------------------------------------------
+
+EVENTS_PER_SECOND_MAX = 100
+EVENTS_PER_SECOND_COLUMNS = [
+    *(f"events_per_second_{idx}_count" for idx in range(EVENTS_PER_SECOND_MAX + 1)),
+    "events_per_second_total_seconds",
+    "events_per_second_global_rate",
+]
+
+
+def build_events_per_second_metadata(
+    df: pd.DataFrame,
+    time_columns: Tuple[str, ...] = ("datetime", "Time"),
+) -> Dict[str, object]:
+    metadata = {column: 0 for column in EVENTS_PER_SECOND_COLUMNS}
+    if df is None or df.empty:
+        return metadata
+
+    time_col = next((col for col in time_columns if col in df.columns), None)
+    if time_col is not None:
+        times = pd.to_datetime(df[time_col], errors="coerce")
+    elif isinstance(df.index, pd.DatetimeIndex):
+        times = pd.Series(df.index)
+    else:
+        return metadata
+
+    times = pd.Series(times).dropna()
+    if times.empty:
+        return metadata
+
+    times = times.dt.floor("s")
+    start_time = times.min()
+    end_time = times.max()
+    if pd.isna(start_time) or pd.isna(end_time):
+        return metadata
+
+    full_range = pd.date_range(start=start_time, end=end_time, freq="S")
+    events_per_second = (
+        times.value_counts().reindex(full_range, fill_value=0).sort_index()
+    )
+
+    total_seconds = int(events_per_second.size)
+    total_events = int(events_per_second.sum())
+    metadata["events_per_second_total_seconds"] = total_seconds
+    metadata["events_per_second_global_rate"] = (
+        round(total_events / total_seconds, 6) if total_seconds > 0 else 0
+    )
+
+    hist_counts = events_per_second.value_counts()
+    for events_count, seconds_count in hist_counts.items():
+        events_count_int = int(events_count)
+        if 0 <= events_count_int <= EVENTS_PER_SECOND_MAX:
+            metadata[f"events_per_second_{events_count_int}_count"] = int(seconds_count)
+
+    return metadata
 
 
 # -----------------------------------------------------------------------------
@@ -4627,6 +4693,8 @@ print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
+
+global_variables.update(build_events_per_second_metadata(working_df))
 
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp

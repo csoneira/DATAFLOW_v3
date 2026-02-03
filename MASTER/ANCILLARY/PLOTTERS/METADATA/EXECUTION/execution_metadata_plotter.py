@@ -27,7 +27,7 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 
 
-STATIONS: Tuple[str, ...] = ("1", "2", "3", "4")
+STATIONS: Tuple[str, ...] = ("0", "1", "2", "3", "4")
 TASK_IDS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 BASE_PATH = Path.home() / "DATAFLOW_v3" / "STATIONS"
 OUTPUT_FILENAME = "execution_metadata_report.pdf"
@@ -41,6 +41,7 @@ Notes:
   --no-data adds a dedicated HV-only subplot that plots hv_HVneg values with coloured markers (requires --include-hv).
 """.strip()
 
+purity_low_lim = 70
 minutes_upper_limit = 5
 DEFAULT_POINT_SIZE = 3
 ZOOM_POINT_SIZE = 6
@@ -1353,7 +1354,7 @@ def plot_station(
                 alpha=0.5,
             )
             ax_second.set_ylabel("Purity (%)")
-            ax_second.set_ylim(0, 105)
+            ax_second.set_ylim(purity_low_lim, 105)
             ax_second.yaxis.label.set_color("tab:red")
             ax_second.tick_params(axis="y", colors="tab:red")
 

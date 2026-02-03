@@ -49,8 +49,8 @@ prepare_reprocessing_metadata:
   remote_user: "rpcuser"           # SSH user to connect to the remote host.
   remote_directory_root: "/local/experiments/MINGOS"  # Base path that contains MINGO0{station} folders.
   date_range:
-    start: 2024-01-01    # Earliest UTC datetime to keep (e.g. "2024-01-01" or "2024-01-01T08:00:00"); null disables.
-    end: null      # Latest UTC datetime to keep (inclusive); null disables.
+    start: 2026-01-01    # Earliest UTC datetime to keep (e.g. "2024-01-01" or "2024-01-01T08:00:00"); null disables.
+    end: 2026-02-01      # Latest UTC datetime to keep (inclusive); null disables.
 
 # Station-specific size and min-gap thresholds (used by prepare_reprocessing_metadata.sh)
 min_size_mb_1: 5.0
