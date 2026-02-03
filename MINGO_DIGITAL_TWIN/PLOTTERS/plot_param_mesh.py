@@ -44,7 +44,7 @@ def main() -> None:
     args = parse_args()
     input_path = Path(args.input)
     output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir -p(parents=True, exist_ok=True)
 
     df = pd.read_csv(input_path)
 

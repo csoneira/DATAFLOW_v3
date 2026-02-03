@@ -310,7 +310,7 @@ def _plot_group(
     ax.set_title(title)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.parent.mkdir -p(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
@@ -374,7 +374,7 @@ def _plot_eff_cal_vs_eff(
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.parent.mkdir -p(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 

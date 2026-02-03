@@ -37,7 +37,7 @@ for i=1:size(daq.TRB3.FPGAs,1)
        leadingTDCPar = [leadingTDCParMin; leadingTDCParMax];
        I = find(trailingTDCParMin == 1000);trailingTDCParMin(I) = 0;
        trailingTDCPar = [trailingTDCParMin; trailingTDCParMax];
-       mkdirOS([inPath 'TDCCal' b 'calPar' b],OS,1);
+       mkdir -pOS([inPath 'TDCCal' b 'calPar' b],OS,1);
        tCalPar = [(1:64)' leadingTDCPar'];
        %Best guess to calcualte the spam of channel one.
        I = find(leadingTDCPar(1,:));tCalPar(1,2) = floor(mean(leadingTDCPar(1,I(2:end))));

@@ -58,7 +58,7 @@ VARIABLE_FILTERS: Dict[str, Dict[str, float]] = {
 }
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "OUTPUT_FILES"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir -p(parents=True, exist_ok=True)
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:

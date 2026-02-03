@@ -30,7 +30,7 @@ typeOfFiles     = 'HADES';
 
 if(strcmp(mergeSelector,'QPedestals'))
         inPath          =  ['/home/alberto/gate/localDocs/lip/daqSystems/' SYSTEMNAME '/system/devices/TRB3/data/daqData/varData/'];
-        outPath         =  [inPath 'calQPED/'];mkdirOS(outPath,OS,1);
+        outPath         =  [inPath 'calQPED/'];mkdir -pOS(outPath,OS,1);
         numberOfFiles   = 'all';
         numberOfFiles   = 40;
         time2Merge      = 0;

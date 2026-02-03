@@ -27,8 +27,8 @@ def main() -> None:
     station_root = repo_root / "STATIONS" / "MINGO00"
     stage0_dir = station_root / "STAGE_0"
     stage01_dir = station_root / "STAGE_0_to_1"
-    stage0_dir.mkdir(parents=True, exist_ok=True)
-    stage01_dir.mkdir(parents=True, exist_ok=True)
+    stage0_dir.mkdir -p(parents=True, exist_ok=True)
+    stage01_dir.mkdir -p(parents=True, exist_ok=True)
 
     registry_path = stage0_dir / "imported_basenames.csv"
     imported = set()
@@ -103,7 +103,7 @@ def main() -> None:
 
     config_path = repo_root / "MASTER" / "CONFIG_FILES" / "ONLINE_RUN_DICTIONARY" / "STATION_0" / "input_file_mingo00.csv"
     if config_rows:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.parent.mkdir -p(parents=True, exist_ok=True)
         existing = set()
         if config_path.exists():
             with config_path.open("r", encoding="utf-8") as handle:
@@ -199,7 +199,7 @@ def main() -> None:
             handle.write(columns_line + "\n")
             df_stage0.to_csv(handle, index=False, header=False)
         print(f"Updated stage-0 config: {stage0_config_path}")
-        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.parent.mkdir -p(parents=True, exist_ok=True)
         shutil.copyfile(stage0_config_path, config_path)
         print(f"Synced online config: {config_path}")
 

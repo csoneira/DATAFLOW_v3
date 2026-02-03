@@ -89,7 +89,7 @@ def snapshot_if_changed(
     label: str,
 ) -> bool:
     """Create a snapshot when payload differs from the latest stored version."""
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_dir.mkdir -p(parents=True, exist_ok=True)
 
     current_payload = payload_loader(config_path)
     previous_payload = latest_snapshot_payload(snapshot_dir, name_suffix)

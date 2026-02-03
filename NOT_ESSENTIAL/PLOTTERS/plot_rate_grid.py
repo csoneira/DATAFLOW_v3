@@ -262,7 +262,7 @@ def main() -> None:
     out_path = Path(output_path)
     if not out_path.is_absolute():
         out_path = ROOT_DIR / out_path
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.parent.mkdir -p(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150)
     print(f"Saved {out_path}")
 

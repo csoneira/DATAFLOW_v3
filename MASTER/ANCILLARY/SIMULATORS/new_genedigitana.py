@@ -1754,7 +1754,7 @@ else:
                     out_dir: Union[str, Path],
                     ndigits: int = 3) -> None:
         out_dir = Path(out_dir).expanduser()
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir -p(parents=True, exist_ok=True)
 
         df = df[df["measured_type"].isin(valid_types)]
 

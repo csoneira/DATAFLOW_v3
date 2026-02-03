@@ -357,7 +357,7 @@ def quicklook(
         days=days,
     )
     if save_path:
-        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.parent.mkdir -p(parents=True, exist_ok=True)
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
     if show:
         plt.show()

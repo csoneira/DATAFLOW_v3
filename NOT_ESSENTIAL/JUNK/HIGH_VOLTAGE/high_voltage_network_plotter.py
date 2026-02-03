@@ -509,9 +509,9 @@ def main():
 
     if args.save:
         outdir = Path(f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/HIGH_VOLTAGE/PLOTS")
-        outdir.mkdir(parents=True, exist_ok=True)
+        outdir.mkdir -p(parents=True, exist_ok=True)
         fig_dir = outdir / "figures"
-        fig_dir.mkdir(parents=True, exist_ok=True)
+        fig_dir.mkdir -p(parents=True, exist_ok=True)
 
         # Save PNGs
         png_paths = []

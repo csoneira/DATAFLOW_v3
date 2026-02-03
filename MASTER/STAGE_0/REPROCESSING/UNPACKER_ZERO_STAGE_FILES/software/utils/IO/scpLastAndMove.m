@@ -27,7 +27,7 @@ try %Try the copy
         I = find(file == b);
         fileName = file(I(end)+1:end);
         %%%    Check if the folder exist
-        mkdirOS(pathOut,OS,1);mkdirOS([pathOut 'done' b],OS,1);
+        mkdir -pOS(pathOut,OS,1);mkdir -pOS([pathOut 'done' b],OS,1);
         
         
         %%%Copy files
@@ -43,7 +43,7 @@ try %Try the copy
             fileName = file(I(end)+1:end);
             
             %%%    Check if the folder exist
-            mkdirOS(pathOut,OS,1);mkdirOS([pathOut 'done' b],OS,1);
+            mkdir -pOS(pathOut,OS,1);mkdir -pOS([pathOut 'done' b],OS,1);
             
             %%%Copy files
             [status, result] = system(['scp -i ' key ' -P ' port ' ' user '@' remoteIP ':' file ' ' pathOut]);

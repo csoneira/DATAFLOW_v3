@@ -1,4 +1,4 @@
-function mkdirOS(inputPath,OS,verbose)
+function mkdir -pOS(inputPath,OS,verbose)
 
 
 if(~exist(inputPath,'dir'))
@@ -7,9 +7,9 @@ if(~exist(inputPath,'dir'))
     end
     
     if(strcmp(OS,'windows'))
-        system(['mkdir ' inputPath]);
+        system(['mkdir -p ' inputPath]);
     elseif(strcmp(OS,'linux'))
-        system(['mkdir ' inputPath]);
+        system(['mkdir -p ' inputPath]);
     else
         disp('Operating system not defined. Stopping')
         pause;

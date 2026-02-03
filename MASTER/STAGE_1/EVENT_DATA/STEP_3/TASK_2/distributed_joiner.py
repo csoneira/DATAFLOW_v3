@@ -291,7 +291,7 @@ def main() -> int:
         return 0
 
     if not args.dry_run:
-        task2_output_root.mkdir(parents=True, exist_ok=True)
+        task2_output_root.mkdir -p(parents=True, exist_ok=True)
 
     for day, day_dir in day_directories:
         csv_files = sorted(day_dir.glob("*.csv"))
@@ -352,7 +352,7 @@ def main() -> int:
             print(f"           # execution_date={exec_date_header}")
             continue
 
-        output_parent.mkdir(parents=True, exist_ok=True)
+        output_parent.mkdir -p(parents=True, exist_ok=True)
 
         with output_path.open("w", encoding="utf-8", newline="") as handle:
             handle.write(f"# source_basenames={basename_header}\n")

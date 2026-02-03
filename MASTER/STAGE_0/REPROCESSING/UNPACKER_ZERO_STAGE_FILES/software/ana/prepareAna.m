@@ -163,7 +163,7 @@ try
 
             
             if(conf.daq.raw2var.keepRawFiles == 1)
-                mkdirOS([outputPath datestr(dateRegularFormat, 'yyyy-mm-dd') b],OS,1);
+                mkdir -pOS([outputPath datestr(dateRegularFormat, 'yyyy-mm-dd') b],OS,1);
                 mvOS(inPath,[inPath 'done' b],file2ana(i).name,OS);
             else
                 system(['rm ' inPath file2ana(i).name]);

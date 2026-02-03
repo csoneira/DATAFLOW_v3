@@ -763,12 +763,12 @@ def main():
             / "STAGE_1"
             / "EVENT_DATA"
         )
-        base.mkdir(parents=True, exist_ok=True)
+        base.mkdir -p(parents=True, exist_ok=True)
 
         # Paths
         pdf_path = base / f"station{args.station}_summary.pdf"
         fig_dir = base / f"station{args.station}_figures"
-        fig_dir.mkdir(parents=True, exist_ok=True)
+        fig_dir.mkdir -p(parents=True, exist_ok=True)
 
         # 1) Save each figure as PNG (and close the live figure)
         png_paths = []

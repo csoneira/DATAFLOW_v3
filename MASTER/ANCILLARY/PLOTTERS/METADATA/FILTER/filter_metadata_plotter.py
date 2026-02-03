@@ -216,7 +216,7 @@ def resolve_output_filename(
 
 
 def _ensure_output_directory(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir -p(parents=True, exist_ok=True)
 
 
 def plot_task_metrics(

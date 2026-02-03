@@ -1060,7 +1060,7 @@ def write_itineraries_to_file(
     itineraries: Iterable[Iterable[str]],
 ) -> None:
     """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.parent.mkdir -p(parents=True, exist_ok=True)
     unique_itineraries: dict[tuple[str, ...], None] = {}
 
     for itinerary in itineraries:
@@ -1624,7 +1624,7 @@ def write_itineraries_to_file(
     itineraries: Iterable[Iterable[str]],
 ) -> None:
     """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.parent.mkdir -p(parents=True, exist_ok=True)
     unique_itineraries: dict[tuple[str, ...], None] = {}
 
     for itinerary in itineraries:
@@ -2331,7 +2331,7 @@ def write_itineraries_to_file(
     itineraries: Iterable[Iterable[str]],
 ) -> None:
     """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.parent.mkdir -p(parents=True, exist_ok=True)
     unique_itineraries: dict[tuple[str, ...], None] = {}
 
     for itinerary in itineraries:

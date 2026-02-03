@@ -68,7 +68,7 @@ def collect_status_rows(
 
 
 def write_csv(rows: Iterable[Dict[str, str]], destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir -p(parents=True, exist_ok=True)
     fieldnames = ["timestamp", "status", "script", "station", "source"]
     with destination.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

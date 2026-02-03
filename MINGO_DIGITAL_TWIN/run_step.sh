@@ -82,7 +82,7 @@ fi
 if [[ -n "$CONTINUOUS" ]]; then
   LOCK_DIR="/tmp/mingo_digital_twin_run_step_continuous.lock"
   PID_FILE="$LOCK_DIR/pid"
-  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  if ! mkdir -p "$LOCK_DIR" 2>/dev/null; then
     if [[ -n "$FORCE_CONTINUOUS" ]]; then
       if [[ -f "$PID_FILE" ]]; then
         LOCK_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -98,7 +98,7 @@ if [[ -n "$CONTINUOUS" ]]; then
         fi
       fi
       rm -rf "$LOCK_DIR"
-      mkdir "$LOCK_DIR"
+      mkdir -p "$LOCK_DIR"
     else
       echo "Continuous operation already running; exiting."
       exit 0

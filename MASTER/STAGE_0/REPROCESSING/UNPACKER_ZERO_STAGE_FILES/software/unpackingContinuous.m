@@ -113,7 +113,7 @@ while 1
             if active & readable
                 %Go to read
                 inPath        =  [conf.daq(i).unpacking.path.rawDataMat tmpRaw2varPath b];
-                outPath       =  [conf.daq(i).raw2var.path.varData tmpRaw2varPath b];mkdirOS(outPath,OS,0);
+                outPath       =  [conf.daq(i).raw2var.path.varData tmpRaw2varPath b];mkdir -pOS(outPath,OS,0);
                 for j=1:size(conf.daq(i).raw2var.lookUpTables,2)
                     lookUpTables{j}  =  [conf.daq(i).raw2var.path.lookUpTables conf.daq(i).raw2var.lookUpTables{j}];
                 end
@@ -124,7 +124,7 @@ while 1
                     TRBs = conf.daq(i).TRB3;
                     raw2varContinuous(inPath,outPath,TRBs,lookUpTables,keepRawFiles,INTERPRETER,logs,OS);
                     if exist([inPath 'TDCCal/'],'dir')
-                        mkdirOS([inPath '../TDCCal/'],OS,0);
+                        mkdir -pOS([inPath '../TDCCal/'],OS,0);
                         mvOS([inPath 'TDCCal/'],[inPath '../TDCCal/'],'*.*',OS)
                     end
                     [~, ~] = system(['rm -r ' inPath]);

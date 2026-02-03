@@ -8,7 +8,7 @@ function [status, result] = setSemaphore(pathIn,logs,OS)
 
 if(~exist([pathIn 'semaphore'],'dir'))%create the semaphore
     try
-        [status, result] = system(['mkdir ' pathIn  'semaphore/']);
+        [status, result] = system(['mkdir -p ' pathIn  'semaphore/']);
         if status == 1
             message2log = ['Error in the generation of the Semaphore skipping. '];
             disp(message2log);

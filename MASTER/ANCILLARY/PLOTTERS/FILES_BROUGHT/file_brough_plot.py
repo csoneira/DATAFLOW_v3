@@ -250,7 +250,7 @@ def axis_configuration(use_real_time: bool) -> Tuple[str, str, str, str]:
 
 def default_output_path(use_real_time: bool) -> Path:
     mode = "real_time" if use_real_time else "execution_time"
-    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    PLOTS_DIR.mkdir -p(parents=True, exist_ok=True)
     return PLOTS_DIR / DEFAULT_FILENAME_TEMPLATE.format(mode=mode)
 
 
@@ -374,7 +374,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     output_path = Path(args.output).expanduser() if args.output else default_output_path(use_real_time)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir -p(parents=True, exist_ok=True)
 
     payloads = [load_station_payload(station) for station in stations]
 

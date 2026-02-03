@@ -170,7 +170,7 @@ def move_step1_outputs_to_unprocessed(
 
     files = sorted(path for path in step1_output_dir.glob("**/*") if path.is_file())
     if not dry_run:
-        unprocessed_root.mkdir(parents=True, exist_ok=True)
+        unprocessed_root.mkdir -p(parents=True, exist_ok=True)
 
     for source in files:
         relative = source.relative_to(step1_output_dir)
@@ -181,7 +181,7 @@ def move_step1_outputs_to_unprocessed(
             planned_moves[destination] = source
             continue
 
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.parent.mkdir -p(parents=True, exist_ok=True)
         if destination.exists():
             if destination.is_file():
                 destination.unlink()
@@ -289,7 +289,7 @@ def archive_processed_files(
             print(f"  [dry-run] move {source} -> {destination}")
             continue
 
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.parent.mkdir -p(parents=True, exist_ok=True)
         if destination.exists():
             if destination.is_file():
                 destination.unlink()
@@ -370,9 +370,9 @@ def main() -> int:
     outlier_limits = config.get("outlier_limits", {})
 
     if not args.dry_run:
-        unprocessed_root.mkdir(parents=True, exist_ok=True)
-        completed_root.mkdir(parents=True, exist_ok=True)
-        output_root.mkdir(parents=True, exist_ok=True)
+        unprocessed_root.mkdir -p(parents=True, exist_ok=True)
+        completed_root.mkdir -p(parents=True, exist_ok=True)
+        output_root.mkdir -p(parents=True, exist_ok=True)
 
     planned_moves = move_step1_outputs_to_unprocessed(
         step1_output_dir,
@@ -468,7 +468,7 @@ def main() -> int:
         if args.dry_run:
             print(f"  [dry-run] would write {output_path}")
         else:
-            output_parent.mkdir(parents=True, exist_ok=True)
+            output_parent.mkdir -p(parents=True, exist_ok=True)
             merged.reset_index().to_csv(output_path, index=False, float_format="%.5g")
             print(f"  Wrote {output_path}")
 

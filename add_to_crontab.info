@@ -58,7 +58,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # 0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_nmdb_retrieval.log 2>&1
 
 # Swap autoclear if idle, so the pipeline does not stop because of full swap event though the PC is idle
-*/10 * * * * /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/AUTO_CLEAR_SWAP/auto_clear_swap_if_idle.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/AUTO_CLEAR_SWAP/auto_clear_swap_if_idle.log 2>&1
+*/2 * * * * /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/AUTO_CLEAR_SWAP/auto_clear_swap_if_idle.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/AUTO_CLEAR_SWAP/auto_clear_swap_if_idle.log 2>&1
 
 # Update station_automation_scripts, the directory with the software I made for the stations
 0 1 * * * rsync -avz --delete /home/mingo/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo01:/home/rpcuser/station_automation_scripts/ >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS/update_mingo01.log 2>&1

@@ -28,9 +28,9 @@ configuration.INTERPRETER                            = INTERPRETER;
 configuration.bar                                    = getBarOS(OS);b = getBarOS(OS);
 
 %% Some general work with the paths
-mkdirOS(SYS,OS,1);
-mkdirOS([SYS 'devices' b],OS,1);
-mkdirOS([SYS 'logs' b],OS,1);
+mkdir -pOS(SYS,OS,1);
+mkdir -pOS([SYS 'devices' b],OS,1);
+mkdir -pOS([SYS 'logs' b],OS,1);
 
 devicePos = 1;
 %%% Devices
@@ -44,8 +44,8 @@ dev = initDevice();
     dev.subType                             =   '';
         dev.reportable.active               =    0;
         
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
             
         dev.dcs.active                      =   1;
         dev.dcs.readable                    =   1;
@@ -77,12 +77,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = 'lookUpTableHV.m';
         
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = '';                                                   %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = '';                                                   %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev = dev;
 devicePos = devicePos +1;
@@ -97,8 +97,8 @@ dev = initDevice();
     dev.subType                             =   '';
         dev.reportable.active               =    0;
         
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
             
         dev.dcs.active                      =   1;
         dev.dcs.readable                    =   1;
@@ -130,12 +130,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = 'lookUpTableSensor0.m';
         
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = '';                                                   %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = '';                                                   %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;
@@ -150,8 +150,8 @@ dev = initDevice();
     dev.subType                             =   '';
         dev.reportable.active               =    0;
         
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
             
         dev.dcs.active                      =   1;
         dev.dcs.readable                    =   1;
@@ -183,12 +183,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = 'lookUpTableSensor1.m';
         
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = '';                                                   %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = '';                                                   %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;
@@ -203,8 +203,8 @@ dev = initDevice();
     dev.subType                             =   '';
         dev.reportable.active               =    0;
         
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
             
         dev.dcs.active                      =   1;
         dev.dcs.readable                    =   1;
@@ -236,12 +236,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = 'lookUpTableFlow.m';
         
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = '';                                                   %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = '';                                                   %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;
@@ -258,9 +258,9 @@ dev = initDevice();
         dev.reportable.active               =    1;
         dev.reportable.LT                   = 'LookUpRPC01Report.csv';
         dev.reportable.timeElapsed          = time2Show;
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
-        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdirOS(dev.path.reporting,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
+        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdir -pOS(dev.path.reporting,OS,1);
             
         dev.dcs.active                      =   0;
         dev.dcs.readable                    =   0;
@@ -285,12 +285,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = '';
         
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdirOS(dev.dcs.path.data,OS,1);mkdirOS([dev.dcs.path.data 'merge' b],OS,1);                                                   %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdir -pOS(dev.dcs.path.data,OS,1);mkdir -pOS([dev.dcs.path.data 'merge' b],OS,1);                                                   %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;
@@ -306,9 +306,9 @@ dev = initDevice();
         dev.reportable.active               =    1;
         dev.reportable.LT                   = 'LookUpRPC02Report.csv';
         dev.reportable.timeElapsed          = time2Show;
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
-        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdirOS(dev.path.reporting,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
+        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdir -pOS(dev.path.reporting,OS,1);
             
         dev.dcs.active                      =   0;
         dev.dcs.readable                    =   0;
@@ -333,12 +333,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = '';
         
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdirOS(dev.dcs.path.data,OS,1);mkdirOS([dev.dcs.path.data 'merge' b],OS,1);                                                  %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdir -pOS(dev.dcs.path.data,OS,1);mkdir -pOS([dev.dcs.path.data 'merge' b],OS,1);                                                  %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;
@@ -354,9 +354,9 @@ dev = initDevice();
         dev.reportable.active               =    1;
         dev.reportable.LT                   = 'LookUpRPC03Report.csv';
         dev.reportable.timeElapsed          = time2Show;
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
-        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdirOS(dev.path.reporting,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
+        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdir -pOS(dev.path.reporting,OS,1);
             
         dev.dcs.active                      =   0;
         dev.dcs.readable                    =   0;
@@ -381,12 +381,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = '';
         
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdirOS(dev.dcs.path.data,OS,1);mkdirOS([dev.dcs.path.data 'merge' b],OS,1);                                                   %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdir -pOS(dev.dcs.path.data,OS,1);mkdir -pOS([dev.dcs.path.data 'merge' b],OS,1);                                                   %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;
@@ -402,9 +402,9 @@ dev = initDevice();
         dev.reportable.active               =    1;
         dev.reportable.LT                   = 'LookUpRPC04Report.csv';
         dev.reportable.timeElapsed          = time2Show;
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
-        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdirOS(dev.path.reporting,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
+        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdir -pOS(dev.path.reporting,OS,1);
             
         dev.dcs.active                      =   0;
         dev.dcs.readable                    =   0;
@@ -429,12 +429,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = '';
         
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdirOS(dev.dcs.path.data,OS,1);mkdirOS([dev.dcs.path.data 'merge' b],OS,1);                                                   %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdir -pOS(dev.dcs.path.data,OS,1);mkdir -pOS([dev.dcs.path.data 'merge' b],OS,1);                                                   %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;
@@ -451,9 +451,9 @@ dev = initDevice();
         dev.reportable.LT                   = '';
         dev.reportable.timeElapsed          = time2Show;
         %dev.reportable.downScaling          = downScaling;
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
-        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdirOS(dev.path.reporting,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
+        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdir -pOS(dev.path.reporting,OS,1);
             
         dev.dcs.active                      = 1;
         dev.dcs.readable                    = 1;
@@ -485,12 +485,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = 'lookUpTableTRB.m';
 
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = '';                                                   %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = '';                                                   %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;
@@ -508,9 +508,9 @@ devicePos = devicePos +1;
         dev.reportable.LT                   = 'lookUpMINGOReport.csv';
         dev.reportable.timeElapsed          = time2Show;
         %dev.reportable.downScaling          = downScaling;
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
-        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdirOS(dev.path.reporting,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
+        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdir -pOS(dev.path.reporting,OS,1);
             
         dev.dcs.active                      = 0;
         dev.dcs.readable                    = 0;
@@ -526,15 +526,15 @@ devicePos = devicePos +1;
         dev.dcs.lAccess.active              = 0;
         dev.dcs.dcData2MatScript            = '';
         dev.dcs.distributionLT              = '';
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                            mkdirOS(dev.dcs.path.base,OS,1);                           
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                            mkdir -pOS(dev.dcs.path.base,OS,1);                           
         dev.dcs.path.rawData                = '';%                           
         dev.dcs.path.rawDataDat             = '';%                           
         dev.dcs.path.rawDataMat             = '';%                           
-        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                          mkdirOS(dev.dcs.path.data,OS,1);mkdirOS([dev.dcs.path.data 'merge' b],OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                                mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                          mkdir -pOS(dev.dcs.path.data,OS,1);mkdir -pOS([dev.dcs.path.data 'merge' b],OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                                mkdir -pOS(dev.dcs.path.LT,OS,1);
     
         dev.ana.active                      = 0;
-        dev.ana.path.base                   = [dev.path.data 'ana' b];                               mkdirOS(dev.ana.path.base,OS,1);
+        dev.ana.path.base                   = [dev.path.data 'ana' b];                               mkdir -pOS(dev.ana.path.base,OS,1);
         telescopePath                       =  dev.ana.path.base; 
 
 configuration.dev(devicePos) = dev;
@@ -551,8 +551,8 @@ dev = initDevice();
     dev.subType                             =   '';
         dev.reportable.active               =    0;
         
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
             
         dev.dcs.active                      =   1;
         dev.dcs.readable                    =   1;
@@ -579,12 +579,12 @@ dev = initDevice();
         
         dev.dcs.distributionLT              = 'lookUpTableODROID01.m';
         
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdirOS(dev.dcs.path.base,OS,1);
-        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdirOS(dev.dcs.path.rawData,OS,1);
-        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdirOS([dev.dcs.path.rawDataDat],OS,1);mkdirOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
-        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdirOS([dev.dcs.path.rawDataMat],OS,1);mkdirOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
-        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdirOS(dev.dcs.path.data,OS,1);mkdirOS([dev.dcs.path.data 'merge' b],OS,1);                                                   %mkdirOS(dev.dcs.path.data,OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                           mkdir -pOS(dev.dcs.path.base,OS,1);
+        dev.dcs.path.rawData                = [dev.dcs.path.base 'rawData' b];                      mkdir -pOS(dev.dcs.path.rawData,OS,1);
+        dev.dcs.path.rawDataDat             = [dev.dcs.path.rawData 'rawDataDat' b];                mkdir -pOS([dev.dcs.path.rawDataDat],OS,1);mkdir -pOS([dev.dcs.path.rawDataDat 'done' b],OS,1);
+        dev.dcs.path.rawDataMat             = [dev.dcs.path.rawData 'rawDataMat' b];                mkdir -pOS([dev.dcs.path.rawDataMat],OS,1);mkdir -pOS([dev.dcs.path.rawDataMat 'done' b],OS,1);
+        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                         mkdir -pOS(dev.dcs.path.data,OS,1);mkdir -pOS([dev.dcs.path.data 'merge' b],OS,1);                                                   %mkdir -pOS(dev.dcs.path.data,OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                               mkdir -pOS(dev.dcs.path.LT,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;
@@ -601,9 +601,9 @@ devicePos = devicePos +1;
         dev.reportable.LT                   = 'lookUpDAQReport.csv';
         dev.reportable.timeElapsed          = time2Show;
         %dev.reportable.downScaling          = downScaling;
-        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdirOS(dev.path.base,OS,1);    
-        dev.path.data                       = [dev.path.base 'data' b];                              mkdirOS(dev.path.data,OS,1);
-        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdirOS(dev.path.reporting,OS,1);
+        dev.path.base                       = [SYS 'devices' b  dev.name  dev.subName b];            mkdir -pOS(dev.path.base,OS,1);    
+        dev.path.data                       = [dev.path.base 'data' b];                              mkdir -pOS(dev.path.data,OS,1);
+        dev.path.reporting                  = [dev.path.base 'reporting' b];                         mkdir -pOS(dev.path.reporting,OS,1);
             
         dev.dcs.active                      = 0;
         dev.dcs.readable                    = 0;
@@ -619,15 +619,15 @@ devicePos = devicePos +1;
         dev.dcs.lAccess.active              = 0;
         dev.dcs.dcData2MatScript            = '';
         dev.dcs.distributionLT              = '';
-        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                            mkdirOS(dev.dcs.path.base,OS,1);                           
+        dev.dcs.path.base                   = [dev.path.data 'dcData' b];                            mkdir -pOS(dev.dcs.path.base,OS,1);                           
         dev.dcs.path.rawData                = '';%                           
         dev.dcs.path.rawDataDat             = '';%                           
         dev.dcs.path.rawDataMat             = '';%                           
-        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                          mkdirOS(dev.dcs.path.data,OS,1);mkdirOS([dev.dcs.path.data 'merge' b],OS,1);
-        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                                mkdirOS(dev.dcs.path.LT,OS,1);
+        dev.dcs.path.data                   = [dev.dcs.path.base 'data' b];                          mkdir -pOS(dev.dcs.path.data,OS,1);mkdir -pOS([dev.dcs.path.data 'merge' b],OS,1);
+        dev.dcs.path.LT                     = [SYS 'lookUpTables' b];                                mkdir -pOS(dev.dcs.path.LT,OS,1);
     
         dev.ana.active                      = 0;
-        dev.ana.path.base                   = [dev.path.data 'ana' b];                               mkdirOS(dev.ana.path.base,OS,1);
+        dev.ana.path.base                   = [dev.path.data 'ana' b];                               mkdir -pOS(dev.ana.path.base,OS,1);
 
 configuration.dev(devicePos) = dev;
 devicePos = devicePos +1;      
@@ -641,8 +641,8 @@ daq.active                              = 1;
 daq.name                                = 'TRB';
 daq.subName                             = '3';
     stationPathSuffix                   = [SYSTEMNAME b];
-    daq.path.base                       = [SYS 'devices' b  daq.name  daq.subName b stationPathSuffix];mkdirOS(daq.path.base,OS,1);    
-    daq.path.data                       = [daq.path.base 'data' b];                              mkdirOS(daq.path.data,OS,1);                              mkdirOS(daq.path.data,OS,1);
+    daq.path.base                       = [SYS 'devices' b  daq.name  daq.subName b stationPathSuffix];mkdir -pOS(daq.path.base,OS,1);    
+    daq.path.data                       = [daq.path.base 'data' b];                              mkdir -pOS(daq.path.data,OS,1);                              mkdir -pOS(daq.path.data,OS,1);
     daq.readable                        = 1;
     
     daq.rAccess.active                  = 1;
@@ -667,10 +667,10 @@ daq.subName                             = '3';
     daq.lAccess.path                    = ['/home/alberto/gate/localDocs/lip/daqSystems/SELADAS1M2/hlds/'];
     daq.lAccess.zip                     = 0;
     
-    daq.unpacking.path.base             = [daq.path.data 'daqData' b];                           mkdirOS([daq.unpacking.path.base],OS,1);
-    daq.unpacking.path.rawData          = [daq.unpacking.path.base 'rawData' b];                 mkdirOS([daq.unpacking.path.rawData],OS,1);
-    daq.unpacking.path.rawDataDat       = [daq.unpacking.path.rawData 'dat' b];                  mkdirOS([daq.unpacking.path.rawDataDat],OS,1);mkdirOS([daq.unpacking.path.rawDataDat 'done' b],OS,1);
-    daq.unpacking.path.rawDataMat       = [daq.unpacking.path.rawData 'mat' b];                  mkdirOS([daq.unpacking.path.rawDataMat],OS,1);mkdirOS([daq.unpacking.path.rawDataMat 'done' b],OS,1);
+    daq.unpacking.path.base             = [daq.path.data 'daqData' b];                           mkdir -pOS([daq.unpacking.path.base],OS,1);
+    daq.unpacking.path.rawData          = [daq.unpacking.path.base 'rawData' b];                 mkdir -pOS([daq.unpacking.path.rawData],OS,1);
+    daq.unpacking.path.rawDataDat       = [daq.unpacking.path.rawData 'dat' b];                  mkdir -pOS([daq.unpacking.path.rawDataDat],OS,1);mkdir -pOS([daq.unpacking.path.rawDataDat 'done' b],OS,1);
+    daq.unpacking.path.rawDataMat       = [daq.unpacking.path.rawData 'mat' b];                  mkdir -pOS([daq.unpacking.path.rawDataMat],OS,1);mkdir -pOS([daq.unpacking.path.rawDataMat 'done' b],OS,1);
     daq.unpacking.fileExt               = '*.hld';
     daq.unpacking.bufferSize            =  60000000;%Confortable number for Manta III
     daq.unpacking.type                  = 'TRB3';
@@ -679,20 +679,20 @@ daq.subName                             = '3';
     daq.unpacking.writeTDCCal           = 0;
     daq.unpacking.downScale             = 1;                               %1 is no downScale
     
-    daq.raw2var.path.base               = [daq.path.data 'daqData' b];                           mkdirOS([daq.raw2var.path.base],OS,1);
-    daq.raw2var.path.varData            = [daq.unpacking.path.base 'varData' b];                 mkdirOS([daq.raw2var.path.varData],OS,1);mkdirOS([daq.raw2var.path.varData 'done' b],OS,1);
-    daq.raw2var.path.lookUpTables       = [SYS 'lookUpTables' b];                                         mkdirOS([daq.raw2var.path.lookUpTables],OS,1);
+    daq.raw2var.path.base               = [daq.path.data 'daqData' b];                           mkdir -pOS([daq.raw2var.path.base],OS,1);
+    daq.raw2var.path.varData            = [daq.unpacking.path.base 'varData' b];                 mkdir -pOS([daq.raw2var.path.varData],OS,1);mkdir -pOS([daq.raw2var.path.varData 'done' b],OS,1);
+    daq.raw2var.path.lookUpTables       = [SYS 'lookUpTables' b];                                         mkdir -pOS([daq.raw2var.path.lookUpTables],OS,1);
     %daq.raw2var.lookUpTables            = {'lookupTables_R3BCTS.m','lookupTables_RPC.m'};
     daq.raw2var.lookUpTables            = {'lookUpTables_RPC.m'};
     daq.raw2var.keepRawFiles            = 0;
     
-    daq.var2cal.path.base               = [daq.path.data 'daqData' b];                           mkdirOS([daq.var2cal.path.base],OS,1);
-    daq.var2cal.path.calData            = [daq.unpacking.path.base 'calData' b];                 mkdirOS([daq.var2cal.path.calData],OS,1);mkdirOS([daq.var2cal.path.calData 'done' b],OS,1);
-    daq.var2cal.path.lookUpTables       = [SYS 'lookUpTables' b];                                         mkdirOS([daq.var2cal.path.lookUpTables],OS,1);
+    daq.var2cal.path.base               = [daq.path.data 'daqData' b];                           mkdir -pOS([daq.var2cal.path.base],OS,1);
+    daq.var2cal.path.calData            = [daq.unpacking.path.base 'calData' b];                 mkdir -pOS([daq.var2cal.path.calData],OS,1);mkdir -pOS([daq.var2cal.path.calData 'done' b],OS,1);
+    daq.var2cal.path.lookUpTables       = [SYS 'lookUpTables' b];                                         mkdir -pOS([daq.var2cal.path.lookUpTables],OS,1);
     daq.var2cal.lookUpTables            = '';
     daq.var2cal.keepVarFiles            = 0;
     daq.var2cal.exportAsci              = 1;
-    daq.var2cal.exportAsciPath          = [daq.var2cal.path.base 'asci' b];                     mkdirOS([daq.var2cal.exportAsciPath],OS,1); 
+    daq.var2cal.exportAsciPath          = [daq.var2cal.path.base 'asci' b];                     mkdir -pOS([daq.var2cal.exportAsciPath],OS,1); 
     daq.var2cal.zipAsci                 = 0;
      
     daq(1).active                       = 1;
@@ -723,25 +723,25 @@ configuration.daq = daq;
 
 %% Ana parametres
 ana.active                                  = 1;
-ana.path                                    = [HOME 'ana' b];mkdirOS(ana.path,OS,1);
+ana.path                                    = [HOME 'ana' b];mkdir -pOS(ana.path,OS,1);
     
     ana.calibration.QPEDParam               = 'Offset_2023_07_14.mat';
     ana.calibration.LonYParam               = 'YOffSet_2023_07_14.mat';
 
-    ana.keepFiles.TriggerType1              = 1;if(ana.keepFiles.TriggerType1);mkdirOS([telescopePath 'TT1' b],OS,1);end
-    ana.keepFiles.TriggerType2              = 1;if(ana.keepFiles.TriggerType2);mkdirOS([telescopePath 'TT2' b],OS,1);end
-    ana.keepVars.TriggerType1               = 1;if(ana.keepVars.TriggerType1);mkdirOS([telescopePath 'Vars' b],OS,1);mkdirOS([telescopePath 'Vars' b 'TT1' b],OS,1);end
-    ana.keepVars.TriggerType2               = 1;if(ana.keepVars.TriggerType1);mkdirOS([telescopePath 'Vars' b],OS,1);mkdirOS([telescopePath 'Vars' b 'TT2' b],OS,1);end
+    ana.keepFiles.TriggerType1              = 1;if(ana.keepFiles.TriggerType1);mkdir -pOS([telescopePath 'TT1' b],OS,1);end
+    ana.keepFiles.TriggerType2              = 1;if(ana.keepFiles.TriggerType2);mkdir -pOS([telescopePath 'TT2' b],OS,1);end
+    ana.keepVars.TriggerType1               = 1;if(ana.keepVars.TriggerType1);mkdir -pOS([telescopePath 'Vars' b],OS,1);mkdir -pOS([telescopePath 'Vars' b 'TT1' b],OS,1);end
+    ana.keepVars.TriggerType2               = 1;if(ana.keepVars.TriggerType1);mkdir -pOS([telescopePath 'Vars' b],OS,1);mkdir -pOS([telescopePath 'Vars' b 'TT2' b],OS,1);end
 
     %ana.calibration.QPED.active             = 0;          
     ana.calibration.longitudinalY.active    = 0;                
-    ana.calibration.longitudinalY.path      = [daq.raw2var.path.varData 'calYOff' b];mkdirOS(ana.calibration.longitudinalY.path,OS,1);
+    ana.calibration.longitudinalY.path      = [daq.raw2var.path.varData 'calYOff' b];mkdir -pOS(ana.calibration.longitudinalY.path,OS,1);
 
     ana.scintAna.active                     = 0;
-    ana.scintAna.path                       = [ana.path 'ScintEff' b];mkdirOS(ana.scintAna.path,OS,1);
+    ana.scintAna.path                       = [ana.path 'ScintEff' b];mkdir -pOS(ana.scintAna.path,OS,1);
 
     ana.backgroundAna.active                = 0;
-    ana.backgroundAna.path                  = [ana.path 'Background' b];mkdirOS(ana.backgroundAna.path,OS,1);
+    ana.backgroundAna.path                  = [ana.path 'Background' b];mkdir -pOS(ana.backgroundAna.path,OS,1);
     
     ana.param.strips.vprop                  = 202.7;%165.7mm/ns
     ana.param.strips.strips                 = 4;
@@ -792,7 +792,7 @@ DB.connection.user      =                   'mingo01';
 DB.connection.pass      =               'mingo01@lip';
 DB.connection.key       = '/home/alberto/.ssh/id_rsa';
 
-DB.tmpFolder            = ['/tmp/'];                                                                                     %mkdirOS([DB.tmpFolder],OS,1);
+DB.tmpFolder            = ['/tmp/'];                                                                                     %mkdir -pOS([DB.tmpFolder],OS,1);
 DB.DistributeDCSVars    = 1;
 DB.DistributeAnaVars    = 1;
 
@@ -804,6 +804,6 @@ configuration.Versioning = {'distributeAnaVars',1;'sendData2DB',0;'writeCSV4DB',
 
 
 %% Write the conf file once per day.
-mkdirOS([HOME 'software/conf/data/'],OS,1);
+mkdir -pOS([HOME 'software/conf/data/'],OS,1);
 save([HOME 'software/conf/data/configuration-' date '.mat'],'configuration');
 return

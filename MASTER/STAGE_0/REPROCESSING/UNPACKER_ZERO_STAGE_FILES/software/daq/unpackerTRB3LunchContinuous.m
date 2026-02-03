@@ -34,10 +34,10 @@ if(size(fileListRun,1) > 1)
         inPathTmp  = [inPath  tmpFolder b];
         outPathTmp = [outPath tmpFolder b];
         
-        mkdirOS(inPathTmp,OS,1);
+        mkdir -pOS(inPathTmp,OS,1);
         mvOS(inPath,inPathTmp,fileListRun(1).fileNameExt,OS);
         
-        mkdirOS(outPathTmp,OS,1);
+        mkdir -pOS(outPathTmp,OS,1);
         [status, result] = remSemaphore(inPath,logs,OS);
     else
         message2log = ['Semaphore in place or error during it generation skipping.'];
@@ -83,7 +83,7 @@ try
         %%%What to do with the file in origing
         if(zipFiles)     %keep the file, move to done and zip
             %%%    Check if the folder exist
-            [~, ~] = system(['mkdir ' inPath 'done' b]);
+            [~, ~] = system(['mkdir -p ' inPath 'done' b]);
             [~, ~] = system(['mv ' inPathTmp fileListRun(hldFile).fileNameExt ' ' inPath 'done' b]);
             [~, ~] = system(['tar -czvf ' inPath 'done' b fileListRun(hldFile).fileName '.tar.gz ' inPath 'done' b fileListRun(hldFile).fileNameExt]);
             [~, ~] = system(['rm ' inPath 'done' b fileListRun(hldFile).fileNameExt]);
@@ -93,7 +93,7 @@ try
             write2log(logs,message2log,'   ','syslog',OS);
         elseif(keepHLDs)        %keep the file, move to done
             %%%    Check if the folder exist
-            [~, ~] = system(['mkdir ' inPath 'done' b]);
+            [~, ~] = system(['mkdir -p ' inPath 'done' b]);
             [~, ~] = system(['mv ' inPathTmp fileListRun(hldFile).fileNameExt ' ' inPath 'done' b]);
             
             message2log = ['Moving to done on location: ' inPath 'done ' fileListRun(hldFile).fileNameExt];

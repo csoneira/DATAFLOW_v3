@@ -45,7 +45,7 @@ def _stage1_flag(config: dict, key: str, default: bool = False) -> bool:
 
 def _finalize_plot(fig: plt.Figure, *, save_path: Optional[Path], show: bool) -> Optional[str]:
     if save_path is not None:
-        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.parent.mkdir -p(parents=True, exist_ok=True)
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
     if show:
         plt.show()

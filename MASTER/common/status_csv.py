@@ -32,7 +32,7 @@ def append_status_row(status_csv_path: Path | str) -> str:
     """
 
     path = Path(status_csv_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir -p(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

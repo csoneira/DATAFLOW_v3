@@ -680,7 +680,7 @@ def main() -> int:
                     else f"station_{args.station_id:02d}_{group.get('name','group')}.png"
                 )
 
-            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.parent.mkdir -p(parents=True, exist_ok=True)
             right_edge = 0.8 if args.legend else 1
             fig.tight_layout(rect=(0.06, 0, right_edge, 0.95))
             fig.subplots_adjust(left=0.08)

@@ -753,7 +753,7 @@ def main() -> int:
             str(base_out_dir / "chisq_results.csv"),
         )
     )
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.parent.mkdir -p(parents=True, exist_ok=True)
     result.to_csv(out_path, index=False)
 
     hist_out = args.hist_out or config.get(
@@ -762,7 +762,7 @@ def main() -> int:
     )
     hist_bins = args.hist_bins or int(config.get("chisq_histogram_bins", 150))
     hist_out_path = Path(hist_out)
-    hist_out_path.parent.mkdir(parents=True, exist_ok=True)
+    hist_out_path.parent.mkdir -p(parents=True, exist_ok=True)
 
     finite = result["chisq"].replace([np.inf, -np.inf], np.nan).dropna()
     if not finite.empty:
@@ -808,7 +808,7 @@ def main() -> int:
                 str(base_out_dir / "chisq_param_hists"),
             )
         )
-        base_dir.mkdir(parents=True, exist_ok=True)
+        base_dir.mkdir -p(parents=True, exist_ok=True)
 
         hist_two_sets(
             pd.to_numeric(result.loc[good_mask, "cos_n"], errors="coerce"),

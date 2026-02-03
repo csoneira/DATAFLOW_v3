@@ -127,7 +127,7 @@ def write_daily_outputs(df: pd.DataFrame, output_dir: Path) -> List[date]:
             continue
 
         month_dir = output_dir / f"{day_key:%Y}" / f"{day_key:%m}"
-        month_dir.mkdir(parents=True, exist_ok=True)
+        month_dir.mkdir -p(parents=True, exist_ok=True)
         output_path = month_dir / f"copernicus_{day_key:%Y_%m_%d}.csv"
         day_frame = (
             day_frame.sort_values("Time")
@@ -154,7 +154,7 @@ def write_daily_outputs(df: pd.DataFrame, output_dir: Path) -> List[date]:
 
 def ensure_directories(paths: Iterable[Path]) -> None:
     for path in paths:
-        path.mkdir(parents=True, exist_ok=True)
+        path.mkdir -p(parents=True, exist_ok=True)
 
 
 def daterange(start_day: date, end_day: date) -> List[date]:

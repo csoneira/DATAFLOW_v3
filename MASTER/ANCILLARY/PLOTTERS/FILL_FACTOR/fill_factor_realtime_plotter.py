@@ -30,9 +30,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLOTS_DIR = SCRIPT_DIR / "PLOTS"
-PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+PLOTS_DIR.mkdir -p(parents=True, exist_ok=True)
 TIME_SERIES_DIR = SCRIPT_DIR / "TIME_SERIES_CSVS"
-TIME_SERIES_DIR.mkdir(parents=True, exist_ok=True)
+TIME_SERIES_DIR.mkdir -p(parents=True, exist_ok=True)
 
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 
@@ -124,7 +124,7 @@ def collect_counts(station: str) -> Dict[str, float]:
 
 def append_snapshot(station: str, counts: Dict[str, float]) -> None:
     history_file = history_path(station)
-    history_file.parent.mkdir(parents=True, exist_ok=True)
+    history_file.parent.mkdir -p(parents=True, exist_ok=True)
     executed_at = datetime.now(timezone.utc).astimezone().isoformat()
     row = {
         "executed_at": executed_at,

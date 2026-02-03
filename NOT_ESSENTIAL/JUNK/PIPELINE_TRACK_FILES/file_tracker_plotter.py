@@ -144,7 +144,7 @@ def plot_station_pages(station_stats: Sequence[Sequence[StationEntryStat]], outp
         return
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir -p(parents=True, exist_ok=True)
 
     with PdfPages(output_path) as pdf:
         for stats in station_stats:

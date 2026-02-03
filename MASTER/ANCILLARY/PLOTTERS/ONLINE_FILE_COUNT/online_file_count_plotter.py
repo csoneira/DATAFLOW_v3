@@ -261,7 +261,7 @@ def plot_snapshot_pages(
         print("No station statistics to plot.")
         return
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir -p(parents=True, exist_ok=True)
     with PdfPages(output_path) as pdf:
         for stats in station_stats:
             if not stats:
@@ -329,7 +329,7 @@ def capture_snapshot(entries: Sequence[DirectoryEntry]) -> List[dict]:
 def append_snapshot(rows: Sequence[dict]) -> None:
     if not rows:
         return
-    SNAPSHOT_CSV.parent.mkdir(parents=True, exist_ok=True)
+    SNAPSHOT_CSV.parent.mkdir -p(parents=True, exist_ok=True)
     df = pd.DataFrame(rows, columns=SNAPSHOT_COLUMNS)
     header = not SNAPSHOT_CSV.exists()
     df.to_csv(SNAPSHOT_CSV, mode="a", header=header, index=False)
@@ -422,7 +422,7 @@ def resolve_output_path(zoom: bool) -> Path:
             filename = f"{filename[:-4]}_zoomed.pdf"
         else:
             filename = f"{filename}_zoomed"
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir -p(parents=True, exist_ok=True)
     return OUTPUT_DIR / filename
 
 
