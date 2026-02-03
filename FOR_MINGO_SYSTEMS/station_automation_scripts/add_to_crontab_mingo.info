@@ -16,6 +16,9 @@
 # Define the base directory for scripts
 BASE_DIR=/home/rpcuser/station_automation_scripts
 
+# Firefox cache cleanup to prevent inode exhaustion (daily at 03:30)
+30 3 * * * bash $BASE_DIR/cache_scripts/firefox_cache_clean.sh
+
 # Kill the tunnel automatically every night so it opens again automatically
 0 0 * * * /usr/bin/pkill -f 'autossh.*lipana' || true
 
