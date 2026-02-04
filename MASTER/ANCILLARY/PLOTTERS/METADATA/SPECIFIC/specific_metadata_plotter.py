@@ -362,7 +362,7 @@ def build_layout(
 
 
 def ensure_output_directory(path: Path) -> None:
-    path.parent.mkdir -p(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def resolve_output_filename(

@@ -722,7 +722,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     output_dir = Path(args.output_dir)
-    output_dir.mkdir -p(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     preferred_time_columns = [
         col.strip() for col in args.time_columns.split(",") if col.strip()

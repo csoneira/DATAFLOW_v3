@@ -75,7 +75,7 @@ def ensure_directory(path: Path, dry_run: bool = False) -> None:
         if not path.exists():
             print(f"[dry-run] mkdir -p {path}")
         return
-    path.mkdir -p(parents=True, exist_ok=True)
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def write_split_file(

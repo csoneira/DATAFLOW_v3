@@ -61,7 +61,7 @@ def _normalise_script_name(script: Union[str, os.PathLike[str]]) -> str:
 
 # def _ensure_log_header(log_path: pathlib.Path) -> None:
 #     if not log_path.exists():
-#         log_path.parent.mkdir -p(parents=True, exist_ok=True)
+#         log_path.parent.mkdir(parents=True, exist_ok=True)
 #         with log_path.open("w", newline="") as handle:
 #             writer = csv.writer(handle)
 #             writer.writerow(_CSV_HEADER)

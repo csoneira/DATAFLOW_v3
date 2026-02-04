@@ -6,6 +6,42 @@
 # Station specific -----------------------------
 original_args=("$@")
 original_args_string="$*"
+
+log_ts() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
+
+log_info() {
+  printf '[%s] [STEP_1] %s\n' "$(log_ts)" "$*"
+}
+
+log_warn() {
+  printf '[%s] [STEP_1] [WARN] %s\n' "$(log_ts)" "$*" >&2
+}
+
+log_err() {
+  printf '[%s] [STEP_1] [ERROR] %s\n' "$(log_ts)" "$*" >&2
+}
+
+is_tty() {
+  [[ -t 1 ]]
+}
+
+declare -A LAST_LOG_TS=()
+
+log_rate_limited() {
+  local key="$1"
+  local interval="$2"
+  shift 2
+  local now last
+  now=$(date +%s)
+  last="${LAST_LOG_TS[$key]:-0}"
+  if (( now - last >= interval )); then
+    LAST_LOG_TS["$key"]="$now"
+    log_info "$*"
+  fi
+}
+
 print_help() {
   cat <<'EOF'
 guide_raw_to_corrected.sh
@@ -279,12 +315,15 @@ acquire_argument_lock() {
   mkdir -p "$LOCK_BASE_DIR"
   exec {ARG_LOCK_FD}> "$ARG_LOCK_FILE"
   if ! flock -n "$ARG_LOCK_FD"; then
-    echo "Another guide_raw_to_corrected.sh with identical arguments (${LOCK_SIGNATURE_DESC}) is already running."
-    echo "Lock file: ${ARG_LOCK_FILE}"
-    echo "Use --run-anyway to override this safety check."
+    # Under cron this is expected and extremely frequent; avoid log spam.
+    if is_tty; then
+      log_warn "Another guide_raw_to_corrected.sh with identical arguments (${LOCK_SIGNATURE_DESC}) is already running."
+      log_info "Lock file: ${ARG_LOCK_FILE}"
+      log_info "Use --run-anyway to override this safety check."
+    fi
     return 1
   fi
-  echo "Acquired run lock for argument set ${LOCK_SIGNATURE_DESC} (lock: ${ARG_LOCK_FILE})."
+  log_info "Acquired run lock for argument set ${LOCK_SIGNATURE_DESC} (lock: ${ARG_LOCK_FILE})."
   return 0
 }
 
@@ -521,13 +560,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "------------------------------------------------------"
-echo "guide_raw_to_corrected.sh started on: $(date)"
-echo "Stations: ${stations_requested[*]}"
-echo "Tasks: ${tasks_requested[*]}"
+log_info "guide_raw_to_corrected.sh started (stations=${stations_requested[*]} tasks=${tasks_requested[*]})."
 refresh_execution_pairs_from_config
-echo "Enabled station-task pairs: ${execution_pairs[*]}"
-echo "------------------------------------------------------"
+log_info "Enabled station-task pairs: ${execution_pairs[*]}"
 
 
 # dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
@@ -607,7 +642,7 @@ max_cpu_usage_pct() {
 wait_for_resources() {
   read -r mem_total mem_avail swap_total swap_free < <(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} /SwapTotal:/ {st=$2} /SwapFree:/ {sf=$2} END {print t, a, st, sf}' /proc/meminfo)
   if [[ -z "${mem_total:-}" || -z "${mem_avail:-}" || "$mem_total" -eq 0 ]]; then
-    echo "Warning: unable to read memory info; continuing."
+    log_rate_limited "warn_meminfo_missing" 300 "Warning: unable to read memory info; continuing."
     return 0
   fi
   mem_used_pct=$(( (100 * (mem_total - mem_avail)) / mem_total ))
@@ -624,11 +659,10 @@ wait_for_resources() {
   fi
 
   if (( mem_used_pct < mem_limit_pct && swap_used_pct < swap_limit_pct && swap_used_kb < swap_limit_kb && max_cpu_pct < cpu_limit_pct )); then
-    echo "Resources OK: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k) / Swap ${swap_used_pct}% (${swap_used_kb}k used) / Max CPU ${max_cpu_pct}%."
     return 0
   fi
 
-  echo "Resources high: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k, limit <${mem_limit_pct}), Swap ${swap_used_pct}% (${swap_used_kb}k used, limits <${swap_limit_pct}% and <${swap_limit_kb}k), Max CPU ${max_cpu_pct}% (limit <${cpu_limit_pct}). Skipping this station/task this loop."
+  log_rate_limited "resources_high" 60 "Resources high: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k, limit <${mem_limit_pct}), Swap ${swap_used_pct}% (${swap_used_kb}k used, limits <${swap_limit_pct}% and <${swap_limit_kb}k), Max CPU ${max_cpu_pct}% (limit <${cpu_limit_pct})."
   return 1
 }
 
@@ -725,35 +759,28 @@ command_targets_station() {
 
 load_resource_limits
 
-echo '------------------------------------------------------'
-echo '------------------------------------------------------'
-
 traffic_light_queue_init
 
 iteration=1
 if [[ "$run_anyway" != true ]]; then
-  echo "Ensuring no other guide_raw_to_corrected.sh is running with identical arguments..."
   if ! acquire_argument_lock; then
     exit 0
   fi
 else
-  echo "--run-anyway set; skipping same-argument locking."
+  log_warn "--run-anyway set; skipping same-argument locking."
 fi
 
 
 while true; do
   refresh_execution_pairs_from_config
   if [[ ${#execution_pairs[@]} -eq 0 ]]; then
-    echo "No enabled station-task pairs (event_data_step1_run_matrix). Sleeping 60s..."
-    echo '------------------------------------------------------'
+    log_rate_limited "no_enabled_pairs" 300 "No enabled station-task pairs (event_data_step1_run_matrix). Sleeping 60s..."
     sleep 60
     iteration=$((iteration + 1))
     continue
   fi
   sanitize_queue_file
-  echo "Pipeline iteration $iteration started at: $(date '+%Y-%m-%d %H:%M:%S')"
   build_iteration_pairs_from_queue iteration_pairs
-  echo "Traffic-light queue snapshot: ${iteration_pairs[*]}"
   for pair in "${iteration_pairs[@]}"; do
     IFS='-' read -r station task_id <<<"$pair"
     refresh_execution_pairs_from_config
@@ -765,41 +792,31 @@ while true; do
       fi
     done
     if [[ "$allowed" != true ]]; then
-      echo "Skipping station $station task${task_id} due to event_data_step1_run_matrix."
-      echo '------------------------------------------------------'
+      log_rate_limited "disabled_pair_${pair}" 300 "Skipping station $station task${task_id}: disabled by event_data_step1_run_matrix."
       continue
     fi
     task_index=$((task_id - 1))
     task_script="${TASK_SCRIPTS[$task_index]}"
     task_label="${TASK_LABELS[$task_index]}"
-    echo "Considering station $station task${task_id} (${task_label}) ..."
     rotate_pair_to_queue_end "$pair"
     if pipeline_already_running "$station"; then
-      echo "Station $station already handled by another guide_raw_to_corrected.sh; exiting to avoid waiting indefinitely."
-      echo '------------------------------------------------------'
+      log_warn "Station $station already handled by another guide_raw_to_corrected.sh; exiting to avoid waiting indefinitely."
       exit 0
     fi
     if [[ ! -x "$task_script" ]]; then
-      echo "Warning: task script $task_script not found or not executable. Skipping."
+      log_warn "Task script $task_script not found or not executable. Skipping."
       continue
     fi
     if ! wait_for_resources; then
-      echo "Skipping station $station task${task_id} (${task_label}) this loop due to high load."
-      echo '------------------------------------------------------'
       continue
     fi
-    echo "Running station $station task${task_id} (${task_label}) ..."
+    log_info "Running station $station task${task_id} (${task_label}) ..."
 
     if ! python3 -u "$task_script" "$station"; then
-      echo "Task $(basename "$task_script") failed for station $station; continuing to next pair."
-      echo '------------------------------------------------------'
+      log_warn "Task $(basename "$task_script") failed for station $station; continuing to next pair."
       continue
     fi
-    echo "Completed station $station task${task_id} (${task_label})."
-    echo '------------------------------------------------------'
+    log_info "Completed station $station task${task_id} (${task_label})."
   done
-  echo "Pipeline iteration $iteration completed at: $(date '+%Y-%m-%d %H:%M:%S')"
-  echo '------------------------------------------------------'
   iteration=$((iteration + 1))
-  echo "Starting next iteration..."
 done

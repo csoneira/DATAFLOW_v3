@@ -451,7 +451,7 @@ def write_itineraries_to_file(
     itineraries: Iterable[Iterable[str]],
 ) -> None:
     """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir -p(parents=True, exist_ok=True)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     unique_itineraries: dict[tuple[str, ...], None] = {}
 
     for itinerary in itineraries:
@@ -9536,7 +9536,7 @@ def _update_pipeline_csv_for_list_event() -> None:
 
     station_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
     csv_path = station_dir / f'database_status_{station}.csv'
-    csv_path.parent.mkdir -p(parents=True, exist_ok=True)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     if not csv_path.exists():
         with csv_path.open('w', newline='') as handle:
             writer = csv.writer(handle)

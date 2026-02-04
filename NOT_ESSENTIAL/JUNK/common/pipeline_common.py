@@ -65,7 +65,7 @@ def ensure_task_layout(task_root: Path) -> Dict[str, Path]:
         "error": files / "ERROR",
     }
     for path in [task_root, files, plots, logs, *queue_dirs.values()]:
-        path.mkdir -p(parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True)
     return {"plots": plots, "logs": logs, **queue_dirs}
 
 
@@ -77,7 +77,7 @@ def sync_sources_to_queue(source: Path, queue: Path) -> None:
         src = source / name
         dst = queue / name
         try:
-            dst.parent.mkdir -p(parents=True, exist_ok=True)
+            dst.parent.mkdir(parents=True, exist_ok=True)
             src.rename(dst)
         except FileNotFoundError:
             continue
@@ -108,21 +108,21 @@ def acquire_file(source: Path, processing: Path, strategy: str = "oldest") -> It
 
 
 def complete_file(processed: Path, destination: Path) -> Path:
-    destination.mkdir -p(parents=True, exist_ok=True)
+    destination.mkdir(parents=True, exist_ok=True)
     target = destination / processed.name
     processed.rename(target)
     return target
 
 
 def fail_file(processed: Path, error_dir: Path) -> Path:
-    error_dir.mkdir -p(parents=True, exist_ok=True)
+    error_dir.mkdir(parents=True, exist_ok=True)
     target = error_dir / processed.name
     processed.rename(target)
     return target
 
 
 def save_dataframe_h5(data: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir -p(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     prepared = _prepare_for_hdf(data)
     prepared.to_hdf(path, key="data", mode="w")
 
@@ -132,7 +132,7 @@ def load_dataframe_h5(path: Path) -> pd.DataFrame:
 
 
 def write_metadata(metadata: dict, path: Path) -> None:
-    path.parent.mkdir -p(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as handle:
         json.dump(metadata, handle, indent=2, sort_keys=True)
 

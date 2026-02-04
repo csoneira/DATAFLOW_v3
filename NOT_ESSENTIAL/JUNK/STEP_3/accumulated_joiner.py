@@ -117,7 +117,7 @@ PIPELINE_CSV_HEADERS = [
 
 station_dir = Path.home() / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
 pipeline_csv_path = station_dir / f'database_status_{station}.csv'
-pipeline_csv_path.parent.mkdir -p(parents=True, exist_ok=True)
+pipeline_csv_path.parent.mkdir(parents=True, exist_ok=True)
 if not pipeline_csv_path.exists():
     with pipeline_csv_path.open('w', newline='') as handle:
         csv.writer(handle).writerow(PIPELINE_CSV_HEADERS)

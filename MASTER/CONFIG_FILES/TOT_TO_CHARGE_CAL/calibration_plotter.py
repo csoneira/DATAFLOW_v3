@@ -75,7 +75,7 @@ def load_calibration_data(csv_path: Path) -> CalibrationData:
 
 
 def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
-    output_path.parent.mkdir -p(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     widths = data.width.to_numpy()
     charges = data.charge.to_numpy()

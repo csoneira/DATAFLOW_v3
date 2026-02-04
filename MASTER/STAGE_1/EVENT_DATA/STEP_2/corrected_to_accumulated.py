@@ -10,20 +10,9 @@ Created on Thu Jun 20 09:15:33 2024
 @author: csoneira@ucm.es
 """
 
-print("\n\n")
-print("__| |____________________________________________________________________________________________________| |__")
-print("__   ____________________________________________________________________________________________________   __")
-print("  | |                                                                                                    | |  ")
-print("  | |                      _                                           _       _                         | |  ")
-print("  | |  _____   _____ _ __ | |_     __ _  ___ ___ _   _ _ __ ___  _   _| | __ _| |_ ___  _ __ _ __  _   _ | |  ")
-print("  | | / _ \\ \\ / / _ \\ '_ \\| __|   / _` |/ __/ __| | | | '_ ` _ \\| | | | |/ _` | __/ _ \\| '__| '_ \\| | | || |  ")
-print("  | ||  __/\\ V /  __/ | | | |_   | (_| | (_| (__| |_| | | | | | | |_| | | (_| | || (_) | |_ | |_) | |_| || |  ")
-print("  | | \\___| \\_/ \\___|_| |_|\\__|___\\__,_|\\___\\___|\\__,_|_| |_| |_|\\__,_|_|\\__,_|\\__\\___/|_(_)| .__/ \\__, || |  ")
-print("  | |                        |_____|                                                        |_|    |___/ | |  ")
-print("__| |____________________________________________________________________________________________________| |__")
-print("__   ____________________________________________________________________________________________________   __")
-print("  | |                                                                                                    | |  ")
-print("\n\n")
+#
+# Note: this script is executed under cron; avoid banner/ascii-art output so
+# CRON_LOGS stay compact and readable.
 
 
 
@@ -70,6 +59,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
 from typing import List, Tuple, Dict, Optional, Union
+
+VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or sys.stdout.isatty()
 
 # ---------------------------- Third-party Libraries --------------------------
 import numpy as np
@@ -118,7 +109,6 @@ from MASTER.common.plot_utils import pdf_save_rasterized_page
 start_timer(__file__)
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 home_path = config["home_path"]
@@ -649,7 +639,8 @@ else:
                     shutil.move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
-                    sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+                    print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+                    sys.exit(0)
 
     else:
         if unprocessed_files:
@@ -695,10 +686,12 @@ else:
                     print(f"File moved to PROCESSING: {processing_file_path}")
                     break
             else:
-                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                sys.exit(0)
 
         else:
-            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            sys.exit(0)
 
 
 # This is for all cases
@@ -809,9 +802,11 @@ if multiple_files:
     file_dir = os.path.dirname(file_path)
     all_files = sorted(os.listdir(file_dir))
 
-    print("Files in the directory of the datafile:")
-    for fname in all_files:
-        print(fname)
+    print(f"Multiple-files mode: directory contains {len(all_files)} file(s).")
+    if VERBOSE:
+        print("Files in the directory of the datafile:")
+        for fname in all_files:
+            print(fname)
 
     # Filter files within ±2h of reference time
     time_candidates = []
@@ -822,9 +817,10 @@ if multiple_files:
     time_candidates.sort()
 
     print(f"Found {len(time_candidates)} files within the time window of {time_window} around {reference_datetime}.")
-    print("Time candidates:")
-    for dt, fname in time_candidates:
-        print(f"{dt} - {fname}")
+    if VERBOSE:
+        print("Time candidates:")
+        for dt, fname in time_candidates:
+            print(f"{dt} - {fname}")
 
     # Load the closest files by timestamp
     merged_df = df.copy()
@@ -840,9 +836,11 @@ if multiple_files:
             temp_df = pd.read_csv(fpath, sep=',')
             temp_df['Time'] = pd.to_datetime(temp_df['Time'], errors='coerce')
             min_t, max_t = temp_df['Time'].min(), temp_df['Time'].max()
-            print(f"Processing file: {fname} with min time {min_t} and max time {max_t}")
+            if VERBOSE:
+                print(f"Processing file: {fname} with min time {min_t} and max time {max_t}")
             if not (max_t < min_time_original - time_tolerance or min_t > max_time_original + time_tolerance):
-                print(f"Merging file: {fname}")
+                if VERBOSE:
+                    print(f"Merging file: {fname}")
                 used_files_names.append(fname)
                 merged_df = pd.concat([merged_df, temp_df], ignore_index=True)
                 # Update time range for rolling inclusion
@@ -850,23 +848,14 @@ if multiple_files:
                 max_time_original = max(max_time_original, max_t)
                 used += 1
         except Exception as e:
-            print(f"Skipping file {fname}: {e}")
+            if VERBOSE:
+                print(f"Skipping file {fname}: {e}")
 
     df = merged_df
     print(f"Total events after merging: {len(df)}")
 
 
-print("-" * 30)
-print("-" * 30)
-print("-" * 30)
-print("-" * 30)
-print("Files used in this accumulation:")
-print(used_files_names)
-print("-" * 30)
-print("-" * 30)
-print("-" * 30)
-print("-" * 30)
-print("-" * 30)
+print(f"Files used in this accumulation (n={len(used_files_names)}): {used_files_names}")
 
 # ------------------------------------------------------------------------------------------
 
@@ -983,7 +972,7 @@ if exists_input_file:
             df["P3-P4"] = selected_conf.get("P3-P4", np.nan)
             df["phi_north"] = selected_conf.get("phi_north", 0)
     else:
-        print("Error: No matching configuration found for the given date range.")
+        print("Warning: No matching configuration found for the given date range. Using default configuration values.")
         # Assign default values if no match found
         z_positions = np.array([0, 150, 300, 450])  # In mm
         df["over_P1"] = 0
@@ -1069,10 +1058,11 @@ def zero_above_limit(frame: pd.DataFrame, columns: Iterable[str], limit: float) 
     frame.loc[:, cols] = subset.where(subset <= limit, 0)
 original_df = df.copy()
 
-# Print the head of the df
 print("----------------------------------------------------------------------")
-print("Dataframe head:")
-print(df.head())
+print(f"Dataframe shape: rows={len(df)} cols={len(df.columns)}")
+if VERBOSE:
+    print("Dataframe head:")
+    print(df.head())
 
 
 # ---------------------------------------------------------------------------------
@@ -1134,7 +1124,8 @@ if side_calculations:
                 for tt in tt_set:
                     df_tt = df_filtered[df_filtered[col] == int(tt)]
                     theta_vals = df_tt['theta'].dropna()
-                    print(f"[DEBUG] filter={filter_value:.1f}, col={col}, tt={tt}, entries={len(theta_vals)}")
+                    if VERBOSE:
+                        print(f"[DEBUG] filter={filter_value:.1f}, col={col}, tt={tt}, entries={len(theta_vals)}")
                     if len(theta_vals) < 10:
                         continue
                     counts, _ = np.histogram(theta_vals, bins=bins)
@@ -1273,10 +1264,12 @@ if side_calculations:
             plt.show()
         plt.close()
 
-        # Print all the column names of df
-        print("Columns in the dataframe:")
-        for col in df.columns:
-            print(f"- {col}")
+        print(f"Dataframe columns: {len(df.columns)}")
+        if VERBOSE:
+            # Print all the column names of df
+            print("Columns in the dataframe:")
+            for col in df.columns:
+                print(f"- {col}")
 
 
     # ---------------------------------------------------------------------------------
@@ -1558,7 +1551,9 @@ if side_calculations:
         # 3. Driver (replace flags with your existing variables)
         # ──────────────────────────────────────────────────────────────────
         df_fits, fit_curves = fit_efficiencies(eff_results, bin_centers)
-        print(df_fits)                        # always available
+        print(f"Efficiency fit parameters computed: {len(df_fits)} fit(s).")
+        if VERBOSE:
+            print(df_fits)                        # always available
 
         # store fitted parameters back into df as before
         for _, row in df_fits.iterrows():
@@ -2544,9 +2539,10 @@ if side_calculations:
 
         df_polya_fit = pd.DataFrame(polya_fit_list)
 
-        print("Polya fit results:")
-        with pd.option_context('display.precision', 1):
-            print(df_polya_fit)
+        print(f"Polya fit results: {len(df_polya_fit)} row(s).")
+        if VERBOSE:
+            with pd.option_context('display.precision', 1):
+                print(df_polya_fit)
         
         # ---------------------------------------------------------------------------------
         # ---------------------------------------------------------------------------------
@@ -3026,7 +3022,8 @@ if side_calculations:
             real_multiplicities[f"real_quadruple_{module}_s1234"] = rename_columns(globals()[f"quadruple_{module}_s1234"], f"quadruple_{module}_s1234")
 
         # List the keys
-        print(real_multiplicities.keys())
+        if VERBOSE:
+            print(real_multiplicities.keys())
         cases = ["real_single", "real_double", "real_triple", "real_quadruple"]
 
         for case in cases:
@@ -3914,7 +3911,8 @@ if side_calculations:
             df_coeffs = df_coeffs.astype(float)
             df_percent = (df_coeffs * 100).round(1)
             print(f"\n===== Coefficients for {detection_type} (in %) =====")
-            print(df_percent.to_string())  # Forces output in all environments
+            if VERBOSE:
+                print(df_percent.to_string())  # Forces output in all environments
 
 
         # Module colors
@@ -4077,7 +4075,8 @@ if side_calculations:
         induction_section_df = pd.DataFrame(induction_section_table)
 
         # Print the DataFrame
-        print(induction_section_df)
+        if VERBOSE:
+            print(induction_section_df)
         
         # Load the LUT
         # /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/INDUCTION_SECTION
@@ -4114,7 +4113,8 @@ if side_calculations:
         })
 
         # Print the resulting DataFrame
-        print(df_best_induction_section)
+        if VERBOSE:
+            print(df_best_induction_section)
         
         # Create new columns called PX_induction_section with th e best induction section value
         for i in range(1, 5):
@@ -4387,7 +4387,8 @@ if side_calculations:
 
         # --- 8. Save fit results ---
         df_cross_fit = pd.DataFrame(fit_results)
-        print(df_cross_fit)
+        if VERBOSE:
+            print(df_cross_fit)
 
 
     # ---------------------------------------------------------------------------------
@@ -4452,7 +4453,8 @@ if side_calculations:
 
         # Some plots of these calculations --------------------------------------------
         df["weighted_global_barycenter"] = numerator / charge_sum
-        print(df.columns)
+        if VERBOSE:
+            print(df.columns)
 
         # --- Collect relevant column groups ---
         per_module_cols = []
@@ -4896,8 +4898,7 @@ if draw_angular_regions:
 
 # df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundaries, region_layout), axis=1)
 
-print("Region was already calculated in previous step.")
-print(df['region'].value_counts())
+print(f"Region distribution: {df['region'].value_counts().to_dict()}")
 
 #%%
 

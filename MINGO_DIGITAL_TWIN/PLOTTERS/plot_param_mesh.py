@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -22,6 +23,12 @@ def parse_args() -> argparse.Namespace:
         "--output",
         default="/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/PLOTTERS/param_mesh_summary.pdf",
         help="Output PDF path",
+    )
+    parser.add_argument(
+        "--n-value",
+        type=float,
+        default=2.0,
+        help="cos_n value used for the n-specific flux histogram (default: 2).",
     )
     return parser.parse_args()
 
@@ -40,11 +47,19 @@ def add_hist(ax, data, title: str) -> None:
     ax.grid(True, axis="y", alpha=0.2)
 
 
+def equal_efficiency_mask(df: pd.DataFrame, atol: float = 1e-12) -> pd.Series:
+    return (
+        np.isclose(df["eff_p1"], df["eff_p2"], atol=atol)
+        & np.isclose(df["eff_p1"], df["eff_p3"], atol=atol)
+        & np.isclose(df["eff_p1"], df["eff_p4"], atol=atol)
+    )
+
+
 def main() -> None:
     args = parse_args()
     input_path = Path(args.input)
     output_path = Path(args.output)
-    output_path.parent.mkdir -p(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(input_path)
 
@@ -101,6 +116,47 @@ def main() -> None:
 
         fig.suptitle("Efficiency Histograms", fontsize=12)
         fig.tight_layout(rect=[0, 0, 1, 0.96])
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        n_mask = np.isclose(df["cos_n"], args.n_value, atol=1e-12)
+        same_eff_df = df.loc[equal_efficiency_mask(df)].copy()
+
+        fig, ax = plt.subplots(figsize=(7.5, 5.5))
+        if n_mask.any():
+            add_hist(ax, df.loc[n_mask, "flux_cm2_min"], f"Flux histogram for cos_n = {args.n_value:g}")
+            ax.set_xlabel("flux_cm2_min")
+            ax.set_ylabel("count")
+        else:
+            ax.text(0.5, 0.5, f"No rows found for cos_n = {args.n_value:g}", ha="center", va="center")
+            ax.set_axis_off()
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(7.5, 5.5))
+        if same_eff_df.empty:
+            ax.text(0.5, 0.5, "No rows where eff_p1 = eff_p2 = eff_p3 = eff_p4", ha="center", va="center")
+            ax.set_axis_off()
+        else:
+            add_hist(ax, same_eff_df["flux_cm2_min"], "Flux histogram for rows with equal efficiencies")
+            ax.set_xlabel("flux_cm2_min")
+            ax.set_ylabel("count")
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(7.5, 5.5))
+        if same_eff_df.empty:
+            ax.text(0.5, 0.5, "No rows where eff_p1 = eff_p2 = eff_p3 = eff_p4", ha="center", va="center")
+            ax.set_axis_off()
+        else:
+            ax.scatter(same_eff_df["flux_cm2_min"], same_eff_df["eff_p1"], s=20, alpha=0.75)
+            ax.set_xlabel("flux_cm2_min")
+            ax.set_ylabel("efficiency")
+            ax.set_title("Flux vs efficiency for rows with equal efficiencies")
+            ax.grid(True, alpha=0.2)
+        fig.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)
 

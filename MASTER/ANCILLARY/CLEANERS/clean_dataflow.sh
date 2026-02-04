@@ -194,13 +194,20 @@ clean_cronlogs() {
     return 0
   fi
 
-  local before after freed count
+  local before after freed count failed
   before=$(du -sb "$dir" | awk '{print $1}')
-  count=$(find "$dir" -mindepth 1 -print | wc -l | awk '{print $1}')
+  count=0
+  failed=0
 
-  echo "--> Cleaning $dir"
+  echo "--> Truncating cron log files under $dir (keeping paths/inodes)"
   chmod -R u+w "$dir" >/dev/null 2>&1 || true
-  find "$dir" -mindepth 1 -delete
+  while IFS= read -r -d '' file; do
+    if : >"$file" 2>/dev/null; then
+      count=$((count + 1))
+    else
+      failed=$((failed + 1))
+    fi
+  done < <(find "$dir" -type f -print0)
 
   after=$(du -sb "$dir" | awk '{print $1}')
   freed=$((before - after))
@@ -210,7 +217,10 @@ clean_cronlogs() {
   TYPE_FREED["$type"]=$freed
   TYPE_COUNTS["$type"]=${count:-0}
 
-  echo "Cron logs cleared: ${count:-0} item(s)"
+  echo "Cron logs truncated: ${count:-0} file(s)"
+  if (( failed > 0 )); then
+    echo "   Failed to truncate: ${failed} file(s)"
+  fi
   echo "   Size before: $(format_bytes "$before")"
   echo "   Size after:  $(format_bytes "$after")"
   echo "   Freed:       $(format_bytes "$freed")"

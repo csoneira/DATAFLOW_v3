@@ -9,3 +9,4 @@ chunk_rows: 100000
 target_rows: 100000
 files_per_station_conf: 1
 payload_sampling: sequential_random_start
+subsample_rows: [15000, 20000, 25000, 30000, 35000, 40000, 50000, 55000]

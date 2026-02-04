@@ -186,7 +186,7 @@ def num_strips_for_plane(plane_idx: int) -> int:
 
 
 def ensure_dir(path: Path) -> None:
-    path.mkdir -p(parents=True, exist_ok=True)
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def now_iso() -> str:

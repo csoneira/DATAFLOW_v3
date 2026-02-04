@@ -33,7 +33,7 @@ config_files_directory: "/home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES"
 #     "2": [4]
 
 event_data_step1_run_matrix:
-  enabled: false
+  enabled: true
   mode: "whitelist"     # whitelist | blacklist
   default_tasks: []      # whitelist only: [] (none) | "all" | [1,2,3,4,5]
   stations:

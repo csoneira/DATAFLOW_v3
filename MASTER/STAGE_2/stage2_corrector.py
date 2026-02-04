@@ -357,7 +357,7 @@ def quicklook(
         days=days,
     )
     if save_path:
-        save_path.parent.mkdir -p(parents=True, exist_ok=True)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
     if show:
         plt.show()
@@ -2456,7 +2456,7 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
 
     # Choose where to save the GIF
     gif_output_dir = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "OUTPUT"
-    gif_output_dir.mkdir -p(parents=True, exist_ok=True)
+    gif_output_dir.mkdir(parents=True, exist_ok=True)
     gif_path = gif_output_dir / "angular_regions_pct_difference.gif"
 
     for t_idx, (ts, row) in enumerate(events_df.iterrows()):

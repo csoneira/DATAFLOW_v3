@@ -130,7 +130,7 @@ def load_itineraries_from_file(file_path: Path, required: bool = True) -> List[L
 
 
 def write_itineraries_to_file(file_path: Path, itineraries: Iterable[Iterable[str]]) -> None:
-    file_path.parent.mkdir -p(parents=True, exist_ok=True)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     unique: Dict[Tuple[str, ...], None] = {}
     for itinerary in itineraries:
         itinerary_tuple = tuple(itinerary)

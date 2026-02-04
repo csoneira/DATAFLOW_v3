@@ -1,5 +1,17 @@
 #!/bin/bash
 
+log_ts() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
+
+log_info() {
+  printf '[%s] [STEP_3] %s\n' "$(log_ts)" "$*"
+}
+
+log_warn() {
+  printf '[%s] [STEP_3] [WARN] %s\n' "$(log_ts)" "$*" >&2
+}
+
 print_help() {
   cat <<'EOF'
 guide_accumulated_to_joined.sh
@@ -283,7 +295,6 @@ any_pipeline_running() {
       continue
     fi
     [[ "$line" == *"pgrep"* ]] && continue
-    echo "$line"
     return 0
   done <<<"$hits"
   return 1
@@ -291,28 +302,23 @@ any_pipeline_running() {
 
 process_station() {
   local station="$1"
-  echo "------------------------------------------------------"
-  echo "Processing STEP_3 for station $station"
+  log_info "Processing station ${station} (STEP_3)."
 
   if ! python3 -u "$accumulated_distributor_py" "$station"; then
-    echo "Station $station STEP_3 distributor failed; continuing with next station."
+    log_warn "Station $station STEP_3 distributor failed; continuing with next station."
     return 1
   fi
 
   if ! python3 -u "$distributed_joiner_py" "$station"; then
-    echo "Station $station STEP_3 joiner failed; continuing with next station."
+    log_warn "Station $station STEP_3 joiner failed; continuing with next station."
     return 1
   fi
 
-  echo "Station $station STEP_3 completed."
+  log_info "Station $station STEP_3 completed."
   return 0
 }
 
-echo "------------------------------------------------------"
-echo "guide_accumulated_to_joined.sh started on: $(date)"
-echo "Stations: ${stations_requested[*]}"
-echo "Traffic-light mode: $use_traffic_light"
-echo "------------------------------------------------------"
+log_info "guide_accumulated_to_joined.sh started (stations=${stations_requested[*]} traffic_light=${use_traffic_light} no_loop=${no_loop})."
 
 if [[ "$use_traffic_light" == true ]]; then
   sanitize_queue_file
@@ -320,7 +326,7 @@ fi
 
 if [[ "$run_anyway" != true ]]; then
   if any_pipeline_running; then
-    echo "Another guide_accumulated_to_joined.sh is already running; exiting. Use --run-anyway to override."
+    log_warn "Another guide_accumulated_to_joined.sh is already running; exiting. Use --run-anyway to override."
     exit 0
   fi
 fi
@@ -329,21 +335,16 @@ iteration=1
 
 if [[ "$use_traffic_light" == true ]]; then
   while true; do
-    echo "STEP_3 iteration $iteration started at: $(date '+%Y-%m-%d %H:%M:%S')"
     build_iteration_stations iteration_stations
-    echo "Traffic-light queue snapshot: ${iteration_stations[*]}"
     for station in "${iteration_stations[@]}"; do
       rotate_station_to_queue_end "$station"
       process_station "$station"
     done
-    echo "STEP_3 iteration $iteration completed at: $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "------------------------------------------------------"
     iteration=$((iteration + 1))
     if [[ "$no_loop" == true ]]; then
-      echo "--no-loop flag set; exiting after single pass."
+      log_info "--no-loop flag set; exiting after single pass."
       break
     fi
-    echo "Starting next iteration..."
   done
 else
   for station in "${stations_requested[@]}"; do

@@ -338,7 +338,7 @@ def main() -> int:
 
     dictionary_df = params_df.merge(metadata_df, on="filename_base", how="left")
 
-    out_path.parent.mkdir -p(parents=True, exist_ok=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     dictionary_df.to_csv(out_path, index=False)
 
     total = len(dictionary_df)

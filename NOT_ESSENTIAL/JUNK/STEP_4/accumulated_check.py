@@ -28,7 +28,7 @@ except ImportError:
 
 
 def ensure_directory(path: Path) -> None:
-    path.mkdir -p(parents=True, exist_ok=True)
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def ensure_parent(path: Path) -> None:

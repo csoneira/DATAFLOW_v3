@@ -56,6 +56,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Rebuild outputs for all days even if the existing file is up to date.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print per-day skip reasons (default: only a summary).",
+    )
     return parser.parse_args()
 
 
@@ -291,12 +296,18 @@ def main() -> int:
         return 0
 
     if not args.dry_run:
-        task2_output_root.mkdir -p(parents=True, exist_ok=True)
+        task2_output_root.mkdir(parents=True, exist_ok=True)
+
+    total_days = 0
+    processed_days = 0
+    skipped_up_to_date = 0
+    skipped_empty_merge = 0
 
     for day, day_dir in day_directories:
         csv_files = sorted(day_dir.glob("*.csv"))
         if not csv_files:
             continue
+        total_days += 1
 
         year = f"{day:%Y}"
         month = f"{day:%m}"
@@ -310,7 +321,9 @@ def main() -> int:
         needs_merge = args.all or not output_path.exists() or day_basenames != existing_basenames
 
         if not needs_merge:
-            print(f"Skipping {day:%Y-%m-%d}: output already up to date ({output_path}).")
+            skipped_up_to_date += 1
+            if args.verbose:
+                print(f"Skipping {day:%Y-%m-%d}: output already up to date ({output_path}).")
             continue
 
         print(
@@ -320,7 +333,9 @@ def main() -> int:
         merged = merge_day_files(csv_files)
 
         if merged.empty:
-            print("  ! Skipped: nothing to merge.")
+            skipped_empty_merge += 1
+            if args.verbose:
+                print("  ! Skipped: nothing to merge.")
             continue
 
         basenames: List[str] = []
@@ -352,7 +367,7 @@ def main() -> int:
             print(f"           # execution_date={exec_date_header}")
             continue
 
-        output_parent.mkdir -p(parents=True, exist_ok=True)
+        output_parent.mkdir(parents=True, exist_ok=True)
 
         with output_path.open("w", encoding="utf-8", newline="") as handle:
             handle.write(f"# source_basenames={basename_header}\n")
@@ -360,6 +375,13 @@ def main() -> int:
             output_dataframe.to_csv(handle, index=False)
 
         print(f"  Wrote {output_path}")
+        processed_days += 1
+
+    print(
+        "Join summary: "
+        f"days_seen={total_days}, processed={processed_days}, "
+        f"skipped_up_to_date={skipped_up_to_date}, skipped_empty_merge={skipped_empty_merge}"
+    )
 
     return 0
 

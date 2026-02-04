@@ -380,7 +380,7 @@ def build_outlier_tables(
 ) -> List[Path]:
     """Persist compact CSV tables from *outlier_data*."""
     generated: List[Path] = []
-    output_dir.mkdir -p(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     for (station, task), rows in outlier_data.items():
         if not rows:
@@ -561,7 +561,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             pdf_path = None
             pdf_writer: Optional[PdfPages] = None
             if args.plot:
-                args.plot_dir.mkdir -p(parents=True, exist_ok=True)
+                args.plot_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = args.plot_dir / f"station_{station_name[-2:]}_task_{task_number}.pdf"
                 pdf_writer = PdfPages(pdf_path)
 

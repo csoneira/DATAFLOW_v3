@@ -93,7 +93,7 @@ def log_message(message: str, *, logfile: Path) -> None:
     timestamp = _now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
     formatted = f"[{timestamp}] {message}"
     print(formatted)
-    logfile.parent.mkdir -p(parents=True, exist_ok=True)
+    logfile.parent.mkdir(parents=True, exist_ok=True)
     with logfile.open("a", encoding="utf-8") as handle:
         handle.write(formatted + "\n")
 

@@ -37,33 +37,10 @@ from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
+from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
 
-from datetime import datetime
-
-# import glob
-# import pandas as pd
-# import random
-# import os
-# import sys
-
-# # Pick a random file in "/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/cleaned_<file>.parquet"
-# IN_PATH = glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.parquet")[random.randint(0, len(glob.glob("/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/DONE/listed_*.parquet")) - 1)]
-# KEY = "df"
-
-# # Load dataframe
-# working_df = pd.read_hdf(IN_PATH, key=KEY)
-# print(f"Listed dataframe reloaded from: {IN_PATH}")
-
-# # --- Continue your calibration or analysis code here ---
-# # e.g.:
-# # run_calibration(working_df)
-
-
-# # Take basename of IN_PATH without extension and witouth the 'listed_' prefix
-# basename_no_ext = os.path.splitext(os.path.basename(IN_PATH))[0].replace("listed_", "")
-# print(f"File basename (no extension): {basename_no_ext}")
+from datetime import datetime, timedelta
 
 
 # I want to chrono the execution time of the script
@@ -85,11 +62,12 @@ import shutil
 import builtins
 import warnings
 import time
-from datetime import timedelta
 from collections import defaultdict
 from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable, List
+
+VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or sys.stdout.isatty()
 
 # Scientific Computing
 from math import sqrt
@@ -868,9 +846,9 @@ for directory in base_directories.values():
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
-
-# status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
-# status_timestamp = append_status_row(status_csv_path)
+csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
+status_filename_base = ""
+status_execution_date = None
 
 # Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
@@ -1211,6 +1189,12 @@ basename_no_ext, file_extension = os.path.splitext(the_filename)
 basename_no_ext = the_filename.replace("listed_", "").replace(".parquet", "")
 
 print(f"File basename (no extension): {basename_no_ext}")
+status_filename_base = basename_no_ext
+status_execution_date = initialize_status_row(
+    csv_path_status,
+    filename_base=status_filename_base,
+    completion_fraction=0.0,
+)
 
 
 analysis_date = datetime.now().strftime("%Y-%m-%d")
@@ -1232,6 +1216,14 @@ try:
         sys.exit(f"File '{file_name}' does not belong to station {station}. Exiting.")
 except ValueError:
     sys.exit(f"Invalid station number in file '{file_name}'. Exiting.")
+
+if status_execution_date is not None:
+    update_status_progress(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        completion_fraction=0.25,
+    )
 
 
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
@@ -1325,6 +1317,13 @@ if "cal_tt" not in working_df.columns:
 
 # Original number of events
 original_number_of_events = len(working_df)
+if status_execution_date is not None:
+    update_status_progress(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        completion_fraction=0.5,
+    )
 
 
 
@@ -1387,7 +1386,7 @@ def write_itineraries_to_file(
     itineraries: Iterable[Iterable[str]],
 ) -> None:
     """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir -p(parents=True, exist_ok=True)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     unique_itineraries: dict[tuple[str, ...], None] = {}
 
     for itinerary in itineraries:
@@ -2125,7 +2124,7 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
+from MASTER.common.status_csv import initialize_status_row, update_status_progress
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
@@ -2201,7 +2200,7 @@ def write_itineraries_to_file(
     itineraries: Iterable[Iterable[str]],
 ) -> None:
     """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir -p(parents=True, exist_ok=True)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     unique_itineraries: dict[tuple[str, ...], None] = {}
 
     for itinerary in itineraries:
@@ -2894,7 +2893,7 @@ def write_itineraries_to_file(
     itineraries: Iterable[Iterable[str]],
 ) -> None:
     """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir -p(parents=True, exist_ok=True)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     unique_itineraries: dict[tuple[str, ...], None] = {}
 
     for itinerary in itineraries:
@@ -7289,7 +7288,7 @@ def _pipeline_compute_start_timestamp(base: str) -> str:
 
 #     station_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
 #     csv_path = station_dir / f'database_status_{station}.csv'
-#     csv_path.parent.mkdir -p(parents=True, exist_ok=True)
+#     csv_path.parent.mkdir(parents=True, exist_ok=True)
 #     if not csv_path.exists():
 #         with csv_path.open('w', newline='') as handle:
 #             writer = csv.writer(handle)
@@ -7554,9 +7553,13 @@ list_to_fit_counts = working_df["list_to_fit_tt"].value_counts()
 for combo_value, count in list_to_fit_counts.items():
     global_variables[f"list_to_fit_tt_{combo_value}_count"] = int(count)
 
-print("Columns before saving list->fit parquet:")
-for col in working_df.columns:
-    print(f" - {col}")
+print(
+    f"Writing fit parquet: rows={len(working_df)} cols={len(working_df.columns)} -> {OUT_PATH}"
+)
+if VERBOSE:
+    print("Columns before saving list->fit parquet:")
+    for col in working_df.columns:
+        print(f" - {col}")
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
@@ -7580,6 +7583,14 @@ total_execution_time_minutes = execution_time_minutes
 # -------------------------------------------------------------------------------
 # Filter metadata (ancillary) ----------------------------------------------------
 # -------------------------------------------------------------------------------
+if status_execution_date is not None:
+    update_status_progress(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        completion_fraction=0.75,
+    )
+
 filter_metrics["data_purity_percentage"] = round(float(data_purity_percentage), 4)
 filter_row = {
     "filename_base": filename_base,
@@ -7631,11 +7642,12 @@ add_normalized_count_metadata(
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp
 
-# Print completely global_variables
-print("----------\nAll global variables to be saved:")
-for key, value in global_variables.items():
-    print(f"{key}: {value}")
-print("----------\n")
+print(f"Specific metadata keys to be saved: {len(global_variables)}")
+if VERBOSE:
+    print("----------\nAll global variables to be saved:")
+    for key, value in global_variables.items():
+        print(f"{key}: {value}")
+    print("----------\n")
 
 print("----------\nSpecific metadata to be saved:")
 print(f"Filename base: {filename_base}")
@@ -7668,5 +7680,13 @@ if user_file_selection == False:
     else:
         print(f"Input file already absent (maybe previously processed): {file_path}")
         print("Skipping move; fitted output stays in OUTPUT_FILES.")
+
+if status_execution_date is not None:
+    update_status_progress(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        completion_fraction=1.0,
+    )
 
 # %%

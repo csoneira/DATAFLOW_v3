@@ -387,8 +387,40 @@ ymd_to_bound_key() {
 }
 
 if [[ ! -s "$clean_metadata_csv" ]]; then
-  log_info "Clean metadata CSV not found at ${clean_metadata_csv}. Run $(basename "$metadata_prep_script") --refresh-metadata first." >&2
-  exit 1
+  log_info "Clean metadata CSV not found at ${clean_metadata_csv}." >&2
+  log_info "Attempting automatic refresh via $(basename "$metadata_prep_script") --refresh-metadata (station ${station})." >&2
+
+  # Throttle + serialize refreshes across stations to avoid overloading the system/remote host.
+  # - Throttle: small station-based delay so stations refresh in numeric order when cron fires simultaneously.
+  # - Serialize: flock ensures only one refresh runs at a time.
+  refresh_delay_sec=$((10#$station * 3))
+  if (( refresh_delay_sec > 0 )); then
+    log_info "Throttling metadata refresh by sleeping ${refresh_delay_sec}s (station ${station})." >&2
+    sleep "$refresh_delay_sec"
+  fi
+
+  lock_dir="$HOME/DATAFLOW_v3/EXECUTION_LOGS/LOCKS"
+  lock_file="${lock_dir}/prepare_reprocessing_metadata_refresh.lock"
+  mkdir -p "$lock_dir"
+
+  exec 9>"$lock_file"
+  if flock -n 9; then
+    if [[ -x "$metadata_prep_script" ]]; then
+      if ! "$metadata_prep_script" "$station" --refresh-metadata; then
+        log_info "Warning: metadata refresh failed for station ${station}." >&2
+      fi
+    else
+      log_info "Warning: metadata preparation script not found at $metadata_prep_script" >&2
+    fi
+    flock -u 9 || true
+  else
+    log_info "Another metadata refresh is already running; skipping refresh for station ${station} this run." >&2
+  fi
+
+  if [[ ! -s "$clean_metadata_csv" ]]; then
+    log_info "Warning: Clean metadata CSV still not found at ${clean_metadata_csv}; skipping downloads for station ${station}." >&2
+    exit 0
+  fi
 fi
 
 if ! cp "$clean_metadata_csv" "$working_metadata_csv"; then

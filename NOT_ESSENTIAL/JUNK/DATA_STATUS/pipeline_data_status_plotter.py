@@ -174,7 +174,7 @@ def plot_station(station: str, output_dir: Path, global_min: datetime | None, gl
     if any(stage_points[field] for field, _, _ in STAGE_MAP):
         ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0.0)
 
-    output_dir.mkdir -p(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     png_path = output_dir / f"pipeline_data_status_MINGO0{station}.png"
     return fig, png_path, station_min, station_max
 

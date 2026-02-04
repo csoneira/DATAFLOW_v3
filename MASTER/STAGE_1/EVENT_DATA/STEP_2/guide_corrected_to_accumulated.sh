@@ -1,5 +1,17 @@
 #!/bin/bash
 
+log_ts() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
+
+log_info() {
+  printf '[%s] [STEP_2] %s\n' "$(log_ts)" "$*"
+}
+
+log_warn() {
+  printf '[%s] [STEP_2] [WARN] %s\n' "$(log_ts)" "$*" >&2
+}
+
 print_help() {
   cat <<'EOF'
 guide_corrected_to_accumulated.sh
@@ -282,7 +294,6 @@ any_pipeline_running() {
       continue
     fi
     [[ "$line" == *"pgrep"* ]] && continue
-    echo "$line"
     return 0
   done <<<"$hits"
   return 1
@@ -290,8 +301,7 @@ any_pipeline_running() {
 
 process_station() {
   local station="$1"
-  echo "------------------------------------------------------"
-  echo "Processing STEP_2 for station $station"
+  log_info "Processing station ${station} (STEP_2)."
 
   local station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
   local base_event_directory="$station_directory/STAGE_1/EVENT_DATA"
@@ -299,23 +309,18 @@ process_station() {
   local base_working_directory="$base_event_directory/STEP_2"
 
   mkdir -p "$base_working_directory" "$input_directory" "$station_directory"
-  echo "Source (STEP_1_TO_2_OUTPUT): $input_directory"
-  echo "Working directory (STEP_2): $base_working_directory"
+  log_info "Paths: source=${input_directory} workdir=${base_working_directory}"
 
   if ! python3 -u "$corrected_to_accumulated_py" "$station"; then
-    echo "Station $station STEP_2 failed; continuing with next station."
+    log_warn "Station $station STEP_2 failed; continuing with next station."
     return 1
   fi
 
-  echo "Station $station STEP_2 completed."
+  log_info "Station $station STEP_2 completed."
   return 0
 }
 
-echo "------------------------------------------------------"
-echo "guide_corrected_to_accumulated.sh started on: $(date)"
-echo "Stations: ${stations_requested[*]}"
-echo "Traffic-light mode: $use_traffic_light"
-echo "------------------------------------------------------"
+log_info "guide_corrected_to_accumulated.sh started (stations=${stations_requested[*]} traffic_light=${use_traffic_light} no_loop=${no_loop})."
 
 if [[ "$use_traffic_light" == true ]]; then
   sanitize_queue_file
@@ -323,7 +328,7 @@ fi
 
 if [[ "$run_anyway" != true ]]; then
   if any_pipeline_running; then
-    echo "Another guide_corrected_to_accumulated.sh is already running; exiting. Use --run-anyway to override."
+    log_warn "Another guide_corrected_to_accumulated.sh is already running; exiting. Use --run-anyway to override."
     exit 0
   fi
 fi
@@ -332,21 +337,16 @@ iteration=1
 
 if [[ "$use_traffic_light" == true ]]; then
   while true; do
-    echo "STEP_2 iteration $iteration started at: $(date '+%Y-%m-%d %H:%M:%S')"
     build_iteration_stations iteration_stations
-    echo "Traffic-light queue snapshot: ${iteration_stations[*]}"
     for station in "${iteration_stations[@]}"; do
       rotate_station_to_queue_end "$station"
       process_station "$station"
     done
-    echo "STEP_2 iteration $iteration completed at: $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "------------------------------------------------------"
     iteration=$((iteration + 1))
     if [[ "$no_loop" == true ]]; then
-      echo "--no-loop flag set; exiting after single pass."
+      log_info "--no-loop flag set; exiting after single pass."
       break
     fi
-    echo "Starting next iteration..."
   done
 else
   for station in "${stations_requested[@]}"; do

@@ -163,7 +163,7 @@ TRIGGER_SELECTED = ['12', '23', '34', '13']
 use_binary = True  # If True, will use a binary file instead of CSV
 bin_filename = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/SIMULATORS/PLANE_COMBINATION_MONTECARLO/simulated_tracks_{N_TRACKS}.pkl"
 csv_filename = f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/SIMULATORS/PLANE_COMBINATION_MONTECARLO/simulated_tracks_{N_TRACKS}.csv"
-Path(bin_filename).parent.mkdir -p(parents=True, exist_ok=True)
+Path(bin_filename).parent.mkdir(parents=True, exist_ok=True)
 
 
 
@@ -428,7 +428,7 @@ import matplotlib.pyplot as plt
 from pandas.plotting import scatter_matrix
 
 plot_dir = Path(PLOT_DIR)
-plot_dir.mkdir -p(parents=True, exist_ok=True)
+plot_dir.mkdir(parents=True, exist_ok=True)
 
 
 def plot_scatter_grid(data: pd.DataFrame, columns: list[str], title: str, filename: str) -> None:

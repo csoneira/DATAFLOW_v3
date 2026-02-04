@@ -138,7 +138,7 @@ def append_marker(log_path: Path, timestamp: str) -> None:
 
 
 def append_entries(entries: Iterable[Tuple[str, str, str, str]]) -> None:
-    OUTPUT_DIR.mkdir -p(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     with OUTPUT_FILE.open("a", encoding="utf-8") as fp:
         for timestamp, log_name, digest, traceback_text in entries:
             fp.write(f"{ENTRY_DIVIDER}\n")
@@ -147,14 +147,14 @@ def append_entries(entries: Iterable[Tuple[str, str, str, str]]) -> None:
 
 
 def append_no_error_entry(timestamp: str) -> None:
-    OUTPUT_DIR.mkdir -p(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     with OUTPUT_FILE.open("a", encoding="utf-8") as fp:
         fp.write(f"{ENTRY_DIVIDER}\n")
         fp.write(f"{timestamp} | NO ERRORS FOUND\n\n")
 
 
 def append_pending_entry(timestamp: str, pending_counts: Counter) -> None:
-    OUTPUT_DIR.mkdir -p(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     total_occurrences = sum(pending_counts.values())
     unique = len(pending_counts)
     with OUTPUT_FILE.open("a", encoding="utf-8") as fp:
@@ -190,7 +190,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    OUTPUT_DIR.mkdir -p(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if not LOG_DIR.exists():
         raise SystemExit(f"Cron log directory not found: {LOG_DIR}")
 

@@ -69,10 +69,10 @@ def build_filename(station_id: int, timestamp: datetime) -> str:
     return f"mi0{station_id}{timestamp.year % 100:02d}{day_of_year:03d}{timestamp:%H%M%S}.dat"
 
 
-def build_sim_filename(base_date: datetime, time_source: datetime) -> str:
-    day_of_year = base_date.timetuple().tm_yday
-    year = base_date.year
-    return f"mi00{year % 100:02d}{day_of_year:03d}{time_source:%H%M%S}.dat"
+def build_sim_filename(timestamp: datetime) -> str:
+    day_of_year = timestamp.timetuple().tm_yday
+    year = timestamp.year
+    return f"mi00{year % 100:02d}{day_of_year:03d}{timestamp:%H%M%S}.dat"
 
 
 def load_output_registry(path: Path) -> dict:
@@ -287,23 +287,81 @@ def ensure_unique_out_name(
 
 
 def ensure_unique_sim_name(
-    base_date: datetime,
     start_time: datetime,
     output_dir: Path,
     used_names: set[str],
 ) -> tuple[str, datetime]:
-    out_name = build_sim_filename(base_date, start_time)
-    if out_name not in used_names:
+    out_name = build_sim_filename(start_time)
+    out_path = output_dir / out_name
+    if out_name not in used_names and not out_path.exists():
         used_names.add(out_name)
         return out_name, start_time
     candidate = start_time
     for _ in range(24 * 60 * 60):
         candidate = candidate + timedelta(seconds=1)
-        out_name = build_sim_filename(base_date, candidate)
-        if out_name not in used_names:
+        out_name = build_sim_filename(candidate)
+        out_path = output_dir / out_name
+        if out_name not in used_names and not out_path.exists():
             used_names.add(out_name)
             return out_name, candidate
     raise RuntimeError("Unable to find unique output name for simulation day.")
+
+
+def parse_subsample_rows(value: object) -> list[int]:
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text.lower() in {"none", "null", "[]"}:
+            return []
+        raw_rows = [part.strip() for part in text.split(",") if part.strip()]
+    elif isinstance(value, (list, tuple)):
+        raw_rows = list(value)
+    else:
+        raise ValueError("config subsample_rows must be a list of integers or a comma-separated string.")
+
+    rows: list[int] = []
+    for row in raw_rows:
+        row_i = int(row)
+        if row_i <= 0:
+            raise ValueError("config subsample_rows values must be positive integers.")
+        rows.append(row_i)
+    return rows
+
+
+def parse_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def collect_input_row_counts(
+    input_paths: list[Path],
+    chunk_rows: int | None,
+) -> tuple[list[int], int]:
+    row_counts: list[int] = []
+    for path in input_paths:
+        total = 0
+        input_iter, _, _ = iter_input_frames(path, chunk_rows)
+        for chunk in input_iter:
+            total += len(chunk)
+        row_counts.append(total)
+        print(f"Input rows: {path} -> {total}")
+    total_rows = int(sum(row_counts))
+    print(f"Total rows across inputs: {total_rows}")
+    return row_counts, total_rows
 
 
 def build_payload(row_dict: dict) -> str:
@@ -371,27 +429,21 @@ def sample_payloads_sequential(
     target_rows: int,
     chunk_rows: int | None,
     rng: np.random.Generator,
-) -> tuple[list[str], int, list[float] | None]:
-    row_counts = []
-    for path in input_paths:
-        total = 0
-        input_iter, _, _ = iter_input_frames(path, chunk_rows)
-        for chunk in input_iter:
-            total += len(chunk)
-        row_counts.append(total)
-        print(f"Input rows: {path} -> {total}")
-    total_rows = int(sum(row_counts))
-    print(f"Total rows across inputs: {total_rows}")
+    total_rows: int | None = None,
+) -> tuple[list[str], int, list[float] | None, int]:
+    if total_rows is None:
+        _, total_rows = collect_input_row_counts(input_paths, chunk_rows)
     if total_rows <= 0:
         raise ValueError("No rows available in the input data.")
+    if target_rows <= 0:
+        raise ValueError("target_rows must be positive.")
     if total_rows < target_rows:
-        print(
-            f"Requested {target_rows} rows but only {total_rows} available; using {total_rows}."
+        raise ValueError(
+            f"Requested {target_rows} rows but only {total_rows} are available for sequential sampling."
         )
-        target_rows = total_rows
 
     start_idx = int(rng.integers(0, total_rows - target_rows + 1))
-    print(f"Sequential sampling start index: {start_idx}")
+    print(f"Sequential sampling start index ({target_rows} rows): {start_idx}")
 
     remaining_skip = start_idx
     remaining_take = target_rows
@@ -440,7 +492,7 @@ def sample_payloads_sequential(
     if offsets is not None and offsets:
         first = offsets[0]
         offsets = [val - first for val in offsets]
-    return payloads, total_rows, offsets
+    return payloads, total_rows, offsets, start_idx
 
 
 def write_with_timestamps(
@@ -450,18 +502,27 @@ def write_with_timestamps(
     rate_hz: float,
     rng: np.random.Generator,
     offsets_s: list[float] | None = None,
-) -> datetime:
+) -> tuple[int, datetime | None]:
+    day_end = datetime(start_time.year, start_time.month, start_time.day) + timedelta(days=1)
+    rows_written = 0
+    last_written_time: datetime | None = None
     with output_path.open("w", encoding="ascii") as dst:
         current_time = start_time
         for idx, payload in enumerate(payloads):
             if offsets_s is not None:
-                current_time = start_time + timedelta(seconds=float(offsets_s[idx]))
-            year = current_time.year
-            month = current_time.month
-            day = current_time.day
-            hour = current_time.hour
-            minute = current_time.minute
-            second = current_time.second
+                event_time = start_time + timedelta(seconds=float(offsets_s[idx]))
+            else:
+                event_time = current_time
+
+            if event_time >= day_end:
+                break
+
+            year = event_time.year
+            month = event_time.month
+            day = event_time.day
+            hour = event_time.hour
+            minute = event_time.minute
+            second = event_time.second
             header = [
                 f"{year:04d}",
                 f"{month:02d}",
@@ -472,10 +533,14 @@ def write_with_timestamps(
                 "1",
             ]
             dst.write(" ".join(header + payload.split()) + "\n")
+            rows_written += 1
+            last_written_time = event_time
             if offsets_s is None and rate_hz > 0:
                 delta = rng.exponential(1.0 / rate_hz)
-                current_time = current_time + timedelta(seconds=float(delta))
-    return current_time
+                current_time = event_time + timedelta(seconds=float(delta))
+            elif offsets_s is None:
+                current_time = event_time
+    return rows_written, last_written_time
 
 
 def main() -> None:
@@ -538,9 +603,15 @@ def main() -> None:
     requested_rows = int(cfg.get("target_rows", 50000))
     if requested_rows <= 0:
         raise ValueError("config target_rows must be a positive integer.")
+    subsample_rows = parse_subsample_rows(cfg.get("subsample_rows", []))
+    if subsample_rows and payload_sampling != "sequential_random_start":
+        raise ValueError(
+            "config subsample_rows requires payload_sampling='sequential_random_start'."
+        )
 
+    registry_enabled = parse_bool(cfg.get("registry_enabled"), True)
     registry_path = output_dir / "step_final_output_registry.json"
-    registry = load_output_registry(registry_path)
+    registry = load_output_registry(registry_path) if registry_enabled else {"version": 1, "files": []}
     used_output_names: dict[Path, set[str]] = defaultdict(set)
     for existing_file in output_dir.rglob("mi0*.dat"):
         used_output_names[existing_file.parent].add(existing_file.name)
@@ -678,70 +749,104 @@ def main() -> None:
         step1_cfg = find_upstream_config(baseline_meta, "STEP_1") or {}
         step3_cfg = find_upstream_config(baseline_meta, "STEP_3") or {}
         step9_cfg = find_upstream_config(baseline_meta, "STEP_9") or {}
-        if sim_params_df is not None:
-            eff_key = json.dumps(step3_cfg.get("efficiencies", []))
-            trig_key = json.dumps(step9_cfg.get("trigger_combinations", []))
-            matches = sim_params_df.copy()
-            for col, val in [
-                ("cos_n", step1_cfg.get("cos_n")),
-                ("flux_cm2_min", step1_cfg.get("flux_cm2_min")),
-                ("z_plane_1", z_vals[0]),
-                ("z_plane_2", z_vals[1]),
-                ("z_plane_3", z_vals[2]),
-                ("z_plane_4", z_vals[3]),
-                ("efficiencies", eff_key),
-                ("trigger_combinations", trig_key),
-            ]:
-                if col not in matches.columns:
-                    matches = matches.iloc[0:0]
-                    break
-                if col in {"efficiencies", "trigger_combinations"}:
-                    matches = matches[matches[col].astype(str) == str(val)]
-                else:
-                    matches = matches[np.isclose(matches[col].astype(float), float(val))]
-            if not matches.empty:
-                mesh.loc[param_row.name, "done"] = 1
-                mesh = normalize_param_mesh_ids(mesh)
-                mesh.to_csv(mesh_path, index=False)
-                print("Skipping existing output for matching parameter set in step_final_simulation_params.csv.")
-                continue
+        total_rows: int
         if payload_sampling == "sequential_random_start":
-            payloads, total_rows, thick_offsets = sample_payloads_sequential(
-                input_paths, requested_rows, chunk_rows, rng
-            )
+            _, total_rows = collect_input_row_counts(input_paths, chunk_rows)
+            if total_rows <= 0:
+                raise ValueError("No rows available in the input data.")
         else:
-            payloads, total_rows, thick_offsets = sample_payloads(
-                input_paths, requested_rows, chunk_rows, rng
-            )
-        selected_rows = len(payloads)
-        if selected_rows < requested_rows:
-            print(f"Selected {selected_rows} rows out of requested {requested_rows}.")
+            total_rows = -1
+
+        file_plans: list[dict[str, object]] = []
+        for _ in range(target_files):
+            file_plans.append({"kind": "target", "requested_rows": requested_rows})
+        for sub_rows in subsample_rows:
+            file_plans.append({"kind": "subsample", "requested_rows": int(sub_rows)})
 
         existing_for_run = sum(
             1
             for entry in registry.get("files", [])
             if entry.get("param_set_id") == int(param_set_id)
         )
-        if existing_for_run >= target_files:
+        if existing_for_run >= len(file_plans):
             print(
                 "Skipping existing output for "
                 f"param_set_id={param_set_id} "
-                f"({existing_for_run}/{target_files})."
+                f"({existing_for_run}/{len(file_plans)})."
             )
             continue
 
         sim_dir = output_dir
         ensure_dir(sim_dir)
         dir_used_names = used_output_names[sim_dir]
+        next_start = datetime.combine(base_time.date(), datetime.min.time())
+        new_param_rows: list[dict] = []
 
-        next_start = base_time
-        for _ in range(target_files - existing_for_run):
-            out_name, start_time = ensure_unique_sim_name(base_time, next_start, sim_dir, dir_used_names)
+        for subfile_index, plan in enumerate(file_plans):
+            file_kind = str(plan["kind"])
+            requested_for_file = int(plan["requested_rows"])
+            desired_rows = requested_for_file
+            sample_start_index: int | None = None
+
+            if payload_sampling == "sequential_random_start":
+                if total_rows < desired_rows:
+                    if file_kind == "subsample":
+                        print(
+                            f"Skipping subsample_rows={desired_rows}; only {total_rows} source rows available."
+                        )
+                        continue
+                    print(
+                        f"Requested {desired_rows} rows but only {total_rows} available; using {total_rows}."
+                    )
+                    desired_rows = total_rows
+
+                payloads, _, thick_offsets, sample_start_index = sample_payloads_sequential(
+                    input_paths,
+                    desired_rows,
+                    chunk_rows,
+                    rng,
+                    total_rows=total_rows,
+                )
+            else:
+                payloads, total_rows, thick_offsets = sample_payloads(
+                    input_paths,
+                    desired_rows,
+                    chunk_rows,
+                    rng,
+                )
+
+            if not payloads:
+                print(
+                    f"Skipping file generation for param_set_id={param_set_id}: no payload rows available."
+                )
+                continue
+
+            out_name, start_time = ensure_unique_sim_name(next_start, sim_dir, dir_used_names)
             out_path = sim_dir / out_name
-            last_time = write_with_timestamps(
-                payloads, out_path, start_time, rate_hz, rng, offsets_s=thick_offsets
+            rows_written, last_time = write_with_timestamps(
+                payloads,
+                out_path,
+                start_time,
+                rate_hz,
+                rng,
+                offsets_s=thick_offsets,
             )
-            next_start = last_time + timedelta(seconds=1)
+
+            if rows_written == 0:
+                out_path.unlink(missing_ok=True)
+                print(f"Skipping empty output {out_name}; no rows fit before midnight.")
+                continue
+
+            if rows_written < len(payloads):
+                print(
+                    f"Cut {out_name} at midnight: wrote {rows_written}/{len(payloads)} rows."
+                )
+            selected_rows = rows_written
+            next_start = (
+                last_time + timedelta(seconds=1)
+                if last_time is not None
+                else start_time + timedelta(seconds=1)
+            )
 
             registry_entry = {
                 "file_name": out_name,
@@ -756,8 +861,12 @@ def main() -> None:
                 "param_mesh": str(mesh_path),
                 "start_time": start_time.isoformat(),
                 "rate_hz": rate_hz,
-                "target_rows": requested_rows,
+                "target_rows": requested_for_file,
+                "requested_rows": requested_for_file,
                 "selected_rows": selected_rows,
+                "subfile_kind": file_kind,
+                "subfile_index": subfile_index,
+                "sample_start_index": sample_start_index,
                 "total_source_rows": total_rows,
                 "input_collect": input_collect,
                 "thick_time_mode": "offset" if thick_offsets is not None else "poisson",
@@ -766,8 +875,9 @@ def main() -> None:
                     "STEP_10_TO_FINAL": collect_sim_run_configs(input_dir),
                 },
             }
-            registry["files"].append(registry_entry)
-            save_output_registry(registry_path, registry)
+            if registry_enabled:
+                registry["files"].append(registry_entry)
+                save_output_registry(registry_path, registry)
 
             row = {
                 "file_name": out_name,
@@ -781,23 +891,29 @@ def main() -> None:
                 "z_plane_4": z_vals[3],
                 "efficiencies": json.dumps(step3_cfg.get("efficiencies", [])),
                 "trigger_combinations": json.dumps(step9_cfg.get("trigger_combinations", [])),
+                "requested_rows": requested_for_file,
                 "selected_rows": selected_rows,
+                "subfile_kind": file_kind,
+                "subfile_index": subfile_index,
+                "sample_start_index": sample_start_index,
             }
+            new_param_rows.append(row)
+            print(
+                f"Saved {out_path} (param_set_id={param_set_id}, requested_rows={requested_for_file}, selected_rows={selected_rows})"
+            )
+
+        if new_param_rows:
             if sim_params_df is not None:
                 df_params = sim_params_df
-                drop_cols = [
-                    col
-                    for col in ("file_path", "input_sim_run", "requested_rows")
-                    if col in df_params.columns
-                ]
+                drop_cols = [col for col in ("file_path", "input_sim_run") if col in df_params.columns]
                 if drop_cols:
                     df_params = df_params.drop(columns=drop_cols)
-                df_params = df_params[df_params["file_name"] != out_name]
-                df_params = pd.concat([df_params, pd.DataFrame([row])], ignore_index=True)
+                for new_row in new_param_rows:
+                    df_params = df_params[df_params["file_name"] != new_row["file_name"]]
+                df_params = pd.concat([df_params, pd.DataFrame(new_param_rows)], ignore_index=True)
             else:
-                df_params = pd.DataFrame([row])
+                df_params = pd.DataFrame(new_param_rows)
             df_params.to_csv(sim_params_path, index=False)
-            print(f"Saved {out_path} (param_set_id={param_set_id})")
 
 
 if __name__ == "__main__":

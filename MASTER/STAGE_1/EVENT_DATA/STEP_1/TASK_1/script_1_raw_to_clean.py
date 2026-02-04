@@ -14,31 +14,7 @@ Along the way it maintains the station staging directories, generates QA plots,
 tracks execution metadata, and emits run-level summaries consumed by the rest
 of the Stage 1 event workflow.
 """
-
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# --------------- TASK_1: import and clean ------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-
 task_number = 1
-
-
-
-print("----------------------------------------------------------------------")
-print("-------------------- STAGE_0_to_1 TO LIST CLEAN IS STARTING -------------------")
-print("----------------------------------------------------------------------")
-
 
 import sys
 from pathlib import Path
@@ -58,7 +34,7 @@ from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
-from MASTER.common.status_csv import append_status_row, mark_status_complete
+from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
 
 
@@ -87,6 +63,8 @@ from collections import defaultdict
 from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable, List
+
+VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or sys.stdout.isatty()
 
 
 # Scientific Computing
@@ -501,9 +479,9 @@ for directory in base_directories.values():
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
-
-# status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
-# status_timestamp = append_status_row(status_csv_path)
+csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
+status_filename_base = ""
+status_execution_date = None
 
 
 raw_directory = base_directories["raw_directory"]
@@ -713,7 +691,7 @@ def write_itineraries_to_file(
     itineraries: Iterable[Iterable[str]],
 ) -> None:
     """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir -p(parents=True, exist_ok=True)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     unique_itineraries: dict[tuple[str, ...], None] = {}
 
     for itinerary in itineraries:
@@ -1896,6 +1874,12 @@ the_filename = os.path.basename(file_path)
 print(f"File to process: {the_filename}")
 basename_no_ext, file_extension = os.path.splitext(the_filename)
 print(f"File basename (no extension): {basename_no_ext}")
+status_filename_base = basename_no_ext
+status_execution_date = initialize_status_row(
+    csv_path_status,
+    filename_base=status_filename_base,
+    completion_fraction=0.0,
+)
 
 reprocessing_values: dict[str, object] = {}
 
@@ -1948,6 +1932,14 @@ try:
         sys.exit(f"File '{file_name}' does not belong to station {station}. Exiting.")
 except ValueError:
     sys.exit(f"Invalid station number in file '{file_name}'. Exiting.")
+
+if status_execution_date is not None:
+    update_status_progress(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        completion_fraction=0.25,
+    )
 
 
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
@@ -2235,6 +2227,13 @@ for key, idx_range in column_indices.items():
 # Create a DataFrame from the columns data
 working_df = pd.DataFrame(columns_data)
 original_number_of_events = len(working_df)
+if status_execution_date is not None:
+    update_status_progress(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        completion_fraction=0.5,
+    )
 
 working_df["datetime"] = selected_df['datetime']
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
@@ -3268,6 +3267,14 @@ total_execution_time_minutes = execution_time_minutes
 # -------------------------------------------------------------------------------
 # Filter metadata (ancillary) ---------------------------------------------------
 # -------------------------------------------------------------------------------
+if status_execution_date is not None:
+    update_status_progress(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        completion_fraction=0.75,
+    )
+
 filter_metrics["data_purity_percentage"] = round(float(data_purity_percentage), 4)
 filter_row = {
     "filename_base": filename_base,
@@ -3319,11 +3326,12 @@ add_normalized_count_metadata(
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp
 
-# Print completely global_variables
-print("----------\nAll global variables to be saved:")
-for key, value in global_variables.items():
-    print(f"{key}: {value}")
-print("----------\n")
+print(f"Specific metadata keys to be saved: {len(global_variables)}")
+if VERBOSE:
+    print("----------\nAll global variables to be saved:")
+    for key, value in global_variables.items():
+        print(f"{key}: {value}")
+    print("----------\n")
 
 print("----------\nSpecific metadata to be saved:")
 print(f"Filename base: {filename_base}")
@@ -3337,9 +3345,13 @@ metadata_specific_csv_path = save_metadata(
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
-print("Columns before saving cleaned parquet:")
-for col in working_df.columns:
-    print(f" - {col}")
+print(
+    f"Writing cleaned parquet: rows={len(working_df)} cols={len(working_df.columns)} -> {OUT_PATH}"
+)
+if VERBOSE:
+    print("Columns before saving cleaned parquet:")
+    for col in working_df.columns:
+        print(f" - {col}")
 
 # Ensure datetime column is stored with a pandas datetime64 dtype to satisfy pyarrow
 if "datetime" in working_df.columns:
@@ -3364,3 +3376,11 @@ if user_file_selection == False:
     print("************************************************************")
     print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
     print("************************************************************")
+
+if status_execution_date is not None:
+    update_status_progress(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        completion_fraction=1.0,
+    )
