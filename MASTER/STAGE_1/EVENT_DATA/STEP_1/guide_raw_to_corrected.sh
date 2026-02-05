@@ -131,6 +131,40 @@ TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/TRAFFIC_LIGHT"
 TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step1_station_task_queue.txt"
 config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
 
+# Runtime tuning (overridden by config_global.yaml if present)
+STEP1_CONFIG_REFRESH_S=${STEP1_CONFIG_REFRESH_S:-30}
+STEP1_IDLE_SLEEP_S=${STEP1_IDLE_SLEEP_S:-60}
+STEP1_RESOURCE_BACKOFF_S=${STEP1_RESOURCE_BACKOFF_S:-15}
+STEP1_ALREADY_RUNNING_LOG_S=${STEP1_ALREADY_RUNNING_LOG_S:-300}
+LAST_CONFIG_REFRESH_TS=0
+LAST_CONFIG_MTIME=0
+GLOBAL_LOG_THROTTLE_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/LOG_THROTTLE"
+
+sanitize_key() {
+  local key="$1"
+  printf '%s\n' "${key//[^A-Za-z0-9_-]/_}"
+}
+
+log_rate_limited_global() {
+  local key_raw="$1"
+  local interval="$2"
+  shift 2
+  local key now stamp_file last
+  key=$(sanitize_key "$key_raw")
+  now=$(date +%s)
+  mkdir -p "$GLOBAL_LOG_THROTTLE_DIR"
+  stamp_file="$GLOBAL_LOG_THROTTLE_DIR/${key}.ts"
+  last=0
+  if [[ -f "$stamp_file" ]]; then
+    last=$(<"$stamp_file") || last=0
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  fi
+  if (( now - last >= interval )); then
+    printf '%s' "$now" >"$stamp_file"
+    log_info "$*"
+  fi
+}
+
 build_default_queue_order() {
   local -n out_arr=$1
   out_arr=("${execution_pairs[@]}")
@@ -417,9 +451,23 @@ validate_tasks "${tasks_requested[@]}"
 
 refresh_execution_pairs_from_config() {
   local cfg_path="$config_file"
-  local stations_csv tasks_csv result
+  local force="${1:-false}"
+  local stations_csv tasks_csv result now mtime
   stations_csv="$(IFS=,; echo "${stations_requested[*]}")"
   tasks_csv="$(IFS=,; echo "${tasks_requested[*]}")"
+
+  now=$(date +%s)
+  mtime=0
+  if [[ -f "$cfg_path" ]]; then
+    mtime=$(stat -c %Y "$cfg_path" 2>/dev/null || echo 0)
+  fi
+  if [[ "$force" != "true" ]]; then
+    if (( now - LAST_CONFIG_REFRESH_TS < STEP1_CONFIG_REFRESH_S )) && (( mtime == LAST_CONFIG_MTIME )); then
+      return 1
+    fi
+  fi
+  LAST_CONFIG_REFRESH_TS=$now
+  LAST_CONFIG_MTIME=$mtime
 
   execution_pairs=()
 
@@ -440,9 +488,32 @@ cfg_path, stations_csv, tasks_csv = sys.argv[1:4]
 stations = [s.strip() for s in stations_csv.split(",") if s.strip()]
 tasks_raw = [t.strip() for t in tasks_csv.split(",") if t.strip()]
 
+idle_sleep = None
+already_log = None
+config_refresh = None
+resource_backoff = None
+
+def _to_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+def emit_cfg():
+    def fmt(val):
+        return "" if val is None else val
+    print(
+        "@CFG "
+        f"idle_sleep_seconds={fmt(idle_sleep)} "
+        f"already_running_log_seconds={fmt(already_log)} "
+        f"config_refresh_seconds={fmt(config_refresh)} "
+        f"resource_backoff_seconds={fmt(resource_backoff)}"
+    )
+
 try:
     import yaml
 except ImportError:
+    emit_cfg()
     for t in tasks_raw:
         for s in stations:
             print(f"{s}-{t}")
@@ -452,6 +523,15 @@ try:
     data = yaml.safe_load(open(cfg_path)) or {}
 except Exception:
     data = {}
+
+runtime = data.get("event_data_step1_run_matrix") or {}
+resource_limits = data.get("event_data_resource_limits") or {}
+
+idle_sleep = _to_int(runtime.get("idle_sleep_seconds"))
+already_log = _to_int(runtime.get("already_running_log_seconds"))
+config_refresh = _to_int(runtime.get("config_refresh_seconds"))
+resource_backoff = _to_int(resource_limits.get("resource_backoff_seconds"))
+emit_cfg()
 
 node = data.get("event_data_step1_run_matrix") or {}
 enabled = bool(node.get("enabled", False))
@@ -541,6 +621,29 @@ PY
 
   while IFS= read -r line; do
     line="${line//$'\r'/}"
+    [[ -z "$line" ]] && continue
+    if [[ "$line" == "@CFG "* ]]; then
+      local kv key val
+      for kv in ${line#@CFG }; do
+        key="${kv%%=*}"
+        val="${kv#*=}"
+        case "$key" in
+          idle_sleep_seconds)
+            [[ "$val" =~ ^[0-9]+$ ]] && STEP1_IDLE_SLEEP_S="$val"
+            ;;
+          already_running_log_seconds)
+            [[ "$val" =~ ^[0-9]+$ ]] && STEP1_ALREADY_RUNNING_LOG_S="$val"
+            ;;
+          config_refresh_seconds)
+            [[ "$val" =~ ^[0-9]+$ ]] && STEP1_CONFIG_REFRESH_S="$val"
+            ;;
+          resource_backoff_seconds)
+            [[ "$val" =~ ^[0-9]+$ ]] && STEP1_RESOURCE_BACKOFF_S="$val"
+            ;;
+        esac
+      done
+      continue
+    fi
     line="${line//[$'\t ']/}"
     [[ -z "$line" ]] && continue
     execution_pairs+=("$line")
@@ -561,7 +664,7 @@ cleanup() {
 trap cleanup EXIT
 
 log_info "guide_raw_to_corrected.sh started (stations=${stations_requested[*]} tasks=${tasks_requested[*]})."
-refresh_execution_pairs_from_config
+refresh_execution_pairs_from_config true
 log_info "Enabled station-task pairs: ${execution_pairs[*]}"
 
 
@@ -672,6 +775,7 @@ pipeline_already_running() {
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     local pid="${line%% *}"
+    pid="${pid//[[:space:]]/}"
     local cmd="${line#* }"
     [[ -z "$pid" || "$pid" == "$line" ]] && continue
     [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
@@ -682,7 +786,9 @@ pipeline_already_running() {
     [[ "$cmd" != *"guide_raw_to_corrected.sh"* ]] && continue
 
     if command_targets_station "$cmd" "$target_station"; then
-      echo "$pid $cmd"
+      if is_tty; then
+        log_info "Detected running guide_raw_to_corrected.sh for station ${target_station}: ${pid} ${cmd}"
+      fi
       return 0
     fi
   done < <(ps -eo pid=,args=)
@@ -774,8 +880,9 @@ fi
 while true; do
   refresh_execution_pairs_from_config
   if [[ ${#execution_pairs[@]} -eq 0 ]]; then
-    log_rate_limited "no_enabled_pairs" 300 "No enabled station-task pairs (event_data_step1_run_matrix). Sleeping 60s..."
-    sleep 60
+    log_rate_limited_global "no_enabled_pairs_${stations_requested[*]}_${tasks_requested[*]}" "$STEP1_IDLE_SLEEP_S" \
+      "No enabled station-task pairs (event_data_step1_run_matrix). Sleeping ${STEP1_IDLE_SLEEP_S}s..."
+    sleep "$STEP1_IDLE_SLEEP_S"
     iteration=$((iteration + 1))
     continue
   fi
@@ -800,7 +907,12 @@ while true; do
     task_label="${TASK_LABELS[$task_index]}"
     rotate_pair_to_queue_end "$pair"
     if pipeline_already_running "$station"; then
-      log_warn "Station $station already handled by another guide_raw_to_corrected.sh; exiting to avoid waiting indefinitely."
+      if is_tty; then
+        log_warn "Station $station already handled by another guide_raw_to_corrected.sh; exiting to avoid waiting indefinitely."
+      else
+        log_rate_limited_global "station_busy_${station}" "$STEP1_ALREADY_RUNNING_LOG_S" \
+          "Station $station already handled by another guide_raw_to_corrected.sh; exiting to avoid waiting indefinitely."
+      fi
       exit 0
     fi
     if [[ ! -x "$task_script" ]]; then
@@ -808,6 +920,7 @@ while true; do
       continue
     fi
     if ! wait_for_resources; then
+      sleep "$STEP1_RESOURCE_BACKOFF_S"
       continue
     fi
     log_info "Running station $station task${task_id} (${task_label}) ..."

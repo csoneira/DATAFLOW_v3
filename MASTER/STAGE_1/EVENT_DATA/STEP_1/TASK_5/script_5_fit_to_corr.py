@@ -63,7 +63,37 @@ from functools import reduce
 from typing import Dict, Tuple, Iterable, List, Optional, Union
 from ast import literal_eval
 
-VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or sys.stdout.isatty()
+VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE"))
+_PRINT_ALWAYS_KEYWORDS = (
+    "error",
+    "warning",
+    "failed",
+    "exception",
+    "traceback",
+    "usage",
+)
+_print = builtins.print
+
+
+def _debug_logging_enabled() -> bool:
+    return bool(globals().get("debug_mode", False)) or VERBOSE
+
+
+def _is_important_message(message: str) -> bool:
+    lowered = message.lower()
+    if any(keyword in lowered for keyword in _PRINT_ALWAYS_KEYWORDS):
+        return True
+    return "total execution time" in lowered or "data purity" in lowered
+
+
+def print(*args, **kwargs):
+    force = kwargs.pop("force", False)
+    if force or _debug_logging_enabled():
+        _print(*args, **kwargs)
+        return
+    message = " ".join(str(arg) for arg in args)
+    if _is_important_message(message):
+        _print(*args, **kwargs)
 
 
 # Scientific Computing
@@ -118,6 +148,7 @@ parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+debug_mode = bool(config.get("debug_mode", False))
 try:
     config = update_config_with_parameters(config, parameter_config_file_path, station)
 except NameError:
@@ -995,31 +1026,9 @@ if status_execution_date is not None:
 
 
 
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Header ----------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# I want to chrono the execution time of the script
-start_execution_time_counting = datetime.now()
-
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
-
-import os
-import yaml
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-print(f"Using config file: {config_file_path}")
-with open(config_file_path, "r") as config_file:
-    config = yaml.safe_load(config_file)
-try:
-    config = update_config_with_parameters(config, parameter_config_file_path, station)
-except NameError:
-    pass
-home_path = config["home_path"]
 
 ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
@@ -1572,69 +1581,6 @@ self_trigger = False
 
 
 
-import os
-import yaml
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-print(f"Using config file: {config_file_path}")
-with open(config_file_path, "r") as config_file:
-    config = yaml.safe_load(config_file)
-try:
-    config = update_config_with_parameters(config, parameter_config_file_path, station)
-except NameError:
-    pass
-home_path = config["home_path"]
-
-ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
-)
-
-
-def load_itineraries_from_file(file_path: Path, required: bool = True) -> list[list[str]]:
-    """Return itineraries stored as comma-separated lines in *file_path*."""
-    if not file_path.exists():
-        if required:
-            raise FileNotFoundError(f"Cannot find itineraries file: {file_path}")
-        return []
-
-    itineraries: list[list[str]] = []
-    with file_path.open("r", encoding="utf-8") as itinerary_file:
-        print(f"Loading itineraries from {file_path}:")
-        for line_number, raw_line in enumerate(itinerary_file, start=1):
-            stripped_line = raw_line.strip()
-            if not stripped_line or stripped_line.startswith("#"):
-                continue
-            segments = [segment.strip() for segment in stripped_line.split(",") if segment.strip()]
-            if segments:
-                itineraries.append(segments)
-                print(segments)
-
-    if not itineraries and required:
-        raise ValueError(f"Itineraries file {file_path} is empty.")
-
-    return itineraries
-
-
-def write_itineraries_to_file(
-    file_path: Path,
-    itineraries: Iterable[Iterable[str]],
-) -> None:
-    """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    unique_itineraries: dict[tuple[str, ...], None] = {}
-
-    for itinerary in itineraries:
-        itinerary_tuple = tuple(itinerary)
-        if not itinerary_tuple:
-            continue
-        unique_itineraries.setdefault(itinerary_tuple, None)
-
-    with file_path.open("w", encoding="utf-8") as itinerary_file:
-        for itinerary_tuple in unique_itineraries:
-            itinerary_file.write(",".join(itinerary_tuple) + "\n")
-
-
-
 not_use_q_semisum = False
 
 stratos_save = config["stratos_save"]
@@ -2162,12 +2108,6 @@ else:
 self_trigger = False
 
 
-# Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
-execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
-print("Execution time is:", execution_time)
-
-
-
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
 datetime_value = working_df['datetime'].iloc[0]
 end_datetime_value = working_df['datetime'].iloc[-1]
@@ -2270,76 +2210,6 @@ global_variables['z_P1'] =  z_positions[0]
 global_variables['z_P2'] =  z_positions[1]
 global_variables['z_P3'] =  z_positions[2]
 global_variables['z_P4'] =  z_positions[3]
-
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Header ----------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-
-import os
-import yaml
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-print(f"Using config file: {config_file_path}")
-with open(config_file_path, "r") as config_file:
-    config = yaml.safe_load(config_file)
-try:
-    config = update_config_with_parameters(config, parameter_config_file_path, station)
-except NameError:
-    pass
-home_path = config["home_path"]
-
-ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
-)
-
-
-def load_itineraries_from_file(file_path: Path, required: bool = True) -> list[list[str]]:
-    """Return itineraries stored as comma-separated lines in *file_path*."""
-    if not file_path.exists():
-        if required:
-            raise FileNotFoundError(f"Cannot find itineraries file: {file_path}")
-        return []
-
-    itineraries: list[list[str]] = []
-    with file_path.open("r", encoding="utf-8") as itinerary_file:
-        print(f"Loading itineraries from {file_path}:")
-        for line_number, raw_line in enumerate(itinerary_file, start=1):
-            stripped_line = raw_line.strip()
-            if not stripped_line or stripped_line.startswith("#"):
-                continue
-            segments = [segment.strip() for segment in stripped_line.split(",") if segment.strip()]
-            if segments:
-                itineraries.append(segments)
-                print(segments)
-
-    if not itineraries and required:
-        raise ValueError(f"Itineraries file {file_path} is empty.")
-
-    return itineraries
-
-
-def write_itineraries_to_file(
-    file_path: Path,
-    itineraries: Iterable[Iterable[str]],
-) -> None:
-    """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    unique_itineraries: dict[tuple[str, ...], None] = {}
-
-    for itinerary in itineraries:
-        itinerary_tuple = tuple(itinerary)
-        if not itinerary_tuple:
-            continue
-        unique_itineraries.setdefault(itinerary_tuple, None)
-
-    with file_path.open("w", encoding="utf-8") as itinerary_file:
-        for itinerary_tuple in unique_itineraries:
-            itinerary_file.write(",".join(itinerary_tuple) + "\n")
-
 
 
 not_use_q_semisum = False

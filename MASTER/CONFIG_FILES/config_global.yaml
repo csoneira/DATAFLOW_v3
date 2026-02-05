@@ -36,9 +36,12 @@ event_data_step1_run_matrix:
   enabled: true
   mode: "whitelist"     # whitelist | blacklist
   default_tasks: []      # whitelist only: [] (none) | "all" | [1,2,3,4,5]
+  idle_sleep_seconds: 300           # sleep when no pairs are enabled for this station list
+  already_running_log_seconds: 300  # throttle "station already handled" cron log entries
+  config_refresh_seconds: 60        # min seconds between config reloads
   stations:
     "0": [1, 2, 3, 4] #, 5]
-    "1": [1, 2, 3, 4] #, 5]
+    #"1": [1, 2, 3, 4] #, 5]
     #"2": [1, 2, 3, 4, 5]
     #"3": [1, 2, 3, 4, 5]
     #"4": [1, 2, 3, 4, 5]
@@ -49,6 +52,7 @@ event_data_resource_limits:
   swap_used_pct_max: 95         # percent
   swap_used_kb_max: 4194304     # 4 GB in kB
   cpu_used_pct_max: 95          # percent
+  resource_backoff_seconds: 20  # sleep after a resource gate rejection
 
 # -----------------------------------------------------------------------------
 # STAGE_0 / REPROCESSING (prepare_reprocessing_metadata.sh)
@@ -58,8 +62,8 @@ prepare_reprocessing_metadata:
   remote_user: "rpcuser"                     # SSH user to connect to the remote host.
   remote_directory_root: "/local/experiments/MINGOS"  # Base path that contains MINGO0{station} folders.
   date_range:
-    start: 2026-01-01
-    end: 2026-02-01
+    start: 2025-12-01
+    end: 2025-12-31
 
 # Station-specific size and min-gap thresholds (used by prepare_reprocessing_metadata.sh)
 min_size_mb_1: 5.0

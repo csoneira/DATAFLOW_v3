@@ -64,7 +64,37 @@ from itertools import combinations
 from functools import reduce
 from typing import Dict, Tuple, Iterable, List
 
-VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or sys.stdout.isatty()
+VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE"))
+_PRINT_ALWAYS_KEYWORDS = (
+    "error",
+    "warning",
+    "failed",
+    "exception",
+    "traceback",
+    "usage",
+)
+_print = builtins.print
+
+
+def _debug_logging_enabled() -> bool:
+    return bool(globals().get("debug_mode", False)) or VERBOSE
+
+
+def _is_important_message(message: str) -> bool:
+    lowered = message.lower()
+    if any(keyword in lowered for keyword in _PRINT_ALWAYS_KEYWORDS):
+        return True
+    return "total execution time" in lowered or "data purity" in lowered
+
+
+def print(*args, **kwargs):
+    force = kwargs.pop("force", False)
+    if force or _debug_logging_enabled():
+        _print(*args, **kwargs)
+        return
+    message = " ".join(str(arg) for arg in args)
+    if _is_important_message(message):
+        _print(*args, **kwargs)
 
 
 # Scientific Computing
@@ -118,6 +148,7 @@ parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
+debug_mode = bool(config.get("debug_mode", False))
 try:
     config = update_config_with_parameters(config, parameter_config_file_path, station)
 except NameError:
@@ -640,21 +671,6 @@ else:
     z_2 = 150
     z_3 = 300
     z_4 = 450
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Header ----------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
-print(f"Using config file: {config_file_path}")
-with open(config_file_path, "r") as config_file:
-    config = yaml.safe_load(config_file)
-home_path = config["home_path"]
-config = update_config_with_parameters(config, parameter_config_file_path, station)
 
 ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"

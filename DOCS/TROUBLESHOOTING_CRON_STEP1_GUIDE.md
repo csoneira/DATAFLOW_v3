@@ -92,3 +92,83 @@ For any long-running cron process:
 1. Do not delete active log files during cleanup.
 2. Use truncation/rotation mechanisms that preserve writable file handles.
 3. If logs look stale but metadata/status moves, check for deleted-log-handle behavior first.
+
+---
+
+## Incident Addendum (2026-02-05): Lock Appears “Broken” (Repeated Lock Acquire + Immediate Exit)
+
+### Symptom
+
+- `guide_raw_to_corrected_0.log` (and peers) repeat the pattern:
+  - “Acquired run lock …”
+  - followed by `Station X already handled by another guide_raw_to_corrected.sh; exiting …`
+  - a raw `ps` line with the cron launcher command shows up in the log.
+- No lock file remains in `EXECUTION_LOGS/LOCKS/guide_raw_to_corrected`.
+
+### Root Cause
+
+`pipeline_already_running()` was parsing `ps -eo pid=,args=` output with a PID that included leading spaces.  
+That prevented `pid_is_self_or_ancestor()` from recognizing the cron launcher (the script’s own parent) as “self,”
+so the script thought it was *another* instance and exited immediately. The lock was not broken; the self‑detection was.
+
+### Fix Applied
+
+- Trim whitespace from the PID before comparison.
+- Stop echoing the raw `ps` line into logs (kept as a TTY‑only debug message).
+
+Updated file:
+- `MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh`
+
+### Verification
+
+Run these checks:
+
+```bash
+pgrep -af "guide_raw_to_corrected.sh -s 0"
+tail -n 5 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_0.log
+```
+
+Expected:
+- Only one active process per station.
+- No repeated “Acquired run lock …” followed by immediate “Station X already handled …” loops.
+
+---
+
+## Incident Addendum (2026-02-05): STEP_1 Process Explosion (Thousands of guide_raw_to_corrected.sh)
+
+### Symptom
+
+- `guide_raw_to_corrected_*.log` files updated extremely fast (hundreds of lines per minute).
+- Memory and swap usage climbed quickly even though most station/task pairs were disabled.
+- `pgrep -fc "guide_raw_to_corrected.sh"` returned a very large count (thousands).
+
+### Root Cause
+
+Cron was launching STEP_1 once per minute per station without a durable cron-level lock.
+If a prior instance did not exit cleanly, the next minute spawned another instance.
+Over time this created thousands of `guide_raw_to_corrected.sh` processes, which:
+
+- Spammed logs with “disabled/omitted” messages.
+- Consumed RAM and swap via sheer process count.
+
+### Fix Applied
+
+1. Killed all running `guide_raw_to_corrected.sh` processes.
+2. Added cron-level `flock` guards so only one instance per station can run at a time.
+
+Updated file:
+- `add_to_crontab.info`
+
+Example (new cron line form):
+```
+* * * * * /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/guide_raw_to_corrected_s0.lock /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 0 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_0.log 2>&1
+```
+
+### Verification
+
+```bash
+pgrep -af "guide_raw_to_corrected.sh -s"
+```
+
+Expected:
+- Only one active process per station (`-s 0` .. `-s 4`) plus the `flock` wrapper.
