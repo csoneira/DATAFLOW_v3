@@ -13,14 +13,58 @@ selection and quality filters, and exports the structured list data required
 for the fitting stages. It also manages plotting artefacts, metadata logs, and
 file movements so subsequent tasks receive consistent inputs.
 """
-
-task_number = 3
-
-
-
-import sys
+# Standard Library
+import builtins
+import csv
+from datetime import datetime, timedelta
+import gc
+import math
+import os
 from pathlib import Path
+import random
+import re
+import shutil
+import sys
+import time
+import warnings
+from collections import defaultdict
+from functools import reduce
+from itertools import combinations
+from typing import Dict, Iterable, List, Tuple
 
+# Scientific Computing
+import numpy as np
+import pandas as pd
+import scipy.linalg as linalg
+from scipy.constants import c
+from scipy.interpolate import CubicSpline
+from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import brentq, curve_fit, minimize_scalar
+from scipy.special import erf
+from scipy.stats import norm, poisson, linregress, median_abs_deviation, skew
+
+# Machine Learning
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
+
+# Plotting
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.gridspec import GridSpec
+from mpl_toolkits.mplot3d import Axes3D
+import seaborn as sns
+
+# Image Processing
+from PIL import Image
+
+# Progress Bar
+from tqdm import tqdm
+
+import yaml
+
+# Resolve repo root for local imports
 CURRENT_PATH = Path(__file__).resolve()
 REPO_ROOT = None
 for parent in CURRENT_PATH.parents:
@@ -38,33 +82,12 @@ from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
+from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 
-from datetime import datetime, timedelta
+task_number = 3
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
-
-
-
-# -----------------------------------------------------------------------------
-# ------------------------------- Imports -------------------------------------
-# -----------------------------------------------------------------------------
-
-# Standard Library
-import os
-import re
-import csv
-import math
-import random
-import gc
-import shutil
-import builtins
-import warnings
-import time
-from collections import defaultdict
-from itertools import combinations
-from functools import reduce
-from typing import Dict, Tuple, Iterable, List
 
 VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE"))
 _PRINT_ALWAYS_KEYWORDS = (
@@ -98,47 +121,8 @@ def print(*args, **kwargs):
     if _is_important_message(message):
         _print(*args, **kwargs)
 
-# Scientific Computing
-from math import sqrt
-import numpy as np
-import pandas as pd
-import scipy.linalg as linalg
-from scipy.constants import c
-from scipy.ndimage import gaussian_filter1d
-from scipy.interpolate import CubicSpline
-from scipy.optimize import brentq, curve_fit, minimize_scalar
-from scipy.special import erf
-from scipy.stats import (
-    norm,
-    poisson,
-    linregress,
-    median_abs_deviation,
-    skew
-)
-
-# Machine Learning
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
-
-# Plotting
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib import gridspec
-from matplotlib.gridspec import GridSpec
-from matplotlib.backends.backend_pdf import PdfPages
-from mpl_toolkits.mplot3d import Axes3D
-
-# Image Processing
-from PIL import Image
-
-# Progress Bar
-from tqdm import tqdm
-
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
-
-import yaml
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
@@ -1084,7 +1068,7 @@ def build_events_per_second_metadata(
     if pd.isna(start_time) or pd.isna(end_time):
         return metadata
 
-    full_range = pd.date_range(start=start_time, end=end_time, freq="S")
+    full_range = pd.date_range(start=start_time, end=end_time, freq="s")
     events_per_second = (
         times.value_counts().reindex(full_range, fill_value=0).sort_index()
     )
@@ -2441,6 +2425,12 @@ status_execution_date = initialize_status_row(
     completion_fraction=0.0,
 )
 
+simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
+    basename_no_ext,
+    Path(base_directory),
+    parquet_path=Path(file_path),
+)
+
 reprocessing_values: dict[str, object] = {}
 
 reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
@@ -2504,14 +2494,6 @@ if limit:
 
 
 # Read the data file into a DataFrame
-
-
-import glob
-import pandas as pd
-import random
-import os
-import sys
-
 KEY = "df"
 
 # Load dataframe
@@ -2596,7 +2578,11 @@ save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filenam
 # ------------ Input file and data managing to select configuration -------------
 # -------------------------------------------------------------------------------
 
-if exists_input_file:
+if simulated_z_positions is not None:
+    z_positions = np.array(simulated_z_positions, dtype=float)
+    found_matching_conf = True
+    print(f"Using simulated z_positions from param_hash={simulated_param_hash}")
+elif exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
@@ -2626,40 +2612,6 @@ if np.isnan(z_positions).any():
     print("Error: Incomplete z_positions in the selected configuration. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
 
-
-# Print the resulting z_positions
-z_positions = z_positions - z_positions[0]
-print(f"Z positions: {z_positions}")
-
-
-
-# -------------------------------------------------------------------------------
-# ------------ Input file and data managing to select configuration -------------
-# -------------------------------------------------------------------------------
-
-if exists_input_file:
-    # Ensure `start` and `end` columns are in datetime format
-    input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
-    matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
-    print(matching_confs)
-    
-    if not matching_confs.empty:
-        if len(matching_confs) > 1:
-            print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
-        selected_conf = matching_confs.iloc[0]
-        print(f"Selected configuration: {selected_conf['conf']}")
-        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
-        found_matching_conf = True
-        print(selected_conf['conf'])
-    else:
-        print("Error: No matching configuration found for the given date range. Using default z_positions.")
-        found_matching_conf = False
-        z_positions = np.array([0, 150, 300, 450])  # In mm
-else:
-    print("Error: No input file. Using default z_positions.")
-    z_positions = np.array([0, 150, 300, 450])  # In mm
 
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]

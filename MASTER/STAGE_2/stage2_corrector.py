@@ -2216,8 +2216,6 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
 
     import sys
     from pathlib import Path
-    save_plots = False
-    show_plots = True
 
     CURRENT_PATH = Path(__file__).resolve()
     REPO_ROOT = None

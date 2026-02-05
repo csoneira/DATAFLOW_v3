@@ -9,7 +9,8 @@
 SHELL=/bin/bash
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 * * * * * /bin/mkdir -p /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/BACKUP /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CLEANERS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CONFIG/COPERNICUS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/TELEGRAM_BOT /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/VERSION_CONTROL
-* * * * * /bin/mkdir -p /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/AUTO_CLEAR_SWAP /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/ENSURE_CRON_LOG_PATHS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/ERASE_ALL_CRON_LOGS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/FLUSH_FROM_UNPROCESSED /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/SEARCH_FOR_ERRORS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS
+* * * * * /bin/mkdir -p /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/AUTO_CLEAR_SWAP /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/ENSURE_CRON_LOG_PATHS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/ERASE_ALL_CRON_LOGS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/FLUSH_FROM_UNPROCESSED /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/SEARCH_FOR_ERRORS
+* * * * * /bin/mkdir -p /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/WATCHDOG_PROCESS_COUNTS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS
 * * * * * /bin/mkdir -p /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/ANCILLARY /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/RUN /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/STEP_0 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/STEP_FINAL
 * * * * * /bin/mkdir -p /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/NEW_FILES /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_0 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/SIMULATION
 * * * * * /bin/mkdir -p /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_2 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_3 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_1 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_2
@@ -48,11 +49,17 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 * * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/ENSURE_CRON_LOG_PATHS/ensure_cron_log_paths.sh --create-files --quiet >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/ENSURE_CRON_LOG_PATHS/ensure_cron_log_paths.log 2>&1
 
 # Clean files every hour (forced)
-0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh --force >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CLEANERS/log_clean_dataflow.log 2>&1
+# 0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh --force >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CLEANERS/log_clean_dataflow.log 2>&1
 0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh --select temps --force >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CLEANERS/log_temps_clean_dataflow.log 2>&1
+
+# Ensure simulation hashes (daily at 06:00)
+0 6 * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/ensure_sim_hashes.py --apply >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/ensure_sim_hashes.log 2>&1
 
 # Solve stale locks (force 15 min age and kill matching stale pipelines)
 */5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.py --force-age-minutes 15 --kill-stale-processes >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.cron.log 2>&1
+
+# Watchdog: prevent process explosions by capping per-job counts
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.cron.log 2>&1
 
 # Emergency saturation guard: if too many duplicate/pending DATAFLOW jobs pile up, stop them
 */2 * * * * PROC_THRESHOLD=25 DUP_THRESHOLD=5 LOAD_FACTOR=2.0 GRACE_SECONDS=6 /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/stop_execution.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CLEANERS/stop_execution.log 2>&1
@@ -79,7 +86,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 5 * * * * /bin/bash MASTER/ANCILLARY/PIPELINE_OPERATIONS/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.log 2>&1
 
 # Run Stage 0 reprocessing unpacker for station 1 with limited concurrency
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 1 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_1.log 2>&1
+# (Removed duplicate cron entry; the STEP_2 section below covers stations 1-4.)
 
 
 # --------------------------------------------------------------------------------
@@ -93,19 +100,19 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # FIX ERRORS IN THE PARAMETER MESH FOR THE SIMULATION
-0 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/reset_param_mesh_from_final.py --apply
+0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag sim_reset_mesh --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/sim_reset_param_mesh.lock /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/reset_param_mesh_from_final.py --apply
 
 # SANITIZE RUNS TO CLEAN FOR NOT NECESARY FILES
-*/5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py --apply >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/ANCILLARY/sanitize_sim_runs.log 2>&1
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag sim_sanitize --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/sim_sanitize_runs.lock /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py --apply >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/ANCILLARY/sanitize_sim_runs.log 2>&1
 
 # ADD NEW RUNS TO THE SIMULATION IF THE OTHERS ARE COMPLETED
-*/10 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/STEP_0/step_0_setup_to_blank.log 2>&1
+*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag sim_step0_setup --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/sim_step0_setup.lock /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/STEP_0/step_0_setup_to_blank.log 2>&1
 
 # DO THE SIMULATION
-*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh -c --no-plots >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/RUN/cron_mingo_digital_twin_continuous.log 2>&1
+*/5 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag sim_run --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/sim_run_step_continuous.lock /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh -c --no-plots >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/RUN/cron_mingo_digital_twin_continuous.log 2>&1
 
 # CONVERT THE SIMULATED DATA INTO THE DETECTOR DATA FORMAT 
-*/10 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/STEP_FINAL/step_final_daq_to_station_dat.log 2>&1
+*/10 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag sim_step_final --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/sim_step_final.lock /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/STEP_FINAL/step_final_daq_to_station_dat.log 2>&1
 
 
 # --------------------------------------------------------------------------------
@@ -133,7 +140,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - SIMULATION - COPY SIMULATED DATA -------------------------------------
-*/25 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/ingest_simulated_station_data.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/SIMULATION/ingest_simulated_station_data.log 2>&1
+*/25 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag sim_ingest --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/sim_ingest_station_data.lock /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/ingest_simulated_station_data.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/SIMULATION/ingest_simulated_station_data.log 2>&1
 
 
 # --------------------------------------------------------------------------------
@@ -169,20 +176,20 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - REPROCESSING - STEP 1 - BRING RANDOM (-r for random, -n for newest) ---------------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_1.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_2.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_3.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_4.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_bring_s1 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/bring_reprocessing_files_s1.lock /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_1.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_bring_s2 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/bring_reprocessing_files_s2.lock /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_2.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_bring_s3 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/bring_reprocessing_files_s3.lock /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_3.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_bring_s4 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/bring_reprocessing_files_s4.lock /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 -r >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_2
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - REPROCESSING - STEP 2 - REPROCESSING - UNPACK (-r for random, -n for newest) ---------------------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 1 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_1.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 2 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_2.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 3 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_3.log 2>&1
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 4 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_4.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_unpack_s1 -- /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 1 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_1.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_unpack_s2 -- /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 2 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_2.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_unpack_s3 -- /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 3 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_3.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_unpack_s4 -- /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 4 -p 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
@@ -199,10 +206,10 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - COPERNICUS -------------------------------------------------------
-* 1 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_1.log 2>&1
-* 2 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_2.log 2>&1
-* 3 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_3.log 2>&1
-* 4 * * * python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_4.log 2>&1
+* 1 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag copernicus_s1 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/copernicus_bring_s1.lock /usr/bin/env python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 1 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_1.log 2>&1
+* 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag copernicus_s2 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/copernicus_bring_s2.lock /usr/bin/env python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_2.log 2>&1
+* 3 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag copernicus_s3 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/copernicus_bring_s3.lock /usr/bin/env python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 3 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_3.log 2>&1
+* 4 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag copernicus_s4 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/copernicus_bring_s4.lock /usr/bin/env python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 4 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_4.log 2>&1
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
@@ -226,14 +233,14 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - EVENT_DATA - ACCUMULATOR -----------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh --no-loop >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated_all.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step1_step2_accumulate -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/guide_corrected_to_accumulated_all.lock /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh --no-loop >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated_all.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_3
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - EVENT_DATA - STEP_3 DISTRIBUTOR -----------------------------------
-* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh --no-loop >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined_all.log 2>&1
+* * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag step1_step3_joined -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/guide_accumulated_to_joined_all.lock /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh --no-loop >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined_all.log 2>&1
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------

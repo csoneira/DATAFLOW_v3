@@ -170,10 +170,10 @@ presentation_plots: false
 stratos_save: false
 
 # Plots / saving (used by STEP_1 tasks + corrected_to_accumulated.py)
-create_plots: false
-create_essential_plots: false
-save_plots: false
-create_pdf: false
+create_plots: true
+create_essential_plots: true
+save_plots: true
+create_pdf: true
 show_plots: false
 
 # Task-specific plot switches

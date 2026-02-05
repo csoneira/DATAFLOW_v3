@@ -14,11 +14,58 @@ Along the way it maintains the station staging directories, generates QA plots,
 tracks execution metadata, and emits run-level summaries consumed by the rest
 of the Stage 1 event workflow.
 """
-task_number = 1
-
-import sys
+# Standard Library
+import builtins
+import csv
+from datetime import datetime, timedelta
+import gc
+import math
+import os
 from pathlib import Path
+import random
+import re
+import shutil
+import sys
+import time
+import warnings
+from collections import defaultdict
+from functools import reduce
+from itertools import combinations
+from typing import Dict, Iterable, List, Tuple
 
+# Scientific Computing
+import numpy as np
+import pandas as pd
+import scipy.linalg as linalg
+from scipy.constants import c
+from scipy.interpolate import CubicSpline
+from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import brentq, curve_fit, minimize_scalar
+from scipy.special import erf
+from scipy.stats import norm, poisson, linregress, median_abs_deviation, skew
+
+# Machine Learning
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
+
+# Plotting
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.gridspec import GridSpec
+from mpl_toolkits.mplot3d import Axes3D
+import seaborn as sns
+
+# Image Processing
+from PIL import Image
+
+# Progress Bar
+from tqdm import tqdm
+
+import yaml
+
+# Resolve repo root for local imports
 CURRENT_PATH = Path(__file__).resolve()
 REPO_ROOT = None
 for parent in CURRENT_PATH.parents:
@@ -36,33 +83,12 @@ from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
+from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 
-
-
-from datetime import datetime, timedelta
+task_number = 1
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
-
-# -----------------------------------------------------------------------------
-# ------------------------------- Imports -------------------------------------
-# -----------------------------------------------------------------------------
-
-# Standard Library
-import os
-import re
-import csv
-import math
-import random
-import gc
-import shutil
-import builtins
-import warnings
-import time
-from collections import defaultdict
-from itertools import combinations
-from functools import reduce
-from typing import Dict, Tuple, Iterable, List
 
 VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE"))
 _PRINT_ALWAYS_KEYWORDS = (
@@ -96,45 +122,6 @@ def print(*args, **kwargs):
     if _is_important_message(message):
         _print(*args, **kwargs)
 
-
-# Scientific Computing
-from math import sqrt
-import numpy as np
-import pandas as pd
-import scipy.linalg as linalg
-from scipy.constants import c
-from scipy.ndimage import gaussian_filter1d
-from scipy.interpolate import CubicSpline
-from scipy.optimize import brentq, curve_fit, minimize_scalar
-from scipy.special import erf
-from scipy.stats import (
-    norm,
-    poisson,
-    linregress,
-    median_abs_deviation,
-    skew
-)
-
-# Machine Learning
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
-
-# Plotting
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib import gridspec
-from matplotlib.gridspec import GridSpec
-from matplotlib.backends.backend_pdf import PdfPages
-from mpl_toolkits.mplot3d import Axes3D
-
-# Image Processing
-from PIL import Image
-
-# Progress Bar
-from tqdm import tqdm
-
-import yaml
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -335,7 +322,7 @@ def build_events_per_second_metadata(
     if pd.isna(start_time) or pd.isna(end_time):
         return metadata
 
-    full_range = pd.date_range(start=start_time, end=end_time, freq="S")
+    full_range = pd.date_range(start=start_time, end=end_time, freq="s")
     events_per_second = (
         times.value_counts().reindex(full_range, fill_value=0).sort_index()
     )
@@ -2052,6 +2039,8 @@ read_lines = 0
 written_lines = 0
 with open(file_path, 'r') as infile, open(temp_file, 'w') as outfile, open(rejected_file, 'w') as rejectfile:
     for i, line in enumerate(infile, start=1):
+        if line.lstrip().startswith("#"):
+            continue
         read_lines += 1
         
         cleaned_line = process_line(line)
@@ -2159,7 +2148,20 @@ save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace(
 # ------------ Input file and data managing to select configuration -------------
 # -------------------------------------------------------------------------------
 
-if exists_input_file:
+conf_value = None
+simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
+    basename_no_ext,
+    Path(base_directory),
+    dat_path=Path(file_path),
+)
+if simulated_param_hash:
+    global_variables["param_hash"] = simulated_param_hash
+
+if simulated_z_positions is not None:
+    z_positions = np.array(simulated_z_positions, dtype=float)
+    found_matching_conf = True
+    print(f"Using simulated z_positions from param_hash={simulated_param_hash}")
+elif exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
@@ -2173,6 +2175,10 @@ if exists_input_file:
         selected_conf = matching_confs.iloc[0]
         print(f"Selected configuration: {selected_conf['conf']}")
         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
+        try:
+            conf_value = float(selected_conf.get("conf"))
+        except (TypeError, ValueError):
+            conf_value = None
         found_matching_conf = True
         print(selected_conf['conf'])
     else:
@@ -2258,9 +2264,9 @@ print("Columns right after initial assignment (before raw_tt computation):")
 for col in working_df.columns:
     print(f" - {col}")
 
-if found_matching_conf:
+if found_matching_conf and conf_value is not None:
     # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-    if selected_conf['conf'] < 2:
+    if conf_value < 2:
         if station == "2":
             print("Configuration of the detector is less than 2.")
             print("Swapping channels that give problems in plane 4.")
@@ -2283,9 +2289,9 @@ if self_trigger:
     working_st_df["datetime"] = self_trigger_df['datetime']
     working_st_df = working_st_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
     
-    if found_matching_conf:
+    if found_matching_conf and conf_value is not None:
         # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-        if selected_conf['conf'] < 2:
+        if conf_value < 2:
             if station == "2":
                 print("Configuration of the detector is less than 2.")
                 print("Swapping channels that give problems in plane 4.")
@@ -3376,6 +3382,10 @@ if "datetime" in working_df.columns:
         working_df["datetime"] = pd.to_datetime(
             working_df["datetime"].astype(str), errors="coerce"
         )
+
+# Persist simulated parameter hash as a constant column (string) for traceability.
+if "param_hash" not in working_df.columns:
+    working_df["param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
 
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)

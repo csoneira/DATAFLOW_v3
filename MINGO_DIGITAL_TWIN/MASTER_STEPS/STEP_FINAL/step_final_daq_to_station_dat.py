@@ -10,6 +10,7 @@ Outputs: SIMULATED_DATA/SIM_RUN_<N>/mi00YYDDDHHMMSS.dat
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections import defaultdict
@@ -61,6 +62,73 @@ def parse_param_datetime(date_str: str) -> datetime:
         return datetime.fromisoformat(date_str)
     except ValueError:
         return parse_date(date_str)
+
+
+PARAM_HASH_FIELDS = (
+    "cos_n",
+    "flux_cm2_min",
+    "z_plane_1",
+    "z_plane_2",
+    "z_plane_3",
+    "z_plane_4",
+    "efficiencies",
+    "trigger_combinations",
+    "requested_rows",
+    "sample_start_index",
+)
+
+
+def _normalize_hash_value(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [_normalize_hash_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _normalize_hash_value(val) for key, val in value.items()}
+    if isinstance(value, (np.integer, int)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        if not np.isfinite(value):
+            return None
+        return float(value)
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return str(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and (
+            (stripped.startswith("[") and stripped.endswith("]"))
+            or (stripped.startswith("{") and stripped.endswith("}"))
+        ):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return stripped
+            return _normalize_hash_value(parsed)
+        return stripped
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    return str(value)
+
+
+def compute_param_hash(values: dict[str, object]) -> str:
+    payload = {key: _normalize_hash_value(values.get(key)) for key in PARAM_HASH_FIELDS}
+    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+
+
+def ensure_param_hash_column(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if "param_hash" not in df.columns:
+        df["param_hash"] = pd.NA
+    missing = df["param_hash"].isna()
+    if missing.any():
+        df.loc[missing, "param_hash"] = [
+            compute_param_hash(row.to_dict()) for _, row in df.loc[missing].iterrows()
+        ]
+    return df
 
 
 def build_filename(station_id: int, timestamp: datetime) -> str:
@@ -502,11 +570,14 @@ def write_with_timestamps(
     rate_hz: float,
     rng: np.random.Generator,
     offsets_s: list[float] | None = None,
+    param_hash: str | None = None,
 ) -> tuple[int, datetime | None]:
     day_end = datetime(start_time.year, start_time.month, start_time.day) + timedelta(days=1)
     rows_written = 0
     last_written_time: datetime | None = None
     with output_path.open("w", encoding="ascii") as dst:
+        if param_hash:
+            dst.write(f"# param_hash={param_hash}\n")
         current_time = start_time
         for idx, payload in enumerate(payloads):
             if offsets_s is not None:
@@ -697,8 +768,16 @@ def main() -> None:
         existing_param_date = param_row.get("param_date") if has_param_date else pd.NA
         sim_params_path = output_dir / "step_final_simulation_params.csv"
         sim_params_df = None
+        sim_params_needs_write = False
         if sim_params_path.exists():
             sim_params_df = pd.read_csv(sim_params_path)
+            drop_cols = [col for col in ("subfile_kind", "subfile_index") if col in sim_params_df.columns]
+            if drop_cols:
+                sim_params_df = sim_params_df.drop(columns=drop_cols)
+                sim_params_needs_write = True
+            if "param_hash" not in sim_params_df.columns or sim_params_df["param_hash"].isna().any():
+                sim_params_df = ensure_param_hash_column(sim_params_df)
+                sim_params_needs_write = True
         if pd.isna(existing_param_set_id) or pd.isna(existing_param_date):
             if has_param_set_id:
                 existing_ids = mesh["param_set_id"].dropna()
@@ -823,6 +902,19 @@ def main() -> None:
 
             out_name, start_time = ensure_unique_sim_name(next_start, sim_dir, dir_used_names)
             out_path = sim_dir / out_name
+            hash_payload = {
+                "cos_n": step1_cfg.get("cos_n"),
+                "flux_cm2_min": step1_cfg.get("flux_cm2_min"),
+                "z_plane_1": z_vals[0],
+                "z_plane_2": z_vals[1],
+                "z_plane_3": z_vals[2],
+                "z_plane_4": z_vals[3],
+                "efficiencies": step3_cfg.get("efficiencies", []),
+                "trigger_combinations": step9_cfg.get("trigger_combinations", []),
+                "requested_rows": requested_for_file,
+                "sample_start_index": sample_start_index,
+            }
+            param_hash = compute_param_hash(hash_payload)
             rows_written, last_time = write_with_timestamps(
                 payloads,
                 out_path,
@@ -830,6 +922,7 @@ def main() -> None:
                 rate_hz,
                 rng,
                 offsets_s=thick_offsets,
+                param_hash=param_hash,
             )
 
             if rows_written == 0:
@@ -881,6 +974,7 @@ def main() -> None:
 
             row = {
                 "file_name": out_name,
+                "param_hash": param_hash,
                 "param_set_id": int(param_set_id),
                 "param_date": str(param_date),
                 "cos_n": step1_cfg.get("cos_n"),
@@ -893,8 +987,6 @@ def main() -> None:
                 "trigger_combinations": json.dumps(step9_cfg.get("trigger_combinations", [])),
                 "requested_rows": requested_for_file,
                 "selected_rows": selected_rows,
-                "subfile_kind": file_kind,
-                "subfile_index": subfile_index,
                 "sample_start_index": sample_start_index,
             }
             new_param_rows.append(row)
@@ -905,7 +997,11 @@ def main() -> None:
         if new_param_rows:
             if sim_params_df is not None:
                 df_params = sim_params_df
-                drop_cols = [col for col in ("file_path", "input_sim_run") if col in df_params.columns]
+                drop_cols = [
+                    col
+                    for col in ("file_path", "input_sim_run", "subfile_kind", "subfile_index")
+                    if col in df_params.columns
+                ]
                 if drop_cols:
                     df_params = df_params.drop(columns=drop_cols)
                 for new_row in new_param_rows:
@@ -914,6 +1010,8 @@ def main() -> None:
             else:
                 df_params = pd.DataFrame(new_param_rows)
             df_params.to_csv(sim_params_path, index=False)
+        elif sim_params_needs_write and sim_params_df is not None:
+            sim_params_df.to_csv(sim_params_path, index=False)
 
 
 if __name__ == "__main__":

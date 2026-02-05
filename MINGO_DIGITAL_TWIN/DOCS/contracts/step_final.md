@@ -19,6 +19,10 @@ Outputs:
 - `SIMULATED_DATA/step_final_output_registry.json`.
 - `SIMULATED_DATA/step_final_simulation_params.csv`.
 
+Each .dat file may begin with a comment line:
+`# param_hash=<sha256>` matching the `param_hash` column in
+`step_final_simulation_params.csv`.
+
 Each .dat line contains:
 - Timestamp header: `YYYY MM DD HH MM SS 1`.
 - 64 channel values ordered by plane [4,3,2,1], field [T_front, T_back, Q_front, Q_back],

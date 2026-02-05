@@ -25,6 +25,13 @@ The final "1" is a fixed flag used by the output format.
 
 Total fields per line: 7 + 64 = 71.
 
+## Optional header
+Files may start with a single comment line to preserve provenance:
+```
+# param_hash=<sha256>
+```
+Readers should skip lines starting with `#` before parsing event rows.
+
 ## Value formatting
 - Non-finite values are written as 0.0.
 - Positive values are formatted with zero padding and 4 decimals: width 9, `0000.0000`.

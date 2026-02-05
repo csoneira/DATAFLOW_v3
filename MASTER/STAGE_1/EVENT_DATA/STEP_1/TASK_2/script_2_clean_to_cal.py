@@ -14,15 +14,59 @@ The script steers plotting, metadata capture, and file bookkeeping so the
 station workspace and execution logs stay synchronized with the processing
 state of each dataset.
 """
-
-
-
-task_number = 2
-
-
-import sys
+# Standard Library
+import builtins
+import csv
+from datetime import datetime, timedelta
+import gc
+import math
+import os
 from pathlib import Path
+import random
+import re
+import shutil
+import sys
+import time
+import warnings
+from collections import defaultdict
+from functools import reduce
+from itertools import combinations
+from typing import Dict, Iterable, List, Optional, Tuple
 
+# Scientific Computing
+import numpy as np
+import pandas as pd
+import scipy.linalg as linalg
+from scipy.constants import c
+from scipy.interpolate import CubicSpline
+from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import brentq, curve_fit, minimize_scalar
+from scipy.signal import find_peaks
+from scipy.special import erf
+from scipy.stats import norm, poisson, linregress, median_abs_deviation, skew
+
+# Machine Learning
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
+
+# Plotting
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from mpl_toolkits.mplot3d import Axes3D
+import seaborn as sns
+
+# Image Processing
+from PIL import Image
+
+# Progress Bar
+from tqdm import tqdm
+
+import yaml
+
+# Resolve repo root for local imports
 CURRENT_PATH = Path(__file__).resolve()
 REPO_ROOT = None
 for parent in CURRENT_PATH.parents:
@@ -40,31 +84,12 @@ from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
+from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 
-from datetime import datetime, timedelta
-
-# -----------------------------------------------------------------------------
-# ------------------------------- Imports -------------------------------------
-# -----------------------------------------------------------------------------
+task_number = 2
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
-
-# Standard Library
-import os
-import re
-import csv
-import math
-import random
-import gc
-import shutil
-import builtins
-import warnings
-import time
-from collections import defaultdict
-from itertools import combinations
-from functools import reduce
-from typing import Dict, Tuple, Iterable, List, Optional
 
 VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE"))
 _PRINT_ALWAYS_KEYWORDS = (
@@ -98,48 +123,8 @@ def print(*args, **kwargs):
     if _is_important_message(message):
         _print(*args, **kwargs)
 
-# Scientific Computing
-from math import sqrt
-import numpy as np
-import pandas as pd
-import scipy.linalg as linalg
-from scipy.constants import c
-from scipy.ndimage import gaussian_filter1d
-from scipy.interpolate import CubicSpline
-from scipy.optimize import brentq, curve_fit, minimize_scalar
-from scipy.special import erf
-from scipy.stats import (
-    norm,
-    poisson,
-    linregress,
-    median_abs_deviation,
-    skew
-)
-from scipy.signal import find_peaks
-
-# Machine Learning
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
-
-# Plotting
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib import gridspec
-from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
-from matplotlib.backends.backend_pdf import PdfPages
-from mpl_toolkits.mplot3d import Axes3D
-
-# Image Processing
-from PIL import Image
-
-# Progress Bar
-from tqdm import tqdm
-
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
-
-import yaml
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
@@ -338,7 +323,7 @@ def build_events_per_second_metadata(
     if pd.isna(start_time) or pd.isna(end_time):
         return metadata
 
-    full_range = pd.date_range(start=start_time, end=end_time, freq="S")
+    full_range = pd.date_range(start=start_time, end=end_time, freq="s")
     events_per_second = (
         times.value_counts().reindex(full_range, fill_value=0).sort_index()
     )
@@ -501,10 +486,6 @@ presentation = config["presentation"]
 presentation_plots = config["presentation_plots"]
 force_replacement = config["force_replacement"]
 article_format = config["article_format"]
-
-
-create_super_essential_plots = False
-save_plots = False
 
 
 print("Creating the necessary directories...")
@@ -1495,6 +1476,12 @@ status_execution_date = initialize_status_row(
     completion_fraction=0.0,
 )
 
+simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
+    basename_no_ext,
+    Path(base_directory),
+    parquet_path=Path(file_path),
+)
+
 
 
 
@@ -1536,13 +1523,6 @@ if limit:
 
 # Read the data file into a DataFrame
 
-
-import glob
-import pandas as pd
-import random
-import os
-import sys
-
 KEY = "df"
 
 # Load dataframe
@@ -1552,6 +1532,19 @@ print(f"Cleaned dataframe reloaded from: {file_path}")
 # print("Columns loaded from parquet:")
 # for col in working_df.columns:
 #     print(f" - {col}")
+
+# Ensure param_hash is persisted for downstream tasks.
+if "param_hash" not in working_df.columns:
+    working_df["param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
+elif simulated_param_hash:
+    param_series = working_df["param_hash"]
+    missing_hash = param_series.isna()
+    try:
+        missing_hash |= param_series.astype(str).str.strip().eq("")
+    except Exception:
+        pass
+    if missing_hash.any():
+        working_df.loc[missing_hash, "param_hash"] = str(simulated_param_hash)
 
 original_number_of_events = len(working_df)
 print(f"Original number of events in the dataframe: {original_number_of_events}")
@@ -1625,7 +1618,12 @@ save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filenam
 # ------------ Input file and data managing to select configuration -------------
 # -------------------------------------------------------------------------------
 
-if exists_input_file:
+if simulated_z_positions is not None:
+    z_positions = np.array(simulated_z_positions, dtype=float)
+    found_matching_conf = True
+    current_conf_number = None
+    print(f"Using simulated z_positions from param_hash={simulated_param_hash}")
+elif exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
@@ -7039,7 +7037,8 @@ if time_study_tsum:
                             sum_ax.set_xlabel('Tsum difference (ns)')
 
                         fig.suptitle(f'Histograms and Charge Correlations for {col}')
-                        plt.tight_layout(rect=[0, 0, 1, 0.96])
+                        # Tight layout does not handle nested GridSpec cleanly here; adjust top margin manually.
+                        fig.subplots_adjust(top=0.92)
 
                         if save_plots:
                             final_filename = f'{fig_idx}_histogram_{col}_part_{chunk_start // max_panels + 1}.png'

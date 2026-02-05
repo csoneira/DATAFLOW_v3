@@ -28,3 +28,4 @@ Notes:
 - `input_sim_run` accepts explicit SIM_RUN, `latest`, `random`, or `all`.
 - `input_collect` controls how multiple SIM_RUN inputs are matched.
 - STEP FINAL assigns `param_set_id` and `param_date` in the parameter mesh.
+- `.dat` outputs start with `# param_hash=<sha256>` matching `step_final_simulation_params.csv`.

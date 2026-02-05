@@ -172,3 +172,47 @@ pgrep -af "guide_raw_to_corrected.sh -s"
 
 Expected:
 - Only one active process per station (`-s 0` .. `-s 4`) plus the `flock` wrapper.
+
+---
+
+## Incident Addendum (2026-02-05): COPERNICUS Process Explosion (Swap Refills Quickly)
+
+### Symptom
+
+- Swap refilled to ~500 MB almost immediately after being cleared.
+- System showed many `copernicus_bring.py` processes running simultaneously.
+- `pgrep -fc "copernicus_bring.py"` returned a very large count (hundreds).
+
+### Root Cause
+
+Cron started `copernicus_bring.py` on a fixed schedule without a durable cron-level lock.
+If a prior run did not exit in time, each scheduled tick launched another process.
+Over time this created a large number of concurrent Copernicus fetchers, which:
+
+- Consumed RAM and swap quickly.
+- Produced misleading “system feels stuck” symptoms even after swap was cleared.
+
+### Fix Applied
+
+1. Manually killed all `copernicus_bring.py` processes.
+2. Added cron-level `flock` guards (one per station) to prevent overlaps.
+3. Wrapped Copernicus cron entries with the resource gate to skip runs when
+   memory/swap/CPU are already high.
+4. Added Copernicus to the process-count watchdog caps.
+
+Updated file:
+- `add_to_crontab.info`
+
+Example (new cron line form):
+```
+* 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag copernicus_s2 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/copernicus_bring_s2.lock /usr/bin/env python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_2.log 2>&1
+```
+
+### Verification
+
+```bash
+pgrep -af "copernicus_bring.py"
+```
+
+Expected:
+- One active Copernicus process per station (1..4) plus the `flock` wrapper.

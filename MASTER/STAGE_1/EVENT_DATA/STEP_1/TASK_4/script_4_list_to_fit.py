@@ -14,14 +14,58 @@ writes the fit-ready artefacts. Execution metadata, diagnostic plots, and
 directory bookkeeping are kept in sync so the pipeline can hand off cleanly to
 the correction stage.
 """
-
-
-task_number = 4
-
-
-import sys
+# Standard Library
+import builtins
+import csv
+from datetime import datetime, timedelta
+import gc
+import math
+import os
 from pathlib import Path
+import random
+import re
+import shutil
+import sys
+import time
+import warnings
+from collections import defaultdict
+from functools import reduce
+from itertools import combinations
+from typing import Dict, Iterable, List, Tuple
 
+# Scientific Computing
+import numpy as np
+import pandas as pd
+import scipy.linalg as linalg
+from scipy.constants import c
+from scipy.interpolate import CubicSpline
+from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import brentq, curve_fit, minimize_scalar
+from scipy.special import erf
+from scipy.stats import norm, poisson, linregress, median_abs_deviation, skew
+
+# Machine Learning
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
+
+# Plotting
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.gridspec import GridSpec
+from mpl_toolkits.mplot3d import Axes3D
+import seaborn as sns
+
+# Image Processing
+from PIL import Image
+
+# Progress Bar
+from tqdm import tqdm
+
+import yaml
+
+# Resolve repo root for local imports
 CURRENT_PATH = Path(__file__).resolve()
 REPO_ROOT = None
 for parent in CURRENT_PATH.parents:
@@ -39,33 +83,12 @@ from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
+from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 
-from datetime import datetime, timedelta
-
+task_number = 4
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
-
-
-# -----------------------------------------------------------------------------
-# ------------------------------- Imports -------------------------------------
-# -----------------------------------------------------------------------------
-
-# Standard Library
-import os
-import re
-import csv
-import math
-import random
-import gc
-import shutil
-import builtins
-import warnings
-import time
-from collections import defaultdict
-from itertools import combinations
-from functools import reduce
-from typing import Dict, Tuple, Iterable, List
 
 VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE"))
 _PRINT_ALWAYS_KEYWORDS = (
@@ -99,47 +122,8 @@ def print(*args, **kwargs):
     if _is_important_message(message):
         _print(*args, **kwargs)
 
-# Scientific Computing
-from math import sqrt
-import numpy as np
-import pandas as pd
-import scipy.linalg as linalg
-from scipy.constants import c
-from scipy.ndimage import gaussian_filter1d
-from scipy.interpolate import CubicSpline
-from scipy.optimize import brentq, curve_fit, minimize_scalar
-from scipy.special import erf
-from scipy.stats import (
-    norm,
-    poisson,
-    linregress,
-    median_abs_deviation,
-    skew
-)
-
-# Machine Learning
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
-
-# Plotting
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib import gridspec
-from matplotlib.gridspec import GridSpec
-from matplotlib.backends.backend_pdf import PdfPages
-from mpl_toolkits.mplot3d import Axes3D
-
-# Image Processing
-from PIL import Image
-
-# Progress Bar
-from tqdm import tqdm
-
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
-
-import yaml
 
 start_timer(__file__)
 user_home = os.path.expanduser("~")
@@ -330,7 +314,7 @@ def build_events_per_second_metadata(
     if pd.isna(start_time) or pd.isna(end_time):
         return metadata
 
-    full_range = pd.date_range(start=start_time, end=end_time, freq="S")
+    full_range = pd.date_range(start=start_time, end=end_time, freq="s")
     events_per_second = (
         times.value_counts().reindex(full_range, fill_value=0).sort_index()
     )
@@ -1227,6 +1211,12 @@ status_execution_date = initialize_status_row(
     completion_fraction=0.0,
 )
 
+simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
+    basename_no_ext,
+    Path(base_directory),
+    parquet_path=Path(file_path),
+)
+
 
 analysis_date = datetime.now().strftime("%Y-%m-%d")
 print(f"Analysis date and time: {analysis_date}")
@@ -1266,14 +1256,6 @@ right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 
 
 # Read the data file into a DataFrame
-
-
-import glob
-import pandas as pd
-import random
-import os
-import sys
-
 KEY = "df"
 
 # Load dataframe
@@ -2598,7 +2580,11 @@ save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filenam
 # ------------ Input file and data managing to select configuration -------------
 # -------------------------------------------------------------------------------
 
-if exists_input_file:
+if simulated_z_positions is not None:
+    z_positions = np.array(simulated_z_positions, dtype=float)
+    found_matching_conf = True
+    print(f"Using simulated z_positions from param_hash={simulated_param_hash}")
+elif exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
@@ -4373,7 +4359,7 @@ def fmgx(nvar, npar, vs, ss, zi): # G matrix for t measurements in X-axis
         S0 = sc
     else:
         S0 = vs[5]
-    kz = sqrt(1 + XP*XP + YP*YP)
+    kz = math.sqrt(1 + XP*XP + YP*YP)
     kzi = 1 / kz
     mg[0,2] = 1
     mg[0,3] = zi
@@ -4454,7 +4440,7 @@ def fres(vs, vdat, lenx, ss, zi):  # Residuals array
         S0 = sc
     else:
         S0 = vs[5]
-    kz = sqrt(1 + XP*XP + YP*YP)
+    kz = math.sqrt(1 + XP*XP + YP*YP)
     # Fitted values
     xfit  = X0 + XP * zi
     yfit  = Y0 + YP * zi
@@ -4985,208 +4971,204 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
 #%%
 
 
+# Time series and fittings
 
-# Time series of core track variables (averaged and errors) ------------------
-if 'datetime' in working_df.columns:
-    
-    ts_core = working_df.copy()
-    ts_core['datetime'] = pd.to_datetime(ts_core['datetime'])
-    ts_core = ts_core.sort_values('datetime')
+timeseries_and_fits = False
+if timeseries_and_fits:
 
-    # Combined error histograms across combinations (one figure) --------------------
-    err_vars = ['x_err', 'y_err', 'theta_err', 'phi_err', 's_err', 't0_err']
-    combo_subsets = []
-    for combo in TRACK_COMBINATIONS:
-        try:
-            combo_int = int(combo)
-        except ValueError:
-            continue
-        subset = ts_core[ts_core['processed_tt'] == combo_int]
-        if subset.empty:
-            continue
-        combo_subsets.append((combo, subset))
+    # Time series of core track variables (averaged and errors) ------------------
+    if 'datetime' in working_df.columns:
+        
+        ts_core = working_df.copy()
+        ts_core['datetime'] = pd.to_datetime(ts_core['datetime'])
+        ts_core = ts_core.sort_values('datetime')
 
-    if combo_subsets:
-        # Compute global quantile bounds per variable across all combos
-        bounds_dict = {}
-        for var in err_vars:
-            lows = []
-            highs = []
-            for _, sub in combo_subsets:
-                if var not in sub.columns:
-                    continue
-                data = sub[var].dropna()
-                if data.empty:
-                    continue
-                q_low, q_high = data.quantile([0.0001, 0.99999])
-                lows.append(q_low)
-                highs.append(q_high)
-            if lows and highs:
-                bounds_dict[var] = (min(lows), max(highs))
-            else:
-                bounds_dict[var] = (0, 1)
-
-        n_rows = len(combo_subsets)
-        n_cols = len(err_vars)
-
-        # Fit a Gaussian per combination/variable and store stats (always, even if plots are off)
-        def _gauss(x, amp, mu, sigma):
-            return amp * norm.pdf(x, mu, sigma)
-
-        fit_results: dict[tuple[int, str], tuple[float, float, float]] = {}
-
-        for combo, sub in combo_subsets:
+        # Combined error histograms across combinations (one figure) --------------------
+        err_vars = ['x_err', 'y_err', 'theta_err', 'phi_err', 's_err', 't0_err']
+        combo_subsets = []
+        for combo in TRACK_COMBINATIONS:
             try:
                 combo_int = int(combo)
             except ValueError:
                 continue
+            subset = ts_core[ts_core['processed_tt'] == combo_int]
+            if subset.empty:
+                continue
+            combo_subsets.append((combo, subset))
+
+        if combo_subsets:
+            # Compute global quantile bounds per variable across all combos
+            bounds_dict = {}
             for var in err_vars:
-                if var not in sub.columns:
-                    continue
-                series = sub[var].dropna()
-                if series.empty:
-                    continue
-                q25, q75 = series.quantile([0.25, 0.75])
-                global_variables[f"{var}_{combo_int}_q25"] = float(q25)
-                global_variables[f"{var}_{combo_int}_q75"] = float(q75)
-                mirror_for_half = var == "theta_err"
-                series_fit = pd.concat([series, -series]) if mirror_for_half else series
-                q_low, q_high = series_fit.quantile([0.0001, 0.99999])
-                bin_edges = np.linspace(q_low, q_high, 161)
-                bin_width = bin_edges[1] - bin_edges[0]
-                counts, edges = np.histogram(series_fit, bins=bin_edges)
-                if not np.any(counts):
-                    continue
+                lows = []
+                highs = []
+                for _, sub in combo_subsets:
+                    if var not in sub.columns:
+                        continue
+                    data = sub[var].dropna()
+                    if data.empty:
+                        continue
+                    q_low, q_high = data.quantile([0.0001, 0.99999])
+                    lows.append(q_low)
+                    highs.append(q_high)
+                if lows and highs:
+                    bounds_dict[var] = (min(lows), max(highs))
+                else:
+                    bounds_dict[var] = (0, 1)
 
-                # Suppress central spike: drop bins far above the typical height
-                nonzero = counts[counts > 0]
-                typical = np.median(nonzero) if len(nonzero) else 0
-                mask = counts > 0
-                if typical > 0:
-                    mask &= counts < typical * 6  # keep more populated bins as well
-                centers = 0.5 * (edges[1:] + edges[:-1])
-                x_fit = centers[mask]
-                y_fit = counts[mask]
-                if y_fit.size < 5:
-                    continue
+            n_rows = len(combo_subsets)
+            n_cols = len(err_vars)
+
+            # Fit a Gaussian per combination/variable and store stats (always, even if plots are off)
+            def _gauss(x, amp, mu, sigma):
+                return amp * norm.pdf(x, mu, sigma)
+
+            fit_results: dict[tuple[int, str], tuple[float, float, float]] = {}
+
+            for combo, sub in combo_subsets:
                 try:
-                    p0 = [y_fit.max(), float(series.mean()), float(max(series.std(), 1e-6))]
-                    weights = np.maximum(y_fit, 1)
-                    popt, _ = curve_fit(
-                        _gauss,
-                        x_fit,
-                        y_fit,
-                        p0=p0,
-                        sigma=1.0 / weights,  # heavier weight for populous bins
-                        absolute_sigma=False,
-                        maxfev=4000,
-                    )
-                except Exception:
+                    combo_int = int(combo)
+                except ValueError:
                     continue
-                amp, mu, sigma = popt
-                if mirror_for_half:
-                    amp *= 0.5  # adjust amplitude back to one-sided scale
-                fit_results[(combo_int, var)] = (float(amp), float(mu), float(sigma))
-                global_variables[f"{var}_{combo_int}_gauss1_amp"] = float(amp)
-                global_variables[f"{var}_{combo_int}_gauss1_mu"] = float(mu)
-                global_variables[f"{var}_{combo_int}_gauss1_sigma"] = float(sigma)
-
-#%%
-
-        # Only plot if requested
-        if create_plots or create_essential_plots:
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
-            if n_rows == 1:
-                axes = np.array([axes])
-            for r, (combo, sub) in enumerate(combo_subsets):
-                for c, var in enumerate(err_vars):
-                    ax = axes[r, c]
+                for var in err_vars:
                     if var not in sub.columns:
-                        ax.set_visible(False)
                         continue
-                    data = sub[var].dropna()
-                    if data.empty:
-                        ax.set_visible(False)
+                    series = sub[var].dropna()
+                    if series.empty:
                         continue
-                    q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
+                    q25, q75 = series.quantile([0.25, 0.75])
+                    global_variables[f"{var}_{combo_int}_q25"] = float(q25)
+                    global_variables[f"{var}_{combo_int}_q75"] = float(q75)
+                    mirror_for_half = var == "theta_err"
+                    series_fit = pd.concat([series, -series]) if mirror_for_half else series
+                    q_low, q_high = series_fit.quantile([0.0001, 0.99999])
                     bin_edges = np.linspace(q_low, q_high, 161)
-                    ax.hist(data, bins=bin_edges, color='C0', alpha=0.7)
-                    ax.set_yscale('log')
-                    ax.set_xlim(q_low, q_high)
-                    if r == 0:
-                        ax.set_title(var)
-                    if c == 0:
-                        ax.set_ylabel(f'Comb {combo}')
-                    ax.grid(True, alpha=0.3)
-            plt.suptitle('Error distributions per combination (data)', fontsize=12)
-            plt.tight_layout(rect=[0, 0, 1, 0.94])
-            if save_plots:
-                final_filename = f'{fig_idx}_hist_core_errs_combined.png'
-                fig_idx += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
-            if show_plots:
-                plt.show()
-            plt.close()
-
-            # Redraw with overlays
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
-            if n_rows == 1:
-                axes = np.array([axes])
-            for r, (combo, sub) in enumerate(combo_subsets):
-                for c, var in enumerate(err_vars):
-                    ax = axes[r, c]
-                    if var not in sub.columns:
-                        ax.set_visible(False)
+                    bin_width = bin_edges[1] - bin_edges[0]
+                    counts, edges = np.histogram(series_fit, bins=bin_edges)
+                    if not np.any(counts):
                         continue
-                    data = sub[var].dropna()
-                    if data.empty:
-                        ax.set_visible(False)
-                        continue
-                    q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
-                    bin_edges = np.linspace(q_low, q_high, 161)
-                    counts, edges, _ = ax.hist(data, bins=bin_edges, color='C0', alpha=0.6, label='data')
-                    ax.set_yscale('log')
-                    ax.set_xlim(q_low, q_high)
-                    y_min, y_max = ax.get_ylim()
 
+                    # Suppress central spike: drop bins far above the typical height
+                    nonzero = counts[counts > 0]
+                    typical = np.median(nonzero) if len(nonzero) else 0
+                    mask = counts > 0
+                    if typical > 0:
+                        mask &= counts < typical * 6  # keep more populated bins as well
+                    centers = 0.5 * (edges[1:] + edges[:-1])
+                    x_fit = centers[mask]
+                    y_fit = counts[mask]
+                    if y_fit.size < 5:
+                        continue
                     try:
-                        combo_int = int(combo)
-                    except ValueError:
-                        combo_int = None
-                    if combo_int is not None:
-                        params = fit_results.get((combo_int, var))
-                        if params:
-                            amp, mu, sigma = params
-                            x_grid = np.linspace(q_low, q_high, 400)
-                            g_vals = _gauss(x_grid, amp, mu, sigma)
-                            ax.plot(x_grid, g_vals, 'r-', lw=1.0, label='fit')
-                    if r == 0:
-                        ax.set_title(var)
-                    if c == 0:
-                        ax.set_ylabel(f'Comb {combo}')
-                    ax.set_ylim(y_min, y_max)
-                    ax.grid(True, alpha=0.3)
-            plt.suptitle('Error distributions per combination (fits)', fontsize=12)
-            plt.tight_layout(rect=[0, 0, 1, 0.94])
-            if save_plots:
-                final_filename = f'{fig_idx}_hist_core_errs_combined_with_fits.png'
-                fig_idx += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
-            if show_plots:
-                plt.show()
-            plt.close()
+                        p0 = [y_fit.max(), float(series.mean()), float(max(series.std(), 1e-6))]
+                        weights = np.maximum(y_fit, 1)
+                        popt, _ = curve_fit(
+                            _gauss,
+                            x_fit,
+                            y_fit,
+                            p0=p0,
+                            sigma=1.0 / weights,  # heavier weight for populous bins
+                            absolute_sigma=False,
+                            maxfev=4000,
+                        )
+                    except Exception:
+                        continue
+                    amp, mu, sigma = popt
+                    if mirror_for_half:
+                        amp *= 0.5  # adjust amplitude back to one-sided scale
+                    fit_results[(combo_int, var)] = (float(amp), float(mu), float(sigma))
+                    global_variables[f"{var}_{combo_int}_gauss1_amp"] = float(amp)
+                    global_variables[f"{var}_{combo_int}_gauss1_mu"] = float(mu)
+                    global_variables[f"{var}_{combo_int}_gauss1_sigma"] = float(sigma)
 
+            # Only plot if requested
+            if create_plots or create_essential_plots:
+                fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
+                if n_rows == 1:
+                    axes = np.array([axes])
+                for r, (combo, sub) in enumerate(combo_subsets):
+                    for c, var in enumerate(err_vars):
+                        ax = axes[r, c]
+                        if var not in sub.columns:
+                            ax.set_visible(False)
+                            continue
+                        data = sub[var].dropna()
+                        if data.empty:
+                            ax.set_visible(False)
+                            continue
+                        q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
+                        bin_edges = np.linspace(q_low, q_high, 161)
+                        ax.hist(data, bins=bin_edges, color='C0', alpha=0.7)
+                        ax.set_yscale('log')
+                        ax.set_xlim(q_low, q_high)
+                        if r == 0:
+                            ax.set_title(var)
+                        if c == 0:
+                            ax.set_ylabel(f'Comb {combo}')
+                        ax.grid(True, alpha=0.3)
+                plt.suptitle('Error distributions per combination (data)', fontsize=12)
+                plt.tight_layout(rect=[0, 0, 1, 0.94])
+                if save_plots:
+                    final_filename = f'{fig_idx}_hist_core_errs_combined.png'
+                    fig_idx += 1
+                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                    plot_list.append(save_fig_path)
+                    plt.savefig(save_fig_path, format='png')
+                if show_plots:
+                    plt.show()
+                plt.close()
 
+                # Redraw with overlays
+                fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), sharex='col')
+                if n_rows == 1:
+                    axes = np.array([axes])
+                for r, (combo, sub) in enumerate(combo_subsets):
+                    for c, var in enumerate(err_vars):
+                        ax = axes[r, c]
+                        if var not in sub.columns:
+                            ax.set_visible(False)
+                            continue
+                        data = sub[var].dropna()
+                        if data.empty:
+                            ax.set_visible(False)
+                            continue
+                        q_low, q_high = bounds_dict.get(var, (data.min(), data.max()))
+                        bin_edges = np.linspace(q_low, q_high, 161)
+                        counts, edges, _ = ax.hist(data, bins=bin_edges, color='C0', alpha=0.6, label='data')
+                        ax.set_yscale('log')
+                        ax.set_xlim(q_low, q_high)
+                        y_min, y_max = ax.get_ylim()
 
-import sys
+                        try:
+                            combo_int = int(combo)
+                        except ValueError:
+                            combo_int = None
+                        if combo_int is not None:
+                            params = fit_results.get((combo_int, var))
+                            if params:
+                                amp, mu, sigma = params
+                                x_grid = np.linspace(q_low, q_high, 400)
+                                g_vals = _gauss(x_grid, amp, mu, sigma)
+                                ax.plot(x_grid, g_vals, 'r-', lw=1.0, label='fit')
+                        if r == 0:
+                            ax.set_title(var)
+                        if c == 0:
+                            ax.set_ylabel(f'Comb {combo}')
+                        ax.set_ylim(y_min, y_max)
+                        ax.grid(True, alpha=0.3)
+                plt.suptitle('Error distributions per combination (fits)', fontsize=12)
+                plt.tight_layout(rect=[0, 0, 1, 0.94])
+                if save_plots:
+                    final_filename = f'{fig_idx}_hist_core_errs_combined_with_fits.png'
+                    fig_idx += 1
+                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                    plot_list.append(save_fig_path)
+                    plt.savefig(save_fig_path, format='png')
+                if show_plots:
+                    plt.show()
+                plt.close()
 #print("DEBUG EXITING")
 #sys.exit()
-
-
 # print("----------------------------------------------------------------------")
 # print("----------------------- Timtrack results filter ----------------------")
 # print("----------------------------------------------------------------------")
@@ -5603,7 +5585,12 @@ if time_window_fitting:
             ax_fill.fill_between(w_fit, 0, P_signal, color='green', alpha=0.4, label='Signal')
             ax_fill.fill_between(w_fit, P_signal, 1, color='red', alpha=0.4, label='Background')
             ax_fill.set_ylabel("Fraction")
-            ax_fill.set_ylim(np.min(P_signal), 1)
+            y_min = float(np.nanmin(P_signal))
+            if not np.isfinite(y_min) or y_min >= 1.0 - np.finfo(float).eps:
+                y_min = 0.0
+            elif y_min < 0.0:
+                y_min = 0.0
+            ax_fill.set_ylim(y_min, 1)
             # ax_fill.set_yticks([0.25, 0.5, 0.75, 1.0])
             ax_fill.legend(loc="upper right")
             ax_fill.set_title(f"Estimated Signal and Background Fractions per Window Width, definitive_tt = {definitive_tt}")
@@ -5935,7 +5922,17 @@ if create_plots or create_essential_plots:
     theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
     phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
     
-    vmax_global = df_filtered.groupby('definitive_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
+    vmax_global = (
+        df_filtered.groupby('definitive_tt')[['theta', 'phi']]
+        .apply(
+            lambda df: np.histogram2d(
+                df['theta'],
+                df['phi'],
+                bins=[theta_bins, phi_bins],
+            )[0].max()
+        )
+        .max()
+    )
     
     for idx, tt_val in enumerate(tt_values):
         row_idx, col_idx = divmod(idx, ncols)
@@ -6012,7 +6009,17 @@ if create_plots:
     theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
     phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
     
-    vmax_global = df_filtered.groupby('definitive_tt').apply(lambda df: np.histogram2d(df['theta'], df['phi'], bins=[theta_bins, phi_bins])[0].max()).max()
+    vmax_global = (
+        df_filtered.groupby('definitive_tt')[['theta', 'phi']]
+        .apply(
+            lambda df: np.histogram2d(
+                df['theta'],
+                df['phi'],
+                bins=[theta_bins, phi_bins],
+            )[0].max()
+        )
+        .max()
+    )
     
     for idx, tt_val in enumerate(tt_values):
         row_idx, col_idx = divmod(idx, ncols)
@@ -6692,7 +6699,7 @@ print(f"Data purity is {data_purity:.1f}%")
 #         for i, (label, df) in enumerate(group_dict.items()):
 #             df.index = pd.to_datetime(df.index, errors='coerce')
 #             event_times = df.index.floor('s')
-#             full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='S')
+#             full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='s')
 #             events_per_second = event_times.value_counts().reindex(full_range, fill_value=0).sort_index()
             
 #             hist_data = events_per_second.value_counts().sort_index()
@@ -6767,7 +6774,7 @@ if create_plots:
             for i, (label, df) in enumerate(group_dict.items()):
                 df.index = pd.to_datetime(df.index, errors='coerce')
                 event_times = df.index.floor('s')
-                full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='S')
+                full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='s')
                 events_per_second = event_times.value_counts().reindex(full_range, fill_value=0).sort_index()
 
                 hist_data = events_per_second.value_counts().sort_index()
@@ -7212,9 +7219,11 @@ record_residual_sigmas(working_df)
 
 tt_columns_desired = ['datetime', 'raw_tt', 'clean_tt', 'cal_tt', 'list_tt', 'tracking_tt', 'definitive_tt']
 tt_columns_present = [col for col in tt_columns_desired if col in working_df.columns]
+param_hash_cols = ["param_hash"] if "param_hash" in working_df.columns else []
 
 columns_to_keep = (
     tt_columns_present
+    + param_hash_cols
     + [
         # New definitions
         'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',

@@ -5,6 +5,7 @@ input_collect: matching
 param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
 param_mesh_sim_run: none
 output_dir: ../../SIMULATED_DATA
+registry_enabled: false
 chunk_rows: 100000
 target_rows: 100000
 files_per_station_conf: 1

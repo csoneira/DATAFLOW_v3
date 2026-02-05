@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional, Tuple, List
+
+import pandas as pd
+
+
+SIM_PARAMS_DEFAULT = (
+    Path("~")
+    .expanduser()
+    / "DATAFLOW_v3"
+    / "MINGO_DIGITAL_TWIN"
+    / "SIMULATED_DATA"
+    / "step_final_simulation_params.csv"
+)
+
+SIM_DATA_DIR = (
+    Path("~")
+    .expanduser()
+    / "DATAFLOW_v3"
+    / "MINGO_DIGITAL_TWIN"
+    / "SIMULATED_DATA"
+)
+
+
+def _normalize_param_hash(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    text = str(value).strip()
+    return text or None
+
+
+def extract_param_hash_from_dat(dat_path: Path) -> Optional[str]:
+    try:
+        with dat_path.open("r", encoding="ascii") as handle:
+            first_line = handle.readline().strip()
+    except FileNotFoundError:
+        return None
+
+    if not first_line.startswith("#"):
+        return None
+    if first_line.startswith("# param_hash="):
+        value = first_line.split("=", 1)[1].strip()
+        return value or None
+    return None
+
+
+def find_simulated_dat_path(basename_no_ext: str, base_directory: Path) -> Optional[Path]:
+    filename = f"{basename_no_ext}.dat"
+    candidate_dirs = [
+        base_directory / "STEP_1" / "TASK_1" / "INPUT_FILES" / "COMPLETED_DIRECTORY",
+        base_directory / "STEP_1" / "TASK_1" / "INPUT_FILES" / "PROCESSING_DIRECTORY",
+        base_directory / "STEP_1" / "TASK_1" / "INPUT_FILES" / "UNPROCESSED_DIRECTORY",
+        base_directory / "STAGE_0_to_1",
+        SIM_DATA_DIR,
+    ]
+    for directory in candidate_dirs:
+        candidate = directory / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def extract_param_hash_from_parquet(parquet_path: Path) -> Optional[str]:
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        return None
+    try:
+        parquet = pq.ParquetFile(parquet_path)
+        if parquet.metadata is None or parquet.metadata.num_row_groups == 0:
+            return None
+        table = parquet.read_row_group(0, columns=["param_hash"])
+    except Exception:
+        return None
+    if "param_hash" not in table.column_names:
+        return None
+    values = table.column("param_hash").to_pylist()
+    for value in values:
+        normalized = _normalize_param_hash(value)
+        if normalized:
+            return normalized
+    return None
+
+
+def load_simulated_z_positions(
+    param_hash: str,
+    sim_params_path: Path = SIM_PARAMS_DEFAULT,
+) -> Optional[List[float]]:
+    if not sim_params_path.exists():
+        return None
+    sim_params = pd.read_csv(sim_params_path)
+    if "param_hash" not in sim_params.columns:
+        return None
+    matches = sim_params[sim_params["param_hash"] == param_hash]
+    if matches.empty:
+        return None
+    row = matches.iloc[0]
+    try:
+        return [
+            float(row["z_plane_1"]),
+            float(row["z_plane_2"]),
+            float(row["z_plane_3"]),
+            float(row["z_plane_4"]),
+        ]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def load_simulated_z_positions_for_file(
+    basename_no_ext: str,
+    sim_params_path: Path = SIM_PARAMS_DEFAULT,
+) -> Tuple[Optional[List[float]], Optional[str]]:
+    if not sim_params_path.exists():
+        return None, None
+    sim_params = pd.read_csv(sim_params_path)
+    if "file_name" not in sim_params.columns:
+        return None, None
+    file_name = basename_no_ext if basename_no_ext.endswith(".dat") else f"{basename_no_ext}.dat"
+    matches = sim_params[sim_params["file_name"] == file_name]
+    if matches.empty:
+        return None, None
+    row = matches.iloc[0]
+    param_hash = _normalize_param_hash(row.get("param_hash"))
+    try:
+        z_positions = [
+            float(row["z_plane_1"]),
+            float(row["z_plane_2"]),
+            float(row["z_plane_3"]),
+            float(row["z_plane_4"]),
+        ]
+    except (KeyError, TypeError, ValueError):
+        return None, param_hash
+    return z_positions, param_hash
+
+
+def resolve_simulated_z_positions(
+    basename_no_ext: str,
+    base_directory: Path,
+    sim_params_path: Optional[Path] = None,
+    dat_path: Optional[Path] = None,
+    parquet_path: Optional[Path] = None,
+    param_hash: Optional[str] = None,
+) -> Tuple[Optional[List[float]], Optional[str]]:
+    if not basename_no_ext.startswith("mi00"):
+        return None, None
+    if sim_params_path is None:
+        sim_params_path = SIM_PARAMS_DEFAULT
+
+    param_hash = _normalize_param_hash(param_hash)
+    if param_hash is None and parquet_path is not None:
+        param_hash = extract_param_hash_from_parquet(parquet_path)
+
+    if param_hash:
+        z_positions = load_simulated_z_positions(param_hash, sim_params_path)
+        if z_positions is not None:
+            return z_positions, param_hash
+        return None, param_hash
+
+    if dat_path is None:
+        dat_path = find_simulated_dat_path(basename_no_ext, base_directory)
+    if dat_path is not None:
+        dat_hash = _normalize_param_hash(extract_param_hash_from_dat(dat_path))
+        if dat_hash:
+            z_positions = load_simulated_z_positions(dat_hash, sim_params_path)
+            if z_positions is not None:
+                return z_positions, dat_hash
+            return None, dat_hash
+
+    z_positions, fallback_hash = load_simulated_z_positions_for_file(
+        basename_no_ext,
+        sim_params_path,
+    )
+    if z_positions is not None:
+        return z_positions, _normalize_param_hash(fallback_hash)
+    if fallback_hash:
+        return None, _normalize_param_hash(fallback_hash)
+    return None, None

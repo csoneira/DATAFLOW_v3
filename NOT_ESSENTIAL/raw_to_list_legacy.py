@@ -9209,7 +9209,7 @@ if create_plots or create_essential_plots:
         for i, (label, df) in enumerate(group_dict.items()):
             df.index = pd.to_datetime(df.index, errors='coerce')
             event_times = df.index.floor('s')
-            full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='S')
+            full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='s')
             events_per_second = event_times.value_counts().reindex(full_range, fill_value=0).sort_index()
             
             hist_data = events_per_second.value_counts().sort_index()
@@ -9279,7 +9279,7 @@ if create_plots or create_essential_plots:
             for i, (label, df) in enumerate(group_dict.items()):
                 df.index = pd.to_datetime(df.index, errors='coerce')
                 event_times = df.index.floor('s')
-                full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='S')
+                full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='s')
                 events_per_second = event_times.value_counts().reindex(full_range, fill_value=0).sort_index()
 
                 hist_data = events_per_second.value_counts().sort_index()
