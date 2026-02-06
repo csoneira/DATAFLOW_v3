@@ -131,13 +131,37 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 start_timer(__file__)
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
+parameter_config_file_path = os.path.join(
+    user_home,
+    "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters_task_1.csv",
+)
+fallback_parameter_config_file_path = os.path.join(
+    user_home,
+    "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv",
+)
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 debug_mode = bool(config.get("debug_mode", False))
+
+
+def _apply_parameter_overrides(config_obj, station_id):
+    task_path = Path(parameter_config_file_path)
+    if task_path.exists():
+        config_obj = update_config_with_parameters(config_obj, task_path, station_id)
+        print(f"Warning: Loaded task parameters from {task_path}")
+        return config_obj
+    fallback_path = Path(fallback_parameter_config_file_path)
+    if fallback_path.exists():
+        print(f"Warning: Task parameters file not found; falling back to {fallback_path}")
+        config_obj = update_config_with_parameters(config_obj, fallback_path, station_id)
+    else:
+        print(f"Warning: No parameters file found for task 1")
+    return config_obj
+
+
 try:
-    config = update_config_with_parameters(config, parameter_config_file_path, station)
+    config = _apply_parameter_overrides(config, station)
 except NameError:
     pass
 home_path = config["home_path"]
@@ -397,9 +421,9 @@ print("Execution time is:", execution_time)
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
 
-run_jupyter_notebook = False
+run_jupyter_notebook = bool(config.get("run_jupyter_notebook", False))
 if run_jupyter_notebook:
-    station = "2"
+    station = str(config.get("jupyter_station_default_task_1", "2"))
 else:
     # Check if the script has an argument
     if len(sys.argv) < 2:
@@ -417,7 +441,7 @@ if station not in ["0", "1", "2", "3", "4"]:
 
 set_station(station)
 
-config = update_config_with_parameters(config, parameter_config_file_path, station)
+config = _apply_parameter_overrides(config, station)
 
 if len(sys.argv) == 3:
     user_file_path = sys.argv[2]
@@ -711,14 +735,11 @@ def write_itineraries_to_file(
 
 not_use_q_semisum = False
 
-stratos_save = config["stratos_save"]
 fast_mode = config["fast_mode"]
 debug_mode = config["debug_mode"]
 last_file_test = config["last_file_test"]
-alternative_fitting = config["alternative_fitting"]
 
 # Accessing all the variables from the configuration
-crontab_execution = config["crontab_execution"]
 create_plots = config["create_plots"]
 create_essential_plots = config["create_essential_plots"]
 save_plots = config["save_plots"]
@@ -726,67 +747,40 @@ show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
 limit = config["limit"]
 limit_number = config["limit_number"]
-number_of_time_cal_figures = config["number_of_time_cal_figures"]
-save_calibrations = config["save_calibrations"]
-presentation = config["presentation"]
-presentation_plots = config["presentation_plots"]
 force_replacement = config["force_replacement"]
 article_format = config["article_format"]
 
 # Charge calibration to fC
-calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
 
 # Charge front-back
-charge_front_back = config["charge_front_back"]
 
 # Slewing correction
-slewing_correction = config["slewing_correction"]
 
 # Time filtering
 time_window_filtering = config["time_window_filtering"]
 
 # Time calibration
-time_calibration = config["time_calibration"]
-old_timing_method = config["old_timing_method"]
-brute_force_analysis_time_calibration_path_finding = config["brute_force_analysis_time_calibration_path_finding"]
 
 # Y position
-y_position_complex_method = config["y_position_complex_method"]
-uniform_y_method = config["uniform_y_method"]
-uniform_weighted_method = config["uniform_weighted_method"]
 
 # RPC variables
-y_new_method = config["y_new_method"]
-blur_y = config["blur_y"]
 
 # Alternative
-alternative_iteration = config["alternative_iteration"]
-number_of_det_executions = config["number_of_det_executions"]
 
 # TimTrack
-fixed_speed = config["fixed_speed"]
-res_ana_removing_planes = config["res_ana_removing_planes"]
-timtrack_iteration = config["timtrack_iteration"]
-number_of_TT_executions = config["number_of_TT_executions"]
 
 # Validation
-validate_charge_pedestal_calibration = config["validate_charge_pedestal_calibration"]
 
 EXPECTED_COLUMNS_config = config["EXPECTED_COLUMNS_config"]
 
-residual_plots = config["residual_plots"]
 residual_plots_fast = config["residual_plots_fast"]
-residual_plots_debug = config["residual_plots_debug"]
 
-timtrack_iteration = config["timtrack_iteration"]
 timtrack_iteration_fast = config["timtrack_iteration_fast"]
 timtrack_iteration_debug = config["timtrack_iteration_debug"]
 
-time_calibration = config["time_calibration"]
 time_calibration_fast = config["time_calibration_fast"]
 time_calibration_debug = config["time_calibration_debug"]
 
-charge_front_back = config["charge_front_back"]
 charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
@@ -821,34 +815,13 @@ Q_side_left_pre_cal_ST = config["Q_side_left_pre_cal_ST"]
 Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 
 # Pre-cal Sum & Diff
-Q_left_pre_cal = config["Q_left_pre_cal"]
-Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
-T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
-T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
 T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
-Q_sum_left_cal = config["Q_sum_left_cal"]
-Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
-Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
-Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
-T_sum_left_cal = config["T_sum_left_cal"]
-T_sum_right_cal = config["T_sum_right_cal"]
-T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_left = config["T_dif_RPC_left"]
-T_dif_RPC_right = config["T_dif_RPC_right"]
-Q_RPC_left = config["Q_RPC_left"]
-Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_left = config["Q_dif_RPC_left"]
-Q_dif_RPC_right = config["Q_dif_RPC_right"]
-Y_RPC_left = config["Y_RPC_left"]
-Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
 det_pos_filter = config["det_pos_filter"]
@@ -859,29 +832,18 @@ det_phi_right_filter = config["det_phi_right_filter"]
 det_slowness_filter_left = config["det_slowness_filter_left"]
 det_slowness_filter_right = config["det_slowness_filter_right"]
 
-det_res_ystr_filter = config["det_res_ystr_filter"]
-det_res_tsum_filter = config["det_res_tsum_filter"]
-det_res_tdif_filter = config["det_res_tdif_filter"]
 
 # TimTrack filter
-proj_filter = config["proj_filter"]
 res_ystr_filter = config["res_ystr_filter"]
 res_tsum_filter = config["res_tsum_filter"]
 res_tdif_filter = config["res_tdif_filter"]
-ext_res_ystr_filter = config["ext_res_ystr_filter"]
-ext_res_tsum_filter = config["ext_res_tsum_filter"]
-ext_res_tdif_filter = config["ext_res_tdif_filter"]
 
 # Fitting comparison
-delta_s_left = config["delta_s_left"]
-delta_s_right = config["delta_s_right"]
 
 # Calibrations
 CRT_gaussian_fit_quantile = config["CRT_gaussian_fit_quantile"]
 coincidence_window_og_ns = config["coincidence_window_og_ns"]
-coincidence_window_precal_ns = config["coincidence_window_precal_ns"]
 coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
-coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_of_points"]
 
 # Pedestal charge calibration
 pedestal_left = config["pedestal_left"]
@@ -898,9 +860,7 @@ front_back_fit_threshold = config["front_back_fit_threshold"]
 # Variables to modify
 beta = config["beta"]
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-validate_pos_cal = config["validate_pos_cal"]
 
-output_order = config["output_order"]
 degree_of_polynomial = config["degree_of_polynomial"]
 
 # X
@@ -909,13 +869,7 @@ narrow_strip = config["narrow_strip"]
 wide_strip = config["wide_strip"]
 
 # Timtrack parameters
-d0 = config["d0"]
-cocut = config["cocut"]
-iter_max = config["iter_max"]
-anc_sy = config["anc_sy"]
-anc_sts = config["anc_sts"]
 anc_std = config["anc_std"]
-anc_sz = config["anc_sz"]
 
 n_planes_timtrack = config["n_planes_timtrack"]
 
@@ -957,41 +911,13 @@ scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
 calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
-interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
-interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
-interpolate_fast_charge_num_bins = config["interpolate_fast_charge_num_bins"]
-interpolate_fast_charge_log_scale = config["interpolate_fast_charge_log_scale"]
 
-crosstalk_fitting = config["crosstalk_fitting"]
-delta_t_left = config["delta_t_left"]
-delta_t_right = config["delta_t_right"]
-q_sum_left = config["q_sum_left"]
-q_sum_right = config["q_sum_right"]
-q_dif_left = config["q_dif_left"]
-q_dif_right = config["q_dif_right"]
 
-Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
-Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
-Q_sum_semisum_left = config["Q_sum_semisum_left"]
-Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
-T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
-slewing_residual_range = config["slewing_residual_range"]
 
-t_comparison_lim = config["t_comparison_lim"]
-t0_time_cal_lim = config["t0_time_cal_lim"]
 
-crosstalk_fit_mu_max = config["crosstalk_fit_mu_max"]
-crosstalk_fit_sigma_min = config["crosstalk_fit_sigma_min"]
-crosstalk_fit_sigma_max = config["crosstalk_fit_sigma_max"]
 
-slewing_correction_r2_threshold = config["slewing_correction_r2_threshold"]
 
-time_window_fitting = config["time_window_fitting"]
 
-charge_plot_limit_left = config["charge_plot_limit_left"]
-charge_plot_limit_right = config["charge_plot_limit_right"]
-charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
 
 
 # -----------------------------------------------------------------------------
@@ -3268,7 +3194,6 @@ for key, idx_range in column_indices.items():
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
-print(f"Data purity is {data_purity:.2f}%")
 
 
 # End of the execution time
@@ -3276,7 +3201,6 @@ end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
 execution_time_minutes = execution_time.total_seconds() / 60
-print(f"Total execution time: {execution_time_minutes:.2f} minutes")
 
 # To save as metadata
 filename_base = basename_no_ext

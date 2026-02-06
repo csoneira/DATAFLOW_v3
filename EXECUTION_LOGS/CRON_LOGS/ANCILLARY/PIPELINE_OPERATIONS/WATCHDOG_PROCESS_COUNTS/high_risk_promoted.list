@@ -7,3 +7,7 @@
 /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh
 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py
 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh
+/home/mingo/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/ingest_simulated_station_data.py
+/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py
+/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py
+rsync

@@ -4,7 +4,7 @@ import csv
 import re
 from ast import literal_eval
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set
 
 
 def _parse_value(raw_value: str) -> Any:
@@ -41,17 +41,52 @@ def _parse_value(raw_value: str) -> Any:
         return value
 
 
+def _resolve_reference_path(base_csv_path: Path, source_task: str) -> Optional[Path]:
+    """Resolve a referenced task config path relative to *base_csv_path*."""
+    source_task = source_task.strip()
+    if not source_task:
+        return None
+    if source_task.endswith(".csv"):
+        ref_path = Path(source_task)
+        if not ref_path.is_absolute():
+            ref_path = base_csv_path.parent / ref_path
+        return ref_path
+    if source_task.startswith("task_"):
+        filename = f"config_parameters_{source_task}.csv"
+    elif source_task.isdigit():
+        filename = f"config_parameters_task_{source_task}.csv"
+    else:
+        filename = f"config_parameters_{source_task}.csv"
+    return base_csv_path.parent / filename
+
+
 def load_parameter_overrides(
     csv_path: str | Path,
     station: str,
+    *,
+    resolve_references: bool = True,
+    _cache: Optional[Dict[Path, Dict[str, Any]]] = None,
+    _stack: Optional[Set[Path]] = None,
 ) -> Dict[str, Any]:
     """Load parameter overrides for *station* from the CSV file."""
     parameter_csv_path = Path(csv_path)
     if not parameter_csv_path.exists():
         raise FileNotFoundError(f"Configuration parameters file not found: {csv_path}")
 
+    if _cache is None:
+        _cache = {}
+    if _stack is None:
+        _stack = set()
+    resolved_path = parameter_csv_path.resolve()
+    if resolved_path in _cache:
+        return dict(_cache[resolved_path])
+    if resolved_path in _stack:
+        return {}
+    _stack.add(resolved_path)
+
     overrides: Dict[str, Any] = {}
     station_column = f"station_{station}"
+    reference_requests: Dict[str, str] = {}
 
     with parameter_csv_path.open("r", newline="", encoding="utf-8") as csv_file:
         reader = csv.DictReader(csv_file)
@@ -59,10 +94,16 @@ def load_parameter_overrides(
             raise ValueError(f"Configuration parameters file has no header: {csv_path}")
         headers = set(reader.fieldnames)
         use_default_only = station_column not in headers
+        has_source_column = "source_task" in headers
 
         for row in reader:
             parameter_name = (row.get("parameter") or "").strip()
             if not parameter_name:
+                continue
+
+            source_task = (row.get("source_task") or "").strip() if has_source_column else ""
+            if resolve_references and source_task:
+                reference_requests[parameter_name] = source_task
                 continue
 
             value_str = ""
@@ -76,6 +117,30 @@ def load_parameter_overrides(
 
             overrides[parameter_name] = _parse_value(value_str)
 
+    if resolve_references and reference_requests:
+        for parameter_name, source_task in reference_requests.items():
+            ref_path = _resolve_reference_path(parameter_csv_path, source_task)
+            if ref_path is None or not ref_path.exists():
+                print(
+                    f"Warning: referenced parameters file for {parameter_name} not found: {source_task}"
+                )
+                continue
+            ref_overrides = load_parameter_overrides(
+                ref_path,
+                station,
+                resolve_references=True,
+                _cache=_cache,
+                _stack=_stack,
+            )
+            if parameter_name in ref_overrides:
+                overrides[parameter_name] = ref_overrides[parameter_name]
+            else:
+                print(
+                    f"Warning: parameter {parameter_name} not found in referenced file {ref_path}"
+                )
+
+    _stack.remove(resolved_path)
+    _cache[resolved_path] = dict(overrides)
     return overrides
 
 
@@ -83,8 +148,14 @@ def update_config_with_parameters(
     config: Dict[str, Any],
     csv_path: str | Path,
     station: str,
+    *,
+    resolve_references: bool = True,
 ) -> Dict[str, Any]:
     """Merge station-specific parameter overrides into *config*."""
-    overrides = load_parameter_overrides(csv_path, station)
+    overrides = load_parameter_overrides(
+        csv_path,
+        station,
+        resolve_references=resolve_references,
+    )
     config.update(overrides)
     return config

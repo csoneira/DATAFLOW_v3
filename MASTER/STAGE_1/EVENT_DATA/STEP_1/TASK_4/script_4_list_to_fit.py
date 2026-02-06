@@ -128,13 +128,37 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 start_timer(__file__)
 user_home = os.path.expanduser("~")
 config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
+parameter_config_file_path = os.path.join(
+    user_home,
+    "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters_task_4.csv",
+)
+fallback_parameter_config_file_path = os.path.join(
+    user_home,
+    "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv",
+)
 print(f"Using config file: {config_file_path}")
 with open(config_file_path, "r") as config_file:
     config = yaml.safe_load(config_file)
 debug_mode = bool(config.get("debug_mode", False))
+
+
+def _apply_parameter_overrides(config_obj, station_id):
+    task_path = Path(parameter_config_file_path)
+    if task_path.exists():
+        config_obj = update_config_with_parameters(config_obj, task_path, station_id)
+        print(f"Warning: Loaded task parameters from {task_path}")
+        return config_obj
+    fallback_path = Path(fallback_parameter_config_file_path)
+    if fallback_path.exists():
+        print(f"Warning: Task parameters file not found; falling back to {fallback_path}")
+        config_obj = update_config_with_parameters(config_obj, fallback_path, station_id)
+    else:
+        print(f"Warning: No parameters file found for task 4")
+    return config_obj
+
+
 try:
-    config = update_config_with_parameters(config, parameter_config_file_path, station)
+    config = _apply_parameter_overrides(config, station)
 except NameError:
     pass
 home_path = config["home_path"]
@@ -592,6 +616,165 @@ def plot_ts_with_side_hist(df, columns, time_col, title, width_ratios=(3, 1)):
     plt.close()
 
 
+# Reject-only histograms/scatters ------------------------------------------------
+def plot_histograms_grid(df, columns, title_prefix, max_bins=60, cols_per_fig=16):
+    """Plot histograms for many columns, chunked into multiple figures."""
+    global fig_idx
+    if df.empty:
+        return
+    if not columns:
+        return
+    cols_per_fig = max(1, int(cols_per_fig))
+    ncols = min(4, cols_per_fig)
+    for chunk_start in range(0, len(columns), cols_per_fig):
+        chunk = columns[chunk_start:chunk_start + cols_per_fig]
+        if not chunk:
+            continue
+        nrows = int(math.ceil(len(chunk) / ncols))
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(4.0 * ncols, 3.0 * nrows),
+            constrained_layout=True,
+        )
+        axes = np.atleast_1d(axes).ravel()
+        last_idx = -1
+        for idx, col in enumerate(chunk):
+            ax = axes[idx]
+            last_idx = idx
+            if col not in df.columns:
+                ax.set_visible(False)
+                continue
+            series = df[col].dropna()
+            if series.empty:
+                ax.set_visible(False)
+                continue
+            if pd.api.types.is_datetime64_any_dtype(series):
+                ax.set_visible(False)
+                continue
+            if pd.api.types.is_bool_dtype(series):
+                # Avoid matplotlib warning by coercing bools to ints.
+                series = series.astype(np.int8)
+                bins, hist_range = 2, (-0.5, 1.5)
+            else:
+                series = series[np.isfinite(series)]
+                if series.empty:
+                    ax.set_visible(False)
+                    continue
+                bins, hist_range = _safe_hist_params(series, max_bins=max_bins)
+            if bins is None:
+                ax.set_visible(False)
+                continue
+            ax.hist(series, bins=bins, range=hist_range, alpha=0.75, color="C0")
+            ax.set_title(col, fontsize=9)
+            ax.tick_params(axis="both", labelsize=8)
+            ax.grid(True, alpha=0.2)
+        for j in range(last_idx + 1, len(axes)):
+            axes[j].set_visible(False)
+        title = f"{title_prefix} histograms ({chunk_start + 1}-{chunk_start + len(chunk)})"
+        plt.suptitle(title, fontsize=12)
+        if save_plots:
+            safe_title = re.sub(r"[\\\\/]+", "_", title).replace(" ", "_")
+            if len(safe_title) > 180:
+                safe_title = safe_title[:180]
+            final_filename = f"{fig_idx}_{safe_title}.png"
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            plt.savefig(save_fig_path, format="png")
+        if show_plots:
+            plt.show()
+        plt.close()
+
+
+def plot_scatter_simple(df, x_col, y_col, title, max_points=200000):
+    """Plot a simple scatter with optional downsampling."""
+    global fig_idx
+    if df.empty:
+        return
+    if x_col not in df.columns or y_col not in df.columns:
+        return
+    sub = df[[x_col, y_col]].dropna()
+    if sub.empty:
+        return
+    sub = sub[np.isfinite(sub[x_col]) & np.isfinite(sub[y_col])]
+    if sub.empty:
+        return
+    if len(sub) > max_points:
+        sub = sub.sample(n=max_points, random_state=0)
+    fig, ax = plt.subplots(figsize=(6.5, 6.0))
+    ax.scatter(
+        sub[x_col],
+        sub[y_col],
+        s=2,
+        alpha=0.3,
+        color="C0",
+        edgecolors="none",
+    )
+    ax.set_xlabel(x_col)
+    ax.set_ylabel(y_col)
+    ax.set_title(title)
+    ax.grid(True, alpha=0.2)
+    if save_plots:
+        safe_title = re.sub(r"[\\\\/]+", "_", title).replace(" ", "_")
+        if len(safe_title) > 180:
+            safe_title = safe_title[:180]
+        final_filename = f"{fig_idx}_{safe_title}.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        plt.savefig(save_fig_path, format="png")
+    if show_plots:
+        plt.show()
+    plt.close()
+
+
+def plot_reject_diagnostics(
+    df,
+    label,
+    basename,
+    hist_bins=60,
+    cols_per_fig=16,
+    scatter_max=200000,
+):
+    """Create histogram grids and key scatter plots for rejected events."""
+    if df.empty:
+        return
+    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    if numeric_cols:
+        plot_histograms_grid(
+            df,
+            numeric_cols,
+            f"{label}_{basename}",
+            max_bins=hist_bins,
+            cols_per_fig=cols_per_fig,
+        )
+    if "theta" in df.columns and "phi" in df.columns:
+        plot_scatter_simple(
+            df,
+            "theta",
+            "phi",
+            f"{label}_theta_phi_{basename}",
+            max_points=scatter_max,
+        )
+    if "x" in df.columns and "y" in df.columns:
+        plot_scatter_simple(
+            df,
+            "x",
+            "y",
+            f"{label}_x_y_{basename}",
+            max_points=scatter_max,
+        )
+    elif "det_x" in df.columns and "det_y" in df.columns:
+        plot_scatter_simple(
+            df,
+            "det_x",
+            "det_y",
+            f"{label}_det_x_det_y_{basename}",
+            max_points=scatter_max,
+        )
+
+
 #%%
 
 def plot_residuals_ts_hist(df, prefixes, time_col, title):
@@ -730,9 +913,9 @@ def plot_err_only_ts_hist(df, base_cols, time_col, title):
 # -----------------------------------------------------------------------------
 
 
-run_jupyter_notebook = False
+run_jupyter_notebook = bool(config.get("run_jupyter_notebook", False))
 if run_jupyter_notebook:
-    station = "3"
+    station = str(config.get("jupyter_station_default_task_4", "3"))
 else:
     # Check if the script has an argument
     if len(sys.argv) < 2:
@@ -749,7 +932,7 @@ if station not in ["0", "1", "2", "3", "4"]:
 # print(f"Station: {station}")
 
 set_station(station)
-config = update_config_with_parameters(config, parameter_config_file_path, station)
+config = _apply_parameter_overrides(config, station)
 
 # Cron job switch that decides if completed files can be revisited.
 complete_reanalysis = config.get("complete_reanalysis", False)
@@ -823,6 +1006,17 @@ create_essential_plots = config["create_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
+save_rejected_rows = config.get("save_rejected_rows", False)
+create_reject_plots = config.get("create_reject_plots", False)
+if create_reject_plots:
+    save_rejected_rows = True
+print(
+    f"Warning: reject-plots config -> create_reject_plots={create_reject_plots} "
+    f"save_rejected_rows={save_rejected_rows} save_plots={save_plots}"
+)
+reject_plot_hist_bins = int(config.get("reject_plot_hist_bins", 60))
+reject_plot_hist_cols_per_fig = int(config.get("reject_plot_hist_cols_per_fig", 16))
+reject_plot_scatter_max_points = int(config.get("reject_plot_scatter_max_points", 200000))
 
 create_plots = config["create_plots"]
 create_plots_task_4 = config.get("create_plots_task_4", False)
@@ -887,7 +1081,7 @@ processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
 
 
-last_file_test = False
+last_file_test = bool(config.get("last_file_test", False))
 
 
 print("----------------------------------------------------------------------")
@@ -1086,10 +1280,11 @@ if os.path.exists(input_file_config_path):
 else:
     exists_input_file = False
     print("Input configuration file does not exist.")
-    z_1 = 0
-    z_2 = 150
-    z_3 = 300
-    z_4 = 450
+    default_z_positions = config.get("default_z_positions", [0, 150, 300, 450])
+    if isinstance(default_z_positions, (list, tuple)) and len(default_z_positions) >= 4:
+        z_1, z_2, z_3, z_4 = default_z_positions[:4]
+    else:
+        z_1, z_2, z_3, z_4 = 0, 150, 300, 450
 
 
 
@@ -1394,13 +1589,10 @@ def write_itineraries_to_file(
 
 
 
-not_use_q_semisum = False
 
-stratos_save = config["stratos_save"]
 fast_mode = config["fast_mode"]
 debug_mode = config["debug_mode"]
 last_file_test = config["last_file_test"]
-alternative_fitting = config["alternative_fitting"]
 
 
 
@@ -1414,38 +1606,20 @@ if create_plots_task_4:
 
 limit = config["limit"]
 limit_number = config["limit_number"]
-number_of_time_cal_figures = config["number_of_time_cal_figures"]
-save_calibrations = config["save_calibrations"]
-presentation = config["presentation"]
-presentation_plots = config["presentation_plots"]
-force_replacement = config["force_replacement"]
-article_format = config["article_format"]
 
 # Charge calibration to fC
-calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
 
 # Charge front-back
-charge_front_back = config["charge_front_back"]
 
 # Slewing correction
-slewing_correction = config["slewing_correction"]
 
 # Time filtering
-time_window_filtering = config["time_window_filtering"]
 
 # Time calibration
-time_calibration = config["time_calibration"]
-old_timing_method = config["old_timing_method"]
-brute_force_analysis_time_calibration_path_finding = config["brute_force_analysis_time_calibration_path_finding"]
 
 # Y position
-y_position_complex_method = config["y_position_complex_method"]
-uniform_y_method = config["uniform_y_method"]
-uniform_weighted_method = config["uniform_weighted_method"]
 
 # RPC variables
-y_new_method = config["y_new_method"]
-blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
@@ -1458,23 +1632,17 @@ timtrack_iteration = config["timtrack_iteration"]
 number_of_TT_executions = config["number_of_TT_executions"]
 
 # Validation
-validate_charge_pedestal_calibration = config["validate_charge_pedestal_calibration"]
 
-EXPECTED_COLUMNS_config = config["EXPECTED_COLUMNS_config"]
 
-residual_plots = config["residual_plots"]
 residual_plots_fast = config["residual_plots_fast"]
-residual_plots_debug = config["residual_plots_debug"]
 
 timtrack_iteration = config["timtrack_iteration"]
 timtrack_iteration_fast = config["timtrack_iteration_fast"]
 timtrack_iteration_debug = config["timtrack_iteration_debug"]
 
-time_calibration = config["time_calibration"]
 time_calibration_fast = config["time_calibration_fast"]
 time_calibration_debug = config["time_calibration_debug"]
 
-charge_front_back = config["charge_front_back"]
 charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
@@ -1493,48 +1661,20 @@ limit_number_debug = config["limit_number_debug"]
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
 T_side_right_pre_cal_debug = config["T_side_right_pre_cal_debug"]
-Q_side_left_pre_cal_debug = config["Q_side_left_pre_cal_debug"]
-Q_side_right_pre_cal_debug = config["Q_side_right_pre_cal_debug"]
 
 T_side_left_pre_cal_default = config["T_side_left_pre_cal_default"]
 T_side_right_pre_cal_default = config["T_side_right_pre_cal_default"]
-Q_side_left_pre_cal_default = config["Q_side_left_pre_cal_default"]
-Q_side_right_pre_cal_default = config["Q_side_right_pre_cal_default"]
 
 T_side_left_pre_cal_ST = config["T_side_left_pre_cal_ST"]
 T_side_right_pre_cal_ST = config["T_side_right_pre_cal_ST"]
-Q_side_left_pre_cal_ST = config["Q_side_left_pre_cal_ST"]
-Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 
 # Pre-cal Sum & Diff
-Q_left_pre_cal = config["Q_left_pre_cal"]
-Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
-T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
-T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
-Q_sum_left_cal = config["Q_sum_left_cal"]
-Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
-Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
-Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
-T_sum_left_cal = config["T_sum_left_cal"]
-T_sum_right_cal = config["T_sum_right_cal"]
-T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_left = config["T_dif_RPC_left"]
-T_dif_RPC_right = config["T_dif_RPC_right"]
-Q_RPC_left = config["Q_RPC_left"]
-Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_left = config["Q_dif_RPC_left"]
-Q_dif_RPC_right = config["Q_dif_RPC_right"]
-Y_RPC_left = config["Y_RPC_left"]
-Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
 det_pos_filter = config["det_pos_filter"]
@@ -1566,31 +1706,17 @@ delta_s_left = config["delta_s_left"]
 delta_s_right = config["delta_s_right"]
 
 # Calibrations
-CRT_gaussian_fit_quantile = config["CRT_gaussian_fit_quantile"]
-coincidence_window_og_ns = config["coincidence_window_og_ns"]
-coincidence_window_precal_ns = config["coincidence_window_precal_ns"]
 coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
 coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_of_points"]
 
 # Pedestal charge calibration
-pedestal_left = config["pedestal_left"]
-pedestal_right = config["pedestal_right"]
 
 # Front-back charge
-distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
-distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
-distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
-distance_sum_charges_plot = config["distance_sum_charges_plot"]
-front_back_fit_threshold = config["front_back_fit_threshold"]
 
 # Variables to modify
 beta = config["beta"]
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-validate_pos_cal = config["validate_pos_cal"]
 
-output_order = config["output_order"]
-degree_of_polynomial = config["degree_of_polynomial"]
 
 # X
 strip_length = config["strip_length"]
@@ -1626,55 +1752,16 @@ T_clip_max_ST = config["T_clip_max_ST"]
 Q_clip_min_ST = config["Q_clip_min_ST"]
 Q_clip_max_ST = config["Q_clip_max_ST"]
 
-log_scale = config["log_scale"]
 
-calibrate_strip_Q_pedestal_thr_factor = config["calibrate_strip_Q_pedestal_thr_factor"]
-calibrate_strip_Q_pedestal_thr_factor_2 = config["calibrate_strip_Q_pedestal_thr_factor_2"]
-calibrate_strip_Q_pedestal_translate_charge_cal = config["calibrate_strip_Q_pedestal_translate_charge_cal"]
 
-calibrate_strip_Q_pedestal_percentile = config["calibrate_strip_Q_pedestal_percentile"]
-calibrate_strip_Q_pedestal_rel_th = config["calibrate_strip_Q_pedestal_rel_th"]
-calibrate_strip_Q_pedestal_rel_th_cal = config["calibrate_strip_Q_pedestal_rel_th_cal"]
-calibrate_strip_Q_pedestal_abs_th = config["calibrate_strip_Q_pedestal_abs_th"]
-calibrate_strip_Q_pedestal_q_quantile = config["calibrate_strip_Q_pedestal_q_quantile"]
 
-scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
-scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
-scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
-scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
-calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
-interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
-interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
-interpolate_fast_charge_num_bins = config["interpolate_fast_charge_num_bins"]
-interpolate_fast_charge_log_scale = config["interpolate_fast_charge_log_scale"]
 
-crosstalk_fitting = config["crosstalk_fitting"]
-delta_t_left = config["delta_t_left"]
-delta_t_right = config["delta_t_right"]
-q_sum_left = config["q_sum_left"]
-q_sum_right = config["q_sum_right"]
-q_dif_left = config["q_dif_left"]
-q_dif_right = config["q_dif_right"]
 
-Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
-Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
-Q_sum_semisum_left = config["Q_sum_semisum_left"]
-Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
-T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
-slewing_residual_range = config["slewing_residual_range"]
 
-t_comparison_lim = config["t_comparison_lim"]
-t0_time_cal_lim = config["t0_time_cal_lim"]
 
-crosstalk_fit_mu_max = config["crosstalk_fit_mu_max"]
-crosstalk_fit_sigma_min = config["crosstalk_fit_sigma_min"]
-crosstalk_fit_sigma_max = config["crosstalk_fit_sigma_max"]
 
-slewing_correction_r2_threshold = config["slewing_correction_r2_threshold"]
 
 time_window_fitting = config["time_window_fitting"]
 
@@ -1777,11 +1864,7 @@ if debug_mode:
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
 
-    Q_F_left_pre_cal = Q_side_left_pre_cal_debug
-    Q_F_right_pre_cal = Q_side_right_pre_cal_debug
 
-    Q_B_left_pre_cal = Q_side_left_pre_cal_debug
-    Q_B_right_pre_cal = Q_side_right_pre_cal_debug
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
     T_F_right_pre_cal = T_side_right_pre_cal_default
@@ -1789,23 +1872,13 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-    Q_F_left_pre_cal = Q_side_left_pre_cal_default
-    Q_F_right_pre_cal = Q_side_right_pre_cal_default
 
-    Q_B_left_pre_cal = Q_side_left_pre_cal_default
-    Q_B_right_pre_cal = Q_side_right_pre_cal_default
 
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-Q_F_left_pre_cal_ST = Q_side_left_pre_cal_ST
-Q_F_right_pre_cal_ST = Q_side_right_pre_cal_ST
-Q_B_left_pre_cal_ST = Q_side_left_pre_cal_ST
-Q_B_right_pre_cal_ST = Q_side_right_pre_cal_ST
 
-Q_left_side = Q_side_left_pre_cal_ST
-Q_right_side = Q_side_right_pre_cal_ST
 
 
 
@@ -1888,6 +1961,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "small_values_zeroed_value_pct",
     "definitive_small_values_zeroed_event_pct",
     "definitive_small_values_zeroed_value_pct",
+    "low_tt_zeroed_event_pct",
     "definitive_rows_removed_pct",
     "definitive_removed_single_zero_rows_pct",
     "definitive_removed_multi_zero_rows_pct",
@@ -2000,83 +2074,32 @@ if not reprocessing_parameters.empty:
         key: value for key, value in reprocessing_values.items() if value is not None
     }
 
-station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
-
-# Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
-
-if os.path.exists(input_file_config_path):
-    print("Searching input configuration file:", input_file_config_path)
-    
-    # It is a csv
-    input_file = pd.read_csv(input_file_config_path, skiprows=1)
-    
-    if not input_file.empty:
-        print("Input configuration file found and is not empty.")
-        exists_input_file = True
-    else:
-        print("Input configuration file is empty.")
-        exists_input_file = False
-    
-    # Print the head
-    # print(input_file.head())
-    
-else:
-    exists_input_file = False
-    print("Input configuration file does not exist.")
-    z_1 = 0
-    z_2 = 150
-    z_3 = 300
-    z_4 = 450
+self_trigger = bool(config.get("self_trigger", False))
 
 
-self_trigger = False
-
-not_use_q_semisum = False
-
-stratos_save = config["stratos_save"]
 fast_mode = config["fast_mode"]
 debug_mode = config["debug_mode"]
 last_file_test = config["last_file_test"]
-alternative_fitting = config["alternative_fitting"]
 
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
 
 limit = config["limit"]
 limit_number = config["limit_number"]
-number_of_time_cal_figures = config["number_of_time_cal_figures"]
-save_calibrations = config["save_calibrations"]
-presentation = config["presentation"]
-presentation_plots = config["presentation_plots"]
-force_replacement = config["force_replacement"]
-article_format = config["article_format"]
 
 # Charge calibration to fC
-calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
 
 # Charge front-back
-charge_front_back = config["charge_front_back"]
 
 # Slewing correction
-slewing_correction = config["slewing_correction"]
 
 # Time filtering
-time_window_filtering = config["time_window_filtering"]
 
 # Time calibration
-time_calibration = config["time_calibration"]
-old_timing_method = config["old_timing_method"]
-brute_force_analysis_time_calibration_path_finding = config["brute_force_analysis_time_calibration_path_finding"]
 
 # Y position
-y_position_complex_method = config["y_position_complex_method"]
-uniform_y_method = config["uniform_y_method"]
-uniform_weighted_method = config["uniform_weighted_method"]
 
 # RPC variables
-y_new_method = config["y_new_method"]
-blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
@@ -2089,23 +2112,17 @@ timtrack_iteration = config["timtrack_iteration"]
 number_of_TT_executions = config["number_of_TT_executions"]
 
 # Validation
-validate_charge_pedestal_calibration = config["validate_charge_pedestal_calibration"]
 
-EXPECTED_COLUMNS_config = config["EXPECTED_COLUMNS_config"]
 
-residual_plots = config["residual_plots"]
 residual_plots_fast = config["residual_plots_fast"]
-residual_plots_debug = config["residual_plots_debug"]
 
 timtrack_iteration = config["timtrack_iteration"]
 timtrack_iteration_fast = config["timtrack_iteration_fast"]
 timtrack_iteration_debug = config["timtrack_iteration_debug"]
 
-time_calibration = config["time_calibration"]
 time_calibration_fast = config["time_calibration_fast"]
 time_calibration_debug = config["time_calibration_debug"]
 
-charge_front_back = config["charge_front_back"]
 charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
@@ -2123,48 +2140,20 @@ limit_number_debug = config["limit_number_debug"]
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
 T_side_right_pre_cal_debug = config["T_side_right_pre_cal_debug"]
-Q_side_left_pre_cal_debug = config["Q_side_left_pre_cal_debug"]
-Q_side_right_pre_cal_debug = config["Q_side_right_pre_cal_debug"]
 
 T_side_left_pre_cal_default = config["T_side_left_pre_cal_default"]
 T_side_right_pre_cal_default = config["T_side_right_pre_cal_default"]
-Q_side_left_pre_cal_default = config["Q_side_left_pre_cal_default"]
-Q_side_right_pre_cal_default = config["Q_side_right_pre_cal_default"]
 
 T_side_left_pre_cal_ST = config["T_side_left_pre_cal_ST"]
 T_side_right_pre_cal_ST = config["T_side_right_pre_cal_ST"]
-Q_side_left_pre_cal_ST = config["Q_side_left_pre_cal_ST"]
-Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 
 # Pre-cal Sum & Diff
-Q_left_pre_cal = config["Q_left_pre_cal"]
-Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
-T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
-T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
-Q_sum_left_cal = config["Q_sum_left_cal"]
-Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
-Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
-Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
-T_sum_left_cal = config["T_sum_left_cal"]
-T_sum_right_cal = config["T_sum_right_cal"]
-T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_left = config["T_dif_RPC_left"]
-T_dif_RPC_right = config["T_dif_RPC_right"]
-Q_RPC_left = config["Q_RPC_left"]
-Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_left = config["Q_dif_RPC_left"]
-Q_dif_RPC_right = config["Q_dif_RPC_right"]
-Y_RPC_left = config["Y_RPC_left"]
-Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
 det_pos_filter = config["det_pos_filter"]
@@ -2193,31 +2182,17 @@ delta_s_left = config["delta_s_left"]
 delta_s_right = config["delta_s_right"]
 
 # Calibrations
-CRT_gaussian_fit_quantile = config["CRT_gaussian_fit_quantile"]
-coincidence_window_og_ns = config["coincidence_window_og_ns"]
-coincidence_window_precal_ns = config["coincidence_window_precal_ns"]
 coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
 coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_of_points"]
 
 # Pedestal charge calibration
-pedestal_left = config["pedestal_left"]
-pedestal_right = config["pedestal_right"]
 
 # Front-back charge
-distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
-distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
-distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
-distance_sum_charges_plot = config["distance_sum_charges_plot"]
-front_back_fit_threshold = config["front_back_fit_threshold"]
 
 # Variables to modify
 beta = config["beta"]
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-validate_pos_cal = config["validate_pos_cal"]
 
-output_order = config["output_order"]
-degree_of_polynomial = config["degree_of_polynomial"]
 
 # X
 strip_length = config["strip_length"]
@@ -2253,55 +2228,16 @@ T_clip_max_ST = config["T_clip_max_ST"]
 Q_clip_min_ST = config["Q_clip_min_ST"]
 Q_clip_max_ST = config["Q_clip_max_ST"]
 
-log_scale = config["log_scale"]
 
-calibrate_strip_Q_pedestal_thr_factor = config["calibrate_strip_Q_pedestal_thr_factor"]
-calibrate_strip_Q_pedestal_thr_factor_2 = config["calibrate_strip_Q_pedestal_thr_factor_2"]
-calibrate_strip_Q_pedestal_translate_charge_cal = config["calibrate_strip_Q_pedestal_translate_charge_cal"]
 
-calibrate_strip_Q_pedestal_percentile = config["calibrate_strip_Q_pedestal_percentile"]
-calibrate_strip_Q_pedestal_rel_th = config["calibrate_strip_Q_pedestal_rel_th"]
-calibrate_strip_Q_pedestal_rel_th_cal = config["calibrate_strip_Q_pedestal_rel_th_cal"]
-calibrate_strip_Q_pedestal_abs_th = config["calibrate_strip_Q_pedestal_abs_th"]
-calibrate_strip_Q_pedestal_q_quantile = config["calibrate_strip_Q_pedestal_q_quantile"]
 
-scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
-scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
-scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
-scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
-calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
-interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
-interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
-interpolate_fast_charge_num_bins = config["interpolate_fast_charge_num_bins"]
-interpolate_fast_charge_log_scale = config["interpolate_fast_charge_log_scale"]
 
-crosstalk_fitting = config["crosstalk_fitting"]
-delta_t_left = config["delta_t_left"]
-delta_t_right = config["delta_t_right"]
-q_sum_left = config["q_sum_left"]
-q_sum_right = config["q_sum_right"]
-q_dif_left = config["q_dif_left"]
-q_dif_right = config["q_dif_right"]
 
-Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
-Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
-Q_sum_semisum_left = config["Q_sum_semisum_left"]
-Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
-T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
-slewing_residual_range = config["slewing_residual_range"]
 
-t_comparison_lim = config["t_comparison_lim"]
-t0_time_cal_lim = config["t0_time_cal_lim"]
 
-crosstalk_fit_mu_max = config["crosstalk_fit_mu_max"]
-crosstalk_fit_sigma_min = config["crosstalk_fit_sigma_min"]
-crosstalk_fit_sigma_max = config["crosstalk_fit_sigma_max"]
 
-slewing_correction_r2_threshold = config["slewing_correction_r2_threshold"]
 
 time_window_fitting = config["time_window_fitting"]
 
@@ -2399,11 +2335,7 @@ if debug_mode:
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
 
-    Q_F_left_pre_cal = Q_side_left_pre_cal_debug
-    Q_F_right_pre_cal = Q_side_right_pre_cal_debug
 
-    Q_B_left_pre_cal = Q_side_left_pre_cal_debug
-    Q_B_right_pre_cal = Q_side_right_pre_cal_debug
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
     T_F_right_pre_cal = T_side_right_pre_cal_default
@@ -2411,23 +2343,13 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-    Q_F_left_pre_cal = Q_side_left_pre_cal_default
-    Q_F_right_pre_cal = Q_side_right_pre_cal_default
 
-    Q_B_left_pre_cal = Q_side_left_pre_cal_default
-    Q_B_right_pre_cal = Q_side_right_pre_cal_default
 
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-Q_F_left_pre_cal_ST = Q_side_left_pre_cal_ST
-Q_F_right_pre_cal_ST = Q_side_right_pre_cal_ST
-Q_B_left_pre_cal_ST = Q_side_left_pre_cal_ST
-Q_B_right_pre_cal_ST = Q_side_right_pre_cal_ST
 
-Q_left_side = Q_side_left_pre_cal_ST
-Q_right_side = Q_side_right_pre_cal_ST
 
 
 
@@ -2478,60 +2400,6 @@ T_clip_min_ST = T_clip_min_ST
 T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
-
-
-
-
-
-
-
-# -----------------------------------------------------------------------------
-# Stuff that could change between mingos --------------------------------------
-# -----------------------------------------------------------------------------
-
-
-set_station(station)
-config = update_config_with_parameters(config, parameter_config_file_path, station)
-
-if len(sys.argv) == 3:
-    user_file_path = sys.argv[2]
-    user_file_selection = True
-    print("User provided file path:", user_file_path)
-else:
-    user_file_selection = False
-
-
-station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
-
-# Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
-
-if os.path.exists(input_file_config_path):
-    print("Searching input configuration file:", input_file_config_path)
-    
-    # It is a csv
-    input_file = pd.read_csv(input_file_config_path, skiprows=1)
-    
-    if not input_file.empty:
-        print("Input configuration file found and is not empty.")
-        exists_input_file = True
-    else:
-        print("Input configuration file is empty.")
-        exists_input_file = False
-    
-    # Print the head
-    # print(input_file.head())
-    
-else:
-    exists_input_file = False
-    print("Input configuration file does not exist.")
-    z_1 = 0
-    z_2 = 150
-    z_3 = 300
-    z_4 = 450
-
-
-self_trigger = False
 
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
@@ -2651,13 +2519,10 @@ global_variables['z_P3'] =  z_positions[2]
 global_variables['z_P4'] =  z_positions[3]
 
 
-not_use_q_semisum = False
 
-stratos_save = config["stratos_save"]
 fast_mode = config["fast_mode"]
 debug_mode = config["debug_mode"]
 last_file_test = config["last_file_test"]
-alternative_fitting = config["alternative_fitting"]
 
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
@@ -2665,38 +2530,20 @@ create_essential_plots = config["create_essential_plots"]
 
 limit = config["limit"]
 limit_number = config["limit_number"]
-number_of_time_cal_figures = config["number_of_time_cal_figures"]
-save_calibrations = config["save_calibrations"]
-presentation = config["presentation"]
-presentation_plots = config["presentation_plots"]
-force_replacement = config["force_replacement"]
-article_format = config["article_format"]
 
 # Charge calibration to fC
-calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
 
 # Charge front-back
-charge_front_back = config["charge_front_back"]
 
 # Slewing correction
-slewing_correction = config["slewing_correction"]
 
 # Time filtering
-time_window_filtering = config["time_window_filtering"]
 
 # Time calibration
-time_calibration = config["time_calibration"]
-old_timing_method = config["old_timing_method"]
-brute_force_analysis_time_calibration_path_finding = config["brute_force_analysis_time_calibration_path_finding"]
 
 # Y position
-y_position_complex_method = config["y_position_complex_method"]
-uniform_y_method = config["uniform_y_method"]
-uniform_weighted_method = config["uniform_weighted_method"]
 
 # RPC variables
-y_new_method = config["y_new_method"]
-blur_y = config["blur_y"]
 
 # Alternative
 alternative_iteration = config["alternative_iteration"]
@@ -2709,23 +2556,17 @@ timtrack_iteration = config["timtrack_iteration"]
 number_of_TT_executions = config["number_of_TT_executions"]
 
 # Validation
-validate_charge_pedestal_calibration = config["validate_charge_pedestal_calibration"]
 
-EXPECTED_COLUMNS_config = config["EXPECTED_COLUMNS_config"]
 
-residual_plots = config["residual_plots"]
 residual_plots_fast = config["residual_plots_fast"]
-residual_plots_debug = config["residual_plots_debug"]
 
 timtrack_iteration = config["timtrack_iteration"]
 timtrack_iteration_fast = config["timtrack_iteration_fast"]
 timtrack_iteration_debug = config["timtrack_iteration_debug"]
 
-time_calibration = config["time_calibration"]
 time_calibration_fast = config["time_calibration_fast"]
 time_calibration_debug = config["time_calibration_debug"]
 
-charge_front_back = config["charge_front_back"]
 charge_front_back_fast = config["charge_front_back_fast"]
 charge_front_back_debug = config["charge_front_back_debug"]
 
@@ -2743,48 +2584,20 @@ limit_number_debug = config["limit_number_debug"]
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
 T_side_right_pre_cal_debug = config["T_side_right_pre_cal_debug"]
-Q_side_left_pre_cal_debug = config["Q_side_left_pre_cal_debug"]
-Q_side_right_pre_cal_debug = config["Q_side_right_pre_cal_debug"]
 
 T_side_left_pre_cal_default = config["T_side_left_pre_cal_default"]
 T_side_right_pre_cal_default = config["T_side_right_pre_cal_default"]
-Q_side_left_pre_cal_default = config["Q_side_left_pre_cal_default"]
-Q_side_right_pre_cal_default = config["Q_side_right_pre_cal_default"]
 
 T_side_left_pre_cal_ST = config["T_side_left_pre_cal_ST"]
 T_side_right_pre_cal_ST = config["T_side_right_pre_cal_ST"]
-Q_side_left_pre_cal_ST = config["Q_side_left_pre_cal_ST"]
-Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 
 # Pre-cal Sum & Diff
-Q_left_pre_cal = config["Q_left_pre_cal"]
-Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
-T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
-T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
 
 # Post-calibration
-Q_sum_left_cal = config["Q_sum_left_cal"]
-Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
-Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
-Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
-T_sum_left_cal = config["T_sum_left_cal"]
-T_sum_right_cal = config["T_sum_right_cal"]
-T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_left = config["T_dif_RPC_left"]
-T_dif_RPC_right = config["T_dif_RPC_right"]
-Q_RPC_left = config["Q_RPC_left"]
-Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_left = config["Q_dif_RPC_left"]
-Q_dif_RPC_right = config["Q_dif_RPC_right"]
-Y_RPC_left = config["Y_RPC_left"]
-Y_RPC_right = config["Y_RPC_right"]
 
 # Alternative fitter filter
 det_pos_filter = config["det_pos_filter"]
@@ -2813,31 +2626,17 @@ delta_s_left = config["delta_s_left"]
 delta_s_right = config["delta_s_right"]
 
 # Calibrations
-CRT_gaussian_fit_quantile = config["CRT_gaussian_fit_quantile"]
-coincidence_window_og_ns = config["coincidence_window_og_ns"]
-coincidence_window_precal_ns = config["coincidence_window_precal_ns"]
 coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
 coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_of_points"]
 
 # Pedestal charge calibration
-pedestal_left = config["pedestal_left"]
-pedestal_right = config["pedestal_right"]
 
 # Front-back charge
-distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
-distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
-distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
-distance_sum_charges_plot = config["distance_sum_charges_plot"]
-front_back_fit_threshold = config["front_back_fit_threshold"]
 
 # Variables to modify
 beta = config["beta"]
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-validate_pos_cal = config["validate_pos_cal"]
 
-output_order = config["output_order"]
-degree_of_polynomial = config["degree_of_polynomial"]
 
 # X
 strip_length = config["strip_length"]
@@ -2873,55 +2672,16 @@ T_clip_max_ST = config["T_clip_max_ST"]
 Q_clip_min_ST = config["Q_clip_min_ST"]
 Q_clip_max_ST = config["Q_clip_max_ST"]
 
-log_scale = config["log_scale"]
 
-calibrate_strip_Q_pedestal_thr_factor = config["calibrate_strip_Q_pedestal_thr_factor"]
-calibrate_strip_Q_pedestal_thr_factor_2 = config["calibrate_strip_Q_pedestal_thr_factor_2"]
-calibrate_strip_Q_pedestal_translate_charge_cal = config["calibrate_strip_Q_pedestal_translate_charge_cal"]
 
-calibrate_strip_Q_pedestal_percentile = config["calibrate_strip_Q_pedestal_percentile"]
-calibrate_strip_Q_pedestal_rel_th = config["calibrate_strip_Q_pedestal_rel_th"]
-calibrate_strip_Q_pedestal_rel_th_cal = config["calibrate_strip_Q_pedestal_rel_th_cal"]
-calibrate_strip_Q_pedestal_abs_th = config["calibrate_strip_Q_pedestal_abs_th"]
-calibrate_strip_Q_pedestal_q_quantile = config["calibrate_strip_Q_pedestal_q_quantile"]
 
-scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
-scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
-scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
-scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
 
-calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
-calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
 
-interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
-interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
-interpolate_fast_charge_num_bins = config["interpolate_fast_charge_num_bins"]
-interpolate_fast_charge_log_scale = config["interpolate_fast_charge_log_scale"]
 
-crosstalk_fitting = config["crosstalk_fitting"]
-delta_t_left = config["delta_t_left"]
-delta_t_right = config["delta_t_right"]
-q_sum_left = config["q_sum_left"]
-q_sum_right = config["q_sum_right"]
-q_dif_left = config["q_dif_left"]
-q_dif_right = config["q_dif_right"]
 
-Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
-Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
-Q_sum_semisum_left = config["Q_sum_semisum_left"]
-Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
-T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
-slewing_residual_range = config["slewing_residual_range"]
 
-t_comparison_lim = config["t_comparison_lim"]
-t0_time_cal_lim = config["t0_time_cal_lim"]
 
-crosstalk_fit_mu_max = config["crosstalk_fit_mu_max"]
-crosstalk_fit_sigma_min = config["crosstalk_fit_sigma_min"]
-crosstalk_fit_sigma_max = config["crosstalk_fit_sigma_max"]
 
-slewing_correction_r2_threshold = config["slewing_correction_r2_threshold"]
 
 time_window_fitting = config["time_window_fitting"]
 
@@ -3021,11 +2781,7 @@ if debug_mode:
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
 
-    Q_F_left_pre_cal = Q_side_left_pre_cal_debug
-    Q_F_right_pre_cal = Q_side_right_pre_cal_debug
 
-    Q_B_left_pre_cal = Q_side_left_pre_cal_debug
-    Q_B_right_pre_cal = Q_side_right_pre_cal_debug
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
     T_F_right_pre_cal = T_side_right_pre_cal_default
@@ -3033,23 +2789,13 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-    Q_F_left_pre_cal = Q_side_left_pre_cal_default
-    Q_F_right_pre_cal = Q_side_right_pre_cal_default
 
-    Q_B_left_pre_cal = Q_side_left_pre_cal_default
-    Q_B_right_pre_cal = Q_side_right_pre_cal_default
 
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-Q_F_left_pre_cal_ST = Q_side_left_pre_cal_ST
-Q_F_right_pre_cal_ST = Q_side_right_pre_cal_ST
-Q_B_left_pre_cal_ST = Q_side_left_pre_cal_ST
-Q_B_right_pre_cal_ST = Q_side_right_pre_cal_ST
 
-Q_left_side = Q_side_left_pre_cal_ST
-Q_right_side = Q_side_right_pre_cal_ST
 
 
 
@@ -4107,7 +3853,9 @@ for det_iteration in range(repeat + 1):
 # ---------------------------------------------------------------------------
 
 # Filter the values inside the machine number window ------------------------
-eps = 1e-7  # Threshold
+remove_small = bool(config.get("remove_small", False))
+remove_small_eps = float(config.get("remove_small_eps", 1e-7))
+eps = remove_small_eps  # Threshold
 def is_small_nonzero(x):
     return isinstance(x, (int, float)) and x != 0 and abs(x) < eps
 
@@ -4222,7 +3970,6 @@ def plot_ts_err_with_hist(df, base_cols, time_col, title):
         plt.show()
     plt.close()
 
-remove_small = False
 if remove_small:
     # Filter the small values ----------------------------------------------------
     mask = working_df.map(is_small_nonzero)  # Create mask of small, non-zero numeric values
@@ -4973,7 +4720,7 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
 
 # Time series and fittings
 
-timeseries_and_fits = False
+timeseries_and_fits = bool(config.get("timeseries_and_fits", False))
 if timeseries_and_fits:
 
     # Time series of core track variables (averaged and errors) ------------------
@@ -5621,15 +5368,31 @@ if time_window_fitting:
 # Last filterings -------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# Put to zero the rows with traking in only one plane, that is, put 0 if tracking_tt < 10
-for index, row in working_df.iterrows():
-    if row['tracking_tt'] < 10 or row['list_tt'] < 10 or row.get('raw_tt', 0) < 10 or row['definitive_tt'] < 10:
-        working_df.at[index, 'x'] = 0
-        working_df.at[index, 'xp'] = 0
-        working_df.at[index, 'y'] = 0
-        working_df.at[index, 'yp'] = 0
-        working_df.at[index, 't0'] = 0
-        working_df.at[index, 's'] = 0
+# Put to zero the rows with tracking in only one plane, that is, put 0 if tracking_tt < 10
+low_tt_zeroed_df = pd.DataFrame()
+low_tt_mask = np.zeros(len(working_df), dtype=bool)
+low_tt_zeroed_count = 0
+low_tt_min = int(config.get("low_tt_min", 10))
+low_tt_zero_cols = config.get("low_tt_zero_cols", ["x", "xp", "y", "yp", "t0", "s"])
+if not isinstance(low_tt_zero_cols, (list, tuple)):
+    low_tt_zero_cols = [c for c in re.split(r"[\\s,;]+", str(low_tt_zero_cols).strip()) if c]
+raw_tt_series = working_df["raw_tt"] if "raw_tt" in working_df.columns else pd.Series(0, index=working_df.index)
+low_tt_mask = (
+    (working_df["tracking_tt"] < low_tt_min)
+    | (working_df["list_tt"] < low_tt_min)
+    | (raw_tt_series < low_tt_min)
+    | (working_df["definitive_tt"] < low_tt_min)
+)
+low_tt_zeroed_count = int(low_tt_mask.sum())
+if low_tt_zeroed_count > 0:
+    cols_to_zero = [c for c in low_tt_zero_cols if c in working_df.columns]
+    if save_rejected_rows or create_reject_plots:
+        low_tt_zeroed_df = working_df.loc[low_tt_mask].copy()
+        low_tt_zeroed_df["reject_stage"] = "low_tt_zeroed"
+        low_tt_zeroed_df["reject_reason"] = f"tracking/list/raw/definitive tt < {low_tt_min}"
+        low_tt_zeroed_df["zeroed_cols"] = ",".join(cols_to_zero)
+    if cols_to_zero:
+        working_df.loc[low_tt_mask, cols_to_zero] = 0
 
 
 # -----------------------------------------------------------------------------
@@ -5769,21 +5532,34 @@ if remove_small:
     )
 
 # Remove rows with zeros in key places ----------------------------------------
-cols_to_check = ['x', 'y', 's', 't0', 'theta', 'phi']
+definitive_nonzero_cols = config.get("definitive_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"])
+if not isinstance(definitive_nonzero_cols, (list, tuple)):
+    definitive_nonzero_cols = [
+        c for c in re.split(r"[\\s,;]+", str(definitive_nonzero_cols).strip()) if c
+    ]
+cols_to_check = [c for c in definitive_nonzero_cols if c in working_df.columns]
 
 baseline_events = original_number_of_events if original_number_of_events else len(working_df)
+record_filter_metric(
+    "low_tt_zeroed_event_pct",
+    int(low_tt_zeroed_count),
+    baseline_events if baseline_events else 0,
+)
 for col in cols_to_check:
-    if col in working_df.columns:
-        zero_rows = int((working_df[col] == 0).sum())
-        record_filter_metric(
-            f"definitive_{col}_zero_rows_pct",
-            zero_rows,
-            baseline_events if baseline_events else 0,
-        )
+    zero_rows = int((working_df[col] == 0).sum())
+    record_filter_metric(
+        f"definitive_{col}_zero_rows_pct",
+        zero_rows,
+        baseline_events if baseline_events else 0,
+    )
 
-cond = (working_df[cols_to_check[0]] != 0)
-for col in cols_to_check[1:]:
-    cond &= (working_df[col] != 0)
+if cols_to_check:
+    cond = (working_df[cols_to_check[0]] != 0)
+    for col in cols_to_check[1:]:
+        cond &= (working_df[col] != 0)
+else:
+    print("Warning: definitive_nonzero_cols resolved to empty; skipping zero-row removal.")
+    cond = np.ones(len(working_df), dtype=bool)
 
 removed_mask = ~cond
 removed_total = int(removed_mask.sum())
@@ -5791,6 +5567,32 @@ zero_counts = np.zeros(len(working_df), dtype=int)
 for col in cols_to_check:
     if col in working_df.columns:
         zero_counts += (working_df[col].to_numpy(copy=False) == 0)
+
+zero_cols_present = [col for col in cols_to_check if col in working_df.columns]
+primary_zero_col = np.full(len(working_df), "", dtype=object)
+for col in cols_to_check:
+    if col in working_df.columns:
+        mask = (primary_zero_col == "") & (working_df[col] == 0)
+        primary_zero_col[mask] = col
+
+rejected_definitive_df = pd.DataFrame()
+if (save_rejected_rows or create_reject_plots) and removed_total > 0:
+    rejected_definitive_df = working_df.loc[removed_mask].copy()
+    rejected_definitive_df["reject_stage"] = "definitive_zero_rows"
+    rejected_definitive_df["reject_reason"] = "zero in x/y/s/t0/theta/phi"
+    rejected_definitive_df["zero_count"] = zero_counts[removed_mask]
+    rejected_definitive_df["primary_zero_col"] = primary_zero_col[removed_mask]
+    if zero_cols_present:
+        zero_mat_removed = np.column_stack(
+            [(working_df[col].to_numpy(copy=False) == 0)[removed_mask] for col in zero_cols_present]
+        )
+        zero_cols_str = [
+            ",".join([col for col, is_zero in zip(zero_cols_present, row) if is_zero])
+            for row in zero_mat_removed
+        ]
+        rejected_definitive_df["zero_cols"] = zero_cols_str
+    if len(low_tt_mask) == len(working_df):
+        rejected_definitive_df["low_tt_zeroed"] = low_tt_mask[removed_mask]
 
 single_zero = removed_mask & (zero_counts == 1)
 multi_zero = removed_mask & (zero_counts >= 2)
@@ -5831,6 +5633,107 @@ record_filter_metric(
     removed_total,
     baseline_events if baseline_events else 0,
 )
+
+if save_rejected_rows:
+    os.makedirs(rejected_files_directory, exist_ok=True)
+    if not low_tt_zeroed_df.empty:
+        low_tt_path = os.path.join(rejected_files_directory, f"zeroed_low_tt_{basename_no_ext}.parquet")
+        low_tt_zeroed_df.to_parquet(low_tt_path, engine="pyarrow", compression="zstd", index=False)
+        print(f"Rejected rows (low_tt zeroed) saved to: {low_tt_path}")
+    if not rejected_definitive_df.empty:
+        rejected_path = os.path.join(rejected_files_directory, f"rejected_definitive_{basename_no_ext}.parquet")
+        rejected_definitive_df.to_parquet(rejected_path, engine="pyarrow", compression="zstd", index=False)
+        print(f"Rejected rows (definitive zero) saved to: {rejected_path}")
+    if not low_tt_zeroed_df.empty or not rejected_definitive_df.empty:
+        combined = pd.concat([df for df in (low_tt_zeroed_df, rejected_definitive_df) if not df.empty], ignore_index=True)
+        combined_path = os.path.join(rejected_files_directory, f"rejected_combined_{basename_no_ext}.parquet")
+        combined.to_parquet(combined_path, engine="pyarrow", compression="zstd", index=False)
+        print(f"Rejected rows (combined) saved to: {combined_path}")
+
+if create_reject_plots:
+    # Ensure saving is enabled even if global plot flags are off.
+    save_plots = True
+    reject_plot_directory = os.path.join(
+        base_directories["ancillary_directory"],
+        "REJECTED_FILES",
+        "REJECTED_PLOTS",
+        f"FIGURES_EXEC_ON_{date_execution}",
+    )
+    os.makedirs(reject_plot_directory, exist_ok=True)
+
+    # Save reject-only plots outside PLOTS so they won't be deleted by cleanup.
+    original_figure_dir = base_directories["figure_directory"]
+    original_plot_list = plot_list if "plot_list" in globals() else []
+    base_directories["figure_directory"] = reject_plot_directory
+    plot_list = []
+    fig_idx_reject = 1
+    fig_idx_backup = globals().get("fig_idx")
+    fig_idx = fig_idx_reject
+
+    print(
+        f"Warning: reject-plots saving to {reject_plot_directory} | "
+        f"low_tt_rows={len(low_tt_zeroed_df)} | definitive_rows={len(rejected_definitive_df)}"
+    )
+
+    if not low_tt_zeroed_df.empty and "datetime" in low_tt_zeroed_df.columns:
+        cols = [c for c in ("x", "y", "theta", "phi", "s", "t0") if c in low_tt_zeroed_df.columns]
+        if cols:
+            plot_ts_with_side_hist(
+                low_tt_zeroed_df,
+                cols,
+                "datetime",
+                f"rejected_low_tt_{basename_no_ext}",
+            )
+    if not rejected_definitive_df.empty and "datetime" in rejected_definitive_df.columns:
+        cols = [c for c in ("x", "y", "theta", "phi", "s", "t0") if c in rejected_definitive_df.columns]
+        if cols:
+            plot_ts_with_side_hist(
+                rejected_definitive_df,
+                cols,
+                "datetime",
+                f"rejected_definitive_{basename_no_ext}",
+            )
+
+    combined_rejected_df = None
+    if not low_tt_zeroed_df.empty or not rejected_definitive_df.empty:
+        combined_rejected_df = pd.concat(
+            [df for df in (low_tt_zeroed_df, rejected_definitive_df) if not df.empty],
+            ignore_index=True,
+        )
+
+    if not low_tt_zeroed_df.empty:
+        plot_reject_diagnostics(
+            low_tt_zeroed_df,
+            "rejected_low_tt",
+            basename_no_ext,
+            hist_bins=reject_plot_hist_bins,
+            cols_per_fig=reject_plot_hist_cols_per_fig,
+            scatter_max=reject_plot_scatter_max_points,
+        )
+    if not rejected_definitive_df.empty:
+        plot_reject_diagnostics(
+            rejected_definitive_df,
+            "rejected_definitive",
+            basename_no_ext,
+            hist_bins=reject_plot_hist_bins,
+            cols_per_fig=reject_plot_hist_cols_per_fig,
+            scatter_max=reject_plot_scatter_max_points,
+        )
+    if combined_rejected_df is not None and not combined_rejected_df.empty:
+        plot_reject_diagnostics(
+            combined_rejected_df,
+            "rejected_all",
+            basename_no_ext,
+            hist_bins=reject_plot_hist_bins,
+            cols_per_fig=reject_plot_hist_cols_per_fig,
+            scatter_max=reject_plot_scatter_max_points,
+        )
+
+    # Restore plot destinations for the rest of the pipeline.
+    base_directories["figure_directory"] = original_figure_dir
+    plot_list = original_plot_list
+    if fig_idx_backup is not None:
+        fig_idx = fig_idx_backup
 
 print("----------------------------------------------------------------------")
 for tt_col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "definitive_tt"):
@@ -6653,14 +6556,6 @@ if create_plots:
 
 
 
-print("----------------------------------------------------------------------")
-print("----------------------- Final data statistics ------------------------")
-print("----------------------------------------------------------------------")
-
-data_purity = len(working_df) / raw_data_len*100
-print(f"Data purity is {data_purity:.1f}%")
-
-
 # if create_plots:
 
 #     column_chosen = "definitive_tt"
@@ -7329,14 +7224,12 @@ if VERBOSE:
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
-print(f"Data purity is {data_purity:.2f}%")
 
 # End of the execution time
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
 execution_time_minutes = execution_time.total_seconds() / 60
-print(f"Total execution time: {execution_time_minutes:.2f} minutes")
 
 # To save as metadata
 filename_base = basename_no_ext

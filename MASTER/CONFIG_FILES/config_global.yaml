@@ -40,7 +40,7 @@ event_data_step1_run_matrix:
   already_running_log_seconds: 300  # throttle "station already handled" cron log entries
   config_refresh_seconds: 60        # min seconds between config reloads
   stations:
-    "0": [1, 2, 3, 4] #, 5]
+    "0": [1, 2, 3, 4, 5]
     #"1": [1, 2, 3, 4] #, 5]
     #"2": [1, 2, 3, 4, 5]
     #"3": [1, 2, 3, 4, 5]
@@ -157,10 +157,24 @@ crontab_execution: true
 fast_mode: false
 debug_mode: false
 last_file_test: true
+run_jupyter_notebook: false
+# Default station when running STEP_1 tasks inside a notebook
+jupyter_station_default_task_1: "2"
+jupyter_station_default_task_2: "2"
+jupyter_station_default_task_3: "2"
+jupyter_station_default_task_4: "3"
+jupyter_station_default_task_5: "2"
+
+# Runtime toggles (Task 4/5)
+self_trigger: false
+timeseries_and_fits: false
+
+# Fallback geometry when input-file configuration is missing
+default_z_positions: [0, 150, 300, 450]
 
 # Reprocessing
 try_to_use_reprocessing_table: false
-complete_reanalysis: false
+complete_reanalysis: true
 
 # Output behavior
 force_replacement: true          # overwrite outputs even if an output already exists
@@ -170,11 +184,14 @@ presentation_plots: false
 stratos_save: false
 
 # Plots / saving (used by STEP_1 tasks + corrected_to_accumulated.py)
-create_plots: true
-create_essential_plots: true
+create_plots: false
+create_essential_plots: false
 save_plots: true
-create_pdf: true
+create_pdf: false
 show_plots: false
+
+save_rejected_rows: true
+create_reject_plots: true
 
 # Task-specific plot switches
 create_plots_task_4: false
@@ -250,7 +267,6 @@ number_of_TT_executions: 1
 correct_angle: false
 update_big_event_file: false
 multiple_files: true
-run_jupyter_notebook: false
 remove_outliers: true
 
 # Particular analyses
