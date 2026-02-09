@@ -41,7 +41,7 @@ event_data_step1_run_matrix:
   config_refresh_seconds: 60        # min seconds between config reloads
   stations:
     "0": [1, 2, 3, 4, 5]
-    #"1": [1, 2, 3, 4] #, 5]
+    #"1": [1, 2, 3, 4, 5]
     #"2": [1, 2, 3, 4, 5]
     #"3": [1, 2, 3, 4, 5]
     #"4": [1, 2, 3, 4, 5]
@@ -174,7 +174,7 @@ default_z_positions: [0, 150, 300, 450]
 
 # Reprocessing
 try_to_use_reprocessing_table: false
-complete_reanalysis: true
+complete_reanalysis: false
 
 # Output behavior
 force_replacement: true          # overwrite outputs even if an output already exists
@@ -190,8 +190,11 @@ save_plots: true
 create_pdf: false
 show_plots: false
 
-save_rejected_rows: true
-create_reject_plots: true
+# Debug plots (independent of create_plots)
+create_debug_plots: false
+
+save_rejected_rows: false
+create_reject_plots: false
 
 # Task-specific plot switches
 create_plots_task_4: false

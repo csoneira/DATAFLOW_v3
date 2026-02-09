@@ -78,6 +78,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
@@ -509,6 +510,52 @@ base_directories = {
 
 
 save_plots = config["save_plots"]
+create_debug_plots = bool(config.get("create_debug_plots", False))
+debug_plot_directory = os.path.join(
+    base_directories["base_plots_directory"],
+    "DEBUG_PLOTS",
+    f"FIGURES_EXEC_ON_{date_execution}",
+)
+debug_fig_idx = 1
+if create_debug_plots:
+    os.makedirs(debug_plot_directory, exist_ok=True)
+
+
+def _debug_plot_filter_group(
+    df: pd.DataFrame,
+    columns: Iterable[str],
+    thresholds: Iterable[float] | float | None,
+    label: str,
+    *,
+    tag: str = "tunable",
+    max_cols_per_fig: int = 16,
+) -> None:
+    """Emit debug histograms for a filter group with threshold lines."""
+    global debug_fig_idx
+    if not create_debug_plots:
+        return
+
+    cols = [col for col in columns if col in df.columns]
+    if not cols:
+        return
+
+    if thresholds is None:
+        threshold_values: list[float] = []
+    elif isinstance(thresholds, (list, tuple, np.ndarray)):
+        threshold_values = [float(v) for v in thresholds if v is not None]
+    else:
+        threshold_values = [float(thresholds)]
+
+    debug_thresholds = {col: threshold_values for col in cols}
+    debug_fig_idx = plot_debug_histograms(
+        df,
+        cols,
+        debug_thresholds,
+        title=f"Task 1 pre-filter: {label} [{tag}] (station {station})",
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+        max_cols_per_fig=max_cols_per_fig,
+    )
 
 # Create ALL directories if they don't already exist
 # Create ALL directories if they don't already exist
@@ -815,63 +862,53 @@ Q_side_left_pre_cal_ST = config["Q_side_left_pre_cal_ST"]
 Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 
 # Pre-cal Sum & Diff
-T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
+T_dif_pre_cal_threshold = config.get("T_dif_pre_cal_threshold", 20)
 
 # Post-calibration
 
 # Once calculated the RPC variables
-T_sum_RPC_left = config["T_sum_RPC_left"]
-T_sum_RPC_right = config["T_sum_RPC_right"]
-
-# Alternative fitter filter
-det_pos_filter = config["det_pos_filter"]
-det_theta_left_filter = config["det_theta_left_filter"]
-det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_left_filter = config["det_phi_left_filter"]
-det_phi_right_filter = config["det_phi_right_filter"]
-det_slowness_filter_left = config["det_slowness_filter_left"]
-det_slowness_filter_right = config["det_slowness_filter_right"]
-
+T_sum_RPC_left = config.get("T_sum_RPC_left", -7)
+T_sum_RPC_right = config.get("T_sum_RPC_right", 7)
 
 # TimTrack filter
-res_ystr_filter = config["res_ystr_filter"]
-res_tsum_filter = config["res_tsum_filter"]
-res_tdif_filter = config["res_tdif_filter"]
+res_ystr_filter = config.get("res_ystr_filter", 500)
+res_tsum_filter = config.get("res_tsum_filter", 3.5)
+res_tdif_filter = config.get("res_tdif_filter", 1.0)
 
 # Fitting comparison
 
 # Calibrations
-CRT_gaussian_fit_quantile = config["CRT_gaussian_fit_quantile"]
+CRT_gaussian_fit_quantile = config.get("CRT_gaussian_fit_quantile", 0.03)
 coincidence_window_og_ns = config["coincidence_window_og_ns"]
-coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
+coincidence_window_cal_ns = config.get("coincidence_window_cal_ns", 3)
 
 # Pedestal charge calibration
-pedestal_left = config["pedestal_left"]
-pedestal_right = config["pedestal_right"]
+pedestal_left = config.get("pedestal_left", -1)
+pedestal_right = config.get("pedestal_right", 3)
 
 # Front-back charge
-distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
-distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
-distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
-distance_sum_charges_plot = config["distance_sum_charges_plot"]
-front_back_fit_threshold = config["front_back_fit_threshold"]
+distance_sum_charges_left_fit = config.get("distance_sum_charges_left_fit", -5)
+distance_sum_charges_right_fit = config.get("distance_sum_charges_right_fit", 200)
+distance_dif_charges_up_fit = config.get("distance_dif_charges_up_fit", 10)
+distance_dif_charges_low_fit = config.get("distance_dif_charges_low_fit", -10)
+distance_sum_charges_plot = config.get("distance_sum_charges_plot", 800)
+front_back_fit_threshold = config.get("front_back_fit_threshold", 4)
 
 # Variables to modify
-beta = config["beta"]
-strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
+beta = config.get("beta", 1)
+strip_speed_factor_of_c = config.get("strip_speed_factor_of_c", 0.666666667)
 
-degree_of_polynomial = config["degree_of_polynomial"]
+degree_of_polynomial = config.get("degree_of_polynomial", 4)
 
 # X
-strip_length = config["strip_length"]
-narrow_strip = config["narrow_strip"]
-wide_strip = config["wide_strip"]
+strip_length = config.get("strip_length", 300)
+narrow_strip = config.get("narrow_strip", 63)
+wide_strip = config.get("wide_strip", 98)
 
 # Timtrack parameters
-anc_std = config["anc_std"]
+anc_std = config.get("anc_std", 0.075)
 
-n_planes_timtrack = config["n_planes_timtrack"]
+n_planes_timtrack = config.get("n_planes_timtrack", 4)
 
 # Plotting options
 T_clip_min_debug = config["T_clip_min_debug"]
@@ -893,23 +930,23 @@ Q_clip_max_ST = config["Q_clip_max_ST"]
 
 log_scale = config["log_scale"]
 
-calibrate_strip_Q_pedestal_thr_factor = config["calibrate_strip_Q_pedestal_thr_factor"]
-calibrate_strip_Q_pedestal_thr_factor_2 = config["calibrate_strip_Q_pedestal_thr_factor_2"]
-calibrate_strip_Q_pedestal_translate_charge_cal = config["calibrate_strip_Q_pedestal_translate_charge_cal"]
+calibrate_strip_Q_pedestal_thr_factor = config.get("calibrate_strip_Q_pedestal_thr_factor", 31.62)
+calibrate_strip_Q_pedestal_thr_factor_2 = config.get("calibrate_strip_Q_pedestal_thr_factor_2", 1.5)
+calibrate_strip_Q_pedestal_translate_charge_cal = config.get("calibrate_strip_Q_pedestal_translate_charge_cal", 0.25)
 
-calibrate_strip_Q_pedestal_percentile = config["calibrate_strip_Q_pedestal_percentile"]
-calibrate_strip_Q_pedestal_rel_th = config["calibrate_strip_Q_pedestal_rel_th"]
-calibrate_strip_Q_pedestal_rel_th_cal = config["calibrate_strip_Q_pedestal_rel_th_cal"]
-calibrate_strip_Q_pedestal_abs_th = config["calibrate_strip_Q_pedestal_abs_th"]
-calibrate_strip_Q_pedestal_q_quantile = config["calibrate_strip_Q_pedestal_q_quantile"]
+calibrate_strip_Q_pedestal_percentile = config.get("calibrate_strip_Q_pedestal_percentile", 10)
+calibrate_strip_Q_pedestal_rel_th = config.get("calibrate_strip_Q_pedestal_rel_th", 0.015)
+calibrate_strip_Q_pedestal_rel_th_cal = config.get("calibrate_strip_Q_pedestal_rel_th_cal", 0.4)
+calibrate_strip_Q_pedestal_abs_th = config.get("calibrate_strip_Q_pedestal_abs_th", 3)
+calibrate_strip_Q_pedestal_q_quantile = config.get("calibrate_strip_Q_pedestal_q_quantile", 0.4)
 
-scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
-scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
-scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
-scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
+scatter_2d_and_fit_new_xlim_left = config.get("scatter_2d_and_fit_new_xlim_left", -5)
+scatter_2d_and_fit_new_xlim_right = config.get("scatter_2d_and_fit_new_xlim_right", 200)
+scatter_2d_and_fit_new_ylim_bottom = config.get("scatter_2d_and_fit_new_ylim_bottom", -11)
+scatter_2d_and_fit_new_ylim_top = config.get("scatter_2d_and_fit_new_ylim_top", 11)
 
-calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
-calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
+calibrate_strip_T_dif_T_rel_th = config.get("calibrate_strip_T_dif_T_rel_th", 0.1)
+calibrate_strip_T_dif_T_abs_th = config.get("calibrate_strip_T_dif_T_abs_th", 1)
 
 
 
@@ -932,17 +969,6 @@ Q_sum_color = 'orange'
 Q_dif_color = 'red'
 T_sum_color = 'blue'
 T_dif_color = 'green'
-
-pos_filter = det_pos_filter
-t0_left_filter = T_sum_RPC_left
-t0_right_filter = T_sum_RPC_right
-slowness_filter_left = det_slowness_filter_left
-slowness_filter_right = det_slowness_filter_right
-
-theta_left_filter = det_theta_left_filter
-theta_right_filter = det_theta_right_filter
-phi_left_filter = det_phi_left_filter
-phi_right_filter = det_phi_right_filter
 
 fig_idx = 1
 plot_list = []
@@ -1100,6 +1126,8 @@ global_variables = {
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "q_front_back_zero_rows_pct",
     "data_purity_percentage",
+    "all_components_zero_rows_removed_pct",
+    "clean_tt_lt_10_rows_removed_pct",
 )
 
 filter_metrics: dict[str, float] = {}
@@ -2294,6 +2322,15 @@ for tt_value, count in sorted(raw_tt_counts.items()):
 if self_trigger:
     working_st_df = compute_tt(working_st_df, "raw_tt")
 
+_debug_plot_filter_group(
+    working_df,
+    [col for col in working_df.columns if re.match(r"^[TQ][1-4]_[FB]_[1-4]$", col)] + ["raw_tt"],
+    None,
+    "incoming parquet: main channels and raw_tt",
+    tag="NON-TUNABLE",
+    max_cols_per_fig=20,
+)
+
 if create_plots :
     event_counts = working_df['raw_tt'].value_counts()
 
@@ -2575,6 +2612,19 @@ T_B_cols = _collect_columns(working_df.columns, T_BACK_PATTERN)
 Q_F_cols = _collect_columns(working_df.columns, Q_FRONT_PATTERN)
 Q_B_cols = _collect_columns(working_df.columns, Q_BACK_PATTERN)
 
+_debug_plot_filter_group(
+    working_df,
+    T_F_cols + T_B_cols,
+    [T_F_left_pre_cal, T_F_right_pre_cal],
+    "T_side_left/right_pre_cal",
+)
+_debug_plot_filter_group(
+    working_df,
+    Q_F_cols + Q_B_cols,
+    [Q_F_left_pre_cal, Q_F_right_pre_cal],
+    "Q_side_left/right_pre_cal",
+)
+
 _apply_bounds(working_df, T_F_cols, T_F_left_pre_cal, T_F_right_pre_cal)
 _apply_bounds(working_df, T_B_cols, T_B_left_pre_cal, T_B_right_pre_cal)
 _apply_bounds(working_df, Q_F_cols, Q_F_left_pre_cal, Q_F_right_pre_cal)
@@ -2588,6 +2638,19 @@ if self_trigger:
     st_T_B_cols = _collect_columns(working_st_df.columns, T_BACK_PATTERN)
     st_Q_F_cols = _collect_columns(working_st_df.columns, Q_FRONT_PATTERN)
     st_Q_B_cols = _collect_columns(working_st_df.columns, Q_BACK_PATTERN)
+
+    _debug_plot_filter_group(
+        working_st_df,
+        st_T_F_cols + st_T_B_cols,
+        [T_F_left_pre_cal_ST, T_F_right_pre_cal_ST],
+        "T_side_left/right_pre_cal_ST",
+    )
+    _debug_plot_filter_group(
+        working_st_df,
+        st_Q_F_cols + st_Q_B_cols,
+        [Q_F_left_pre_cal_ST, Q_F_right_pre_cal_ST],
+        "Q_side_left/right_pre_cal_ST",
+    )
 
     _apply_bounds(working_st_df, st_T_F_cols, T_F_left_pre_cal_ST, T_F_right_pre_cal_ST)
     _apply_bounds(working_st_df, st_T_B_cols, T_B_left_pre_cal_ST, T_B_right_pre_cal_ST)
@@ -3145,6 +3208,20 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
 Q_F_cols = _collect_columns(working_df.columns, Q_FRONT_PATTERN)
 Q_B_cols = _collect_columns(working_df.columns, Q_BACK_PATTERN)
+if create_debug_plots and (Q_F_cols or Q_B_cols):
+    debug_cols = Q_F_cols + Q_B_cols
+    debug_thresholds = {col: [0] for col in debug_cols}
+    debug_fig_idx = plot_debug_histograms(
+        working_df,
+        debug_cols,
+        debug_thresholds,
+        title=(
+            f"Task 1 pre-filter: Q front/back nonzero "
+            f"[NON-TUNABLE] (station {station})"
+        ),
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+    )
 qfb_total = len(working_df)
 qfb_mask = (working_df[Q_F_cols] != 0).any(axis=1) & (working_df[Q_B_cols] != 0).any(axis=1)
 working_df = working_df[qfb_mask]
@@ -3154,14 +3231,45 @@ record_filter_metric(
     qfb_total if qfb_total else 0,
 )
 
+component_cols = [
+    col
+    for col in working_df.columns
+    if re.match(r"^[TQ]\\d+_[FB]_\\d+$", col)
+]
+if component_cols:
+    component_data = working_df[component_cols].fillna(0)
+    all_zero_mask = (component_data == 0).all(axis=1)
+    removed_all_zero = int(all_zero_mask.sum())
+    if removed_all_zero > 0:
+        working_df = working_df.loc[~all_zero_mask].copy()
+    record_filter_metric(
+        "all_components_zero_rows_removed_pct",
+        removed_all_zero,
+        len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
+    )
+
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
-# Final number of events
-final_number_of_events = len(working_df)
-print(f"Final number of events in the dataframe: {final_number_of_events}")
 # Compute clean trigger types on the filtered dataframe
 working_df = compute_tt(working_df, "clean_tt")
-working_df["raw_to_clean_tt"] = (
+clean_tt_total = len(working_df)
+if create_debug_plots and "clean_tt" in working_df.columns:
+    debug_fig_idx = plot_debug_histograms(
+        working_df,
+        ["clean_tt"],
+        {"clean_tt": [10]},
+        title=f"Task 1 pre-filter: clean_tt >= 10 [NON-TUNABLE] (station {station})",
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+    )
+clean_tt_mask = working_df["clean_tt"].notna() & (working_df["clean_tt"] >= 10)
+working_df = working_df.loc[clean_tt_mask].copy()
+record_filter_metric(
+    "clean_tt_lt_10_rows_removed_pct",
+    clean_tt_total - int(clean_tt_mask.sum()),
+    clean_tt_total if clean_tt_total else 0,
+)
+working_df.loc[:, "raw_to_clean_tt"] = (
     working_df["raw_tt"].astype(str) + "_" + working_df["clean_tt"].astype(str)
 )
 
@@ -3172,6 +3280,10 @@ for tt_value, count in clean_tt_counts.items():
 raw_to_clean_counts = working_df["raw_to_clean_tt"].value_counts()
 for combo_value, count in raw_to_clean_counts.items():
     global_variables[f"raw_to_clean_tt_{combo_value}_count"] = int(count)
+
+# Final number of events
+final_number_of_events = len(working_df)
+print(f"Final number of events in the dataframe: {final_number_of_events}")
 
 # ----------------------------------------------------------------------------------
 # Count the number of non-zero entries per channel in the whole dataframe ----------

@@ -2,6 +2,7 @@
 add_to_rclone.info
 
 *.lock
+*.ts
 
 *.pkl
 *.npz
@@ -33,6 +34,7 @@ STATIONS/
 *.json
 !grafana/**/*.json
 *.txt
+!MASTER/CONFIG_FILES/config_parameters_task_*.csv
 
 # Ignore images
 *.png*

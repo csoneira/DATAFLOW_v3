@@ -78,6 +78,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
@@ -1006,6 +1007,7 @@ create_essential_plots = config["create_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
+create_debug_plots = bool(config.get("create_debug_plots", False))
 save_rejected_rows = config.get("save_rejected_rows", False)
 create_reject_plots = config.get("create_reject_plots", False)
 if create_reject_plots:
@@ -1051,6 +1053,15 @@ for directory in base_directories.values():
         continue
     print(f"Created {directory}")
     os.makedirs(directory, exist_ok=True)
+
+debug_plot_directory = os.path.join(
+    base_directories["base_plots_directory"],
+    "DEBUG_PLOTS",
+    f"FIGURES_EXEC_ON_{date_execution}",
+)
+debug_fig_idx = 1
+if create_debug_plots:
+    os.makedirs(debug_plot_directory, exist_ok=True)
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
@@ -1467,6 +1478,31 @@ if "raw_tt" not in working_df.columns and "original_tt" in working_df.columns:
 if "clean_tt" not in working_df.columns and "preprocessed_tt" in working_df.columns:
     working_df = working_df.rename(columns={"preprocessed_tt": "clean_tt"})
 
+if create_debug_plots:
+    main_cols: list[str] = []
+    for i_plane in range(1, 5):
+        main_cols.extend(
+            [
+                f"P{i_plane}_T_sum_final",
+                f"P{i_plane}_T_dif_final",
+                f"P{i_plane}_Q_sum_final",
+                f"P{i_plane}_Q_dif_final",
+                f"P{i_plane}_Y_final",
+            ]
+        )
+    main_cols.extend(["raw_tt", "clean_tt", "cal_tt", "list_tt"])
+    main_cols = [col for col in main_cols if col in working_df.columns]
+    if main_cols:
+        debug_fig_idx = plot_debug_histograms(
+            working_df,
+            main_cols,
+            thresholds=None,
+            title=f"Task 4 incoming parquet: main columns [NON-TUNABLE] (station {station})",
+            out_dir=debug_plot_directory,
+            fig_idx=debug_fig_idx,
+            max_cols_per_fig=20,
+        )
+
 
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
@@ -1659,14 +1695,14 @@ limit_number_fast = config["limit_number_fast"]
 limit_number_debug = config["limit_number_debug"]
 
 # Pre-cal Front & Back
-T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
-T_side_right_pre_cal_debug = config["T_side_right_pre_cal_debug"]
+T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
+T_side_right_pre_cal_debug = config.get("T_side_right_pre_cal_debug", 500)
 
-T_side_left_pre_cal_default = config["T_side_left_pre_cal_default"]
-T_side_right_pre_cal_default = config["T_side_right_pre_cal_default"]
+T_side_left_pre_cal_default = config.get("T_side_left_pre_cal_default", -200)
+T_side_right_pre_cal_default = config.get("T_side_right_pre_cal_default", -100)
 
-T_side_left_pre_cal_ST = config["T_side_left_pre_cal_ST"]
-T_side_right_pre_cal_ST = config["T_side_right_pre_cal_ST"]
+T_side_left_pre_cal_ST = config.get("T_side_left_pre_cal_ST", -200)
+T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 
 # Pre-cal Sum & Diff
 
@@ -1702,8 +1738,8 @@ ext_res_tsum_filter = config["ext_res_tsum_filter"]
 ext_res_tdif_filter = config["ext_res_tdif_filter"]
 
 # Fitting comparison
-delta_s_left = config["delta_s_left"]
-delta_s_right = config["delta_s_right"]
+delta_s_left = config.get("delta_s_left", -0.0003)
+delta_s_right = config.get("delta_s_right", 0.0003)
 
 # Calibrations
 coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
@@ -1735,22 +1771,22 @@ anc_sz = config["anc_sz"]
 n_planes_timtrack = config["n_planes_timtrack"]
 
 # Plotting options
-T_clip_min_debug = config["T_clip_min_debug"]
-T_clip_max_debug = config["T_clip_max_debug"]
-Q_clip_min_debug = config["Q_clip_min_debug"]
-Q_clip_max_debug = config["Q_clip_max_debug"]
-num_bins_debug = config["num_bins_debug"]
+T_clip_min_debug = config.get("T_clip_min_debug", -500)
+T_clip_max_debug = config.get("T_clip_max_debug", 500)
+Q_clip_min_debug = config.get("Q_clip_min_debug", -500)
+Q_clip_max_debug = config.get("Q_clip_max_debug", 500)
+num_bins_debug = config.get("num_bins_debug", 100)
 
-T_clip_min_default = config["T_clip_min_default"]
-T_clip_max_default = config["T_clip_max_default"]
-Q_clip_min_default = config["Q_clip_min_default"]
-Q_clip_max_default = config["Q_clip_max_default"]
-num_bins_default = config["num_bins_default"]
+T_clip_min_default = config.get("T_clip_min_default", -300)
+T_clip_max_default = config.get("T_clip_max_default", 100)
+Q_clip_min_default = config.get("Q_clip_min_default", 0)
+Q_clip_max_default = config.get("Q_clip_max_default", 500)
+num_bins_default = config.get("num_bins_default", 100)
 
-T_clip_min_ST = config["T_clip_min_ST"]
-T_clip_max_ST = config["T_clip_max_ST"]
-Q_clip_min_ST = config["Q_clip_min_ST"]
-Q_clip_max_ST = config["Q_clip_max_ST"]
+T_clip_min_ST = config.get("T_clip_min_ST", -300)
+T_clip_max_ST = config.get("T_clip_max_ST", 100)
+Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
+Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
 
 
@@ -1767,7 +1803,7 @@ time_window_fitting = config["time_window_fitting"]
 
 charge_plot_limit_left = config["charge_plot_limit_left"]
 charge_plot_limit_right = config["charge_plot_limit_right"]
-charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
+charge_plot_event_limit_right = config.get("charge_plot_event_limit_right", 400)
 
 
 # -----------------------------------------------------------------------------
@@ -1979,6 +2015,8 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "definitive_phi_zero_rows_pct",
     "ancillary_charge_filtered_rows_pct",
     "data_purity_percentage",
+    "all_components_zero_rows_removed_pct",
+    "fit_tt_lt_10_rows_removed_pct",
 )
 
 reprocessing_parameters = pd.DataFrame()
@@ -2138,14 +2176,14 @@ limit_number_fast = config["limit_number_fast"]
 limit_number_debug = config["limit_number_debug"]
 
 # Pre-cal Front & Back
-T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
-T_side_right_pre_cal_debug = config["T_side_right_pre_cal_debug"]
+T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
+T_side_right_pre_cal_debug = config.get("T_side_right_pre_cal_debug", 500)
 
-T_side_left_pre_cal_default = config["T_side_left_pre_cal_default"]
-T_side_right_pre_cal_default = config["T_side_right_pre_cal_default"]
+T_side_left_pre_cal_default = config.get("T_side_left_pre_cal_default", -200)
+T_side_right_pre_cal_default = config.get("T_side_right_pre_cal_default", -100)
 
-T_side_left_pre_cal_ST = config["T_side_left_pre_cal_ST"]
-T_side_right_pre_cal_ST = config["T_side_right_pre_cal_ST"]
+T_side_left_pre_cal_ST = config.get("T_side_left_pre_cal_ST", -200)
+T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 
 # Pre-cal Sum & Diff
 
@@ -2178,8 +2216,8 @@ ext_res_tsum_filter = config["ext_res_tsum_filter"]
 ext_res_tdif_filter = config["ext_res_tdif_filter"]
 
 # Fitting comparison
-delta_s_left = config["delta_s_left"]
-delta_s_right = config["delta_s_right"]
+delta_s_left = config.get("delta_s_left", -0.0003)
+delta_s_right = config.get("delta_s_right", 0.0003)
 
 # Calibrations
 coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
@@ -2211,22 +2249,22 @@ anc_sz = config["anc_sz"]
 n_planes_timtrack = config["n_planes_timtrack"]
 
 # Plotting options
-T_clip_min_debug = config["T_clip_min_debug"]
-T_clip_max_debug = config["T_clip_max_debug"]
-Q_clip_min_debug = config["Q_clip_min_debug"]
-Q_clip_max_debug = config["Q_clip_max_debug"]
-num_bins_debug = config["num_bins_debug"]
+T_clip_min_debug = config.get("T_clip_min_debug", -500)
+T_clip_max_debug = config.get("T_clip_max_debug", 500)
+Q_clip_min_debug = config.get("Q_clip_min_debug", -500)
+Q_clip_max_debug = config.get("Q_clip_max_debug", 500)
+num_bins_debug = config.get("num_bins_debug", 100)
 
-T_clip_min_default = config["T_clip_min_default"]
-T_clip_max_default = config["T_clip_max_default"]
-Q_clip_min_default = config["Q_clip_min_default"]
-Q_clip_max_default = config["Q_clip_max_default"]
-num_bins_default = config["num_bins_default"]
+T_clip_min_default = config.get("T_clip_min_default", -300)
+T_clip_max_default = config.get("T_clip_max_default", 100)
+Q_clip_min_default = config.get("Q_clip_min_default", 0)
+Q_clip_max_default = config.get("Q_clip_max_default", 500)
+num_bins_default = config.get("num_bins_default", 100)
 
-T_clip_min_ST = config["T_clip_min_ST"]
-T_clip_max_ST = config["T_clip_max_ST"]
-Q_clip_min_ST = config["Q_clip_min_ST"]
-Q_clip_max_ST = config["Q_clip_max_ST"]
+T_clip_min_ST = config.get("T_clip_min_ST", -300)
+T_clip_max_ST = config.get("T_clip_max_ST", 100)
+Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
+Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
 
 
@@ -2243,7 +2281,7 @@ time_window_fitting = config["time_window_fitting"]
 
 charge_plot_limit_left = config["charge_plot_limit_left"]
 charge_plot_limit_right = config["charge_plot_limit_right"]
-charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
+charge_plot_event_limit_right = config.get("charge_plot_event_limit_right", 400)
 
 
 # -----------------------------------------------------------------------------
@@ -2582,14 +2620,14 @@ limit_number_fast = config["limit_number_fast"]
 limit_number_debug = config["limit_number_debug"]
 
 # Pre-cal Front & Back
-T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
-T_side_right_pre_cal_debug = config["T_side_right_pre_cal_debug"]
+T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
+T_side_right_pre_cal_debug = config.get("T_side_right_pre_cal_debug", 500)
 
-T_side_left_pre_cal_default = config["T_side_left_pre_cal_default"]
-T_side_right_pre_cal_default = config["T_side_right_pre_cal_default"]
+T_side_left_pre_cal_default = config.get("T_side_left_pre_cal_default", -200)
+T_side_right_pre_cal_default = config.get("T_side_right_pre_cal_default", -100)
 
-T_side_left_pre_cal_ST = config["T_side_left_pre_cal_ST"]
-T_side_right_pre_cal_ST = config["T_side_right_pre_cal_ST"]
+T_side_left_pre_cal_ST = config.get("T_side_left_pre_cal_ST", -200)
+T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 
 # Pre-cal Sum & Diff
 
@@ -2622,8 +2660,8 @@ ext_res_tsum_filter = config["ext_res_tsum_filter"]
 ext_res_tdif_filter = config["ext_res_tdif_filter"]
 
 # Fitting comparison
-delta_s_left = config["delta_s_left"]
-delta_s_right = config["delta_s_right"]
+delta_s_left = config.get("delta_s_left", -0.0003)
+delta_s_right = config.get("delta_s_right", 0.0003)
 
 # Calibrations
 coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
@@ -2655,22 +2693,22 @@ anc_sz = config["anc_sz"]
 n_planes_timtrack = config["n_planes_timtrack"]
 
 # Plotting options
-T_clip_min_debug = config["T_clip_min_debug"]
-T_clip_max_debug = config["T_clip_max_debug"]
-Q_clip_min_debug = config["Q_clip_min_debug"]
-Q_clip_max_debug = config["Q_clip_max_debug"]
-num_bins_debug = config["num_bins_debug"]
+T_clip_min_debug = config.get("T_clip_min_debug", -500)
+T_clip_max_debug = config.get("T_clip_max_debug", 500)
+Q_clip_min_debug = config.get("Q_clip_min_debug", -500)
+Q_clip_max_debug = config.get("Q_clip_max_debug", 500)
+num_bins_debug = config.get("num_bins_debug", 100)
 
-T_clip_min_default = config["T_clip_min_default"]
-T_clip_max_default = config["T_clip_max_default"]
-Q_clip_min_default = config["Q_clip_min_default"]
-Q_clip_max_default = config["Q_clip_max_default"]
-num_bins_default = config["num_bins_default"]
+T_clip_min_default = config.get("T_clip_min_default", -300)
+T_clip_max_default = config.get("T_clip_max_default", 100)
+Q_clip_min_default = config.get("Q_clip_min_default", 0)
+Q_clip_max_default = config.get("Q_clip_max_default", 500)
+num_bins_default = config.get("num_bins_default", 100)
 
-T_clip_min_ST = config["T_clip_min_ST"]
-T_clip_max_ST = config["T_clip_max_ST"]
-Q_clip_min_ST = config["Q_clip_min_ST"]
-Q_clip_max_ST = config["Q_clip_max_ST"]
+T_clip_min_ST = config.get("T_clip_min_ST", -300)
+T_clip_max_ST = config.get("T_clip_max_ST", 100)
+Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
+Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
 
 
@@ -2687,7 +2725,7 @@ time_window_fitting = config["time_window_fitting"]
 
 charge_plot_limit_left = config["charge_plot_limit_left"]
 charge_plot_limit_right = config["charge_plot_limit_right"]
-charge_plot_event_limit_right = config["charge_plot_event_limit_right"]
+charge_plot_event_limit_right = config.get("charge_plot_event_limit_right", 400)
 
 
 # -----------------------------------------------------------------------------
@@ -3972,6 +4010,21 @@ def plot_ts_err_with_hist(df, base_cols, time_col, title):
 
 if remove_small:
     # Filter the small values ----------------------------------------------------
+    if create_debug_plots:
+        numeric_cols = working_df.select_dtypes(include=[np.number]).columns.tolist()
+        if numeric_cols:
+            debug_thresholds = {col: [-eps, eps] for col in numeric_cols}
+            debug_fig_idx = plot_debug_histograms(
+                working_df,
+                numeric_cols,
+                debug_thresholds,
+                title=(
+                    f"Task 4 pre-filter (intermediate): remove_small_eps={eps:g} "
+                    f"[tunable] (station {station})"
+                ),
+                out_dir=debug_plot_directory,
+                fig_idx=debug_fig_idx,
+            )
     mask = working_df.map(is_small_nonzero)  # Create mask of small, non-zero numeric values
     nonzero_numeric_mask = working_df.map(lambda x: isinstance(x, (int, float)) and x != 0)  # Count total non-zero numeric entries
     n_events = len(working_df)
@@ -4280,8 +4333,12 @@ for iteration in range(repeat + 1):
         charge_event = 0.0
         for i_plane in range(nplan):
             plane_id = i_plane + 1
-            charge_plane = getattr(track, f'P{plane_id}_Q_sum_final')
-            if charge_plane != 0:
+            charge_plane = getattr(track, f'P{plane_id}_Q_sum_final', 0)
+            ts_plane = getattr(track, f'P{plane_id}_T_sum_final', 0)
+            td_plane = getattr(track, f'P{plane_id}_T_dif_final', 0)
+            y_plane = getattr(track, f'P{plane_id}_Y_final', 0)
+            plane_values = np.array([charge_plane, ts_plane, td_plane, y_plane], dtype=float)
+            if np.all(np.isfinite(plane_values)) and np.all(plane_values != 0):
                 planes_to_iterate.append(plane_id)
                 if plane_id <= 4:
                     charge_arr[pos, plane_id - 1] = charge_plane
@@ -4291,6 +4348,14 @@ for iteration in range(repeat + 1):
         
         # FITTING -----------------------------------------------------------------------
         if len(planes_to_iterate) <= 1:
+            x_arr[pos] = np.nan
+            xp_arr[pos] = np.nan
+            y_arr[pos] = np.nan
+            yp_arr[pos] = np.nan
+            t0_arr[pos] = np.nan
+            s_arr[pos] = np.nan
+            conv_distance_arr[pos] = np.nan
+            th_chi_arr[pos] = np.nan
             continue
         
         if fixed_speed:
@@ -4652,6 +4717,121 @@ for base, det_prefix, tim_prefix in residual_sets:
         working_df[f"{base}_{p}"] = 0.5 * (det_vals + tim_vals)
         working_df[f"{base}_{p}_err"] = 0.5 * (det_vals - tim_vals)
 
+
+if create_debug_plots:
+    def _emit_param_debug(param_label, columns, thresholds, *, tag="tunable"):
+        cols_present = [col for col in columns if col in working_df.columns]
+        if not cols_present:
+            return
+        debug_thresholds = {col: thresholds for col in cols_present}
+        title = f"Task 4 pre-filter: {param_label} [{tag}] (station {station})"
+        cols_present.sort()
+        global debug_fig_idx
+        debug_fig_idx = plot_debug_histograms(
+            working_df,
+            cols_present,
+            debug_thresholds,
+            title=title,
+            out_dir=debug_plot_directory,
+            fig_idx=debug_fig_idx,
+        )
+
+    def _plane_cols(prefix):
+        return [f"{prefix}{p}" for p in range(1, 5)]
+
+    # Core kinematic filters
+    _emit_param_debug(
+        "det_pos_filter",
+        ["det_x", "det_y", "x", "y"],
+        [-det_pos_filter, det_pos_filter],
+    )
+    _emit_param_debug(
+        "proj_filter",
+        ["xp", "yp"],
+        [-proj_filter, proj_filter],
+    )
+    _emit_param_debug(
+        "slowness_filter_left/right",
+        ["det_s", "s"],
+        [slowness_filter_left, slowness_filter_right],
+    )
+    _emit_param_debug(
+        "theta_left/right_filter",
+        ["det_theta", "theta"],
+        [theta_left_filter, theta_right_filter],
+    )
+    _emit_param_debug(
+        "phi_left/right_filter",
+        ["det_phi", "phi"],
+        [phi_left_filter, phi_right_filter],
+    )
+    _emit_param_debug(
+        "t0_left/right_filter",
+        ["t0", "det_t0", "tim_t0"],
+        [t0_left_filter, t0_right_filter],
+    )
+
+    # Residual filters (timtrack + detached + combined)
+    _emit_param_debug(
+        "res_ystr_filter",
+        _plane_cols("res_ystr_"),
+        [-res_ystr_filter, res_ystr_filter],
+    )
+    _emit_param_debug(
+        "res_tsum_filter",
+        _plane_cols("res_tsum_"),
+        [-res_tsum_filter, res_tsum_filter],
+    )
+    _emit_param_debug(
+        "res_tdif_filter",
+        _plane_cols("res_tdif_"),
+        [-res_tdif_filter, res_tdif_filter],
+    )
+    _emit_param_debug(
+        "ext_res_ystr_filter",
+        _plane_cols("ext_res_ystr_"),
+        [-ext_res_ystr_filter, ext_res_ystr_filter],
+    )
+    _emit_param_debug(
+        "ext_res_tsum_filter",
+        _plane_cols("ext_res_tsum_"),
+        [-ext_res_tsum_filter, ext_res_tsum_filter],
+    )
+    _emit_param_debug(
+        "ext_res_tdif_filter",
+        _plane_cols("ext_res_tdif_"),
+        [-ext_res_tdif_filter, ext_res_tdif_filter],
+    )
+    _emit_param_debug(
+        "det_res_ystr_filter",
+        _plane_cols("det_res_ystr_"),
+        [-det_res_ystr_filter, det_res_ystr_filter],
+    )
+    _emit_param_debug(
+        "det_res_tsum_filter",
+        _plane_cols("det_res_tsum_"),
+        [-det_res_tsum_filter, det_res_tsum_filter],
+    )
+    _emit_param_debug(
+        "det_res_tdif_filter",
+        _plane_cols("det_res_tdif_"),
+        [-det_res_tdif_filter, det_res_tdif_filter],
+    )
+    _emit_param_debug(
+        "det_ext_res_ystr_filter",
+        _plane_cols("det_ext_res_ystr_"),
+        [-det_ext_res_ystr_filter, det_ext_res_ystr_filter],
+    )
+    _emit_param_debug(
+        "det_ext_res_tsum_filter",
+        _plane_cols("det_ext_res_tsum_"),
+        [-det_ext_res_tsum_filter, det_ext_res_tsum_filter],
+    )
+    _emit_param_debug(
+        "det_ext_res_tdif_filter",
+        _plane_cols("det_ext_res_tdif_"),
+        [-det_ext_res_tdif_filter, det_ext_res_tdif_filter],
+    )
 
 
 # print("----------------------------------------------------------------------")
@@ -5377,6 +5557,21 @@ low_tt_zero_cols = config.get("low_tt_zero_cols", ["x", "xp", "y", "yp", "t0", "
 if not isinstance(low_tt_zero_cols, (list, tuple)):
     low_tt_zero_cols = [c for c in re.split(r"[\\s,;]+", str(low_tt_zero_cols).strip()) if c]
 raw_tt_series = working_df["raw_tt"] if "raw_tt" in working_df.columns else pd.Series(0, index=working_df.index)
+if create_debug_plots:
+    debug_cols = [c for c in ("tracking_tt", "list_tt", "raw_tt", "definitive_tt") if c in working_df.columns]
+    if debug_cols:
+        debug_thresholds = {col: [low_tt_min] for col in debug_cols}
+        debug_fig_idx = plot_debug_histograms(
+            working_df,
+            debug_cols,
+            debug_thresholds,
+            title=(
+                f"Task 4 pre-filter: low_tt_min={low_tt_min} "
+                f"[tunable] (station {station})"
+            ),
+            out_dir=debug_plot_directory,
+            fig_idx=debug_fig_idx,
+        )
 low_tt_mask = (
     (working_df["tracking_tt"] < low_tt_min)
     | (working_df["list_tt"] < low_tt_min)
@@ -5509,8 +5704,29 @@ if create_plots or create_essential_plots:
 
 working_df = working_df.copy()
 
+# Remove rows with zeros in key places ----------------------------------------
+definitive_nonzero_cols = config.get("definitive_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"])
+if not isinstance(definitive_nonzero_cols, (list, tuple)):
+    definitive_nonzero_cols = [
+        c for c in re.split(r"[\\s,;]+", str(definitive_nonzero_cols).strip()) if c
+    ]
+cols_to_check = [c for c in definitive_nonzero_cols if c in working_df.columns]
+
 if remove_small:
     # Remove small, non-zero values -----------------------------------------------
+    if create_debug_plots and cols_to_check:
+        debug_thresholds = {col: [-eps, eps] for col in cols_to_check}
+        debug_fig_idx = plot_debug_histograms(
+            working_df,
+            cols_to_check,
+            debug_thresholds,
+            title=(
+                f"Task 4 pre-filter (definitive): remove_small_eps={eps:g} "
+                f"[tunable] (station {station})"
+            ),
+            out_dir=debug_plot_directory,
+            fig_idx=debug_fig_idx,
+        )
     mask = working_df.map(is_small_nonzero)
     nonzero_numeric_mask = working_df.map(lambda x: isinstance(x, (int, float)) and x != 0)
     n_events = len(working_df)
@@ -5531,15 +5747,20 @@ if remove_small:
         n_total if n_total else 0,
     )
 
-# Remove rows with zeros in key places ----------------------------------------
-definitive_nonzero_cols = config.get("definitive_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"])
-if not isinstance(definitive_nonzero_cols, (list, tuple)):
-    definitive_nonzero_cols = [
-        c for c in re.split(r"[\\s,;]+", str(definitive_nonzero_cols).strip()) if c
-    ]
-cols_to_check = [c for c in definitive_nonzero_cols if c in working_df.columns]
-
 baseline_events = original_number_of_events if original_number_of_events else len(working_df)
+if create_debug_plots and cols_to_check:
+    debug_thresholds = {col: [0] for col in cols_to_check}
+    debug_fig_idx = plot_debug_histograms(
+        working_df,
+        cols_to_check,
+        debug_thresholds,
+        title=(
+            f"Task 4 pre-filter: definitive_nonzero_cols "
+            f"[tunable] (station {station})"
+        ),
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+    )
 record_filter_metric(
     "low_tt_zeroed_event_pct",
     int(low_tt_zeroed_count),
@@ -5620,7 +5841,7 @@ for col in cols_to_check:
     remaining &= ~primary_mask
 
 n_before = len(working_df)
-working_df = working_df[cond]
+working_df = working_df.loc[cond].copy()
 n_after = len(working_df)
 
 # Calculate and print percentage ----------------------------------------------
@@ -7105,6 +7326,42 @@ print("----------------------------------------------------------------------\n\
 
 record_residual_sigmas(working_df)
 
+component_cols = []
+for i_plane in range(1, 5):
+    component_cols.extend(
+        [
+            f"P{i_plane}_T_sum_final",
+            f"P{i_plane}_T_dif_final",
+            f"P{i_plane}_Q_sum_final",
+            f"P{i_plane}_Q_dif_final",
+            f"P{i_plane}_Y_final",
+        ]
+    )
+component_cols = [col for col in component_cols if col in working_df.columns]
+if component_cols:
+    component_data = working_df[component_cols].fillna(0)
+    all_zero_mask = (component_data == 0).all(axis=1)
+    removed_all_zero = int(all_zero_mask.sum())
+    if removed_all_zero > 0:
+        working_df = working_df.loc[~all_zero_mask].copy()
+    record_filter_metric(
+        "all_components_zero_rows_removed_pct",
+        removed_all_zero,
+        len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
+    )
+
+# Compute fit_tt before pruning columns, since it depends on P*_..._final fields.
+fit_tt_columns = {
+    i_plane: [
+        f"P{i_plane}_T_sum_final",
+        f"P{i_plane}_T_dif_final",
+        f"P{i_plane}_Q_sum_final",
+        f"P{i_plane}_Q_dif_final",
+        f"P{i_plane}_Y_final",
+    ]
+    for i_plane in range(1, 5)
+}
+working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
 
 
 
@@ -7112,7 +7369,8 @@ record_residual_sigmas(working_df)
 
 
 
-tt_columns_desired = ['datetime', 'raw_tt', 'clean_tt', 'cal_tt', 'list_tt', 'tracking_tt', 'definitive_tt']
+
+tt_columns_desired = ['datetime', 'raw_tt', 'clean_tt', 'cal_tt', 'list_tt', 'tracking_tt', 'definitive_tt', 'fit_tt']
 tt_columns_present = [col for col in tt_columns_desired if col in working_df.columns]
 param_hash_cols = ["param_hash"] if "param_hash" in working_df.columns else []
 
@@ -7188,21 +7446,24 @@ for col in working_df.columns:
 
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
-# Final number of events
-final_number_of_events = len(working_df)
-print(f"Final number of events in the dataframe: {final_number_of_events}")
-fit_tt_columns = {
-    i_plane: [
-        f"P{i_plane}_T_sum_final",
-        f"P{i_plane}_T_dif_final",
-        f"P{i_plane}_Q_sum_final",
-        f"P{i_plane}_Q_dif_final",
-        f"P{i_plane}_Y_final",
-    ]
-    for i_plane in range(1, 5)
-}
-working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
-working_df["list_to_fit_tt"] = (
+fit_tt_total = len(working_df)
+if create_debug_plots and "fit_tt" in working_df.columns:
+    debug_fig_idx = plot_debug_histograms(
+        working_df,
+        ["fit_tt"],
+        {"fit_tt": [10]},
+        title=f"Task 4 pre-filter: fit_tt >= 10 [NON-TUNABLE] (station {station})",
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+    )
+fit_tt_mask = working_df["fit_tt"].notna() & (working_df["fit_tt"] >= 10)
+working_df = working_df.loc[fit_tt_mask].copy()
+record_filter_metric(
+    "fit_tt_lt_10_rows_removed_pct",
+    fit_tt_total - int(fit_tt_mask.sum()),
+    fit_tt_total if fit_tt_total else 0,
+)
+working_df.loc[:, "list_to_fit_tt"] = (
     working_df["list_tt"].astype(str) + "_" + working_df["fit_tt"].astype(str)
 )
 
@@ -7213,6 +7474,10 @@ for tt_value, count in fit_tt_counts.items():
 list_to_fit_counts = working_df["list_to_fit_tt"].value_counts()
 for combo_value, count in list_to_fit_counts.items():
     global_variables[f"list_to_fit_tt_{combo_value}_count"] = int(count)
+
+# Final number of events
+final_number_of_events = len(working_df)
+print(f"Final number of events in the dataframe: {final_number_of_events}")
 
 print(
     f"Writing fit parquet: rows={len(working_df)} cols={len(working_df.columns)} -> {OUT_PATH}"

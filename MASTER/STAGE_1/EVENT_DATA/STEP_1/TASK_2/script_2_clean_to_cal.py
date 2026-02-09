@@ -79,6 +79,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
@@ -499,6 +500,7 @@ create_essential_plots = config["create_essential_plots"]
 save_plots = config["save_plots"]
 show_plots = config["show_plots"]
 create_pdf = config["create_pdf"]
+create_debug_plots = bool(config.get("create_debug_plots", False))
 limit = config["limit"]
 limit_number = config["limit_number"]
 number_of_time_cal_figures = config["number_of_time_cal_figures"]
@@ -565,6 +567,51 @@ for directory in base_directories.values():
     if directory == base_directories["figure_directory"] and not save_plots:
         continue
     os.makedirs(directory, exist_ok=True)
+
+debug_plot_directory = os.path.join(
+    base_directories["base_plots_directory"],
+    "DEBUG_PLOTS",
+    f"FIGURES_EXEC_ON_{date_execution}",
+)
+debug_fig_idx = 1
+if create_debug_plots:
+    os.makedirs(debug_plot_directory, exist_ok=True)
+
+
+def _debug_plot_filter_group(
+    df: pd.DataFrame,
+    columns: Iterable[str],
+    thresholds: Iterable[float] | float | None,
+    label: str,
+    *,
+    max_cols_per_fig: int = 16,
+) -> None:
+    """Emit debug histograms for a filter group with threshold lines."""
+    global debug_fig_idx
+    if not create_debug_plots:
+        return
+
+    cols = [col for col in columns if col in df.columns]
+    if not cols:
+        return
+
+    if thresholds is None:
+        threshold_values: list[float] = []
+    elif isinstance(thresholds, (list, tuple, np.ndarray)):
+        threshold_values = [float(v) for v in thresholds if v is not None]
+    else:
+        threshold_values = [float(thresholds)]
+
+    debug_thresholds = {col: threshold_values for col in cols}
+    debug_fig_idx = plot_debug_histograms(
+        df,
+        cols,
+        debug_thresholds,
+        title=f"Task 2 pre-filter: {label} [tunable] (station {station})",
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+        max_cols_per_fig=max_cols_per_fig,
+    )
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
@@ -828,23 +875,23 @@ Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
-T_sum_RPC_left = config["T_sum_RPC_left"]
-T_sum_RPC_right = config["T_sum_RPC_right"]
+T_sum_RPC_left = config.get("T_sum_RPC_left", -7)
+T_sum_RPC_right = config.get("T_sum_RPC_right", 7)
 
 # Alternative fitter filter
-det_pos_filter = config["det_pos_filter"]
-det_theta_left_filter = config["det_theta_left_filter"]
-det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_left_filter = config["det_phi_left_filter"]
-det_phi_right_filter = config["det_phi_right_filter"]
-det_slowness_filter_left = config["det_slowness_filter_left"]
-det_slowness_filter_right = config["det_slowness_filter_right"]
+det_pos_filter = config.get("det_pos_filter", 800)
+det_theta_left_filter = config.get("det_theta_left_filter", 0)
+det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
+det_phi_left_filter = config.get("det_phi_left_filter", -3.141592)
+det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
+det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
+det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
 
 # TimTrack filter
-res_ystr_filter = config["res_ystr_filter"]
-res_tsum_filter = config["res_tsum_filter"]
-res_tdif_filter = config["res_tdif_filter"]
+res_ystr_filter = config.get("res_ystr_filter", 500)
+res_tsum_filter = config.get("res_tsum_filter", 3.5)
+res_tdif_filter = config.get("res_tdif_filter", 1.0)
 
 # Fitting comparison
 
@@ -881,37 +928,37 @@ narrow_strip = config["narrow_strip"]
 wide_strip = config["wide_strip"]
 
 # Timtrack parameters
-anc_std = config["anc_std"]
+anc_std = config.get("anc_std", 0.075)
 
-n_planes_timtrack = config["n_planes_timtrack"]
+n_planes_timtrack = config.get("n_planes_timtrack", 4)
 
 # Plotting options
-T_clip_min_debug = config["T_clip_min_debug"]
-T_clip_max_debug = config["T_clip_max_debug"]
+T_clip_min_debug = config.get("T_clip_min_debug", -500)
+T_clip_max_debug = config.get("T_clip_max_debug", 500)
 Q_clip_min_debug = config["Q_clip_min_debug"]
 Q_clip_max_debug = config["Q_clip_max_debug"]
 num_bins_debug = config["num_bins_debug"]
 
-T_clip_min_default = config["T_clip_min_default"]
-T_clip_max_default = config["T_clip_max_default"]
+T_clip_min_default = config.get("T_clip_min_default", -300)
+T_clip_max_default = config.get("T_clip_max_default", 100)
 Q_clip_min_default = config["Q_clip_min_default"]
 Q_clip_max_default = config["Q_clip_max_default"]
 num_bins_default = config["num_bins_default"]
 
-T_clip_min_ST = config["T_clip_min_ST"]
-T_clip_max_ST = config["T_clip_max_ST"]
-Q_clip_min_ST = config["Q_clip_min_ST"]
-Q_clip_max_ST = config["Q_clip_max_ST"]
+T_clip_min_ST = config.get("T_clip_min_ST", -300)
+T_clip_max_ST = config.get("T_clip_max_ST", 100)
+Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
+Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
 log_scale = config["log_scale"]
 
-calibrate_strip_Q_pedestal_translate_charge_cal = config["calibrate_strip_Q_pedestal_translate_charge_cal"]
+calibrate_strip_Q_pedestal_translate_charge_cal = config.get("calibrate_strip_Q_pedestal_translate_charge_cal", 0.25)
 
-calibrate_strip_Q_pedestal_percentile = config["calibrate_strip_Q_pedestal_percentile"]
-calibrate_strip_Q_pedestal_rel_th = config["calibrate_strip_Q_pedestal_rel_th"]
-calibrate_strip_Q_pedestal_rel_th_cal = config["calibrate_strip_Q_pedestal_rel_th_cal"]
+calibrate_strip_Q_pedestal_percentile = config.get("calibrate_strip_Q_pedestal_percentile", 10)
+calibrate_strip_Q_pedestal_rel_th = config.get("calibrate_strip_Q_pedestal_rel_th", 0.015)
+calibrate_strip_Q_pedestal_rel_th_cal = config.get("calibrate_strip_Q_pedestal_rel_th_cal", 0.4)
 calibrate_strip_Q_pedestal_abs_th = config["calibrate_strip_Q_pedestal_abs_th"]
-calibrate_strip_Q_pedestal_q_quantile = config["calibrate_strip_Q_pedestal_q_quantile"]
+calibrate_strip_Q_pedestal_q_quantile = config.get("calibrate_strip_Q_pedestal_q_quantile", 0.4)
 
 scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
 scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
@@ -1134,18 +1181,92 @@ global_variables = {
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "clean_tt_nan_rows_removed_pct",
+    "strip_zeroing_stage1_rows_affected_pct",
+    "strip_zeroing_stage1_values_zeroed_pct",
+    "strip_zeroing_stage2_rows_affected_pct",
+    "strip_zeroing_stage2_values_zeroed_pct",
+    "strip_zeroing_stage3_rows_affected_pct",
+    "strip_zeroing_stage3_values_zeroed_pct",
+    "t_sum_outlier_zeroing_rows_affected_pct",
+    "t_sum_outlier_zeroing_values_zeroed_pct",
+    "strip_zeroing_stage4_rows_affected_pct",
+    "strip_zeroing_stage4_values_zeroed_pct",
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
+    "all_components_zero_rows_removed_pct",
+    "cal_tt_lt_10_rows_removed_pct",
 )
 
-filter_metrics: dict[str, float] = {}
+filter_metrics: dict[str, float] = {
+    name: 0.0 for name in FILTER_METRIC_NAMES if name != "data_purity_percentage"
+}
+
+
+def record_activity_metric(name: str, affected: float, total: float, label: str = "affected") -> None:
+    """Record a generic percentage metric."""
+    pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
+    filter_metrics[name] = round(pct, 4)
+    print(f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)")
 
 
 def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
-    pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
-    filter_metrics[name] = round(pct, 4)
-    print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+    record_activity_metric(name, removed, total, label="removed")
+
+
+STRIP_COMPONENT_PATTERN = re.compile(r"^[QT]\d+_(Q|T)_(sum|dif)_\d+$")
+
+
+def collect_strip_component_columns(columns: Iterable[str]) -> list[str]:
+    """Collect Task-2 calibrated component columns used by strip-level zeroing."""
+    return [name for name in columns if STRIP_COMPONENT_PATTERN.match(name)]
+
+
+def snapshot_nonzero_mask(df: pd.DataFrame, columns: Iterable[str]) -> tuple[list[str], np.ndarray]:
+    """Capture a boolean mask of non-zero values before a zeroing operation."""
+    tracked_columns = [col for col in columns if col in df.columns]
+    if not tracked_columns:
+        return [], np.empty((len(df), 0), dtype=bool)
+    values = df.loc[:, tracked_columns].to_numpy(copy=False)
+    return tracked_columns, np.isfinite(values) & (values != 0)
+
+
+def record_zeroing_step_metrics(
+    step_prefix: str,
+    before_nonzero_mask: np.ndarray,
+    tracked_columns: list[str],
+    after_df: pd.DataFrame,
+) -> None:
+    """
+    Record how many rows and values became zero after a zeroing operation.
+    """
+    rows_metric = f"{step_prefix}_rows_affected_pct"
+    values_metric = f"{step_prefix}_values_zeroed_pct"
+
+    if not tracked_columns or before_nonzero_mask.size == 0:
+        filter_metrics[rows_metric] = 0.0
+        filter_metrics[values_metric] = 0.0
+        print(f"[filter-metrics] {step_prefix}: no tracked columns available.")
+        return
+
+    after_values = after_df.loc[:, tracked_columns].to_numpy(copy=False)
+    n_rows = min(before_nonzero_mask.shape[0], after_values.shape[0])
+    if n_rows == 0:
+        filter_metrics[rows_metric] = 0.0
+        filter_metrics[values_metric] = 0.0
+        print(f"[filter-metrics] {step_prefix}: no rows available.")
+        return
+
+    before_nonzero = before_nonzero_mask[:n_rows]
+    after_zero = np.isfinite(after_values[:n_rows]) & (after_values[:n_rows] == 0)
+    newly_zero = before_nonzero & after_zero
+
+    rows_affected = int(np.count_nonzero(np.any(newly_zero, axis=1)))
+    values_zeroed = int(np.count_nonzero(newly_zero))
+    total_values = n_rows * len(tracked_columns)
+
+    record_activity_metric(rows_metric, rows_affected, n_rows, label="rows affected")
+    record_activity_metric(values_metric, values_zeroed, total_values, label="values zeroed")
 
 
 
@@ -1154,8 +1275,9 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
 
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
-    def _derive_tt(row: pd.Series) -> str:
-        planes_with_charge = []
+    df = df.copy()
+    def _derive_tt(row: pd.Series) -> int:
+        tt_value = 0
         for plane in range(1, 5):
             if columns_map:
                 charge_columns = [col for col in columns_map.get(plane, []) if col in row.index]
@@ -1175,11 +1297,10 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
                     f"Q_P{plane}s4",
                 ]
             if any(row.get(col, 0) != 0 for col in charge_columns):
-                planes_with_charge.append(str(plane))
-        return "".join(planes_with_charge) if planes_with_charge else "0"
+                tt_value = (tt_value * 10) + plane
+        return tt_value
 
-    df[column_name] = df.apply(_derive_tt, axis=1)
-    df[column_name] = df[column_name].apply(builtins.int)
+    df.loc[:, column_name] = df.apply(_derive_tt, axis=1)
     # If the value is smaller than 10, put a NaN, to indicate invalid TT
     df.loc[df[column_name] < 10, column_name] = np.nan
     return df
@@ -1494,6 +1615,33 @@ elif simulated_param_hash:
     if missing_hash.any():
         working_df.loc[missing_hash, "param_hash"] = str(simulated_param_hash)
 
+if create_debug_plots:
+    incoming_patterns = [
+        re.compile(r"^T\d+_[FB]_\d+$"),
+        re.compile(r"^Q\d+_[FB]_\d+$"),
+        re.compile(r"^T\d+_T_(sum|dif)_\d+$"),
+        re.compile(r"^Q\d+_Q_(sum|dif)_\d+$"),
+    ]
+    main_cols = [
+        col
+        for col in working_df.columns
+        if any(pattern.match(col) for pattern in incoming_patterns)
+    ]
+    main_cols.extend([col for col in ("raw_tt", "clean_tt", "cal_tt") if col in working_df.columns])
+    # Preserve order while de-duplicating
+    seen = set()
+    main_cols = [col for col in main_cols if not (col in seen or seen.add(col))]
+    if main_cols:
+        debug_fig_idx = plot_debug_histograms(
+            working_df,
+            main_cols,
+            thresholds=None,
+            title=f"Task 2 incoming parquet: main columns [NON-TUNABLE] (station {station})",
+            out_dir=debug_plot_directory,
+            fig_idx=debug_fig_idx,
+            max_cols_per_fig=20,
+        )
+
 original_number_of_events = len(working_df)
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 if status_execution_date is not None:
@@ -1507,6 +1655,15 @@ if status_execution_date is not None:
 working_df = compute_tt(working_df, "clean_tt")
 
 # Remove rows in which clean_tt is NaN (invalid TT)
+if create_debug_plots and "clean_tt" in working_df.columns:
+    debug_fig_idx = plot_debug_histograms(
+        working_df,
+        ["clean_tt"],
+        thresholds=None,
+        title=f"Task 2 pre-filter: clean_tt NaNs [NON-TUNABLE] (station {station})",
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+    )
 n_before_clean_tt = len(working_df)
 working_df = working_df.dropna(subset=["clean_tt"])
 record_filter_metric(
@@ -1795,23 +1952,23 @@ Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
 T_dif_cal_threshold = config["T_dif_cal_threshold"]
 
 # Once calculated the RPC variables
-T_sum_RPC_left = config["T_sum_RPC_left"]
-T_sum_RPC_right = config["T_sum_RPC_right"]
+T_sum_RPC_left = config.get("T_sum_RPC_left", -7)
+T_sum_RPC_right = config.get("T_sum_RPC_right", 7)
 
 # Alternative fitter filter
-det_pos_filter = config["det_pos_filter"]
-det_theta_left_filter = config["det_theta_left_filter"]
-det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_left_filter = config["det_phi_left_filter"]
-det_phi_right_filter = config["det_phi_right_filter"]
-det_slowness_filter_left = config["det_slowness_filter_left"]
-det_slowness_filter_right = config["det_slowness_filter_right"]
+det_pos_filter = config.get("det_pos_filter", 800)
+det_theta_left_filter = config.get("det_theta_left_filter", 0)
+det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
+det_phi_left_filter = config.get("det_phi_left_filter", -3.141592)
+det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
+det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
+det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
 
 # TimTrack filter
-res_ystr_filter = config["res_ystr_filter"]
-res_tsum_filter = config["res_tsum_filter"]
-res_tdif_filter = config["res_tdif_filter"]
+res_ystr_filter = config.get("res_ystr_filter", 500)
+res_tsum_filter = config.get("res_tsum_filter", 3.5)
+res_tdif_filter = config.get("res_tdif_filter", 1.0)
 
 # Fitting comparison
 
@@ -1846,37 +2003,37 @@ narrow_strip = config["narrow_strip"]
 wide_strip = config["wide_strip"]
 
 # Timtrack parameters
-anc_std = config["anc_std"]
+anc_std = config.get("anc_std", 0.075)
 
-n_planes_timtrack = config["n_planes_timtrack"]
+n_planes_timtrack = config.get("n_planes_timtrack", 4)
 
 # Plotting options
-T_clip_min_debug = config["T_clip_min_debug"]
-T_clip_max_debug = config["T_clip_max_debug"]
+T_clip_min_debug = config.get("T_clip_min_debug", -500)
+T_clip_max_debug = config.get("T_clip_max_debug", 500)
 Q_clip_min_debug = config["Q_clip_min_debug"]
 Q_clip_max_debug = config["Q_clip_max_debug"]
 num_bins_debug = config["num_bins_debug"]
 
-T_clip_min_default = config["T_clip_min_default"]
-T_clip_max_default = config["T_clip_max_default"]
+T_clip_min_default = config.get("T_clip_min_default", -300)
+T_clip_max_default = config.get("T_clip_max_default", 100)
 Q_clip_min_default = config["Q_clip_min_default"]
 Q_clip_max_default = config["Q_clip_max_default"]
 num_bins_default = config["num_bins_default"]
 
-T_clip_min_ST = config["T_clip_min_ST"]
-T_clip_max_ST = config["T_clip_max_ST"]
-Q_clip_min_ST = config["Q_clip_min_ST"]
-Q_clip_max_ST = config["Q_clip_max_ST"]
+T_clip_min_ST = config.get("T_clip_min_ST", -300)
+T_clip_max_ST = config.get("T_clip_max_ST", 100)
+Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
+Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
 log_scale = config["log_scale"]
 
-calibrate_strip_Q_pedestal_translate_charge_cal = config["calibrate_strip_Q_pedestal_translate_charge_cal"]
+calibrate_strip_Q_pedestal_translate_charge_cal = config.get("calibrate_strip_Q_pedestal_translate_charge_cal", 0.25)
 
-calibrate_strip_Q_pedestal_percentile = config["calibrate_strip_Q_pedestal_percentile"]
-calibrate_strip_Q_pedestal_rel_th = config["calibrate_strip_Q_pedestal_rel_th"]
-calibrate_strip_Q_pedestal_rel_th_cal = config["calibrate_strip_Q_pedestal_rel_th_cal"]
+calibrate_strip_Q_pedestal_percentile = config.get("calibrate_strip_Q_pedestal_percentile", 10)
+calibrate_strip_Q_pedestal_rel_th = config.get("calibrate_strip_Q_pedestal_rel_th", 0.015)
+calibrate_strip_Q_pedestal_rel_th_cal = config.get("calibrate_strip_Q_pedestal_rel_th_cal", 0.4)
 calibrate_strip_Q_pedestal_abs_th = config["calibrate_strip_Q_pedestal_abs_th"]
-calibrate_strip_Q_pedestal_q_quantile = config["calibrate_strip_Q_pedestal_q_quantile"]
+calibrate_strip_Q_pedestal_q_quantile = config.get("calibrate_strip_Q_pedestal_q_quantile", 0.4)
 
 scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
 scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
@@ -3988,6 +4145,15 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
     spread_df_OG = spread_df.copy()
+
+    if create_debug_plots and "T_sum_spread_OG" in spread_df.columns:
+        _debug_plot_filter_group(
+            spread_df,
+            ["T_sum_spread_OG"],
+            [coincidence_window_precal_ns],
+            "coincidence_window_precal_ns (T_sum_spread_OG, stage_1)",
+            max_cols_per_fig=1,
+        )
     
     if create_plots:
         clean_tts = sorted(spread_df["clean_tt"].unique())
@@ -4096,6 +4262,32 @@ print("----------------------------------------------------------------------")
 
 print("-------------------- Filter 2: uncalibrated data ---------------------")
 
+# Debug views with threshold lines before applying pre-cal clipping.
+_debug_plot_filter_group(
+    working_df,
+    [col for col in working_df.columns if "_T_sum_" in col],
+    [T_sum_left_pre_cal, T_sum_right_pre_cal],
+    "T_sum_left/right_pre_cal",
+)
+_debug_plot_filter_group(
+    working_df,
+    [col for col in working_df.columns if "_T_dif_" in col or "_T_diff_" in col],
+    [-T_dif_pre_cal_threshold, T_dif_pre_cal_threshold],
+    "T_dif_pre_cal_threshold",
+)
+_debug_plot_filter_group(
+    working_df,
+    [col for col in working_df.columns if "_Q_sum_" in col],
+    [Q_left_pre_cal, Q_right_pre_cal],
+    "Q_left/right_pre_cal",
+)
+_debug_plot_filter_group(
+    working_df,
+    [col for col in working_df.columns if "_Q_dif_" in col or "_Q_diff_" in col],
+    [-Q_dif_pre_cal_threshold, Q_dif_pre_cal_threshold],
+    "Q_dif_pre_cal_threshold",
+)
+
 # FILTER 2: TSUM, TDIF, QSUM, QDIF PRECALIBRATED THRESHOLDS --> 0 if out ------------------------------
 for col in working_df.columns:
     if 'T_sum' in col:
@@ -4171,6 +4363,12 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
         working_df.loc[mask, f'{key}_Q_sum_{j+1}'] -= ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
 
 print("------------------ Filter 3: charge sum filtering --------------------")
+_debug_plot_filter_group(
+    working_df,
+    [col for col in working_df.columns if "_Q_sum_" in col],
+    [Q_sum_left_cal, Q_sum_right_cal],
+    "Q_sum_left/right_cal",
+)
 for col in working_df.columns:
     if 'Q_sum' in col:
         working_df[col] = np.where((working_df[col] > Q_sum_right_cal) | (working_df[col] < Q_sum_left_cal), 0, working_df[col])
@@ -4196,6 +4394,12 @@ for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         working_df.loc[mask, f'{key}_T_dif_{j+1}'] -= Tdiff_cal[i][j]
 
 print("--------------------- Filter 3.2: time diff filtering ----------------")
+_debug_plot_filter_group(
+    working_df,
+    [col for col in working_df.columns if "_T_dif_" in col or "_T_diff_" in col],
+    [-T_dif_cal_threshold, T_dif_cal_threshold],
+    "T_dif_cal_threshold",
+)
 for col in working_df.columns:
     if 'T_diff' in col:
         working_df[col] = np.where((working_df[col] > T_dif_cal_threshold) | (working_df[col] < -T_dif_cal_threshold), 0, working_df[col])
@@ -4222,6 +4426,12 @@ for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
         working_df.loc[mask, f'{key}_Q_dif_{j+1}'] -= ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
 
 print("------------------ Filter 4: charge diff filtering -------------------")
+_debug_plot_filter_group(
+    working_df,
+    [col for col in working_df.columns if "_Q_dif_" in col or "_Q_diff_" in col],
+    [-Q_dif_cal_threshold, Q_dif_cal_threshold],
+    "Q_dif_cal_threshold",
+)
 for col in working_df.columns:
     if 'Q_dif' in col:
         working_df[col] = np.where((working_df[col] > Q_dif_cal_threshold) | (working_df[col] < -Q_dif_cal_threshold), 0, working_df[col])
@@ -4385,6 +4595,12 @@ else:
 
 print("----------------------------------------------------------------------")
 print("------------- Filter 5: charge difference FB filtering ---------------")
+_debug_plot_filter_group(
+    working_df,
+    [col for col in working_df.columns if "_Q_dif_" in col or "_Q_diff_" in col],
+    [-Q_dif_cal_threshold_FB, Q_dif_cal_threshold_FB],
+    "Q_dif_cal_threshold_FB",
+)
 for col in working_df.columns:
     if 'Q_diff' in col:
         working_df[col] = np.where(np.abs(working_df[col]) < Q_dif_cal_threshold_FB, working_df[col], 0)
@@ -4458,6 +4674,10 @@ print("----------------------------------------------------------------------")
 # Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
 # put the four variables in that plane, strip and event to 0
 
+strip_stage1_cols, strip_stage1_before = snapshot_nonzero_mask(
+    working_df,
+    collect_strip_component_columns(working_df.columns),
+)
 total_events = len(working_df)
 
 for plane in range(1, 5):
@@ -4490,6 +4710,13 @@ for plane in range(1, 5):
 
         # Zero the affected values
         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+
+record_zeroing_step_metrics(
+    "strip_zeroing_stage1",
+    strip_stage1_before,
+    strip_stage1_cols,
+    working_df,
+)
 
 
 if self_trigger:
@@ -6367,6 +6594,10 @@ print("----------------------------------------------------------------------")
 # Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
 # put the four variables in that plane, strip and event to 0
 
+strip_stage2_cols, strip_stage2_before = snapshot_nonzero_mask(
+    working_df,
+    collect_strip_component_columns(working_df.columns),
+)
 total_events = len(working_df)
 
 for plane in range(1, 5):
@@ -6399,6 +6630,13 @@ for plane in range(1, 5):
 
         # Zero the affected values
         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+
+record_zeroing_step_metrics(
+    "strip_zeroing_stage2",
+    strip_stage2_before,
+    strip_stage2_cols,
+    working_df,
+)
 
 
 
@@ -7109,6 +7347,10 @@ print("----------------------------------------------------------------------")
 # Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
 # put the four variables in that plane, strip and event to 0
 
+strip_stage3_cols, strip_stage3_before = snapshot_nonzero_mask(
+    working_df,
+    collect_strip_component_columns(working_df.columns),
+)
 total_events = len(working_df)
 
 for plane in range(1, 5):
@@ -7142,6 +7384,13 @@ for plane in range(1, 5):
         # Zero the affected values
         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
+record_zeroing_step_metrics(
+    "strip_zeroing_stage3",
+    strip_stage3_before,
+    strip_stage3_cols,
+    working_df,
+)
+
 
 print("----------------------------------------------------------------------")
 print("--------------------- Using clean_tt as trigger ----------------------")
@@ -7165,6 +7414,15 @@ if time_window_filtering:
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
     spread_df_OG = spread_df.copy()
+
+    if create_debug_plots and "T_sum_spread_OG" in spread_df.columns:
+        _debug_plot_filter_group(
+            spread_df,
+            ["T_sum_spread_OG"],
+            [coincidence_window_precal_ns],
+            "coincidence_window_precal_ns (T_sum_spread_OG, stage_2)",
+            max_cols_per_fig=1,
+        )
     
     if create_plots:
         clean_tts = sorted(spread_df["clean_tt"].unique())
@@ -7199,6 +7457,10 @@ if time_window_filtering:
             plt.close(fig)
 
     # Removal of outliers
+    t_sum_zeroing_cols, t_sum_zeroing_before = snapshot_nonzero_mask(
+        working_df,
+        [col for col in working_df.columns if "_T_sum_" in col],
+    )
     def zero_outlier_tsum(row, threshold=coincidence_window_precal_ns):
         t_sum_cols = [col for col in row.index if '_T_sum_' in col]
         t_sum_vals = row[t_sum_cols].copy()
@@ -7210,6 +7472,12 @@ if time_window_filtering:
         for col in outliers.index[outliers]: row[col] = 0.0
         return row
     working_df = working_df.apply(zero_outlier_tsum, axis=1)
+    record_zeroing_step_metrics(
+        "t_sum_outlier_zeroing",
+        t_sum_zeroing_before,
+        t_sum_zeroing_cols,
+        working_df,
+    )
 
     # Post removal of outliers
     spread_results = []
@@ -7331,6 +7599,10 @@ print("----------------------------------------------------------------------")
 # Now go throuhg every plane and strip and if any of the T_sum, T_diff, Q_sum, Q_diff == 0,
 # put the four variables in that plane, strip and event to 0
 
+strip_stage4_cols, strip_stage4_before = snapshot_nonzero_mask(
+    working_df,
+    collect_strip_component_columns(working_df.columns),
+)
 total_events = len(working_df)
 
 for plane in range(1, 5):
@@ -7363,6 +7635,13 @@ for plane in range(1, 5):
 
         # Zero the affected values
         working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+
+record_zeroing_step_metrics(
+    "strip_zeroing_stage4",
+    strip_stage4_before,
+    strip_stage4_cols,
+    working_df,
+)
 
 working_df = working_df.copy()
 
@@ -7485,14 +7764,41 @@ Q_SUM_PATTERN = re.compile(r"^Q\d+_Q_sum_\d+$")
 
 # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
 Q_cols = _collect_columns(working_df.columns, Q_SUM_PATTERN)
+if create_debug_plots and Q_cols:
+    debug_thresholds = {col: [0] for col in Q_cols}
+    debug_fig_idx = plot_debug_histograms(
+        working_df,
+        Q_cols,
+        debug_thresholds,
+        title=f"Task 2 pre-filter: Q_sum nonzero [NON-TUNABLE] (station {station})",
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+    )
 qsum_total = len(working_df)
 qsum_mask = (working_df[Q_cols] != 0).any(axis=1)
-working_df = working_df[qsum_mask]
+working_df = working_df.loc[qsum_mask].copy()
 record_filter_metric(
     "q_sum_all_zero_rows_removed_pct",
     qsum_total - int(qsum_mask.sum()),
     original_number_of_events if original_number_of_events else 0,
 )
+
+component_cols = [
+    col
+    for col in working_df.columns
+    if re.match(r"^[TQ]\\d+_(T|Q)_(sum|dif)_\\d+$", col)
+]
+if component_cols:
+    component_data = working_df[component_cols].fillna(0)
+    all_zero_mask = (component_data == 0).all(axis=1)
+    removed_all_zero = int(all_zero_mask.sum())
+    if removed_all_zero > 0:
+        working_df = working_df.loc[~all_zero_mask].copy()
+    record_filter_metric(
+        "all_components_zero_rows_removed_pct",
+        removed_all_zero,
+        len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
+    )
 
 
 
@@ -7500,11 +7806,6 @@ record_filter_metric(
 
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
-
-# Final number of events
-final_number_of_events = len(working_df)
-
-print(f"Final number of events in the dataframe: {final_number_of_events}")
 
 cal_tt_columns: dict[int, list[str]] = {}
 
@@ -7524,8 +7825,26 @@ for plane in range(1, 5):
     ]
 
 working_df = compute_tt(working_df, "cal_tt", cal_tt_columns)
-working_df["clean_to_cal_tt"] = (
+working_df.loc[:, "clean_to_cal_tt"] = (
     working_df["clean_tt"].astype(str) + "_" + working_df["cal_tt"].astype(str)
+)
+
+cal_tt_total = len(working_df)
+if create_debug_plots and "cal_tt" in working_df.columns:
+    debug_fig_idx = plot_debug_histograms(
+        working_df,
+        ["cal_tt"],
+        {"cal_tt": [10]},
+        title=f"Task 2 pre-filter: cal_tt >= 10 [NON-TUNABLE] (station {station})",
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+    )
+cal_tt_mask = working_df["cal_tt"].notna() & (working_df["cal_tt"] >= 10)
+working_df = working_df.loc[cal_tt_mask].copy()
+record_filter_metric(
+    "cal_tt_lt_10_rows_removed_pct",
+    cal_tt_total - int(cal_tt_mask.sum()),
+    cal_tt_total if cal_tt_total else 0,
 )
 
 cal_tt_counts = working_df["cal_tt"].value_counts()
@@ -7535,18 +7854,9 @@ for tt_value, count in cal_tt_counts.items():
 clean_to_cal_counts = working_df["clean_to_cal_tt"].value_counts()
 for combo_value, count in clean_to_cal_counts.items():
     global_variables[f"clean_to_cal_tt_{combo_value}_count"] = int(count)
-working_df = compute_tt(working_df, "cal_tt")
-working_df["clean_to_cal_tt"] = (
-    working_df["clean_tt"].astype(str) + "_" + working_df["cal_tt"].astype(str)
-)
 
-cal_tt_counts = working_df["cal_tt"].value_counts()
-for tt_value, count in cal_tt_counts.items():
-    global_variables[f"cal_tt_{tt_value}_count"] = int(count)
-
-clean_to_cal_counts = working_df["clean_to_cal_tt"].value_counts()
-for combo_value, count in clean_to_cal_counts.items():
-    global_variables[f"clean_to_cal_tt_{combo_value}_count"] = int(count)
+final_number_of_events = len(working_df)
+print(f"Final number of events in the dataframe: {final_number_of_events}")
 
 # print("Columns before saving cleaned->calibrated parquet:")
 # for col in working_df.columns:

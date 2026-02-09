@@ -1,0 +1,17 @@
+parameter,default,station_1,station_2,station_3,station_4,source_task
+T_sum_RPC_left,-15,-15,-15,-15,-15,
+T_sum_RPC_right,10,10,10,10,10,
+T_dif_RPC_left,-0.8,-0.8,-0.8,-0.8,-0.8,
+T_dif_RPC_right,0.8,0.8,0.8,0.8,0.8,
+Q_RPC_left,0,0,0,0,0,
+Q_RPC_right,500,500,500,500,500,
+Q_dif_RPC_left,-4,-4,-4,-4,-4,
+Q_dif_RPC_right,4,4,4,4,4,
+Y_RPC_left,-200,-200,-200,-200,-200,
+Y_RPC_right,200,200,200,200,200,
+strip_speed_factor_of_c,,,,,,task_2
+narrow_strip,,,,,,task_2
+wide_strip,,,,,,task_2
+anc_std,0.075,0.075,0.075,0.075,0.075,
+charge_per_strip_plot_threshold,40,40,40,40,40,
+charge_per_plane_plot_threshold,50,50,50,50,50,
