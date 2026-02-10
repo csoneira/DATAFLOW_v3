@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared utilities for the MASTER_VS_SIMULATION pipeline.
+"""Shared utilities for the INFERENCE_DICTIONARY_VALIDATION pipeline.
 
 This module consolidates common helpers used across STEP_1 through STEP_4
 to eliminate code duplication and ensure consistent behavior.

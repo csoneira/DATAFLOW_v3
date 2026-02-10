@@ -1,6 +1,6 @@
-# MASTER_VS_SIMULATION — Pipeline Validation and Methodological Guidance (Non-Code)
+# INFERENCE_DICTIONARY_VALIDATION — Pipeline Validation and Methodological Guidance (Non-Code)
 
-This document provides high-level, non-code guidance for validating the simulation pipeline implemented in `MASTER_VS_SIMULATION`, covering Steps 1 through 4. It is intended to be pasted into the repository and used as prompt context for LLM-assisted development (Codex, Claude) and for internal methodological traceability.
+This document provides high-level, non-code guidance for validating the simulation pipeline implemented in `INFERENCE_DICTIONARY_VALIDATION`, covering Steps 1 through 4. It is intended to be pasted into the repository and used as prompt context for LLM-assisted development (Codex, Claude) and for internal methodological traceability.
 
 ## Scope and Philosophy
 

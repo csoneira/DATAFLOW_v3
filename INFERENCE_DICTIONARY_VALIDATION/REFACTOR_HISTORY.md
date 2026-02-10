@@ -1,4 +1,4 @@
-# MASTER_VS_SIMULATION — Refactoring Report
+# INFERENCE_DICTIONARY_VALIDATION — Refactoring Report
 
 > **Date:** 2025-01-XX  
 > **Scope:** STEP_1 through STEP_4 scripts + new shared utilities module  
@@ -36,7 +36,7 @@ significantly once duplicates were eliminated.
 ## 2. New File: `msv_utils.py`
 
 A single shared-utilities module placed at the repository root
-(`MASTER_VS_SIMULATION/msv_utils.py`), imported by every STEP via:
+(`INFERENCE_DICTIONARY_VALIDATION/msv_utils.py`), imported by every STEP via:
 
 ```python
 STEP_DIR = Path(__file__).resolve().parent

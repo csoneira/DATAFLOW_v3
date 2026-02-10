@@ -1,4 +1,4 @@
-# SIM Validation (MASTER_VS_SIMULATION)
+# SIM Validation (INFERENCE_DICTIONARY_VALIDATION)
 
 This module validates the consistency between:
 
@@ -7,7 +7,7 @@ This module validates the consistency between:
 
 It consumes the dictionary produced by:
 
-`MASTER_VS_SIMULATION/DICTIONARY_CREATOR/STEP_1_BUILD/output/task_01/param_metadata_dictionary.csv`
+`INFERENCE_DICTIONARY_VALIDATION/DICTIONARY_CREATOR/STEP_1_BUILD/output/task_01/param_metadata_dictionary.csv`
 
 ## What It Produces
 
@@ -52,20 +52,20 @@ Alternative method is available for compatibility with previous "quick" formulat
 ## Run
 
 ```bash
-python3 /home/mingo/DATAFLOW_v3/MASTER_VS_SIMULATION/SIM_VALIDATION/validate_simulation_vs_parameters.py
+python3 /home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/SIM_VALIDATION/validate_simulation_vs_parameters.py
 ```
 
 With explicit config:
 
 ```bash
-python3 /home/mingo/DATAFLOW_v3/MASTER_VS_SIMULATION/SIM_VALIDATION/validate_simulation_vs_parameters.py \
-  --config /home/mingo/DATAFLOW_v3/MASTER_VS_SIMULATION/SIM_VALIDATION/config_validation.json
+python3 /home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/SIM_VALIDATION/validate_simulation_vs_parameters.py \
+  --config /home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/SIM_VALIDATION/config_validation.json
 ```
 
 Contour-specific overrides (optional):
 
 ```bash
-python3 /home/mingo/DATAFLOW_v3/MASTER_VS_SIMULATION/SIM_VALIDATION/validate_simulation_vs_parameters.py \
+python3 /home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/SIM_VALIDATION/validate_simulation_vs_parameters.py \
   --contour-cos-n 2.0 \
   --contour-cos-tol 1e-9 \
   --contour-equal-eff-tol 1e-9 \
@@ -75,6 +75,6 @@ python3 /home/mingo/DATAFLOW_v3/MASTER_VS_SIMULATION/SIM_VALIDATION/validate_sim
 Relative-error filter override (optional):
 
 ```bash
-python3 /home/mingo/DATAFLOW_v3/MASTER_VS_SIMULATION/SIM_VALIDATION/validate_simulation_vs_parameters.py \
+python3 /home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/SIM_VALIDATION/validate_simulation_vs_parameters.py \
   --relerr-max-abs 0.05
 ```

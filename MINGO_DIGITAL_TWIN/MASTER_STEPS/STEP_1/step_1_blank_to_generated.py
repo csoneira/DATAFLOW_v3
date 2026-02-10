@@ -345,6 +345,7 @@ class ThickSecondSequencer:
 
 
 def main() -> None:
+    print("\n-----\nStep 1 starting...\n-----")
     parser = argparse.ArgumentParser(description="Step 1: generate muon sample (x,y,z,theta,phi).")
     parser.add_argument("--config", default="config_step_1_physics.yaml", help="Path to step physics config YAML")
     parser.add_argument(

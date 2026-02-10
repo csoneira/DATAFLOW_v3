@@ -133,8 +133,12 @@ def extract_tracebacks(lines: Sequence[str]) -> List[str]:
 
 
 def append_marker(log_path: Path, timestamp: str) -> None:
-    with log_path.open("a", encoding="utf-8") as fp:
-        fp.write(f"\n{MARKER_PREFIX}{timestamp} ###\n")
+    try:
+        with log_path.open("a", encoding="utf-8") as fp:
+            fp.write(f"\n{MARKER_PREFIX}{timestamp} ###\n")
+    except OSError:
+        # Keep scanning resilient even if one log file cannot be written.
+        return
 
 
 def append_entries(entries: Iterable[Tuple[str, str, str, str]]) -> None:
@@ -176,6 +180,19 @@ def process_log(log_path: Path, *, full_scan: bool = False) -> Tuple[List[str], 
     return tracebacks, has_new_section
 
 
+def iter_log_files(log_dir: Path) -> List[Path]:
+    """Return all .log files under CRON_LOGS (recursive), sorted for stability."""
+    return sorted(path for path in log_dir.rglob("*.log") if path.is_file())
+
+
+def format_log_label(log_path: Path, root: Path) -> str:
+    """Use CRON_LOGS-relative path for unambiguous source identification."""
+    try:
+        return str(log_path.relative_to(root))
+    except ValueError:
+        return log_path.name
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Collect Tracebacks from cron logs into a single summary file.",
@@ -203,7 +220,8 @@ def main() -> None:
     encountered_hashes: Set[str] = set()
     state_modified = args.full_scan
 
-    for log_path in sorted(LOG_DIR.glob("*.log")):
+    for log_path in iter_log_files(LOG_DIR):
+        log_label = format_log_label(log_path, LOG_DIR)
         tracebacks, has_new_content = process_log(log_path, full_scan=args.full_scan)
         for tb in tracebacks:
             digest = hashlib.sha1(tb.encode("utf-8")).hexdigest()
@@ -217,7 +235,7 @@ def main() -> None:
                 catalog[digest] = {
                     "traceback": tb,
                     "first_seen": now,
-                    "source_log": log_path.name,
+                    "source_log": log_label,
                 }
                 catalog_modified = True
             if digest in known_hashes:
@@ -225,7 +243,7 @@ def main() -> None:
                 continue
             known_hashes.add(digest)
             state_modified = True
-            entries_to_write.append((now, log_path.name, digest, tb))
+            entries_to_write.append((now, log_label, digest, tb))
         if has_new_content and not args.full_scan:
             append_marker(log_path, now)
 

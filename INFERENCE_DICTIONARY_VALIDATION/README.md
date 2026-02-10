@@ -1,6 +1,6 @@
-# MASTER_VS_SIMULATION Pipeline Reference
+# INFERENCE_DICTIONARY_VALIDATION Pipeline Reference
 
-This document is an exhaustive reference for the active `STEP_*` scripts in `MASTER_VS_SIMULATION`:
+This document is an exhaustive reference for the active `STEP_*` scripts in `INFERENCE_DICTIONARY_VALIDATION`:
 
 - `STEP_1_DICTIONARY/build_dictionary.py`
 - `STEP_2_SIM_VALIDATION/compute_relative_error.py`
@@ -19,7 +19,7 @@ It is written as prompt context for future Codex sessions.
 ## Folder Layout (Active)
 
 ```text
-MASTER_VS_SIMULATION/
+INFERENCE_DICTIONARY_VALIDATION/
   README.md
   STEP_1_DICTIONARY/
     build_dictionary.py
@@ -63,7 +63,7 @@ Script: `STEP_1_DICTIONARY/build_dictionary.py`
 ### What It Does
 
 - Creates `out_dir/task_XX/param_metadata_dictionary.csv` by delegating to:
-  - `MASTER_VS_SIMULATION/STEP_1_DICTIONARY/STEP_1_BUILD/build_param_metadata_dictionary.py`
+  - `INFERENCE_DICTIONARY_VALIDATION/STEP_1_DICTIONARY/STEP_1_BUILD/build_param_metadata_dictionary.py`
 - Optionally creates quick-look plots to explore the dataset.
 
 Note: the output is a broad simulated dataset — not yet a validated dictionary.
@@ -73,14 +73,14 @@ entries that form the actual dictionary.
 ### CLI
 
 ```bash
-python3 MASTER_VS_SIMULATION/STEP_1_DICTIONARY/build_dictionary.py [options]
+python3 INFERENCE_DICTIONARY_VALIDATION/STEP_1_DICTIONARY/build_dictionary.py [options]
 ```
 
 Arguments:
 
-- `--config` (default: `/home/mingo/DATAFLOW_v3/MASTER_VS_SIMULATION/STEP_1_DICTIONARY/config/pipeline_config.json`)
+- `--config` (default: `/home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/STEP_1_DICTIONARY/config/pipeline_config.json`)
 - `--task-id` (default: `1`)
-- `--out-dir` (default: `MASTER_VS_SIMULATION/STEP_1_DICTIONARY/output`)
+- `--out-dir` (default: `INFERENCE_DICTIONARY_VALIDATION/STEP_1_DICTIONARY/output`)
 - `--no-plots` (flag; skips histogram/scatter generation)
 
 ### Behavior Details
@@ -134,7 +134,7 @@ Script: `STEP_2_SIM_VALIDATION/compute_relative_error.py`
 1. Loads dictionary CSV.
 2. Builds a validation table by calling:
    - `from validate_simulation_vs_parameters import build_validation_table`
-   - local module path: `MASTER_VS_SIMULATION/STEP_2_SIM_VALIDATION/validate_simulation_vs_parameters.py`
+   - local module path: `INFERENCE_DICTIONARY_VALIDATION/STEP_2_SIM_VALIDATION/validate_simulation_vs_parameters.py`
 3. Joins selected validation columns back to dictionary rows.
 4. Filters rows by relative error thresholds and minimum event count.
 5. Writes full and filtered outputs plus diagnostic plots.
@@ -142,12 +142,12 @@ Script: `STEP_2_SIM_VALIDATION/compute_relative_error.py`
 ### CLI
 
 ```bash
-python3 MASTER_VS_SIMULATION/STEP_2_SIM_VALIDATION/compute_relative_error.py [options]
+python3 INFERENCE_DICTIONARY_VALIDATION/STEP_2_SIM_VALIDATION/compute_relative_error.py [options]
 ```
 
 Arguments:
 
-- `--config` (default: `MASTER_VS_SIMULATION/STEP_2_SIM_VALIDATION/config.json`)
+- `--config` (default: `INFERENCE_DICTIONARY_VALIDATION/STEP_2_SIM_VALIDATION/config.json`)
 - `--dictionary-csv`
 - `--out-dir`
 - `--prefix` (default fallback: `raw`)
@@ -261,7 +261,7 @@ Given a reference CSV (normally Step 2 filtered output), it:
 ### CLI
 
 ```bash
-python3 MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/self_consistency_r2.py [options]
+python3 INFERENCE_DICTIONARY_VALIDATION/STEP_3_SELF_CONSISTENCY/self_consistency_r2.py [options]
 ```
 
 Arguments:
@@ -466,7 +466,7 @@ Important:
 ### CLI
 
 ```bash
-python3 MASTER_VS_SIMULATION/STEP_4_METHOD_UNCERTAINTY/compute_uncertainty_limits.py [options]
+python3 INFERENCE_DICTIONARY_VALIDATION/STEP_4_METHOD_UNCERTAINTY/compute_uncertainty_limits.py [options]
 ```
 
 Arguments:
@@ -626,33 +626,33 @@ JUNK dependencies used by this pipeline are vendored into the active `STEP_*` fo
 2. Step 2 validation code:
    - `STEP_2_SIM_VALIDATION/validate_simulation_vs_parameters.py`
 
-So Step 1/Step 2 run without importing code from `MASTER_VS_SIMULATION/JUNK`.
+So Step 1/Step 2 run without importing code from `INFERENCE_DICTIONARY_VALIDATION/JUNK`.
 
 ## Typical Run Sequence
 
 ```bash
 # Step 1
-python3 MASTER_VS_SIMULATION/STEP_1_DICTIONARY/build_dictionary.py \
+python3 INFERENCE_DICTIONARY_VALIDATION/STEP_1_DICTIONARY/build_dictionary.py \
   --task-id 1 \
-  --out-dir MASTER_VS_SIMULATION/STEP_1_DICTIONARY/output
+  --out-dir INFERENCE_DICTIONARY_VALIDATION/STEP_1_DICTIONARY/output
 
 # Step 2
-python3 MASTER_VS_SIMULATION/STEP_2_SIM_VALIDATION/compute_relative_error.py \
-  --config MASTER_VS_SIMULATION/STEP_2_SIM_VALIDATION/config.json
+python3 INFERENCE_DICTIONARY_VALIDATION/STEP_2_SIM_VALIDATION/compute_relative_error.py \
+  --config INFERENCE_DICTIONARY_VALIDATION/STEP_2_SIM_VALIDATION/config.json
 
 # Step 3
-python3 MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/self_consistency_r2.py \
-  --config MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/config.json \
+python3 INFERENCE_DICTIONARY_VALIDATION/STEP_3_SELF_CONSISTENCY/self_consistency_r2.py \
+  --config INFERENCE_DICTIONARY_VALIDATION/STEP_3_SELF_CONSISTENCY/config.json \
   --single
 
 # Step 3 (all-files validation mode)
-python3 MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/self_consistency_r2.py \
-  --config MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/config.json \
+python3 INFERENCE_DICTIONARY_VALIDATION/STEP_3_SELF_CONSISTENCY/self_consistency_r2.py \
+  --config INFERENCE_DICTIONARY_VALIDATION/STEP_3_SELF_CONSISTENCY/config.json \
   --all
 
 # Step 4
-python3 MASTER_VS_SIMULATION/STEP_4_METHOD_UNCERTAINTY/compute_uncertainty_limits.py \
-  --config MASTER_VS_SIMULATION/STEP_4_METHOD_UNCERTAINTY/config.json
+python3 INFERENCE_DICTIONARY_VALIDATION/STEP_4_METHOD_UNCERTAINTY/compute_uncertainty_limits.py \
+  --config INFERENCE_DICTIONARY_VALIDATION/STEP_4_METHOD_UNCERTAINTY/config.json
 ```
 
 ## Prompt-Ready Context Snippet

@@ -209,7 +209,7 @@ def main() -> int:
     if not builder_script.exists():
         raise FileNotFoundError(
             f"Builder script not found: {builder_script}\n"
-            "Expected at MASTER_VS_SIMULATION/STEP_1_DICTIONARY/STEP_1_BUILD/."
+            "Expected at INFERENCE_DICTIONARY_VALIDATION/STEP_1_DICTIONARY/STEP_1_BUILD/."
         )
 
     cmd = [
