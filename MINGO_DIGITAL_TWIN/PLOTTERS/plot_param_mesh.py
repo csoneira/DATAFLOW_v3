@@ -18,8 +18,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot simulation parameter summary to PDF")
     parser.add_argument(
         "--input",
-        default="/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv",
-        help="Path to the parameters CSV to plot",
+        default="/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
+        help="Path to the proposed/base parameter mesh CSV (e.g. STEP_0_TO_1/param_mesh.csv).",
     )
     parser.add_argument(
         "--output",
@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--completed",
         default="/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv",
-        help="Path to step_final_simulation_params.csv",
+        help="Path to the completed simulation params CSV (step_final_simulation_params.csv).",
     )
     parser.add_argument(
         "--n-value",
@@ -213,6 +213,8 @@ def main() -> None:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if not input_path.exists():
+        raise FileNotFoundError(f"Proposed/base params file not found: {input_path}")
     df = pd.read_csv(input_path)
     df = normalize_step_params(df)
     if not completed_path.exists():
@@ -303,7 +305,7 @@ def main() -> None:
         plt.close(fig)
 
         fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        add_rows_per_file_hist(ax, df)
+        add_rows_per_file_hist(ax, completed_params)
         fig.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)

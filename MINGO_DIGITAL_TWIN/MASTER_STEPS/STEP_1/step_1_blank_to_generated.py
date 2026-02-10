@@ -405,7 +405,8 @@ def main() -> None:
                 param_row = row
                 break
         if param_row is None:
-            raise ValueError("All step_1_id combinations already exist.")
+            print("Skipping STEP_1: all step_1_id combinations already exist.")
+            return
         if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
             param_set_id = int(param_row["param_set_id"])
         if "param_date" in param_row:

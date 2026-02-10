@@ -10,6 +10,6 @@ efficiencies: [0.7, 1]
 efficiencies_identical: true
 
 # Optional: generate multiple rows per run, sharing selected columns.
-repeat_samples: 1
+repeat_samples: 0
 shared_columns: [cos_n]  # also supports efficiencies or z_positions
 expand_z_positions: true  # when true, use all z positions for each sampled row
