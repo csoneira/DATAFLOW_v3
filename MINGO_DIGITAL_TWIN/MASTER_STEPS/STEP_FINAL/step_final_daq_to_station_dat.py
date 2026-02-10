@@ -30,12 +30,14 @@ from STEP_SHARED.sim_utils import (
     iter_input_frames,
     latest_sim_run,
     normalize_param_mesh_ids,
+    param_mesh_lock,
     resolve_param_mesh,
     load_sim_run_registry,
     load_step_configs,
     load_with_metadata,
     now_iso,
     random_sim_run,
+    write_csv_atomic,
 )
 
 
@@ -733,125 +735,132 @@ def main() -> None:
         if not isinstance(effs, list) or len(effs) != 4:
             raise ValueError("efficiencies not found in STEP_3 metadata.")
         mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed"))
-        if "done" not in mesh.columns:
-            mesh["done"] = 0
-        has_param_set_id = "param_set_id" in mesh.columns
-        has_param_date = "param_date" in mesh.columns
-        if has_param_set_id:
-            pending_mask = mesh["param_set_id"].isna()
-        else:
-            pending_mask = pd.Series(True, index=mesh.index)
-        mask = (mesh["done"] != 1) & pending_mask
-        mask &= np.isclose(mesh["cos_n"].astype(float), float(step1_cfg.get("cos_n")))
-        mask &= np.isclose(mesh["flux_cm2_min"].astype(float), float(step1_cfg.get("flux_cm2_min")))
-        mask &= np.isclose(mesh["eff_p1"].astype(float), float(effs[0]))
-        mask &= np.isclose(mesh["eff_p2"].astype(float), float(effs[1]))
-        mask &= np.isclose(mesh["eff_p3"].astype(float), float(effs[2]))
-        mask &= np.isclose(mesh["eff_p4"].astype(float), float(effs[3]))
-        abs_mask = mask.copy()
-        abs_mask &= np.isclose(mesh["z_p1"].astype(float), float(z_positions[0]))
-        abs_mask &= np.isclose(mesh["z_p2"].astype(float), float(z_positions[1]))
-        abs_mask &= np.isclose(mesh["z_p3"].astype(float), float(z_positions[2]))
-        abs_mask &= np.isclose(mesh["z_p4"].astype(float), float(z_positions[3]))
-        candidates = mesh[abs_mask]
-        if candidates.empty:
-            base = mesh["z_p1"].astype(float)
-            rel_mask = mask.copy()
-            rel_mask &= np.isclose(mesh["z_p1"].astype(float) - base, float(z_positions[0]))
-            rel_mask &= np.isclose(mesh["z_p2"].astype(float) - base, float(z_positions[1]))
-            rel_mask &= np.isclose(mesh["z_p3"].astype(float) - base, float(z_positions[2]))
-            rel_mask &= np.isclose(mesh["z_p4"].astype(float) - base, float(z_positions[3]))
-            candidates = mesh[rel_mask]
-        if candidates.empty:
-            full_mask = (
-                np.isclose(mesh["cos_n"].astype(float), float(step1_cfg.get("cos_n")))
-                & np.isclose(mesh["flux_cm2_min"].astype(float), float(step1_cfg.get("flux_cm2_min")))
-                & np.isclose(mesh["eff_p1"].astype(float), float(effs[0]))
-                & np.isclose(mesh["eff_p2"].astype(float), float(effs[1]))
-                & np.isclose(mesh["eff_p3"].astype(float), float(effs[2]))
-                & np.isclose(mesh["eff_p4"].astype(float), float(effs[3]))
-            )
-            base = mesh["z_p1"].astype(float)
-            abs_full = full_mask.copy()
-            abs_full &= np.isclose(mesh["z_p1"].astype(float), float(z_positions[0]))
-            abs_full &= np.isclose(mesh["z_p2"].astype(float), float(z_positions[1]))
-            abs_full &= np.isclose(mesh["z_p3"].astype(float), float(z_positions[2]))
-            abs_full &= np.isclose(mesh["z_p4"].astype(float), float(z_positions[3]))
-            rel_full = full_mask.copy()
-            rel_full &= np.isclose(mesh["z_p1"].astype(float) - base, float(z_positions[0]))
-            rel_full &= np.isclose(mesh["z_p2"].astype(float) - base, float(z_positions[1]))
-            rel_full &= np.isclose(mesh["z_p3"].astype(float) - base, float(z_positions[2]))
-            rel_full &= np.isclose(mesh["z_p4"].astype(float) - base, float(z_positions[3]))
-            candidates = mesh[abs_full]
+        with param_mesh_lock(mesh_path):
+            try:
+                mesh = pd.read_csv(mesh_path)
+            except pd.errors.EmptyDataError:
+                _log_warn("param_mesh.csv is empty; skipping this parameter set.")
+                continue
+
+            if "done" not in mesh.columns:
+                mesh["done"] = 0
+            has_param_set_id = "param_set_id" in mesh.columns
+            has_param_date = "param_date" in mesh.columns
+            if has_param_set_id:
+                pending_mask = mesh["param_set_id"].isna()
+            else:
+                pending_mask = pd.Series(True, index=mesh.index)
+            mask = (mesh["done"] != 1) & pending_mask
+            mask &= np.isclose(mesh["cos_n"].astype(float), float(step1_cfg.get("cos_n")))
+            mask &= np.isclose(mesh["flux_cm2_min"].astype(float), float(step1_cfg.get("flux_cm2_min")))
+            mask &= np.isclose(mesh["eff_p1"].astype(float), float(effs[0]))
+            mask &= np.isclose(mesh["eff_p2"].astype(float), float(effs[1]))
+            mask &= np.isclose(mesh["eff_p3"].astype(float), float(effs[2]))
+            mask &= np.isclose(mesh["eff_p4"].astype(float), float(effs[3]))
+            abs_mask = mask.copy()
+            abs_mask &= np.isclose(mesh["z_p1"].astype(float), float(z_positions[0]))
+            abs_mask &= np.isclose(mesh["z_p2"].astype(float), float(z_positions[1]))
+            abs_mask &= np.isclose(mesh["z_p3"].astype(float), float(z_positions[2]))
+            abs_mask &= np.isclose(mesh["z_p4"].astype(float), float(z_positions[3]))
+            candidates = mesh[abs_mask]
             if candidates.empty:
-                candidates = mesh[rel_full]
-        if candidates.empty:
-            _log_warn("No matching param_mesh row found for this parameter set; skipping.")
-            continue
-        if len(candidates) > 1:
-            raise ValueError("Multiple matching param_mesh rows found; cannot assign param_set_id.")
-        param_row = candidates.iloc[0]
-        existing_param_set_id = param_row.get("param_set_id") if has_param_set_id else pd.NA
-        existing_param_date = param_row.get("param_date") if has_param_date else pd.NA
-        sim_params_path = output_dir / "step_final_simulation_params.csv"
-        sim_params_df = None
-        sim_params_needs_write = False
-        if sim_params_path.exists():
-            sim_params_df = pd.read_csv(sim_params_path)
-            drop_cols = [col for col in ("subfile_kind", "subfile_index") if col in sim_params_df.columns]
-            if drop_cols:
-                sim_params_df = sim_params_df.drop(columns=drop_cols)
-                sim_params_needs_write = True
-            if "param_hash" not in sim_params_df.columns or sim_params_df["param_hash"].isna().any():
-                sim_params_df = ensure_param_hash_column(sim_params_df)
-                sim_params_needs_write = True
-        if pd.isna(existing_param_set_id) or pd.isna(existing_param_date):
-            if has_param_set_id:
-                existing_ids = mesh["param_set_id"].dropna()
-            elif sim_params_df is not None and "param_set_id" in sim_params_df.columns:
-                existing_ids = sim_params_df["param_set_id"].dropna()
+                base = mesh["z_p1"].astype(float)
+                rel_mask = mask.copy()
+                rel_mask &= np.isclose(mesh["z_p1"].astype(float) - base, float(z_positions[0]))
+                rel_mask &= np.isclose(mesh["z_p2"].astype(float) - base, float(z_positions[1]))
+                rel_mask &= np.isclose(mesh["z_p3"].astype(float) - base, float(z_positions[2]))
+                rel_mask &= np.isclose(mesh["z_p4"].astype(float) - base, float(z_positions[3]))
+                candidates = mesh[rel_mask]
+            if candidates.empty:
+                full_mask = (
+                    np.isclose(mesh["cos_n"].astype(float), float(step1_cfg.get("cos_n")))
+                    & np.isclose(mesh["flux_cm2_min"].astype(float), float(step1_cfg.get("flux_cm2_min")))
+                    & np.isclose(mesh["eff_p1"].astype(float), float(effs[0]))
+                    & np.isclose(mesh["eff_p2"].astype(float), float(effs[1]))
+                    & np.isclose(mesh["eff_p3"].astype(float), float(effs[2]))
+                    & np.isclose(mesh["eff_p4"].astype(float), float(effs[3]))
+                )
+                base = mesh["z_p1"].astype(float)
+                abs_full = full_mask.copy()
+                abs_full &= np.isclose(mesh["z_p1"].astype(float), float(z_positions[0]))
+                abs_full &= np.isclose(mesh["z_p2"].astype(float), float(z_positions[1]))
+                abs_full &= np.isclose(mesh["z_p3"].astype(float), float(z_positions[2]))
+                abs_full &= np.isclose(mesh["z_p4"].astype(float), float(z_positions[3]))
+                rel_full = full_mask.copy()
+                rel_full &= np.isclose(mesh["z_p1"].astype(float) - base, float(z_positions[0]))
+                rel_full &= np.isclose(mesh["z_p2"].astype(float) - base, float(z_positions[1]))
+                rel_full &= np.isclose(mesh["z_p3"].astype(float) - base, float(z_positions[2]))
+                rel_full &= np.isclose(mesh["z_p4"].astype(float) - base, float(z_positions[3]))
+                candidates = mesh[abs_full]
+                if candidates.empty:
+                    candidates = mesh[rel_full]
+            if candidates.empty:
+                _log_warn("No matching param_mesh row found for this parameter set; skipping.")
+                continue
+            if len(candidates) > 1:
+                raise ValueError("Multiple matching param_mesh rows found; cannot assign param_set_id.")
+            param_row = candidates.iloc[0]
+            existing_param_set_id = param_row.get("param_set_id") if has_param_set_id else pd.NA
+            existing_param_date = param_row.get("param_date") if has_param_date else pd.NA
+            sim_params_path = output_dir / "step_final_simulation_params.csv"
+            sim_params_df = None
+            sim_params_needs_write = False
+            if sim_params_path.exists():
+                sim_params_df = pd.read_csv(sim_params_path)
+                drop_cols = [col for col in ("subfile_kind", "subfile_index") if col in sim_params_df.columns]
+                if drop_cols:
+                    sim_params_df = sim_params_df.drop(columns=drop_cols)
+                    sim_params_needs_write = True
+                if "param_hash" not in sim_params_df.columns or sim_params_df["param_hash"].isna().any():
+                    sim_params_df = ensure_param_hash_column(sim_params_df)
+                    sim_params_needs_write = True
+            if pd.isna(existing_param_set_id) or pd.isna(existing_param_date):
+                if has_param_set_id:
+                    existing_ids = mesh["param_set_id"].dropna()
+                elif sim_params_df is not None and "param_set_id" in sim_params_df.columns:
+                    existing_ids = sim_params_df["param_set_id"].dropna()
+                else:
+                    existing_ids = pd.Series([], dtype="float64")
+                next_id = int(existing_ids.max()) + 1 if not existing_ids.empty else 1
+                if sim_params_df is not None and "param_date" in sim_params_df.columns:
+                    existing_dates = sim_params_df["param_date"].dropna()
+                elif has_param_date:
+                    existing_dates = mesh["param_date"].dropna()
+                else:
+                    existing_dates = pd.Series([], dtype="object")
+                if not existing_dates.empty:
+                    last_date = parse_param_datetime(str(existing_dates.iloc[-1])).date()
+                    next_date = last_date + timedelta(days=1)
+                else:
+                    next_date = date(2000, 1, 1)
+                if has_param_set_id:
+                    mesh.loc[param_row.name, "param_set_id"] = next_id
+                if has_param_date:
+                    mesh.loc[param_row.name, "param_date"] = next_date.isoformat()
+                mesh.loc[param_row.name, "done"] = 1
+                param_set_id = next_id
+                param_date = next_date.isoformat()
             else:
-                existing_ids = pd.Series([], dtype="float64")
-            next_id = int(existing_ids.max()) + 1 if not existing_ids.empty else 1
-            if sim_params_df is not None and "param_date" in sim_params_df.columns:
-                existing_dates = sim_params_df["param_date"].dropna()
-            elif has_param_date:
-                existing_dates = mesh["param_date"].dropna()
-            else:
-                existing_dates = pd.Series([], dtype="object")
-            if not existing_dates.empty:
-                last_date = parse_param_datetime(str(existing_dates.iloc[-1])).date()
-                next_date = last_date + timedelta(days=1)
-            else:
-                next_date = date(2000, 1, 1)
-            if has_param_set_id:
-                mesh.loc[param_row.name, "param_set_id"] = next_id
-            if has_param_date:
-                mesh.loc[param_row.name, "param_date"] = next_date.isoformat()
-            mesh.loc[param_row.name, "done"] = 1
-            param_set_id = next_id
-            param_date = next_date.isoformat()
-        else:
-            param_set_id = int(existing_param_set_id)
-            param_date = str(existing_param_date)
-        z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
-        head_cols = ["done", "param_set_id", "param_date"]
-        ordered_cols = [c for c in head_cols if c in mesh.columns] + [
-            c for c in mesh.columns if c not in head_cols and c not in z_cols
-        ] + [c for c in z_cols if c in mesh.columns]
-        mesh = mesh[ordered_cols]
-        mesh["done"] = mesh["done"].fillna(0).astype(int)
-        mesh = normalize_param_mesh_ids(mesh)
-        mesh.to_csv(mesh_path, index=False)
-        if param_date is None or pd.isna(param_date):
-            raise ValueError("param_date is missing; enable param_date column or ensure it is populated.")
-        base_time = parse_param_datetime(str(param_date))
-        z_vals = [
-            float(param_row["z_p1"]),
-            float(param_row["z_p2"]),
-            float(param_row["z_p3"]),
-            float(param_row["z_p4"]),
-        ]
+                param_set_id = int(existing_param_set_id)
+                param_date = str(existing_param_date)
+            z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
+            head_cols = ["done", "param_set_id", "param_date"]
+            ordered_cols = [c for c in head_cols if c in mesh.columns] + [
+                c for c in mesh.columns if c not in head_cols and c not in z_cols
+            ] + [c for c in z_cols if c in mesh.columns]
+            mesh = mesh[ordered_cols]
+            mesh["done"] = mesh["done"].fillna(0).astype(int)
+            mesh = normalize_param_mesh_ids(mesh)
+            write_csv_atomic(mesh, mesh_path, index=False)
+            if param_date is None or pd.isna(param_date):
+                raise ValueError("param_date is missing; enable param_date column or ensure it is populated.")
+            base_time = parse_param_datetime(str(param_date))
+            z_vals = [
+                float(param_row["z_p1"]),
+                float(param_row["z_p2"]),
+                float(param_row["z_p3"]),
+                float(param_row["z_p4"]),
+            ]
         step1_cfg = find_upstream_config(baseline_meta, "STEP_1") or {}
         step3_cfg = find_upstream_config(baseline_meta, "STEP_3") or {}
         step9_cfg = find_upstream_config(baseline_meta, "STEP_9") or {}

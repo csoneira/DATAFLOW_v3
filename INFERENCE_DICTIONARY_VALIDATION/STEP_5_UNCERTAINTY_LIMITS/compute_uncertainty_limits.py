@@ -372,117 +372,54 @@ def _compute_plane_mean(
     return x_edges, y_edges, z_mean, count
 
 
-def _plot_plane_mean_error(
+def _plot_plane_mean_error_combined(
     df: pd.DataFrame,
     *,
-    value_col: str,
     title: str,
-    cbar_label: str,
     path: Path,
     flux_bins: int,
     eff_bins: int,
 ) -> None:
-    """1×2 figure: left = mean-error heatmap, right = counts companion."""
-    x_edges, y_edges, z_mean, counts = _compute_plane_mean(
-        df,
-        value_col=value_col,
-        flux_bins=flux_bins,
-        eff_bins=eff_bins,
-    )
-    if z_mean.size == 0:
-        return
-
-    finite = pd.Series(z_mean.ravel()).dropna()
-    if finite.empty:
-        return
-    vmax = float(np.nanpercentile(finite.to_numpy(dtype=float), 95))
-    if not np.isfinite(vmax) or vmax <= 0:
-        vmax = None
-
+    """1×2 figure: left = mean |flux error| heatmap, right = mean |eff error| heatmap."""
+    pairs = [
+        ("abs_flux_rel_error_pct", "Mean |flux rel. error| [%]"),
+        ("abs_eff_rel_error_pct", "Mean |eff rel. error| [%]"),
+    ]
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    mesh0 = axes[0].pcolormesh(
-        x_edges, y_edges, z_mean.T, shading="auto", cmap="viridis",
-        vmin=0, vmax=vmax,
-    )
-    fig.colorbar(mesh0, ax=axes[0], label=cbar_label)
-    axes[0].set_xlabel("True flux [cm^-2 min^-1]")
-    axes[0].set_ylabel("True eff_1")
-    axes[0].set_title(title)
-    axes[0].grid(True, alpha=0.2)
+    for idx, (value_col, cbar_label) in enumerate(pairs):
+        ax = axes[idx]
+        x_edges, y_edges, z_mean, counts = _compute_plane_mean(
+            df,
+            value_col=value_col,
+            flux_bins=flux_bins,
+            eff_bins=eff_bins,
+        )
+        if z_mean.size == 0:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center",
+                    transform=ax.transAxes)
+            continue
 
-    mesh1 = axes[1].pcolormesh(
-        x_edges, y_edges, counts.T, shading="auto", cmap="magma",
-    )
-    fig.colorbar(mesh1, ax=axes[1], label="Samples in cell")
-    axes[1].set_xlabel("True flux [cm^-2 min^-1]")
-    axes[1].set_ylabel("True eff_1")
-    axes[1].set_title(title.replace("mean", "counts"))
-    axes[1].grid(True, alpha=0.2)
+        finite = pd.Series(z_mean.ravel()).dropna()
+        if finite.empty:
+            ax.text(0.5, 0.5, "No finite values", ha="center", va="center",
+                    transform=ax.transAxes)
+            continue
+        vmax = float(np.nanpercentile(finite.to_numpy(dtype=float), 95))
+        if not np.isfinite(vmax) or vmax <= 0:
+            vmax = None
 
-    fig.tight_layout()
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
+        mesh = ax.pcolormesh(
+            x_edges, y_edges, z_mean.T, shading="auto", cmap="viridis",
+            vmin=0, vmax=vmax,
+        )
+        fig.colorbar(mesh, ax=ax, label=cbar_label)
+        ax.set_xlabel("True flux [cm^-2 min^-1]")
+        ax.set_ylabel("True eff_1")
+        ax.set_title(cbar_label)
+        ax.grid(True, alpha=0.2)
 
-
-def _plot_sector_histograms(
-    df: pd.DataFrame,
-    *,
-    error_col: str,
-    title: str,
-    path: Path,
-    flux_sectors: int,
-    eff_sectors: int,
-    hist_bins: int,
-) -> None:
-    needed = ["true_flux_cm2_min", "true_eff_1", error_col]
-    work = df[needed].apply(pd.to_numeric, errors="coerce").dropna()
-    if len(work) < 10:
-        return
-
-    x = work["true_flux_cm2_min"].to_numpy(dtype=float)
-    y = work["true_eff_1"].to_numpy(dtype=float)
-    err = work[error_col].to_numpy(dtype=float)
-
-    x_edges = np.linspace(float(np.min(x)), float(np.max(x)), max(2, flux_sectors) + 1)
-    y_edges = np.linspace(float(np.min(y)), float(np.max(y)), max(2, eff_sectors) + 1)
-    q01, q99 = np.nanpercentile(err, [1, 99])
-    span = max(abs(q01), abs(q99))
-    xlim = (-span, span) if span > 0 else (-1.0, 1.0)
-
-    fig, axes = plt.subplots(eff_sectors, flux_sectors, figsize=(3.2 * flux_sectors, 2.4 * eff_sectors), sharex=True, sharey=True)
-    axes = np.atleast_2d(axes)
-
-    for j in range(eff_sectors):
-        y_lo = y_edges[j]
-        y_hi = y_edges[j + 1]
-        y_mask = (y >= y_lo) & ((y < y_hi) if j < eff_sectors - 1 else (y <= y_hi))
-        for i in range(flux_sectors):
-            ax = axes[eff_sectors - 1 - j, i]
-            x_lo = x_edges[i]
-            x_hi = x_edges[i + 1]
-            x_mask = (x >= x_lo) & ((x < x_hi) if i < flux_sectors - 1 else (x <= x_hi))
-            sector = err[x_mask & y_mask]
-            if len(sector) > 0:
-                ax.hist(sector, bins=hist_bins, range=xlim, color="#4C78A8", alpha=0.85, edgecolor="white")
-            ax.axvline(0.0, color="black", linewidth=0.7, linestyle="--")
-            ax.grid(True, alpha=0.2)
-            ax.text(
-                0.98, 0.92, f"n={len(sector)}",
-                transform=ax.transAxes,
-                ha="right",
-                va="top",
-                fontsize=7,
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.7, edgecolor="#DDDDDD"),
-            )
-            if j == 0:
-                ax.set_title(f"F{i + 1}", fontsize=8)
-            if i == 0:
-                ax.set_ylabel(f"E{eff_sectors - j}", fontsize=8)
-
-    fig.suptitle(title, fontsize=11)
-    fig.supxlabel(error_col)
-    fig.supylabel("Count")
+    fig.suptitle(title, fontsize=12)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -641,38 +578,42 @@ def _plot_sample_size_distribution(df: pd.DataFrame, path: Path, threshold: floa
     plt.close(fig)
 
 
-def _plot_error_vs_distance_combined(df: pd.DataFrame, path: Path) -> None:
-    """1×2 scatter: flux and efficiency error vs distance-to-dictionary."""
-    x = pd.to_numeric(df.get("sample_to_dict_dist_norm"), errors="coerce")
+def _plot_residual_overlay(
+    high_df: pd.DataFrame,
+    low_df: pd.DataFrame,
+    *,
+    error_col: str,
+    xlabel: str,
+    title: str,
+    path: Path,
+    threshold: float,
+) -> None:
+    """Overlay high-stat and low-stat residual distributions in one figure."""
+    fig, ax = plt.subplots(figsize=(9, 5.5))
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    for subset_df, label, color in (
+        (high_df, f"events >= {threshold:g}", "#4C78A8"),
+        (low_df, f"events < {threshold:g}", "#E45756"),
+    ):
+        vals = pd.to_numeric(subset_df.get(error_col), errors="coerce").dropna()
+        if vals.empty:
+            continue
+        # Clip to 1st–99th percentile for readable axis range
+        q01, q99 = float(vals.quantile(0.01)), float(vals.quantile(0.99))
+        span = max(abs(q01), abs(q99))
+        clipped = vals[(vals >= -span) & (vals <= span)]
+        ax.hist(
+            clipped, bins=60, density=True, alpha=0.55,
+            color=color, edgecolor="white", linewidth=0.4,
+            label=f"{label} (n={len(vals)})",
+        )
 
-    for idx, (error_col, ylabel, title_tag) in enumerate([
-        ("abs_flux_rel_error_pct", "|Flux relative error| [%]", "flux"),
-        ("abs_eff_rel_error_pct", "|Efficiency relative error| [%]", "efficiency"),
-    ]):
-        ax = axes[idx]
-        y = pd.to_numeric(df.get(error_col), errors="coerce")
-        mask = x.notna() & y.notna()
-        if mask.sum() >= 10:
-            ax.scatter(x[mask], y[mask], s=16, alpha=0.6, color="#4C78A8")
-            xv = x[mask].to_numpy(dtype=float)
-            yv = y[mask].to_numpy(dtype=float)
-            pr = float(np.corrcoef(xv, yv)[0, 1])
-            try:
-                from scipy.stats import spearmanr as _spearmanr
-                sr = _spearmanr(xv, yv)
-                ann = f"Pearson r = {pr:.3f}\nSpearman r = {sr.correlation:.3f}"
-            except Exception:
-                ann = f"Pearson r = {pr:.3f}"
-            ax.text(0.02, 0.98, ann, transform=ax.transAxes, fontsize=9,
-                    verticalalignment="top",
-                    bbox=dict(facecolor="white", alpha=0.8, edgecolor="grey"))
-        ax.set_xlabel("Distance to nearest dictionary point (normalized)")
-        ax.set_ylabel(ylabel)
-        ax.set_title(f"STEP_4: {title_tag} error vs distance-to-dictionary")
-        ax.grid(True, alpha=0.2)
-
+    ax.axvline(0.0, color="black", linestyle="--", linewidth=0.8)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Density")
+    ax.set_title(title)
+    ax.legend(frameon=True, framealpha=0.9)
+    ax.grid(True, alpha=0.2)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -812,11 +753,6 @@ def main() -> int:
                         help="Event threshold for high-stat flux-eff error maps (default 40000).")
     parser.add_argument("--plane-flux-bins", type=int, default=None)
     parser.add_argument("--plane-eff-bins", type=int, default=None)
-    parser.add_argument("--sector-flux-bins", type=int, default=None,
-                        help="Number of flux sectors for residual-histogram grid.")
-    parser.add_argument("--sector-eff-bins", type=int, default=None,
-                        help="Number of efficiency sectors for residual-histogram grid.")
-    parser.add_argument("--sector-hist-bins", type=int, default=None)
     parser.add_argument("--events-fixed-edges", default=None,
                         help="Comma-separated fixed event-bin edges for uncertainty table.")
     parser.add_argument("--sweep-points", type=int, default=None,
@@ -852,9 +788,6 @@ def main() -> int:
     plane_min_events = float(_rp(args.plane_min_events, "plane_min_events", 40000))
     plane_flux_bins = int(_rp(args.plane_flux_bins, "plane_flux_bins", 24))
     plane_eff_bins = int(_rp(args.plane_eff_bins, "plane_eff_bins", 24))
-    sector_flux_bins = int(_rp(args.sector_flux_bins, "sector_flux_bins", 4))
-    sector_eff_bins = int(_rp(args.sector_eff_bins, "sector_eff_bins", 4))
-    sector_hist_bins = int(_rp(args.sector_hist_bins, "sector_hist_bins", 28))
     fixed_edges = parse_list(
         _rp(args.events_fixed_edges, "events_fixed_edges",
             [0, 5000, 10000, 15000, 20000, 30000, 40000, 50000, 70000, 100000]),
@@ -1103,83 +1036,36 @@ def main() -> int:
         high_df = _event_filter(results_plus, plane_min_events, "ge")
         low_df = _event_filter(results_plus, plane_min_events, "lt")
 
-        _plot_plane_mean_error(
+        _plot_plane_mean_error_combined(
             high_df,
-            value_col="abs_flux_rel_error_pct",
-            title=f"Flux mean abs relative error in (flux, eff) plane for events >= {plane_min_events:g}",
-            cbar_label="Mean |flux relative error| [%]",
-            path=out_dir / f"plane_mean_abs_flux_error_ge_{int(plane_min_events)}.png",
+            title=f"Mean absolute relative error in (flux, eff) plane — events >= {plane_min_events:g}",
+            path=out_dir / f"plane_mean_error_ge_{int(plane_min_events)}.png",
             flux_bins=plane_flux_bins,
             eff_bins=plane_eff_bins,
         )
-        _plot_plane_mean_error(
-            high_df,
-            value_col="abs_eff_rel_error_pct",
-            title=f"Efficiency mean abs relative error in (flux, eff) plane for events >= {plane_min_events:g}",
-            cbar_label="Mean |efficiency relative error| [%]",
-            path=out_dir / f"plane_mean_abs_eff_error_ge_{int(plane_min_events)}.png",
-            flux_bins=plane_flux_bins,
-            eff_bins=plane_eff_bins,
-        )
-        _plot_plane_mean_error(
+        _plot_plane_mean_error_combined(
             low_df,
-            value_col="abs_flux_rel_error_pct",
-            title=f"Flux mean abs relative error in (flux, eff) plane for events < {plane_min_events:g}",
-            cbar_label="Mean |flux relative error| [%]",
-            path=out_dir / f"plane_mean_abs_flux_error_lt_{int(plane_min_events)}.png",
-            flux_bins=plane_flux_bins,
-            eff_bins=plane_eff_bins,
-        )
-        _plot_plane_mean_error(
-            low_df,
-            value_col="abs_eff_rel_error_pct",
-            title=f"Efficiency mean abs relative error in (flux, eff) plane for events < {plane_min_events:g}",
-            cbar_label="Mean |efficiency relative error| [%]",
-            path=out_dir / f"plane_mean_abs_eff_error_lt_{int(plane_min_events)}.png",
+            title=f"Mean absolute relative error in (flux, eff) plane — events < {plane_min_events:g}",
+            path=out_dir / f"plane_mean_error_lt_{int(plane_min_events)}.png",
             flux_bins=plane_flux_bins,
             eff_bins=plane_eff_bins,
         )
 
-        _plot_sector_histograms(
-            low_df,
+        _plot_residual_overlay(
+            high_df, low_df,
             error_col="flux_rel_error_pct",
-            title=f"Flux residual histograms per sector (events < {plane_min_events:g})",
-            path=out_dir / f"sector_hist_flux_residual_lt_{int(plane_min_events)}.png",
-            flux_sectors=sector_flux_bins,
-            eff_sectors=sector_eff_bins,
-            hist_bins=sector_hist_bins,
+            xlabel="Flux relative error [%]",
+            title="Flux residual distribution: high vs low statistics",
+            path=out_dir / "residual_overlay_flux.png",
+            threshold=plane_min_events,
         )
-        _plot_sector_histograms(
-            high_df,
-            error_col="flux_rel_error_pct",
-            title=f"Flux residual histograms per sector (events >= {plane_min_events:g})",
-            path=out_dir / f"sector_hist_flux_residual_ge_{int(plane_min_events)}.png",
-            flux_sectors=sector_flux_bins,
-            eff_sectors=sector_eff_bins,
-            hist_bins=sector_hist_bins,
-        )
-        _plot_sector_histograms(
-            low_df,
+        _plot_residual_overlay(
+            high_df, low_df,
             error_col="eff_rel_error_pct",
-            title=f"Efficiency residual histograms per sector (events < {plane_min_events:g})",
-            path=out_dir / f"sector_hist_eff_residual_lt_{int(plane_min_events)}.png",
-            flux_sectors=sector_flux_bins,
-            eff_sectors=sector_eff_bins,
-            hist_bins=sector_hist_bins,
-        )
-        _plot_sector_histograms(
-            high_df,
-            error_col="eff_rel_error_pct",
-            title=f"Efficiency residual histograms per sector (events >= {plane_min_events:g})",
-            path=out_dir / f"sector_hist_eff_residual_ge_{int(plane_min_events)}.png",
-            flux_sectors=sector_flux_bins,
-            eff_sectors=sector_eff_bins,
-            hist_bins=sector_hist_bins,
-        )
-
-        _plot_error_vs_distance_combined(
-            results_plus,
-            out_dir / "scatter_error_vs_dict_distance.png",
+            xlabel="Efficiency relative error [%]",
+            title="Efficiency residual distribution: high vs low statistics",
+            path=out_dir / "residual_overlay_eff.png",
+            threshold=plane_min_events,
         )
 
     log.info("Wrote uncertainty table: %s", uncertainty_csv)

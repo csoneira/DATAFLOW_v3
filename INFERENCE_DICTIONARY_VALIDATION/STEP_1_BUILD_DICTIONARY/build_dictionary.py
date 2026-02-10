@@ -46,10 +46,8 @@ def _generate_plots(csv_path: Path) -> None:
 
     Consolidated figures:
     - hist_flux_cos_n.png          : flux + cos_n histograms (1×2)
-    - hist_z_planes.png            : z_plane_1..4 histograms (2×2)
+    - hist_z_planes.png            : z-plane geometry diagnostics (2×2)
     - scatter_flux_vs_cos_n.png    : single scatter
-    - scatter_flux_vs_z_planes.png : flux vs z_plane_1..4 (2×2)
-    - scatter_z_plane_pairs.png    : all z-plane pair combos (corner plot)
     - scatter_flux_vs_rates.png    : flux vs rate columns (multi-panel)
     """
     df = pd.read_csv(csv_path, low_memory=False)
@@ -81,23 +79,80 @@ def _generate_plots(csv_path: Path) -> None:
         fig.savefig(plot_dir / "hist_flux_cos_n.png", dpi=140)
         plt.close(fig)
 
-    # --- z-plane histograms (2×2) ---
+    # --- z-plane geometry diagnostics (2×2) ---
     z_cols = [f"z_plane_{i}" for i in range(1, 5) if f"z_plane_{i}" in df.columns]
     if z_cols:
+        z_df = df[z_cols].apply(pd.to_numeric, errors="coerce")
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        for idx, col in enumerate(z_cols):
-            ax = axes[idx // 2, idx % 2]
-            series = pd.to_numeric(df.get(col), errors="coerce").dropna()
-            if not series.empty:
-                ax.hist(series, bins=40, color="#4C78A8", alpha=0.85,
-                        edgecolor="white")
-            ax.set_xlabel(col)
-            ax.set_ylabel("Count")
-            ax.set_title(f"Distribution of {col}")
-            ax.grid(True, alpha=0.2)
-        # Hide unused subplots
-        for idx in range(len(z_cols), 4):
-            axes[idx // 2, idx % 2].set_visible(False)
+
+        # Panel A: compact comparison of each z-plane distribution
+        ax = axes[0, 0]
+        box_data = [z_df[col].dropna().to_numpy(dtype=float) for col in z_cols]
+        if any(len(arr) > 0 for arr in box_data):
+            bp = ax.boxplot(
+                box_data,
+                labels=z_cols,
+                patch_artist=True,
+                showfliers=False,
+            )
+            for patch in bp["boxes"]:
+                patch.set_facecolor("#4C78A8")
+                patch.set_alpha(0.45)
+        ax.set_title("z-plane distributions (boxplot)")
+        ax.set_ylabel("z value")
+        ax.grid(True, alpha=0.2)
+
+        # Panel B: total geometry span (max(z)-min(z))
+        ax = axes[0, 1]
+        span = (z_df.max(axis=1) - z_df.min(axis=1)).dropna()
+        if not span.empty:
+            ax.hist(span, bins=40, color="#54A24B", alpha=0.85, edgecolor="white")
+        ax.set_title("Geometry span: max(z)-min(z)")
+        ax.set_xlabel("span")
+        ax.set_ylabel("Count")
+        ax.grid(True, alpha=0.2)
+
+        # Panel C: nearest-neighbor gaps along the stack
+        ax = axes[1, 0]
+        sorted_z = np.sort(z_df.to_numpy(dtype=float), axis=1)
+        if sorted_z.shape[1] >= 2:
+            gaps = np.diff(sorted_z, axis=1)
+            colors = ["#F58518", "#E45756", "#72B7B2"]
+            for i in range(gaps.shape[1]):
+                g = pd.Series(gaps[:, i]).dropna()
+                if not g.empty:
+                    ax.hist(
+                        g,
+                        bins=35,
+                        alpha=0.45,
+                        label=f"gap_{i+1}",
+                        color=colors[i % len(colors)],
+                        edgecolor="white",
+                    )
+            ax.legend(frameon=True, framealpha=0.9, fontsize=8)
+        ax.set_title("Neighbor gaps in sorted z planes")
+        ax.set_xlabel("gap")
+        ax.set_ylabel("Count")
+        ax.grid(True, alpha=0.2)
+
+        # Panel D: stack center vs span (colored by cos_n if available)
+        ax = axes[1, 1]
+        center = z_df.mean(axis=1)
+        mask = center.notna() & span.reindex(center.index).notna()
+        if mask.sum() >= 2:
+            y = span.reindex(center.index)[mask]
+            if "cos_n" in df.columns:
+                c = pd.to_numeric(df["cos_n"], errors="coerce").reindex(center.index)[mask]
+                sc = ax.scatter(center[mask], y, c=c, s=14, alpha=0.65, cmap="viridis")
+                cbar = fig.colorbar(sc, ax=ax)
+                cbar.set_label("cos_n")
+            else:
+                ax.scatter(center[mask], y, s=14, alpha=0.65, color="#4C78A8")
+        ax.set_title("Geometry center vs span")
+        ax.set_xlabel("mean(z_planes)")
+        ax.set_ylabel("span")
+        ax.grid(True, alpha=0.2)
+
         fig.tight_layout()
         fig.savefig(plot_dir / "hist_z_planes.png", dpi=140)
         plt.close(fig)
@@ -105,52 +160,6 @@ def _generate_plots(csv_path: Path) -> None:
     # --- flux vs cos_n scatter (single) ---
     plot_scatter(df, "flux_cm2_min", "cos_n",
                  plot_dir / "scatter_flux_vs_cos_n.png")
-
-    # --- flux vs z-planes (2×2) ---
-    if z_cols and "flux_cm2_min" in df.columns:
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        for idx, zc in enumerate(z_cols):
-            ax = axes[idx // 2, idx % 2]
-            x = pd.to_numeric(df.get("flux_cm2_min"), errors="coerce")
-            y = pd.to_numeric(df.get(zc), errors="coerce")
-            mask = x.notna() & y.notna()
-            if mask.sum() >= 2:
-                ax.scatter(x[mask], y[mask], s=12, alpha=0.6, color="#F58518")
-            ax.set_xlabel("flux_cm2_min")
-            ax.set_ylabel(zc)
-            ax.set_title(f"{zc} vs flux")
-            ax.grid(True, alpha=0.2)
-        for idx in range(len(z_cols), 4):
-            axes[idx // 2, idx % 2].set_visible(False)
-        fig.tight_layout()
-        fig.savefig(plot_dir / "scatter_flux_vs_z_planes.png", dpi=140)
-        plt.close(fig)
-
-    # --- z-plane pair corner plot ---
-    import itertools
-    z_pairs = list(itertools.combinations(z_cols, 2))
-    if z_pairs:
-        n_pairs = len(z_pairs)
-        ncols = min(3, n_pairs)
-        nrows = (n_pairs + ncols - 1) // ncols
-        fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 5 * nrows))
-        axes_flat = np.atleast_1d(axes).ravel()
-        for idx, (ci, cj) in enumerate(z_pairs):
-            ax = axes_flat[idx]
-            x = pd.to_numeric(df.get(ci), errors="coerce")
-            y = pd.to_numeric(df.get(cj), errors="coerce")
-            mask = x.notna() & y.notna()
-            if mask.sum() >= 2:
-                ax.scatter(x[mask], y[mask], s=12, alpha=0.6, color="#F58518")
-            ax.set_xlabel(ci)
-            ax.set_ylabel(cj)
-            ax.set_title(f"{cj} vs {ci}")
-            ax.grid(True, alpha=0.2)
-        for idx in range(len(z_pairs), len(axes_flat)):
-            axes_flat[idx].set_visible(False)
-        fig.tight_layout()
-        fig.savefig(plot_dir / "scatter_z_plane_pairs.png", dpi=140)
-        plt.close(fig)
 
     # --- Rate-vs-flux multi-panel (§2.3) ---
     rate_cols = [c for c in df.columns

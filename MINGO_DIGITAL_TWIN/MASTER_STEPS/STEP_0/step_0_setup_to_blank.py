@@ -25,7 +25,10 @@ from STEP_SHARED.sim_utils import (
     list_station_config_files,
     load_step_configs,
     now_iso,
+    param_mesh_lock,
     read_station_config,
+    write_csv_atomic,
+    write_text_atomic,
 )
 
 
@@ -182,7 +185,10 @@ def _append_param_row(
         shared.update({"z_p1", "z_p2", "z_p3", "z_p4"})
 
     if mesh_path.exists():
-        mesh = pd.read_csv(mesh_path)
+        try:
+            mesh = pd.read_csv(mesh_path)
+        except pd.errors.EmptyDataError:
+            mesh = pd.DataFrame()
         if "done" not in mesh.columns:
             mesh["done"] = 0
         dup_cols = [col for col in mesh.columns if col.endswith(".1")]
@@ -304,7 +310,7 @@ def _append_param_row(
     )
     mesh = mesh[ordered_cols]
     mesh["done"] = mesh["done"].fillna(0).astype(int)
-    mesh.to_csv(mesh_path, index=False)
+    write_csv_atomic(mesh, mesh_path, index=False)
 
     meta = {
         "updated_at": now_iso(),
@@ -315,7 +321,7 @@ def _append_param_row(
         "shared_columns": sorted(shared),
         "step": "STEP_0",
     }
-    meta_path.write_text(json.dumps(meta, indent=2))
+    write_text_atomic(meta_path, json.dumps(meta, indent=2))
 
 
 def _log_info(message: str) -> None:
@@ -388,38 +394,42 @@ def main() -> None:
     mesh_path = output_dir / "param_mesh.csv"
     mesh_meta_path = output_dir / "param_mesh_metadata.json"
 
-    if mesh_path.exists() and not args.force:
-        mesh = pd.read_csv(mesh_path)
-        if "done" not in mesh.columns:
-            mesh["done"] = 0
-        done_series = mesh["done"].fillna(0).astype(int)
-        total_rows = len(mesh)
-        done_rows = int((done_series == 1).sum())
-        if total_rows > 0 and done_rows < total_rows:
-            done_pct = done_rows / total_rows * 100.0
-            print(
-                "Skipping append: mesh completion "
-                f"{done_pct:.1f}% ({done_rows}/{total_rows} rows done) is below 100%."
-            )
-            _log_info("Skip append: mesh not fully done")
-            return
+    with param_mesh_lock(mesh_path):
+        if mesh_path.exists() and not args.force:
+            try:
+                mesh = pd.read_csv(mesh_path)
+            except pd.errors.EmptyDataError:
+                mesh = pd.DataFrame()
+            if "done" not in mesh.columns:
+                mesh["done"] = 0
+            done_series = mesh["done"].fillna(0).astype(int)
+            total_rows = len(mesh)
+            done_rows = int((done_series == 1).sum())
+            if total_rows > 0 and done_rows < total_rows:
+                done_pct = done_rows / total_rows * 100.0
+                print(
+                    "Skipping append: mesh completion "
+                    f"{done_pct:.1f}% ({done_rows}/{total_rows} rows done) is below 100%."
+                )
+                _log_info("Skip append: mesh not fully done")
+                return
 
-    _append_param_row(mesh_path, mesh_meta_path, physics_cfg, rng, z_positions)
+        _append_param_row(mesh_path, mesh_meta_path, physics_cfg, rng, z_positions)
 
-    try:
-        mesh = pd.read_csv(mesh_path)
-        _log_info(f"Mesh rows after append: {len(mesh)}")
-    except (OSError, pd.errors.ParserError):
-        _log_info("Mesh updated (row count unavailable)")
+        try:
+            mesh = pd.read_csv(mesh_path)
+            _log_info(f"Mesh rows after append: {len(mesh)}")
+        except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError):
+            _log_info("Mesh updated (row count unavailable)")
 
-    meta = {
-        "created_at": now_iso(),
-        "step": "STEP_0",
-        "config": physics_cfg,
-        "runtime_config": runtime_cfg,
-        "station_config_root": str(station_root),
-    }
-    mesh_meta_path.write_text(json.dumps(meta, indent=2))
+        meta = {
+            "created_at": now_iso(),
+            "step": "STEP_0",
+            "config": physics_cfg,
+            "runtime_config": runtime_cfg,
+            "station_config_root": str(station_root),
+        }
+        write_text_atomic(mesh_meta_path, json.dumps(meta, indent=2))
 
     _log_info(f"Updated param mesh in {output_dir}")
 

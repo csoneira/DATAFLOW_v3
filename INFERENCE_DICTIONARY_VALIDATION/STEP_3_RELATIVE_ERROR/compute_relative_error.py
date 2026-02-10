@@ -45,6 +45,99 @@ DEFAULT_CONFIG = STEP_DIR / "config.json"
 
 
 # -------------------------------------------------------------------------
+# Iso-rate contours on eff vs flux
+# -------------------------------------------------------------------------
+
+def _plot_iso_rate_contours(
+    df: pd.DataFrame,
+    plot_dir: Path,
+) -> None:
+    """Scatter eff vs flux with iso-contour lines of constant global rate.
+
+    Produces a single figure with the dictionary points in (flux, eff) space,
+    coloured by global rate, with contour lines at integer Hz values
+    (10, 11, 12, …, 18 Hz).
+    """
+    import ast as _ast
+    from matplotlib.tri import Triangulation, LinearTriInterpolator
+
+    # --- Extract efficiency from the 'efficiencies' string column ---
+    if "efficiencies" not in df.columns:
+        log.warning("No 'efficiencies' column — skipping iso-rate plot.")
+        return
+    try:
+        effs = df["efficiencies"].apply(_ast.literal_eval)
+        eff = effs.apply(lambda x: float(x[0]))
+    except Exception:
+        log.warning("Could not parse efficiencies — skipping iso-rate plot.")
+        return
+
+    gr_col = "events_per_second_global_rate"
+    if gr_col not in df.columns:
+        log.warning("No global rate column — skipping iso-rate plot.")
+        return
+
+    flux = pd.to_numeric(df["flux_cm2_min"], errors="coerce")
+    rate = pd.to_numeric(df[gr_col], errors="coerce")
+
+    x_arr = flux.to_numpy(dtype=float)
+    y_arr = eff.to_numpy(dtype=float)
+    z_arr = rate.to_numpy(dtype=float)
+    mask = np.isfinite(x_arr) & np.isfinite(y_arr) & np.isfinite(z_arr)
+    if mask.sum() < 10:
+        log.warning("Too few valid points for iso-rate plot.")
+        return
+
+    xm, ym, zm = x_arr[mask], y_arr[mask], z_arr[mask]
+
+    # Fixed contour levels at integer Hz
+    levels = np.array([10, 11, 12, 13, 14, 15, 16, 17, 18], dtype=float)
+
+    cmap = plt.cm.coolwarm
+
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(10, 7.5))
+
+    # Scatter: points coloured by global rate
+    sc = ax.scatter(xm, ym, c=zm, cmap=cmap, s=22, alpha=0.75,
+                    edgecolors="0.3", linewidths=0.3, zorder=3,
+                    vmin=levels.min(), vmax=levels.max())
+
+    # Triangulated iso-contours at the fixed levels
+    try:
+        tri = Triangulation(xm, ym)
+        interp = LinearTriInterpolator(tri, zm)
+        xi = np.linspace(xm.min(), xm.max(), 300)
+        yi = np.linspace(ym.min(), ym.max(), 300)
+        Xi, Yi = np.meshgrid(xi, yi)
+        Zi = interp(Xi, Yi)
+        cs = ax.contour(Xi, Yi, Zi, levels=levels, cmap=cmap,
+                        linewidths=1.4, alpha=0.9, zorder=2,
+                        vmin=levels.min(), vmax=levels.max())
+        ax.clabel(cs, inline=True, fontsize=9, fmt="%d Hz")
+    except Exception as exc:
+        log.warning("Contour interpolation failed: %s", exc)
+
+    cbar = fig.colorbar(sc, ax=ax, pad=0.02, fraction=0.046)
+    cbar.set_label("Global rate [Hz]", fontsize=10)
+    cbar.set_ticks(levels)
+
+    ax.set_xlabel("Flux [cm$^{-2}$ min$^{-1}$]", fontsize=11)
+    ax.set_ylabel("Efficiency", fontsize=11)
+    ax.set_title(
+        "Iso-global-rate contours\n"
+        f"({mask.sum()} dictionary entries after deduplication)",
+        fontsize=12,
+    )
+    ax.grid(True, alpha=0.15)
+    fig.tight_layout()
+    fig.savefig(plot_dir / "iso_rate_global_rate.png", dpi=150)
+    plt.close(fig)
+    log.info("Iso-rate contour plot saved to %s", plot_dir)
+
+
+# -------------------------------------------------------------------------
 # Efficiency sim-vs-est scatter (all 4 planes in one 2×2 figure)
 # -------------------------------------------------------------------------
 
@@ -182,6 +275,27 @@ def main() -> int:
     mask = rel2.le(relerr_threshold) & rel3.le(relerr_threshold) & event_mask
     filtered = merged.loc[mask].copy()
 
+    # --- Deduplicate: keep only the highest-statistics file per unique
+    #     physical parameter set (flux, cos_n, z-planes).  Multiple files
+    #     sharing the same parameters but with fewer events are statistical
+    #     subsamples of the same simulation; keeping only the best one
+    #     avoids redundancy and improves downstream matching (STEP 4). ---
+    dedup_cols = ["flux_cm2_min", "cos_n",
+                  "z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"]
+    dedup_existing = [c for c in dedup_cols if c in filtered.columns]
+    events_col = "selected_rows" if "selected_rows" in filtered.columns else None
+    n_before_dedup = len(filtered)
+    if dedup_existing and events_col:
+        filtered = (
+            filtered
+            .sort_values(events_col, ascending=False)
+            .drop_duplicates(subset=dedup_existing, keep="first")
+            .sort_index()
+        )
+        log.info("Deduplication: %d → %d rows (keeping max %s per [%s]).",
+                 n_before_dedup, len(filtered), events_col,
+                 ", ".join(dedup_existing))
+
     merged["used_in_reference"] = mask
     used_entries = merged.loc[mask].copy()
     unused_entries = merged.loc[~mask].copy()
@@ -315,8 +429,6 @@ def _write_plots(
     - hist_used_vs_unused_flux_cosn.png  : flux+cos_n overlays (1×2)
     - counts_summary.png                 : grouped bar chart
     - selection_bias_diagnostics.png     : multi-panel selection-bias histograms
-    - scatter_used_vs_unused_flux_cosn_scatter.png : used/unused in (flux,cos_n)
-    - scatter_used_events_vs_relerr_p1_p4.png : p1/p4 events scatter (1×2)
     """
     plot_dir.mkdir(parents=True, exist_ok=True)
 
@@ -444,34 +556,8 @@ def _write_plots(
         fig.savefig(plot_dir / "selection_bias_diagnostics.png", dpi=140)
         plt.close(fig)
 
-    # --- 7. Scatter: used vs unused in (flux, cos_n) space ---
-    plot_scatter_overlay(
-        used, unused, "flux_cm2_min", "cos_n",
-        plot_dir / "scatter_used_vs_unused_flux_cosn.png",
-        "Flux vs cos_n (used vs unused)",
-    )
-
-    # --- 8. p1/p4 events scatter (1×2) ---
-    p_cols = [f"eff_rel_err_p{p}" for p in (1, 4) if f"eff_rel_err_p{p}" in used.columns]
-    if p_cols and "generated_events_count" in used.columns:
-        fig, axes = plt.subplots(1, len(p_cols),
-                                 figsize=(7 * len(p_cols), 5))
-        if len(p_cols) == 1:
-            axes = [axes]
-        for ax, rcol in zip(axes, p_cols):
-            x = pd.to_numeric(used.get("generated_events_count"), errors="coerce")
-            y = pd.to_numeric(used.get(rcol), errors="coerce")
-            mask = x.notna() & y.notna()
-            if mask.sum() >= 2:
-                ax.scatter(x[mask], y[mask], s=12, alpha=0.6, color="#54A24B")
-            ax.set_xlabel("generated_events_count")
-            ax.set_ylabel(rcol)
-            ax.set_title(f"{rcol} vs events (used only)")
-            ax.grid(True, alpha=0.2)
-        fig.tight_layout()
-        fig.savefig(plot_dir / "scatter_used_events_vs_relerr_p1_p4.png",
-                    dpi=140)
-        plt.close(fig)
+    # --- 7. Iso-rate contours (eff vs flux with constant-rate lines) ---
+    _plot_iso_rate_contours(filtered, plot_dir)
 
     log.info("Plots saved to %s", plot_dir)
 

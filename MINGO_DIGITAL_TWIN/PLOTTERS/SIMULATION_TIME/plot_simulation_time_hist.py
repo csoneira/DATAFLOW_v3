@@ -162,6 +162,9 @@ def main() -> None:
     ax.set_ylabel("Count")
     ax.legend(loc="upper right")
 
+    # Log-scale y-axis
+    ax.set_yscale("log")
+
     filter_text = (
         f"N={values.size}\n"
         f"min={min_v:.2f}s\n"

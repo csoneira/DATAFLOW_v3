@@ -405,76 +405,6 @@ def _plot_feature_diagnostics(
     plt.close(fig)
 
 
-def _plot_top_n_profiles(
-    metric_df: pd.DataFrame,
-    candidates: pd.DataFrame,
-    sample_vec: np.ndarray,
-    feature_names: list,
-    score_metric: str,
-    top_n: int,
-    plot_path: Path,
-) -> None:
-    """Overlay the rate profiles of the top-N candidates vs the sample."""
-    df = candidates.dropna(subset=["score_value"])
-    if len(df) < 2:
-        return
-    ascending = score_metric in LOWER_IS_BETTER
-    top = df.sort_values("score_value", ascending=ascending).head(top_n)
-
-    short = [n.replace("_rate_hz", "").replace("raw_tt_", "tt_")
-             .replace("events_per_second_", "") for n in feature_names]
-    x_pos = np.arange(len(short))
-
-    fig, ax = plt.subplots(figsize=(max(9, len(short) * 0.9), 6))
-    cmap = plt.cm.Blues(np.linspace(0.3, 0.85, len(top)))
-    for rank, (idx, row) in enumerate(top.iterrows(), 1):
-        orig_idx = int(row["_orig_ref_idx"])
-        vals = metric_df.loc[orig_idx].to_numpy(dtype=float)
-        ax.plot(x_pos, vals, "o-", color=cmap[rank - 1], markersize=4,
-                linewidth=1.2, alpha=0.7, label=f"#{rank} (s={row['score_value']:.3g})")
-    ax.plot(x_pos, sample_vec, "s-", color="#E45756", markersize=6,
-            linewidth=2, alpha=0.9, label="Test sample", zorder=10)
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
-    ax.set_ylabel("Rate [Hz]")
-    ax.set_title(f"Rate profiles: sample vs top-{len(top)} candidates")
-    ax.legend(fontsize=8, loc="best", framealpha=0.9, ncol=2)
-    ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=150)
-    plt.close(fig)
-
-
-def _plot_flux_eff_errors(
-    candidates: pd.DataFrame,
-    score_metric: str,
-    plot_path: Path,
-) -> None:
-    """Scatter of flux error vs eff error for all candidates, colored by score."""
-    df = candidates.dropna(subset=["flux_error", "eff_error", "score_value"])
-    if len(df) < 3:
-        return
-    lower_is_better = score_metric in LOWER_IS_BETTER
-    z = df["score_value"].to_numpy(dtype=float)
-    cmap = "viridis_r" if lower_is_better else "viridis"
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    sc = ax.scatter(
-        df["flux_error"] * 100, df["eff_error"] * 100,
-        c=z, cmap=cmap, s=30, alpha=0.75, edgecolors="black", linewidths=0.3,
-    )
-    ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
-    ax.axvline(0, color="gray", linewidth=0.6, linestyle="--")
-    fig.colorbar(sc, ax=ax, label=f"Score ({score_metric})", shrink=0.85)
-    ax.set_xlabel("Flux error [%]")
-    ax.set_ylabel("Efficiency error [%]")
-    ax.set_title("Parameter errors colored by score")
-    ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=150)
-    plt.close(fig)
-
-
 def _resolve_sample_events_count(sample_row: pd.Series, dict_sample: pd.Series) -> float:
     for col in ("generated_events_count", "selected_rows", "requested_rows"):
         if col in sample_row.index:
@@ -557,6 +487,7 @@ def _evaluate_sample(
     scale_means: pd.Series | None,
     scale_stds: pd.Series | None,
     emp_eff: pd.DataFrame | None,
+    interpolation_k: int = 1,
 ) -> dict:
     if not (0 <= sample_idx < len(ref_df)):
         raise IndexError(f"Sample index {sample_idx} out of range (0..{len(ref_df) - 1}).")
@@ -617,6 +548,26 @@ def _evaluate_sample(
         if join_col in ref_df.columns and pd.notna(sample_id):
             same_id = ref_df[join_col].astype(str).eq(str(sample_id)).to_numpy()
             z_mask &= ~same_id
+        # Exclude candidates with identical physical parameters
+        # (flux, cos_n, eff_1..4).  Without this, duplicate parameter
+        # sets in the reference trivially match, giving ~0 error and
+        # producing optimistic uncertainty estimates downstream.
+        param_match_cols = [
+            ("flux_cm2_min", sample_flux),
+            ("cos_n", sample_cosn),
+            ("eff_1", sample_eff),
+            ("eff_2", sample_eff_2),
+            ("eff_3", sample_eff_3),
+            ("eff_4", sample_eff_4),
+        ]
+        same_params = np.ones(len(ref_df), dtype=bool)
+        for col_name, val in param_match_cols:
+            if col_name in ref_df.columns and np.isfinite(val):
+                same_params &= np.isclose(
+                    pd.to_numeric(ref_df[col_name], errors="coerce").to_numpy(dtype=float),
+                    val, atol=flux_tol if col_name == "flux_cm2_min" else eff_match_tol,
+                )
+        z_mask &= ~same_params
 
     candidates = ref_df.loc[z_mask].copy()
     if candidates.empty:
@@ -666,9 +617,51 @@ def _evaluate_sample(
     best_row = candidates.loc[best_idx]
     best_orig_idx = int(best_row["_orig_ref_idx"])
     best_vec_raw = metric_df.loc[best_orig_idx].to_numpy(dtype=float)
-    best_flux = as_float(best_row.get("dict_flux_cm2_min"))
-    best_eff = as_float(best_row.get("dict_eff_1"))
     best_score = float(scores_valid.loc[best_idx])
+
+    # --- IDW interpolation across K nearest neighbours ----------------
+    if interpolation_k > 1 and len(candidates) >= 2:
+        k_use = min(interpolation_k, len(candidates))
+        if score_metric in LOWER_IS_BETTER:
+            top_k = candidates.nsmallest(k_use, "score_value")
+        else:
+            top_k = candidates.nlargest(k_use, "score_value")
+        top_k_scores = top_k["score_value"].to_numpy(dtype=float)
+        # For lower-is-better metrics, distance = score; for higher-is-better
+        # metrics, invert so that highest score gets highest weight.
+        if score_metric in LOWER_IS_BETTER:
+            dists = np.clip(top_k_scores, 1e-15, None)
+        else:
+            dists = np.clip(1.0 / (top_k_scores + 1e-15), 1e-15, None)
+        # If the best distance is exactly 0, give it all the weight.
+        if dists[0] < 1e-12:
+            weights = np.zeros_like(dists)
+            weights[0] = 1.0
+        else:
+            weights = 1.0 / dists ** 2
+            weights /= weights.sum()
+        top_k_flux = pd.to_numeric(
+            top_k["dict_flux_cm2_min"], errors="coerce"
+        ).to_numpy(dtype=float)
+        top_k_eff = pd.to_numeric(
+            top_k["dict_eff_1"], errors="coerce"
+        ).to_numpy(dtype=float)
+        # Fall back to single-best if flux/eff have NaNs
+        flux_finite = np.isfinite(top_k_flux)
+        eff_finite = np.isfinite(top_k_eff)
+        if flux_finite.sum() >= 2 and eff_finite.sum() >= 2:
+            w_f = weights.copy(); w_f[~flux_finite] = 0.0
+            if w_f.sum() > 0: w_f /= w_f.sum()
+            w_e = weights.copy(); w_e[~eff_finite] = 0.0
+            if w_e.sum() > 0: w_e /= w_e.sum()
+            best_flux = float(np.nansum(w_f * top_k_flux))
+            best_eff = float(np.nansum(w_e * top_k_eff))
+        else:
+            best_flux = as_float(best_row.get("dict_flux_cm2_min"))
+            best_eff = as_float(best_row.get("dict_eff_1"))
+    else:
+        best_flux = as_float(best_row.get("dict_flux_cm2_min"))
+        best_eff = as_float(best_row.get("dict_eff_1"))
 
     flux_error = best_flux - sample_flux if np.isfinite(best_flux) and np.isfinite(sample_flux) else np.nan
     eff_error = best_eff - sample_eff if np.isfinite(best_eff) and np.isfinite(sample_eff) else np.nan
@@ -895,29 +888,6 @@ def _plot_stratified_errors(ok_df: pd.DataFrame, out_dir: Path, tag: str) -> Non
         plt.close(fig)
 
 
-def _plot_top_n_spread(ok_df: pd.DataFrame, out_dir: Path, tag: str) -> None:
-    """Histogram of top-N candidate spread — std only (1×2)."""
-    cols = [
-        ("top_n_flux_std", "Top-10 flux std"),
-        ("top_n_eff_std", "Top-10 eff std"),
-    ]
-    valid = [(c, l) for c, l in cols
-             if c in ok_df.columns and not pd.to_numeric(ok_df.get(c), errors="coerce").dropna().empty]
-    if not valid:
-        return
-    fig, axes = plt.subplots(1, len(valid), figsize=(7 * len(valid), 5))
-    if len(valid) == 1:
-        axes = [axes]
-    for ax, (col, xlabel) in zip(axes, valid):
-        vals = pd.to_numeric(ok_df.get(col), errors="coerce").dropna()
-        ax.hist(vals, bins=50, color="#F58518", alpha=0.85, edgecolor="white")
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel("Count")
-        ax.set_title(f"ALL mode: {xlabel} distribution")
-        ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(out_dir / f"all_hist_top_n_spread_{tag}.png", dpi=150)
-    plt.close(fig)
 
 
 # _build_uncertainty_table — replaced by msv_utils.build_uncertainty_table
@@ -958,6 +928,9 @@ def main() -> int:  # noqa: C901
     parser.add_argument("--sample-index", type=int, default=None)
     parser.add_argument("--max-sample-tries", type=int, default=None)
     parser.add_argument("--top-n", type=int, default=None)
+    parser.add_argument("--interpolation-k", type=int, default=None,
+                        help="Number of nearest neighbours for IDW "
+                             "interpolation (1 = nearest-only, default).")
     parser.add_argument("--exclude-self", action="store_true",
                         help="Exclude the sample itself from candidates.")
     mode_group = parser.add_mutually_exclusive_group()
@@ -989,6 +962,8 @@ def main() -> int:  # noqa: C901
     z_tol = resolve_param(args.z_tol, config, "z_tol", 1e-6, float)
     max_sample_tries = resolve_param(args.max_sample_tries, config, "max_sample_tries", 1000, int)  # noqa: F841
     top_n = resolve_param(args.top_n, config, "top_n", 10, int)
+    interpolation_k = int(resolve_param(
+        args.interpolation_k, config, "interpolation_k", 1, int))
     exclude_self = args.exclude_self or config.get("exclude_self", False)
     sample_index_arg = args.sample_index
 
@@ -1010,6 +985,9 @@ def main() -> int:  # noqa: C901
         path.unlink()
 
     log.info("Run mode: %s", run_mode)
+    log.info("Interpolation K: %d%s", interpolation_k,
+             " (nearest-only)" if interpolation_k <= 1
+             else f" (IDW over {interpolation_k} neighbours)")
     log.info("Loading reference: %s", reference_csv)
     ref_df = pd.read_csv(reference_csv, low_memory=False)
     ref_df = extract_eff_columns(ref_df)
@@ -1118,6 +1096,7 @@ def main() -> int:  # noqa: C901
             scale_means=scale_means,
             scale_stds=scale_stds,
             emp_eff=emp_eff,
+            interpolation_k=interpolation_k,
         )
 
         if metric_mode == "dict_eff_global":
@@ -1234,21 +1213,6 @@ def main() -> int:  # noqa: C901
             score_metric,
             out_dir / f"score_vs_param_dist_{tag}.png",
         )
-        _plot_top_n_profiles(
-            metric_df,
-            candidates,
-            sample_vec_series.to_numpy(dtype=float),
-            metric_cols,
-            score_metric,
-            top_n,
-            out_dir / f"profiles_top_n_{tag}.png",
-        )
-        _plot_flux_eff_errors(
-            candidates,
-            score_metric,
-            out_dir / f"flux_eff_errors_{tag}.png",
-        )
-
         log.info("Wrote candidates: %s", candidates_csv)
         log.info("Wrote plots to: %s", out_dir)
         return 0
@@ -1281,6 +1245,7 @@ def main() -> int:  # noqa: C901
                 scale_means=scale_means,
                 scale_stds=scale_stds,
                 emp_eff=emp_eff,
+                interpolation_k=interpolation_k,
             )
             all_rows.append(
                 {
@@ -1405,9 +1370,95 @@ def main() -> int:  # noqa: C901
             uncertainty_df.to_csv(uncertainty_csv, index=False)
             log.info("Wrote uncertainty table: %s", uncertainty_csv)
 
-        # Stratified and spread diagnostics (to_do.md §4.1, §4.3)
+        # Stratified diagnostics (to_do.md §4.1)
         _plot_stratified_errors(ok_df, out_dir, tag)
-        _plot_top_n_spread(ok_df, out_dir, tag)
+
+        # ── Showcase: single-sample diagnostic plots for one representative ──
+        # Pick the sample whose flux error is closest to the median (most
+        # representative of the overall distribution) and re-evaluate it
+        # to produce the rich contour / feature / score plots from single mode.
+        median_flux_err = float(ok_df["abs_flux_rel_error_pct"].median())
+        dist_to_median = (ok_df["abs_flux_rel_error_pct"] - median_flux_err).abs()
+        showcase_row = ok_df.loc[dist_to_median.idxmin()]
+        showcase_idx = int(showcase_row["sample_index"])
+        log.info("Generating single-sample diagnostics for showcase "
+                 "sample %d (flux err %.2f%%, closest to median %.2f%%).",
+                 showcase_idx,
+                 float(showcase_row["abs_flux_rel_error_pct"]),
+                 median_flux_err)
+        try:
+            sc_result = _evaluate_sample(
+                showcase_idx,
+                ref_df=ref_df,
+                dict_lookup=dict_lookup,
+                dict_subset=dict_subset,
+                metric_df=metric_df,
+                metric_df_scaled=metric_df_scaled,
+                metric_cols=metric_cols,
+                metric_mode=metric_mode,
+                metric_scale=metric_scale,
+                score_metric=score_metric,
+                rate_prefix=rate_prefix,
+                eff_method=eff_method,
+                global_rate_col=global_rate_col,
+                z_tol=z_tol,
+                flux_tol=flux_tol,
+                eff_match_tol=eff_match_tol,
+                exclude_self=exclude_self,
+                join_col=join_col,
+                scale_means=scale_means,
+                scale_stds=scale_stds,
+                emp_eff=emp_eff,
+                interpolation_k=interpolation_k,
+            )
+            sc_cands = sc_result["candidates"]
+            plot_cands = sc_cands.dropna(
+                subset=["dict_flux_cm2_min", "dict_eff_1", "score_value"])
+            if len(plot_cands) >= 3:
+                _plot_contour(
+                    plot_cands,
+                    float(sc_result["sample_flux"]),
+                    float(sc_result["sample_eff"]),
+                    float(sc_result["best_flux"])
+                        if np.isfinite(sc_result["best_flux"]) else None,
+                    float(sc_result["best_eff"])
+                        if np.isfinite(sc_result["best_eff"]) else None,
+                    score_metric,
+                    metric_mode,
+                    sc_result["best_score"],
+                    sc_result["truth_rank"],
+                    len(sc_cands),
+                    out_dir / f"all_showcase_contour_{tag}.png",
+                    sc_result["events_label"],
+                    sc_result["sample_label"],
+                    top_n=top_n,
+                )
+            sv = sc_result["sample_vec_series"]
+            bo = int(sc_result["best_orig_idx"])
+            _plot_feature_diagnostics(
+                sv.to_numpy(dtype=float),
+                metric_df.loc[bo].to_numpy(dtype=float),
+                sc_result["sample_vec_scaled"],
+                metric_df_scaled.loc[bo].to_numpy(dtype=float),
+                metric_cols,
+                out_dir / f"all_showcase_feature_diagnostics_{tag}.png",
+                f"Showcase sample #{showcase_idx} — feature diagnostics ({tag})",
+            )
+            _plot_score_distribution(
+                sc_cands["score_value"], score_metric,
+                sc_result["best_score"],
+                out_dir / f"all_showcase_score_distribution_{tag}.png",
+            )
+            _plot_score_vs_param_distance(
+                sc_cands,
+                float(sc_result["sample_flux"]),
+                float(sc_result["sample_eff"]),
+                score_metric,
+                out_dir / f"all_showcase_score_vs_param_dist_{tag}.png",
+            )
+            log.info("Showcase plots written for sample %d.", showcase_idx)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not generate showcase plots: %s", exc)
 
     log.info("Wrote all-mode results: %s", all_csv)
     log.info("Wrote successful rows: %s", ok_csv)

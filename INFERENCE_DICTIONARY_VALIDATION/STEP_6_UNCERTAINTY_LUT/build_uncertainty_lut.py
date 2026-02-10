@@ -379,54 +379,105 @@ def _plot_overview(
     plt.close(fig)
 
 
-def _plot_2d_sigma_maps(
-    lut_df: pd.DataFrame,
-    meta: dict,
+def _plot_error_scatter_by_events(
+    df: pd.DataFrame,
     path: Path,
-    n_events_values: list[float] | None = None,
+    events_edges: list[float] | None = None,
+    n_ranges: int = 4,
 ) -> None:
-    """2-D maps of σ at representative event counts (nearest events bin)."""
-    filled = lut_df[lut_df["sigma_flux_pct"].notna()]
-    if filled.empty:
+    """Scatter plots of actual data points coloured by relative error.
+
+    Instead of a discretised LUT grid, show the raw (est_flux, est_eff)
+    points coloured by their |relative error|, split into event-count
+    ranges.  This reveals continuous tendencies that the binned LUT
+    cannot show.
+
+    Layout: 2 rows (flux error, eff error) × N columns (event ranges).
+    """
+    needed = [
+        "estimated_flux_cm2_min", "estimated_eff_1",
+        "sample_events_count",
+        "abs_flux_rel_error_pct", "abs_eff_rel_error_pct",
+    ]
+    work = df.dropna(subset=needed).copy()
+    if work.empty:
         return
-    if n_events_values is None:
-        n_events_values = sorted(filled["events_mid"].unique())
 
-    available_mids = np.sort(filled["events_mid"].unique())
-    events_to_show: list[float] = []
-    for nev in n_events_values:
-        best = float(available_mids[np.argmin(np.abs(available_mids - nev))])
-        if best not in events_to_show:
-            events_to_show.append(best)
-    events_to_show = events_to_show[:6]
+    evts = work["sample_events_count"].to_numpy(dtype=float)
 
-    n_cols = len(events_to_show)
+    # Build event-range edges
+    if events_edges is not None and len(events_edges) >= 2:
+        edges = sorted(set(events_edges))
+    else:
+        qs = np.linspace(0.0, 1.0, n_ranges + 1)
+        edges = list(np.unique(np.nanquantile(evts, qs)))
+        if len(edges) < 2:
+            edges = [float(np.nanmin(evts)), float(np.nanmax(evts))]
+
+    n_cols = len(edges) - 1
     if n_cols == 0:
         return
-    fig, axes = plt.subplots(2, n_cols, figsize=(4.5 * n_cols, 9))
-    if n_cols == 1:
-        axes = axes.reshape(2, 1)
 
-    for col_i, n_ev in enumerate(events_to_show):
-        sub = filled[np.isclose(filled["events_mid"], n_ev)]
-        if sub.empty:
-            continue
-        for row_i, tag in enumerate(["flux", "eff"]):
+    fig, axes = plt.subplots(2, n_cols, figsize=(5.0 * n_cols, 9),
+                             squeeze=False)
+
+    # Common colour limits (clipped at p95 so outliers don't wash out)
+    vmax_f = float(np.nanpercentile(
+        work["abs_flux_rel_error_pct"].to_numpy(dtype=float), 95))
+    vmax_e = float(np.nanpercentile(
+        work["abs_eff_rel_error_pct"].to_numpy(dtype=float), 95))
+    vmax_f = max(vmax_f, 0.1)
+    vmax_e = max(vmax_e, 0.1)
+
+    for col_i in range(n_cols):
+        lo, hi = edges[col_i], edges[col_i + 1]
+        if col_i < n_cols - 1:
+            mask = (evts >= lo) & (evts < hi)
+        else:
+            mask = (evts >= lo) & (evts <= hi)  # include upper edge
+        sub = work.loc[mask]
+        n_pts = len(sub)
+
+        for row_i, (tag, vmax) in enumerate([
+            ("flux", vmax_f), ("eff", vmax_e),
+        ]):
             ax = axes[row_i, col_i]
-            col = f"sigma_{tag}_pct"
+            col = f"abs_{tag}_rel_error_pct"
+            if sub.empty:
+                ax.set_title(f"N ∈ [{int(lo)}, {int(hi)})  (0 pts)")
+                ax.set_xlabel("Estimated flux")
+                ax.set_ylabel("Estimated eff_1")
+                continue
+
             sc = ax.scatter(
-                sub["flux_mid"], sub["eff_mid"],
-                c=sub[col], s=80, cmap="YlOrRd", edgecolors="grey",
-                linewidths=0.5, vmin=0,
+                sub["estimated_flux_cm2_min"],
+                sub["estimated_eff_1"],
+                c=sub[col],
+                s=40,
+                cmap="YlOrRd",
+                vmin=0,
+                vmax=vmax,
+                alpha=0.8,
+                edgecolors="grey",
+                linewidths=0.3,
             )
-            fig.colorbar(sc, ax=ax, label=f"σ_{tag} [%]", shrink=0.8)
+            cb = fig.colorbar(sc, ax=ax, shrink=0.8)
+            cb.set_label(f"|Δ{tag}| [%]", fontsize=9)
+
             ax.set_xlabel("Estimated flux")
             ax.set_ylabel("Estimated eff_1")
-            ax.set_title(f"σ_{tag} @ N≈{int(n_ev)}")
+            title_tag = "flux" if tag == "flux" else "efficiency"
+            ax.set_title(
+                f"|Δ{title_tag}| — N ∈ [{int(lo)}, {int(hi)}]  "
+                f"({n_pts} pts)",
+                fontsize=10,
+            )
             ax.grid(True, alpha=0.2)
 
-    fig.suptitle("Empirical uncertainty maps at fixed event counts",
-                 fontsize=13)
+    fig.suptitle(
+        "Relative error in (flux, eff) space — split by event count",
+        fontsize=13,
+    )
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -671,9 +722,10 @@ def main() -> int:
     if not args.no_plots:
         _plot_overview(lut_df, lut_meta,
                        out_dir / "lut_diagnostic_overview.png")
-        _plot_2d_sigma_maps(lut_df, lut_meta,
-                            out_dir / "lut_2d_sigma_maps.png",
-                            n_events_values=sigma_events)
+        _plot_error_scatter_by_events(
+            df, out_dir / "lut_error_scatter_by_events.png",
+            events_edges=sigma_events,
+        )
         _plot_ellipse_validation(df, out_dir,
                                  out_dir / "lut_ellipse_validation.png")
         log.info("Diagnostic plots saved to %s", out_dir)

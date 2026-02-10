@@ -3,9 +3,13 @@ from __future__ import annotations
 """
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+import fcntl
 import hashlib
+import os
 import random
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Optional
 
@@ -193,6 +197,56 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def param_mesh_lock_path(mesh_path: Path) -> Path:
+    return mesh_path.with_name(".param_mesh.lock")
+
+
+@contextmanager
+def param_mesh_lock(mesh_path: Path):
+    lock_path = param_mesh_lock_path(mesh_path)
+    ensure_dir(lock_path.parent)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def write_csv_atomic(df: pd.DataFrame, path: Path, *, index: bool = False) -> None:
+    ensure_dir(path.parent)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        df.to_csv(tmp_path, index=index)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def write_text_atomic(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    ensure_dir(path.parent)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        tmp_path.write_text(text, encoding=encoding)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
 def load_with_metadata(path: Path) -> Tuple[pd.DataFrame, Dict]:
     if path.suffix == ".pkl":
         df = pd.read_pickle(path)
@@ -260,10 +314,11 @@ def resolve_param_mesh(
                 mesh_path = fallback
     if not mesh_path.exists():
         raise FileNotFoundError(f"param_mesh.csv not found in {mesh_path.parent}")
-    mesh = pd.read_csv(mesh_path)
-    mesh = normalize_param_mesh_ids(mesh)
-    if _mesh_ids_changed(mesh, mesh_path):
-        mesh.to_csv(mesh_path, index=False)
+    with param_mesh_lock(mesh_path):
+        mesh = pd.read_csv(mesh_path)
+        mesh = normalize_param_mesh_ids(mesh)
+        if _mesh_ids_changed(mesh, mesh_path):
+            write_csv_atomic(mesh, mesh_path, index=False)
     return mesh, mesh_path
 
 
@@ -440,20 +495,21 @@ def register_sim_run(
 def mark_param_set_done(mesh_path: Path, param_set_id: int) -> None:
     if not mesh_path.exists():
         raise FileNotFoundError(f"param_mesh.csv not found at {mesh_path}")
-    mesh = pd.read_csv(mesh_path)
-    if "done" not in mesh.columns:
-        mesh["done"] = 0
-    match = mesh["param_set_id"] == int(param_set_id)
-    if not match.any():
-        raise ValueError(f"param_set_id {param_set_id} not found in param_mesh.csv")
-    mesh.loc[match, "done"] = 1
-    z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
-    head_cols = ["done", "param_set_id", "param_date"]
-    ordered_cols = [c for c in head_cols if c in mesh.columns] + [
-        c for c in mesh.columns if c not in head_cols and c not in z_cols
-    ] + [c for c in z_cols if c in mesh.columns]
-    mesh = mesh[ordered_cols]
-    mesh.to_csv(mesh_path, index=False)
+    with param_mesh_lock(mesh_path):
+        mesh = pd.read_csv(mesh_path)
+        if "done" not in mesh.columns:
+            mesh["done"] = 0
+        match = mesh["param_set_id"] == int(param_set_id)
+        if not match.any():
+            raise ValueError(f"param_set_id {param_set_id} not found in param_mesh.csv")
+        mesh.loc[match, "done"] = 1
+        z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
+        head_cols = ["done", "param_set_id", "param_date"]
+        ordered_cols = [c for c in head_cols if c in mesh.columns] + [
+            c for c in mesh.columns if c not in head_cols and c not in z_cols
+        ] + [c for c in z_cols if c in mesh.columns]
+        mesh = mesh[ordered_cols]
+        write_csv_atomic(mesh, mesh_path, index=False)
 
 
 def extract_param_set(meta: Optional[Dict]) -> Tuple[Optional[int], Optional[str]]:

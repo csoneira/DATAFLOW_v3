@@ -5,9 +5,16 @@ import argparse
 import ast
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pandas as pd
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT_DIR))
+sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
+
+from STEP_SHARED.sim_utils import param_mesh_lock, write_csv_atomic, write_text_atomic
 
 
 def _parse_efficiencies(value: object) -> list[float]:
@@ -113,7 +120,7 @@ def _write_mesh(mesh: pd.DataFrame, mesh_path: Path) -> None:
     ]
     mesh = mesh[ordered_cols]
     mesh["done"] = mesh["done"].astype(int)
-    mesh.to_csv(mesh_path, index=False)
+    write_csv_atomic(mesh, mesh_path, index=False)
 
 
 def _cleanup_sim_runs(intersteps_dir: Path, apply: bool) -> None:
@@ -173,15 +180,16 @@ def main() -> None:
 
     sim_params = pd.read_csv(sim_params_path)
     mesh = _build_mesh(sim_params)
-    _write_mesh(mesh, mesh_path)
+    with param_mesh_lock(mesh_path):
+        _write_mesh(mesh, mesh_path)
 
-    meta_path = mesh_path.with_name("param_mesh_metadata.json")
-    meta = {
-        "source": str(sim_params_path),
-        "row_count": int(len(mesh)),
-        "note": "Rebuilt from step_final_simulation_params.csv (param_set_id/param_date excluded).",
-    }
-    meta_path.write_text(json.dumps(meta, indent=2))
+        meta_path = mesh_path.with_name("param_mesh_metadata.json")
+        meta = {
+            "source": str(sim_params_path),
+            "row_count": int(len(mesh)),
+            "note": "Rebuilt from step_final_simulation_params.csv (param_set_id/param_date excluded).",
+        }
+        write_text_atomic(meta_path, json.dumps(meta, indent=2))
 
     if not args.skip_delete:
         _cleanup_sim_runs(intersteps_dir, args.apply)

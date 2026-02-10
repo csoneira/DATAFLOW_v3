@@ -27,6 +27,7 @@ from msv_utils import (  # noqa: E402
     build_validation_table,
     compute_efficiency,
     load_config,
+    maybe_log_x,
     parse_efficiencies,
     safe_numeric,
     setup_logger,
@@ -130,160 +131,7 @@ def plot_efficiency_scatter(df: pd.DataFrame, out_path: Path) -> None:
     plt.close(fig)
 
 
-def plot_contour_eff_vs_flux(
-    df: pd.DataFrame,
-    out_path: Path,
-    *,
-    cos_n_target: float,
-    cos_n_tolerance: float,
-    equal_eff_tolerance: float,
-    value_col: str,
-    levels: int,
-) -> bool:
-    if value_col not in df.columns:
-        raise KeyError(f"Column '{value_col}' not found in validation table.")
-
-    subset = df.copy()
-    subset = subset[
-        (subset["cos_n"] - cos_n_target).abs() <= cos_n_tolerance
-    ].copy()
-    if subset.empty:
-        return False
-
-    # Keep only rows where all 4 simulated plane efficiencies are effectively equal.
-    e1 = subset["eff_sim_p1"]
-    equal_mask = (
-        (subset["eff_sim_p2"] - e1).abs() <= equal_eff_tolerance
-    ) & (
-        (subset["eff_sim_p3"] - e1).abs() <= equal_eff_tolerance
-    ) & (
-        (subset["eff_sim_p4"] - e1).abs() <= equal_eff_tolerance
-    )
-    subset = subset[equal_mask].copy()
-    if subset.empty:
-        return False
-
-    subset["eff_common"] = subset["eff_sim_p1"]
-    subset = subset[["flux_cm2_min", "eff_common", value_col]].dropna()
-    if subset.empty:
-        return False
-
-    # Collapse duplicate (flux,eff) points to one value so triangulation is stable.
-    points = (
-        subset.groupby(["flux_cm2_min", "eff_common"], as_index=False)[value_col]
-        .mean()
-    )
-    if len(points) < 2:
-        return False
-
-    x = points["flux_cm2_min"].to_numpy()
-    y = points["eff_common"].to_numpy()
-    z = points[value_col].to_numpy()
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    # Prefer a cleaner colored-point map over dense contour fills.
-    sc = ax.scatter(
-        x,
-        y,
-        c=z,
-        s=65,
-        cmap="viridis",
-        alpha=0.9,
-        edgecolors="black",
-        linewidths=0.35,
-    )
-    fig.colorbar(sc, ax=ax, label=value_col)
-
-    # Optional light contour lines when enough unique points are available.
-    if len(points) >= 12:
-        try:
-            ax.tricontour(x, y, z, levels=min(levels, 10), colors="k", linewidths=0.25, alpha=0.25)
-        except Exception:
-            pass
-
-    ax.set_xlabel("Flux [cm^-2 min^-1]")
-    ax.set_ylabel("Common plane efficiency")
-    ax.set_title(
-        f"Colored points: {value_col} in (eff, flux) plane\n"
-        f"cos_n={cos_n_target:g}, eff1≈eff2≈eff3≈eff4 (tol={equal_eff_tolerance:g})"
-    )
-    ax.grid(True, alpha=0.25)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return True
-
-
-def _maybe_log_x(ax: plt.Axes, values: pd.Series) -> None:
-    vals = values.dropna()
-    if vals.empty:
-        return
-    vmin = float(vals.min())
-    vmax = float(vals.max())
-    if vmin > 0 and vmax / vmin >= 100.0:
-        ax.set_xscale("log")
-
-
-def plot_residuals_planes_2_3(
-    df: pd.DataFrame,
-    out_path: Path,
-    *,
-    relerr_max_abs: float,
-) -> None:
-    fig, axes = plt.subplots(2, 3, figsize=(16, 8), sharex="col")
-    planes = [2, 3]
-    for row, plane in enumerate(planes):
-        sim_col = f"eff_sim_p{plane}"
-        resid_col = f"eff_resid_p{plane}"
-        rel_col = f"eff_rel_err_p{plane}"
-        ev_col = "generated_events_count"
-
-        mask_common = df[sim_col].notna() & df[resid_col].notna() & df[rel_col].notna()
-        mask_common = mask_common & (df[rel_col].abs() <= relerr_max_abs)
-
-        ax_res = axes[row, 0]
-        ax_res.scatter(df.loc[mask_common, sim_col], df.loc[mask_common, resid_col], s=18, alpha=0.7)
-        ax_res.axhline(0.0, color="red", linestyle="--", linewidth=1)
-        ax_res.set_title(f"Plane {plane}: residual")
-        ax_res.set_ylabel("Estimated - Simulated")
-        ax_res.grid(True, alpha=0.3)
-
-        ax_rel = axes[row, 1]
-        ax_rel.scatter(
-            df.loc[mask_common, sim_col],
-            100.0 * df.loc[mask_common, rel_col],
-            s=18,
-            alpha=0.7,
-        )
-        ax_rel.axhline(0.0, color="red", linestyle="--", linewidth=1)
-        ax_rel.set_title(f"Plane {plane}: relative error (|err| <= {100.0 * relerr_max_abs:g}%)")
-        ax_rel.set_ylabel("100 * (Estimated - Simulated) / Simulated [%]")
-        ax_rel.grid(True, alpha=0.3)
-
-        ax_ev = axes[row, 2]
-        mask_ev = mask_common & df[ev_col].notna()
-        ax_ev.scatter(
-            df.loc[mask_ev, ev_col],
-            100.0 * df.loc[mask_ev, rel_col],
-            s=18,
-            alpha=0.7,
-        )
-        ax_ev.axhline(0.0, color="red", linestyle="--", linewidth=1)
-        ax_ev.set_title(f"Plane {plane}: rel. error vs generated events")
-        ax_ev.set_ylabel("Relative error [%]")
-        ax_ev.grid(True, alpha=0.3)
-        _maybe_log_x(ax_ev, df.loc[mask_ev, ev_col])
-
-    axes[1, 0].set_xlabel("Simulated efficiency")
-    axes[1, 1].set_xlabel("Simulated efficiency")
-    axes[1, 2].set_xlabel("Generated events in file")
-    fig.suptitle("Residual and Relative Error for Plane 2 and Plane 3 (Filtered)", fontsize=12)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140)
-    plt.close(fig)
-
-
-def plot_colored_sim_eff_relerr_events_planes_2_3(
+def plot_residuals_all_planes(
     df: pd.DataFrame,
     out_path: Path,
     *,
@@ -297,45 +145,6 @@ def plot_colored_sim_eff_relerr_events_planes_2_3(
         sim_col = f"eff_sim_p{plane}"
         rel_col = f"eff_rel_err_p{plane}"
         mask = df[sim_col].notna() & df[rel_col].notna() & df[ev_col].notna()
-        mask = mask & (df[rel_col].abs() <= relerr_max_abs)
-        if not mask.any():
-            ax.set_title(f"Plane {plane}: no points after filter")
-            ax.grid(True, alpha=0.3)
-            continue
-
-        rel_pct = 100.0 * df.loc[mask, rel_col]
-        counts = df.loc[mask, ev_col]
-        cmax = max(1e-6, float(np.nanmax(np.abs(rel_pct))))
-        sizes = 20.0 + 90.0 * (counts / counts.max())
-        sc = ax.scatter(
-            df.loc[mask, sim_col],
-            rel_pct,
-            s=sizes,
-            c=rel_pct,
-            cmap="coolwarm",
-            vmin=-cmax,
-            vmax=cmax,
-            alpha=0.8,
-            edgecolors="black",
-            linewidths=0.25,
-        )
-        ax.axhline(0.0, color="black", linestyle="--", linewidth=1)
-        ax.set_title(f"Plane {plane}")
-        ax.set_xlabel("Simulated efficiency")
-        ax.grid(True, alpha=0.3)
-        cbar = fig.colorbar(sc, ax=ax)
-        cbar.set_label("Relative error [%]")
-
-    axes[0].set_ylabel("Relative error [%]")
-    fig.suptitle(
-        "Simulated Efficiency vs Relative Error (size ~ generated events, color = relative error)",
-        fontsize=11,
-    )
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140)
-    plt.close(fig)
-
-
 def plot_residuals_all_planes(
     df: pd.DataFrame,
     out_path: Path,
@@ -394,7 +203,7 @@ def plot_residuals_all_planes(
         ax_ev.set_title(f"Plane {plane}: rel. error vs events{p_note}")
         ax_ev.set_ylabel("Relative error [%]")
         ax_ev.grid(True, alpha=0.3)
-        _maybe_log_x(ax_ev, df.loc[mask_ev, ev_col])
+        maybe_log_x(ax_ev, df.loc[mask_ev, ev_col])
 
     axes[-1, 0].set_xlabel("Simulated efficiency")
     axes[-1, 1].set_xlabel("Simulated efficiency")
@@ -457,7 +266,7 @@ def plot_error_vs_event_count_all_planes(
         ax.set_title(f"Plane {plane}: |rel. error| vs events{p_star}")
         ax.set_ylabel("|Relative error| [%]")
         ax.grid(True, alpha=0.3)
-        _maybe_log_x(ax, pd.Series(events))
+        maybe_log_x(ax, pd.Series(events))
     axes[-1, 0].set_xlabel("Generated events")
     axes[-1, 1].set_xlabel("Generated events")
     fig.suptitle("Error vs Event Count — All Planes (variance scaling check §3.1)", fontsize=11)
@@ -492,11 +301,6 @@ def main() -> int:
             "one_minus_three_over_four = 1 - N3_missing / N4."
         ),
     )
-    parser.add_argument("--contour-cos-n", type=float, default=None)
-    parser.add_argument("--contour-cos-tol", type=float, default=None)
-    parser.add_argument("--contour-equal-eff-tol", type=float, default=None)
-    parser.add_argument("--contour-value-col", default=None)
-    parser.add_argument("--contour-levels", type=int, default=None)
     parser.add_argument("--relerr-max-abs", type=float, default=None)
     args = parser.parse_args()
 
@@ -506,15 +310,6 @@ def main() -> int:
     out_dir = Path(args.out_dir or config.get("out_dir", str(DEFAULT_OUT_DIR)))
     prefix = str(args.prefix or config.get("prefix", "raw"))
     eff_method = str(args.eff_method or config.get("eff_method", "four_over_three_plus_four"))
-    contour_cos_n = float(args.contour_cos_n or config.get("contour_cos_n_target", 2.0))
-    contour_cos_tol = float(args.contour_cos_tol or config.get("contour_cos_n_tolerance", 1e-9))
-    contour_equal_eff_tol = float(
-        args.contour_equal_eff_tol or config.get("contour_equal_eff_tolerance", 1e-9)
-    )
-    contour_value_col = str(
-        args.contour_value_col or config.get("contour_value_column", "global_trigger_rate_hz")
-    )
-    contour_levels = int(args.contour_levels or config.get("contour_levels", 18))
     relerr_max_abs = float(args.relerr_max_abs or config.get("relerr_max_abs", 0.05))
 
     if not dictionary_csv.exists():
@@ -546,9 +341,6 @@ def main() -> int:
     summary_csv = out_dir / "summary_metrics.csv"
     flux_plot = out_dir / "scatter_flux_vs_global_trigger_rate.png"
     eff_plot = out_dir / "scatter_eff_sim_vs_estimated.png"
-    contour_plot = out_dir / "contour_eff_vs_flux_cosn2_identical_eff.png"
-    residual_plot = out_dir / "scatter_residual_relative_error_planes_2_3.png"
-    colored_plot = out_dir / "scatter_colored_sim_eff_relerr_eventcount_planes_2_3.png"
     residual_all_plot = out_dir / "scatter_residual_all_planes.png"
     error_vs_events_plot = out_dir / "scatter_error_vs_events_all_planes.png"
 
@@ -556,34 +348,15 @@ def main() -> int:
     summary.to_csv(summary_csv, index=False)
     plot_flux_vs_rate(validation, flux_plot)
     plot_efficiency_scatter(validation, eff_plot)
-    plot_residuals_planes_2_3(validation, residual_plot, relerr_max_abs=relerr_max_abs)
     plot_residuals_all_planes(validation, residual_all_plot, relerr_max_abs=relerr_max_abs)
     plot_error_vs_event_count_all_planes(validation, error_vs_events_plot, relerr_max_abs=relerr_max_abs)
-    plot_colored_sim_eff_relerr_events_planes_2_3(
-        validation,
-        colored_plot,
-        relerr_max_abs=relerr_max_abs,
-    )
-    contour_ok = plot_contour_eff_vs_flux(
-        validation,
-        contour_plot,
-        cos_n_target=contour_cos_n,
-        cos_n_tolerance=contour_cos_tol,
-        equal_eff_tolerance=contour_equal_eff_tol,
-        value_col=contour_value_col,
-        levels=contour_levels,
-    )
 
     print(f"Wrote validation table: {validation_csv}")
     print(f"Wrote summary metrics: {summary_csv}")
     print(f"Wrote plot: {flux_plot}")
     print(f"Wrote plot: {eff_plot}")
-    print(f"Wrote plot: {residual_plot}")
-    print(f"Wrote plot: {colored_plot}")
-    if contour_ok:
-        print(f"Wrote plot: {contour_plot}")
-    else:
-        print("Contour plot skipped: not enough matching points after filters.")
+    print(f"Wrote plot: {residual_all_plot}")
+    print(f"Wrote plot: {error_vs_events_plot}")
     print(f"Rows used: {len(validation)}")
     return 0
 
