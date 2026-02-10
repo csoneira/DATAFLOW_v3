@@ -244,116 +244,90 @@ def _compute_dictionary_coverage(
 # _maybe_log_x — replaced by msv_utils.maybe_log_x
 
 
-def _plot_error_vs_events(df: pd.DataFrame, col: str, ylabel: str, title: str, path: Path) -> None:
-    x = pd.to_numeric(df["sample_events_count"], errors="coerce")
-    y = pd.to_numeric(df[col], errors="coerce")
-    mask = x.notna() & y.notna()
-    if mask.sum() < 3:
-        return
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.scatter(x[mask], y[mask], s=16, alpha=0.55, color="#4C78A8")
-    ax.set_xlabel("Sample events count")
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.grid(True, alpha=0.2)
-    maybe_log_x(ax, x[mask])
-    fig.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-
-
-def _plot_uncertainty_bands(unc_df: pd.DataFrame, path: Path) -> None:
+def _plot_uncertainty_bands(unc_df: pd.DataFrame, raw_df: pd.DataFrame, path: Path) -> None:
+    """Percentile bands with raw scatter underlay from *raw_df*."""
     if unc_df.empty:
         return
-    x = pd.to_numeric(unc_df["events_median"], errors="coerce")
+    x_bands = pd.to_numeric(unc_df["events_median"], errors="coerce")
+    raw_x = pd.to_numeric(raw_df["sample_events_count"], errors="coerce") if raw_df is not None else pd.Series(dtype=float)
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharex=True)
 
-    axes[0].plot(x, unc_df["flux_abs_rel_err_pct_p50"], "o-", label="p50", color="#4C78A8")
-    axes[0].plot(x, unc_df["flux_abs_rel_err_pct_p68"], "o-", label="p68", color="#F58518")
-    axes[0].plot(x, unc_df["flux_abs_rel_err_pct_p95"], "o-", label="p95", color="#E45756")
-    axes[0].set_title("Flux uncertainty vs sample size")
-    axes[0].set_ylabel("|Flux relative error| [%]")
-    axes[0].grid(True, alpha=0.2)
-    axes[0].legend()
+    for idx, (tag, col_prefix, ylabel) in enumerate([
+        ("Flux", "flux", "|Flux relative error| [%]"),
+        ("Efficiency", "eff", "|Efficiency relative error| [%]"),
+    ]):
+        ax = axes[idx]
+        raw_y_col = f"abs_{col_prefix}_rel_error_pct"
+        raw_y = pd.to_numeric(raw_df.get(raw_y_col), errors="coerce") if raw_df is not None else pd.Series(dtype=float)
+        mask = raw_x.notna() & raw_y.notna()
+        if mask.sum() > 0:
+            ax.scatter(raw_x[mask], raw_y[mask], s=10, alpha=0.20, color="#AAAAAA", zorder=1,
+                       label="individual samples")
 
-    axes[1].plot(x, unc_df["eff_abs_rel_err_pct_p50"], "o-", label="p50", color="#4C78A8")
-    axes[1].plot(x, unc_df["eff_abs_rel_err_pct_p68"], "o-", label="p68", color="#F58518")
-    axes[1].plot(x, unc_df["eff_abs_rel_err_pct_p95"], "o-", label="p95", color="#E45756")
-    axes[1].set_title("Efficiency uncertainty vs sample size")
-    axes[1].set_ylabel("|Efficiency relative error| [%]")
+        ax.plot(x_bands, unc_df[f"{col_prefix}_abs_rel_err_pct_p50"], "o-", label="p50", color="#4C78A8", zorder=2)
+        ax.plot(x_bands, unc_df[f"{col_prefix}_abs_rel_err_pct_p68"], "o-", label="p68", color="#F58518", zorder=2)
+        ax.plot(x_bands, unc_df[f"{col_prefix}_abs_rel_err_pct_p95"], "o-", label="p95", color="#E45756", zorder=2)
+        ax.set_title(f"{tag} uncertainty vs sample size")
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel("Median events in bin")
+        ax.grid(True, alpha=0.2)
+        ax.legend(fontsize=8)
+        maybe_log_x(ax, x_bands)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_dictionary_overview(df: pd.DataFrame, scatter_title: str, path: Path) -> None:
+    """Side-by-side scatter + hexbin of dictionary points in flux-eff space."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    axes[0].scatter(df["flux_cm2_min"], df["eff_1"], s=10, alpha=0.45, color="#54A24B")
+    axes[0].set_xlabel("Flux [cm^-2 min^-1]")
+    axes[0].set_ylabel("eff_1")
+    axes[0].set_title(scatter_title)
+    axes[0].grid(True, alpha=0.2)
+
+    hb = axes[1].hexbin(
+        df["flux_cm2_min"], df["eff_1"],
+        gridsize=40, mincnt=1, cmap="viridis",
+    )
+    fig.colorbar(hb, ax=axes[1], label="Points per hex")
+    axes[1].set_xlabel("Flux [cm^-2 min^-1]")
+    axes[1].set_ylabel("eff_1")
+    axes[1].set_title("Dictionary density in flux-eff space")
     axes[1].grid(True, alpha=0.2)
 
-    for ax in axes:
-        ax.set_xlabel("Median events in bin")
-        maybe_log_x(ax, x)
-
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
 
-def _plot_dictionary_scatter(df: pd.DataFrame, title: str, path: Path) -> None:
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.scatter(df["flux_cm2_min"], df["eff_1"], s=10, alpha=0.45, color="#54A24B")
-    ax.set_xlabel("Flux [cm^-2 min^-1]")
-    ax.set_ylabel("eff_1")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-
-
-def _plot_dictionary_hexbin(df: pd.DataFrame, title: str, path: Path) -> None:
-    fig, ax = plt.subplots(figsize=(7, 6))
-    hb = ax.hexbin(
-        df["flux_cm2_min"],
-        df["eff_1"],
-        gridsize=40,
-        mincnt=1,
-        cmap="viridis",
-    )
-    fig.colorbar(hb, ax=ax, label="Points per hex")
-    ax.set_xlabel("Flux [cm^-2 min^-1]")
-    ax.set_ylabel("eff_1")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-
-
-def _plot_nn_hist(nn_dist: np.ndarray, path: Path) -> None:
+def _plot_dictionary_coverage(nn_dist: np.ndarray, radius_df: pd.DataFrame, path: Path) -> None:
+    """Side-by-side NN distance histogram + coverage-vs-radius curve."""
     vals = pd.Series(nn_dist).dropna()
-    if vals.empty:
-        return
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.hist(vals, bins=50, color="#F58518", alpha=0.85, edgecolor="white")
-    ax.set_xlabel("Nearest-neighbor distance (normalized flux-eff space)")
-    ax.set_ylabel("Count")
-    ax.set_title("Dictionary nearest-neighbor spacing")
-    ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
+    if not vals.empty:
+        axes[0].hist(vals, bins=50, color="#F58518", alpha=0.85, edgecolor="white")
+    axes[0].set_xlabel("Nearest-neighbor distance (normalized flux-eff space)")
+    axes[0].set_ylabel("Count")
+    axes[0].set_title("Dictionary nearest-neighbor spacing")
+    axes[0].grid(True, alpha=0.2)
 
-def _plot_coverage_vs_radius(radius_df: pd.DataFrame, path: Path) -> None:
-    if radius_df.empty:
-        return
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(
-        radius_df["radius_norm"],
-        radius_df["covered_fraction_pct"],
-        "o-",
-        color="#4C78A8",
-    )
-    ax.set_xlabel("Coverage radius (normalized units)")
-    ax.set_ylabel("Covered random points [%]")
-    ax.set_title("Dictionary filling by distance-based coverage")
-    ax.grid(True, alpha=0.2)
+    if not radius_df.empty:
+        axes[1].plot(
+            radius_df["radius_norm"],
+            radius_df["covered_fraction_pct"],
+            "o-", color="#4C78A8",
+        )
+    axes[1].set_xlabel("Coverage radius (normalized units)")
+    axes[1].set_ylabel("Covered random points [%]")
+    axes[1].set_title("Dictionary filling by distance-based coverage")
+    axes[1].grid(True, alpha=0.2)
+
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -408,6 +382,7 @@ def _plot_plane_mean_error(
     flux_bins: int,
     eff_bins: int,
 ) -> None:
+    """1×2 figure: left = mean-error heatmap, right = counts companion."""
     x_edges, y_edges, z_mean, counts = _compute_plane_mean(
         df,
         value_col=value_col,
@@ -424,40 +399,29 @@ def _plot_plane_mean_error(
     if not np.isfinite(vmax) or vmax <= 0:
         vmax = None
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    mesh = ax.pcolormesh(
-        x_edges,
-        y_edges,
-        z_mean.T,
-        shading="auto",
-        cmap="viridis",
-        vmin=0,
-        vmax=vmax,
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    mesh0 = axes[0].pcolormesh(
+        x_edges, y_edges, z_mean.T, shading="auto", cmap="viridis",
+        vmin=0, vmax=vmax,
     )
-    fig.colorbar(mesh, ax=ax, label=cbar_label)
-    ax.set_xlabel("True flux [cm^-2 min^-1]")
-    ax.set_ylabel("True eff_1")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.2)
+    fig.colorbar(mesh0, ax=axes[0], label=cbar_label)
+    axes[0].set_xlabel("True flux [cm^-2 min^-1]")
+    axes[0].set_ylabel("True eff_1")
+    axes[0].set_title(title)
+    axes[0].grid(True, alpha=0.2)
+
+    mesh1 = axes[1].pcolormesh(
+        x_edges, y_edges, counts.T, shading="auto", cmap="magma",
+    )
+    fig.colorbar(mesh1, ax=axes[1], label="Samples in cell")
+    axes[1].set_xlabel("True flux [cm^-2 min^-1]")
+    axes[1].set_ylabel("True eff_1")
+    axes[1].set_title(title.replace("mean", "counts"))
+    axes[1].grid(True, alpha=0.2)
+
     fig.tight_layout()
     fig.savefig(path, dpi=160)
-    plt.close(fig)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    mesh = ax.pcolormesh(
-        x_edges,
-        y_edges,
-        counts.T,
-        shading="auto",
-        cmap="magma",
-    )
-    fig.colorbar(mesh, ax=ax, label="Samples in cell")
-    ax.set_xlabel("True flux [cm^-2 min^-1]")
-    ax.set_ylabel("True eff_1")
-    ax.set_title(title.replace("mean", "counts"))
-    ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(path.with_name(path.stem + "_counts" + path.suffix), dpi=160)
     plt.close(fig)
 
 
@@ -677,30 +641,38 @@ def _plot_sample_size_distribution(df: pd.DataFrame, path: Path, threshold: floa
     plt.close(fig)
 
 
-def _plot_error_vs_distance(df: pd.DataFrame, error_col: str, ylabel: str, title: str, path: Path) -> None:
+def _plot_error_vs_distance_combined(df: pd.DataFrame, path: Path) -> None:
+    """1×2 scatter: flux and efficiency error vs distance-to-dictionary."""
     x = pd.to_numeric(df.get("sample_to_dict_dist_norm"), errors="coerce")
-    y = pd.to_numeric(df.get(error_col), errors="coerce")
-    mask = x.notna() & y.notna()
-    if mask.sum() < 10:
-        return
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.scatter(x[mask], y[mask], s=16, alpha=0.6, color="#4C78A8")
-    ax.set_xlabel("Distance to nearest dictionary point (normalized)")
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.grid(True, alpha=0.2)
-    # Annotate with correlation coefficients
-    xv = x[mask].to_numpy(dtype=float)
-    yv = y[mask].to_numpy(dtype=float)
-    pr = float(np.corrcoef(xv, yv)[0, 1])
-    try:
-        from scipy.stats import spearmanr as _spearmanr
-        sr = _spearmanr(xv, yv)
-        ann = f"Pearson r = {pr:.3f}\nSpearman r = {sr.correlation:.3f}"
-    except Exception:
-        ann = f"Pearson r = {pr:.3f}"
-    ax.text(0.02, 0.98, ann, transform=ax.transAxes, fontsize=9,
-            verticalalignment="top", bbox=dict(facecolor="white", alpha=0.8, edgecolor="grey"))
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    for idx, (error_col, ylabel, title_tag) in enumerate([
+        ("abs_flux_rel_error_pct", "|Flux relative error| [%]", "flux"),
+        ("abs_eff_rel_error_pct", "|Efficiency relative error| [%]", "efficiency"),
+    ]):
+        ax = axes[idx]
+        y = pd.to_numeric(df.get(error_col), errors="coerce")
+        mask = x.notna() & y.notna()
+        if mask.sum() >= 10:
+            ax.scatter(x[mask], y[mask], s=16, alpha=0.6, color="#4C78A8")
+            xv = x[mask].to_numpy(dtype=float)
+            yv = y[mask].to_numpy(dtype=float)
+            pr = float(np.corrcoef(xv, yv)[0, 1])
+            try:
+                from scipy.stats import spearmanr as _spearmanr
+                sr = _spearmanr(xv, yv)
+                ann = f"Pearson r = {pr:.3f}\nSpearman r = {sr.correlation:.3f}"
+            except Exception:
+                ann = f"Pearson r = {pr:.3f}"
+            ax.text(0.02, 0.98, ann, transform=ax.transAxes, fontsize=9,
+                    verticalalignment="top",
+                    bbox=dict(facecolor="white", alpha=0.8, edgecolor="grey"))
+        ax.set_xlabel("Distance to nearest dictionary point (normalized)")
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"STEP_4: {title_tag} error vs distance-to-dictionary")
+        ax.grid(True, alpha=0.2)
+
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -1114,21 +1086,10 @@ def main() -> int:
             out_dir / "sample_size_distribution.png",
             threshold=plane_min_events,
         )
-        _plot_error_vs_events(
-            results_ok,
-            "abs_flux_rel_error_pct",
-            "|Flux relative error| [%]",
-            "STEP_4: flux uncertainty vs sample size",
-            out_dir / "scatter_abs_flux_error_vs_events.png",
+        _plot_uncertainty_bands(
+            uncertainty_df, results_ok,
+            out_dir / "uncertainty_bands_by_events.png",
         )
-        _plot_error_vs_events(
-            results_ok,
-            "abs_eff_rel_error_pct",
-            "|Efficiency relative error| [%]",
-            "STEP_4: efficiency uncertainty vs sample size",
-            out_dir / "scatter_abs_eff_error_vs_events.png",
-        )
-        _plot_uncertainty_bands(uncertainty_df, out_dir / "uncertainty_bands_by_events.png")
         _plot_threshold_sweep(sweep_df, out_dir / "threshold_sweep_min_events.png")
 
         scatter_title = (
@@ -1136,10 +1097,8 @@ def main() -> int:
             f"(n={coverage_metrics['n_points_unique_flux_eff']}, "
             f"grid_fill={coverage_metrics['grid_fill_pct']:.2f}%)"
         )
-        _plot_dictionary_scatter(dict_points, scatter_title, out_dir / "dictionary_flux_eff_scatter.png")
-        _plot_dictionary_hexbin(dict_points, "Dictionary density in flux-eff space", out_dir / "dictionary_flux_eff_hexbin.png")
-        _plot_nn_hist(nn_dist, out_dir / "dictionary_nn_distance_hist_norm.png")
-        _plot_coverage_vs_radius(radius_df, out_dir / "dictionary_coverage_vs_radius.png")
+        _plot_dictionary_overview(dict_points, scatter_title, out_dir / "dictionary_flux_eff.png")
+        _plot_dictionary_coverage(nn_dist, radius_df, out_dir / "dictionary_coverage.png")
 
         high_df = _event_filter(results_plus, plane_min_events, "ge")
         low_df = _event_filter(results_plus, plane_min_events, "lt")
@@ -1182,24 +1141,6 @@ def main() -> int:
         )
 
         _plot_sector_histograms(
-            results_plus,
-            error_col="flux_rel_error_pct",
-            title=f"Flux residual histograms per (flux, eff) sector [{sector_flux_bins}x{sector_eff_bins}]",
-            path=out_dir / "sector_hist_flux_residual_all.png",
-            flux_sectors=sector_flux_bins,
-            eff_sectors=sector_eff_bins,
-            hist_bins=sector_hist_bins,
-        )
-        _plot_sector_histograms(
-            results_plus,
-            error_col="eff_rel_error_pct",
-            title=f"Efficiency residual histograms per (flux, eff) sector [{sector_flux_bins}x{sector_eff_bins}]",
-            path=out_dir / "sector_hist_eff_residual_all.png",
-            flux_sectors=sector_flux_bins,
-            eff_sectors=sector_eff_bins,
-            hist_bins=sector_hist_bins,
-        )
-        _plot_sector_histograms(
             low_df,
             error_col="flux_rel_error_pct",
             title=f"Flux residual histograms per sector (events < {plane_min_events:g})",
@@ -1236,19 +1177,9 @@ def main() -> int:
             hist_bins=sector_hist_bins,
         )
 
-        _plot_error_vs_distance(
+        _plot_error_vs_distance_combined(
             results_plus,
-            "abs_flux_rel_error_pct",
-            "|Flux relative error| [%]",
-            "STEP_4: flux error vs distance-to-dictionary",
-            out_dir / "scatter_abs_flux_error_vs_dict_distance.png",
-        )
-        _plot_error_vs_distance(
-            results_plus,
-            "abs_eff_rel_error_pct",
-            "|Efficiency relative error| [%]",
-            "STEP_4: efficiency error vs distance-to-dictionary",
-            out_dir / "scatter_abs_eff_error_vs_dict_distance.png",
+            out_dir / "scatter_error_vs_dict_distance.png",
         )
 
     log.info("Wrote uncertainty table: %s", uncertainty_csv)

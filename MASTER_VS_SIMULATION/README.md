@@ -5,14 +5,14 @@ This document is an exhaustive reference for the active `STEP_*` scripts in `MAS
 - `STEP_1_DICTIONARY/build_dictionary.py`
 - `STEP_2_SIM_VALIDATION/compute_relative_error.py`
 - `STEP_3_SELF_CONSISTENCY/self_consistency_r2.py`
-- `STEP_4_UNCERTAINTY/compute_uncertainty_limits.py`
+- `STEP_4_METHOD_UNCERTAINTY/compute_uncertainty_limits.py`
 
 It is written as prompt context for future Codex sessions.
 
 ## End-to-End Purpose
 
-1. Build a simulation dictionary CSV (Step 1).
-2. Validate simulated efficiencies and filter reliable rows (Step 2).
+1. Build a simulated dataset CSV (Step 1).
+2. Validate simulated efficiencies and filter reliable rows to form the reference dictionary (Step 2).
 3. Run self-consistency matching in `(flux, efficiency)` space (Step 3).
 4. Calibrate uncertainty/validity limits and quantify dictionary coverage (Step 4).
 
@@ -32,7 +32,7 @@ MASTER_VS_SIMULATION/
     self_consistency_r2.py
     config.json
     output/
-  STEP_4_UNCERTAINTY/
+  STEP_4_METHOD_UNCERTAINTY/
     compute_uncertainty_limits.py
     config.json
     output/
@@ -56,7 +56,7 @@ For Steps 2, 3, and 4, values are resolved as:
 
 Step 1 takes CLI args directly and forwards to an external builder script.
 
-## STEP 1: Dictionary Build Wrapper
+## STEP 1: Simulated Dataset Builder
 
 Script: `STEP_1_DICTIONARY/build_dictionary.py`
 
@@ -64,7 +64,11 @@ Script: `STEP_1_DICTIONARY/build_dictionary.py`
 
 - Creates `out_dir/task_XX/param_metadata_dictionary.csv` by delegating to:
   - `MASTER_VS_SIMULATION/STEP_1_DICTIONARY/STEP_1_BUILD/build_param_metadata_dictionary.py`
-- Optionally creates quick sanity plots from output CSV.
+- Optionally creates quick-look plots to explore the dataset.
+
+Note: the output is a broad simulated dataset — not yet a validated dictionary.
+Downstream steps (especially Step 2) filter it to select reliable reference
+entries that form the actual dictionary.
 
 ### CLI
 
@@ -86,19 +90,17 @@ Arguments:
   - `out_dir/task_{task_id:02d}/param_metadata_dictionary.csv`
 - If plots are enabled:
   - Deletes existing `*.png` in `.../plots`
-  - Writes:
-    - `hist_flux_cm2_min.png`
-    - `hist_cos_n.png`
-    - `hist_z_plane_1.png`
-    - `hist_z_plane_2.png`
-    - `hist_z_plane_3.png`
-    - `hist_z_plane_4.png`
-    - `scatter_flux_vs_cos_n.png`
-    - `scatter_flux_vs_z1.png`
+  - Writes (consolidated multi-panel figures):
+    - `hist_flux_cos_n.png` (1×2: flux + cos_n distributions)
+    - `hist_z_planes.png` (2×2: z_plane_1..4 distributions)
+    - `scatter_flux_vs_cos_n.png` (single scatter)
+    - `scatter_flux_vs_z_planes.png` (2×2: flux vs each z_plane)
+    - `scatter_z_plane_pairs.png` (corner plot of all z-plane pairs)
+    - `scatter_flux_vs_rates.png` (multi-panel: flux vs each rate column)
 
 ### Data Produced
 
-The dictionary CSV is wide and contains metadata, rates, counts, and derived rate/fraction features.  
+The dataset CSV is wide and contains metadata, rates, counts, and derived rate/fraction features.
 Important fields used downstream include:
 
 - IDs/join keys:
@@ -231,20 +233,16 @@ Written under `out_dir`:
 - `used_dictionary_entries.csv`
 - `unused_dictionary_entries.csv`
 
-If plots enabled, under `out_dir/plots`:
+If plots enabled, under `out_dir/plots` (consolidated multi-panel figures):
 
-- `hist_eff_rel_err_p2.png`
-- `hist_eff_rel_err_p3.png`
-- `scatter_relerr_p2_vs_p3.png`
-- `scatter_eff2_sim_vs_est.png`
-- `scatter_eff3_sim_vs_est.png`
-- `hist_used_vs_unused_eff_rel_err_p2.png`
-- `hist_used_vs_unused_eff_rel_err_p3.png`
-- `scatter_used_vs_unused_relerr_p2_vs_p3.png`
-- `hist_used_vs_unused_flux.png`
-- `hist_used_vs_unused_cos_n.png`
-- `counts_total_vs_filtered.png`
-- `counts_used_vs_unused.png`
+- `scatter_eff_sim_vs_est.png` (2×2: simulated vs estimated eff for all 4 planes)
+- `hist_used_vs_unused_relerr.png` (1×2: p2 + p3 relative-error overlay histograms)
+- `scatter_used_vs_unused_relerr_p2_vs_p3.png` (used/unused overlay scatter)
+- `hist_used_vs_unused_flux_cosn.png` (1×2: flux + cos_n overlay histograms)
+- `counts_summary.png` (grouped bar chart: total / filtered / used / unused)
+- `selection_bias_diagnostics.png` (multi-panel: p1/p4 relerr + z_planes + events)
+- `scatter_used_vs_unused_flux_cosn.png` (flux-cos_n overlay scatter)
+- `scatter_used_events_vs_relerr_p1_p4.png` (1×2: events vs p1/p4 relerr)
 
 ## STEP 3: Self-Consistency Search
 
@@ -343,7 +341,7 @@ Arguments:
   - error vs sample size
   - true vs estimated parameter scatter
   - error distributions
-- Produces event-binned uncertainty table for future `STEP_4_UNCERTAINTY`.
+- Produces event-binned uncertainty table for future `STEP_4_METHOD_UNCERTAINTY`.
 
 ### Metric Modes
 
@@ -421,34 +419,29 @@ All-mode table columns include:
 - `flux_rel_error_pct`, `eff_rel_error_pct`
 - absolute error versions and ranking fields
 
-### Plot Outputs (11 files)
+### Plot Outputs (consolidated)
 
 Filename tag is `{metric_mode}_{score_metric}`. Generated files:
 
-Single mode (11 plots):
-- `contour_{tag}.png`
-- `features_{tag}.png`
-- `scatter_sample_vs_best_{tag}.png`
-- `hist_score_{tag}.png`
-- `score_vs_param_dist_{tag}.png`
-- `top_n_param_space_{tag}.png`
-- `residuals_{tag}.png`
-- `l2_contribution_{tag}.png`
-- `profiles_top_n_{tag}.png`
-- `score_cdf_{tag}.png`
-- `flux_eff_errors_{tag}.png`
+Single mode (5 plots):
+- `contour_{tag}.png` (score contour map with top-N rank annotations)
+- `feature_diagnostics_{tag}.png` (2×2: bars, scatter, residuals, L2 contribution)
+- `score_distribution_{tag}.png` (1×2: histogram + CDF of scores)
+- `score_vs_param_dist_{tag}.png` (score vs parameter distance)
+- `profiles_top_n_{tag}.png` (top-N candidate rate profiles vs sample)
+- `flux_eff_errors_{tag}.png` (flux/eff error scatter)
 
 All mode (aggregate plots):
-- `all_events_vs_abs_flux_relerr_{tag}.png`
-- `all_events_vs_abs_eff_relerr_{tag}.png`
-- `all_true_vs_est_flux_{tag}.png`
-- `all_true_vs_est_eff_{tag}.png`
-- `all_hist_abs_flux_relerr_{tag}.png`
-- `all_hist_abs_eff_relerr_{tag}.png`
+- `all_true_vs_est_{tag}.png` (1×2: flux + eff true-vs-estimated)
+- `all_stratified_flux_relerr_{tag}.png` (in-dict vs off-dict flux error distributions)
+- `all_stratified_eff_relerr_{tag}.png` (in-dict vs off-dict eff error distributions)
+- `all_stratified_flux_relerr_vs_events_{tag}.png` (flux error vs sample size by membership)
+- `all_stratified_eff_relerr_vs_events_{tag}.png` (eff error vs sample size by membership)
+- `all_hist_top_n_spread_{tag}.png` (1×2: flux + eff spread std histograms)
 
 ## STEP 4: Uncertainty and Coverage Limits
 
-Script: `STEP_4_UNCERTAINTY/compute_uncertainty_limits.py`
+Script: `STEP_4_METHOD_UNCERTAINTY/compute_uncertainty_limits.py`
 
 ### What It Does
 
@@ -473,12 +466,12 @@ Important:
 ### CLI
 
 ```bash
-python3 MASTER_VS_SIMULATION/STEP_4_UNCERTAINTY/compute_uncertainty_limits.py [options]
+python3 MASTER_VS_SIMULATION/STEP_4_METHOD_UNCERTAINTY/compute_uncertainty_limits.py [options]
 ```
 
 Arguments:
 
-- `--config` (default: `STEP_4_UNCERTAINTY/config.json`)
+- `--config` (default: `STEP_4_METHOD_UNCERTAINTY/config.json`)
 - `--all-results-csv`
 - `--dictionary-csv`
 - `--out-dir`
@@ -497,7 +490,7 @@ Arguments:
 - `--sweep-points` (resolution for threshold sweep used to choose minimum sample size)
 - `--no-plots`
 
-### Config Keys (Current `STEP_4_UNCERTAINTY/config.json`)
+### Config Keys (Current `STEP_4_METHOD_UNCERTAINTY/config.json`)
 
 - `all_results_csv`
 - `dictionary_csv`
@@ -521,7 +514,7 @@ Arguments:
 
 ### Core Outputs
 
-Written under `STEP_4_UNCERTAINTY/output`:
+Written under `STEP_4_METHOD_UNCERTAINTY/output`:
 
 - `uncertainty_by_events.csv`
   - event bins with p50/p68/p90/p95 absolute relative errors for flux and efficiency.
@@ -569,29 +562,22 @@ Written under `STEP_4_UNCERTAINTY/output`:
 - enables error vs interpolation/extrapolation distance diagnostics.
 - if all distances are ~0, the validation set is on-dictionary and uncertainty limits may be optimistic for out-of-dictionary cases.
 
-### STEP 4 Plot Outputs
+### STEP 4 Plot Outputs (consolidated)
 
-- `scatter_abs_flux_error_vs_events.png`
-- `scatter_abs_eff_error_vs_events.png`
-- `sample_size_distribution.png`
-- `uncertainty_bands_by_events.png`
-- `threshold_sweep_min_events.png`
-- `dictionary_flux_eff_scatter.png`
-- `dictionary_flux_eff_hexbin.png`
-- `dictionary_nn_distance_hist_norm.png`
-- `dictionary_coverage_vs_radius.png`
-- `plane_mean_abs_flux_error_ge_40000.png` (+ `_counts`)
-- `plane_mean_abs_eff_error_ge_40000.png` (+ `_counts`)
-- `plane_mean_abs_flux_error_lt_40000.png` (+ `_counts`)
-- `plane_mean_abs_eff_error_lt_40000.png` (+ `_counts`)
-- `sector_hist_flux_residual_all.png`
-- `sector_hist_eff_residual_all.png`
-- `sector_hist_flux_residual_ge_40000.png`
-- `sector_hist_eff_residual_ge_40000.png`
+- `sample_size_distribution.png` (1×2: histogram + CDF with threshold line)
+- `uncertainty_bands_by_events.png` (1×2: flux + eff percentile bands with raw scatter underlay)
+- `threshold_sweep_min_events.png` (1×3: flux error, eff error, sample count vs threshold)
+- `dictionary_flux_eff.png` (1×2: scatter + hexbin density in flux-eff space)
+- `dictionary_coverage.png` (1×2: NN distance histogram + coverage-vs-radius curve)
+- `plane_mean_abs_flux_error_ge_40000.png` (1×2: error heatmap + counts companion)
+- `plane_mean_abs_eff_error_ge_40000.png` (1×2: error heatmap + counts companion)
+- `plane_mean_abs_flux_error_lt_40000.png` (1×2: error heatmap + counts companion)
+- `plane_mean_abs_eff_error_lt_40000.png` (1×2: error heatmap + counts companion)
 - `sector_hist_flux_residual_lt_40000.png`
+- `sector_hist_flux_residual_ge_40000.png`
 - `sector_hist_eff_residual_lt_40000.png`
-- `scatter_abs_flux_error_vs_dict_distance.png`
-- `scatter_abs_eff_error_vs_dict_distance.png`
+- `sector_hist_eff_residual_ge_40000.png`
+- `scatter_error_vs_dict_distance.png` (1×2: flux + eff error vs distance-to-dictionary)
 
 ## Step Interfaces (Data Contracts)
 
@@ -665,8 +651,8 @@ python3 MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/self_consistency_r2.py \
   --all
 
 # Step 4
-python3 MASTER_VS_SIMULATION/STEP_4_UNCERTAINTY/compute_uncertainty_limits.py \
-  --config MASTER_VS_SIMULATION/STEP_4_UNCERTAINTY/config.json
+python3 MASTER_VS_SIMULATION/STEP_4_METHOD_UNCERTAINTY/compute_uncertainty_limits.py \
+  --config MASTER_VS_SIMULATION/STEP_4_METHOD_UNCERTAINTY/config.json
 ```
 
 ## Prompt-Ready Context Snippet

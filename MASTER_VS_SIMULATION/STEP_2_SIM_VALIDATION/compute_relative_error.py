@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 # Shared utilities --------------------------------------------------------
@@ -43,27 +44,45 @@ DEFAULT_CONFIG = STEP_DIR / "config.json"
 
 
 # -------------------------------------------------------------------------
-# Efficiency sim-vs-est scatter
+# Efficiency sim-vs-est scatter (all 4 planes in one 2×2 figure)
 # -------------------------------------------------------------------------
 
-def _plot_eff_sim_vs_est(df: pd.DataFrame, plane: int, plot_path: Path) -> None:
-    sim_col, est_col = f"eff_sim_p{plane}", f"eff_est_p{plane}"
-    if sim_col not in df.columns or est_col not in df.columns:
-        return
-    sim = pd.to_numeric(df[sim_col], errors="coerce")
-    est = pd.to_numeric(df[est_col], errors="coerce")
-    mask = sim.notna() & est.notna()
-    if mask.sum() < 2:
-        return
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.scatter(sim[mask], est[mask], s=14, alpha=0.6, color="#4C78A8")
-    ax.plot([0, 1], [0, 1], "k--", linewidth=1)
-    ax.set_xlabel(sim_col)
-    ax.set_ylabel(est_col)
-    ax.set_title(f"Eff {plane}: simulated vs calculated")
-    ax.set_xlim(0, 1.05)
-    ax.set_ylim(0, 1.05)
-    ax.grid(True, alpha=0.2)
+def _plot_eff_sim_vs_est_all(df: pd.DataFrame, plot_path: Path) -> None:
+    """2×2 scatter of simulated vs calculated efficiency for all planes.
+
+    For planes 1 & 4 (outer planes), the estimated efficiency includes an
+    acceptance factor that does NOT cancel in the coincidence-ratio estimator.
+    This means eff_est_p1 / eff_est_p4 are NOT directly comparable with the
+    simulated efficiency.  The systematic offset visible on those planes is
+    expected.  These estimates CAN, however, be compared between dictionary
+    entries and test samples (both carry the same acceptance bias).
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    for idx, plane in enumerate(range(1, 5)):
+        ax = axes[idx // 2, idx % 2]
+        sim_col, est_col = f"eff_sim_p{plane}", f"eff_est_p{plane}"
+        if sim_col not in df.columns or est_col not in df.columns:
+            ax.set_visible(False)
+            continue
+        sim = pd.to_numeric(df[sim_col], errors="coerce")
+        est = pd.to_numeric(df[est_col], errors="coerce")
+        mask = sim.notna() & est.notna()
+        if mask.sum() >= 2:
+            ax.scatter(sim[mask], est[mask], s=14, alpha=0.6, color="#4C78A8")
+        ax.plot([0, 1], [0, 1], "k--", linewidth=1)
+        ax.set_xlabel(sim_col)
+        ax.set_ylabel(est_col)
+        if plane in (1, 4):
+            ax.set_title(
+                f"Plane {plane}: sim vs est\n"
+                "(acceptance offset expected)",
+                fontsize=10,
+            )
+        else:
+            ax.set_title(f"Plane {plane}: sim vs est")
+        ax.set_xlim(0, 1.05)
+        ax.set_ylim(0, 1.05)
+        ax.grid(True, alpha=0.2)
     fig.tight_layout()
     fig.savefig(plot_path, dpi=140)
     plt.close(fig)
@@ -287,113 +306,172 @@ def _write_plots(
     filtered: pd.DataFrame,
     plot_dir: Path,
 ) -> None:
-    """Generate all diagnostic plots for STEP 2."""
+    """Generate all diagnostic plots for STEP 2 (consolidated).
+
+    Output files:
+    - scatter_eff_sim_vs_est.png         : 2×2 sim-vs-est for all planes
+    - hist_used_vs_unused_relerr.png     : overlay p2+p3 rel-err (2-panel)
+    - scatter_used_vs_unused_relerr_p2_vs_p3.png : used/unused rel-err scatter
+    - hist_used_vs_unused_flux_cosn.png  : flux+cos_n overlays (1×2)
+    - counts_summary.png                 : grouped bar chart
+    - selection_bias_diagnostics.png     : multi-panel selection-bias histograms
+    - scatter_used_vs_unused_flux_cosn_scatter.png : used/unused in (flux,cos_n)
+    - scatter_used_events_vs_relerr_p1_p4.png : p1/p4 events scatter (1×2)
+    """
     plot_dir.mkdir(parents=True, exist_ok=True)
 
-    plot_histogram(
-        merged, "eff_rel_err_p2",
-        plot_dir / "hist_eff_rel_err_p2.png",
-        density=True, log_y=True, color="#54A24B",
+    # --- 1. Efficiency sim-vs-est (2×2) ---
+    _plot_eff_sim_vs_est_all(
+        validation, plot_dir / "scatter_eff_sim_vs_est.png",
     )
-    plot_histogram(
-        merged, "eff_rel_err_p3",
-        plot_dir / "hist_eff_rel_err_p3.png",
-        density=True, log_y=True, color="#54A24B",
-    )
-    plot_scatter(
-        merged, "eff_rel_err_p2", "eff_rel_err_p3",
-        plot_dir / "scatter_relerr_p2_vs_p3.png",
-        color="#E45756",
-    )
-    _plot_eff_sim_vs_est(validation, 2,
-                         plot_dir / "scatter_eff2_sim_vs_est.png")
-    _plot_eff_sim_vs_est(validation, 3,
-                         plot_dir / "scatter_eff3_sim_vs_est.png")
 
-    # Overlay plots
-    plot_histogram_overlay(
-        used, unused, "eff_rel_err_p2",
-        plot_dir / "hist_used_vs_unused_eff_rel_err_p2.png",
-        "eff_rel_err_p2 (used vs unused)",
-    )
-    plot_histogram_overlay(
-        used, unused, "eff_rel_err_p3",
-        plot_dir / "hist_used_vs_unused_eff_rel_err_p3.png",
-        "eff_rel_err_p3 (used vs unused)",
-    )
+    # --- 2. Used/unused rel-err overlay for p2+p3 (1×2) ---
+    # (Replaces hist_eff_rel_err_p2/p3 + their used/unused overlays)
+    relerr_cols = [c for c in ("eff_rel_err_p2", "eff_rel_err_p3")
+                   if c in used.columns and c in unused.columns]
+    if relerr_cols:
+        fig, axes = plt.subplots(1, len(relerr_cols),
+                                 figsize=(7 * len(relerr_cols), 5))
+        if len(relerr_cols) == 1:
+            axes = [axes]
+        for ax, col in zip(axes, relerr_cols):
+            u = pd.to_numeric(used.get(col), errors="coerce").dropna()
+            un = pd.to_numeric(unused.get(col), errors="coerce").dropna()
+            if not u.empty:
+                ax.hist(u, bins=40, density=True, color="#54A24B",
+                        alpha=0.65, label="used")
+            if not un.empty:
+                ax.hist(un, bins=40, density=True, color="#E45756",
+                        alpha=0.55, label="unused")
+            ax.set_xlabel(col)
+            ax.set_ylabel("Density")
+            ax.set_title(f"{col} (used vs unused)")
+            ax.set_yscale("log")
+            ax.grid(True, alpha=0.2)
+            ax.legend(frameon=True, framealpha=0.9)
+        fig.tight_layout()
+        fig.savefig(plot_dir / "hist_used_vs_unused_relerr.png", dpi=140)
+        plt.close(fig)
+
+    # --- 3. Rel-err scatter used/unused ---
     plot_scatter_overlay(
         used, unused, "eff_rel_err_p2", "eff_rel_err_p3",
         plot_dir / "scatter_used_vs_unused_relerr_p2_vs_p3.png",
         "Rel. error p2 vs p3 (used vs unused)",
     )
-    plot_histogram_overlay(
-        used, unused, "flux_cm2_min",
-        plot_dir / "hist_used_vs_unused_flux.png",
-        "flux_cm2_min (used vs unused)",
-    )
-    plot_histogram_overlay(
-        used, unused, "cos_n",
-        plot_dir / "hist_used_vs_unused_cos_n.png",
-        "cos_n (used vs unused)",
-    )
 
-    # Count bar charts
-    plot_bar_counts(
-        ["total", "filtered"], [len(merged), len(filtered)],
-        ["#4C78A8", "#F58518"],
-        "Reference filtering by rel. error",
-        plot_dir / "counts_total_vs_filtered.png",
-    )
-    plot_bar_counts(
-        ["used", "unused"], [len(used), len(unused)],
-        ["#54A24B", "#E45756"],
-        "Dictionary entries used vs unused",
-        plot_dir / "counts_used_vs_unused.png",
-    )
+    # --- 4. Flux + cos_n used/unused overlays (1×2) ---
+    fc_cols = [c for c in ("flux_cm2_min", "cos_n")
+               if c in used.columns and c in unused.columns]
+    if fc_cols:
+        fig, axes = plt.subplots(1, len(fc_cols),
+                                 figsize=(7 * len(fc_cols), 5))
+        if len(fc_cols) == 1:
+            axes = [axes]
+        for ax, col in zip(axes, fc_cols):
+            u = pd.to_numeric(used.get(col), errors="coerce").dropna()
+            un = pd.to_numeric(unused.get(col), errors="coerce").dropna()
+            if not u.empty:
+                ax.hist(u, bins=40, density=True, color="#54A24B",
+                        alpha=0.65, label="used")
+            if not un.empty:
+                ax.hist(un, bins=40, density=True, color="#E45756",
+                        alpha=0.55, label="unused")
+            ax.set_xlabel(col)
+            ax.set_ylabel("Density")
+            ax.set_title(f"{col} (used vs unused)")
+            ax.set_yscale("log")
+            ax.grid(True, alpha=0.2)
+            ax.legend(frameon=True, framealpha=0.9)
+        fig.tight_layout()
+        fig.savefig(plot_dir / "hist_used_vs_unused_flux_cosn.png", dpi=140)
+        plt.close(fig)
 
-    # --- Selection-bias diagnostics (to_do.md §3.3) ---
-    # Compare used vs unused distributions for parameters NOT in the cut
-    # to detect whether filtering on p2/p3 creates bias in p1/p4.
+    # --- 5. Counts bar chart (single grouped figure) ---
+    labels = ["total", "filtered", "used", "unused"]
+    values = [len(merged), len(filtered), len(used), len(unused)]
+    colors = ["#4C78A8", "#F58518", "#54A24B", "#E45756"]
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.bar(labels, values, color=colors)
+    ax.set_ylabel("Rows")
+    ax.set_title("Reference filtering summary")
+    ax.grid(True, axis="y", alpha=0.2)
+    for i, v in enumerate(values):
+        ax.text(i, v + max(values) * 0.01, str(v), ha="center", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(plot_dir / "counts_summary.png", dpi=140)
+    plt.close(fig)
+
+    # --- 6. Selection-bias diagnostics (multi-panel) ---
+    # p1/p4 rel-err + z_plane_1..4 + generated_events_count
+    bias_cols = []
     for col in ("eff_rel_err_p1", "eff_rel_err_p4"):
         if col in used.columns and col in unused.columns:
-            plot_histogram_overlay(
-                used, unused, col,
-                plot_dir / f"hist_used_vs_unused_{col}.png",
-                f"{col} (used vs unused)",
-            )
-
-    # Geometry and efficiency distributions — selection bias check
+            bias_cols.append(col)
     for col in ("z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"):
         if col in used.columns and col in unused.columns:
-            plot_histogram_overlay(
-                used, unused, col,
-                plot_dir / f"hist_used_vs_unused_{col}.png",
-                f"{col} (used vs unused)",
-            )
+            bias_cols.append(col)
     for col in ("generated_events_count",):
         if col in used.columns and col in unused.columns:
-            plot_histogram_overlay(
-                used, unused, col,
-                plot_dir / f"hist_used_vs_unused_{col}.png",
-                f"{col} (used vs unused)",
-            )
+            bias_cols.append(col)
 
-    # Scatter: used vs unused in (flux, cos_n) space
+    if bias_cols:
+        ncols = min(3, len(bias_cols))
+        nrows = (len(bias_cols) + ncols - 1) // ncols
+        fig, axes = plt.subplots(nrows, ncols,
+                                 figsize=(6 * ncols, 4.5 * nrows))
+        axes_flat = np.atleast_1d(axes).ravel()
+        for idx, col in enumerate(bias_cols):
+            ax = axes_flat[idx]
+            u = pd.to_numeric(used.get(col), errors="coerce").dropna()
+            un = pd.to_numeric(unused.get(col), errors="coerce").dropna()
+            if not u.empty:
+                ax.hist(u, bins=40, density=True, color="#54A24B",
+                        alpha=0.65, label="used")
+            if not un.empty:
+                ax.hist(un, bins=40, density=True, color="#E45756",
+                        alpha=0.55, label="unused")
+            ax.set_xlabel(col)
+            ax.set_ylabel("Density")
+            ax.set_title(col, fontsize=9)
+            ax.set_yscale("log")
+            ax.grid(True, alpha=0.2)
+            ax.legend(fontsize=7, frameon=True, framealpha=0.9)
+        for idx in range(len(bias_cols), len(axes_flat)):
+            axes_flat[idx].set_visible(False)
+        fig.suptitle("Selection-bias diagnostics (used vs unused)", fontsize=11)
+        fig.tight_layout()
+        fig.savefig(plot_dir / "selection_bias_diagnostics.png", dpi=140)
+        plt.close(fig)
+
+    # --- 7. Scatter: used vs unused in (flux, cos_n) space ---
     plot_scatter_overlay(
         used, unused, "flux_cm2_min", "cos_n",
         plot_dir / "scatter_used_vs_unused_flux_cosn.png",
         "Flux vs cos_n (used vs unused)",
     )
 
-    # Scatter: p1/p4 errors for used entries — check they stay well-behaved
-    for p in (1, 4):
-        rcol = f"eff_rel_err_p{p}"
-        if rcol in used.columns:
-            plot_scatter(
-                used, "generated_events_count", rcol,
-                plot_dir / f"scatter_used_events_vs_{rcol}.png",
-                color="#54A24B",
-            )
+    # --- 8. p1/p4 events scatter (1×2) ---
+    p_cols = [f"eff_rel_err_p{p}" for p in (1, 4) if f"eff_rel_err_p{p}" in used.columns]
+    if p_cols and "generated_events_count" in used.columns:
+        fig, axes = plt.subplots(1, len(p_cols),
+                                 figsize=(7 * len(p_cols), 5))
+        if len(p_cols) == 1:
+            axes = [axes]
+        for ax, rcol in zip(axes, p_cols):
+            x = pd.to_numeric(used.get("generated_events_count"), errors="coerce")
+            y = pd.to_numeric(used.get(rcol), errors="coerce")
+            mask = x.notna() & y.notna()
+            if mask.sum() >= 2:
+                ax.scatter(x[mask], y[mask], s=12, alpha=0.6, color="#54A24B")
+            ax.set_xlabel("generated_events_count")
+            ax.set_ylabel(rcol)
+            ax.set_title(f"{rcol} vs events (used only)")
+            ax.grid(True, alpha=0.2)
+        fig.tight_layout()
+        fig.savefig(plot_dir / "scatter_used_events_vs_relerr_p1_p4.png",
+                    dpi=140)
+        plt.close(fig)
 
     log.info("Plots saved to %s", plot_dir)
 

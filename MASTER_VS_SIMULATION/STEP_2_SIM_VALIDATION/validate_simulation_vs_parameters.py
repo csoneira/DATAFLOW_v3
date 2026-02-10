@@ -418,7 +418,20 @@ def plot_residuals_all_planes(
     *,
     relerr_max_abs: float,
 ) -> None:
-    """Residual and relative-error scatter for **all four planes** (to_do.md §3.1)."""
+    """Residual and relative-error scatter for **all four planes** (to_do.md §3.1).
+
+    IMPORTANT — acceptance-factor caveat for planes 1 & 4
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    The estimated efficiency for planes 2 & 3 (inner planes) is derived
+    from the four-fold/three-fold coincidence ratio which cleanly cancels
+    geometry.  For planes 1 & 4 (outer planes) the same ratio includes an
+    acceptance factor that does NOT cancel, so ``eff_est_p1`` and
+    ``eff_est_p4`` are **not** directly comparable with the simulated
+    efficiency ``eff_sim_p1`` / ``eff_sim_p4``.  They *can* be compared
+    between dictionary entries and test samples (both carry the same
+    acceptance bias), but residuals against simulated values will show a
+    systematic offset proportional to the acceptance correction.
+    """
     fig, axes = plt.subplots(4, 3, figsize=(16, 16), sharex="col")
     planes = [1, 2, 3, 4]
     for row, plane in enumerate(planes):
@@ -438,14 +451,15 @@ def plot_residuals_all_planes(
         ax_res = axes[row, 0]
         ax_res.scatter(df.loc[mask_common, sim_col], df.loc[mask_common, resid_col], s=14, alpha=0.6)
         ax_res.axhline(0.0, color="red", linestyle="--", linewidth=1)
-        ax_res.set_title(f"Plane {plane}: residual")
+        p_note = " *" if plane in (1, 4) else ""
+        ax_res.set_title(f"Plane {plane}: residual{p_note}")
         ax_res.set_ylabel("Est − Sim")
         ax_res.grid(True, alpha=0.3)
 
         ax_rel = axes[row, 1]
         ax_rel.scatter(df.loc[mask_common, sim_col], 100.0 * df.loc[mask_common, rel_col], s=14, alpha=0.6)
         ax_rel.axhline(0.0, color="red", linestyle="--", linewidth=1)
-        ax_rel.set_title(f"Plane {plane}: rel. error (|err| ≤ {100 * relerr_max_abs:g}%)")
+        ax_rel.set_title(f"Plane {plane}: rel. error (|err| ≤ {100 * relerr_max_abs:g}%){p_note}")
         ax_rel.set_ylabel("Relative error [%]")
         ax_rel.grid(True, alpha=0.3)
 
@@ -453,7 +467,7 @@ def plot_residuals_all_planes(
         mask_ev = mask_common & df[ev_col].notna()
         ax_ev.scatter(df.loc[mask_ev, ev_col], 100.0 * df.loc[mask_ev, rel_col], s=14, alpha=0.6)
         ax_ev.axhline(0.0, color="red", linestyle="--", linewidth=1)
-        ax_ev.set_title(f"Plane {plane}: rel. error vs events")
+        ax_ev.set_title(f"Plane {plane}: rel. error vs events{p_note}")
         ax_ev.set_ylabel("Relative error [%]")
         ax_ev.grid(True, alpha=0.3)
         _maybe_log_x(ax_ev, df.loc[mask_ev, ev_col])
@@ -462,7 +476,12 @@ def plot_residuals_all_planes(
     axes[-1, 1].set_xlabel("Simulated efficiency")
     axes[-1, 2].set_xlabel("Generated events")
     fig.suptitle("Residual and Relative Error — All 4 Planes", fontsize=12)
-    fig.tight_layout()
+    fig.text(
+        0.5, 0.005,
+        "* Planes 1 & 4: acceptance factor NOT cancelled — systematic offset expected",
+        ha="center", fontsize=9, style="italic", color="grey",
+    )
+    fig.tight_layout(rect=[0, 0.02, 1, 0.97])
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
 
@@ -473,7 +492,15 @@ def plot_error_vs_event_count_all_planes(
     *,
     relerr_max_abs: float,
 ) -> None:
-    """Error vs event count for all planes — 1/sqrt(N) overlay (to_do.md §3.1)."""
+    """Error vs event count for all planes — 1/sqrt(N) overlay (to_do.md §3.1).
+
+    The red dashed curve shows the expected purely-statistical scaling
+    ``error ∝ 1/√N``.  If the data follow this curve the deviations are
+    consistent with sampling noise.  Note that for planes 1 & 4 the
+    residual is affected by an acceptance factor that does not cancel in
+    the coincidence-ratio estimator, so a systematic offset above the
+    guide curve is expected and does NOT indicate a problem.
+    """
     ev_col = "generated_events_count"
     fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True)
     for idx, plane in enumerate([1, 2, 3, 4]):
@@ -502,14 +529,20 @@ def plot_error_vs_event_count_all_planes(
                 ax.plot(ev_line, scale / np.sqrt(ev_line), "r--",
                         linewidth=1, label=r"$\propto 1/\sqrt{N}$")
                 ax.legend(fontsize=8)
-        ax.set_title(f"Plane {plane}: |rel. error| vs events")
+        p_star = " *" if plane in (1, 4) else ""
+        ax.set_title(f"Plane {plane}: |rel. error| vs events{p_star}")
         ax.set_ylabel("|Relative error| [%]")
         ax.grid(True, alpha=0.3)
         _maybe_log_x(ax, pd.Series(events))
     axes[-1, 0].set_xlabel("Generated events")
     axes[-1, 1].set_xlabel("Generated events")
     fig.suptitle("Error vs Event Count — All Planes (variance scaling check §3.1)", fontsize=11)
-    fig.tight_layout()
+    fig.text(
+        0.5, 0.005,
+        "* Planes 1 & 4: acceptance factor NOT cancelled — offset above 1/√N expected",
+        ha="center", fontsize=9, style="italic", color="grey",
+    )
+    fig.tight_layout(rect=[0, 0.02, 1, 0.97])
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
 

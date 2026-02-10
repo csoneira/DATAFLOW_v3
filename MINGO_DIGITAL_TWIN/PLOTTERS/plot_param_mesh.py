@@ -234,6 +234,9 @@ def main() -> None:
 
     completed_mask = build_completed_mask(df, completed_params)
     completed_df, in_process_df = split_by_status(df, completed_mask)
+    same_eff_mask = equal_efficiency_mask(df)
+    n_mask = np.isclose(df["cos_n"], args.n_value, atol=1e-12)
+    same_eff_n_mask = same_eff_mask & n_mask
 
     eff_p1 = df["eff_p1"]
     eff_p2 = df["eff_p2"]
@@ -247,6 +250,49 @@ def main() -> None:
     prod_41 = eff_p4 * eff_p1
 
     with PdfPages(output_path) as pdf:
+        fig, ax = plt.subplots(figsize=(7.5, 5.5))
+        if same_eff_n_mask.any():
+            same_eff_n_completed = df.loc[completed_mask & same_eff_n_mask]
+            same_eff_n_in_process = df.loc[~completed_mask & same_eff_n_mask]
+            if not same_eff_n_in_process.empty:
+                ax.scatter(
+                    same_eff_n_in_process["flux_cm2_min"],
+                    same_eff_n_in_process["eff_p1"],
+                    s=20,
+                    alpha=0.6,
+                    color=IN_PROCESS_COLOR,
+                    label="In process",
+                )
+            if not same_eff_n_completed.empty:
+                ax.scatter(
+                    same_eff_n_completed["flux_cm2_min"],
+                    same_eff_n_completed["eff_p1"],
+                    s=24,
+                    alpha=0.7,
+                    color=COMPLETED_COLOR,
+                    label="Completed",
+                )
+            ax.set_xlabel("flux_cm2_min")
+            ax.set_ylabel("efficiency")
+            ax.set_title(
+                f"Flux vs efficiency for equal efficiencies and cos_n = {args.n_value:g}"
+            )
+            if not same_eff_n_in_process.empty or not same_eff_n_completed.empty:
+                ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.2)
+        else:
+            ax.text(
+                0.5,
+                0.5,
+                f"No rows for eff_p1=eff_p2=eff_p3=eff_p4 and cos_n = {args.n_value:g}",
+                ha="center",
+                va="center",
+            )
+            ax.set_axis_off()
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
         fig, ax = plt.subplots(figsize=(7.5, 5.5))
         add_scatter(ax, completed_df, in_process_df)
         ax.set_title(
@@ -297,8 +343,7 @@ def main() -> None:
         pdf.savefig(fig)
         plt.close(fig)
 
-        n_mask = np.isclose(df["cos_n"], args.n_value, atol=1e-12)
-        same_eff_df = df.loc[equal_efficiency_mask(df)].copy()
+        same_eff_df = df.loc[same_eff_mask].copy()
 
         fig, ax = plt.subplots(figsize=(7.5, 5.5))
         if n_mask.any():
@@ -322,7 +367,6 @@ def main() -> None:
             ax.text(0.5, 0.5, "No rows where eff_p1 = eff_p2 = eff_p3 = eff_p4", ha="center", va="center")
             ax.set_axis_off()
         else:
-            same_eff_mask = equal_efficiency_mask(df)
             add_status_hist(
                 ax,
                 df.loc[completed_mask & same_eff_mask, "flux_cm2_min"],
@@ -331,41 +375,6 @@ def main() -> None:
             )
             ax.set_xlabel("flux_cm2_min")
             ax.set_ylabel("count")
-        fig.tight_layout()
-        pdf.savefig(fig)
-        plt.close(fig)
-
-        fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        if same_eff_df.empty:
-            ax.text(0.5, 0.5, "No rows where eff_p1 = eff_p2 = eff_p3 = eff_p4", ha="center", va="center")
-            ax.set_axis_off()
-        else:
-            same_eff_mask = equal_efficiency_mask(df)
-            same_eff_completed = df.loc[completed_mask & same_eff_mask]
-            same_eff_in_process = df.loc[~completed_mask & same_eff_mask]
-            if not same_eff_in_process.empty:
-                ax.scatter(
-                    same_eff_in_process["flux_cm2_min"],
-                    same_eff_in_process["eff_p1"],
-                    s=20,
-                    alpha=0.6,
-                    color=IN_PROCESS_COLOR,
-                    label="In process",
-                )
-            if not same_eff_completed.empty:
-                ax.scatter(
-                    same_eff_completed["flux_cm2_min"],
-                    same_eff_completed["eff_p1"],
-                    s=24,
-                    alpha=0.7,
-                    color=COMPLETED_COLOR,
-                    label="Completed",
-                )
-            ax.set_xlabel("flux_cm2_min")
-            ax.set_ylabel("efficiency")
-            ax.set_title("Flux vs efficiency for rows with equal efficiencies")
-            ax.legend(fontsize=8)
-            ax.grid(True, alpha=0.2)
         fig.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)

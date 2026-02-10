@@ -131,8 +131,13 @@ def _plot_contour(
     plot_path: Path,
     events_label: str,
     sample_label: str,
+    top_n: int = 0,
 ) -> None:
-    """Create a contour/heatmap of scores in (flux, efficiency) space."""
+    """Create a contour/heatmap of scores in (flux, efficiency) space.
+
+    Also annotates top-N ranked candidates inline (replaces the old
+    standalone top_n_param_space plot).
+    """
     x = candidates["dict_flux_cm2_min"].to_numpy(dtype=float)
     y = candidates["dict_eff_1"].to_numpy(dtype=float)
     z = candidates["score_value"].to_numpy(dtype=float)
@@ -224,47 +229,28 @@ def _plot_contour(
         transform=ax.transAxes, va="top", ha="left", fontsize=9,
         bbox=dict(boxstyle="round", facecolor="white", alpha=0.9, edgecolor="#D9D9D9"),
     )
+    # --- top-N rank annotations (integrated from former top_n_param_space) ---
+    if top_n > 0:
+        ascending = score_metric in LOWER_IS_BETTER
+        df_sorted = candidates.dropna(subset=["dict_flux_cm2_min", "dict_eff_1", "score_value"]) \
+            .sort_values("score_value", ascending=ascending)
+        top = df_sorted.head(top_n)
+        rank_colors = plt.cm.RdYlGn_r(np.linspace(0.1, 0.9, min(top_n, len(top))))
+        for rank, (_, row) in enumerate(top.iterrows(), 1):
+            if rank == 1:
+                continue  # best candidate already marked with X
+            ax.annotate(
+                f"#{rank}",
+                (row["dict_flux_cm2_min"], row["dict_eff_1"]),
+                textcoords="offset points", xytext=(6, 6),
+                fontsize=7, fontweight="bold",
+                color=rank_colors[rank - 1],
+            )
+
     ax.legend(loc="lower right", frameon=True, framealpha=0.9, fontsize=9)
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(plot_path, dpi=160)
-    plt.close(fig)
-
-
-def _plot_feature_comparison(
-    sample_vec: np.ndarray,
-    best_vec: np.ndarray,
-    feature_names: list,
-    plot_path: Path,
-    title: str,
-) -> None:
-    """Bar chart comparing sample vs best-candidate feature values."""
-    mask = np.isfinite(sample_vec) & np.isfinite(best_vec)
-    if mask.sum() < 1:
-        return
-    idx = np.where(mask)[0]
-    names = [feature_names[i] for i in idx]
-    sv = sample_vec[idx]
-    bv = best_vec[idx]
-
-    # Shorten long column names for display
-    short_names = [n.replace("_rate_hz", "").replace("raw_tt_", "tt_")
-                   .replace("events_per_second_", "") for n in names]
-
-    x_pos = np.arange(len(short_names))
-    width = 0.38
-
-    fig, ax = plt.subplots(figsize=(max(8, len(short_names) * 0.8), 5))
-    ax.bar(x_pos - width / 2, sv, width, label="Test sample", color="#4C78A8", alpha=0.85)
-    ax.bar(x_pos + width / 2, bv, width, label="Best candidate", color="#F58518", alpha=0.85)
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(short_names, rotation=45, ha="right", fontsize=8)
-    ax.set_ylabel("Rate [Hz]")
-    ax.set_title(title, fontsize=11)
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.2, axis="y")
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=150)
     plt.close(fig)
 
 
@@ -294,37 +280,82 @@ def _plot_score_vs_param_distance(
     plt.close(fig)
 
 
-def _plot_score_histogram(
+def _plot_score_distribution(
     scores: pd.Series,
     score_metric: str,
+    best_score: float,
     plot_path: Path,
 ) -> None:
+    """Combined histogram + CDF of scores (2-panel figure)."""
     scores = scores.dropna()
     if scores.empty:
         return
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.hist(scores, bins=40, color="#4C78A8", alpha=0.85, edgecolor="white")
-    ax.set_xlabel(f"Score ({score_metric})")
-    ax.set_ylabel("Count")
-    ax.set_title(f"Score distribution  (n={len(scores)})")
-    ax.grid(True, alpha=0.2)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    # Histogram
+    ax1.hist(scores, bins=40, color="#4C78A8", alpha=0.85, edgecolor="white")
+    ax1.axvline(best_score, color="#E45756", linestyle="--", linewidth=1.2,
+               label=f"Best = {best_score:.4g}")
+    ax1.set_xlabel(f"Score ({score_metric})")
+    ax1.set_ylabel("Count")
+    ax1.set_title(f"Score distribution  (n={len(scores)})")
+    ax1.legend(fontsize=9)
+    ax1.grid(True, alpha=0.2)
+    # CDF
+    sorted_scores = scores.sort_values()
+    cdf = np.arange(1, len(sorted_scores) + 1) / len(sorted_scores)
+    ax2.step(sorted_scores.values, cdf, where="post", color="#4C78A8", linewidth=1.5)
+    ax2.axvline(best_score, color="#E45756", linestyle="--", linewidth=1.2,
+               label=f"Best = {best_score:.4g}")
+    ax2.fill_between(sorted_scores.values, 0, cdf, alpha=0.12, color="#4C78A8", step="post")
+    ax2.set_xlabel(f"Score ({score_metric})")
+    ax2.set_ylabel("Cumulative fraction")
+    ax2.set_title(f"Score CDF  (n={len(scores)})")
+    ax2.legend(fontsize=9)
+    ax2.grid(True, alpha=0.2)
     fig.tight_layout()
     fig.savefig(plot_path, dpi=140)
     plt.close(fig)
 
 
-def _plot_scatter_sample_vs_best(
+def _plot_feature_diagnostics(
     sample_vec: np.ndarray,
     best_vec: np.ndarray,
+    sample_vec_scaled: np.ndarray,
+    best_vec_scaled: np.ndarray,
+    feature_names: list,
     plot_path: Path,
     title: str,
 ) -> None:
-    mask = np.isfinite(sample_vec) & np.isfinite(best_vec)
-    if mask.sum() < 2:
+    """2×2 multi-panel: feature bars, scatter, residuals, L2 contribution."""
+    mask_all = np.isfinite(sample_vec) & np.isfinite(best_vec)
+    if mask_all.sum() < 1:
         return
-    x = best_vec[mask]
-    y = sample_vec[mask]
-    fig, ax = plt.subplots(figsize=(7, 5))
+
+    short_names = [n.replace("_rate_hz", "").replace("raw_tt_", "tt_")
+                   .replace("events_per_second_", "") for n in feature_names]
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+
+    # --- Top-left: grouped bar chart ---
+    ax = axes[0, 0]
+    idx = np.where(mask_all)[0]
+    names = [short_names[i] for i in idx]
+    sv = sample_vec[idx]
+    bv = best_vec[idx]
+    x_pos = np.arange(len(names))
+    width = 0.38
+    ax.bar(x_pos - width / 2, sv, width, label="Test sample", color="#4C78A8", alpha=0.85)
+    ax.bar(x_pos + width / 2, bv, width, label="Best candidate", color="#F58518", alpha=0.85)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(names, rotation=45, ha="right", fontsize=7)
+    ax.set_ylabel("Rate [Hz]")
+    ax.set_title("Feature comparison", fontsize=10)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.2, axis="y")
+
+    # --- Top-right: sample vs best scatter ---
+    ax = axes[0, 1]
+    x, y = best_vec[mask_all], sample_vec[mask_all]
     ax.scatter(x, y, s=24, alpha=0.7, color="#72B7B2")
     lo = float(np.nanmin(np.concatenate([x, y])))
     hi = float(np.nanmax(np.concatenate([x, y])))
@@ -332,116 +363,43 @@ def _plot_scatter_sample_vs_best(
     ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], "k--", linewidth=1)
     ax.set_xlabel("Best-fit candidate rate")
     ax.set_ylabel("Test sample rate")
-    ax.set_title(title)
+    ax.set_title("Sample vs best-fit", fontsize=10)
     ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=140)
-    plt.close(fig)
 
-
-def _plot_top_n_param_space(
-    candidates: pd.DataFrame,
-    sample_flux: float,
-    sample_eff: float,
-    score_metric: str,
-    top_n: int,
-    plot_path: Path,
-) -> None:
-    """Show top-N candidates highlighted with rank labels on the (flux, eff) plane."""
-    df = candidates.dropna(subset=["dict_flux_cm2_min", "dict_eff_1", "score_value"])
-    if len(df) < 3:
-        return
-    ascending = score_metric in LOWER_IS_BETTER
-    df_sorted = df.sort_values("score_value", ascending=ascending)
-    top = df_sorted.head(top_n)
-    rest = df_sorted.iloc[top_n:]
-
-    fig, ax = plt.subplots(figsize=(9, 7))
-    ax.scatter(
-        rest["dict_flux_cm2_min"], rest["dict_eff_1"],
-        s=20, alpha=0.35, color="#AAAAAA", edgecolors="none", zorder=2,
-        label="Other candidates",
-    )
-    colors = plt.cm.RdYlGn_r(np.linspace(0.1, 0.9, top_n))
-    for rank, (idx, row) in enumerate(top.iterrows(), 1):
-        ax.scatter(
-            [row["dict_flux_cm2_min"]], [row["dict_eff_1"]],
-            s=120, color=colors[rank - 1], edgecolors="black", linewidths=0.7,
-            zorder=5,
-        )
-        ax.annotate(
-            f"#{rank}", (row["dict_flux_cm2_min"], row["dict_eff_1"]),
-            textcoords="offset points", xytext=(6, 6), fontsize=8, fontweight="bold",
-            color=colors[rank - 1],
-        )
-    ax.scatter(
-        [sample_flux], [sample_eff], s=250, marker="*", color="#E45756",
-        edgecolors="black", linewidths=0.8, zorder=6, label="True sample",
-    )
-    ax.set_xlabel("Flux [cm$^{-2}$ min$^{-1}$]")
-    ax.set_ylabel("Efficiency (eff_1)")
-    ax.set_title(f"Top-{top_n} candidates in parameter space ({score_metric})")
-    ax.legend(loc="lower right", fontsize=9, framealpha=0.9)
-    ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=150)
-    plt.close(fig)
-
-
-def _plot_feature_residuals(
-    sample_vec: np.ndarray,
-    best_vec: np.ndarray,
-    feature_names: list,
-    plot_path: Path,
-) -> None:
-    """Bar chart of relative residuals (best - sample) / sample per feature."""
-    mask = np.isfinite(sample_vec) & np.isfinite(best_vec) & (np.abs(sample_vec) > 1e-12)
-    if mask.sum() < 1:
-        return
-    idx = np.where(mask)[0]
-    residuals = (best_vec[idx] - sample_vec[idx]) / np.abs(sample_vec[idx]) * 100
-    short = [feature_names[i].replace("_rate_hz", "").replace("raw_tt_", "tt_")
-             .replace("events_per_second_", "") for i in idx]
-
-    fig, ax = plt.subplots(figsize=(max(8, len(short) * 0.8), 5))
-    colors = ["#E45756" if r > 0 else "#4C78A8" for r in residuals]
-    ax.bar(np.arange(len(short)), residuals, color=colors, alpha=0.85, edgecolor="white")
-    ax.axhline(0, color="black", linewidth=0.8)
-    ax.set_xticks(np.arange(len(short)))
-    ax.set_xticklabels(short, rotation=45, ha="right", fontsize=8)
+    # --- Bottom-left: residuals bar chart ---
+    ax = axes[1, 0]
+    mask_resid = mask_all & (np.abs(sample_vec) > 1e-12)
+    idx_r = np.where(mask_resid)[0]
+    if len(idx_r) > 0:
+        residuals = (best_vec[idx_r] - sample_vec[idx_r]) / np.abs(sample_vec[idx_r]) * 100
+        r_names = [short_names[i] for i in idx_r]
+        colors_r = ["#E45756" if r > 0 else "#4C78A8" for r in residuals]
+        ax.bar(np.arange(len(r_names)), residuals, color=colors_r, alpha=0.85, edgecolor="white")
+        ax.axhline(0, color="black", linewidth=0.8)
+        ax.set_xticks(np.arange(len(r_names)))
+        ax.set_xticklabels(r_names, rotation=45, ha="right", fontsize=7)
     ax.set_ylabel("Relative residual [%]")
-    ax.set_title("Per-feature residual: (best − sample) / sample")
+    ax.set_title("Per-feature residual: (best - sample) / sample", fontsize=10)
     ax.grid(True, alpha=0.2, axis="y")
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=150)
-    plt.close(fig)
 
-
-def _plot_l2_contribution(
-    sample_vec: np.ndarray,
-    best_vec: np.ndarray,
-    feature_names: list,
-    plot_path: Path,
-) -> None:
-    """Horizontal bar chart showing each feature's contribution to the L2 score."""
-    mask = np.isfinite(sample_vec) & np.isfinite(best_vec)
-    if mask.sum() < 1:
-        return
-    idx = np.where(mask)[0]
-    contrib = (sample_vec[idx] - best_vec[idx]) ** 2
-    short = [feature_names[i].replace("_rate_hz", "").replace("raw_tt_", "tt_")
-             .replace("events_per_second_", "") for i in idx]
-    order = np.argsort(contrib)[::-1]
-
-    fig, ax = plt.subplots(figsize=(8, max(4, len(short) * 0.35)))
-    y_pos = np.arange(len(short))
-    ax.barh(y_pos, contrib[order], color="#4C78A8", alpha=0.85, edgecolor="white")
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels([short[i] for i in order], fontsize=9)
+    # --- Bottom-right: L2 contribution ---
+    ax = axes[1, 1]
+    mask_l2 = np.isfinite(sample_vec_scaled) & np.isfinite(best_vec_scaled)
+    idx_l = np.where(mask_l2)[0]
+    if len(idx_l) > 0:
+        contrib = (sample_vec_scaled[idx_l] - best_vec_scaled[idx_l]) ** 2
+        l_names = [short_names[i] for i in idx_l]
+        order = np.argsort(contrib)[::-1]
+        y_pos = np.arange(len(l_names))
+        ax.barh(y_pos, contrib[order], color="#4C78A8", alpha=0.85, edgecolor="white")
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels([l_names[i] for i in order], fontsize=8)
+        ax.invert_yaxis()
     ax.set_xlabel("Squared difference (scaled)")
-    ax.set_title("Per-feature contribution to L2 distance")
-    ax.invert_yaxis()
+    ax.set_title("Per-feature contribution to L2 distance", fontsize=10)
     ax.grid(True, alpha=0.2, axis="x")
+
+    fig.suptitle(title, fontsize=12)
     fig.tight_layout()
     fig.savefig(plot_path, dpi=150)
     plt.close(fig)
@@ -484,33 +442,6 @@ def _plot_top_n_profiles(
     ax.grid(True, alpha=0.2)
     fig.tight_layout()
     fig.savefig(plot_path, dpi=150)
-    plt.close(fig)
-
-
-def _plot_score_cdf(
-    scores: pd.Series,
-    score_metric: str,
-    best_score: float,
-    plot_path: Path,
-) -> None:
-    """Cumulative distribution function of scores with best-score marker."""
-    scores = scores.dropna().sort_values()
-    if scores.empty:
-        return
-    cdf = np.arange(1, len(scores) + 1) / len(scores)
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.step(scores.values, cdf, where="post", color="#4C78A8", linewidth=1.5)
-    ax.axvline(best_score, color="#E45756", linestyle="--", linewidth=1.2,
-               label=f"Best = {best_score:.4g}")
-    ax.fill_between(scores.values, 0, cdf, alpha=0.12, color="#4C78A8", step="post")
-    ax.set_xlabel(f"Score ({score_metric})")
-    ax.set_ylabel("Cumulative fraction")
-    ax.set_title(f"Score CDF  (n={len(scores)})")
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=140)
     plt.close(fig)
 
 
@@ -587,8 +518,8 @@ def _pick_single_sample_index(
         & (ref_with_dict["dict_eff_3"] - ref_with_dict["dict_eff_1"]).abs().le(eff_tol)
         & (ref_with_dict["dict_eff_4"] - ref_with_dict["dict_eff_1"]).abs().le(eff_tol)
     )
-    eligible_idx = ref_with_dict.index[eligible_mask].to_numpy()
-    if len(eligible_idx) == 0:
+    eligible_pos = np.flatnonzero(eligible_mask.to_numpy())
+    if len(eligible_pos) == 0:
         log.warning("No eligible samples with exact cos_n and equal effs; "
                     "relaxing to cos_n +/-0.05 tolerance.")
         eligible_mask = (
@@ -596,11 +527,11 @@ def _pick_single_sample_index(
             & (ref_with_dict["dict_cos_n"] - cos_n_target).abs().le(0.05)
             & ref_with_dict["dict_eff_1"].notna()
         )
-        eligible_idx = ref_with_dict.index[eligible_mask].to_numpy()
-    if len(eligible_idx) == 0:
+        eligible_pos = np.flatnonzero(eligible_mask.to_numpy())
+    if len(eligible_pos) == 0:
         raise ValueError("No eligible samples found even with relaxed criteria.")
-    log.info("Eligible sample rows: %d", len(eligible_idx))
-    return int(rng.choice(eligible_idx))
+    log.info("Eligible sample rows: %d", len(eligible_pos))
+    return int(rng.choice(eligible_pos))
 
 
 def _evaluate_sample(
@@ -645,16 +576,16 @@ def _evaluate_sample(
             raise ValueError("Empirical efficiencies are required for dict_eff_global mode.")
         sample_vec_series = pd.Series(
             [
-                emp_eff.loc[sample_idx, "eff_est_p1"],
-                emp_eff.loc[sample_idx, "eff_est_p2"],
-                emp_eff.loc[sample_idx, "eff_est_p3"],
-                emp_eff.loc[sample_idx, "eff_est_p4"],
-                ref_df.loc[sample_idx, global_rate_col],
+                emp_eff.iloc[sample_idx]["eff_est_p1"],
+                emp_eff.iloc[sample_idx]["eff_est_p2"],
+                emp_eff.iloc[sample_idx]["eff_est_p3"],
+                emp_eff.iloc[sample_idx]["eff_est_p4"],
+                ref_df.iloc[sample_idx][global_rate_col],
             ],
             index=metric_cols,
         )
     else:
-        sample_vec_series = metric_df.loc[sample_idx]
+        sample_vec_series = metric_df.iloc[sample_idx]
 
     sample_flux = _resolve_truth_value(sample_row, dict_sample, "flux_cm2_min")
     sample_eff = _resolve_truth_value(sample_row, dict_sample, "eff_1")
@@ -682,6 +613,10 @@ def _evaluate_sample(
         z_mask &= np.isclose(ref_df[col].astype(float), z_vals[idx_z], atol=z_tol)
     if exclude_self:
         z_mask[sample_idx] = False
+        # Also exclude rows sharing the same file identifier as the sample.
+        if join_col in ref_df.columns and pd.notna(sample_id):
+            same_id = ref_df[join_col].astype(str).eq(str(sample_id)).to_numpy()
+            z_mask &= ~same_id
 
     candidates = ref_df.loc[z_mask].copy()
     if candidates.empty:
@@ -816,77 +751,39 @@ def _evaluate_sample(
     }
 
 
-def _plot_all_events_vs_error(
+def _plot_all_true_vs_est_combined(
     df: pd.DataFrame,
-    error_col: str,
-    ylabel: str,
-    title: str,
     plot_path: Path,
 ) -> None:
-    x = pd.to_numeric(df.get("sample_events_count"), errors="coerce")
-    y = pd.to_numeric(df.get(error_col), errors="coerce")
-    mask = x.notna() & y.notna()
-    if mask.sum() < 3:
-        return
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.scatter(x[mask], y[mask], s=20, alpha=0.65, color="#4C78A8")
-    ax.set_xlabel("Sample events count")
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.grid(True, alpha=0.2)
-    maybe_log_x(ax, x[mask])
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=150)
-    plt.close(fig)
-
-
-def _plot_all_true_vs_est(
-    df: pd.DataFrame,
-    true_col: str,
-    est_col: str,
-    axis_label: str,
-    title: str,
-    plot_path: Path,
-) -> None:
-    true_vals = pd.to_numeric(df.get(true_col), errors="coerce")
-    est_vals = pd.to_numeric(df.get(est_col), errors="coerce")
-    mask = true_vals.notna() & est_vals.notna()
-    if mask.sum() < 3:
-        return
-    x = true_vals[mask].to_numpy(dtype=float)
-    y = est_vals[mask].to_numpy(dtype=float)
-    lo = float(np.nanmin(np.concatenate([x, y])))
-    hi = float(np.nanmax(np.concatenate([x, y])))
-    pad = 0.02 * (hi - lo) if hi > lo else 0.1
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(x, y, s=20, alpha=0.65, color="#F58518")
-    ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], "k--", linewidth=1)
-    ax.set_xlabel(f"True {axis_label}")
-    ax.set_ylabel(f"Estimated {axis_label}")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=150)
-    plt.close(fig)
-
-
-def _plot_all_error_hist(
-    df: pd.DataFrame,
-    error_col: str,
-    xlabel: str,
-    title: str,
-    plot_path: Path,
-) -> None:
-    values = pd.to_numeric(df.get(error_col), errors="coerce").dropna()
-    if values.empty:
-        return
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.hist(values, bins=50, color="#54A24B", alpha=0.85, edgecolor="white")
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Count")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.2)
+    """True vs estimated: flux and eff side-by-side (1×2)."""
+    pairs = [
+        ("true_flux_cm2_min", "estimated_flux_cm2_min",
+         "flux [cm^-2 min^-1]", "True vs estimated flux"),
+        ("true_eff_1", "estimated_eff_1",
+         "eff_1", "True vs estimated efficiency"),
+    ]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    for ax, (true_col, est_col, axis_label, title) in zip(axes, pairs):
+        true_vals = pd.to_numeric(df.get(true_col), errors="coerce")
+        est_vals = pd.to_numeric(df.get(est_col), errors="coerce")
+        mask = true_vals.notna() & est_vals.notna()
+        if mask.sum() < 3:
+            ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center",
+                    transform=ax.transAxes)
+            continue
+        x = true_vals[mask].to_numpy(dtype=float)
+        y = est_vals[mask].to_numpy(dtype=float)
+        lo = float(np.nanmin(np.concatenate([x, y])))
+        hi = float(np.nanmax(np.concatenate([x, y])))
+        pad = 0.02 * (hi - lo) if hi > lo else 0.1
+        ax.scatter(x, y, s=20, alpha=0.65, color="#F58518")
+        ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], "k--", linewidth=1)
+        ax.set_xlabel(f"True {axis_label}")
+        ax.set_ylabel(f"Estimated {axis_label}")
+        ax.set_title(title)
+        ax.set_aspect("equal", adjustable="box")
+        ax.grid(True, alpha=0.2)
+    fig.suptitle("ALL mode: true vs estimated parameters", fontsize=12)
     fig.tight_layout()
     fig.savefig(plot_path, dpi=150)
     plt.close(fig)
@@ -954,12 +851,13 @@ def _plot_stratified_errors(ok_df: pd.DataFrame, out_dir: Path, tag: str) -> Non
         fig.savefig(out_dir / f"all_stratified_{error_col}_{tag}.png", dpi=150)
         plt.close(fig)
 
-    # Scatter: events vs error, colored by membership
+    # Scatter: events vs error, colored by membership, with 1/√N guide
     for error_col, ylabel in (
         ("abs_flux_rel_error_pct", "|Flux rel. error| [%]"),
         ("abs_eff_rel_error_pct", "|Eff rel. error| [%]"),
     ):
-        fig, ax = plt.subplots(figsize=(7, 5))
+        fig, ax = plt.subplots(figsize=(8, 5))
+        all_x, all_y = [], []
         for subset_df, lbl, color in (
             (in_df, "in-dict", "#4C78A8"),
             (out_df, "off-dict", "#E45756"),
@@ -970,10 +868,26 @@ def _plot_stratified_errors(ok_df: pd.DataFrame, out_dir: Path, tag: str) -> Non
             if mask.sum() > 0:
                 ax.scatter(x[mask], y[mask], s=16, alpha=0.5,
                            color=color, label=f"{lbl} (n={mask.sum()})")
+                all_x.extend(x[mask].tolist())
+                all_y.extend(y[mask].tolist())
+        # 1/√N guide curve
+        if len(all_x) >= 3:
+            ax_arr = np.asarray(all_x, dtype=float)
+            ay_arr = np.asarray(all_y, dtype=float)
+            pos = ax_arr > 0
+            if pos.sum() >= 3:
+                med_err = float(np.nanmedian(ay_arr[pos]))
+                med_ev = float(np.nanmedian(ax_arr[pos]))
+                if med_ev > 0 and med_err > 0:
+                    scale = med_err * np.sqrt(med_ev)
+                    ev_line = np.linspace(float(ax_arr[pos].min()),
+                                         float(ax_arr[pos].max()), 300)
+                    ax.plot(ev_line, scale / np.sqrt(ev_line), "r--",
+                            linewidth=1.5, label=r"expected $\propto 1/\sqrt{N}$")
         ax.set_xlabel("Sample events count")
         ax.set_ylabel(ylabel)
         ax.set_title(f"Error vs events — in-dict vs off-dict")
-        ax.legend()
+        ax.legend(fontsize=9)
         ax.grid(True, alpha=0.2)
         maybe_log_x(ax, pd.to_numeric(ok_df.get("sample_events_count"), errors="coerce"))
         fig.tight_layout()
@@ -982,25 +896,28 @@ def _plot_stratified_errors(ok_df: pd.DataFrame, out_dir: Path, tag: str) -> Non
 
 
 def _plot_top_n_spread(ok_df: pd.DataFrame, out_dir: Path, tag: str) -> None:
-    """Histogram of top-N candidate spread (to_do.md §4.3)."""
-    for col, xlabel in (
+    """Histogram of top-N candidate spread — std only (1×2)."""
+    cols = [
         ("top_n_flux_std", "Top-10 flux std"),
         ("top_n_eff_std", "Top-10 eff std"),
-        ("top_n_flux_range", "Top-10 flux range"),
-        ("top_n_eff_range", "Top-10 eff range"),
-    ):
+    ]
+    valid = [(c, l) for c, l in cols
+             if c in ok_df.columns and not pd.to_numeric(ok_df.get(c), errors="coerce").dropna().empty]
+    if not valid:
+        return
+    fig, axes = plt.subplots(1, len(valid), figsize=(7 * len(valid), 5))
+    if len(valid) == 1:
+        axes = [axes]
+    for ax, (col, xlabel) in zip(axes, valid):
         vals = pd.to_numeric(ok_df.get(col), errors="coerce").dropna()
-        if vals.empty:
-            continue
-        fig, ax = plt.subplots(figsize=(7, 5))
         ax.hist(vals, bins=50, color="#F58518", alpha=0.85, edgecolor="white")
         ax.set_xlabel(xlabel)
         ax.set_ylabel("Count")
         ax.set_title(f"ALL mode: {xlabel} distribution")
         ax.grid(True, alpha=0.2)
-        fig.tight_layout()
-        fig.savefig(out_dir / f"all_hist_{col}_{tag}.png", dpi=150)
-        plt.close(fig)
+    fig.tight_layout()
+    fig.savefig(out_dir / f"all_hist_top_n_spread_{tag}.png", dpi=150)
+    plt.close(fig)
 
 
 # _build_uncertainty_table — replaced by msv_utils.build_uncertainty_table
@@ -1289,52 +1206,33 @@ def main() -> int:  # noqa: C901
                 out_dir / f"contour_{tag}.png",
                 result["events_label"],
                 result["sample_label"],
+                top_n=top_n,
             )
         else:
             log.warning("Too few candidates for contour plot.")
 
         sample_vec_series = result["sample_vec_series"]
         best_orig_idx = int(result["best_orig_idx"])
-        _plot_feature_comparison(
+        _plot_feature_diagnostics(
             sample_vec_series.to_numpy(dtype=float),
             metric_df.loc[best_orig_idx].to_numpy(dtype=float),
+            result["sample_vec_scaled"],
+            metric_df_scaled.loc[best_orig_idx].to_numpy(dtype=float),
             metric_cols,
-            out_dir / f"features_{tag}.png",
-            f"Feature comparison: sample vs best ({tag})",
+            out_dir / f"feature_diagnostics_{tag}.png",
+            f"Feature diagnostics: sample vs best ({tag})",
         )
-        _plot_scatter_sample_vs_best(
-            sample_vec_series.to_numpy(dtype=float),
-            result["best_vec_raw"],
-            out_dir / f"scatter_sample_vs_best_{tag}.png",
-            f"Test sample vs best-fit ({tag})",
+        _plot_score_distribution(
+            candidates["score_value"], score_metric,
+            result["best_score"],
+            out_dir / f"score_distribution_{tag}.png",
         )
-        _plot_score_histogram(candidates["score_value"], score_metric, out_dir / f"hist_score_{tag}.png")
         _plot_score_vs_param_distance(
             candidates,
             float(result["sample_flux"]),
             float(result["sample_eff"]),
             score_metric,
             out_dir / f"score_vs_param_dist_{tag}.png",
-        )
-        _plot_top_n_param_space(
-            candidates,
-            float(result["sample_flux"]),
-            float(result["sample_eff"]),
-            score_metric,
-            top_n,
-            out_dir / f"top_n_param_space_{tag}.png",
-        )
-        _plot_feature_residuals(
-            sample_vec_series.to_numpy(dtype=float),
-            metric_df.loc[best_orig_idx].to_numpy(dtype=float),
-            metric_cols,
-            out_dir / f"residuals_{tag}.png",
-        )
-        _plot_l2_contribution(
-            result["sample_vec_scaled"],
-            metric_df_scaled.loc[best_orig_idx].to_numpy(dtype=float),
-            metric_cols,
-            out_dir / f"l2_contribution_{tag}.png",
         )
         _plot_top_n_profiles(
             metric_df,
@@ -1344,12 +1242,6 @@ def main() -> int:  # noqa: C901
             score_metric,
             top_n,
             out_dir / f"profiles_top_n_{tag}.png",
-        )
-        _plot_score_cdf(
-            candidates["score_value"],
-            score_metric,
-            result["best_score"],
-            out_dir / f"score_cdf_{tag}.png",
         )
         _plot_flux_eff_errors(
             candidates,
@@ -1501,50 +1393,12 @@ def main() -> int:  # noqa: C901
         json.dump(summary, handle, indent=2)
 
     if not ok_df.empty:
-        _plot_all_events_vs_error(
+        # True vs estimated (combined 1×2 figure)
+        _plot_all_true_vs_est_combined(
             ok_df,
-            error_col="abs_flux_rel_error_pct",
-            ylabel="|Flux relative error| [%]",
-            title="ALL mode: flux error vs sample size",
-            plot_path=out_dir / f"all_events_vs_abs_flux_relerr_{tag}.png",
+            plot_path=out_dir / f"all_true_vs_est_{tag}.png",
         )
-        _plot_all_events_vs_error(
-            ok_df,
-            error_col="abs_eff_rel_error_pct",
-            ylabel="|Efficiency relative error| [%]",
-            title="ALL mode: efficiency error vs sample size",
-            plot_path=out_dir / f"all_events_vs_abs_eff_relerr_{tag}.png",
-        )
-        _plot_all_true_vs_est(
-            ok_df,
-            true_col="true_flux_cm2_min",
-            est_col="estimated_flux_cm2_min",
-            axis_label="flux [cm^-2 min^-1]",
-            title="ALL mode: true vs estimated flux",
-            plot_path=out_dir / f"all_true_vs_est_flux_{tag}.png",
-        )
-        _plot_all_true_vs_est(
-            ok_df,
-            true_col="true_eff_1",
-            est_col="estimated_eff_1",
-            axis_label="eff_1",
-            title="ALL mode: true vs estimated efficiency",
-            plot_path=out_dir / f"all_true_vs_est_eff_{tag}.png",
-        )
-        _plot_all_error_hist(
-            ok_df,
-            error_col="abs_flux_rel_error_pct",
-            xlabel="|Flux relative error| [%]",
-            title="ALL mode: |flux relative error| distribution",
-            plot_path=out_dir / f"all_hist_abs_flux_relerr_{tag}.png",
-        )
-        _plot_all_error_hist(
-            ok_df,
-            error_col="abs_eff_rel_error_pct",
-            xlabel="|Efficiency relative error| [%]",
-            title="ALL mode: |efficiency relative error| distribution",
-            plot_path=out_dir / f"all_hist_abs_eff_relerr_{tag}.png",
-        )
+        # Stratified plots already include events-vs-error and error histograms
         uncertainty_df = build_uncertainty_table(ok_df, n_bins=10)
         if not uncertainty_df.empty:
             uncertainty_csv = out_dir / f"all_uncertainty_by_events_{tag}.csv"
