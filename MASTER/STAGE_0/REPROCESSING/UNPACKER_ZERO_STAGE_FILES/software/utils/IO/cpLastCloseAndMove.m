@@ -38,7 +38,7 @@ try %Try the copy
                 fileName = hld2Copy(i).fileName;
                 
                 %%%    Check if the folder exist
-                mkdir -pOS(pathOut,OS,1);mkdir -pOS([pathOut 'done' b],OS,1);
+                mkdirOS(pathOut,OS,1);mkdirOS([pathOut 'done' b],OS,1);
                 
                 %%%Copy files
                 [status, result] = system(['cp ' file ' ' pathOut]);
@@ -52,14 +52,14 @@ try %Try the copy
                     message2log = ['Compressing and moving to done on local location: ' file];
                     disp(message2log);
                     write2log(logs,message2log,'   ','syslog',OS);
-                    mkdir -pOS([pathIn 'done' b],OS,0);
+                    mkdirOS([pathIn 'done' b],OS,0);
                     [status, result] = system(['tar -czvf ' pathIn 'done' b fileName '.gz.tar ' file]);
                     [status, result] = system(['rm ' file]);
                 else
                     message2log = ['Moving to done on local location: ' file];
                     disp(message2log);
                     write2log(logs,message2log,'   ','syslog',OS);
-                    mkdir -pOS([pathIn 'done' b],OS,0);
+                    mkdirOS([pathIn 'done' b],OS,0);
                     [status, result] = system(['mv ' file ' ' pathIn 'done' b]);
                 end
             end

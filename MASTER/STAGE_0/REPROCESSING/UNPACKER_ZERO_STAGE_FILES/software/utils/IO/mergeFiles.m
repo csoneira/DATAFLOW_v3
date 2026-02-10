@@ -100,7 +100,7 @@ if(strcmp(outputFile,'none'))
     outputFile = [listedFiles_(1).name(1:end-4) '_merge'];
 end
 
-if(~exist(outputPath,'dir')); mkdir -pOS(outputPath,'linux',1); end;
+if(~exist(outputPath,'dir')); mkdirOS(outputPath,'linux',1); end;
 
 if strcmp('matlab',interpreter)
     eval(['save(' '''' outputPath outputFile '''' ',' outputVars(1:end-1) ');']);

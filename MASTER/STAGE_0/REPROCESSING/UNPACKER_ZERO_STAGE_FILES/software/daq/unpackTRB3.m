@@ -430,14 +430,14 @@ while done
                             save([pathOut{1} filename{1} '_' num2str(TRBs(i).centralFPGA) '_' num2str(TRBs(i).FPGAs{k,1}) '_part' sprintf('%04d',counterFile) '.mat'],'trailingEpochCounter','leadingEpochCounter','leadingCoarseTime','leadingFineTime','trailingCoarseTime','trailingFineTime');
                             if writeTDCCal
                                 b = getBarOS(OS);
-                                mkdir -pOS([pathOut{1} 'TDCCal' b],OS,1);
+                                mkdirOS([pathOut{1} 'TDCCal' b],OS,1);
                                 save([pathOut{1} 'TDCCal' b filename{1} '_' num2str(TRBs(i).centralFPGA) '_' num2str(TRBs(i).FPGAs{k,1}) '_part' sprintf('%04d',counterFile) '.mat'],'leadingFineTime','trailingFineTime');
                             end
                         elseif strcmp('octave',interpreter)
                             save([pathOut{1} filename{1} '_' num2str(TRBs(i).centralFPGA) '_' num2str(TRBs(i).FPGAs{k,1}) '_part' sprintf('%04d',counterFile) '.mat'],'trailingEpochCounter','leadingEpochCounter','leadingCoarseTime','leadingFineTime','trailingCoarseTime','trailingFineTime','-mat7-binary');
                             if writeTDCCal
                                 b = getBarOS(OS);
-                                mkdir -pOS([pathOut{1} 'TDCCal' b],OS,1);
+                                mkdirOS([pathOut{1} 'TDCCal' b],OS,1);
                                 save([pathOut{1} 'TDCCal' b filename{1} '_' num2str(TRBs(i).centralFPGA) '_' num2str(TRBs(i).FPGAs{k,1}) '_part' sprintf('%04d',counterFile) '.mat'],'leadingFineTime','trailingCoarseTime','trailingFineTime','-mat7-binary');
                             end
                         end

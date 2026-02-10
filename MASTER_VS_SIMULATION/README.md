@@ -5,6 +5,7 @@ This document is an exhaustive reference for the active `STEP_*` scripts in `MAS
 - `STEP_1_DICTIONARY/build_dictionary.py`
 - `STEP_2_SIM_VALIDATION/compute_relative_error.py`
 - `STEP_3_SELF_CONSISTENCY/self_consistency_r2.py`
+- `STEP_4_UNCERTAINTY/compute_uncertainty_limits.py`
 
 It is written as prompt context for future Codex sessions.
 
@@ -13,6 +14,7 @@ It is written as prompt context for future Codex sessions.
 1. Build a simulation dictionary CSV (Step 1).
 2. Validate simulated efficiencies and filter reliable rows (Step 2).
 3. Run self-consistency matching in `(flux, efficiency)` space (Step 3).
+4. Calibrate uncertainty/validity limits and quantify dictionary coverage (Step 4).
 
 ## Folder Layout (Active)
 
@@ -30,6 +32,10 @@ MASTER_VS_SIMULATION/
     self_consistency_r2.py
     config.json
     output/
+  STEP_4_UNCERTAINTY/
+    compute_uncertainty_limits.py
+    config.json
+    output/
 ```
 
 ## Runtime Dependencies
@@ -37,12 +43,12 @@ MASTER_VS_SIMULATION/
 - Python 3
 - `pandas`
 - `matplotlib`
-- `numpy` (Step 3)
+- `numpy` (Step 3 and Step 4)
 - `scipy` optional (Step 3 smooth contour interpolation; code falls back if missing)
 
 ## CLI/Config Precedence Rule
 
-For Steps 2 and 3, values are resolved as:
+For Steps 2, 3, and 4, values are resolved as:
 
 1. CLI argument, if provided.
 2. Config JSON key, if present.
@@ -248,11 +254,11 @@ Script: `STEP_3_SELF_CONSISTENCY/self_consistency_r2.py`
 
 Given a reference CSV (normally Step 2 filtered output), it:
 
-1. Chooses a sample row.
+1. Builds feature fingerprints from the selected metric mode.
 2. Restricts candidates to same z-plane geometry.
-3. Scores candidate fingerprints against sample fingerprint.
-4. Finds best candidate and parameter errors in `(flux, eff_1)`.
-5. Exports candidate ranking, summary JSON, and many plots.
+3. Scores candidate fingerprints and estimates `(flux, eff_1)` from nearest match.
+4. Exports per-sample diagnostics.
+5. In all-files mode, exports aggregate error-vs-sample-size diagnostics for uncertainty modeling.
 
 ### CLI
 
@@ -290,6 +296,8 @@ Arguments:
 - `--max-sample-tries` (parsed from config/CLI; currently unused in logic)
 - `--top-n`
 - `--exclude-self` (remove sample row from candidate set)
+- `-s, --single` (one-file mode; legacy behavior)
+- `-a, --all` (evaluate all files and aggregate errors)
 
 ### Config Keys (Current `STEP_3_SELF_CONSISTENCY/config.json`)
 
@@ -314,6 +322,28 @@ Arguments:
 - `max_sample_tries`
 - `top_n`
 - `exclude_self`
+- `run_mode` (`single` or `all`; default `single` if missing)
+
+### Execution Modes
+
+1. Single-file mode (`-s/--single` or `run_mode=single`)
+- Equivalent to previous behavior.
+- Uses one selected sample (`--sample-index` or auto-selection).
+- Produces detailed candidate-level plots and summary for that sample.
+
+2. All-files mode (`-a/--all` or `run_mode=all`)
+- Evaluates every row in reference CSV as test sample.
+- Stores, per sample:
+  - true pair (`true_flux_cm2_min`, `true_eff_1`)
+  - estimated pair (`estimated_flux_cm2_min`, `estimated_eff_1`)
+  - sample size (`sample_events_count`)
+  - dictionary-membership flags (`sample_in_dictionary`, `best_in_dictionary`)
+  - error metrics and truth-rank diagnostics
+- Produces aggregate plots for:
+  - error vs sample size
+  - true vs estimated parameter scatter
+  - error distributions
+- Produces event-binned uncertainty table for future `STEP_4_UNCERTAINTY`.
 
 ### Metric Modes
 
@@ -362,6 +392,7 @@ Candidates are rows in reference CSV with same geometry as sample:
 
 Written under `out_dir`:
 
+Single mode:
 - `r2_candidates.csv` (all z-matched candidates + dictionary fields + scores/errors)
 - `top_candidates.csv` (top `N`, if `top_n > 0`)
 - `r2_summary.json`
@@ -375,10 +406,26 @@ Summary JSON contains:
 - absolute and relative parameter errors
 - truth rank diagnostics
 
+All mode:
+- `all_samples_results.csv` (success + failure rows)
+- `all_samples_success.csv`
+- `all_samples_failed.csv`
+- `all_samples_summary.json`
+- `all_uncertainty_by_events_{tag}.csv` (if enough valid points)
+
+All-mode table columns include:
+- `sample_file`, `sample_events_count`
+- `sample_in_dictionary`, `best_in_dictionary`
+- `true_flux_cm2_min`, `true_eff_1`
+- `estimated_flux_cm2_min`, `estimated_eff_1`
+- `flux_rel_error_pct`, `eff_rel_error_pct`
+- absolute error versions and ranking fields
+
 ### Plot Outputs (11 files)
 
 Filename tag is `{metric_mode}_{score_metric}`. Generated files:
 
+Single mode (11 plots):
 - `contour_{tag}.png`
 - `features_{tag}.png`
 - `scatter_sample_vs_best_{tag}.png`
@@ -390,6 +437,161 @@ Filename tag is `{metric_mode}_{score_metric}`. Generated files:
 - `profiles_top_n_{tag}.png`
 - `score_cdf_{tag}.png`
 - `flux_eff_errors_{tag}.png`
+
+All mode (aggregate plots):
+- `all_events_vs_abs_flux_relerr_{tag}.png`
+- `all_events_vs_abs_eff_relerr_{tag}.png`
+- `all_true_vs_est_flux_{tag}.png`
+- `all_true_vs_est_eff_{tag}.png`
+- `all_hist_abs_flux_relerr_{tag}.png`
+- `all_hist_abs_eff_relerr_{tag}.png`
+
+## STEP 4: Uncertainty and Coverage Limits
+
+Script: `STEP_4_UNCERTAINTY/compute_uncertainty_limits.py`
+
+### What It Does
+
+Consumes Step 3 all-mode outputs and produces:
+
+1. Event-count-dependent uncertainty calibration tables.
+2. Validity limit table (required events to meet target error levels).
+3. Dictionary completeness diagnostics in `(flux, eff_1)` space.
+4. Dictionary filling statistics using both grid occupancy and distance-based coverage.
+
+### Inputs
+
+- Step 3 all-mode table:
+  - default: `STEP_3_SELF_CONSISTENCY/output/all_samples_results.csv`
+- Step 1 dictionary table:
+  - default: `STEP_1_DICTIONARY/output/task_01/param_metadata_dictionary.csv`
+
+Important:
+- Step 4 can only diagnose sample sizes present in the Step 3 all-mode input table.
+- If low-stat bins are empty, run Step 3 `--all` on a lower-stat reference set (or relax Step 2 filtering) before interpreting minimum-sample-size limits.
+
+### CLI
+
+```bash
+python3 MASTER_VS_SIMULATION/STEP_4_UNCERTAINTY/compute_uncertainty_limits.py [options]
+```
+
+Arguments:
+
+- `--config` (default: `STEP_4_UNCERTAINTY/config.json`)
+- `--all-results-csv`
+- `--dictionary-csv`
+- `--out-dir`
+- `--events-bins` (number of event-count bins for uncertainty curves)
+- `--min-bin-count` (minimum rows per bin)
+- `--target-error-pct` (comma-separated, e.g. `1,2,5`)
+- `--target-quantiles` (comma-separated, e.g. `0.68,0.95`)
+- `--grid-size` (grid resolution for occupancy fill metric)
+- `--coverage-radii` (comma-separated normalized radii for distance-based fill)
+- `--mc-points` (Monte Carlo random points used for coverage estimate)
+- `--seed`
+- `--plane-min-events` (default `40000`, split high-stat/low-stat diagnostics)
+- `--plane-flux-bins`, `--plane-eff-bins` (2D bins for flux-eff error maps)
+- `--sector-flux-bins`, `--sector-eff-bins`, `--sector-hist-bins` (residual histogram grid controls)
+- `--events-fixed-edges` (fixed sample-size bins to expose low-stat gaps explicitly)
+- `--sweep-points` (resolution for threshold sweep used to choose minimum sample size)
+- `--no-plots`
+
+### Config Keys (Current `STEP_4_UNCERTAINTY/config.json`)
+
+- `all_results_csv`
+- `dictionary_csv`
+- `out_dir`
+- `events_bins`
+- `min_bin_count`
+- `target_error_pct`
+- `target_quantiles`
+- `grid_size`
+- `coverage_radii`
+- `mc_points`
+- `seed`
+- `plane_min_events`
+- `plane_flux_bins`
+- `plane_eff_bins`
+- `sector_flux_bins`
+- `sector_eff_bins`
+- `sector_hist_bins`
+- `events_fixed_edges`
+- `sweep_points`
+
+### Core Outputs
+
+Written under `STEP_4_UNCERTAINTY/output`:
+
+- `uncertainty_by_events.csv`
+  - event bins with p50/p68/p90/p95 absolute relative errors for flux and efficiency.
+- `uncertainty_fixed_event_bins.csv`
+  - fixed event bins (including potentially empty low-stat bins) with p68/p95 errors.
+- `uncertainty_by_dictionary_membership.csv`
+  - uncertainty summary split by `in_dictionary` and `out_dictionary` samples.
+- `threshold_sweep_min_events.csv`
+  - errors and retained sample count as function of minimum event threshold.
+- `validity_limits_by_target.csv`
+  - per `(quantile, target_error_pct)`, required event count for flux and efficiency.
+- `dictionary_coverage_metrics.json`
+  - global dictionary completeness metrics.
+- `dictionary_coverage_by_radius.csv`
+  - covered fraction vs normalized coverage radius.
+- `step4_summary.json`
+  - top-level summary linking uncertainty and coverage metrics.
+  - includes `n_samples_in_dictionary` and `n_samples_out_dictionary`.
+- `all_samples_success_with_distance.csv`
+  - Step 3 successful rows with added `sample_to_dict_dist_norm`.
+
+### Dictionary Filling Statistics Implemented
+
+1. Grid occupancy filling:
+- normalize `(flux, eff_1)` to unit square in dictionary min/max range.
+- discretize with `grid_size x grid_size`.
+- `grid_fill_pct = occupied_cells / total_cells * 100`.
+
+2. Convex hull filling envelope:
+- convex-hull area in normalized plane as percent of bounding box.
+- reported as `convex_hull_area_pct_of_bbox`.
+
+3. Distance-based filling:
+- sample random points in normalized unit square.
+- compute nearest dictionary-point distance.
+- for each radius `r`, report:
+  - `covered_fraction_pct = P(min_distance <= r) * 100`.
+
+4. Dictionary spacing:
+- nearest-neighbor distances among dictionary points in normalized space.
+- report median/p68/p95/mean spacing.
+
+5. Distance-to-dictionary for evaluated samples:
+- each sample true point is mapped to nearest dictionary point (normalized).
+- enables error vs interpolation/extrapolation distance diagnostics.
+- if all distances are ~0, the validation set is on-dictionary and uncertainty limits may be optimistic for out-of-dictionary cases.
+
+### STEP 4 Plot Outputs
+
+- `scatter_abs_flux_error_vs_events.png`
+- `scatter_abs_eff_error_vs_events.png`
+- `sample_size_distribution.png`
+- `uncertainty_bands_by_events.png`
+- `threshold_sweep_min_events.png`
+- `dictionary_flux_eff_scatter.png`
+- `dictionary_flux_eff_hexbin.png`
+- `dictionary_nn_distance_hist_norm.png`
+- `dictionary_coverage_vs_radius.png`
+- `plane_mean_abs_flux_error_ge_40000.png` (+ `_counts`)
+- `plane_mean_abs_eff_error_ge_40000.png` (+ `_counts`)
+- `plane_mean_abs_flux_error_lt_40000.png` (+ `_counts`)
+- `plane_mean_abs_eff_error_lt_40000.png` (+ `_counts`)
+- `sector_hist_flux_residual_all.png`
+- `sector_hist_eff_residual_all.png`
+- `sector_hist_flux_residual_ge_40000.png`
+- `sector_hist_eff_residual_ge_40000.png`
+- `sector_hist_flux_residual_lt_40000.png`
+- `sector_hist_eff_residual_lt_40000.png`
+- `scatter_abs_flux_error_vs_dict_distance.png`
+- `scatter_abs_eff_error_vs_dict_distance.png`
 
 ## Step Interfaces (Data Contracts)
 
@@ -412,7 +614,20 @@ Step 2 expects Step 1 dictionary to include at minimum:
 ### Step 2 -> Step 3
 
 Step 3 default input is `STEP_2_SIM_VALIDATION/output/filtered_reference.csv`.  
-It additionally requires dictionary CSV (`STEP_1_DICTIONARY/output/task_01/param_metadata_dictionary.csv`) for true parameter joins and diagnostics.
+It additionally uses dictionary CSV (`STEP_1_DICTIONARY/output/task_01/param_metadata_dictionary.csv`) for joins and diagnostics.
+If a sample is not present in dictionary, Step 3 falls back to truth columns already present in reference CSV (`flux_cm2_min`, `eff_1..4`, etc.).
+
+### Step 3 -> Step 4
+
+Step 4 default inputs are:
+
+- `STEP_3_SELF_CONSISTENCY/output/all_samples_results.csv`
+- `STEP_1_DICTIONARY/output/task_01/param_metadata_dictionary.csv`
+
+So the intended sequence is:
+
+1. Run Step 3 in `--all` mode to generate the all-samples table.
+2. Run Step 4 to convert that table into uncertainty limits and dictionary completeness metrics.
 
 ## Embedded Code Policy
 
@@ -441,7 +656,17 @@ python3 MASTER_VS_SIMULATION/STEP_2_SIM_VALIDATION/compute_relative_error.py \
 
 # Step 3
 python3 MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/self_consistency_r2.py \
-  --config MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/config.json
+  --config MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/config.json \
+  --single
+
+# Step 3 (all-files validation mode)
+python3 MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/self_consistency_r2.py \
+  --config MASTER_VS_SIMULATION/STEP_3_SELF_CONSISTENCY/config.json \
+  --all
+
+# Step 4
+python3 MASTER_VS_SIMULATION/STEP_4_UNCERTAINTY/compute_uncertainty_limits.py \
+  --config MASTER_VS_SIMULATION/STEP_4_UNCERTAINTY/config.json
 ```
 
 ## Prompt-Ready Context Snippet
@@ -452,4 +677,4 @@ When asking Codex to modify this pipeline, include:
 - metric mode (`raw_tt_rates`, `eff_global`, or `dict_eff_global`)
 - score metric (`l2`, `chi2`, `poisson`, `r2`)
 - filtering thresholds (`relerr_threshold`, `min_events`)
-- whether path caveats above are already fixed in your branch
+- uncertainty settings (`events_bins`, target quantiles/error levels, coverage radii)

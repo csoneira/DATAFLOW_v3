@@ -68,7 +68,7 @@ try %Try the copy
             %[status, result] = system(['ssh -i ' key ' -p ' port ' ' user '@' remoteIP ' lsof | grep ' pathIn fileExt]);
 
             %%% Check if the folder exist
-            mkdir -pOS(pathOut,OS,1);mkdir -pOS([pathOut 'done' b],OS,1);
+            mkdirOS(pathOut,OS,1);mkdirOS([pathOut 'done' b],OS,1);
             [status, result] = system(['ssh ' keyString sshPortString userString remoteIP ' mkdir -p ' pathIn 'done' b]);
             
             if(~mod(i-1,downScale))%%% Just skip to copy one file 

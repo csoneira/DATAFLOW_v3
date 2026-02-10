@@ -22,7 +22,7 @@ for i = 1:size(varInStruct,1)
     end
 end
 
-mkdir -pOS(outputPath,OS,1);
+mkdirOS(outputPath,OS,1);
 
 
 for i = 1:size(varInStruct,1)

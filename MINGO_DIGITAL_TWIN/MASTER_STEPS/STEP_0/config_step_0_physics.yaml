@@ -2,14 +2,14 @@
 ## Angular distribution
 cos_n: [2, 2]
 ## Flux
-flux_cm2_min: [0.9, 1.1]
+flux_cm2_min: [0.8, 1.2]
 
 # Step 3
 ## Efficiencies
-efficiencies: [0.8, 1]
+efficiencies: [0.7, 1]
 efficiencies_identical: true
 
 # Optional: generate multiple rows per run, sharing selected columns.
-repeat_samples: 5
-shared_columns: [cos_n, flux_cm2_min]  # also supports efficiencies or z_positions
+repeat_samples: 1
+shared_columns: [cos_n]  # also supports efficiencies or z_positions
 expand_z_positions: true  # when true, use all z positions for each sampled row

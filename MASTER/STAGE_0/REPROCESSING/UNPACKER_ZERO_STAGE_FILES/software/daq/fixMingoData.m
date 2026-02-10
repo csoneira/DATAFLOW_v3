@@ -50,7 +50,7 @@ save([outPath s(1).name],'EBtime','Q1_B','Q1_F','Q2_B','Q2_F','Q3_B','Q3_F','Q4_
 if(exportAsci)
     M = full([T1_F T1_B Q1_F Q1_B    T2_F T2_B Q2_F Q2_B   T3_F T3_B Q3_F Q3_B      T4_F T4_B Q4_F Q4_B]);
     fileName = s(1).name;fileName = fileName(1:end-4);
-    mkdir -pOS([outPath2 'asci/'],'linux',1);file2Open = [outPath2 'asci/' fileName '.dat'];
+    mkdirOS([outPath2 'asci/'],'linux',1);file2Open = [outPath2 'asci/' fileName '.dat'];
     openFile;
     fprintf(fp, ['%010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f    %010.4f %010.4f %010.4f %010.4f \n'],M');
 

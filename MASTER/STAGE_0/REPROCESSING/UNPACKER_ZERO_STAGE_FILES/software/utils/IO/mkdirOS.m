@@ -1,4 +1,4 @@
-function mkdir -pOS(inputPath,OS,verbose)
+function mkdirOS(inputPath,OS,verbose)
 
 
 if(~exist(inputPath,'dir'))
@@ -7,7 +7,7 @@ if(~exist(inputPath,'dir'))
     end
     
     if(strcmp(OS,'windows'))
-        system(['mkdir -p ' inputPath]);
+        system(['mkdir ' inputPath]);
     elseif(strcmp(OS,'linux'))
         system(['mkdir -p ' inputPath]);
     else

@@ -1279,13 +1279,12 @@ PY
 
     if [[ -n "$dt_min" ]]; then
       # dt_min is a float string; compare using python for simplicity
-      if ! python3 - <<'PY'
+      if ! DT_MIN="$dt_min" MIN_GAP="$min_gap_minutes" python3 - <<'PY'
 import os, sys
 dt = float(os.environ.get("DT_MIN", "0"))
 min_gap = float(os.environ.get("MIN_GAP", "0"))
 sys.exit(0 if dt >= min_gap else 1)
 PY
-DT_MIN="$dt_min" MIN_GAP="$min_gap_minutes"
       then
         ((removed_gap++))
         continue

@@ -1423,6 +1423,9 @@ simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
     parquet_path=Path(file_path),
 )
 
+global_variables = {}
+if simulated_param_hash:
+    global_variables["param_hash"] = simulated_param_hash
 
 analysis_date = datetime.now().strftime("%Y-%m-%d")
 print(f"Analysis date and time: {analysis_date}")
@@ -1467,6 +1470,18 @@ KEY = "df"
 # Load dataframe
 working_df = pd.read_parquet(file_path, engine="pyarrow")
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+# Ensure param_hash is persisted for downstream tasks.
+if "param_hash" not in working_df.columns:
+    working_df["param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
+elif simulated_param_hash:
+    _ph_series = working_df["param_hash"]
+    _ph_missing = _ph_series.isna()
+    try:
+        _ph_missing |= _ph_series.astype(str).str.strip().eq("")
+    except Exception:
+        pass
+    if _ph_missing.any():
+        working_df.loc[_ph_missing, "param_hash"] = str(simulated_param_hash)
 print(f"Listed dataframe reloaded from: {file_path}")
 # print("Columns loaded from parquet:")
 # for col in working_df.columns:
@@ -1544,7 +1559,6 @@ list_tt_columns = {
 # the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
 # 0 -> regular analysis
 # 1 -> repeated, careful analysis
-global_variables = {}
 
 working_df = compute_tt(working_df, "list_tt", list_tt_columns)
 list_tt_counts_initial = working_df["list_tt"].value_counts()

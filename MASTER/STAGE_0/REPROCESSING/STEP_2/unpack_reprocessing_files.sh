@@ -496,7 +496,7 @@ wait_for_unpacker_slot() {
             local fname owner mtime age
             fname=$(basename "$leftover")
             owner=$(extract_station_code_from_name "$fname" 2>/dev/null || true)
-            mtime=$(stat -c %s "$leftover" 2>/dev/null || echo 0)
+            mtime=$(stat -c %Y "$leftover" 2>/dev/null || echo 0)
             now=$(date +%s)
             age=$((now - mtime))
 
@@ -745,7 +745,16 @@ process_single_hld() {
         export RPCSYSTEM="mingo${station_code}"
         export RPCRUNMODE=oneRun
 
-        "$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh"
+        if ! "$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh"; then
+            echo "Unpacking failed for $filename. Moving in-flight files to ERROR." >&2
+            local failed_path failed_name
+            for failed_path in "$hld_input_directory/$filename" "$hld_input_directory/$new_filename" "$processing_path"; do
+                [[ -e "$failed_path" ]] || continue
+                failed_name=$(basename "$failed_path")
+                mv -f "$failed_path" "$error_directory/$failed_name"
+            done
+            return 1
+        fi
 
         echo ""
         echo ""

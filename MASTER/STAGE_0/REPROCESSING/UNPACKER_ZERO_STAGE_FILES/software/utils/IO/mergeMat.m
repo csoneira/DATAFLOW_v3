@@ -131,7 +131,7 @@ if (findVersion(scriptVersions,'mergeMat') == 1)
         outputFile = [fileStruct(1).fileName '_merge'];
     end
     
-    if(~exist(outputPath,'dir')); mkdir -pOS(outputPath,'linux',1); end
+    if(~exist(outputPath,'dir')); mkdirOS(outputPath,'linux',1); end
     
     disp(['Writting merged file to ' outputPath outputFile]);
     if strcmp('matlab',interpreter)

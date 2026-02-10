@@ -34,10 +34,10 @@ if(size(fileListRun,1) > 1)
         inPathTmp  = [inPath  tmpFolder b];
         outPathTmp = [outPath tmpFolder b];
         
-        mkdir -pOS(inPathTmp,OS,1);
+        mkdirOS(inPathTmp,OS,1);
         mvOS(inPath,inPathTmp,fileListRun(1).fileNameExt,OS);
         
-        mkdir -pOS(outPathTmp,OS,1);
+        mkdirOS(outPathTmp,OS,1);
         [status, result] = remSemaphore(inPath,logs,OS);
     else
         message2log = ['Semaphore in place or error during it generation skipping.'];

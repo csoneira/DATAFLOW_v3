@@ -1925,6 +1925,7 @@ is_simulated_file = basename_no_ext.startswith("mi00")
 if is_simulated_file:
     if simulated_param_hash:
         print(f"Simulated param_hash resolved: {simulated_param_hash}")
+        global_variables["param_hash"] = simulated_param_hash
     else:
         print("Warning: Simulated param_hash missing; default z_positions will be used.")
 
@@ -1996,6 +1997,18 @@ KEY = "df"
 # Load dataframe
 working_df = pd.read_parquet(file_path, engine="pyarrow")
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+# Ensure param_hash is persisted for downstream tasks.
+if "param_hash" not in working_df.columns:
+    working_df["param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
+elif simulated_param_hash:
+    _ph_series = working_df["param_hash"]
+    _ph_missing = _ph_series.isna()
+    try:
+        _ph_missing |= _ph_series.astype(str).str.strip().eq("")
+    except Exception:
+        pass
+    if _ph_missing.any():
+        working_df.loc[_ph_missing, "param_hash"] = str(simulated_param_hash)
 print(f"Cleaned dataframe reloaded from: {file_path}")
 print("Columns loaded from parquet:")
 for col in working_df.columns:
