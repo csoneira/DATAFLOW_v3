@@ -12,3 +12,5 @@
 /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py
 rsync
 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py
+/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py
+/home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh

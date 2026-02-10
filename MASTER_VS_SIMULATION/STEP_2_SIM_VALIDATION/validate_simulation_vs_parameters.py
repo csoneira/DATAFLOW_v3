@@ -29,6 +29,12 @@ DEFAULT_DICT = (
     / "task_01"
     / "param_metadata_dictionary.csv"
 )
+DEFAULT_PARAMS_CSV = (
+    BASE_DIR.parent.parent
+    / "MINGO_DIGITAL_TWIN"
+    / "SIMULATED_DATA"
+    / "step_final_simulation_params.csv"
+)
 DEFAULT_OUT_DIR = BASE_DIR / "output"
 
 
@@ -442,6 +448,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate simulation parameters against STEP_1 outputs.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--dictionary-csv", default=None)
+    parser.add_argument(
+        "--params-csv",
+        default=None,
+        help="Source-of-truth params CSV used to filter dictionary rows.",
+    )
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--prefix", default=None, help="Trigger prefix (default from config or 'raw').")
     parser.add_argument(
@@ -464,6 +475,7 @@ def main() -> int:
 
     config = _load_config(Path(args.config))
     dictionary_csv = Path(args.dictionary_csv or config.get("dictionary_csv", str(DEFAULT_DICT)))
+    params_csv = Path(args.params_csv or config.get("params_csv", str(DEFAULT_PARAMS_CSV)))
     out_dir = Path(args.out_dir or config.get("out_dir", str(DEFAULT_OUT_DIR)))
     prefix = str(args.prefix or config.get("prefix", "raw"))
     eff_method = str(args.eff_method or config.get("eff_method", "four_over_three_plus_four"))
@@ -483,6 +495,23 @@ def main() -> int:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(dictionary_csv, low_memory=False)
+    if params_csv.exists():
+        params_df = pd.read_csv(params_csv, usecols=["file_name"])
+        params_files = params_df["file_name"].dropna().astype(str).str.strip()
+        params_set = set(params_files)
+        if "file_name" in df.columns:
+            before = len(df)
+            df = df[df["file_name"].astype(str).str.strip().isin(params_set)].copy()
+            print(f"Filtered dictionary rows by {params_csv}: {before} -> {len(df)}")
+        elif "filename_base" in df.columns:
+            before = len(df)
+            params_stems = {Path(name).stem for name in params_set}
+            df = df[df["filename_base"].astype(str).str.strip().isin(params_stems)].copy()
+            print(f"Filtered dictionary rows by {params_csv}: {before} -> {len(df)}")
+        else:
+            print("Warning: dictionary CSV has no file_name/filename_base; skipping params filter.")
+    else:
+        print(f"Warning: params CSV not found: {params_csv}; skipping params filter.")
     validation = build_validation_table(df, prefix=prefix, eff_method=eff_method)
     summary = build_summary(validation)
 

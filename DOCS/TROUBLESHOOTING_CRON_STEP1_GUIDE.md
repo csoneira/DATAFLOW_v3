@@ -198,6 +198,44 @@ Over time this created a large number of concurrent Copernicus fetchers, which:
 2. Added cron-level `flock` guards (one per station) to prevent overlaps.
 3. Wrapped Copernicus cron entries with the resource gate to skip runs when
    memory/swap/CPU are already high.
+
+---
+
+## Incident Addendum (2026-02-09): SIMULATION Continuous Run Stuck (Stale Lock)
+
+### Symptom
+
+- `cron_mingo_digital_twin_continuous.log` repeated:
+  - "Continuous operation already running; exiting."
+- No active `run_step.sh` process despite cron running every minute.
+- STEP_0 log stayed empty and STEP_FINAL failed with missing `SIM_RUN_*` inputs.
+
+### Root Cause
+
+`run_step.sh -c` uses a lock directory in `/tmp`:
+`/tmp/mingo_digital_twin_run_step_continuous.lock`. The PID inside the lock was
+stale (process no longer running), so every new cron invocation exited early.
+
+### Fix Applied
+
+1. Removed the stale lock directory so cron could start a new continuous run.
+2. Updated `run_step.sh` to auto-detect stale locks and recover:
+   - If the PID is alive and `run_step.sh` is running, log a `[WARN]` with timestamp.
+   - If the PID is missing or dead, remove the lock and continue.
+
+Updated file:
+- `MINGO_DIGITAL_TWIN/run_step.sh`
+
+### Verification
+
+```bash
+pgrep -af "run_step.sh -c"
+tail -n 5 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/RUN/cron_mingo_digital_twin_continuous.log
+```
+
+Expected:
+- A running `run_step.sh -c` process.
+- Log lines like `YYYY-MM-DDTHH:MM:SSZ run_step.sh continuous loop start`.
 4. Added Copernicus to the process-count watchdog caps.
 
 Updated file:

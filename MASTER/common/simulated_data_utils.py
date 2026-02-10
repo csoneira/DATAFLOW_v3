@@ -74,18 +74,22 @@ def extract_param_hash_from_parquet(parquet_path: Path) -> Optional[str]:
         return None
     try:
         parquet = pq.ParquetFile(parquet_path)
-        if parquet.metadata is None or parquet.metadata.num_row_groups == 0:
-            return None
-        table = parquet.read_row_group(0, columns=["param_hash"])
     except Exception:
         return None
-    if "param_hash" not in table.column_names:
+    if parquet.metadata is None or parquet.metadata.num_row_groups == 0:
         return None
-    values = table.column("param_hash").to_pylist()
-    for value in values:
-        normalized = _normalize_param_hash(value)
-        if normalized:
-            return normalized
+    if "param_hash" not in parquet.schema.names:
+        return None
+    for row_group in range(parquet.metadata.num_row_groups):
+        try:
+            table = parquet.read_row_group(row_group, columns=["param_hash"])
+        except Exception:
+            continue
+        values = table.column("param_hash").to_pylist()
+        for value in values:
+            normalized = _normalize_param_hash(value)
+            if normalized:
+                return normalized
     return None
 
 

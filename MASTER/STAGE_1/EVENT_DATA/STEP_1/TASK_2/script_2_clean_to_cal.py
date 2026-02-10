@@ -1551,6 +1551,13 @@ simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
     parquet_path=Path(file_path),
 )
 
+is_simulated_file = basename_no_ext.startswith("mi00")
+if is_simulated_file:
+    if simulated_param_hash:
+        print(f"Simulated param_hash resolved: {simulated_param_hash}")
+    else:
+        print("Warning: Simulated param_hash missing; default z_positions will be used.")
+
 
 
 
@@ -1723,17 +1730,29 @@ save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filenam
 # ------------ Input file and data managing to select configuration -------------
 # -------------------------------------------------------------------------------
 
+used_input_file = False
+
 if simulated_z_positions is not None:
     z_positions = np.array(simulated_z_positions, dtype=float)
     found_matching_conf = True
     current_conf_number = None
     print(f"Using simulated z_positions from param_hash={simulated_param_hash}")
+elif basename_no_ext.startswith("mi00"):
+    print("Warning: Simulated file missing param_hash; using default z_positions.")
+    found_matching_conf = False
+    z_positions = np.array([0, 150, 300, 450])  # In mm
+    current_conf_number = None
 elif exists_input_file:
+    used_input_file = True
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
-    matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
+    start_day = pd.to_datetime(start_time).normalize()
+    end_day = pd.to_datetime(end_time).normalize()
+    input_file["start_day"] = input_file["start"].dt.normalize()
+    input_file["end_day"] = input_file["end"].dt.normalize()
+    matching_confs = input_file[(input_file["start_day"] <= start_day) & (input_file["end_day"] >= end_day)]
     print(matching_confs)
     
     if not matching_confs.empty:
@@ -1750,10 +1769,20 @@ elif exists_input_file:
             conf_value = None
         current_conf_number = conf_value
     else:
-        print("Error: No matching configuration found for the given date range. Using default z_positions.")
-        found_matching_conf = False
-        z_positions = np.array([0, 150, 300, 450])  # In mm
-        current_conf_number = None
+        print("Warning: No matching configuration for the date range; selecting closest configuration.")
+        before = input_file[input_file["start_day"] <= end_day].sort_values("start_day", ascending=False)
+        if not before.empty:
+            selected_conf = before.iloc[0]
+        else:
+            selected_conf = input_file.sort_values("start", ascending=True).iloc[0]
+        print(f"Selected configuration: {selected_conf['conf']}")
+        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
+        found_matching_conf = True
+        try:
+            conf_value = int(selected_conf.get("conf"))
+        except (TypeError, ValueError):
+            conf_value = None
+        current_conf_number = conf_value
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
@@ -1762,10 +1791,34 @@ else:
 
 
 
-# If any of the z_positions is NaN, use default values
-if np.isnan(z_positions).any():
-    print("Error: Incomplete z_positions in the selected configuration. Using default z_positions.")
-    z_positions = np.array([0, 150, 300, 450])  # In mm
+def _zpos_from_conf(row):
+    return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
+
+# If any z_positions is NaN or all zeros, find the closest non-zero configuration.
+if np.isnan(z_positions).any() or np.all(z_positions == 0):
+    if used_input_file:
+        print("Warning: Invalid z_positions in selected configuration; searching for closest non-zero configuration.")
+        valid_rows = input_file.dropna(subset=["start"]).copy()
+        valid_rows["has_nonzero_z"] = valid_rows.apply(
+            lambda r: np.any(_zpos_from_conf(r) != 0), axis=1
+        )
+        valid_rows = valid_rows[valid_rows["has_nonzero_z"]]
+        if not valid_rows.empty:
+            valid_rows["delta"] = (valid_rows["start_day"] - start_day).abs()
+            selected_conf = valid_rows.sort_values("delta").iloc[0]
+            print(f"Selected non-zero configuration: {selected_conf['conf']}")
+            z_positions = _zpos_from_conf(selected_conf)
+            try:
+                conf_value = int(selected_conf.get("conf"))
+            except (TypeError, ValueError):
+                conf_value = None
+            current_conf_number = conf_value
+        else:
+            print("Error: No non-zero z_positions available. Using default z_positions.")
+            z_positions = np.array([0, 150, 300, 450])  # In mm
+    else:
+        print("Error: Invalid z_positions without config fallback. Using default z_positions.")
+        z_positions = np.array([0, 150, 300, 450])  # In mm
 
 
 
@@ -7926,7 +7979,7 @@ print("----------\nExecution metadata to be saved:")
 print(f"Filename base: {filename_base}")
 print(f"Execution timestamp: {execution_timestamp}")
 print(f"Data purity percentage: {data_purity_percentage:.2f}%")
-print(f"Total execution time: {total_execution_time_minutes:.2f} minutes\n----------")
+print(f"Total execution time: {total_execution_time_minutes:.2f} minutes")
 
 metadata_execution_csv_path = save_metadata(
     csv_path,

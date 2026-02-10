@@ -14,7 +14,7 @@ import hashlib
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +37,22 @@ from STEP_SHARED.sim_utils import (
     now_iso,
     random_sim_run,
 )
+
+
+def _log_ts() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _log_info(message: str) -> None:
+    print(f"[{_log_ts()}] [STEP_FINAL] {message}")
+
+
+def _log_warn(message: str) -> None:
+    print(f"[{_log_ts()}] [STEP_FINAL] [WARN] {message}")
+
+
+def _log_err(message: str) -> None:
+    print(f"[{_log_ts()}] [STEP_FINAL] [ERROR] {message}")
 
 
 def format_value(val: float) -> str:
@@ -632,8 +648,10 @@ def main() -> None:
     parser.add_argument("--plot-only", action="store_true", help="No-op for consistency")
     args = parser.parse_args()
 
+    _log_info("STEP_FINAL started")
+
     if args.plot_only:
-        print("Plot-only requested; STEP_FINAL does not generate plots. Skipping.")
+        _log_warn("Plot-only requested; STEP_FINAL does not generate plots. Skipping.")
         return
 
     config_path = Path(args.config)
@@ -645,6 +663,12 @@ def main() -> None:
 
     physics_cfg, runtime_cfg, cfg, runtime_path = load_step_configs(config_path, runtime_path)
 
+    _log_info(
+        "Loaded configs: "
+        f"physics={config_path}, "
+        f"runtime={runtime_path if runtime_path else 'auto'}"
+    )
+
     input_dir = Path(cfg["input_dir"])
     if not input_dir.is_absolute():
         input_dir = Path(__file__).resolve().parent / input_dir
@@ -652,6 +676,8 @@ def main() -> None:
     if not output_dir.is_absolute():
         output_dir = Path(__file__).resolve().parent / output_dir
     ensure_dir(output_dir)
+    _log_info(f"Input dir: {input_dir}")
+    _log_info(f"Output dir: {output_dir}")
 
     rate_hz = float(cfg.get("rate_hz", 0.0))
     chunk_rows = cfg.get("chunk_rows")
@@ -664,8 +690,9 @@ def main() -> None:
     input_sim_run = cfg.get("input_sim_run", "latest")
     sim_runs = resolve_input_sim_runs(input_dir, input_sim_run, cfg.get("seed"))
     if len(sim_runs) > 1 and input_collect != "baseline_only":
-        print("Multiple SIM_RUNs requested; using baseline_only input collection per SIM_RUN.")
+        _log_warn("Multiple SIM_RUNs requested; using baseline_only input collection per SIM_RUN.")
         input_collect = "baseline_only"
+    _log_info(f"SIM_RUNs selected: {len(sim_runs)}")
 
     mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
     if not mesh_dir.is_absolute():
@@ -759,7 +786,7 @@ def main() -> None:
             if candidates.empty:
                 candidates = mesh[rel_full]
         if candidates.empty:
-            print("Warning: no matching param_mesh row found for this parameter set; skipping.")
+            _log_warn("No matching param_mesh row found for this parameter set; skipping.")
             continue
         if len(candidates) > 1:
             raise ValueError("Multiple matching param_mesh rows found; cannot assign param_set_id.")
@@ -848,7 +875,7 @@ def main() -> None:
             if entry.get("param_set_id") == int(param_set_id)
         )
         if existing_for_run >= len(file_plans):
-            print(
+            _log_info(
                 "Skipping existing output for "
                 f"param_set_id={param_set_id} "
                 f"({existing_for_run}/{len(file_plans)})."
@@ -870,11 +897,11 @@ def main() -> None:
             if payload_sampling == "sequential_random_start":
                 if total_rows < desired_rows:
                     if file_kind == "subsample":
-                        print(
+                        _log_warn(
                             f"Skipping subsample_rows={desired_rows}; only {total_rows} source rows available."
                         )
                         continue
-                    print(
+                    _log_warn(
                         f"Requested {desired_rows} rows but only {total_rows} available; using {total_rows}."
                     )
                     desired_rows = total_rows
@@ -895,7 +922,7 @@ def main() -> None:
                 )
 
             if not payloads:
-                print(
+                _log_warn(
                     f"Skipping file generation for param_set_id={param_set_id}: no payload rows available."
                 )
                 continue
@@ -927,11 +954,11 @@ def main() -> None:
 
             if rows_written == 0:
                 out_path.unlink(missing_ok=True)
-                print(f"Skipping empty output {out_name}; no rows fit before midnight.")
+                _log_warn(f"Skipping empty output {out_name}; no rows fit before midnight.")
                 continue
 
             if rows_written < len(payloads):
-                print(
+                _log_warn(
                     f"Cut {out_name} at midnight: wrote {rows_written}/{len(payloads)} rows."
                 )
             selected_rows = rows_written
@@ -990,7 +1017,7 @@ def main() -> None:
                 "sample_start_index": sample_start_index,
             }
             new_param_rows.append(row)
-            print(
+            _log_info(
                 f"Saved {out_path} (param_set_id={param_set_id}, requested_rows={requested_for_file}, selected_rows={selected_rows})"
             )
 

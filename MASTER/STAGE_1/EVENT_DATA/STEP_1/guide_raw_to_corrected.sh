@@ -930,6 +930,7 @@ while true; do
       continue
     fi
     log_info "Completed station $station task${task_id} (${task_label})."
+    log_info "----------"
   done
   iteration=$((iteration + 1))
 done

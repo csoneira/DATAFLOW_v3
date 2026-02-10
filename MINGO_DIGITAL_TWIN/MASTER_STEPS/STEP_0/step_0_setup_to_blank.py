@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -316,6 +317,11 @@ def _append_param_row(
     meta_path.write_text(json.dumps(meta, indent=2))
 
 
+def _log_info(message: str) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] [STEP_0] {message}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="STEP_0: append one parameter row and update mesh.")
     parser.add_argument(
@@ -335,6 +341,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    _log_info("STEP_0 setup started")
+
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = Path(__file__).resolve().parent / config_path
@@ -343,6 +351,12 @@ def main() -> None:
         runtime_path = Path(__file__).resolve().parent / runtime_path
 
     physics_cfg, runtime_cfg, cfg, runtime_path = load_step_configs(config_path, runtime_path)
+
+    _log_info(
+        "Loaded configs: "
+        f"physics={config_path}, "
+        f"runtime={runtime_path if runtime_path else 'auto'}"
+    )
 
     station_root = Path(
         cfg.get(
@@ -359,12 +373,15 @@ def main() -> None:
     if not output_dir.is_absolute():
         output_dir = Path(__file__).resolve().parent / output_dir
     ensure_dir(output_dir)
+    _log_info(f"Output directory: {output_dir}")
 
     station_files = list_station_config_files(station_root)
     if not station_files:
         raise FileNotFoundError(f"No station config CSVs found under {station_root}")
+    _log_info(f"Station configs found: {len(station_files)}")
 
     z_positions = _collect_z_positions(station_files)
+    _log_info(f"Unique z-position rows: {len(z_positions)}")
 
     rng = np.random.default_rng(cfg.get("seed"))
     mesh_path = output_dir / "param_mesh.csv"
@@ -383,9 +400,16 @@ def main() -> None:
                 "Skipping append: mesh completion "
                 f"{done_pct:.1f}% ({done_rows}/{total_rows} rows done) is below 100%."
             )
+            _log_info("Skip append: mesh not fully done")
             return
 
     _append_param_row(mesh_path, mesh_meta_path, physics_cfg, rng, z_positions)
+
+    try:
+        mesh = pd.read_csv(mesh_path)
+        _log_info(f"Mesh rows after append: {len(mesh)}")
+    except (OSError, pd.errors.ParserError):
+        _log_info("Mesh updated (row count unavailable)")
 
     meta = {
         "created_at": now_iso(),
@@ -396,7 +420,7 @@ def main() -> None:
     }
     mesh_meta_path.write_text(json.dumps(meta, indent=2))
 
-    print(f"Updated param mesh in {output_dir}")
+    _log_info(f"Updated param mesh in {output_dir}")
 
 
 if __name__ == "__main__":

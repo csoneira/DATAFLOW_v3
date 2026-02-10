@@ -343,7 +343,11 @@ def main() -> int:
 
     total = len(dictionary_df)
     if len(metadata_cols) > 1:
-        missing = dictionary_df[metadata_cols[1:]].isna().all(axis=1).sum()
+        present_cols = [col for col in metadata_cols[1:] if col in dictionary_df.columns]
+        if present_cols:
+            missing = dictionary_df[present_cols].isna().all(axis=1).sum()
+        else:
+            missing = 0
     else:
         missing = 0
     print(

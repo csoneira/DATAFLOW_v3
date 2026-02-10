@@ -37,6 +37,20 @@ def load_param_hash_lookup(params_path: Path) -> Dict[str, str]:
     return lookup
 
 
+def load_param_hash_set(params_path: Path) -> set[str]:
+    hashes: set[str] = set()
+    if not params_path.exists():
+        return hashes
+    with params_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            param_hash = (row.get("param_hash") or "").strip()
+            if not param_hash:
+                continue
+            hashes.add(param_hash)
+    return hashes
+
+
 def iter_mi00_files(roots: Iterable[Path]) -> Iterable[Path]:
     for root in roots:
         if not root.exists():
@@ -160,6 +174,7 @@ def remove_file(path: Path, apply_changes: bool) -> bool:
 def process_file(
     path: Path,
     lookup: Dict[str, str],
+    valid_hashes: set[str],
     apply_changes: bool,
 ) -> Tuple[str, Optional[str]]:
     try:
@@ -170,6 +185,12 @@ def process_file(
 
     existing_hash = parse_first_line_hash(first_line)
     if existing_hash:
+        if valid_hashes and existing_hash not in valid_hashes:
+            try:
+                remove_file(path, apply_changes)
+                return "deleted_hash_mismatch", existing_hash
+            except OSError:
+                return "error_delete", existing_hash
         return "has_hash", existing_hash
 
     lookup_hash = lookup.get(path.name.lower())
@@ -190,12 +211,25 @@ def process_file(
 def process_parquet(
     path: Path,
     lookup: Dict[str, str],
+    valid_hashes: set[str],
     apply_changes: bool,
 ) -> Tuple[str, Optional[str]]:
     status, detail = parquet_hash_status(path)
     if status == "has_hash":
+        if detail and valid_hashes and detail not in valid_hashes:
+            try:
+                remove_file(path, apply_changes)
+                return "parquet_deleted_hash_mismatch", detail
+            except OSError:
+                return "parquet_error_delete", detail
         return "parquet_has_hash", detail
     if status == "needs_fill" and detail:
+        if valid_hashes and detail not in valid_hashes:
+            try:
+                remove_file(path, apply_changes)
+                return "parquet_deleted_hash_mismatch", detail
+            except OSError:
+                return "parquet_error_delete", detail
         try:
             ensure_param_hash_column(path, detail, apply_changes)
             return "parquet_filled_hash", detail
@@ -211,6 +245,12 @@ def process_parquet(
             return "parquet_deleted", None
         except OSError:
             return "parquet_error_delete", None
+    if valid_hashes and lookup_hash not in valid_hashes:
+        try:
+            remove_file(path, apply_changes)
+            return "parquet_deleted_hash_mismatch", lookup_hash
+        except OSError:
+            return "parquet_error_delete", lookup_hash
 
     try:
         ensure_param_hash_column(path, lookup_hash, apply_changes)
@@ -262,6 +302,7 @@ def main() -> int:
     )
     params_path = args.params or default_params
     lookup = load_param_hash_lookup(params_path)
+    valid_hashes = load_param_hash_set(params_path)
 
     roots = [
         repo_root / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA",
@@ -274,6 +315,7 @@ def main() -> int:
         "has_hash": 0,
         "added_hash": 0,
         "deleted": 0,
+        "deleted_hash_mismatch": 0,
         "error_read": 0,
         "error_write": 0,
         "error_delete": 0,
@@ -282,6 +324,7 @@ def main() -> int:
         "parquet_filled_hash": 0,
         "parquet_added_hash": 0,
         "parquet_deleted": 0,
+        "parquet_deleted_hash_mismatch": 0,
         "parquet_error_read": 0,
         "parquet_error_write": 0,
         "parquet_error_delete": 0,
@@ -289,7 +332,7 @@ def main() -> int:
 
     for path in iter_mi00_files(roots):
         stats["checked"] += 1
-        status, detail = process_file(path, lookup, args.apply)
+        status, detail = process_file(path, lookup, valid_hashes, args.apply)
         if status in stats:
             stats[status] += 1
 
@@ -298,6 +341,9 @@ def main() -> int:
         if status == "added_hash":
             action = "ADD" if args.apply else "WOULD_ADD"
             print(f"{action} {path} param_hash={detail}")
+        elif status == "deleted_hash_mismatch":
+            action = "DELETE" if args.apply else "WOULD_DELETE"
+            print(f"{action} {path} hash_not_in_table={detail}")
         elif status == "deleted":
             action = "DELETE" if args.apply else "WOULD_DELETE"
             print(f"{action} {path}")
@@ -306,7 +352,7 @@ def main() -> int:
 
     for path in iter_mi00_parquets(roots):
         stats["parquet_checked"] += 1
-        status, detail = process_parquet(path, lookup, args.apply)
+        status, detail = process_parquet(path, lookup, valid_hashes, args.apply)
         if status in stats:
             stats[status] += 1
         if status == "parquet_has_hash":
@@ -317,6 +363,9 @@ def main() -> int:
         elif status == "parquet_added_hash":
             action = "ADD" if args.apply else "WOULD_ADD"
             print(f"{action} {path} param_hash={detail}")
+        elif status == "parquet_deleted_hash_mismatch":
+            action = "DELETE" if args.apply else "WOULD_DELETE"
+            print(f"{action} {path} hash_not_in_table={detail}")
         elif status == "parquet_deleted":
             action = "DELETE" if args.apply else "WOULD_DELETE"
             print(f"{action} {path}")
@@ -327,14 +376,16 @@ def main() -> int:
     print(f"Mode: {mode}")
     print(
         "Checked: {checked} | Has hash: {has_hash} | Added: {added_hash} | Deleted: {deleted} | "
-        "Read errors: {error_read} | Write errors: {error_write} | Delete errors: {error_delete}".format(
+        "Deleted (hash mismatch): {deleted_hash_mismatch} | Read errors: {error_read} | "
+        "Write errors: {error_write} | Delete errors: {error_delete}".format(
             **stats
         )
     )
     print(
         "Parquet checked: {parquet_checked} | Has hash: {parquet_has_hash} | Added: {parquet_added_hash} | "
-        "Filled: {parquet_filled_hash} | Deleted: {parquet_deleted} | Read errors: {parquet_error_read} | "
-        "Write errors: {parquet_error_write} | Delete errors: {parquet_error_delete}".format(**stats)
+        "Filled: {parquet_filled_hash} | Deleted: {parquet_deleted} | Deleted (hash mismatch): "
+        "{parquet_deleted_hash_mismatch} | Read errors: {parquet_error_read} | Write errors: "
+        "{parquet_error_write} | Delete errors: {parquet_error_delete}".format(**stats)
     )
     return 0
 

@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -15,6 +16,18 @@ sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
 from STEP_SHARED.sim_utils import extract_step_id_chain
+
+
+def _log_ts() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _log_info(message: str) -> None:
+    print(f"[{_log_ts()}] [STEP_SANITIZE] {message}")
+
+
+def _log_warn(message: str) -> None:
+    print(f"[{_log_ts()}] [STEP_SANITIZE] [WARN] {message}")
 
 
 def parse_step_index(step_dir: Path) -> int | None:
@@ -104,6 +117,9 @@ def main() -> None:
     if not mesh_path.exists():
         raise FileNotFoundError(f"param_mesh.csv not found: {mesh_path}")
 
+    _log_info(f"Intersteps dir: {intersteps_dir}")
+    _log_info(f"Param mesh: {mesh_path}")
+
     # Recommended workflow:
     # 1) Generate a batch of mesh rows (STEP_0) with shared columns.
     # 2) Run STEP_1/2 once, then reuse those runs for STEP_3+.
@@ -111,8 +127,10 @@ def main() -> None:
     # 4) Run this script to remove SIM_RUNs whose step IDs are no longer present in active rows.
     mesh = pd.read_csv(mesh_path)
     if "done" not in mesh.columns:
-        print("No done column found; nothing to delete.")
+        _log_warn("No done column found; nothing to delete.")
         return
+
+    _log_info(f"Loaded mesh rows: {len(mesh)}")
 
     removed = 0
     skipped = 0
@@ -121,23 +139,23 @@ def main() -> None:
         step_index = parse_step_index(step_dir)
         if step_index is None:
             unknown += 1
-            print(f"SKIP (unrecognized step dir): {step_dir}")
+            _log_warn(f"SKIP (unrecognized step dir): {step_dir}")
             continue
         for sim_run_dir in sorted(step_dir.glob("SIM_RUN_*")):
             meta = find_metadata(sim_run_dir)
             if not meta:
                 unknown += 1
-                print(f"SKIP (no metadata): {sim_run_dir}")
+                _log_warn(f"SKIP (no metadata): {sim_run_dir}")
                 continue
             step_chain = extract_step_id_chain(meta)
             if not step_chain:
                 unknown += 1
-                print(f"SKIP (no step ids): {sim_run_dir}")
+                _log_warn(f"SKIP (no step ids): {sim_run_dir}")
                 continue
             combo_done = combo_done_in_mesh(mesh, step_chain, step_index)
             if combo_done is None:
                 unknown += 1
-                print(f"SKIP (no mesh match): {sim_run_dir}")
+                _log_warn(f"SKIP (no mesh match): {sim_run_dir}")
                 continue
             if not combo_done:
                 skipped += 1
@@ -145,11 +163,11 @@ def main() -> None:
             if args.apply:
                 shutil.rmtree(sim_run_dir)
                 removed += 1
-                print(f"DELETED: {sim_run_dir}")
+                _log_info(f"DELETED: {sim_run_dir}")
             else:
-                print(f"DRY-RUN DELETE: {sim_run_dir}")
+                _log_info(f"DRY-RUN DELETE: {sim_run_dir}")
 
-    print(f"Summary: removed={removed}, skipped={skipped}, unknown={unknown}")
+    _log_info(f"Summary: removed={removed}, skipped={skipped}, unknown={unknown}")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,10 @@ Notes:
 EOF
 }
 
+log_warn() {
+  echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") [WARN] $*"
+}
+
 NO_PLOTS=""
 PLOT_ONLY=""
 FINAL_STEP=""
@@ -100,8 +104,19 @@ if [[ -n "$CONTINUOUS" ]]; then
       rm -rf "$LOCK_DIR"
       mkdir "$LOCK_DIR"
     else
-      echo "Continuous operation already running; exiting."
-      exit 0
+      if [[ -f "$PID_FILE" ]]; then
+        LOCK_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+        if [[ -n "$LOCK_PID" ]] && kill -0 "$LOCK_PID" 2>/dev/null; then
+          CMDLINE="$(tr '\0' ' ' < "/proc/$LOCK_PID/cmdline" 2>/dev/null || true)"
+          if [[ "$CMDLINE" == *"run_step.sh"* ]]; then
+            log_warn "Continuous operation already running; pid=$LOCK_PID cmdline=$CMDLINE"
+            exit 0
+          fi
+        fi
+      fi
+      log_warn "Stale continuous lock detected; removing $LOCK_DIR and continuing"
+      rm -rf "$LOCK_DIR"
+      mkdir "$LOCK_DIR"
     fi
   fi
   echo "$$" > "$PID_FILE"

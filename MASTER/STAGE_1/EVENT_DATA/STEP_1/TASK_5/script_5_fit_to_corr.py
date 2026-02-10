@@ -964,6 +964,18 @@ KEY = "df"
 working_df = pd.read_parquet(file_path, engine="pyarrow")
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 print(f"Listed dataframe reloaded from: {file_path}")
+# Ensure param_hash is persisted for downstream tasks.
+if "param_hash" not in working_df.columns:
+    working_df["param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
+elif simulated_param_hash:
+    param_series = working_df["param_hash"]
+    missing_hash = param_series.isna()
+    try:
+        missing_hash |= param_series.astype(str).str.strip().eq("")
+    except Exception:
+        pass
+    if missing_hash.any():
+        working_df.loc[missing_hash, "param_hash"] = str(simulated_param_hash)
 # print("Columns loaded from parquet:")
 # for col in working_df.columns:
 #     print(f" - {col}")
@@ -1037,12 +1049,14 @@ fit_tt_columns = {
     for i_plane in range(1, 5)
 }
 
-# Task-5-local trigger type. For now it mirrors fit_tt, but it is intentionally
-# decoupled so it can be redefined in Task 5 without changing Task 4 outputs.
-TASK5_TT_COLUMN = "task5_tt"
+# Prefer the corr_tt already provided by upstream steps.
+CORR_TT_COLUMN = "corr_tt"
 global_variables = {
     'analysis_mode': 0,
 }
+
+if simulated_param_hash:
+    global_variables["param_hash"] = simulated_param_hash
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "total_rows_removed_pct",
@@ -1070,16 +1084,48 @@ else:
         .astype(int)
     )
 
-# Task 5 TT definition (currently identical to fit_tt by design).
-working_df.loc[:, TASK5_TT_COLUMN] = working_df["fit_tt"].astype(int)
+# Prefer corr_tt from upstream; otherwise fall back to definitive_tt/list_tt.
+if CORR_TT_COLUMN in working_df.columns:
+    working_df.loc[:, CORR_TT_COLUMN] = (
+        pd.to_numeric(working_df[CORR_TT_COLUMN], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+elif "definitive_tt" in working_df.columns:
+    print("Warning: corr_tt missing; using definitive_tt for filtering.")
+    working_df.loc[:, CORR_TT_COLUMN] = (
+        pd.to_numeric(working_df["definitive_tt"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+elif "list_tt" in working_df.columns:
+    print("Warning: corr_tt missing; using list_tt for filtering.")
+    working_df.loc[:, CORR_TT_COLUMN] = (
+        pd.to_numeric(working_df["list_tt"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+else:
+    corr_tt_columns = {
+        i_plane: [
+            f"P{i_plane}_T_sum_final",
+            f"P{i_plane}_T_dif_final",
+            f"P{i_plane}_Q_sum_final",
+            f"P{i_plane}_Q_dif_final",
+            f"P{i_plane}_Y_final",
+        ]
+        for i_plane in range(1, 5)
+    }
+    print("Warning: corr_tt missing; computing from available charge columns.")
+    working_df = compute_tt(working_df, CORR_TT_COLUMN, corr_tt_columns)
 
 fit_tt_counts_initial = working_df["fit_tt"].value_counts()
 for tt_value, count in fit_tt_counts_initial.items():
     global_variables[f"fit_tt_{tt_value}_count"] = int(count)
 
-task5_tt_counts_initial = working_df[TASK5_TT_COLUMN].value_counts()
-for tt_value, count in task5_tt_counts_initial.items():
-    global_variables[f"{TASK5_TT_COLUMN}_{tt_value}_count"] = int(count)
+corr_tt_counts_initial = working_df[CORR_TT_COLUMN].value_counts()
+for tt_value, count in corr_tt_counts_initial.items():
+    global_variables[f"{CORR_TT_COLUMN}_{tt_value}_count"] = int(count)
 
 
 
@@ -1836,18 +1882,30 @@ def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basenam
 # ------------ Input file and data managing to select configuration -------------
 # -------------------------------------------------------------------------------
 
+is_simulated_file = basename_no_ext.startswith("mi00")
+used_input_file = False
+
 if simulated_z_positions is not None:
     z_positions = np.array(simulated_z_positions, dtype=float)
     found_matching_conf = True
     print(f"Using simulated z_positions from param_hash={simulated_param_hash}")
+elif is_simulated_file:
+    print("Warning: Simulated file missing param_hash; using default z_positions.")
+    found_matching_conf = False
+    z_positions = np.array([0, 150, 300, 450])  # In mm
 elif exists_input_file:
+    used_input_file = True
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
-    matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
+    start_day = pd.to_datetime(start_time).normalize()
+    end_day = pd.to_datetime(end_time).normalize()
+    input_file["start_day"] = input_file["start"].dt.normalize()
+    input_file["end_day"] = input_file["end"].dt.normalize()
+    matching_confs = input_file[(input_file["start_day"] <= start_day) & (input_file["end_day"] >= end_day)]
     print(matching_confs)
-    
+
     if not matching_confs.empty:
         if len(matching_confs) > 1:
             print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
@@ -1857,9 +1915,15 @@ elif exists_input_file:
         found_matching_conf = True
         print(selected_conf['conf'])
     else:
-        print("Error: No matching configuration found for the given date range. Using default z_positions.")
-        found_matching_conf = False
-        z_positions = np.array([0, 150, 300, 450])  # In mm
+        print("Warning: No matching configuration for the date range; selecting closest configuration.")
+        before = input_file[input_file["start_day"] <= end_day].sort_values("start_day", ascending=False)
+        if not before.empty:
+            selected_conf = before.iloc[0]
+        else:
+            selected_conf = input_file.sort_values("start", ascending=True).iloc[0]
+        print(f"Selected configuration: {selected_conf['conf']}")
+        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
+        found_matching_conf = True
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
@@ -2155,14 +2219,22 @@ if simulated_z_positions is not None:
     z_positions = np.array(simulated_z_positions, dtype=float)
     found_matching_conf = True
     print(f"Using simulated z_positions from param_hash={simulated_param_hash}")
+elif is_simulated_file:
+    print("Warning: Simulated file missing param_hash; using default z_positions.")
+    found_matching_conf = False
+    z_positions = np.array([0, 150, 300, 450])  # In mm
 elif exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
     input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
-    matching_confs = input_file[ (input_file["start"] <= start_time) & (input_file["end"] >= end_time) ]
+    start_day = pd.to_datetime(start_time).normalize()
+    end_day = pd.to_datetime(end_time).normalize()
+    input_file["start_day"] = input_file["start"].dt.normalize()
+    input_file["end_day"] = input_file["end"].dt.normalize()
+    matching_confs = input_file[(input_file["start_day"] <= start_day) & (input_file["end_day"] >= end_day)]
     print(matching_confs)
-    
+
     if not matching_confs.empty:
         if len(matching_confs) > 1:
             print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
@@ -2172,9 +2244,15 @@ elif exists_input_file:
         found_matching_conf = True
         print(selected_conf['conf'])
     else:
-        print("Error: No matching configuration found for the given date range. Using default z_positions.")
-        found_matching_conf = False
-        z_positions = np.array([0, 150, 300, 450])  # In mm
+        print("Warning: No matching configuration for the date range; selecting closest configuration.")
+        before = input_file[input_file["start_day"] <= end_day].sort_values("start_day", ascending=False)
+        if not before.empty:
+            selected_conf = before.iloc[0]
+        else:
+            selected_conf = input_file.sort_values("start", ascending=True).iloc[0]
+        print(f"Selected configuration: {selected_conf['conf']}")
+        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
+        found_matching_conf = True
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
@@ -2949,37 +3027,17 @@ if component_cols:
 
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
-if create_debug_plots and TASK5_TT_COLUMN in working_df.columns:
+if create_debug_plots and CORR_TT_COLUMN in working_df.columns:
     debug_fig_idx = plot_debug_histograms(
         working_df,
-        [TASK5_TT_COLUMN],
-        {TASK5_TT_COLUMN: [10]},
-        title=f"Task 5 pre-filter: {TASK5_TT_COLUMN} >= 10 [NON-TUNABLE] (station {station})",
+        [CORR_TT_COLUMN],
+        {CORR_TT_COLUMN: [10]},
+        title=f"Task 5 pre-filter: {CORR_TT_COLUMN} >= 10 [NON-TUNABLE] (station {station})",
         out_dir=debug_plot_directory,
         fig_idx=debug_fig_idx,
     )
-corr_tt_columns = {
-    i_plane: [
-        f"P{i_plane}_T_sum_final",
-        f"P{i_plane}_T_dif_final",
-        f"P{i_plane}_Q_sum_final",
-        f"P{i_plane}_Q_dif_final",
-        f"P{i_plane}_Y_final",
-    ]
-    for i_plane in range(1, 5)
-}
-working_df = compute_tt(working_df, "corr_tt", corr_tt_columns)
 corr_tt_total = len(working_df)
-if create_debug_plots and "corr_tt" in working_df.columns:
-    debug_fig_idx = plot_debug_histograms(
-        working_df,
-        ["corr_tt"],
-        {"corr_tt": [10]},
-        title=f"Task 5 pre-filter: corr_tt >= 10 [NON-TUNABLE] (station {station})",
-        out_dir=debug_plot_directory,
-        fig_idx=debug_fig_idx,
-    )
-corr_tt_mask = working_df["corr_tt"].notna() & (working_df["corr_tt"] >= 10)
+corr_tt_mask = working_df[CORR_TT_COLUMN].notna() & (working_df[CORR_TT_COLUMN] >= 10)
 working_df = working_df.loc[corr_tt_mask].copy()
 record_filter_metric(
     "corr_tt_lt_10_rows_removed_pct",
@@ -2987,13 +3045,11 @@ record_filter_metric(
     corr_tt_total if corr_tt_total else 0,
 )
 
-working_df.loc[:, "task5_to_corr_tt"] = (
-    working_df[TASK5_TT_COLUMN].astype(str) + "_" + working_df["corr_tt"].astype(str)
-)
+working_df.loc[:, "task5_to_corr_tt"] = working_df[CORR_TT_COLUMN].astype(str)
 # Backward-compatible alias used by downstream metadata consumers.
 working_df.loc[:, "fit_to_corr_tt"] = working_df["task5_to_corr_tt"]
 
-corr_tt_counts = working_df["corr_tt"].value_counts()
+corr_tt_counts = working_df[CORR_TT_COLUMN].value_counts()
 for tt_value, count in corr_tt_counts.items():
     global_variables[f"corr_tt_{tt_value}_count"] = int(count)
 
@@ -3085,7 +3141,7 @@ print("----------\nExecution metadata to be saved:")
 print(f"Filename base: {filename_base}")
 print(f"Execution timestamp: {execution_timestamp}")
 print(f"Data purity percentage: {data_purity_percentage:.2f}%")
-print(f"Total execution time: {total_execution_time_minutes:.2f} minutes\n----------")
+print(f"Total execution time: {total_execution_time_minutes:.2f} minutes")
 
 metadata_execution_csv_path = save_metadata(
     csv_path,
