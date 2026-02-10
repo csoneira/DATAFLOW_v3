@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from msv_utils import (  # noqa: E402
+    build_validation_table,
     compute_efficiency,
     load_config,
     parse_efficiencies,
@@ -35,7 +36,7 @@ log = setup_logger("STEP_2_validate")
 
 DEFAULT_CONFIG = BASE_DIR / "config_validation.json"
 DEFAULT_DICT = (
-    REPO_ROOT / "STEP_1_DICTIONARY" / "output" / "task_01"
+    REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "output" / "task_01"
     / "param_metadata_dictionary.csv"
 )
 DEFAULT_PARAMS_CSV = (
@@ -43,83 +44,6 @@ DEFAULT_PARAMS_CSV = (
     / "step_final_simulation_params.csv"
 )
 DEFAULT_OUT_DIR = BASE_DIR / "output"
-
-
-def build_validation_table(df: pd.DataFrame, prefix: str, eff_method: str) -> pd.DataFrame:
-    four_col = f"{prefix}_tt_1234_count"
-    miss_cols = {
-        1: f"{prefix}_tt_234_count",
-        2: f"{prefix}_tt_134_count",
-        3: f"{prefix}_tt_124_count",
-        4: f"{prefix}_tt_123_count",
-    }
-    rate_cols = [col for col in df.columns if col.startswith(f"{prefix}_tt_") and col.endswith("_rate_hz")]
-
-    needed = [four_col, *miss_cols.values(), "flux_cm2_min", "cos_n", "efficiencies"]
-    missing = [col for col in needed if col not in df.columns]
-    if missing:
-        raise KeyError(
-            "Dictionary CSV is missing required columns for validation: "
-            + ", ".join(missing)
-        )
-
-    out = df.copy()
-    event_count_candidates = [
-        "generated_events_count",
-        "total_events_generated",
-        "n_events_generated",
-        "num_events_generated",
-        "event_count",
-        "num_events",
-        "selected_rows",
-    ]
-    source_event_col = next((c for c in event_count_candidates if c in out.columns), None)
-    if source_event_col is not None and source_event_col != "generated_events_count":
-        out["generated_events_count"] = out[source_event_col]
-    numeric_cols = [four_col, *miss_cols.values(), "flux_cm2_min", "cos_n", *rate_cols, "generated_events_count"]
-    out = safe_numeric(out, numeric_cols)
-
-    sim_eff = out["efficiencies"].apply(parse_efficiencies).apply(pd.Series)
-    sim_eff.columns = [f"eff_sim_p{i}" for i in range(1, 5)]
-    out = pd.concat([out, sim_eff], axis=1)
-
-    for plane in range(1, 5):
-        miss_col = miss_cols[plane]
-        est_col = f"eff_est_p{plane}"
-        sim_col = f"eff_sim_p{plane}"
-        resid_col = f"eff_resid_p{plane}"
-        rel_col = f"eff_rel_err_p{plane}"
-        out[est_col] = compute_efficiency(out[four_col], out[miss_col], eff_method)
-        out[resid_col] = out[est_col] - out[sim_col]
-        out[f"eff_abs_err_p{plane}"] = out[resid_col].abs()
-        out[rel_col] = out[resid_col] / out[sim_col].replace({0: np.nan})
-
-    if rate_cols:
-        out["global_trigger_rate_hz"] = out[rate_cols].sum(axis=1, min_count=1)
-    else:
-        out["global_trigger_rate_hz"] = np.nan
-
-    keep_cols = [
-        "file_name",
-        "filename_base",
-        "param_set_id",
-        "flux_cm2_min",
-        "cos_n",
-        "generated_events_count",
-        four_col,
-        *miss_cols.values(),
-        "global_trigger_rate_hz",
-    ]
-    keep_cols += [f"eff_sim_p{i}" for i in range(1, 5)]
-    keep_cols += [f"eff_est_p{i}" for i in range(1, 5)]
-    keep_cols += [f"eff_resid_p{i}" for i in range(1, 5)]
-    keep_cols += [f"eff_rel_err_p{i}" for i in range(1, 5)]
-    keep_cols += [f"eff_abs_err_p{i}" for i in range(1, 5)]
-
-    for col in keep_cols:
-        if col not in out.columns:
-            out[col] = np.nan
-    return out[keep_cols].copy()
 
 
 def _calc_metrics(sim: pd.Series, est: pd.Series) -> dict[str, float]:

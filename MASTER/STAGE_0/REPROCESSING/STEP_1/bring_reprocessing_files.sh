@@ -14,6 +14,10 @@ log_info() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
 
+log_warn() {
+  printf '[%s] [WARN] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_DIR="$SCRIPT_DIR"
 while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
@@ -407,18 +411,18 @@ if [[ ! -s "$clean_metadata_csv" ]]; then
   if flock -n 9; then
     if [[ -x "$metadata_prep_script" ]]; then
       if ! "$metadata_prep_script" "$station" --refresh-metadata; then
-        log_info "Warning: metadata refresh failed for station ${station}." >&2
+        log_warn "metadata refresh failed for station ${station}"
       fi
     else
-      log_info "Warning: metadata preparation script not found at $metadata_prep_script" >&2
+      log_warn "metadata preparation script not found at $metadata_prep_script"
     fi
     flock -u 9 || true
   else
-    log_info "Another metadata refresh is already running; skipping refresh for station ${station} this run." >&2
+    log_warn "another metadata refresh is already running; skipping refresh for station ${station} this run"
   fi
 
   if [[ ! -s "$clean_metadata_csv" ]]; then
-    log_info "Warning: Clean metadata CSV still not found at ${clean_metadata_csv}; skipping downloads for station ${station}." >&2
+    log_warn "clean metadata CSV still not found at ${clean_metadata_csv}; skipping downloads for station ${station}"
     exit 0
   fi
 fi
@@ -697,7 +701,7 @@ if [[ -s "$compressed_list_file" ]]; then
     if (( rsync_status != 23 && rsync_status != 24 )); then
       exit "$rsync_status"
     fi
-    echo "Warning: rsync reported status $rsync_status while transferring compressed files; continuing." >&2
+    log_warn "rsync reported status $rsync_status while transferring compressed files; continuing"
   fi
   while IFS= read -r filename; do
     [[ -z "$filename" ]] && continue
@@ -719,7 +723,7 @@ if [[ -s "$uncompressed_list_file" ]]; then
     if (( rsync_status != 23 && rsync_status != 24 )); then
       exit "$rsync_status"
     fi
-    echo "Warning: rsync reported status $rsync_status while transferring uncompressed files; continuing." >&2
+    log_warn "rsync reported status $rsync_status while transferring uncompressed files; continuing"
   fi
   while IFS= read -r filename; do
     [[ -z "$filename" ]] && continue

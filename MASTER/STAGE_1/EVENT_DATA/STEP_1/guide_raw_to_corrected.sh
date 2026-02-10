@@ -42,6 +42,19 @@ log_rate_limited() {
   fi
 }
 
+log_rate_limited_warn() {
+  local key="$1"
+  local interval="$2"
+  shift 2
+  local now last
+  now=$(date +%s)
+  last="${LAST_LOG_TS[$key]:-0}"
+  if (( now - last >= interval )); then
+    LAST_LOG_TS["$key"]="$now"
+    log_warn "$*"
+  fi
+}
+
 print_help() {
   cat <<'EOF'
 guide_raw_to_corrected.sh
@@ -419,7 +432,7 @@ validate_stations() {
     if [[ "$s" =~ ^[0-4]$ ]]; then
       validated+=("$s")
     else
-      echo "Warning: ignoring invalid station '$s' (must be 0-4)" >&2
+      log_warn "ignoring invalid station '$s' (must be 0-4)"
     fi
   done
   if [[ ${#validated[@]} -eq 0 ]]; then
@@ -436,7 +449,7 @@ validate_tasks() {
     if [[ "$t" =~ ^[1-5]$ ]]; then
       validated+=("$t")
     else
-      echo "Warning: ignoring invalid task '$t' (must be 1-5)" >&2
+      log_warn "ignoring invalid task '$t' (must be 1-5)"
     fi
   done
   if [[ ${#validated[@]} -eq 0 ]]; then
@@ -745,7 +758,7 @@ max_cpu_usage_pct() {
 wait_for_resources() {
   read -r mem_total mem_avail swap_total swap_free < <(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} /SwapTotal:/ {st=$2} /SwapFree:/ {sf=$2} END {print t, a, st, sf}' /proc/meminfo)
   if [[ -z "${mem_total:-}" || -z "${mem_avail:-}" || "$mem_total" -eq 0 ]]; then
-    log_rate_limited "warn_meminfo_missing" 300 "Warning: unable to read memory info; continuing."
+    log_rate_limited_warn "warn_meminfo_missing" 300 "unable to read memory info; continuing"
     return 0
   fi
   mem_used_pct=$(( (100 * (mem_total - mem_avail)) / mem_total ))
@@ -765,7 +778,7 @@ wait_for_resources() {
     return 0
   fi
 
-  log_rate_limited "resources_high" 60 "Resources high: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k, limit <${mem_limit_pct}), Swap ${swap_used_pct}% (${swap_used_kb}k used, limits <${swap_limit_pct}% and <${swap_limit_kb}k), Max CPU ${max_cpu_pct}% (limit <${cpu_limit_pct})."
+  log_rate_limited_warn "resources_high" 60 "Resources high: Mem ${mem_used_pct}% (avail ${mem_avail}k/${mem_total}k, limit <${mem_limit_pct}), Swap ${swap_used_pct}% (${swap_used_kb}k used, limits <${swap_limit_pct}% and <${swap_limit_kb}k), Max CPU ${max_cpu_pct}% (limit <${cpu_limit_pct})."
   return 1
 }
 

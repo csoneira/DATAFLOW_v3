@@ -38,10 +38,10 @@ from msv_utils import (  # noqa: E402
     setup_logger,
 )
 
-log = setup_logger("STEP_4")
+log = setup_logger("STEP_5")
 
-DEFAULT_ALL_RESULTS = REPO_ROOT / "STEP_3_SELF_CONSISTENCY" / "output" / "all_samples_results.csv"
-DEFAULT_DICT = REPO_ROOT / "STEP_1_DICTIONARY" / "output" / "task_01" / "param_metadata_dictionary.csv"
+DEFAULT_ALL_RESULTS = REPO_ROOT / "STEP_4_SELF_CONSISTENCY" / "output" / "all_samples_results.csv"
+DEFAULT_DICT = REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "output" / "task_01" / "param_metadata_dictionary.csv"
 DEFAULT_OUT = STEP_DIR / "output"
 DEFAULT_CONFIG = STEP_DIR / "config.json"
 

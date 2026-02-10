@@ -169,9 +169,9 @@ def _append_param_row(
     eff_range = physics_cfg.get("efficiencies")
     if eff_range is None:
         raise ValueError("efficiencies must be set in config_step_0_physics.yaml.")
-    repeat_samples = int(physics_cfg.get("repeat_samples", 1))
-    if repeat_samples < 1:
-        raise ValueError("repeat_samples must be >= 1.")
+    repeat_samples = int(physics_cfg.get("repeat_samples", 0))
+    if repeat_samples < 0:
+        raise ValueError("repeat_samples must be >= 0 (0 = one sample per geometry, no repeats).")
     shared_columns = physics_cfg.get("shared_columns", [])
     if isinstance(shared_columns, str):
         shared_columns = [shared_columns]
@@ -249,7 +249,8 @@ def _append_param_row(
         )
 
     new_rows = []
-    for _ in range(repeat_samples):
+    n_samples = repeat_samples + 1  # 0 repeats → 1 base sample; N repeats → N+1
+    for _ in range(n_samples):
         cos_n = shared_values.get("cos_n", _sample_range(rng, physics_cfg.get("cos_n"), "cos_n"))
         flux_cm2_min = shared_values.get(
             "flux_cm2_min", _sample_range(rng, physics_cfg.get("flux_cm2_min"), "flux_cm2_min")

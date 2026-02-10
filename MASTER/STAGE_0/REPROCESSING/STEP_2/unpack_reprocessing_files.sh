@@ -7,6 +7,22 @@
 #    initConf.m, the HOME line, THAT MUST END WITH A SLASH
 #    
 
+log_ts() {
+    date '+%Y-%m-%d %H:%M:%S'
+}
+
+log_info() {
+    printf '[%s] [UNPACK_STEP_2] %s\n' "$(log_ts)" "$*"
+}
+
+log_warn() {
+    printf '[%s] [UNPACK_STEP_2] [WARN] %s\n' "$(log_ts)" "$*" >&2
+}
+
+log_error() {
+    printf '[%s] [UNPACK_STEP_2] [ERROR] %s\n' "$(log_ts)" "$*" >&2
+}
+
 if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
     cat <<'EOF'
 unpack_reprocessing_files.sh
@@ -70,7 +86,7 @@ while (( $# > 0 )); do
                 max_parallel="${2}"
                 shift
             else
-                echo "Error: --max-parallel requires a positive integer."
+                log_error "--max-parallel requires a positive integer."
                 exit 1
             fi
             ;;
@@ -397,7 +413,7 @@ move_step1_outputs_to_unprocessed() {
                 moved_any=true
                 rm -f "$archive"
             else
-                echo "Warning: failed to extract $(basename "$archive")." >&2
+                log_warn "failed to extract $(basename "$archive")"
             fi
         done
     fi
@@ -466,7 +482,7 @@ route_dat_outputs() {
                 fi
             fi
         else
-            echo "Warning: failed to move $fname into ${destination_dir}." >&2
+            log_warn "failed to move $fname into ${destination_dir}"
         fi
     done
     shopt -u nullglob
@@ -616,7 +632,7 @@ process_single_hld() {
                     relocated_candidates=true
                     continue
                 else
-                    echo "Warning: failed to relocate $(basename "$candidate") to station $candidate_station." >&2
+                    log_warn "failed to relocate $(basename "$candidate") to station $candidate_station"
                 fi
             fi
             local candidate_base
@@ -698,12 +714,12 @@ process_single_hld() {
     local processing_path="$processing_directory/$filename"
 
     if [[ -e "$processing_path" ]]; then
-        echo "Warning: $filename already existed in PROCESSING; moving old copy to ERROR."
+        log_warn "$filename already existed in PROCESSING; moving old copy to ERROR"
         mv "$processing_path" "$error_directory/$filename"
     fi
 
     if ! mv "$selected_file" "$processing_path"; then
-        echo "Warning: failed to move $filename into PROCESSING." >&2
+        log_warn "failed to move $filename into PROCESSING"
         return 1
     fi
 
@@ -718,7 +734,7 @@ process_single_hld() {
         route_dat_outputs
 
         if ! cp "$processing_path" "$hld_input_directory/$filename"; then
-            echo "Warning: failed to copy $filename into unpacker input directory." >&2
+            log_warn "failed to copy $filename into unpacker input directory"
             return 1
         fi
 

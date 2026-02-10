@@ -4,6 +4,14 @@ set -euo pipefail
 LC_ALL=C
 shopt -s dotglob nullglob
 
+log_ts() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
+
+log_warn() {
+  printf '[%s] [CLEAN_DATAFLOW] [WARN] %s\n' "$(log_ts)" "$*" >&2
+}
+
 usage() {
   cat <<'EOF'
 clean_completed.sh
@@ -356,7 +364,7 @@ clean_temps() {
       echo "--> Removing $match"
       chmod -R u+w "$match" >/dev/null 2>&1 || true
       if ! rm -rf -- "$match"; then
-        echo "   Warning: unable to remove $match (check permissions)" >&2
+        log_warn "unable to remove $match (check permissions)"
       fi
       if [[ ! -e "$match" ]]; then
         ((++removed))

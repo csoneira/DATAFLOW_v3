@@ -12,6 +12,7 @@ add_to_rclone.info
 *.mat
 *.log
 STATIONS/
+NOT_ESSENTIAL/
 
 # Copernicus data
 *.nc

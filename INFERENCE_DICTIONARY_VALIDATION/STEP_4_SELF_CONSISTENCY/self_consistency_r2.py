@@ -69,12 +69,12 @@ from msv_utils import (  # noqa: E402
     setup_logger,
 )
 
-log = setup_logger("STEP_3")
+log = setup_logger("STEP_4")
 
-DEFAULT_REF = REPO_ROOT / "STEP_2_SIM_VALIDATION" / "output" / "filtered_reference.csv"
+DEFAULT_REF = REPO_ROOT / "STEP_3_RELATIVE_ERROR" / "output" / "filtered_reference.csv"
 DEFAULT_OUT = STEP_DIR / "output"
 DEFAULT_DICT = (
-    REPO_ROOT / "STEP_1_DICTIONARY" / "output" / "task_01"
+    REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "output" / "task_01"
     / "param_metadata_dictionary.csv"
 )
 DEFAULT_CONFIG = STEP_DIR / "config.json"

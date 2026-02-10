@@ -254,7 +254,7 @@ validate_stations() {
     if [[ "$st" =~ ^[0-4]$ ]]; then
       validated+=("$st")
     else
-      echo "Warning: ignoring invalid station '$st'" >&2
+      log_warn "ignoring invalid station '$st'"
     fi
   done
   if [[ ${#validated[@]} -eq 0 ]]; then

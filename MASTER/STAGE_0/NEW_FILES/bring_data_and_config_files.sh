@@ -3,6 +3,22 @@
 # log_file="${LOG_FILE:-~/cron_logs/bring_and_analyze_events_${station}.log}"
 # mkdir -p "$(dirname "$log_file")"
 
+log_ts() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
+
+log_info() {
+  printf '[%s] [NEW_FILES] %s\n' "$(log_ts)" "$*"
+}
+
+log_warn() {
+  printf '[%s] [NEW_FILES] [WARN] %s\n' "$(log_ts)" "$*" >&2
+}
+
+log_error() {
+  printf '[%s] [NEW_FILES] [ERROR] %s\n' "$(log_ts)" "$*" >&2
+}
+
 # Station specific -----------------------------
 if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
   cat <<'EOF'
@@ -22,7 +38,7 @@ EOF
 fi
 
 if [ -z "$1" ]; then
-  echo "Error: No station provided."
+  log_error "No station provided."
   echo "Usage: $0 <station>"
   exit 1
 fi
@@ -46,7 +62,7 @@ STATUS_CSV=""
 
 # If $1 is not 1, 2, 3, 4, exit
 if [[ ! "$station" =~ ^[1-4]$ ]]; then
-  echo "Error: Invalid station number. Please provide a number between 1 and 4."
+  log_error "Invalid station number. Please provide a number between 1 and 4."
   exit 1
 fi
 
@@ -79,16 +95,14 @@ for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash 
         cmdline=$(ps -p "$pid" -o args=)
         # echo "$(date) - Found running process: PID $pid - $cmdline"
         if [[ "$cmdline" == *"$script_name"* ]]; then
-            echo "------------------------------------------------------"
-            echo "$(date): The script $script_name is already running (PID: $pid). Exiting."
-            echo "------------------------------------------------------"
+            log_warn "The script $script_name is already running (pid=$pid). Exiting."
             exit 1
         fi
     fi
 done
 
 # If no duplicate process is found, continue
-echo "$(date) - No running instance found. Proceeding..."
+log_info "No running instance found. Proceeding."
 
 
 # If no duplicate process is found, continue
@@ -201,7 +215,7 @@ if ssh "${SSH_OPTS[@]}" "$mingo_direction" "true" >/dev/null 2>&1; then
   connection_ok=1
   echo "Connection to $mingo_direction confirmed."
 else
-  echo "Error: Unable to establish SSH connection with $mingo_direction. Skipping data fetch for this run." >&2
+  log_error "Unable to establish SSH connection with $mingo_direction. Skipping data fetch for this run."
 fi
 
 if [[ $connection_ok -eq 1 ]]; then
@@ -245,7 +259,7 @@ if [[ $connection_ok -eq 1 ]]; then
           --from0 \
           "$mingo_direction:$dat_files_directory/" \
           "$raw_directory/"; then
-          echo "Warning: rsync encountered an error while fetching data." >&2
+          log_warn "rsync encountered an error while fetching data."
         fi
       else
         echo "No .dat files eligible for transfer after excluding logged entries."
@@ -254,7 +268,7 @@ if [[ $connection_ok -eq 1 ]]; then
       echo "No .dat files found to transfer."
     fi
   else
-    echo "Warning: unable to build .dat file list from remote host." >&2
+    log_warn "unable to build .dat file list from remote host."
   fi
 
   after_list=$(mktemp)
@@ -310,7 +324,7 @@ GID=$(yq -r ".logbook.gid_by_station.\"$station\"" "$CONFIG_FILE")
 
 # Basic validation
 if [[ -z "$SHEET_ID" || -z "$GID" ]]; then
-  echo "Error: Could not read SHEET_ID or GID for station $station from $CONFIG_FILE"
+  log_error "Could not read SHEET_ID or GID for station $station from $CONFIG_FILE"
   exit 1
 fi
 
@@ -331,7 +345,7 @@ wget -q --show-progress --no-check-certificate \
 if [[ $? -eq 0 ]]; then
     echo "Download completed. Data saved at ${OUTPUT_FILE}."
 else
-    echo "Error: Download failed. Continuing execution..."
+    log_error "Download failed. Continuing execution."
 fi
 
 

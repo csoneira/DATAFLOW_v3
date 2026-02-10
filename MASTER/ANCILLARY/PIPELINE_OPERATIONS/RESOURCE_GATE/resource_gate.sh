@@ -107,10 +107,11 @@ MAX_SWAP_KB="${MAX_SWAP_KB:-4194304}"
 MAX_CPU_PCT="${MAX_CPU_PCT:-95}"
 
 log_line() {
-  local msg="$1"
+  local level="$1"
+  local msg="$2"
   local ts
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  printf '[%s] [RESOURCE_GATE] [%s] %s\n' "$ts" "$TAG" "$msg" >>"$LOG_FILE"
+  printf '[%s] [RESOURCE_GATE] [%s] [%s] %s\n' "$ts" "$TAG" "$level" "$msg" >>"$LOG_FILE"
 }
 
 max_cpu_usage_pct() {
@@ -130,7 +131,7 @@ max_cpu_usage_pct() {
 
 read -r mem_total mem_avail swap_total swap_free < <(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} /SwapTotal:/ {st=$2} /SwapFree:/ {sf=$2} END {print t, a, st, sf}' /proc/meminfo)
 if [[ -z "${mem_total:-}" || -z "${mem_avail:-}" || "$mem_total" -eq 0 ]]; then
-  log_line "Unable to read /proc/meminfo; allowing command."
+  log_line "WARN" "Unable to read /proc/meminfo; allowing command."
   exec "$@"
 fi
 
@@ -145,7 +146,7 @@ fi
 cpu_used_pct="$(max_cpu_usage_pct || echo 0)"
 
 if (( mem_used_pct >= MAX_MEM_PCT || swap_used_pct >= MAX_SWAP_PCT || swap_used_kb >= MAX_SWAP_KB || cpu_used_pct >= MAX_CPU_PCT )); then
-  log_line "Resources high: Mem ${mem_used_pct}% (limit ${MAX_MEM_PCT}), Swap ${swap_used_pct}%/${swap_used_kb}k (limit ${MAX_SWAP_PCT}%/${MAX_SWAP_KB}k), CPU ${cpu_used_pct}% (limit ${MAX_CPU_PCT}). Skipping command."
+  log_line "WARN" "Resources high: Mem ${mem_used_pct}% (limit ${MAX_MEM_PCT}), Swap ${swap_used_pct}%/${swap_used_kb}k (limit ${MAX_SWAP_PCT}%/${MAX_SWAP_KB}k), CPU ${cpu_used_pct}% (limit ${MAX_CPU_PCT}). Skipping command."
   exit 0
 fi
 

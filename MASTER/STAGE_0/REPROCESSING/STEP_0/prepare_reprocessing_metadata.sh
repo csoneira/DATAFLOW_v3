@@ -20,6 +20,10 @@ log_info() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
 
+log_warn() {
+  printf '[%s] [WARN] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+}
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -1168,7 +1172,7 @@ refresh_metadata_csv() {
   local tmp_listing
   tmp_listing=$(mktemp) || return 1
   if ! ssh -o BatchMode=yes "${remote_user}@${remote_host}" "cd ${remote_dir_escaped} && find . -maxdepth 1 -type f \\( -name '*.hld' -o -name '*.hld.tar.gz' -o -name '*.hld-tar-gz' -o -name '*.tar.gz' -o -name '*.dat' \\) -printf '%f,%s\n'" > "$tmp_listing"; then
-    log_info "Warning: unable to refresh metadata; could not list remote directory ${remote_user}@${remote_host}:${remote_dir}" >&2
+    log_warn "unable to refresh metadata; could not list remote directory ${remote_user}@${remote_host}:${remote_dir}"
     rm -f "$tmp_listing"
     return 1
   fi

@@ -1,3 +1,12 @@
+- Check the L2, use normalized version, and check the Poisson-like score. Compare them to see if they give consistent results or if one is more stable than the others.
+- Check the effect of z-score scaling on the scores and the inferred parameters. Does it improve the stability of the inference, especially in cases with varying event counts or efficiency regimes?
+- Try to get the errors in the inference. For example a reasonable error would be the sqrt of counts since they come with Poisson statistics, so for example a chisq could be interesting to calculate.
+
+
+
+---
+
+
 # INFERENCE_DICTIONARY_VALIDATION — Pipeline Validation and Methodological Guidance (Non-Code)
 
 This document provides high-level, non-code guidance for validating the simulation pipeline implemented in `INFERENCE_DICTIONARY_VALIDATION`, covering Steps 1 through 4. It is intended to be pasted into the repository and used as prompt context for LLM-assisted development (Codex, Claude) and for internal methodological traceability.

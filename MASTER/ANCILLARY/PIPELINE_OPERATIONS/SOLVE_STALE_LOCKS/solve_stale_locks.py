@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,9 @@ DEFAULT_LOG_FILE = (
 # Task-level locks should clear faster so the pipeline does not get stuck if a task died
 # before releasing its lock.
 TASK_LOCK_MAX_AGE = dt.timedelta(minutes=5)
+RUN_STEP_CONTINUOUS_LOCK_DIR = Path("/tmp/mingo_digital_twin_run_step_continuous.lock")
+RUN_STEP_CONTINUOUS_PID_FILE = RUN_STEP_CONTINUOUS_LOCK_DIR / "pid"
+RUN_STEP_LOCK_RACE_GRACE = dt.timedelta(minutes=2)
 
 
 def _now() -> dt.datetime:
@@ -201,6 +205,77 @@ def unpacker_running() -> bool:
     return result.returncode == 0 and result.stdout.strip() != ""
 
 
+def pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def cleanup_dead_run_step_continuous_lock(*, dry_run: bool, logfile: Path) -> bool:
+    """Remove stale /tmp lock used by run_step.sh continuous mode."""
+    lock_dir = RUN_STEP_CONTINUOUS_LOCK_DIR
+    pid_file = RUN_STEP_CONTINUOUS_PID_FILE
+    if not lock_dir.exists():
+        return False
+
+    try:
+        mtime = dt.datetime.fromtimestamp(lock_dir.stat().st_mtime, tz=dt.timezone.utc)
+    except FileNotFoundError:
+        return False
+    age = _now() - mtime
+
+    pid_text = ""
+    if pid_file.exists():
+        try:
+            pid_text = pid_file.read_text(encoding="utf-8", errors="ignore").strip()
+        except OSError:
+            pid_text = ""
+    elif age < RUN_STEP_LOCK_RACE_GRACE:
+        # Avoid racing with run_step between mkdir and pid write.
+        return False
+
+    reason = "missing_pid"
+    if pid_text:
+        if pid_text.isdigit():
+            pid = int(pid_text)
+            if pid_is_alive(pid):
+                return False
+            reason = f"dead_pid={pid}"
+        else:
+            if age < RUN_STEP_LOCK_RACE_GRACE:
+                return False
+            reason = f"invalid_pid={pid_text}"
+
+    action = "DRY-RUN would delete" if dry_run else "Deleting"
+    log_message(
+        f"{action} stale run_step continuous lock {lock_dir}: {reason}; age {age}",
+        logfile=logfile,
+    )
+    if dry_run:
+        return True
+
+    try:
+        if pid_file.exists():
+            pid_file.unlink()
+    except OSError as exc:
+        log_message(f"Failed to remove pid file {pid_file}: {exc}", logfile=logfile)
+    try:
+        lock_dir.rmdir()
+    except OSError:
+        try:
+            shutil.rmtree(lock_dir)
+        except OSError as exc:
+            log_message(f"Failed to delete stale lock dir {lock_dir}: {exc}", logfile=logfile)
+            return False
+    return True
+
+
 def kill_station_processes(station: str, *, min_age: dt.timedelta, logfile: Path, task: str | None = None) -> None:
     """Kill guide_raw_to_corrected.sh processes older than min_age for a station (optionally task-scoped)."""
     pattern = rf"guide_raw_to_corrected.sh.*--station\s+{station}"
@@ -306,11 +381,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     lock_dir = args.lock_dir
     log_path = args.log_file
 
+    stale_found = cleanup_dead_run_step_continuous_lock(dry_run=args.dry_run, logfile=log_path)
+
     if not lock_dir.exists():
-        log_message(f"Lock directory {lock_dir} does not exist; nothing to do", logfile=log_path)
+        if not stale_found:
+            log_message(f"Lock directory {lock_dir} does not exist; nothing to do", logfile=log_path)
         return 0
 
-    stale_found = False
     for lock_file in sorted(lock_dir.glob("*.lock")):
         task_info = task_info_from_lock_name(lock_file)
         if task_info:

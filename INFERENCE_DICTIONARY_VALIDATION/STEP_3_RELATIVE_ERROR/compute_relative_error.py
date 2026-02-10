@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""STEP_2: Compute relative error for eff_p2 and eff_p3 and filter reference rows.
+"""STEP_3: Compute relative error for eff_p2 and eff_p3 and filter reference rows.
 
 Loads the dictionary CSV, builds a validation table (estimated vs simulated
 efficiencies), applies quality cuts on relative error and minimum event count,
@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from msv_utils import (  # noqa: E402
+    build_validation_table,
     load_config,
     plot_bar_counts,
     plot_histogram,
@@ -33,10 +34,10 @@ from msv_utils import (  # noqa: E402
     setup_logger,
 )
 
-log = setup_logger("STEP_2")
+log = setup_logger("STEP_3")
 
 DEFAULT_DICT = (
-    REPO_ROOT / "STEP_1_DICTIONARY" / "output" / "task_01"
+    REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "output" / "task_01"
     / "param_metadata_dictionary.csv"
 )
 DEFAULT_OUT = STEP_DIR / "output"
@@ -95,7 +96,6 @@ def _plot_eff_sim_vs_est_all(df: pd.DataFrame, plot_path: Path) -> None:
 def _build_validation_table(
     df: pd.DataFrame, prefix: str, eff_method: str
 ) -> pd.DataFrame:
-    from validate_simulation_vs_parameters import build_validation_table
     return build_validation_table(df, prefix=prefix, eff_method=eff_method)
 
 
@@ -224,12 +224,12 @@ def _compare_eff_methods(
     so disagreements flag estimator-model mismatch.
     """
     import matplotlib.pyplot as plt  # noqa: local for optional path
-    from validate_simulation_vs_parameters import build_validation_table
+    from msv_utils import build_validation_table as _bvt
 
     methods = ("four_over_three_plus_four", "one_minus_three_over_four")
     tables = {}
     for m in methods:
-        tables[m] = build_validation_table(df, prefix=prefix, eff_method=m)
+        tables[m] = _bvt(df, prefix=prefix, eff_method=m)
 
     comp_dir = plot_dir / "method_comparison"
     comp_dir.mkdir(parents=True, exist_ok=True)
