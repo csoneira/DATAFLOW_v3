@@ -1,25 +1,38 @@
+# ----------------------------------------------------------------------
+# Repository-specific local files
+# ----------------------------------------------------------------------
 .github/workflows/bug-detector.yml
 add_to_rclone.info
 
-*.lock
-*.ts
+# ----------------------------------------------------------------------
+# Runtime directories (data-heavy, generated outside source control)
+# ----------------------------------------------------------------------
+STATIONS/
+NOT_ESSENTIAL/
 
+# ----------------------------------------------------------------------
+# Runtime locks and throttle markers
+# ----------------------------------------------------------------------
+*.lock
+MASTER/STAGE_0/REPROCESSING/STEP_2/.unpack_shared.lock
+EXECUTION_LOGS/LOG_THROTTLE/*.ts
+
+# ----------------------------------------------------------------------
+# Binary / scientific artifacts
+# ----------------------------------------------------------------------
 *.pkl
 *.npz
 *.bin
 *.h5
 *.hld
 *.mat
-*.log
-STATIONS/
-NOT_ESSENTIAL/
-
-# Copernicus data
 *.nc
 *.nc4
 .cdsapirc
 
-# Ignore compressed and archive files
+# ----------------------------------------------------------------------
+# Archives and compressed payloads
+# ----------------------------------------------------------------------
 *.tar
 *.tar.gz
 *.zip
@@ -28,25 +41,38 @@ NOT_ESSENTIAL/
 *.csv.gz
 *.gz
 
-# Ignore raw data files
+# ----------------------------------------------------------------------
+# Data payloads (default-ignore with explicit allow-list)
+# ----------------------------------------------------------------------
 *.dat*
 *.csv
 *.tsv
 *.json
-!grafana/**/*.json
 *.txt
 !MASTER/CONFIG_FILES/config_parameters_task_*.csv
+!grafana/**/*.json
 
-# Ignore images
-*.png*
+# ----------------------------------------------------------------------
+# Logs, temp files, and merge leftovers
+# ----------------------------------------------------------------------
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.~*
+*.orig
+
+# ----------------------------------------------------------------------
+# Images and office documents
+# ----------------------------------------------------------------------
+*.png
 *.jpg
 *.jpeg
 *.gif
 *.tif
 *.tiff
 *.bmp
-
-# Ignore documents and PDFs
 *.pdf
 *.doc
 *.docx
@@ -56,41 +82,29 @@ NOT_ESSENTIAL/
 *.ppt
 *.pptx
 
-# Ignore logs and temporary files
-*.log
-*.tmp
-*.bak
-*.swp
-*.swo
-*.~*
-
-# Ignore Python cache and compiled files
+# ----------------------------------------------------------------------
+# Python and notebook caches
+# ----------------------------------------------------------------------
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Ignore Jupyter Notebook checkpoints
 .ipynb_checkpoints/
-
-# Ignore system-specific files
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Ignore virtual environments
 venv/
 .env/
 .venv/
 
-# Ignore build and output folders
+# ----------------------------------------------------------------------
+# Build and dependency outputs
+# ----------------------------------------------------------------------
 build/
 dist/
 *.egg-info/
 node_modules/
 
-# Ignore Git merge conflict files
-*.orig
-
-# Runtime lock produced by STEP_2 unpacker serialization
-MASTER/STAGE_0/REPROCESSING/STEP_2/.unpack_shared.lock
+# ----------------------------------------------------------------------
+# OS-specific noise
+# ----------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -108,6 +108,11 @@ def _normalize_hash_value(value: object) -> object:
     if isinstance(value, (np.floating, float)):
         if not np.isfinite(value):
             return None
+        # Normalize exact-integer floats to int so that hashes are
+        # stable across CSV round-trips (pandas reads int columns as
+        # float64 when NaN values are present in the same column).
+        if float(value) == int(value):
+            return int(value)
         return float(value)
     if isinstance(value, (pd.Timestamp, datetime, date)):
         return str(value)
@@ -1026,11 +1031,9 @@ def main() -> None:
                 "sample_start_index": sample_start_index,
             }
             new_param_rows.append(row)
-            _log_info(
-                f"Saved {out_path} (param_set_id={param_set_id}, requested_rows={requested_for_file}, selected_rows={selected_rows})"
-            )
 
-        if new_param_rows:
+            # Write CSV immediately after each file so that a crash
+            # mid-batch does not lose rows for already-written files.
             if sim_params_df is not None:
                 df_params = sim_params_df
                 drop_cols = [
@@ -1040,14 +1043,19 @@ def main() -> None:
                 ]
                 if drop_cols:
                     df_params = df_params.drop(columns=drop_cols)
-                for new_row in new_param_rows:
-                    df_params = df_params[df_params["file_name"] != new_row["file_name"]]
+                for nr in new_param_rows:
+                    df_params = df_params[df_params["file_name"] != nr["file_name"]]
                 df_params = pd.concat([df_params, pd.DataFrame(new_param_rows)], ignore_index=True)
             else:
                 df_params = pd.DataFrame(new_param_rows)
-            df_params.to_csv(sim_params_path, index=False)
-        elif sim_params_needs_write and sim_params_df is not None:
-            sim_params_df.to_csv(sim_params_path, index=False)
+            write_csv_atomic(df_params, sim_params_path, index=False)
+
+            _log_info(
+                f"Saved {out_path} (param_set_id={param_set_id}, requested_rows={requested_for_file}, selected_rows={selected_rows})"
+            )
+
+        if not new_param_rows and sim_params_needs_write and sim_params_df is not None:
+            write_csv_atomic(sim_params_df, sim_params_path, index=False)
 
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@ ensure_simulation_time_csv() {
   local current_header
   local backup
   csv_path="$(simulation_time_csv_path)"
-  header='timestamp_utc,elapsed_seconds'
+  header='exec_time_s,step,timestamp_utc'
   mkdir -p "$(dirname "$csv_path")"
   if [[ ! -f "$csv_path" ]]; then
     printf '%s\n' "$header" > "$csv_path"
@@ -67,12 +67,20 @@ ensure_simulation_time_csv() {
 
 append_simulation_time_row() {
   local elapsed="$1"
+  local step="$2"
   local csv_path
   csv_path="$(simulation_time_csv_path)"
   ensure_simulation_time_csv
-  printf '%s,%s\n' \
-    "$(log_ts)" \
-    "$elapsed" >> "$csv_path"
+  printf '%s,%s,%s\n' \
+    "$elapsed" \
+    "$step" \
+    "$(log_ts)" >> "$csv_path"
+}
+
+elapsed_seconds_between() {
+  local start_ts="$1"
+  local end_ts="$2"
+  LC_ALL=C awk -v s="$start_ts" -v e="$end_ts" 'BEGIN{d=e-s; if (d < 0) d=0; printf "%.6f", d}'
 }
 
 NO_PLOTS=""
@@ -450,31 +458,36 @@ run_step_with_progress() {
   local start_epoch
   local end_epoch
   local elapsed
+  local elapsed_log
   local rc
   output_dir="$(step_output_dir_for_step "$step")"
   before_count="$(count_sim_run_dirs "$output_dir")"
-  start_epoch=$(date +%s)
+  start_epoch=$(date +%s.%N)
   if run_step "$step"; then
     rc=0
   else
     rc=$?
   fi
   if [[ "$rc" -ne 0 ]]; then
-    end_epoch=$(date +%s)
-    elapsed=$((end_epoch - start_epoch))
+    end_epoch=$(date +%s.%N)
+    elapsed="$(elapsed_seconds_between "$start_epoch" "$end_epoch")"
+    elapsed_log="$(LC_ALL=C awk -v d="$elapsed" 'BEGIN{printf "%.3f", d}')"
     after_count="$(count_sim_run_dirs "$output_dir")"
-    log_warn "step=$step status=failed rc=$rc dirs=${before_count}->${after_count} elapsed_s=$elapsed"
+    append_simulation_time_row "$elapsed" "$step" || true
+    log_warn "step=$step status=failed rc=$rc dirs=${before_count}->${after_count} elapsed_s=$elapsed_log"
     return 2
   fi
-  end_epoch=$(date +%s)
-  elapsed=$((end_epoch - start_epoch))
+  end_epoch=$(date +%s.%N)
+  elapsed="$(elapsed_seconds_between "$start_epoch" "$end_epoch")"
+  elapsed_log="$(LC_ALL=C awk -v d="$elapsed" 'BEGIN{printf "%.3f", d}')"
+  append_simulation_time_row "$elapsed" "$step" || true
   after_count="$(count_sim_run_dirs "$output_dir")"
   if [[ "$after_count" -gt "$before_count" ]]; then
-    log_info "step=$step status=progress dirs=${before_count}->${after_count} elapsed_s=$elapsed"
+    log_info "step=$step status=progress dirs=${before_count}->${after_count} elapsed_s=$elapsed_log"
     return 0
   fi
   if [[ -n "$DEBUG" ]]; then
-    log_info "step=$step status=noop dirs=${before_count}->${after_count} elapsed_s=$elapsed"
+    log_info "step=$step status=noop dirs=${before_count}->${after_count} elapsed_s=$elapsed_log"
   fi
   return 1
 }
@@ -482,8 +495,6 @@ run_step_with_progress() {
 while true; do
   cycle_start_epoch=$(date +%s)
   cycle_end_epoch="$cycle_start_epoch"
-  cycle_elapsed=0
-  cycle_should_record=0
   step_failed="0"
 
   if [[ -n "$CONTINUOUS" ]]; then
@@ -491,7 +502,6 @@ while true; do
   fi
   case "$STEP" in
     all)
-      cycle_should_record=1
       failed_steps=0
       refresh_work_cache_or_disable
       lower_step=9
@@ -544,7 +554,6 @@ while true; do
         log_error "Usage: $0 from <step_number> [--no-plots]"
         exit 1
       fi
-      cycle_should_record=1
       for step in $(seq "$start_step" 10); do
         if ! run_step "$step"; then
           log_warn "step=$step failed; continuing"
@@ -562,12 +571,6 @@ while true; do
       cycle_elapsed=$((cycle_end_epoch - cycle_start_epoch))
       ;;
   esac
-
-  if [[ "$cycle_should_record" == "1" ]]; then
-    if ! append_simulation_time_row "$cycle_elapsed"; then
-      log_warn "failed to append simulation timing row to $(simulation_time_csv_path)"
-    fi
-  fi
 
   if [[ "$step_failed" == "1" ]]; then
     exit 1
