@@ -56,6 +56,7 @@ if str(REPO_ROOT) not in sys.path:
 from msv_utils import (  # noqa: E402
     LOWER_IS_BETTER,
     SCORE_FNS,
+    apply_clean_style,
     as_float,
     build_empirical_eff,
     build_uncertainty_table,
@@ -67,14 +68,16 @@ from msv_utils import (  # noqa: E402
     resolve_param,
     safe_rel_error_pct,
     setup_logger,
+    setup_output_dirs,
 )
 
 log = setup_logger("STEP_4")
+apply_clean_style()
 
-DEFAULT_REF = REPO_ROOT / "STEP_3_RELATIVE_ERROR" / "output" / "filtered_reference.csv"
-DEFAULT_OUT = STEP_DIR / "output"
+DEFAULT_REF = REPO_ROOT / "STEP_3_RELATIVE_ERROR" / "OUTPUTS" / "FILES" / "filtered_reference.csv"
+DEFAULT_OUT = STEP_DIR
 DEFAULT_DICT = (
-    REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "output" / "task_01"
+    REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "task_01"
     / "param_metadata_dictionary.csv"
 )
 DEFAULT_CONFIG = STEP_DIR / "config.json"
@@ -133,124 +136,47 @@ def _plot_contour(
     sample_label: str,
     top_n: int = 0,
 ) -> None:
-    """Create a contour/heatmap of scores in (flux, efficiency) space.
-
-    Also annotates top-N ranked candidates inline (replaces the old
-    standalone top_n_param_space plot).
-    """
+    """Score heatmap in (flux, efficiency) space — simplified."""
     x = candidates["dict_flux_cm2_min"].to_numpy(dtype=float)
     y = candidates["dict_eff_1"].to_numpy(dtype=float)
     z = candidates["score_value"].to_numpy(dtype=float)
 
-    # Use log scale for distance-like metrics (avoid log(0))
     lower_is_better = score_metric in LOWER_IS_BETTER
     if lower_is_better:
         z_display = np.log10(np.maximum(z, 1e-12))
-        color_label = "log10(" + score_metric + ")"
+        color_label = f"log₁₀({score_metric})"
         cmap = "viridis_r"
     else:
         z_display = z
         color_label = score_metric.upper()
         cmap = "viridis"
 
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(8, 5.5))
 
-    # --- smooth background contour (if scipy available & enough points) ---
-    if _griddata is not None and len(x) >= 10:
-        xi = np.linspace(x.min(), x.max(), 200)
-        yi = np.linspace(y.min(), y.max(), 200)
-        Xi, Yi = np.meshgrid(xi, yi)
-        try:
-            Zi = _griddata((x, y), z_display, (Xi, Yi), method="cubic")
-            ax.contourf(Xi, Yi, Zi, levels=20, cmap=cmap, alpha=0.45)
-        except Exception:
-            pass  # fall back to scatter only
-    elif len(x) >= 3:
-        try:
-            triang = mtri.Triangulation(x, y)
-            ax.tricontourf(triang, z_display, levels=12, cmap=cmap, alpha=0.45)
-        except Exception:
-            pass
-
-    # --- scatter all candidates ---
-    sc = ax.scatter(
-        x, y,
-        c=z_display,
-        cmap=cmap,
-        s=50,
-        alpha=0.85,
-        edgecolors="black",
-        linewidths=0.3,
-        zorder=3,
-    )
+    # Scatter all candidates
+    sc = ax.scatter(x, y, c=z_display, cmap=cmap, s=30, alpha=0.8,
+                    edgecolors="none", zorder=3)
     fig.colorbar(sc, ax=ax, label=color_label, shrink=0.85)
 
-    # --- mark true sample ---
+    # Mark true sample
     if np.isfinite(sample_flux) and np.isfinite(sample_eff):
-        ax.scatter(
-            [sample_flux], [sample_eff],
-            s=220, marker="*", color="#E45756",
-            edgecolors="black", linewidths=0.8, zorder=6,
-            label="True sample",
-        )
+        ax.scatter([sample_flux], [sample_eff], s=150, marker="*",
+                   color="#E45756", edgecolors="black", linewidths=0.6,
+                   zorder=6, label="True sample")
 
-    # --- mark best candidate ---
+    # Mark best candidate
     if best_flux is not None and best_eff is not None:
-        ax.scatter(
-            [best_flux], [best_eff],
-            s=180, marker="X", color="#F58518",
-            edgecolors="black", linewidths=0.8, zorder=6,
-            label="Best candidate",
-        )
+        ax.scatter([best_flux], [best_eff], s=120, marker="X",
+                   color="#F58518", edgecolors="black", linewidths=0.6,
+                   zorder=6, label="Best candidate")
 
-    # --- annotations ---
     best_lbl = "n/a" if best_score is None else f"{score_metric}={best_score:.4g}"
     tr_str = f"{truth_rank}/{n_candidates}" if truth_rank > 0 else "self"
-    ax.set_title(
-        f"Self-consistency score map ({metric_mode}, {score_metric})\n"
-        f"Sample={sample_label}  events={events_label}  best {best_lbl}  "
-        f"truth_rank={tr_str}",
-        fontsize=11,
-    )
-    ax.set_xlabel("Flux [cm^-2 min^-1]")
-    ax.set_ylabel("Efficiency (eff_1)")
-
-    if best_flux is not None and best_eff is not None:
-        info_text = (
-            f"sample flux = {sample_flux:.4g}\n"
-            f"sample eff = {sample_eff:.4g}\n"
-            f"delta_flux = {best_flux - sample_flux:.4g}\n"
-            f"delta_eff = {best_eff - sample_eff:.4g}"
-        )
-    else:
-        info_text = f"sample flux = {sample_flux:.4g}\nsample eff = {sample_eff:.4g}"
-    ax.text(
-        0.02, 0.98, info_text,
-        transform=ax.transAxes, va="top", ha="left", fontsize=9,
-        bbox=dict(boxstyle="round", facecolor="white", alpha=0.9, edgecolor="#D9D9D9"),
-    )
-    # --- top-N rank annotations (integrated from former top_n_param_space) ---
-    if top_n > 0:
-        ascending = score_metric in LOWER_IS_BETTER
-        df_sorted = candidates.dropna(subset=["dict_flux_cm2_min", "dict_eff_1", "score_value"]) \
-            .sort_values("score_value", ascending=ascending)
-        top = df_sorted.head(top_n)
-        rank_colors = plt.cm.RdYlGn_r(np.linspace(0.1, 0.9, min(top_n, len(top))))
-        for rank, (_, row) in enumerate(top.iterrows(), 1):
-            if rank == 1:
-                continue  # best candidate already marked with X
-            ax.annotate(
-                f"#{rank}",
-                (row["dict_flux_cm2_min"], row["dict_eff_1"]),
-                textcoords="offset points", xytext=(6, 6),
-                fontsize=7, fontweight="bold",
-                color=rank_colors[rank - 1],
-            )
-
-    ax.legend(loc="lower right", frameon=True, framealpha=0.9, fontsize=9)
-    ax.grid(True, alpha=0.25)
-    fig.tight_layout()
-    fig.savefig(plot_path, dpi=160)
+    ax.set_title(f"Score map ({score_metric})  truth_rank={tr_str}")
+    ax.set_xlabel("Flux [cm⁻² min⁻¹]")
+    ax.set_ylabel("Efficiency (eff₁)")
+    ax.legend(loc="lower right", fontsize=8)
+    fig.savefig(plot_path, dpi=150)
     plt.close(fig)
 
 
@@ -979,10 +905,12 @@ def main() -> int:  # noqa: C901
     if run_mode == "all" and sample_index_arg is not None:
         raise ValueError("--sample-index is only valid in single mode.")
 
-    out_dir = Path(out_dir_str)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for path in out_dir.glob("*.png"):
+    out_base = Path(out_dir_str)
+    files_dir, plots_dir = setup_output_dirs(out_base)
+    for path in plots_dir.glob("*.png"):
         path.unlink()
+    # Keep out_dir pointing to files_dir for CSV/JSON writes
+    out_dir = files_dir
 
     log.info("Run mode: %s", run_mode)
     log.info("Interpolation K: %d%s", interpolation_k,
@@ -1182,7 +1110,7 @@ def main() -> int:  # noqa: C901
                 result["best_score"],
                 result["truth_rank"],
                 len(candidates),
-                out_dir / f"contour_{tag}.png",
+                plots_dir / f"contour_{tag}.png",
                 result["events_label"],
                 result["sample_label"],
                 top_n=top_n,
@@ -1198,23 +1126,23 @@ def main() -> int:  # noqa: C901
             result["sample_vec_scaled"],
             metric_df_scaled.loc[best_orig_idx].to_numpy(dtype=float),
             metric_cols,
-            out_dir / f"feature_diagnostics_{tag}.png",
+            plots_dir / f"feature_diagnostics_{tag}.png",
             f"Feature diagnostics: sample vs best ({tag})",
         )
         _plot_score_distribution(
             candidates["score_value"], score_metric,
             result["best_score"],
-            out_dir / f"score_distribution_{tag}.png",
+            plots_dir / f"score_distribution_{tag}.png",
         )
         _plot_score_vs_param_distance(
             candidates,
             float(result["sample_flux"]),
             float(result["sample_eff"]),
             score_metric,
-            out_dir / f"score_vs_param_dist_{tag}.png",
+            plots_dir / f"score_vs_param_dist_{tag}.png",
         )
         log.info("Wrote candidates: %s", candidates_csv)
-        log.info("Wrote plots to: %s", out_dir)
+        log.info("Wrote plots to: %s", plots_dir)
         return 0
 
     if not exclude_self:
@@ -1361,7 +1289,7 @@ def main() -> int:  # noqa: C901
         # True vs estimated (combined 1×2 figure)
         _plot_all_true_vs_est_combined(
             ok_df,
-            plot_path=out_dir / f"all_true_vs_est_{tag}.png",
+            plot_path=plots_dir / f"all_true_vs_est_{tag}.png",
         )
         # Stratified plots already include events-vs-error and error histograms
         uncertainty_df = build_uncertainty_table(ok_df, n_bins=10)
@@ -1371,7 +1299,7 @@ def main() -> int:  # noqa: C901
             log.info("Wrote uncertainty table: %s", uncertainty_csv)
 
         # Stratified diagnostics (to_do.md §4.1)
-        _plot_stratified_errors(ok_df, out_dir, tag)
+        _plot_stratified_errors(ok_df, plots_dir, tag)
 
         # ── Showcase: single-sample diagnostic plots for one representative ──
         # Pick the sample whose flux error is closest to the median (most
@@ -1428,7 +1356,7 @@ def main() -> int:  # noqa: C901
                     sc_result["best_score"],
                     sc_result["truth_rank"],
                     len(sc_cands),
-                    out_dir / f"all_showcase_contour_{tag}.png",
+                    plots_dir / f"all_showcase_contour_{tag}.png",
                     sc_result["events_label"],
                     sc_result["sample_label"],
                     top_n=top_n,
@@ -1441,20 +1369,20 @@ def main() -> int:  # noqa: C901
                 sc_result["sample_vec_scaled"],
                 metric_df_scaled.loc[bo].to_numpy(dtype=float),
                 metric_cols,
-                out_dir / f"all_showcase_feature_diagnostics_{tag}.png",
+                plots_dir / f"all_showcase_feature_diagnostics_{tag}.png",
                 f"Showcase sample #{showcase_idx} — feature diagnostics ({tag})",
             )
             _plot_score_distribution(
                 sc_cands["score_value"], score_metric,
                 sc_result["best_score"],
-                out_dir / f"all_showcase_score_distribution_{tag}.png",
+                plots_dir / f"all_showcase_score_distribution_{tag}.png",
             )
             _plot_score_vs_param_distance(
                 sc_cands,
                 float(sc_result["sample_flux"]),
                 float(sc_result["sample_eff"]),
                 score_metric,
-                out_dir / f"all_showcase_score_vs_param_dist_{tag}.png",
+                plots_dir / f"all_showcase_score_vs_param_dist_{tag}.png",
             )
             log.info("Showcase plots written for sample %d.", showcase_idx)
         except Exception as exc:  # noqa: BLE001
@@ -1464,7 +1392,7 @@ def main() -> int:  # noqa: C901
     log.info("Wrote successful rows: %s", ok_csv)
     log.info("Wrote failed rows: %s", failed_csv)
     log.info("Wrote summary JSON: %s", out_dir / 'all_samples_summary.json')
-    log.info("Wrote plots to: %s", out_dir)
+    log.info("Wrote plots to: %s", plots_dir)
     return 0
 
 

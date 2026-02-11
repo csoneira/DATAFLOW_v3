@@ -36,6 +36,52 @@ def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
 
 
 # ---------------------------------------------------------------------------
+# Output directory helpers
+# ---------------------------------------------------------------------------
+
+def setup_output_dirs(base_dir: Path) -> tuple[Path, Path]:
+    """Create and return (files_dir, plots_dir) under *base_dir*/OUTPUTS.
+
+    Layout::
+
+        base_dir/OUTPUTS/FILES/   ← CSVs, JSONs, markdown reports
+        base_dir/OUTPUTS/PLOTS/   ← PNG figures
+
+    Both directories are created if they do not exist.
+    """
+    files_dir = base_dir / "OUTPUTS" / "FILES"
+    plots_dir = base_dir / "OUTPUTS" / "PLOTS"
+    files_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    return files_dir, plots_dir
+
+
+# ---------------------------------------------------------------------------
+# Global plot style
+# ---------------------------------------------------------------------------
+
+def apply_clean_style() -> None:
+    """Apply a clean, minimal matplotlib style for all pipeline plots."""
+    import matplotlib as mpl
+    mpl.rcParams.update({
+        "figure.dpi": 150,
+        "savefig.dpi": 150,
+        "font.size": 10,
+        "axes.titlesize": 11,
+        "axes.labelsize": 10,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "legend.fontsize": 8,
+        "axes.grid": True,
+        "grid.alpha": 0.25,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "figure.constrained_layout.use": True,
+        "figure.figsize": (7, 4.5),
+    })
+
+
+# ---------------------------------------------------------------------------
 # Configuration helpers
 # ---------------------------------------------------------------------------
 

@@ -1,2 +1,3 @@
 station_config_root: /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY
 output_dir: ../../INTERSTEPS/STEP_0_TO_1
+force: false

@@ -60,6 +60,19 @@ def fmt_gb(size_bytes: int) -> str:
     return f"{size_bytes / (1024 ** 3):.3f}"
 
 
+def estimate_one_line_bytes(
+    dirs_now: int,
+    size_now: int,
+    exp_dirs: int,
+    size_expected: int,
+) -> int:
+    if dirs_now > 0:
+        return int(size_now / dirs_now)
+    if exp_dirs > 0 and size_expected > 0:
+        return int(size_expected / exp_dirs)
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Combined size/expected SIM_RUN report.")
     parser.add_argument(
@@ -96,6 +109,7 @@ def main() -> None:
     total_inputs = 0
     total_bytes = 0
     total_expected_bytes = 0
+    total_one_line_bytes = 0
 
     for step_dir in step_dirs:
         step_name = step_dir.name
@@ -113,47 +127,80 @@ def main() -> None:
             size_expected = int(avg_bytes * exp_dirs)
         else:
             size_expected = 0
+        one_line_bytes = estimate_one_line_bytes(dirs_now, size_now, exp_dirs, size_expected)
         pct = (dirs_now / exp_dirs * 100.0) if exp_dirs else 0.0
-        rows.append((step_name, dirs_now, exp_dirs, available_inputs, size_now, size_expected, pct))
+        rows.append(
+            (
+                step_name,
+                dirs_now,
+                exp_dirs,
+                available_inputs,
+                size_now,
+                size_expected,
+                one_line_bytes,
+                pct,
+            )
+        )
 
         total_dirs += dirs_now
         total_expected_dirs += exp_dirs
         total_inputs += available_inputs
         total_bytes += size_now
         total_expected_bytes += size_expected
+        total_one_line_bytes += one_line_bytes
 
-    width_step = max(len(row[0]) for row in rows + [("TOTAL", 0, 0, 0, 0, 0, 0.0)])
-    width_dirs = max(len(f"{row[1]}/{row[2]}") for row in rows + [("TOTAL", total_dirs, total_expected_dirs, 0, 0, 0, 0.0)])
-    width_inputs = max(len(str(row[3])) for row in rows + [("TOTAL", 0, 0, total_inputs, 0, 0, 0.0)])
-    width_size = max(len(f"{fmt_gb(row[4])}/{fmt_gb(row[5])}") for row in rows + [("TOTAL", 0, 0, 0, total_bytes, total_expected_bytes, 0.0)])
-    width_pct = 7
+    width_step = max(len(row[0]) for row in rows + [("TOTAL", 0, 0, 0, 0, 0, 0, 0.0)])
+    width_dirs = max(
+        len(f"{row[1]}/{row[2]}")
+        for row in rows + [("TOTAL", total_dirs, total_expected_dirs, 0, 0, 0, 0, 0.0)]
+    )
+    width_inputs = max(
+        len(str(row[3]))
+        for row in rows + [("TOTAL", 0, 0, total_inputs, 0, 0, 0, 0.0)]
+    )
+    width_size = max(
+        len(f"{fmt_gb(row[4])}/{fmt_gb(row[5])}")
+        for row in rows + [("TOTAL", 0, 0, 0, total_bytes, total_expected_bytes, 0, 0.0)]
+    )
+    width_line = max(
+        len(fmt_gb(row[6]))
+        for row in rows + [("TOTAL", 0, 0, 0, 0, 0, total_one_line_bytes, 0.0)]
+    )
+    width_step = max(width_step, len("STEP"))
+    width_dirs = max(width_dirs, len("DIRS NOW/EXP"))
+    width_inputs = max(width_inputs, len("INPUTS"))
+    width_size = max(width_size, len("SIZE GB NOW/EXP"))
+    width_line = max(width_line, len("ONE LINE GB"))
+    width_pct = max(7, len("% DONE"))
 
     header = (
         f"{'STEP':<{width_step}} | {'DIRS NOW/EXP':>{width_dirs}} | {'INPUTS':>{width_inputs}} | "
-        f"{'SIZE GB NOW/EXP':>{width_size}} | {'% DONE':>{width_pct}}"
+        f"{'SIZE GB NOW/EXP':>{width_size}} | {'ONE LINE GB':>{width_line}} | {'% DONE':>{width_pct}}"
     )
     sep = (
-        f"{'-' * width_step}-+-{'-' * width_dirs}-+-{'-' * width_inputs}-+-{'-' * width_size}-+-{'-' * width_pct}"
+        f"{'-' * width_step}-+-{'-' * width_dirs}-+-{'-' * width_inputs}-+-{'-' * width_size}-+-{'-' * width_line}-+-{'-' * width_pct}"
     )
 
     # print("SIM_RUN utilization summary")
     print(sep)
     print(header)
     print(sep)
-    for step_name, dirs_now, exp_dirs, available_inputs, size_now, size_expected, pct in rows:
+    for step_name, dirs_now, exp_dirs, available_inputs, size_now, size_expected, one_line_bytes, pct in rows:
         dirs_cell = f"{dirs_now}/{exp_dirs}"
         size_cell = f"{fmt_gb(size_now)}/{fmt_gb(size_expected)}"
+        one_line_cell = fmt_gb(one_line_bytes)
         print(
             f"{step_name:<{width_step}} | {dirs_cell:>{width_dirs}} | {available_inputs:>{width_inputs}} | "
-            f"{size_cell:>{width_size}} | {pct:>{width_pct}.1f}%"
+            f"{size_cell:>{width_size}} | {one_line_cell:>{width_line}} | {pct:>{width_pct}.1f}%"
         )
     total_pct = (total_dirs / total_expected_dirs * 100.0) if total_expected_dirs else 0.0
     total_dirs_cell = f"{total_dirs}/{total_expected_dirs}"
     total_size_cell = f"{fmt_gb(total_bytes)}/{fmt_gb(total_expected_bytes)}"
+    total_line_cell = fmt_gb(total_one_line_bytes)
     print(sep)
     print(
         f"{'TOTAL':<{width_step}} | {total_dirs_cell:>{width_dirs}} | {total_inputs:>{width_inputs}} | "
-        f"{total_size_cell:>{width_size}} | {total_pct:>{width_pct}.1f}%"
+        f"{total_size_cell:>{width_size}} | {total_line_cell:>{width_line}} | {total_pct:>{width_pct}.1f}%"
     )
     print(sep)
 

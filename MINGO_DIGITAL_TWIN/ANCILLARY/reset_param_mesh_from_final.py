@@ -17,6 +17,20 @@ sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 from STEP_SHARED.sim_utils import param_mesh_lock, write_csv_atomic, write_text_atomic
 
 
+MESH_NUMERIC_COLS = [
+    "cos_n",
+    "flux_cm2_min",
+    "eff_p1",
+    "eff_p2",
+    "eff_p3",
+    "eff_p4",
+    "z_p1",
+    "z_p2",
+    "z_p3",
+    "z_p4",
+]
+
+
 def _parse_efficiencies(value: object) -> list[float]:
     if isinstance(value, (list, tuple)):
         effs = list(value)
@@ -123,6 +137,35 @@ def _write_mesh(mesh: pd.DataFrame, mesh_path: Path) -> None:
     write_csv_atomic(mesh, mesh_path, index=False)
 
 
+def _load_pending_rows(mesh_path: Path) -> pd.DataFrame:
+    if not mesh_path.exists():
+        return pd.DataFrame(columns=["done"] + MESH_NUMERIC_COLS)
+
+    try:
+        existing = pd.read_csv(mesh_path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(columns=["done"] + MESH_NUMERIC_COLS)
+
+    if "done" not in existing.columns:
+        return pd.DataFrame(columns=["done"] + MESH_NUMERIC_COLS)
+
+    pending = existing[existing["done"].fillna(0).astype(int) != 1].copy()
+    if pending.empty:
+        return pd.DataFrame(columns=["done"] + MESH_NUMERIC_COLS)
+
+    missing_cols = [col for col in MESH_NUMERIC_COLS if col not in pending.columns]
+    if missing_cols:
+        raise ValueError(f"Existing pending rows are missing required columns: {missing_cols}")
+
+    pending["done"] = 0
+    for col in MESH_NUMERIC_COLS:
+        pending[col] = pd.to_numeric(pending[col], errors="coerce")
+    if pending[MESH_NUMERIC_COLS].isna().any().any():
+        raise ValueError("Existing pending rows contain invalid numeric values.")
+
+    return pending[["done"] + MESH_NUMERIC_COLS].reset_index(drop=True)
+
+
 def _cleanup_sim_runs(intersteps_dir: Path, apply: bool) -> None:
     for step_dir in sorted(intersteps_dir.glob("STEP_*_TO_*")):
         if step_dir.name == "STEP_0_TO_1":
@@ -179,15 +222,40 @@ def main() -> None:
         raise FileNotFoundError(f"INTERSTEPS dir not found: {intersteps_dir}")
 
     sim_params = pd.read_csv(sim_params_path)
-    mesh = _build_mesh(sim_params)
+    mesh_done = _build_mesh(sim_params)
     with param_mesh_lock(mesh_path):
+        pending_rows = _load_pending_rows(mesh_path)
+        if not pending_rows.empty:
+            print(f"Keeping {len(pending_rows)} pending rows (done=0) from existing param mesh.")
+            mesh = pd.concat([mesh_done, pending_rows], ignore_index=True)
+            sort_cols = [
+                "cos_n",
+                "flux_cm2_min",
+                "z_p1",
+                "z_p2",
+                "z_p3",
+                "z_p4",
+                "eff_p1",
+                "eff_p2",
+                "eff_p3",
+                "eff_p4",
+                "done",
+            ]
+            mesh = mesh.sort_values(sort_cols, ascending=[True] * 10 + [False]).reset_index(drop=True)
+            mesh = _assign_step_ids(mesh)
+        else:
+            mesh = mesh_done
         _write_mesh(mesh, mesh_path)
 
         meta_path = mesh_path.with_name("param_mesh_metadata.json")
         meta = {
             "source": str(sim_params_path),
             "row_count": int(len(mesh)),
-            "note": "Rebuilt from step_final_simulation_params.csv (param_set_id/param_date excluded).",
+            "pending_rows_kept": int(len(pending_rows)),
+            "note": (
+                "Rebuilt from step_final_simulation_params.csv while preserving existing pending rows "
+                "(done=0). param_set_id/param_date excluded."
+            ),
         }
         write_text_atomic(meta_path, json.dumps(meta, indent=2))
 

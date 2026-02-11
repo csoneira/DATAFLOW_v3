@@ -56,17 +56,20 @@ REPO_ROOT = STEP_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from msv_utils import (  # noqa: E402
+    apply_clean_style,
     load_config,
     maybe_log_x,
     parse_list,
     resolve_param,
     setup_logger,
+    setup_output_dirs,
 )
 
 log = setup_logger("LUT_BUILD")
+apply_clean_style()
 
-DEFAULT_ALL_RESULTS = REPO_ROOT / "STEP_4_SELF_CONSISTENCY" / "output" / "all_samples_results.csv"
-DEFAULT_OUT = STEP_DIR / "output" / "lut"
+DEFAULT_ALL_RESULTS = REPO_ROOT / "STEP_4_SELF_CONSISTENCY" / "OUTPUTS" / "FILES" / "all_samples_results.csv"
+DEFAULT_OUT = STEP_DIR
 DEFAULT_CONFIG = STEP_DIR / "config.json"
 
 
@@ -634,7 +637,7 @@ def main() -> int:
 
     all_csv    = Path(_rp(args.all_results_csv,
                           "all_results_csv", str(DEFAULT_ALL_RESULTS)))
-    out_dir    = Path(_rp(args.out_dir,
+    out_base   = Path(_rp(args.out_dir,
                           "lut_out_dir", str(DEFAULT_OUT)))
     flux_bins  = int(_rp(args.flux_bins,      "lut_flux_bins",      5))
     eff_bins   = int(_rp(args.eff_bins,       "lut_eff_bins",       5))
@@ -655,6 +658,9 @@ def main() -> int:
     if not all_csv.exists():
         raise FileNotFoundError(f"All-results CSV not found: {all_csv}")
 
+    files_dir, plots_dir = setup_output_dirs(out_base)
+    # LUT files go into a 'lut' subdirectory of FILES
+    out_dir = files_dir / "lut"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Loading validation data (data matched against dictionary): %s",
@@ -721,16 +727,16 @@ def main() -> int:
     # ── Plots ───────────────────────────────────────────────────────────
     if not args.no_plots:
         _plot_overview(lut_df, lut_meta,
-                       out_dir / "lut_diagnostic_overview.png")
+                       plots_dir / "lut_diagnostic_overview.png")
         _plot_error_scatter_by_events(
-            df, out_dir / "lut_error_scatter_by_events.png",
+            df, plots_dir / "lut_error_scatter_by_events.png",
             events_edges=sigma_events,
         )
         _plot_ellipse_validation(df, out_dir,
-                                 out_dir / "lut_ellipse_validation.png")
-        log.info("Diagnostic plots saved to %s", out_dir)
+                                 plots_dir / "lut_ellipse_validation.png")
+        log.info("Diagnostic plots saved to %s", plots_dir)
 
-    log.info("Done. LUT outputs in %s", out_dir)
+    log.info("Done. LUT files in %s, plots in %s", out_dir, plots_dir)
     return 0
 
 

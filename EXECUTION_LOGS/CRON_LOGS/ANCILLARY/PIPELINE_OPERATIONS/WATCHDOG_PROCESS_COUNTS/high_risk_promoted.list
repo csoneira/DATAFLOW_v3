@@ -14,3 +14,5 @@ rsync
 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py
 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py
 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh
+/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh
+/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean.sh

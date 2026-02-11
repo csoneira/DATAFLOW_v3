@@ -8,6 +8,7 @@ Outputs: param_mesh.csv in STEP_0_TO_1.
 from __future__ import annotations
 
 import argparse
+from itertools import product
 import json
 import sys
 from datetime import datetime, timezone
@@ -116,6 +117,122 @@ def _sample_efficiencies(
     return [float(rng.uniform(lo, hi)) for _ in range(4)]
 
 
+def _as_bool(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, np.integer)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    raise ValueError(f"Cannot parse boolean value from {value!r}.")
+
+
+def _range_bounds(value: object, name: str) -> tuple[float, float]:
+    if isinstance(value, (int, float)):
+        val = float(value)
+        return val, val
+    if isinstance(value, list) and len(value) == 2:
+        lo, hi = float(value[0]), float(value[1])
+        if lo > hi:
+            raise ValueError(f"{name} range must satisfy min <= max.")
+        return lo, hi
+    raise ValueError(f"{name} must be a number or a 2-value list [min, max].")
+
+
+def _build_regular_mesh_overrides(
+    rng: np.random.Generator,
+    physics_cfg: dict,
+    eff_range: object,
+    efficiencies_identical: bool,
+) -> list[dict[str, float]]:
+    raw_params = physics_cfg.get("regular_mesh_parameters", physics_cfg.get("mesh_parameters"))
+    if isinstance(raw_params, str):
+        raw_params = [raw_params]
+    if not raw_params:
+        raise ValueError(
+            "regular_mesh mode requires regular_mesh_parameters (or mesh_parameters)."
+        )
+
+    aliases = {
+        "flux": "flux_cm2_min",
+        "eff": "efficiencies",
+        "efficiency": "efficiencies",
+    }
+    valid = {"cos_n", "flux_cm2_min", "efficiencies"}
+    mesh_params: list[str] = []
+    for param in raw_params:
+        key = aliases.get(str(param).strip().lower(), str(param).strip().lower())
+        if key not in valid:
+            allowed = ", ".join(sorted(valid))
+            raise ValueError(
+                f"Unsupported regular mesh parameter '{param}'. Allowed: {allowed}."
+            )
+        if key not in mesh_params:
+            mesh_params.append(key)
+
+    if "efficiencies" in mesh_params and not efficiencies_identical:
+        raise ValueError(
+            "regular_mesh for efficiencies requires efficiencies_identical=true."
+        )
+
+    points = int(physics_cfg.get("regular_mesh_points", physics_cfg.get("mesh_points", 10)))
+    if points <= 0:
+        raise ValueError("regular_mesh_points must be >= 1.")
+    relative_span_cfg = physics_cfg.get(
+        "regular_mesh_relative_span", physics_cfg.get("mesh_relative_span")
+    )
+    if relative_span_cfg is None:
+        relative_span = None
+    else:
+        relative_span = float(relative_span_cfg)
+        if relative_span < 0:
+            raise ValueError("regular_mesh_relative_span must be >= 0.")
+
+    axes: dict[str, list[float]] = {}
+    for param in mesh_params:
+        if param == "cos_n":
+            lo, hi = _range_bounds(physics_cfg.get("cos_n"), "cos_n")
+        elif param == "flux_cm2_min":
+            lo, hi = _range_bounds(physics_cfg.get("flux_cm2_min"), "flux_cm2_min")
+        else:
+            lo, hi = _range_bounds(eff_range, "efficiencies")
+
+        if points == 1 or lo == hi:
+            center = lo if lo == hi else float(rng.uniform(lo, hi))
+            values = np.array([center], dtype=float)
+        else:
+            width = hi - lo
+            max_span = (points - 1) / (2 * points)
+            span = max_span if relative_span is None else min(relative_span, max_span)
+            half_span = span * width
+            center_lo = lo + half_span
+            center_hi = hi - half_span
+            center = center_lo if center_hi <= center_lo else float(rng.uniform(center_lo, center_hi))
+            values = np.linspace(center - half_span, center + half_span, num=points, dtype=float)
+        values = np.round(values.astype(float), 10)
+        axes[param] = [float(v) for v in values]
+
+    overrides: list[dict[str, float]] = []
+    for combo in product(*(axes[param] for param in mesh_params)):
+        row_override: dict[str, float] = {}
+        for param, value in zip(mesh_params, combo):
+            if param == "efficiencies":
+                row_override["eff_p1"] = float(value)
+                row_override["eff_p2"] = float(value)
+                row_override["eff_p3"] = float(value)
+                row_override["eff_p4"] = float(value)
+            else:
+                row_override[param] = float(value)
+        overrides.append(row_override)
+    return overrides
+
+
 def _collect_z_positions(station_files: dict[int, Path]) -> pd.DataFrame:
     station_dfs = [read_station_config(path) for path in station_files.values()]
     geom_cols = ["P1", "P2", "P3", "P4"]
@@ -168,7 +285,13 @@ def _append_param_row(
     rng: np.random.Generator,
     z_positions: pd.DataFrame,
 ) -> None:
-    efficiencies_identical = bool(physics_cfg.get("efficiencies_identical", False))
+    mode = str(physics_cfg.get("mode", "uniform_random")).strip().lower()
+    if mode not in {"uniform_random", "regular_mesh"}:
+        raise ValueError("mode must be either 'uniform_random' or 'regular_mesh'.")
+
+    efficiencies_identical = _as_bool(
+        physics_cfg.get("efficiencies_identical", False), default=False
+    )
     eff_range = physics_cfg.get("efficiencies")
     if eff_range is None:
         raise ValueError("efficiencies must be set in config_step_0_physics.yaml.")
@@ -223,7 +346,7 @@ def _append_param_row(
                 mesh.at[idx, "z_p4"] = float(geom_row["P4"])
 
     shared_values: dict[str, float] = {}
-    expand_z_positions = bool(physics_cfg.get("expand_z_positions", False))
+    expand_z_positions = _as_bool(physics_cfg.get("expand_z_positions", False), default=False)
     shared_geom_row = None
     if not expand_z_positions and {"z_p1", "z_p2", "z_p3", "z_p4"} & shared:
         shared_geom_row = z_positions.sample(
@@ -255,8 +378,19 @@ def _append_param_row(
         )
 
     new_rows = []
-    n_samples = repeat_samples + 1  # 0 repeats → 1 base sample; N repeats → N+1
-    for _ in range(n_samples):
+    if mode == "regular_mesh":
+        # Build one structured grid per invocation; repeat_samples remains for uniform_random mode.
+        sample_overrides: list[dict[str, float] | None] = _build_regular_mesh_overrides(
+            rng=rng,
+            physics_cfg=physics_cfg,
+            eff_range=eff_range,
+            efficiencies_identical=efficiencies_identical,
+        )
+    else:
+        n_samples = repeat_samples + 1  # 0 repeats → 1 base sample; N repeats → N+1
+        sample_overrides = [None] * n_samples
+
+    for override in sample_overrides:
         cos_n = shared_values.get("cos_n", _sample_range(rng, physics_cfg.get("cos_n"), "cos_n"))
         flux_cm2_min = shared_values.get(
             "flux_cm2_min", _sample_range(rng, physics_cfg.get("flux_cm2_min"), "flux_cm2_min")
@@ -266,6 +400,15 @@ def _append_param_row(
             if key in shared_values:
                 idx = int(key.split("_p")[-1]) - 1
                 effs[idx] = float(shared_values[key])
+        if override:
+            if "cos_n" in override:
+                cos_n = float(override["cos_n"])
+            if "flux_cm2_min" in override:
+                flux_cm2_min = float(override["flux_cm2_min"])
+            for key in ("eff_p1", "eff_p2", "eff_p3", "eff_p4"):
+                if key in override:
+                    idx = int(key.split("_p")[-1]) - 1
+                    effs[idx] = float(override[key])
         if shared_geom_row is not None:
             geom_rows = [shared_geom_row]
         elif expand_z_positions:
@@ -277,7 +420,7 @@ def _append_param_row(
         for geom_row in geom_rows:
             new_rows.append(
                 {
-                "done": 0,
+                    "done": 0,
                     "cos_n": float(cos_n),
                     "flux_cm2_min": float(flux_cm2_min),
                     "z_p1": float(geom_row["P1"]),
@@ -319,6 +462,7 @@ def _append_param_row(
         "repeat_samples": repeat_samples,
         "expand_z_positions": expand_z_positions,
         "shared_columns": sorted(shared),
+        "mode": mode,
         "step": "STEP_0",
     }
     write_text_atomic(meta_path, json.dumps(meta, indent=2))
@@ -344,7 +488,7 @@ def main() -> None:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Append even if total completion is below 100%.",
+        help="Append even if total completion is below 100%%.",
     )
     args = parser.parse_args()
 
@@ -358,6 +502,8 @@ def main() -> None:
         runtime_path = Path(__file__).resolve().parent / runtime_path
 
     physics_cfg, runtime_cfg, cfg, runtime_path = load_step_configs(config_path, runtime_path)
+    force_from_cfg = _as_bool(cfg.get("force", False), default=False)
+    force_append = args.force or force_from_cfg
 
     _log_info(
         "Loaded configs: "
@@ -395,7 +541,7 @@ def main() -> None:
     mesh_meta_path = output_dir / "param_mesh_metadata.json"
 
     with param_mesh_lock(mesh_path):
-        if mesh_path.exists() and not args.force:
+        if mesh_path.exists() and not force_append:
             try:
                 mesh = pd.read_csv(mesh_path)
             except pd.errors.EmptyDataError:
@@ -427,6 +573,7 @@ def main() -> None:
             "step": "STEP_0",
             "config": physics_cfg,
             "runtime_config": runtime_cfg,
+            "force": force_append,
             "station_config_root": str(station_root),
         }
         write_text_atomic(mesh_meta_path, json.dumps(meta, indent=2))

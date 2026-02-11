@@ -27,7 +27,7 @@
 #   ./run_pipeline.sh  3 4 6       # run only steps 3, 4 and 6
 #   ./run_pipeline.sh  --from 4    # run steps 4, 5, 6
 #
-# Each step is idempotent: re-running it overwrites its own output/.
+# Each step is idempotent: re-running it overwrites its own OUTPUTS/.
 # ═══════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail

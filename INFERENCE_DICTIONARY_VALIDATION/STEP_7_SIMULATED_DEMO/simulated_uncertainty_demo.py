@@ -32,20 +32,23 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from msv_utils import (  # noqa: E402
+    apply_clean_style,
     coerce_bool_series,
     load_config,
     maybe_log_x,
     resolve_param,
     setup_logger,
+    setup_output_dirs,
 )
 from uncertainty_lut import UncertaintyLUT  # noqa: E402
 
 log = setup_logger("STEP_7_demo")
+apply_clean_style()
 
 DEFAULT_CONFIG = STEP_DIR / "config.json"
-DEFAULT_ALL_RESULTS = REPO_ROOT / "STEP_4_SELF_CONSISTENCY" / "output" / "all_samples_results.csv"
-DEFAULT_LUT_DIR = REPO_ROOT / "STEP_6_UNCERTAINTY_LUT" / "output" / "lut"
-DEFAULT_OUT_DIR = STEP_DIR / "output"
+DEFAULT_ALL_RESULTS = REPO_ROOT / "STEP_4_SELF_CONSISTENCY" / "OUTPUTS" / "FILES" / "all_samples_results.csv"
+DEFAULT_LUT_DIR = REPO_ROOT / "STEP_6_UNCERTAINTY_LUT" / "OUTPUTS" / "FILES" / "lut"
+DEFAULT_OUT_DIR = STEP_DIR
 
 
 def _load_all_results(path: Path) -> pd.DataFrame:
@@ -494,7 +497,7 @@ def main() -> int:
         resolve_param(args.all_results_csv, config, "all_results_csv", str(DEFAULT_ALL_RESULTS))
     )
     lut_dir = Path(resolve_param(args.lut_dir, config, "lut_dir", str(DEFAULT_LUT_DIR)))
-    out_dir = Path(resolve_param(args.out_dir, config, "out_dir", str(DEFAULT_OUT_DIR)))
+    out_base = Path(resolve_param(args.out_dir, config, "out_dir", str(DEFAULT_OUT_DIR)))
     n_demo_points = int(resolve_param(args.n_demo_points, config, "n_demo_points", 12, int))
     events_bins = int(resolve_param(args.events_bins, config, "events_bins", 4, int))
     seed = int(resolve_param(args.seed, config, "seed", 123, int))
@@ -507,9 +510,9 @@ def main() -> int:
     if not lut_dir.exists():
         raise FileNotFoundError(f"LUT directory not found: {lut_dir}")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    files_dir, plots_dir = setup_output_dirs(out_base)
     if not args.no_plots:
-        for p in out_dir.glob("*.png"):
+        for p in plots_dir.glob("*.png"):
             p.unlink()
 
     log.info("Loading all-sample results: %s", all_results_csv)
@@ -549,7 +552,7 @@ def main() -> int:
         how="left",
     )
 
-    all_table_csv = out_dir / "all_samples_with_lut_uncertainty.csv"
+    all_table_csv = files_dir / "all_samples_with_lut_uncertainty.csv"
     eval_df.to_csv(all_table_csv, index=False)
 
     stats_all = _coverage_stats(eval_df, suffix="")
@@ -557,11 +560,11 @@ def main() -> int:
     stats_non_exact_cal = _coverage_stats(non_exact_df_cal, suffix="_cal")
 
     by_events = _coverage_by_event_bins(non_exact_df_cal, n_bins=events_bins)
-    by_events_csv = out_dir / "coverage_by_events.csv"
+    by_events_csv = files_dir / "coverage_by_events.csv"
     by_events.to_csv(by_events_csv, index=False)
 
     demo_df = _pick_demo_points(non_exact_df_cal, n_points=n_demo_points, seed=seed)
-    demo_points_csv = out_dir / "demo_points_with_uncertainty.csv"
+    demo_points_csv = files_dir / "demo_points_with_uncertainty.csv"
     demo_df.to_csv(demo_points_csv, index=False)
 
     summary = {
@@ -574,10 +577,10 @@ def main() -> int:
         "coverage_without_exact_self_matches_calibrated": stats_non_exact_cal,
         "sigma_calibration": calibration,
     }
-    summary_json = out_dir / "demo_summary.json"
+    summary_json = files_dir / "demo_summary.json"
     summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
-    report_md = out_dir / "demo_report.md"
+    report_md = files_dir / "demo_report.md"
     _write_markdown_report(
         report_md,
         input_results=all_results_csv,
@@ -591,9 +594,9 @@ def main() -> int:
     )
 
     if not args.no_plots:
-        _plot_nsigma_coverage(non_exact_df, out_dir / "coverage_nsigma.png")
-        _plot_error_over_sigma_hist(non_exact_df, out_dir / "error_over_sigma_hist.png")
-        _plot_demo_points(demo_df, out_dir / "demo_points_true_vs_est.png")
+        _plot_nsigma_coverage(non_exact_df, plots_dir / "coverage_nsigma.png")
+        _plot_error_over_sigma_hist(non_exact_df, plots_dir / "error_over_sigma_hist.png")
+        _plot_demo_points(demo_df, plots_dir / "demo_points_true_vs_est.png")
 
         # Simple scatter to show sample-size regime used for coverage
         fig, ax = plt.subplots(figsize=(7, 4))
@@ -604,13 +607,13 @@ def main() -> int:
         ax.grid(True, alpha=0.25)
         maybe_log_x(ax, non_exact_df["sample_events_count"])
         fig.tight_layout()
-        fig.savefig(out_dir / "events_distribution_non_exact.png", dpi=150)
+        fig.savefig(plots_dir / "events_distribution_non_exact.png", dpi=150)
         plt.close(fig)
 
     log.info("Wrote summary JSON: %s", summary_json)
     log.info("Wrote report: %s", report_md)
     log.info("Wrote demo points table: %s", demo_points_csv)
-    log.info("Done. Artifacts in %s", out_dir)
+    log.info("Done. Files in %s, plots in %s", files_dir, plots_dir)
     return 0
 
 

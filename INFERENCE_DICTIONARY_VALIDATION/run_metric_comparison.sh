@@ -8,9 +8,9 @@
 # table is printed and saved to COMPARISON/metric_comparison.csv.
 #
 # Output layout (per metric):
-#   STEP_4_SELF_CONSISTENCY/output/<metric>/
-#   STEP_6_UNCERTAINTY_LUT/output/<metric>/        (includes lut/ subdir)
-#   STEP_7_SIMULATED_DEMO/output/<metric>/
+#   STEP_4_SELF_CONSISTENCY/<metric>/OUTPUTS/{FILES,PLOTS}/
+#   STEP_6_UNCERTAINTY_LUT/<metric>/OUTPUTS/{FILES,PLOTS}/ (LUT in FILES/lut/)
+#   STEP_7_SIMULATED_DEMO/<metric>/OUTPUTS/{FILES,PLOTS}/
 #   COMPARISON/                                    (final summary)
 #
 # Usage:
@@ -123,12 +123,11 @@ for metric in "${METRICS[@]}"; do
     METRIC_START=$(date +%s)
     banner "PHASE 2 — Metric: ${metric}"
 
-    STEP4_OUT="STEP_4_SELF_CONSISTENCY/output/${metric}"
-    STEP6_OUT="STEP_6_UNCERTAINTY_LUT/output/${metric}"
-    STEP6_LUT="${STEP6_OUT}/lut"
-    STEP7_OUT="STEP_7_SIMULATED_DEMO/output/${metric}"
+    STEP4_OUT="STEP_4_SELF_CONSISTENCY/${metric}"
+    STEP6_OUT="STEP_6_UNCERTAINTY_LUT/${metric}"
+    STEP7_OUT="STEP_7_SIMULATED_DEMO/${metric}"
 
-    mkdir -p "$STEP4_OUT" "$STEP6_OUT" "$STEP6_LUT" "$STEP7_OUT"
+    mkdir -p "$STEP4_OUT" "$STEP6_OUT" "$STEP7_OUT"
 
     # Choose appropriate feature scaling for each metric:
     #   l2, r2   → zscore  (equal feature weight, scale-invariant)
@@ -150,14 +149,14 @@ for metric in "${METRICS[@]}"; do
     # ── STEP 6: Uncertainty LUT ───────────────────────────────────────
     run_py "STEP 6 [${metric}]: Uncertainty LUT" \
         STEP_6_UNCERTAINTY_LUT/build_uncertainty_lut.py \
-        --all-results-csv "${STEP4_OUT}/all_samples_results.csv" \
-        --out-dir "$STEP6_LUT"
+        --all-results-csv "${STEP4_OUT}/OUTPUTS/FILES/all_samples_results.csv" \
+        --out-dir "$STEP6_OUT"
 
     # ── STEP 7: Simulated Demo ────────────────────────────────────────
     run_py "STEP 7 [${metric}]: Simulated Demo" \
         STEP_7_SIMULATED_DEMO/simulated_uncertainty_demo.py \
-        --all-results-csv "${STEP4_OUT}/all_samples_results.csv" \
-        --lut-dir "$STEP6_LUT" \
+        --all-results-csv "${STEP4_OUT}/OUTPUTS/FILES/all_samples_results.csv" \
+        --lut-dir "${STEP6_OUT}/OUTPUTS/FILES/lut" \
         --out-dir "$STEP7_OUT"
 
     DT=$(elapsed_since "$METRIC_START")
@@ -190,8 +189,8 @@ base = Path(os.environ.get("SCRIPT_DIR", str(comp_dir.parent)))
 
 rows = []
 for metric in metrics:
-    summary_path = base / f"STEP_7_SIMULATED_DEMO/output/{metric}/demo_summary.json"
-    step4_csv = base / f"STEP_4_SELF_CONSISTENCY/output/{metric}/all_samples_results.csv"
+    summary_path = base / f"STEP_7_SIMULATED_DEMO/{metric}/OUTPUTS/FILES/demo_summary.json"
+    step4_csv = base / f"STEP_4_SELF_CONSISTENCY/{metric}/OUTPUTS/FILES/all_samples_results.csv"
 
     if not summary_path.exists():
         print(f"  WARNING: {summary_path} not found, skipping {metric}")

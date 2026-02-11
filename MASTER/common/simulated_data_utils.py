@@ -157,32 +157,39 @@ def resolve_simulated_z_positions(
     if sim_params_path is None:
         sim_params_path = SIM_PARAMS_DEFAULT
 
+    best_hash: Optional[str] = None
+
     param_hash = _normalize_param_hash(param_hash)
     if param_hash is None and parquet_path is not None:
         param_hash = extract_param_hash_from_parquet(parquet_path)
 
     if param_hash:
+        best_hash = param_hash
         z_positions = load_simulated_z_positions(param_hash, sim_params_path)
         if z_positions is not None:
             return z_positions, param_hash
-        return None, param_hash
+        # Hash found but no matching CSV row — fall through to file_name lookup.
 
-    if dat_path is None:
-        dat_path = find_simulated_dat_path(basename_no_ext, base_directory)
-    if dat_path is not None:
-        dat_hash = _normalize_param_hash(extract_param_hash_from_dat(dat_path))
-        if dat_hash:
-            z_positions = load_simulated_z_positions(dat_hash, sim_params_path)
-            if z_positions is not None:
-                return z_positions, dat_hash
-            return None, dat_hash
+    if best_hash is None:
+        if dat_path is None:
+            dat_path = find_simulated_dat_path(basename_no_ext, base_directory)
+        if dat_path is not None:
+            dat_hash = _normalize_param_hash(extract_param_hash_from_dat(dat_path))
+            if dat_hash:
+                best_hash = dat_hash
+                z_positions = load_simulated_z_positions(dat_hash, sim_params_path)
+                if z_positions is not None:
+                    return z_positions, dat_hash
+                # Hash found but no matching CSV row — fall through.
 
+    # Fallback: look up by file_name in the simulation params CSV.
     z_positions, fallback_hash = load_simulated_z_positions_for_file(
         basename_no_ext,
         sim_params_path,
     )
+    resolved_hash = best_hash or _normalize_param_hash(fallback_hash)
     if z_positions is not None:
-        return z_positions, _normalize_param_hash(fallback_hash)
-    if fallback_hash:
-        return None, _normalize_param_hash(fallback_hash)
+        return z_positions, resolved_hash
+    if resolved_hash:
+        return None, resolved_hash
     return None, None

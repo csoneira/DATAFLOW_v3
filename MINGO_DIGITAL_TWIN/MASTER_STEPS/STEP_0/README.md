@@ -15,8 +15,11 @@ Outputs:
 
 Key behavior:
 - Samples `cos_n`, `flux_cm2_min`, efficiencies, and z-plane tuples.
+- Supports append `mode`:
+  - `uniform_random` (default): one or more random samples.
+  - `regular_mesh`: regular grid over selected parameters around random centers.
 - Supports `repeat_samples`, `shared_columns`, and `expand_z_positions` for scan design.
-- Appends only when all existing rows are marked `done=1` unless `--force` is provided.
+- Appends only when all existing rows are marked `done=1` unless `--force` or runtime `force: true`.
 
 Run:
 ```

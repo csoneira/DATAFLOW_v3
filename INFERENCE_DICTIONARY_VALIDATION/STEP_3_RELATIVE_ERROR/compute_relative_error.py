@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from msv_utils import (  # noqa: E402
+    apply_clean_style,
     build_validation_table,
     load_config,
     plot_bar_counts,
@@ -32,15 +33,17 @@ from msv_utils import (  # noqa: E402
     plot_scatter_overlay,
     resolve_param,
     setup_logger,
+    setup_output_dirs,
 )
 
 log = setup_logger("STEP_3")
+apply_clean_style()
 
 DEFAULT_DICT = (
-    REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "output" / "task_01"
+    REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "task_01"
     / "param_metadata_dictionary.csv"
 )
-DEFAULT_OUT = STEP_DIR / "output"
+DEFAULT_OUT = STEP_DIR
 DEFAULT_CONFIG = STEP_DIR / "config.json"
 
 
@@ -223,7 +226,7 @@ def main() -> int:
 
     dictionary_csv = resolve_param(
         args.dictionary_csv, config, "dictionary_csv", str(DEFAULT_DICT))
-    out_dir = Path(resolve_param(
+    out_base = Path(resolve_param(
         args.out_dir, config, "out_dir", str(DEFAULT_OUT)))
     prefix = resolve_param(args.prefix, config, "prefix", "raw")
     eff_method = resolve_param(
@@ -233,8 +236,7 @@ def main() -> int:
     min_events = resolve_param(
         args.min_events, config, "min_events", 50000, int)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    plot_dir = out_dir / "plots"
+    files_dir, plot_dir = setup_output_dirs(out_base)
     if plot_dir.exists():
         for p in plot_dir.glob("*.png"):
             p.unlink()
@@ -301,10 +303,10 @@ def main() -> int:
     unused_entries = merged.loc[~mask].copy()
 
     # --- Write outputs ---
-    validation_csv = out_dir / "validation_table.csv"
-    filtered_csv = out_dir / "filtered_reference.csv"
-    used_csv = out_dir / "used_dictionary_entries.csv"
-    unused_csv = out_dir / "unused_dictionary_entries.csv"
+    validation_csv = files_dir / "validation_table.csv"
+    filtered_csv = files_dir / "filtered_reference.csv"
+    used_csv = files_dir / "used_dictionary_entries.csv"
+    unused_csv = files_dir / "unused_dictionary_entries.csv"
     validation.to_csv(validation_csv, index=False)
     filtered.to_csv(filtered_csv, index=False)
     used_entries.to_csv(used_csv, index=False)

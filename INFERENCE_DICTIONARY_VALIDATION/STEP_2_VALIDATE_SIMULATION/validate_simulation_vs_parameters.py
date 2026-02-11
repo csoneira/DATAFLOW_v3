@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from msv_utils import (  # noqa: E402
+    apply_clean_style,
     build_validation_table,
     compute_efficiency,
     load_config,
@@ -31,20 +32,22 @@ from msv_utils import (  # noqa: E402
     parse_efficiencies,
     safe_numeric,
     setup_logger,
+    setup_output_dirs,
 )
 
 log = setup_logger("STEP_2_validate")
+apply_clean_style()
 
 DEFAULT_CONFIG = BASE_DIR / "config_validation.json"
 DEFAULT_DICT = (
-    REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "output" / "task_01"
+    REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "task_01"
     / "param_metadata_dictionary.csv"
 )
 DEFAULT_PARAMS_CSV = (
     REPO_ROOT.parent / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA"
     / "step_final_simulation_params.csv"
 )
-DEFAULT_OUT_DIR = BASE_DIR / "output"
+DEFAULT_OUT_DIR = BASE_DIR
 
 
 def _calc_metrics(sim: pd.Series, est: pd.Series) -> dict[str, float]:
@@ -151,71 +154,44 @@ def plot_residuals_all_planes(
     *,
     relerr_max_abs: float,
 ) -> None:
-    """Residual and relative-error scatter for **all four planes** (to_do.md §3.1).
+    """Residual and relative-error scatter for all four planes.
 
-    IMPORTANT — acceptance-factor caveat for planes 1 & 4
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    The estimated efficiency for planes 2 & 3 (inner planes) is derived
-    from the four-fold/three-fold coincidence ratio which cleanly cancels
-    geometry.  For planes 1 & 4 (outer planes) the same ratio includes an
-    acceptance factor that does NOT cancel, so ``eff_est_p1`` and
-    ``eff_est_p4`` are **not** directly comparable with the simulated
-    efficiency ``eff_sim_p1`` / ``eff_sim_p4``.  They *can* be compared
-    between dictionary entries and test samples (both carry the same
-    acceptance bias), but residuals against simulated values will show a
-    systematic offset proportional to the acceptance correction.
+    Planes 1 & 4 carry an acceptance-factor bias so their residuals vs
+    simulation show a systematic offset (marked with *).
     """
-    fig, axes = plt.subplots(4, 3, figsize=(16, 16), sharex="col")
+    fig, axes = plt.subplots(4, 2, figsize=(12, 14))
     planes = [1, 2, 3, 4]
     for row, plane in enumerate(planes):
         sim_col = f"eff_sim_p{plane}"
         resid_col = f"eff_resid_p{plane}"
         rel_col = f"eff_rel_err_p{plane}"
-        ev_col = "generated_events_count"
 
         if sim_col not in df.columns or resid_col not in df.columns:
-            for c in range(3):
+            for c in range(2):
                 axes[row, c].set_visible(False)
             continue
 
-        mask_common = df[sim_col].notna() & df[resid_col].notna() & df[rel_col].notna()
-        mask_common = mask_common & (df[rel_col].abs() <= relerr_max_abs)
-
-        ax_res = axes[row, 0]
-        ax_res.scatter(df.loc[mask_common, sim_col], df.loc[mask_common, resid_col], s=14, alpha=0.6)
-        ax_res.axhline(0.0, color="red", linestyle="--", linewidth=1)
+        mask = df[sim_col].notna() & df[resid_col].notna() & df[rel_col].notna()
+        mask = mask & (df[rel_col].abs() <= relerr_max_abs)
         p_note = " *" if plane in (1, 4) else ""
-        ax_res.set_title(f"Plane {plane}: residual{p_note}")
-        ax_res.set_ylabel("Est − Sim")
-        ax_res.grid(True, alpha=0.3)
 
-        ax_rel = axes[row, 1]
-        ax_rel.scatter(df.loc[mask_common, sim_col], 100.0 * df.loc[mask_common, rel_col], s=14, alpha=0.6)
-        ax_rel.axhline(0.0, color="red", linestyle="--", linewidth=1)
-        ax_rel.set_title(f"Plane {plane}: rel. error (|err| ≤ {100 * relerr_max_abs:g}%){p_note}")
-        ax_rel.set_ylabel("Relative error [%]")
-        ax_rel.grid(True, alpha=0.3)
+        ax = axes[row, 0]
+        ax.scatter(df.loc[mask, sim_col], df.loc[mask, resid_col], s=10, alpha=0.5)
+        ax.axhline(0.0, color="red", ls="--", lw=0.8)
+        ax.set_title(f"Plane {plane}: residual{p_note}")
+        ax.set_ylabel("Est − Sim")
 
-        ax_ev = axes[row, 2]
-        mask_ev = mask_common & df[ev_col].notna()
-        ax_ev.scatter(df.loc[mask_ev, ev_col], 100.0 * df.loc[mask_ev, rel_col], s=14, alpha=0.6)
-        ax_ev.axhline(0.0, color="red", linestyle="--", linewidth=1)
-        ax_ev.set_title(f"Plane {plane}: rel. error vs events{p_note}")
-        ax_ev.set_ylabel("Relative error [%]")
-        ax_ev.grid(True, alpha=0.3)
-        maybe_log_x(ax_ev, df.loc[mask_ev, ev_col])
+        ax = axes[row, 1]
+        ax.scatter(df.loc[mask, sim_col], 100.0 * df.loc[mask, rel_col], s=10, alpha=0.5)
+        ax.axhline(0.0, color="red", ls="--", lw=0.8)
+        ax.set_title(f"Plane {plane}: rel. error{p_note}")
+        ax.set_ylabel("Rel. error [%]")
 
     axes[-1, 0].set_xlabel("Simulated efficiency")
     axes[-1, 1].set_xlabel("Simulated efficiency")
-    axes[-1, 2].set_xlabel("Generated events")
-    fig.suptitle("Residual and Relative Error — All 4 Planes", fontsize=12)
-    fig.text(
-        0.5, 0.005,
-        "* Planes 1 & 4: acceptance factor NOT cancelled — systematic offset expected",
-        ha="center", fontsize=9, style="italic", color="grey",
-    )
-    fig.tight_layout(rect=[0, 0.02, 1, 0.97])
-    fig.savefig(out_path, dpi=140)
+    fig.suptitle("Residual & Relative Error — All Planes\n"
+                 "(* planes 1 & 4: acceptance bias expected)", fontsize=11)
+    fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
 
@@ -307,7 +283,7 @@ def main() -> int:
     config = load_config(Path(args.config))
     dictionary_csv = Path(args.dictionary_csv or config.get("dictionary_csv", str(DEFAULT_DICT)))
     params_csv = Path(args.params_csv or config.get("params_csv", str(DEFAULT_PARAMS_CSV)))
-    out_dir = Path(args.out_dir or config.get("out_dir", str(DEFAULT_OUT_DIR)))
+    out_base = Path(args.out_dir or config.get("out_dir", str(DEFAULT_OUT_DIR)))
     prefix = str(args.prefix or config.get("prefix", "raw"))
     eff_method = str(args.eff_method or config.get("eff_method", "four_over_three_plus_four"))
     relerr_max_abs = float(args.relerr_max_abs or config.get("relerr_max_abs", 0.05))
@@ -315,7 +291,7 @@ def main() -> int:
     if not dictionary_csv.exists():
         raise FileNotFoundError(f"Dictionary CSV not found: {dictionary_csv}")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    files_dir, plots_dir = setup_output_dirs(out_base)
     df = pd.read_csv(dictionary_csv, low_memory=False)
     if params_csv.exists():
         params_df = pd.read_csv(params_csv, usecols=["file_name"])
@@ -337,12 +313,12 @@ def main() -> int:
     validation = build_validation_table(df, prefix=prefix, eff_method=eff_method)
     summary = build_summary(validation)
 
-    validation_csv = out_dir / "validation_table.csv"
-    summary_csv = out_dir / "summary_metrics.csv"
-    flux_plot = out_dir / "scatter_flux_vs_global_trigger_rate.png"
-    eff_plot = out_dir / "scatter_eff_sim_vs_estimated.png"
-    residual_all_plot = out_dir / "scatter_residual_all_planes.png"
-    error_vs_events_plot = out_dir / "scatter_error_vs_events_all_planes.png"
+    validation_csv = files_dir / "validation_table.csv"
+    summary_csv = files_dir / "summary_metrics.csv"
+    flux_plot = plots_dir / "scatter_flux_vs_global_trigger_rate.png"
+    eff_plot = plots_dir / "scatter_eff_sim_vs_estimated.png"
+    residual_all_plot = plots_dir / "scatter_residual_all_planes.png"
+    error_vs_events_plot = plots_dir / "scatter_error_vs_events_all_planes.png"
 
     validation.to_csv(validation_csv, index=False)
     summary.to_csv(summary_csv, index=False)

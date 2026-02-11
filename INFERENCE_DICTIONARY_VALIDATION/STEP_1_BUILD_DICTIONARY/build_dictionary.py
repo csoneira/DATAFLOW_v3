@@ -26,22 +26,25 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from msv_utils import (  # noqa: E402
+    apply_clean_style,
     plot_histogram,
     plot_scatter,
     setup_logger,
+    setup_output_dirs,
 )
 
 log = setup_logger("STEP_1")
+apply_clean_style()
 
 DEFAULT_CONFIG = STEP_DIR / "config" / "pipeline_config.json"
-DEFAULT_OUT = STEP_DIR / "output"
+DEFAULT_OUT = STEP_DIR
 
 
 # -------------------------------------------------------------------------
 # Plotting
 # -------------------------------------------------------------------------
 
-def _generate_plots(csv_path: Path) -> None:
+def _generate_plots(csv_path: Path, plot_dir: Path) -> None:
     """Produce quick-look histograms and scatters from the dictionary CSV.
 
     Consolidated figures:
@@ -51,7 +54,6 @@ def _generate_plots(csv_path: Path) -> None:
     - scatter_flux_vs_rates.png    : flux vs rate columns (multi-panel)
     """
     df = pd.read_csv(csv_path, low_memory=False)
-    plot_dir = csv_path.parent / "plots"
 
     # Clean old plots
     if plot_dir.exists():
@@ -210,9 +212,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_csv = out_dir / f"task_{args.task_id:02d}" / "param_metadata_dictionary.csv"
+    base_dir = Path(args.out_dir)
+    files_dir, plots_dir = setup_output_dirs(base_dir)
+    out_csv = files_dir / f"task_{args.task_id:02d}" / "param_metadata_dictionary.csv"
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     builder_script = STEP_DIR / "STEP_1_BUILD" / "build_param_metadata_dictionary.py"
     if not builder_script.exists():
@@ -233,7 +236,7 @@ def main() -> int:
     log.info("Dictionary written to %s", out_csv)
 
     if out_csv.exists() and not args.no_plots:
-        _generate_plots(out_csv)
+        _generate_plots(out_csv, plots_dir)
 
     return 0
 

@@ -25,6 +25,7 @@ REPO_ROOT = STEP_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from msv_utils import (  # noqa: E402
+    apply_clean_style,
     build_uncertainty_table,
     coerce_bool_series,
     convex_hull,
@@ -36,13 +37,15 @@ from msv_utils import (  # noqa: E402
     polygon_area,
     resolve_param,
     setup_logger,
+    setup_output_dirs,
 )
 
 log = setup_logger("STEP_5")
+apply_clean_style()
 
-DEFAULT_ALL_RESULTS = REPO_ROOT / "STEP_4_SELF_CONSISTENCY" / "output" / "all_samples_results.csv"
-DEFAULT_DICT = REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "output" / "task_01" / "param_metadata_dictionary.csv"
-DEFAULT_OUT = STEP_DIR / "output"
+DEFAULT_ALL_RESULTS = REPO_ROOT / "STEP_4_SELF_CONSISTENCY" / "OUTPUTS" / "FILES" / "all_samples_results.csv"
+DEFAULT_DICT = REPO_ROOT / "STEP_1_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "task_01" / "param_metadata_dictionary.csv"
+DEFAULT_OUT = STEP_DIR
 DEFAULT_CONFIG = STEP_DIR / "config.json"
 
 
@@ -767,7 +770,7 @@ def main() -> int:
 
     all_results_csv = Path(_rp(args.all_results_csv, "all_results_csv", str(DEFAULT_ALL_RESULTS)))
     dictionary_csv = Path(_rp(args.dictionary_csv, "dictionary_csv", str(DEFAULT_DICT)))
-    out_dir = Path(_rp(args.out_dir, "out_dir", str(DEFAULT_OUT)))
+    out_base = Path(_rp(args.out_dir, "out_dir", str(DEFAULT_OUT)))
     events_bins = int(_rp(args.events_bins, "events_bins", 10))
     min_bin_count = int(_rp(args.min_bin_count, "min_bin_count", 30))
     target_error_pct = parse_list(
@@ -800,7 +803,8 @@ def main() -> int:
     if not dictionary_csv.exists():
         raise FileNotFoundError(f"Dictionary CSV not found: {dictionary_csv}")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    files_dir, plots_dir = setup_output_dirs(out_base)
+    out_dir = files_dir  # CSVs/JSONs go into OUTPUTS/FILES
 
     log.info("Loading all-mode results: %s", all_results_csv)
     results_df = pd.read_csv(all_results_csv, low_memory=False)
@@ -1016,22 +1020,22 @@ def main() -> int:
     if not args.no_plots:
         _plot_sample_size_distribution(
             results_ok,
-            out_dir / "sample_size_distribution.png",
+            plots_dir / "sample_size_distribution.png",
             threshold=plane_min_events,
         )
         _plot_uncertainty_bands(
             uncertainty_df, results_ok,
-            out_dir / "uncertainty_bands_by_events.png",
+            plots_dir / "uncertainty_bands_by_events.png",
         )
-        _plot_threshold_sweep(sweep_df, out_dir / "threshold_sweep_min_events.png")
+        _plot_threshold_sweep(sweep_df, plots_dir / "threshold_sweep_min_events.png")
 
         scatter_title = (
             "Dictionary points in flux-eff space "
             f"(n={coverage_metrics['n_points_unique_flux_eff']}, "
             f"grid_fill={coverage_metrics['grid_fill_pct']:.2f}%)"
         )
-        _plot_dictionary_overview(dict_points, scatter_title, out_dir / "dictionary_flux_eff.png")
-        _plot_dictionary_coverage(nn_dist, radius_df, out_dir / "dictionary_coverage.png")
+        _plot_dictionary_overview(dict_points, scatter_title, plots_dir / "dictionary_flux_eff.png")
+        _plot_dictionary_coverage(nn_dist, radius_df, plots_dir / "dictionary_coverage.png")
 
         high_df = _event_filter(results_plus, plane_min_events, "ge")
         low_df = _event_filter(results_plus, plane_min_events, "lt")
@@ -1039,14 +1043,14 @@ def main() -> int:
         _plot_plane_mean_error_combined(
             high_df,
             title=f"Mean absolute relative error in (flux, eff) plane — events >= {plane_min_events:g}",
-            path=out_dir / f"plane_mean_error_ge_{int(plane_min_events)}.png",
+            path=plots_dir / f"plane_mean_error_ge_{int(plane_min_events)}.png",
             flux_bins=plane_flux_bins,
             eff_bins=plane_eff_bins,
         )
         _plot_plane_mean_error_combined(
             low_df,
             title=f"Mean absolute relative error in (flux, eff) plane — events < {plane_min_events:g}",
-            path=out_dir / f"plane_mean_error_lt_{int(plane_min_events)}.png",
+            path=plots_dir / f"plane_mean_error_lt_{int(plane_min_events)}.png",
             flux_bins=plane_flux_bins,
             eff_bins=plane_eff_bins,
         )
@@ -1056,7 +1060,7 @@ def main() -> int:
             error_col="flux_rel_error_pct",
             xlabel="Flux relative error [%]",
             title="Flux residual distribution: high vs low statistics",
-            path=out_dir / "residual_overlay_flux.png",
+            path=plots_dir / "residual_overlay_flux.png",
             threshold=plane_min_events,
         )
         _plot_residual_overlay(
@@ -1064,7 +1068,7 @@ def main() -> int:
             error_col="eff_rel_error_pct",
             xlabel="Efficiency relative error [%]",
             title="Efficiency residual distribution: high vs low statistics",
-            path=out_dir / "residual_overlay_eff.png",
+            path=plots_dir / "residual_overlay_eff.png",
             threshold=plane_min_events,
         )
 
