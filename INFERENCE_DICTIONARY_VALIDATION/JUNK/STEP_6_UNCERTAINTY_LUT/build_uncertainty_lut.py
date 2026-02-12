@@ -422,7 +422,7 @@ def _plot_error_scatter_by_events(
         return
 
     fig, axes = plt.subplots(2, n_cols, figsize=(5.0 * n_cols, 9),
-                             squeeze=False)
+                             squeeze=False, layout="constrained")
 
     # Common colour limits (clipped at p95 so outliers don't wash out)
     vmax_f = float(np.nanpercentile(
@@ -481,7 +481,6 @@ def _plot_error_scatter_by_events(
         "Relative error in (flux, eff) space — split by event count",
         fontsize=13,
     )
-    fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
 

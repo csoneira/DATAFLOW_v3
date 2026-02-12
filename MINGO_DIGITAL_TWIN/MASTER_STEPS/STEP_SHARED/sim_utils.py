@@ -276,12 +276,18 @@ def iter_input_frames(path: Path, chunk_rows: Optional[int]) -> Tuple[Iterable[p
         def _iter() -> Iterable[pd.DataFrame]:
             for chunk_path in chunk_paths:
                 chunk_file = Path(chunk_path)
-                if chunk_file.suffix == ".csv":
-                    yield pd.read_csv(chunk_file)
-                elif chunk_file.suffix == ".pkl":
-                    yield pd.read_pickle(chunk_file)
-                else:
-                    raise ValueError(f"Unsupported chunk format: {chunk_file.suffix}")
+                try:
+                    if chunk_file.suffix == ".csv":
+                        yield pd.read_csv(chunk_file)
+                    elif chunk_file.suffix == ".pkl":
+                        yield pd.read_pickle(chunk_file)
+                    else:
+                        raise ValueError(f"Unsupported chunk format: {chunk_file.suffix}")
+                except (FileNotFoundError, OSError) as exc:
+                    # Transient cleanup/race conditions can remove chunks between
+                    # manifest read and chunk open; skip and continue processing.
+                    print(f"[WARN] Skipping missing/unreadable chunk {chunk_file}: {exc}")
+                    continue
 
         return _iter(), meta, True
 

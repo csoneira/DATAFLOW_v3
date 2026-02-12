@@ -241,8 +241,9 @@ run_step() {
   if "${cmd[@]}" >"$tmp_log" 2>&1; then
     rm -f "$tmp_log"
     return 0
+  else
+    rc=$?
   fi
-  rc=$?
   failure_log="/tmp/mingo_digital_twin_last_step_${step}.log"
   cp "$tmp_log" "$failure_log" 2>/dev/null || true
   last_error="$(awk 'NF {line=$0} END {print line}' "$tmp_log" 2>/dev/null || true)"
@@ -503,45 +504,38 @@ while true; do
   case "$STEP" in
     all)
       failed_steps=0
-      refresh_work_cache_or_disable
-      lower_step=9
-      while [[ "$lower_step" -ge 1 ]]; do
-        top_rc=1
-        if step_has_cached_work 10; then
-          if run_step_with_progress 10; then
-            refresh_work_cache_or_disable
-            continue
-          fi
-          top_rc=$?
-        elif [[ -n "$DEBUG" ]]; then
-          log_info "step=10 status=cache-skip"
-        fi
-        if [[ "$top_rc" -eq 2 ]]; then
-          log_warn "step=10 failed; continuing"
-          failed_steps=$((failed_steps + 1))
-        fi
+      while true; do
+        refresh_work_cache_or_disable
+        progressed=0
+        attempted=0
 
-        chain_progress=0
-        for step in $(seq "$lower_step" 10); do
+        # Strictly prioritize closing existing lines:
+        # try highest pending step first (10 -> 1), and stop after first progress.
+        for step in $(seq 10 -1 1); do
           if ! step_has_cached_work "$step"; then
             if [[ -n "$DEBUG" ]]; then
               log_info "step=$step status=cache-skip"
             fi
             continue
           fi
+
+          attempted=1
           if run_step_with_progress "$step"; then
-            chain_progress=1
-            refresh_work_cache_or_disable
-            continue
+            progressed=1
+            break
           fi
+
           rc=$?
           if [[ "$rc" -eq 2 ]]; then
             log_warn "step=$step failed; continuing"
             failed_steps=$((failed_steps + 1))
           fi
         done
-        if [[ "$chain_progress" -eq 0 ]]; then
-          lower_step=$((lower_step - 1))
+
+        # End the "all" cycle when there is no pending cached work,
+        # or when no step produced progress in this pass.
+        if [[ "$attempted" -eq 0 || "$progressed" -eq 0 ]]; then
+          break
         fi
       done
       cycle_end_epoch=$(date +%s)

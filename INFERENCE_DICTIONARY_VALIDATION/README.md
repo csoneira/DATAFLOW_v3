@@ -35,7 +35,7 @@ STEP 7  Simulated Demo           generates demo artifacts with point
 
 | File | Purpose |
 |---|---|
-| `msv_utils.py` | Common helpers: logging, config, parsing, scoring, plotting, geometry, uncertainty |
+| `MODULES/simulation_validation_utils.py` | Common helpers: logging, config, parsing, scoring, plotting, geometry, uncertainty |
 | `uncertainty_lut.py` | LUT loader + trilinear interpolation class (used by steps 6 & 7) |
 
 ## Directory layout

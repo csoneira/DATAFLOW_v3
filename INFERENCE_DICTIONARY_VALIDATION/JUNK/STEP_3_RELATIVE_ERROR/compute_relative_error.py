@@ -100,7 +100,7 @@ def _plot_iso_rate_contours(
 
     plot_dir.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(10, 7.5))
+    fig, ax = plt.subplots(figsize=(10, 7.5), layout="constrained")
 
     # Scatter: points coloured by global rate
     sc = ax.scatter(xm, ym, c=zm, cmap=cmap, s=22, alpha=0.75,
@@ -134,7 +134,6 @@ def _plot_iso_rate_contours(
         fontsize=12,
     )
     ax.grid(True, alpha=0.15)
-    fig.tight_layout()
     fig.savefig(plot_dir / "iso_rate_global_rate.png", dpi=150)
     plt.close(fig)
     log.info("Iso-rate contour plot saved to %s", plot_dir)
@@ -425,7 +424,6 @@ def _write_plots(
     """Generate all diagnostic plots for STEP 2 (consolidated).
 
     Output files:
-    - scatter_eff_sim_vs_est.png         : 2×2 sim-vs-est for all planes
     - hist_used_vs_unused_relerr.png     : overlay p2+p3 rel-err (2-panel)
     - scatter_used_vs_unused_relerr_p2_vs_p3.png : used/unused rel-err scatter
     - hist_used_vs_unused_flux_cosn.png  : flux+cos_n overlays (1×2)
@@ -434,12 +432,7 @@ def _write_plots(
     """
     plot_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- 1. Efficiency sim-vs-est (2×2) ---
-    _plot_eff_sim_vs_est_all(
-        validation, plot_dir / "scatter_eff_sim_vs_est.png",
-    )
-
-    # --- 2. Used/unused rel-err overlay for p2+p3 (1×2) ---
+    # --- 1. Used/unused rel-err overlay for p2+p3 (1×2) ---
     # (Replaces hist_eff_rel_err_p2/p3 + their used/unused overlays)
     relerr_cols = [c for c in ("eff_rel_err_p2", "eff_rel_err_p3")
                    if c in used.columns and c in unused.columns]
@@ -452,10 +445,10 @@ def _write_plots(
             u = pd.to_numeric(used.get(col), errors="coerce").dropna()
             un = pd.to_numeric(unused.get(col), errors="coerce").dropna()
             if not u.empty:
-                ax.hist(u, bins=40, density=True, color="#54A24B",
+                ax.hist(u, bins=40, density=True, color="#E45756",
                         alpha=0.65, label="used")
             if not un.empty:
-                ax.hist(un, bins=40, density=True, color="#E45756",
+                ax.hist(un, bins=40, density=True, color="#54A24B",
                         alpha=0.55, label="unused")
             ax.set_xlabel(col)
             ax.set_ylabel("Density")
@@ -467,14 +460,35 @@ def _write_plots(
         fig.savefig(plot_dir / "hist_used_vs_unused_relerr.png", dpi=140)
         plt.close(fig)
 
-    # --- 3. Rel-err scatter used/unused ---
-    plot_scatter_overlay(
-        used, unused, "eff_rel_err_p2", "eff_rel_err_p3",
-        plot_dir / "scatter_used_vs_unused_relerr_p2_vs_p3.png",
-        "Rel. error p2 vs p3 (used vs unused)",
-    )
+    # --- 2. Rel-err scatter used/unused ---
+    x_used = pd.to_numeric(used.get("eff_rel_err_p2"), errors="coerce")
+    y_used = pd.to_numeric(used.get("eff_rel_err_p3"), errors="coerce")
+    x_unused = pd.to_numeric(unused.get("eff_rel_err_p2"), errors="coerce")
+    y_unused = pd.to_numeric(unused.get("eff_rel_err_p3"), errors="coerce")
+    mask_used = x_used.notna() & y_used.notna()
+    mask_unused = x_unused.notna() & y_unused.notna()
+    if (mask_used.sum() + mask_unused.sum()) >= 2:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        if mask_used.any():
+            ax.scatter(
+                x_used[mask_used], y_used[mask_used],
+                s=12, alpha=0.6, color="#E45756", label="used",
+            )
+        if mask_unused.any():
+            ax.scatter(
+                x_unused[mask_unused], y_unused[mask_unused],
+                s=12, alpha=0.45, color="#54A24B", label="unused",
+            )
+        ax.set_xlabel("eff_rel_err_p2")
+        ax.set_ylabel("eff_rel_err_p3")
+        ax.set_title("Rel. error p2 vs p3 (used vs unused)")
+        ax.grid(True, alpha=0.2)
+        ax.legend(frameon=True, framealpha=0.9)
+        fig.tight_layout()
+        fig.savefig(plot_dir / "scatter_used_vs_unused_relerr_p2_vs_p3.png", dpi=140)
+        plt.close(fig)
 
-    # --- 4. Flux + cos_n used/unused overlays (1×2) ---
+    # --- 3. Flux + cos_n used/unused overlays (1×2) ---
     fc_cols = [c for c in ("flux_cm2_min", "cos_n")
                if c in used.columns and c in unused.columns]
     if fc_cols:
@@ -501,7 +515,7 @@ def _write_plots(
         fig.savefig(plot_dir / "hist_used_vs_unused_flux_cosn.png", dpi=140)
         plt.close(fig)
 
-    # --- 5. Counts bar chart (single grouped figure) ---
+    # --- 4. Counts bar chart (single grouped figure) ---
     labels = ["total", "filtered", "used", "unused"]
     values = [len(merged), len(filtered), len(used), len(unused)]
     colors = ["#4C78A8", "#F58518", "#54A24B", "#E45756"]
@@ -516,13 +530,10 @@ def _write_plots(
     fig.savefig(plot_dir / "counts_summary.png", dpi=140)
     plt.close(fig)
 
-    # --- 6. Selection-bias diagnostics (multi-panel) ---
-    # p1/p4 rel-err + z_plane_1..4 + generated_events_count
+    # --- 5. Selection-bias diagnostics (multi-panel) ---
+    # p1/p4 rel-err + generated_events_count
     bias_cols = []
     for col in ("eff_rel_err_p1", "eff_rel_err_p4"):
-        if col in used.columns and col in unused.columns:
-            bias_cols.append(col)
-    for col in ("z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"):
         if col in used.columns and col in unused.columns:
             bias_cols.append(col)
     for col in ("generated_events_count",):
@@ -558,7 +569,7 @@ def _write_plots(
         fig.savefig(plot_dir / "selection_bias_diagnostics.png", dpi=140)
         plt.close(fig)
 
-    # --- 7. Iso-rate contours (eff vs flux with constant-rate lines) ---
+    # --- 6. Iso-rate contours (eff vs flux with constant-rate lines) ---
     _plot_iso_rate_contours(filtered, plot_dir)
 
     log.info("Plots saved to %s", plot_dir)

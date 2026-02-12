@@ -701,10 +701,19 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Comma-separated list of preferred time columns (overrides defaults).",
     )
-    parser.add_argument(
+    xfb_group = parser.add_mutually_exclusive_group()
+    xfb_group.add_argument(
         "--x-from-basename",
+        dest="x_from_basename",
         action="store_true",
-        help="Use timestamp parsed from filename_base for the x-axis (falls back to other columns if parsing fails).",
+        default=True,
+        help="Use timestamp parsed from filename_base for the x-axis (default: enabled).",
+    )
+    xfb_group.add_argument(
+        "--no-x-from-basename",
+        dest="x_from_basename",
+        action="store_false",
+        help="Do NOT use timestamp parsed from filename_base for the x-axis.",
     )
     parser.add_argument(
         "--linear-color",

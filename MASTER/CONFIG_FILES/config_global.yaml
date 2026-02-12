@@ -40,8 +40,8 @@ event_data_step1_run_matrix:
   already_running_log_seconds: 300  # throttle "station already handled" cron log entries
   config_refresh_seconds: 60        # min seconds between config reloads
   stations:
-    "0": [1, 2, 3, 4, 5]
-    "1": [1, 2, 3, 4, 5]
+    "0": [1] # , 2, 3, 4, 5]
+    #"1": [1, 2, 3, 4, 5]
     #"2": [1, 2, 3, 4, 5]
     #"3": [1, 2, 3, 4, 5]
     #"4": [1, 2, 3, 4, 5]

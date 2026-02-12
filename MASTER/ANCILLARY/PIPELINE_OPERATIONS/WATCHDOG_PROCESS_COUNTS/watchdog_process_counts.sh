@@ -42,6 +42,18 @@ log_line() {
   printf '[%s] [WATCHDOG] %s\n' "$ts" "$msg" >>"$LOG_FILE"
 }
 
+sanitize_nonneg_int() {
+  local value="${1:-0}"
+  value="${value%%$'\n'*}"
+  value="${value//$'\r'/}"
+  value="${value//[[:space:]]/}"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$value"
+  else
+    printf '0'
+  fi
+}
+
 regex_escape() {
   printf '%s' "$1" | sed -e 's/[][\\.^$*+?(){}|]/\\&/g'
 }
@@ -362,17 +374,19 @@ handle_group() {
     if (( ${#cron_keys[@]} > 0 )); then
       summary=""
       promote_factor="$CRON_PROMOTE_FACTOR"
+      promote_min_count="$(sanitize_nonneg_int "$CRON_PROMOTE_MIN_COUNT")"
+      promote_delta="$(sanitize_nonneg_int "$CRON_PROMOTE_DELTA")"
       for key in "${cron_keys[@]}"; do
         if [[ -n "$CRON_REPORT_EXCLUDE_REGEX" ]] && [[ "$key" =~ $CRON_REPORT_EXCLUDE_REGEX ]]; then
           continue
         fi
         pattern="$(regex_escape "$key")"
-        count="$(pgrep -fc -f "$pattern" 2>/dev/null || echo 0)"
+        count="$(sanitize_nonneg_int "$(pgrep -fc -f "$pattern" 2>/dev/null || true)")"
         CURRENT_COUNTS["$key"]="$count"
-        prev="${LAST_COUNTS[$key]:-0}"
+        prev="$(sanitize_nonneg_int "${LAST_COUNTS[$key]:-0}")"
         if [[ "$CRON_PROMOTE_ENABLED" == "1" ]]; then
-          if (( count >= CRON_PROMOTE_MIN_COUNT )); then
-            if (( count - prev >= CRON_PROMOTE_DELTA )); then
+          if (( count >= promote_min_count )); then
+            if (( count - prev >= promote_delta )); then
               promote_key "$key" "$prev" "$count"
             elif (( prev > 0 )) && awk -v n="$count" -v p="$prev" -v f="$promote_factor" 'BEGIN{exit !(n >= p*f)}'; then
               promote_key "$key" "$prev" "$count"

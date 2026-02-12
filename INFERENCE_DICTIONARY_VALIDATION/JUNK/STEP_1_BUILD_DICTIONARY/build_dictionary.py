@@ -27,6 +27,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from msv_utils import (  # noqa: E402
     apply_clean_style,
+    extract_eff_columns,
     plot_histogram,
     plot_scatter,
     setup_logger,
@@ -44,6 +45,101 @@ DEFAULT_OUT = STEP_DIR
 # Plotting
 # -------------------------------------------------------------------------
 
+def _resolve_eff_col(df: pd.DataFrame) -> str | None:
+    """Return the preferred efficiency column available in *df*."""
+    return next(
+        (
+            col for col in ("eff_1", "eff", "efficiency", "eff_sim_p1")
+            if col in df.columns
+        ),
+        None,
+    )
+
+
+def _axis_limits(values: pd.Series) -> tuple[float, float]:
+    """Return padded axis limits for a numeric series."""
+    arr = pd.to_numeric(values, errors="coerce").dropna().to_numpy(dtype=float)
+    if arr.size == 0:
+        return (0.0, 1.0)
+    vmin = float(np.min(arr))
+    vmax = float(np.max(arr))
+    if np.isclose(vmin, vmax):
+        pad = max(abs(vmin) * 0.05, 1e-6)
+        return (vmin - pad, vmax + pad)
+    pad = 0.05 * (vmax - vmin)
+    return (vmin - pad, vmax + pad)
+
+
+def _plot_scatter_matrix(
+    df: pd.DataFrame,
+    columns: list[str],
+    output_path: Path,
+    *,
+    bins: int = 40,
+    max_points: int = 6000,
+) -> None:
+    """Diagonal histograms + lower-triangle scatter matrix."""
+    if len(columns) < 2:
+        return
+    work = df[columns].apply(pd.to_numeric, errors="coerce").dropna()
+    if work.shape[0] < 2:
+        return
+
+    if work.shape[0] > max_points:
+        work = work.sample(n=max_points, random_state=42)
+
+    n = len(columns)
+    limits = {col: _axis_limits(work[col]) for col in columns}
+
+    fig, axes = plt.subplots(n, n, figsize=(3.0 * n, 3.0 * n), squeeze=False)
+    for i, y_col in enumerate(columns):
+        for j, x_col in enumerate(columns):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis("off")
+                continue
+
+            if i == j:
+                x = work[x_col].to_numpy(dtype=float)
+                ax.hist(x, bins=bins, color="#4C78A8", alpha=0.85, edgecolor="white")
+                ax.set_xlim(limits[x_col])
+                ax.set_yticks([])
+            else:
+                x = work[x_col].to_numpy(dtype=float)
+                y = work[y_col].to_numpy(dtype=float)
+                ax.scatter(
+                    x,
+                    y,
+                    s=7,
+                    alpha=0.35,
+                    color="#F58518",
+                    edgecolors="none",
+                    rasterized=True,
+                )
+                ax.set_xlim(limits[x_col])
+                ax.set_ylim(limits[y_col])
+
+            if i == n - 1:
+                ax.set_xlabel(x_col, fontsize=9)
+            else:
+                ax.set_xticklabels([])
+
+            if j == 0 and i != j:
+                ax.set_ylabel(y_col, fontsize=9)
+            elif j != 0:
+                ax.set_yticklabels([])
+
+            ax.grid(True, alpha=0.2)
+
+    fig.suptitle(
+        "Parameter Matrix (diagonal histograms + lower-triangle scatter)",
+        fontsize=12,
+    )
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
 def _generate_plots(csv_path: Path, plot_dir: Path) -> None:
     """Produce quick-look histograms and scatters from the dictionary CSV.
 
@@ -51,9 +147,12 @@ def _generate_plots(csv_path: Path, plot_dir: Path) -> None:
     - hist_flux_cos_n.png          : flux + cos_n histograms (1×2)
     - hist_z_planes.png            : z-plane geometry diagnostics (2×2)
     - scatter_flux_vs_cos_n.png    : single scatter
+    - scatter_flux_vs_eff.png      : single scatter
+    - scatter_matrix_parameters.png: diagonal histograms + pair scatters
     - scatter_flux_vs_rates.png    : flux vs rate columns (multi-panel)
     """
     df = pd.read_csv(csv_path, low_memory=False)
+    df = extract_eff_columns(df)
 
     # Clean old plots
     if plot_dir.exists():
@@ -85,7 +184,7 @@ def _generate_plots(csv_path: Path, plot_dir: Path) -> None:
     z_cols = [f"z_plane_{i}" for i in range(1, 5) if f"z_plane_{i}" in df.columns]
     if z_cols:
         z_df = df[z_cols].apply(pd.to_numeric, errors="coerce")
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10), layout="constrained")
 
         # Panel A: compact comparison of each z-plane distribution
         ax = axes[0, 0]
@@ -93,7 +192,7 @@ def _generate_plots(csv_path: Path, plot_dir: Path) -> None:
         if any(len(arr) > 0 for arr in box_data):
             bp = ax.boxplot(
                 box_data,
-                labels=z_cols,
+                tick_labels=z_cols,
                 patch_artist=True,
                 showfliers=False,
             )
@@ -155,13 +254,44 @@ def _generate_plots(csv_path: Path, plot_dir: Path) -> None:
         ax.set_ylabel("span")
         ax.grid(True, alpha=0.2)
 
-        fig.tight_layout()
         fig.savefig(plot_dir / "hist_z_planes.png", dpi=140)
         plt.close(fig)
 
     # --- flux vs cos_n scatter (single) ---
     plot_scatter(df, "flux_cm2_min", "cos_n",
                  plot_dir / "scatter_flux_vs_cos_n.png")
+
+    # --- flux vs eff scatter (single) ---
+    eff_col = _resolve_eff_col(df)
+    if eff_col is not None:
+        plot_scatter(
+            df,
+            "flux_cm2_min",
+            eff_col,
+            plot_dir / "scatter_flux_vs_eff.png",
+            title="Efficiency vs flux",
+        )
+
+    # --- parameter matrix: diagonal histograms + lower-triangle scatters ---
+    param_cols: list[str] = []
+    for col in (
+        "flux_cm2_min",
+        "cos_n",
+        eff_col,
+        "z_plane_1",
+        "z_plane_2",
+        "z_plane_3",
+        "z_plane_4",
+    ):
+        if col is not None and col in df.columns:
+            param_cols.append(col)
+    param_cols = list(dict.fromkeys(param_cols))
+    if len(param_cols) >= 2:
+        _plot_scatter_matrix(
+            df,
+            param_cols,
+            plot_dir / "scatter_matrix_parameters.png",
+        )
 
     # --- Rate-vs-flux multi-panel (§2.3) ---
     rate_cols = [c for c in df.columns

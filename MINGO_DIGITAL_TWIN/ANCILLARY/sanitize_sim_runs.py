@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import re
 import shutil
@@ -81,9 +82,34 @@ def find_metadata(sim_run_dir: Path) -> dict | None:
     return None
 
 
+def step_ids_from_sim_run_dir(sim_run_dir: Path, step_index: int) -> list[str] | None:
+    name = sim_run_dir.name
+    if not name.startswith("SIM_RUN_"):
+        return None
+    parts = name.removeprefix("SIM_RUN_").split("_")
+    if len(parts) < step_index:
+        return None
+    return parts[:step_index]
+
+
 def iter_step_dirs(intersteps_dir: Path) -> list[Path]:
     step_dirs = sorted(intersteps_dir.glob("STEP_*_TO_*"))
     return [path for path in step_dirs if path.name != "STEP_0_TO_1"]
+
+
+def _is_lock_busy(lock_path: Path) -> bool:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        finally:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+    return False
 
 
 def main() -> None:
@@ -108,10 +134,29 @@ def main() -> None:
         action="store_true",
         help="Actually delete directories (default is dry-run).",
     )
+    parser.add_argument(
+        "--min-age-seconds",
+        type=int,
+        default=900,
+        help=(
+            "Only delete SIM_RUN dirs older than this many seconds. "
+            "Helps avoid deleting directories while downstream steps are still reading them."
+        ),
+    )
+    parser.add_argument(
+        "--step-final-lock",
+        default="~/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/sim_step_final.lock",
+        help=(
+            "Lock file used by STEP_FINAL cron. If locked, STEP_10_TO_FINAL cleanup is skipped "
+            "to avoid deleting active inputs."
+        ),
+    )
     args = parser.parse_args()
 
     intersteps_dir = Path(args.intersteps_dir).expanduser().resolve()
     mesh_path = Path(args.param_mesh).expanduser().resolve()
+    step_final_lock = Path(args.step_final_lock).expanduser().resolve()
+    min_age_seconds = max(0, int(args.min_age_seconds))
     if not intersteps_dir.exists():
         raise FileNotFoundError(f"INTERSTEPS dir not found: {intersteps_dir}")
     if not mesh_path.exists():
@@ -119,6 +164,8 @@ def main() -> None:
 
     _log_info(f"Intersteps dir: {intersteps_dir}")
     _log_info(f"Param mesh: {mesh_path}")
+    _log_info(f"Min age (s): {min_age_seconds}")
+    _log_info(f"STEP_FINAL lock: {step_final_lock}")
 
     # Recommended workflow:
     # 1) Generate a batch of mesh rows (STEP_0) with shared columns.
@@ -134,23 +181,44 @@ def main() -> None:
 
     removed = 0
     skipped = 0
+    skipped_recent = 0
+    skipped_locked = 0
     unknown = 0
+    now_ts = datetime.now(timezone.utc).timestamp()
+    step_final_busy = _is_lock_busy(step_final_lock)
+    if step_final_busy:
+        _log_info("STEP_FINAL lock is busy; STEP_10_TO_FINAL cleanup will be skipped this run.")
     for step_dir in iter_step_dirs(intersteps_dir):
         step_index = parse_step_index(step_dir)
         if step_index is None:
             unknown += 1
             _log_warn(f"SKIP (unrecognized step dir): {step_dir}")
             continue
+        if step_dir.name == "STEP_10_TO_FINAL" and step_final_busy:
+            skipped_locked += 1
+            continue
         for sim_run_dir in sorted(step_dir.glob("SIM_RUN_*")):
-            meta = find_metadata(sim_run_dir)
-            if not meta:
+            try:
+                age_s = now_ts - sim_run_dir.stat().st_mtime
+            except OSError:
                 unknown += 1
-                _log_warn(f"SKIP (no metadata): {sim_run_dir}")
+                _log_warn(f"SKIP (cannot stat): {sim_run_dir}")
                 continue
-            step_chain = extract_step_id_chain(meta)
+            if age_s < min_age_seconds:
+                skipped_recent += 1
+                continue
+            step_chain: list[str] | None = None
+            meta = find_metadata(sim_run_dir)
+            if meta:
+                chain = extract_step_id_chain(meta)
+                if chain:
+                    step_chain = chain[:step_index]
+            if not step_chain:
+                # Fallback for old/partial runs where chunks metadata got removed.
+                step_chain = step_ids_from_sim_run_dir(sim_run_dir, step_index)
             if not step_chain:
                 unknown += 1
-                _log_warn(f"SKIP (no step ids): {sim_run_dir}")
+                _log_warn(f"SKIP (cannot infer step ids): {sim_run_dir}")
                 continue
             combo_done = combo_done_in_mesh(mesh, step_chain, step_index)
             if combo_done is None:
@@ -167,7 +235,14 @@ def main() -> None:
             else:
                 _log_info(f"DRY-RUN DELETE: {sim_run_dir}")
 
-    _log_info(f"Summary: removed={removed}, skipped={skipped}, unknown={unknown}")
+    _log_info(
+        "Summary: "
+        f"removed={removed}, "
+        f"skipped={skipped}, "
+        f"skipped_recent={skipped_recent}, "
+        f"skipped_locked={skipped_locked}, "
+        f"unknown={unknown}"
+    )
 
 
 if __name__ == "__main__":

@@ -285,7 +285,7 @@ def _plot_uncertainty_bands(unc_df: pd.DataFrame, raw_df: pd.DataFrame, path: Pa
 
 def _plot_dictionary_overview(df: pd.DataFrame, scatter_title: str, path: Path) -> None:
     """Side-by-side scatter + hexbin of dictionary points in flux-eff space."""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), layout="constrained")
 
     axes[0].scatter(df["flux_cm2_min"], df["eff_1"], s=10, alpha=0.45, color="#54A24B")
     axes[0].set_xlabel("Flux [cm^-2 min^-1]")
@@ -303,7 +303,6 @@ def _plot_dictionary_overview(df: pd.DataFrame, scatter_title: str, path: Path) 
     axes[1].set_title("Dictionary density in flux-eff space")
     axes[1].grid(True, alpha=0.2)
 
-    fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
@@ -364,8 +363,25 @@ def _compute_plane_mean(
     y = work[eff_col].to_numpy(dtype=float)
     z = work[value_col].to_numpy(dtype=float)
 
-    x_edges = np.linspace(float(np.min(x)), float(np.max(x)), max(2, flux_bins) + 1)
-    y_edges = np.linspace(float(np.min(y)), float(np.max(y)), max(2, eff_bins) + 1)
+    # Quantile-based bin edges improve occupancy in highly non-uniform clouds.
+    def _quantile_edges(values: np.ndarray, n_bins: int) -> np.ndarray:
+        if values.size < 2:
+            return np.array([])
+        if np.isclose(float(np.min(values)), float(np.max(values))):
+            return np.array([])
+        q = np.linspace(0.0, 1.0, max(2, int(n_bins)) + 1)
+        edges = np.unique(np.quantile(values, q))
+        if len(edges) < 3:
+            edges = np.linspace(float(np.min(values)), float(np.max(values)), max(2, int(n_bins)) + 1)
+        edges = np.unique(edges)
+        if len(edges) < 3:
+            return np.array([])
+        return edges
+
+    x_edges = _quantile_edges(x, flux_bins)
+    y_edges = _quantile_edges(y, eff_bins)
+    if x_edges.size == 0 or y_edges.size == 0:
+        return np.array([]), np.array([]), np.array([[]]), np.array([[]])
 
     count, _, _ = np.histogram2d(x, y, bins=[x_edges, y_edges])
     z_sum, _, _ = np.histogram2d(x, y, bins=[x_edges, y_edges], weights=z)
@@ -388,7 +404,7 @@ def _plot_plane_mean_error_combined(
         ("abs_flux_rel_error_pct", "Mean |flux rel. error| [%]"),
         ("abs_eff_rel_error_pct", "Mean |eff rel. error| [%]"),
     ]
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), layout="constrained")
 
     for idx, (value_col, cbar_label) in enumerate(pairs):
         ax = axes[idx]
@@ -403,27 +419,54 @@ def _plot_plane_mean_error_combined(
                     transform=ax.transAxes)
             continue
 
-        finite = pd.Series(z_mean.ravel()).dropna()
+        # Mask low-occupancy bins to avoid noisy checkerboards.
+        min_count = max(3, int(np.sqrt(max(1, len(df))) / 8))
+        z_plot = z_mean.copy()
+        z_plot[counts < min_count] = np.nan
+        finite = pd.Series(z_plot.ravel()).dropna()
+        if finite.size < 8:
+            z_plot = z_mean
+            finite = pd.Series(z_plot.ravel()).dropna()
+            min_count = 1
+
         if finite.empty:
             ax.text(0.5, 0.5, "No finite values", ha="center", va="center",
                     transform=ax.transAxes)
             continue
-        vmax = float(np.nanpercentile(finite.to_numpy(dtype=float), 95))
-        if not np.isfinite(vmax) or vmax <= 0:
+        vals = finite.to_numpy(dtype=float)
+        vmin = float(np.nanpercentile(vals, 5))
+        vmax = float(np.nanpercentile(vals, 95))
+        if not np.isfinite(vmin):
+            vmin = None
+        if not np.isfinite(vmax) or (vmin is not None and vmax <= vmin):
             vmax = None
 
+        cmap = plt.colormaps["magma"].copy()
+        cmap.set_bad("#f1f1f1")
+
         mesh = ax.pcolormesh(
-            x_edges, y_edges, z_mean.T, shading="auto", cmap="viridis",
-            vmin=0, vmax=vmax,
+            x_edges, y_edges, np.ma.masked_invalid(z_plot.T),
+            shading="auto", cmap=cmap, vmin=vmin, vmax=vmax,
         )
         fig.colorbar(mesh, ax=ax, label=cbar_label)
         ax.set_xlabel("True flux [cm^-2 min^-1]")
         ax.set_ylabel("True eff_1")
         ax.set_title(cbar_label)
         ax.grid(True, alpha=0.2)
+        valid_bins = int(np.isfinite(z_plot).sum())
+        total_bins = int(z_plot.size)
+        ax.text(
+            0.02,
+            0.98,
+            f"n={len(df)}\nvalid bins={valid_bins}/{total_bins}\nmin/bin={min_count}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=8,
+            bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+        )
 
     fig.suptitle(title, fontsize=12)
-    fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
 
@@ -592,26 +635,45 @@ def _plot_residual_overlay(
     threshold: float,
 ) -> None:
     """Overlay high-stat and low-stat residual distributions in one figure."""
+    high_vals = pd.to_numeric(high_df.get(error_col), errors="coerce").dropna()
+    low_vals = pd.to_numeric(low_df.get(error_col), errors="coerce").dropna()
+    combined = pd.concat([high_vals, low_vals], ignore_index=True)
+    if combined.empty:
+        return
+
+    q_low = float(combined.quantile(0.005))
+    q_high = float(combined.quantile(0.995))
+    span = max(abs(q_low), abs(q_high))
+    if not np.isfinite(span) or span <= 0:
+        span = float(np.nanmax(np.abs(combined.to_numpy(dtype=float))))
+    if not np.isfinite(span) or span <= 0:
+        span = 1.0
+    bins = np.linspace(-span, span, 80)
+
     fig, ax = plt.subplots(figsize=(9, 5.5))
 
-    for subset_df, label, color in (
-        (high_df, f"events >= {threshold:g}", "#4C78A8"),
-        (low_df, f"events < {threshold:g}", "#E45756"),
+    for vals, label, color in (
+        (high_vals, f"events >= {threshold:g}", "#1f77b4"),
+        (low_vals, f"events < {threshold:g}", "#d62728"),
     ):
-        vals = pd.to_numeric(subset_df.get(error_col), errors="coerce").dropna()
         if vals.empty:
             continue
-        # Clip to 1st–99th percentile for readable axis range
-        q01, q99 = float(vals.quantile(0.01)), float(vals.quantile(0.99))
-        span = max(abs(q01), abs(q99))
-        clipped = vals[(vals >= -span) & (vals <= span)]
+        clipped = vals.clip(lower=-span, upper=span)
+        med = float(np.nanmedian(vals))
+        p68_abs = float(np.nanpercentile(np.abs(vals.to_numpy(dtype=float)), 68))
         ax.hist(
-            clipped, bins=60, density=True, alpha=0.55,
-            color=color, edgecolor="white", linewidth=0.4,
-            label=f"{label} (n={len(vals)})",
+            clipped,
+            bins=bins,
+            density=True,
+            histtype="step",
+            linewidth=2.0,
+            color=color,
+            label=f"{label} (n={len(vals)}, med={med:.2f}%, |p68|={p68_abs:.2f}%)",
         )
+        ax.axvline(med, color=color, linestyle=":", linewidth=1.3, alpha=0.9)
 
     ax.axvline(0.0, color="black", linestyle="--", linewidth=0.8)
+    ax.set_xlim(-span, span)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Density")
     ax.set_title(title)
@@ -1018,6 +1080,13 @@ def main() -> int:
     coverage_json.write_text(json.dumps(coverage_metrics, indent=2), encoding="utf-8")
 
     if not args.no_plots:
+        # Explicitly disable the plane mean-error maps (user-requested).
+        plane_ge_path = plots_dir / f"plane_mean_error_ge_{int(plane_min_events)}.png"
+        plane_lt_path = plots_dir / f"plane_mean_error_lt_{int(plane_min_events)}.png"
+        for stale_plot in (plane_ge_path, plane_lt_path):
+            if stale_plot.exists():
+                stale_plot.unlink()
+
         _plot_sample_size_distribution(
             results_ok,
             plots_dir / "sample_size_distribution.png",
@@ -1039,21 +1108,6 @@ def main() -> int:
 
         high_df = _event_filter(results_plus, plane_min_events, "ge")
         low_df = _event_filter(results_plus, plane_min_events, "lt")
-
-        _plot_plane_mean_error_combined(
-            high_df,
-            title=f"Mean absolute relative error in (flux, eff) plane — events >= {plane_min_events:g}",
-            path=plots_dir / f"plane_mean_error_ge_{int(plane_min_events)}.png",
-            flux_bins=plane_flux_bins,
-            eff_bins=plane_eff_bins,
-        )
-        _plot_plane_mean_error_combined(
-            low_df,
-            title=f"Mean absolute relative error in (flux, eff) plane — events < {plane_min_events:g}",
-            path=plots_dir / f"plane_mean_error_lt_{int(plane_min_events)}.png",
-            flux_bins=plane_flux_bins,
-            eff_bins=plane_eff_bins,
-        )
 
         _plot_residual_overlay(
             high_df, low_df,

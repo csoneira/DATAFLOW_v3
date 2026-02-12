@@ -420,7 +420,15 @@ def main() -> None:
             manifest = None
             muon_df = None
         elif stream_chunks:
-            manifest = json.loads(chunk_manifest.read_text())
+            try:
+                manifest = json.loads(chunk_manifest.read_text())
+            except (json.JSONDecodeError, OSError) as exc:
+                print(f"[WARN] Skipping unreadable chunk manifest {chunk_manifest}: {exc}")
+                continue
+            chunk_list = manifest.get("chunks", [])
+            if not isinstance(chunk_list, list) or not chunk_list:
+                print(f"[WARN] Skipping empty chunk manifest {chunk_manifest}")
+                continue
             upstream_meta = manifest.get("metadata", {})
             muon_df = None
         else:
@@ -598,6 +606,7 @@ def main() -> None:
             chunk_iter = (manifest.get("chunks", []), "pkl")
 
         processed_chunks = 0
+        skipped_chunks = 0
         for item in chunk_iter[0]:
             processed_chunks += 1
             if chunk_iter[1] == "pkl":
@@ -605,7 +614,13 @@ def main() -> None:
             else:
                 print(f"Processing chunk {processed_chunks}")
             if chunk_iter[1] == "pkl":
-                chunk_df = pd.read_pickle(item)
+                chunk_path = Path(item)
+                try:
+                    chunk_df = pd.read_pickle(chunk_path)
+                except (FileNotFoundError, OSError) as exc:
+                    skipped_chunks += 1
+                    print(f"[WARN] Skipping missing/unreadable chunk {chunk_path}: {exc}")
+                    continue
             else:
                 chunk_df = item
             geom_chunk = calculate_intersections(chunk_df, z_positions, bounds, c_mm_per_ns)
@@ -619,6 +634,8 @@ def main() -> None:
                 maybe_flush_buffer()
             if processed_chunks % 10 == 0:
                 print(f"Chunks processed: {processed_chunks}, rows kept so far: {total_rows:,}")
+        if skipped_chunks:
+            print(f"[WARN] STEP_2 skipped {skipped_chunks} missing/unreadable chunks.")
 
         if full_chunks == 0 and buffered_rows > 0:
             flush_chunk(pd.concat(buffer, ignore_index=True))

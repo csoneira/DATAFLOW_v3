@@ -31,10 +31,10 @@ import pandas as pd
 # ── path setup ──────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-VALIDATION_DIR = REPO_ROOT / "INFERENCE_DICTIONARY_VALIDATION"
+MODULES_DIR = REPO_ROOT / "INFERENCE_DICTIONARY_VALIDATION" / "MODULES"
 
-if str(VALIDATION_DIR) not in sys.path:
-    sys.path.insert(0, str(VALIDATION_DIR))
+if str(MODULES_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULES_DIR))
 
 from uncertainty_lut import UncertaintyLUT  # noqa: E402
 

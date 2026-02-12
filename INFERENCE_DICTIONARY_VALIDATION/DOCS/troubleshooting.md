@@ -11,7 +11,7 @@ outstanding items for the `INFERENCE_DICTIONARY_VALIDATION` pipeline.
 
 The four original step scripts carried ~600 lines of duplicated helper
 functions (parsing, scoring, efficiency computation, plotting, geometry).
-All shared code was extracted into `msv_utils.py` at the repository root.
+All shared code was extracted into `MODULES/simulation_validation_utils.py`.
 
 **Key changes per step:**
 
@@ -88,7 +88,7 @@ The pipeline is considered validated for a specific regime when:
 - [ ] Check effect of z-score scaling on stability across event-count and efficiency regimes.
 - [ ] Get inference errors (e.g. √counts Poisson-based χ²).
 - [ ] Split STEP 4 `main()` into `_run_single_mode()` + `_run_all_mode()`.
-- [ ] Add unit tests for `msv_utils` (scoring, `parse_efficiencies`).
+- [ ] Add unit tests for `simulation_validation_utils` (scoring, `parse_efficiencies`).
 - [ ] Type annotations on remaining helpers.
 - [ ] Comparison with real data (next phase).
 - [ ] Cut sensitivity analysis: vary `relerr_threshold` and `min_events` and measure downstream stability.
@@ -104,3 +104,37 @@ When asking an LLM to modify this pipeline, include:
 - Current settings: `metric_mode`, `score_metric`, `metric_scale`, thresholds.
 - Goal: improved interpolation, off-dictionary generalization, or validity masks.
 - Required artifacts (tables, plots, summary JSON fields).
+
+---
+
+## 5. Known expected behavior
+
+### 5.1 STEP 1.1 (`collect_data.py`) can legitimately return far fewer rows
+
+This is expected when these two filters are active:
+
+1. **Single z-configuration filter**  
+   `collect_data.py` keeps only rows matching one `(z_plane_1..4)` configuration
+   from `config["z_position_config"]`.
+
+2. **Inner join with task metadata**  
+   It then keeps only `filename_base` values present in both:
+   - `step_final_simulation_params.csv`
+   - `task_*_metadata_specific.csv` for configured `task_ids`
+
+Because of this, a large input table can reduce to a much smaller collected set.
+
+**Recorded example (2026-02-12):**
+- Simulation params rows: `17129`
+- Task 1 metadata rows: `1649`
+- Config z selection: `[0.0, 145.0, 290.0, 435.0]`
+- Rows after z cut: `3024`
+- Rows after inner join (task 1): `207`
+- `z_config_selected.json` and `collected_data.csv` report this same `207`.
+
+This behavior is **not a bug**.
+
+If more rows are desired, change configuration intentionally:
+- include more `task_ids`
+- use a different `z_position_config` (or set to `null` to randomize)
+- remove/relax the z filter logic (only if methodologically intended)

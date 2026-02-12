@@ -94,7 +94,7 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_flux_vs_rate(df: pd.DataFrame, out_path: Path) -> None:
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
     sc = ax.scatter(
         df["flux_cm2_min"],
         df["global_trigger_rate_hz"],
@@ -109,24 +109,46 @@ def plot_flux_vs_rate(df: pd.DataFrame, out_path: Path) -> None:
     cbar = fig.colorbar(sc, ax=ax)
     cbar.set_label("cos_n")
     ax.grid(True, alpha=0.3)
-    fig.tight_layout()
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
 
 
 def plot_efficiency_scatter(df: pd.DataFrame, out_path: Path) -> None:
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharex=True, sharey=True)
+    # Keep both axes on the same range for direct 1:1 comparison.
+    min_values = []
+    for plane in range(1, 5):
+        sim_col = f"eff_sim_p{plane}"
+        est_col = f"eff_est_p{plane}"
+        if sim_col in df.columns:
+            sim_series = pd.to_numeric(df[sim_col], errors="coerce").dropna()
+            if not sim_series.empty:
+                min_values.append(float(sim_series.min()))
+        if est_col in df.columns:
+            est_series = pd.to_numeric(df[est_col], errors="coerce").dropna()
+            if not est_series.empty:
+                min_values.append(float(est_series.min()))
+    xmin = min(min_values) if min_values else 0.0
+    if np.isclose(xmin, 1.0):
+        xmin = 0.99
+    xmax = 1.0
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 10), sharex=True, sharey=True)
     for plane in range(1, 5):
         ax = axes[(plane - 1) // 2, (plane - 1) % 2]
         sim_col = f"eff_sim_p{plane}"
         est_col = f"eff_est_p{plane}"
-        ax.scatter(df[sim_col], df[est_col], s=18, alpha=0.7)
-        ax.plot([0, 1], [0, 1], "r--", linewidth=1)
+        sim = pd.to_numeric(df.get(sim_col), errors="coerce")
+        est = pd.to_numeric(df.get(est_col), errors="coerce")
+        mask = sim.notna() & est.notna()
+        if mask.any():
+            ax.scatter(sim[mask], est[mask], s=18, alpha=0.7)
+        ax.plot([xmin, xmax], [xmin, xmax], "r--", linewidth=1)
         ax.set_title(f"Plane {plane}")
         ax.set_xlabel("Simulated efficiency")
         ax.set_ylabel("Estimated efficiency")
-        ax.set_xlim(0, 1.05)
-        ax.set_ylim(0, 1.05)
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(xmin, xmax)
+        ax.set_aspect("equal", adjustable="box")
         ax.grid(True, alpha=0.3)
     fig.suptitle("Simulated vs Estimated Efficiency per Plane", fontsize=12)
     fig.tight_layout()
@@ -140,27 +162,12 @@ def plot_residuals_all_planes(
     *,
     relerr_max_abs: float,
 ) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
-    ev_col = "generated_events_count"
+    """Residual and relative-error scatter for planes 2 and 3 only."""
     planes = [2, 3]
-    for idx, plane in enumerate(planes):
-        ax = axes[idx]
-        sim_col = f"eff_sim_p{plane}"
-        rel_col = f"eff_rel_err_p{plane}"
-        mask = df[sim_col].notna() & df[rel_col].notna() & df[ev_col].notna()
-def plot_residuals_all_planes(
-    df: pd.DataFrame,
-    out_path: Path,
-    *,
-    relerr_max_abs: float,
-) -> None:
-    """Residual and relative-error scatter for all four planes.
+    fig, axes = plt.subplots(len(planes), 2, figsize=(12, 7), sharex="col")
+    if len(planes) == 1:
+        axes = np.array([axes])
 
-    Planes 1 & 4 carry an acceptance-factor bias so their residuals vs
-    simulation show a systematic offset (marked with *).
-    """
-    fig, axes = plt.subplots(4, 2, figsize=(12, 14))
-    planes = [1, 2, 3, 4]
     for row, plane in enumerate(planes):
         sim_col = f"eff_sim_p{plane}"
         resid_col = f"eff_resid_p{plane}"
@@ -173,24 +180,24 @@ def plot_residuals_all_planes(
 
         mask = df[sim_col].notna() & df[resid_col].notna() & df[rel_col].notna()
         mask = mask & (df[rel_col].abs() <= relerr_max_abs)
-        p_note = " *" if plane in (1, 4) else ""
 
         ax = axes[row, 0]
         ax.scatter(df.loc[mask, sim_col], df.loc[mask, resid_col], s=10, alpha=0.5)
         ax.axhline(0.0, color="red", ls="--", lw=0.8)
-        ax.set_title(f"Plane {plane}: residual{p_note}")
+        ax.set_title(f"Plane {plane}: residual")
         ax.set_ylabel("Est − Sim")
 
         ax = axes[row, 1]
         ax.scatter(df.loc[mask, sim_col], 100.0 * df.loc[mask, rel_col], s=10, alpha=0.5)
         ax.axhline(0.0, color="red", ls="--", lw=0.8)
-        ax.set_title(f"Plane {plane}: rel. error{p_note}")
+        ax.set_title(f"Plane {plane}: rel. error")
         ax.set_ylabel("Rel. error [%]")
+        ax.grid(True, alpha=0.3)
 
     axes[-1, 0].set_xlabel("Simulated efficiency")
     axes[-1, 1].set_xlabel("Simulated efficiency")
-    fig.suptitle("Residual & Relative Error — All Planes\n"
-                 "(* planes 1 & 4: acceptance bias expected)", fontsize=11)
+    fig.suptitle("Residual & Relative Error — Planes 2 and 3", fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
@@ -201,19 +208,12 @@ def plot_error_vs_event_count_all_planes(
     *,
     relerr_max_abs: float,
 ) -> None:
-    """Error vs event count for all planes — 1/sqrt(N) overlay (to_do.md §3.1).
-
-    The red dashed curve shows the expected purely-statistical scaling
-    ``error ∝ 1/√N``.  If the data follow this curve the deviations are
-    consistent with sampling noise.  Note that for planes 1 & 4 the
-    residual is affected by an acceptance factor that does not cancel in
-    the coincidence-ratio estimator, so a systematic offset above the
-    guide curve is expected and does NOT indicate a problem.
-    """
+    """Error vs event count for planes 2 and 3 with 1/sqrt(N) overlay."""
     ev_col = "generated_events_count"
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True)
-    for idx, plane in enumerate([1, 2, 3, 4]):
-        ax = axes[idx // 2, idx % 2]
+    planes = [2, 3]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=False)
+    for idx, plane in enumerate(planes):
+        ax = axes[idx]
         rel_col = f"eff_rel_err_p{plane}"
         if rel_col not in df.columns or ev_col not in df.columns:
             ax.set_title(f"Plane {plane}: no data")
@@ -229,7 +229,6 @@ def plot_error_vs_event_count_all_planes(
         # 1/sqrt(N) guide curve
         ev_sort = np.sort(events)
         if ev_sort[0] > 0:
-            guide = err[np.argsort(events)]
             median_err = float(np.nanmedian(err))
             median_ev = float(np.nanmedian(events))
             if median_ev > 0:
@@ -238,20 +237,13 @@ def plot_error_vs_event_count_all_planes(
                 ax.plot(ev_line, scale / np.sqrt(ev_line), "r--",
                         linewidth=1, label=r"$\propto 1/\sqrt{N}$")
                 ax.legend(fontsize=8)
-        p_star = " *" if plane in (1, 4) else ""
-        ax.set_title(f"Plane {plane}: |rel. error| vs events{p_star}")
+        ax.set_title(f"Plane {plane}: |rel. error| vs events")
         ax.set_ylabel("|Relative error| [%]")
+        ax.set_xlabel("Generated events")
         ax.grid(True, alpha=0.3)
         maybe_log_x(ax, pd.Series(events))
-    axes[-1, 0].set_xlabel("Generated events")
-    axes[-1, 1].set_xlabel("Generated events")
-    fig.suptitle("Error vs Event Count — All Planes (variance scaling check §3.1)", fontsize=11)
-    fig.text(
-        0.5, 0.005,
-        "* Planes 1 & 4: acceptance factor NOT cancelled — offset above 1/√N expected",
-        ha="center", fontsize=9, style="italic", color="grey",
-    )
-    fig.tight_layout(rect=[0, 0.02, 1, 0.97])
+    fig.suptitle("Error vs Event Count — Planes 2 and 3 (variance scaling check §3.1)", fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
 

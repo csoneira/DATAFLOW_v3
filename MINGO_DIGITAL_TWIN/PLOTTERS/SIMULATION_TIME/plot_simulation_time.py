@@ -120,7 +120,8 @@ def load_filtered_times(args: argparse.Namespace) -> pd.DataFrame:
     df = df[df["exec_time_s"].notna()]
     df = df[df["step"].notna()]
     df = df[df["timestamp_utc"].notna()]
-    df = df[df["exec_time_s"] >= 0]
+    # Log-scale plots require strictly positive execution times.
+    df = df[df["exec_time_s"] > 0]
     df["step"] = df["step"].astype(int)
     df = df[df["step"].between(1, 10)]
 
@@ -196,8 +197,8 @@ def main() -> None:
     ax_hist.set_ylabel("Count")
     ax_hist.legend(loc="upper right", ncol=2, fontsize=9)
 
-    # Log-scale y-axis
-    ax_hist.set_yscale("log")
+    # Requested: log-scale on x-axis (exec_time_s) in upper panel.
+    ax_hist.set_xscale("log")
 
     # Time series panel: timestamp_utc in x, exec_time_s in y (log-scale)
     for step in plotted_steps:

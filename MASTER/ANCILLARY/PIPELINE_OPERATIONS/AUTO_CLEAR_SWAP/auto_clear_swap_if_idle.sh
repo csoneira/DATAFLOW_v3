@@ -19,13 +19,22 @@ LOG_TAG="swap-autoclear"
 # Thresholds (adjust to taste)
 MIN_MEM_AVAILABLE_KB=4000000   # ~4 GiB; only clear swap if we have at least this much available
 MIN_SWAP_USED_KB=100000        # ~100 MiB; only act if at least this amount is used
-MAX_LOAD_AVG=3 #0.50              # 1-minute load average must be below this to be considered "idle"
+MAX_LOAD_AVG=3                 # 1-minute load average must be below this to be considered "idle"
+
+# Emergency override:
+# If swap is critically high and enough RAM headroom exists, clear swap even under high load.
+CRITICAL_SWAP_USED_PCT=85
+MIN_MEM_HEADROOM_AFTER_CLEAR_KB=1500000  # ~1.5 GiB must remain available after swapping pages back in
 
 # Read memory info
 mem_avail_kb=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
 swap_total_kb=$(awk '/SwapTotal/ {print $2}' /proc/meminfo)
 swap_free_kb=$(awk '/SwapFree/  {print $2}' /proc/meminfo)
 swap_used_kb=$((swap_total_kb - swap_free_kb))
+swap_used_pct=0
+if [ "$swap_total_kb" -gt 0 ]; then
+    swap_used_pct=$((100 * swap_used_kb / swap_total_kb))
+fi
 
 # Read 1-minute load average
 load_avg_1=$(awk '{print $1}' /proc/loadavg)
@@ -49,11 +58,18 @@ if [ "$swap_used_kb" -lt "$MIN_SWAP_USED_KB" ]; then
     exit 0
 fi
 
-# 3) Low CPU load → system "idle"
+# 3) Low CPU load -> system "idle"
+#    If not idle, allow an emergency clear only when swap is critically high
+#    and there is enough memory headroom to safely pull swapped pages back.
+emergency_clear="no"
+mem_headroom_after_clear_kb=$((mem_avail_kb - swap_used_kb))
 if [ "$load_ok" != "yes" ]; then
-    # System is busy; do nothing
-    echo "System load high (Load1=${load_avg_1}); skipping swap clear"
-    exit 0
+    if [ "$swap_used_pct" -ge "$CRITICAL_SWAP_USED_PCT" ] && [ "$mem_headroom_after_clear_kb" -ge "$MIN_MEM_HEADROOM_AFTER_CLEAR_KB" ]; then
+        emergency_clear="yes"
+    else
+        echo "System load high (Load1=${load_avg_1}) and no emergency condition (SwapUsed=${swap_used_pct}% MemHeadroomAfterClear=${mem_headroom_after_clear_kb}kB); skipping swap clear"
+        exit 0
+    fi
 fi
 
 run_swap_cmd() {
@@ -70,9 +86,13 @@ run_swap_cmd() {
 }
 
 # All conditions satisfied: clear swap
-logger -t "$LOG_TAG" "Clearing swap: MemAvailable=${mem_avail_kb}kB SwapUsed=${swap_used_kb}kB Load1=${load_avg_1}"
+if [ "$emergency_clear" = "yes" ]; then
+    logger -t "$LOG_TAG" "Clearing swap (emergency override): MemAvailable=${mem_avail_kb}kB SwapUsed=${swap_used_kb}kB (${swap_used_pct}%) MemHeadroomAfterClear=${mem_headroom_after_clear_kb}kB Load1=${load_avg_1}"
+else
+    logger -t "$LOG_TAG" "Clearing swap: MemAvailable=${mem_avail_kb}kB SwapUsed=${swap_used_kb}kB (${swap_used_pct}%) Load1=${load_avg_1}"
+fi
 SWAPOFF_BIN=${SWAPOFF_BIN:-$(command -v swapoff 2>/dev/null || echo /sbin/swapoff)}
 SWAPON_BIN=${SWAPON_BIN:-$(command -v swapon 2>/dev/null || echo /sbin/swapon)}
 run_swap_cmd "$SWAPOFF_BIN" -a
 run_swap_cmd "$SWAPON_BIN" -a
-logger -t "$LOG_TAG" "Swap cleared: SwapUsed was ${swap_used_kb}kB"
+logger -t "$LOG_TAG" "Swap cleared: SwapUsed was ${swap_used_kb}kB (${swap_used_pct}%)"
