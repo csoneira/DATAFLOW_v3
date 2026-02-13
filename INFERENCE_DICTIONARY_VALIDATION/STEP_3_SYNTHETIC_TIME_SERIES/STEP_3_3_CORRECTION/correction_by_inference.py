@@ -947,6 +947,67 @@ def _plot_flux_recovery_vs_global_rate(
     _apply_striped_background(axes[3], est_flux)
     axes[3].legend(loc="best", fontsize=8)
 
+    # Harmonize number of 1%-bands across all four subplots (visual-only, preserve axis centers)
+    # Determine per-axis 1% size using the same fallback logic as the striped background helper.
+    y_sources = [y_ref_flux, y_ref_eff, rate_vals, est_flux]
+    band_sizes = []
+    current_bands = []
+    centers = []
+    for ax, y_arr in zip(axes, y_sources):
+        y_min, y_max = ax.get_ylim()
+        span = y_max - y_min
+        valid = np.isfinite(y_arr)
+        if np.any(valid):
+            mean_val = float(np.mean(y_arr[valid]))
+            band = abs(mean_val) * 0.01
+        else:
+            band = span * 0.01
+        if not np.isfinite(band) or band <= 0.0:
+            band = max(span * 0.01, 1e-12)
+        band_sizes.append(band)
+        centers.append(0.5 * (y_min + y_max))
+        current_bands.append((span / band) if band > 0.0 else 0.0)
+
+    # Target number of 1%-bands (take ceiling of the maximum observed)
+    N = int(np.ceil(max(current_bands))) if current_bands else 0
+
+    # Apply new y-limits (preserve center) and set 1%-spaced ticks (values in original units).
+    # Then redraw the 1%-striped background so stripes cover the NEW ylim span (visual-only).
+    if N > 0:
+        for ax, center, band, y_arr in zip(axes, centers, band_sizes, y_sources):
+            target_span = N * band
+            new_min = center - 0.5 * target_span
+            new_max = center + 0.5 * target_span
+            ax.set_ylim(new_min, new_max)
+            # set tick positions every 1% but limit tick count to avoid label overlap
+            # keep ticks aligned to the 1%-band grid but sample them sparsely when N is large
+            max_ticks = 9
+            n_bands = max(1, int(round(target_span / band)))
+            step_bands = max(1, int(np.ceil(n_bands / max_ticks)))
+            # build symmetric indices around center on the band grid
+            k_min = - (n_bands // 2)
+            k_max = (n_bands // 2) + (1 if (n_bands % 2 == 0) else 0)
+            ks = list(range(k_min, k_max + 1, step_bands))
+            ticks = [center + k * band for k in ks]
+            ax.set_yticks(ticks)
+            # format tick labels to 2 decimal places to avoid excessive precision
+            try:
+                ax.set_yticklabels([f"{v:.2f}" for v in ticks])
+            except Exception:
+                # fallback: use a numeric formatter if direct set fails
+                try:
+                    from matplotlib.ticker import FormatStrFormatter
+
+                    ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+                except Exception:
+                    pass
+            # redraw 1%-striped background to fill the expanded ylim range
+            try:
+                _apply_striped_background(ax, y_arr)
+            except Exception:
+                # non-critical: leave background as-is if redraw fails
+                pass
+
     fig.suptitle(
         "Flux-recovery story: simulated flux/efficiency -> global-rate response -> reconstructed flux",
         fontsize=11,

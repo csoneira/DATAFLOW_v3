@@ -1,5 +1,10 @@
 # To do list
 
+## Urgent
+- [ ] Put the ideas of the scripts of /home/mingo/DATAFLOW_v3/NOT_ESSENTIAL/tools in the VALIDATION folder.
+
+## Not so
+
 - [ ] Validate the method using different sample sizes with different statistics. Build the dictionary with a lot of data, then try to estimate the parameters using different sample sizes to see how stable the estimation is.
 - [ ] Make possible to generate more events for a certain set of parameters to make richer the statistics.
 - [ ] Validation of the simulation.
