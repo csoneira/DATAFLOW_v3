@@ -685,7 +685,7 @@ def _plot_highlight_contributions(
                 dy_s[m_zero],
                 s=14,
                 color="lightgray",
-                alpha=0.35,
+                alpha=0.80,
                 linewidths=0.0,
                 label=f"{basis_label} (excluded by event constraint)",
                 zorder=0,

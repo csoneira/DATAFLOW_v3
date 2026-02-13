@@ -206,13 +206,12 @@ def main() -> int:
         ev = pd.to_numeric(collected[ev_col], errors="coerce").dropna()
         if not ev.empty:
             fig, ax = plt.subplots(figsize=(7, 4.5))
-            ax.hist(ev, bins=40, alpha=0.8, color="#4C78A8", edgecolor="white")
-            ax.axvline(ev.median(), color="#E45756", linestyle="--", linewidth=1.2,
-                       label=f"median = {ev.median():.0f}")
+            # Match the blue histogram alpha used elsewhere (was 0.8 here)
+            ax.hist(ev, bins=40, alpha=0.5, color="#4C78A8", edgecolor="white")
+            # Removed median vertical line / legend for a cleaner presentation
             ax.set_xlabel(f"Event count ({ev_col})")
             ax.set_ylabel("Number of files")
             ax.set_title(f"Event count distribution — {len(ev)} collected files")
-            ax.legend(fontsize=9)
             ax.grid(True, alpha=0.2)
             fig.tight_layout()
             fig.savefig(PLOTS_DIR / "event_count_histogram.png", dpi=150)

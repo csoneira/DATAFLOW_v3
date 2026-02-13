@@ -455,19 +455,15 @@ def _make_plots(
             ax.scatter(ne[m], er[m], s=10, alpha=0.4, color="#4C78A8")
             ax.axhline(0, color="black", linewidth=0.8)
 
-            # ±1/sqrt(N) guide
+            # Theoretical ±1/√N guide converted to percent: 100/√N (matches rel. error [%])
             nv = ne[m].values.astype(float)
-            ev = np.abs(er[m].values.astype(float))
-            med_err = float(np.nanmedian(ev))
-            med_n = float(np.nanmedian(nv))
-            if med_n > 0 and med_err > 0:
-                scale = med_err * np.sqrt(med_n)
-                n_line = np.linspace(nv.min(), nv.max(), 300)
-                ax.plot(n_line, scale / np.sqrt(n_line), "r--",
-                        linewidth=1.5, label=r"$\propto 1/\sqrt{N}$")
-                ax.plot(n_line, -scale / np.sqrt(n_line), "r--",
-                        linewidth=1.5)
-                ax.legend(fontsize=8)
+            n_line = np.linspace(max(1.0, nv.min()), nv.max(), 300)
+            # muted grey dashed line (thin) — theoretical expectation in percent
+            ax.plot(n_line, 100.0 / np.sqrt(n_line), color="#6e6e6e", linestyle="--",
+                    linewidth=1.0, label=r"$100/\sqrt{N}$")
+            ax.plot(n_line, -100.0 / np.sqrt(n_line), color="#6e6e6e", linestyle="--",
+                    linewidth=1.0)
+            ax.legend(fontsize=8)
 
             ax.set_xlabel("Number of events")
             ax.set_ylabel(f"Rel. error {pname} [%]")
@@ -476,7 +472,11 @@ def _make_plots(
                 title += f" ({n_outside} outside range omitted)"
             ax.set_title(title)
             ax.set_ylim(relerr_plot_min, relerr_plot_max)
-            ax.set_xscale("log")
+            # Set x-axis to linear and force integer ticks
+            ax.set_xscale("linear")
+            from matplotlib.ticker import MaxNLocator
+            ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune=None))
+            ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, pos: f"{int(x):,}" if x >= 1 else f"{x:g}"))
             fig.tight_layout()
             fig.savefig(PLOTS_DIR / f"error_vs_events_{pname}.png")
             plt.close(fig)
@@ -514,20 +514,25 @@ def _make_plots(
             out_vals = out_raw[
                 (out_raw >= relerr_plot_min) & (out_raw <= relerr_plot_max)
             ]
+            # Use counts (not density) for specific parameters requested by user
+            density_flag = False if pname in ("eff_sim_1", "flux_cm2_min") else True
             if not in_vals.empty:
                 ax.hist(in_vals, bins=40, alpha=0.6, color="#2ca02c",
-                        label=f"In-dict (n={len(in_vals)})", density=True)
+                        label=f"In-dict (n={len(in_vals)})", density=density_flag)
             if not out_vals.empty:
                 ax.hist(out_vals, bins=40, alpha=0.6, color="#d62728",
-                        label=f"Off-dict strict (n={len(out_vals)})", density=True)
+                        label=f"Off-dict strict (n={len(out_vals)})", density=density_flag)
             ax.set_xlabel(f"Rel. error {pname} [%]")
-            ax.set_ylabel("Density")
+            ax.set_ylabel("Count" if not density_flag else "Density")
             ax.set_title(
                 f"In-dict vs off-dict strict: rel. error {pname} "
                 f"([{relerr_plot_min:.1f}, {relerr_plot_max:.1f}]%)"
             )
             ax.set_xlim(relerr_plot_min, relerr_plot_max)
             ax.legend(fontsize=8)
+            # Put Y axis in log scale only for the two requested parameters
+            if pname in ("eff_sim_1", "flux_cm2_min"):
+                ax.set_yscale("log")
             fig.tight_layout()
             fig.savefig(PLOTS_DIR / f"dict_vs_offdict_relerr_{pname}.png")
             plt.close(fig)

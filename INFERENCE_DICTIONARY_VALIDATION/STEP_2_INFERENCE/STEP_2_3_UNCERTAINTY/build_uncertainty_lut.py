@@ -797,9 +797,16 @@ def _make_plots(
         event_bins = max(1, len(all_edges[event_dim]) - 1) if event_dim is not None else 1
         row_shape = [max(1, len(all_edges[d]) - 1) for d in row_dims]
         row_keys = list(np.ndindex(*row_shape)) if row_shape else [tuple()]
-        hist_edges = np.linspace(relerr_min, relerr_max, 33)
+        # Default histogram edges (n_edges points => n_edges-1 bins). For two
+        # frequently-inspected parameters use a finer binning to show detail.
+        hist_n_edges_default = 33
+        _hist_n_edges_special = {"eff_sim_1": 101, "flux_cm2_min": 101}
 
         for pname in plot_pnames:
+            # per-parameter histogram edges (increase bins for requested params)
+            n_edges = _hist_n_edges_special.get(pname, hist_n_edges_default)
+            hist_edges = np.linspace(relerr_min, relerr_max, int(n_edges))
+
             err_col = f"relerr_{pname}_pct"
             if err_col not in val_work.columns:
                 continue
