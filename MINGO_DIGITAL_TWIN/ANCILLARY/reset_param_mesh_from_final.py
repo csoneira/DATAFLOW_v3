@@ -31,6 +31,13 @@ MESH_NUMERIC_COLS = [
 ]
 
 
+STEP_ID_SPECS = [
+    ("step_1_id", ["cos_n", "flux_cm2_min"]),
+    ("step_2_id", ["z_p1", "z_p2", "z_p3", "z_p4"]),
+    ("step_3_id", ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]),
+]
+
+
 def _parse_efficiencies(value: object) -> list[float]:
     if isinstance(value, (list, tuple)):
         effs = list(value)
@@ -41,24 +48,60 @@ def _parse_efficiencies(value: object) -> list[float]:
     return [float(x) for x in effs]
 
 
-def _assign_step_ids(mesh: pd.DataFrame) -> pd.DataFrame:
+def _normalize_step_id(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_param_key(row: pd.Series, cols: list[str]) -> tuple[float, ...]:
+    return tuple(round(float(row[col]), 12) for col in cols)
+
+
+def _assign_step_ids(mesh: pd.DataFrame, existing_mesh: pd.DataFrame | None = None) -> pd.DataFrame:
     mesh = mesh.copy()
+    existing = existing_mesh.copy() if existing_mesh is not None else pd.DataFrame()
+    if not existing.empty:
+        for col in MESH_NUMERIC_COLS:
+            if col in existing.columns:
+                existing[col] = pd.to_numeric(existing[col], errors="coerce")
+        existing = existing.dropna(subset=[col for col in MESH_NUMERIC_COLS if col in existing.columns])
 
     def assign_ids(cols: list[str], id_col: str) -> None:
-        mapping: dict[tuple[object, ...], int] = {}
-        next_id = 1
+        mapping: dict[tuple[float, ...], int] = {}
+        used_ids: set[int] = set()
+
+        if not existing.empty and id_col in existing.columns and all(col in existing.columns for col in cols):
+            for _, row in existing.iterrows():
+                step_id = _normalize_step_id(row.get(id_col))
+                if step_id is None:
+                    continue
+                key = _build_param_key(row, cols)
+                if key not in mapping or step_id < mapping[key]:
+                    mapping[key] = step_id
+                used_ids.add(step_id)
+
+        next_id = max(used_ids, default=0) + 1
         ids: list[str] = []
         for _, row in mesh.iterrows():
-            key = tuple(row[col] for col in cols)
+            key = _build_param_key(row, cols)
             if key not in mapping:
                 mapping[key] = next_id
+                used_ids.add(next_id)
                 next_id += 1
             ids.append(f"{mapping[key]:03d}")
         mesh[id_col] = pd.Series(ids, dtype="string")
 
-    assign_ids(["cos_n", "flux_cm2_min"], "step_1_id")
-    assign_ids(["z_p1", "z_p2", "z_p3", "z_p4"], "step_2_id")
-    assign_ids(["eff_p1", "eff_p2", "eff_p3", "eff_p4"], "step_3_id")
+    for id_col, cols in STEP_ID_SPECS:
+        assign_ids(cols, id_col)
     for idx in range(4, 11):
         mesh[f"step_{idx}_id"] = "001"
     return mesh
@@ -114,7 +157,6 @@ def _build_mesh(sim_params: pd.DataFrame) -> pd.DataFrame:
     mesh = pd.concat([mesh, eff_cols], axis=1)
 
     mesh = mesh.sort_values(["cos_n", "flux_cm2_min", "z_p1", "z_p2", "z_p3", "z_p4"]).reset_index(drop=True)
-    mesh = _assign_step_ids(mesh)
     return mesh
 
 
@@ -166,6 +208,25 @@ def _load_pending_rows(mesh_path: Path) -> pd.DataFrame:
     return pending[["done"] + MESH_NUMERIC_COLS].reset_index(drop=True)
 
 
+def _load_existing_mesh(mesh_path: Path) -> pd.DataFrame:
+    if not mesh_path.exists():
+        return pd.DataFrame(columns=["done"] + MESH_NUMERIC_COLS)
+
+    try:
+        existing = pd.read_csv(mesh_path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(columns=["done"] + MESH_NUMERIC_COLS)
+
+    missing_cols = [col for col in MESH_NUMERIC_COLS if col not in existing.columns]
+    if missing_cols:
+        return pd.DataFrame(columns=["done"] + MESH_NUMERIC_COLS)
+
+    for col in MESH_NUMERIC_COLS:
+        existing[col] = pd.to_numeric(existing[col], errors="coerce")
+    existing = existing.dropna(subset=MESH_NUMERIC_COLS).reset_index(drop=True)
+    return existing
+
+
 def _cleanup_sim_runs(intersteps_dir: Path, apply: bool) -> None:
     for step_dir in sorted(intersteps_dir.glob("STEP_*_TO_*")):
         if step_dir.name == "STEP_0_TO_1":
@@ -182,7 +243,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Rebuild param_mesh.csv from step_final_simulation_params.csv and "
-            "delete intermediate SIM_RUN directories."
+            "optionally clean intermediate SIM_RUN directories."
         )
     )
     parser.add_argument(
@@ -203,12 +264,17 @@ def main() -> None:
     parser.add_argument(
         "--skip-delete",
         action="store_true",
-        help="Skip deleting SIM_RUN directories.",
+        help="Skip deleting SIM_RUN directories (kept for backwards compatibility).",
+    )
+    parser.add_argument(
+        "--delete-sim-runs",
+        action="store_true",
+        help="Enable cleanup of intermediate SIM_RUN directories.",
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Actually delete directories (default is dry-run).",
+        help="Apply destructive cleanup when used with --delete-sim-runs (otherwise cleanup is dry-run).",
     )
     args = parser.parse_args()
 
@@ -224,6 +290,7 @@ def main() -> None:
     sim_params = pd.read_csv(sim_params_path)
     mesh_done = _build_mesh(sim_params)
     with param_mesh_lock(mesh_path):
+        existing_mesh = _load_existing_mesh(mesh_path)
         pending_rows = _load_pending_rows(mesh_path)
         if not pending_rows.empty:
             print(f"Keeping {len(pending_rows)} pending rows (done=0) from existing param mesh.")
@@ -242,9 +309,9 @@ def main() -> None:
                 "done",
             ]
             mesh = mesh.sort_values(sort_cols, ascending=[True] * 10 + [False]).reset_index(drop=True)
-            mesh = _assign_step_ids(mesh)
         else:
             mesh = mesh_done
+        mesh = _assign_step_ids(mesh, existing_mesh=existing_mesh)
         _write_mesh(mesh, mesh_path)
 
         meta_path = mesh_path.with_name("param_mesh_metadata.json")
@@ -259,8 +326,11 @@ def main() -> None:
         }
         write_text_atomic(meta_path, json.dumps(meta, indent=2))
 
-    if not args.skip_delete:
+    cleanup_enabled = bool(args.delete_sim_runs) and not bool(args.skip_delete)
+    if cleanup_enabled:
         _cleanup_sim_runs(intersteps_dir, args.apply)
+    else:
+        print("SIM_RUN cleanup skipped (pass --delete-sim-runs to enable).")
 
     print(f"Wrote param mesh to {mesh_path}")
 

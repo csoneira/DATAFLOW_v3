@@ -116,6 +116,21 @@ def normalize_positions(z_positions: Tuple[float, float, float, float], normaliz
     return z_array
 
 
+def _normalize_step_id(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    try:
+        return f"{int(float(value)):03d}"
+    except (TypeError, ValueError):
+        text = str(value).strip()
+        return text or None
+
+
 def plot_geometry_summary(df: pd.DataFrame, pdf: PdfPages, title: str) -> None:
     required = {"Theta_gen", "Phi_gen", "tt_crossing"}
     if not required.issubset(df.columns):
@@ -210,7 +225,13 @@ def _resolve_input_path(run_dir: Path, input_basename: str | None) -> Path:
             return manifest_path
         chunks_dir = input_path.with_suffix("") / "chunks"
         if chunks_dir.exists():
-            return chunks_dir
+            manifest_path = chunks_dir.parent.with_suffix(".chunks.json")
+            if manifest_path.exists():
+                print(f"Using chunk manifest: {manifest_path}")
+                return manifest_path
+            raise FileNotFoundError(
+                f"Found chunks in {chunks_dir} but missing manifest {manifest_path}; run is incomplete."
+            )
     candidates = (
         sorted(run_dir.glob("muon_sample_*.chunks.json"))
         + sorted(run_dir.glob("muon_sample_*.pkl"))
@@ -219,13 +240,18 @@ def _resolve_input_path(run_dir: Path, input_basename: str | None) -> Path:
     if len(candidates) == 1:
         return candidates[0]
     manifest_candidates = sorted(run_dir.glob("muon_sample_*.chunks.json"))
-    if not manifest_candidates:
-        manifest_candidates = sorted(run_dir.glob("muon_sample_*/chunks"))
     if len(manifest_candidates) != 1:
+        incomplete_chunks = []
+        for chunks_dir in sorted(run_dir.glob("muon_sample_*/chunks")):
+            manifest_path = chunks_dir.parent.with_suffix(".chunks.json")
+            if not manifest_path.exists():
+                incomplete_chunks.append(str(chunks_dir))
+        if incomplete_chunks:
+            raise FileNotFoundError(
+                f"Found chunk directories without manifests in {run_dir}: {', '.join(incomplete_chunks)}."
+            )
         raise FileNotFoundError(f"Expected 1 muon_sample file in {run_dir}, found {len(candidates)}.")
     manifest_path = manifest_candidates[0]
-    if manifest_path.name == "chunks":
-        return manifest_path.parent
     return Path(str(manifest_path)[: -len(".chunks.json")] + ".pkl")
 
 
@@ -233,15 +259,33 @@ def _load_input_meta(path: Path) -> dict:
     if not path.exists():
         return {}
     if path.name.endswith(".chunks.json"):
-        return json.loads(path.read_text()).get("metadata", {})
+        try:
+            return json.loads(path.read_text()).get("metadata", {})
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[WARN] Failed to read manifest metadata from {path}: {exc}")
+            return {}
     if path.is_dir() and path.name == "chunks":
         manifest_path = path.parent.with_suffix(".chunks.json")
         if manifest_path.exists():
-            return json.loads(manifest_path.read_text()).get("metadata", {})
+            try:
+                return json.loads(manifest_path.read_text()).get("metadata", {})
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"[WARN] Failed to read manifest metadata from {manifest_path}: {exc}")
+                return {}
+        return {}
+    if path.is_dir():
+        return {}
     meta_path = path.with_suffix(path.suffix + ".meta.json")
     if meta_path.exists():
-        return json.loads(meta_path.read_text())
-    _, meta = load_with_metadata(path)
+        try:
+            return json.loads(meta_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[WARN] Failed to read sidecar metadata from {meta_path}: {exc}")
+            return {}
+    try:
+        _, meta = load_with_metadata(path)
+    except ValueError:
+        return {}
     return meta
 
 
@@ -404,6 +448,7 @@ def main() -> None:
     param_date = None
     param_row_id = None
     step_1_id = None
+    step_2_id = None
     z_values = None
 
     for candidate_path, candidate_sim_run in input_candidates:
@@ -449,7 +494,8 @@ def main() -> None:
         z_positions_cfg = cfg.get("z_positions")
         param_set_id, param_date = extract_param_set(upstream_meta)
         param_row_id = extract_param_row_id(upstream_meta)
-        step_1_id = upstream_meta.get("step_1_id")
+        step_1_id = _normalize_step_id(upstream_meta.get("step_1_id"))
+        step_2_id = None
         param_mesh_path = None
         param_row = None
         if z_positions_cfg is None:
@@ -482,15 +528,18 @@ def main() -> None:
             order = list(range(start_idx, len(mesh_candidates))) + list(range(0, start_idx))
             for idx in order:
                 row = mesh_candidates.iloc[idx]
-                step_2_id_candidate = str(row.get("step_2_id")) if "step_2_id" in row.index else None
+                step_2_id_candidate = _normalize_step_id(row.get("step_2_id"))
                 if not step_1_id or not step_2_id_candidate:
                     continue
                 sim_run_candidate = build_sim_run_name([step_1_id, step_2_id_candidate])
                 if not (output_dir / sim_run_candidate).exists():
                     param_row = row
+                    step_2_id = step_2_id_candidate
                     break
             if param_row is None:
                 continue
+            if not step_1_id and "step_1_id" in param_row.index:
+                step_1_id = _normalize_step_id(param_row.get("step_1_id"))
             if "param_set_id" in param_row.index and pd.notna(param_row["param_set_id"]):
                 param_set_id = int(param_row["param_set_id"])
             if "param_date" in param_row:
@@ -511,10 +560,71 @@ def main() -> None:
                 cfg["z_positions"] = z_values
                 param_set_id = None
                 param_date = None
+                mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+                if not mesh_dir.is_absolute():
+                    mesh_dir = Path(__file__).resolve().parent / mesh_dir
+                mesh, mesh_path = resolve_param_mesh(
+                    mesh_dir, cfg.get("param_mesh_sim_run", "none"), cfg.get("seed")
+                )
+                mesh = mesh.copy()
+                mesh["done"] = mesh.get("done", 0).fillna(0).astype(int)
+                param_mesh_path = mesh_path
+                required_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
+                if not all(col in mesh.columns for col in required_cols):
+                    raise ValueError("param_mesh.csv is missing z_p1..z_p4 required for geometry selection.")
+
+                z_frame = mesh[required_cols].apply(pd.to_numeric, errors="coerce")
+                z_target = np.array(z_values, dtype=float)
+                z_match = np.isclose(
+                    z_frame.to_numpy(dtype=float),
+                    z_target[np.newaxis, :],
+                    rtol=0.0,
+                    atol=1e-6,
+                ).all(axis=1)
+
+                if step_1_id and "step_1_id" in mesh.columns:
+                    step1_match = mesh["step_1_id"].apply(_normalize_step_id) == step_1_id
+                else:
+                    step1_match = pd.Series(True, index=mesh.index)
+
+                mesh_candidates = mesh[z_match & step1_match & (mesh["done"] != 1)]
+                if mesh_candidates.empty:
+                    mesh_candidates = mesh[z_match & step1_match]
+                if mesh_candidates.empty and step_1_id and "step_1_id" in mesh.columns:
+                    mesh_candidates = mesh[z_match & (mesh["done"] != 1)]
+                    if mesh_candidates.empty:
+                        mesh_candidates = mesh[z_match]
+                if mesh_candidates.empty:
+                    raise ValueError(
+                        f"No param_mesh rows match fixed z_positions={z_values}."
+                    )
+
+                candidate_indices = mesh_candidates.index.tolist()
+                start_idx = int(rng.integers(0, len(candidate_indices)))
+                order = list(range(start_idx, len(candidate_indices))) + list(range(0, start_idx))
+                for idx in order:
+                    row_idx = candidate_indices[idx]
+                    row = mesh.loc[row_idx]
+                    step_1_candidate = step_1_id or _normalize_step_id(row.get("step_1_id"))
+                    step_2_candidate = _normalize_step_id(row.get("step_2_id"))
+                    if not step_1_candidate or not step_2_candidate:
+                        continue
+                    sim_run_candidate = build_sim_run_name([step_1_candidate, step_2_candidate])
+                    if not (output_dir / sim_run_candidate).exists():
+                        param_row = row
+                        param_row_id = int(row_idx)
+                        step_1_id = step_1_candidate
+                        step_2_id = step_2_candidate
+                        break
+                if param_row is None:
+                    continue
             else:
                 raise ValueError("z_positions must be 'random' or a 4-value list [z1, z2, z3, z4].")
 
-        step_2_id = str(param_row.get("step_2_id")) if param_row is not None and "step_2_id" in param_row.index else None
+        if step_2_id is None and param_row is not None and "step_2_id" in param_row.index:
+            step_2_id = _normalize_step_id(param_row.get("step_2_id"))
+        if not step_1_id and param_row is not None and "step_1_id" in param_row.index:
+            step_1_id = _normalize_step_id(param_row.get("step_1_id"))
         if not step_1_id or not step_2_id:
             raise ValueError("step_1_id or step_2_id missing; ensure param_mesh.csv has step IDs.")
         cfg["step_1_id"] = step_1_id

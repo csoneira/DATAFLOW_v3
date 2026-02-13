@@ -21,6 +21,8 @@ Options:
 Notes:
   -c/--continuous implies "all", "--loop", and "--no-plots" and uses a lock in /tmp.
   --force-continuous is only valid with -c/--continuous.
+  Set RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_LINES=1 to auto-close active
+  step_1 lines that have no pending rows compatible with fixed STEP_2 z_positions.
 EOF
 }
 
@@ -144,6 +146,7 @@ WORK_BROKEN_RUNS_PATH="/tmp/mingo_digital_twin_run_step_broken_runs.csv"
 STRICT_LINE_CLOSURE="${RUN_STEP_STRICT_LINE_CLOSURE:-1}"
 STEP1_STUCK_AGE_S="${RUN_STEP_STEP1_STUCK_AGE_S:-1800}"
 STEP1_BLOCK_LOG_INTERVAL_S="${RUN_STEP_STEP1_BLOCK_LOG_INTERVAL_S:-300}"
+OBLITERATE_UNINTERESTING_STEP1_LINES="${RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_LINES:-0}"
 LAST_STEP1_BLOCK_LOG_EPOCH=0
 if [[ "$STRICT_LINE_CLOSURE" != "0" && "$STRICT_LINE_CLOSURE" != "1" ]]; then
   STRICT_LINE_CLOSURE="1"
@@ -153,6 +156,9 @@ if ! [[ "$STEP1_STUCK_AGE_S" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$STEP1_BLOCK_LOG_INTERVAL_S" =~ ^[0-9]+$ ]]; then
   STEP1_BLOCK_LOG_INTERVAL_S="300"
+fi
+if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "0" && "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "1" ]]; then
+  OBLITERATE_UNINTERESTING_STEP1_LINES="0"
 fi
 if [[ -n "$CONTINUOUS" && -z "$DEBUG" ]]; then
   QUIET_CONTINUOUS="1"
@@ -363,6 +369,41 @@ maybe_log_step1_blocked() {
   if [[ "$broken_runs" != "0" ]]; then
     log_warn "broken SIM_RUN report path=$WORK_BROKEN_RUNS_PATH"
   fi
+}
+
+obliterate_uninteresting_step1_lines_if_needed() {
+  local helper
+  local output
+  local rc
+  if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "1" ]]; then
+    return 3
+  fi
+  helper="$DT/ANCILLARY/obliterate_open_lines_for_fixed_z.py"
+  if [[ ! -f "$helper" ]]; then
+    log_warn "step=1 line-obliterate helper missing: $helper"
+    return 2
+  fi
+  if output="$(python3 "$helper" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+    if [[ "$rc" -eq 3 ]]; then
+      if [[ -n "$output" ]]; then
+        log_info "step=1 line-obliterate $output"
+      fi
+      return 3
+    fi
+    if [[ -n "$output" ]]; then
+      log_warn "step=1 line-obliterate failed rc=$rc output=$output"
+    else
+      log_warn "step=1 line-obliterate failed rc=$rc"
+    fi
+    return 2
+  fi
+  if [[ -n "$output" ]]; then
+    log_info "step=1 line-obliterate $output"
+  fi
+  return 0
 }
 
 refresh_step_work_cache() {
@@ -792,10 +833,27 @@ while true; do
             if ! step1_new_lines_allowed; then
               attempted=1
               maybe_log_step1_blocked
-              if [[ -n "$DEBUG" ]]; then
-                log_info "step=1 status=cache-blocked strict_line_closure=$STRICT_LINE_CLOSURE"
+              if obliterate_uninteresting_step1_lines_if_needed; then
+                refresh_work_cache_or_disable
+                if step1_new_lines_allowed; then
+                  log_info "step=1 status=unblocked reason=obliterated-non-interest-line"
+                else
+                  if [[ -n "$DEBUG" ]]; then
+                    log_info "step=1 status=cache-blocked strict_line_closure=$STRICT_LINE_CLOSURE"
+                  fi
+                  continue
+                fi
+              else
+                obliterate_rc=$?
+                if [[ -n "$DEBUG" ]]; then
+                  if [[ "$obliterate_rc" -eq 3 ]]; then
+                    log_info "step=1 status=cache-blocked strict_line_closure=$STRICT_LINE_CLOSURE"
+                  else
+                    log_info "step=1 status=cache-blocked strict_line_closure=$STRICT_LINE_CLOSURE obliterate_rc=$obliterate_rc"
+                  fi
+                fi
+                continue
               fi
-              continue
             fi
           fi
 

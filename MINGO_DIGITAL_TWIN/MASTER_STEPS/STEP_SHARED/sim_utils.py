@@ -753,7 +753,9 @@ def find_sim_run(output_dir: Path, cfg: Dict, upstream_meta: Optional[Dict]) -> 
     registry = load_sim_run_registry(output_dir)
     for entry in registry.get("runs", []):
         if entry.get("config_hash") == config_hash and entry.get("upstream_hash") == upstream_hash:
-            return entry.get("sim_run")
+            sim_run = entry.get("sim_run")
+            if sim_run and (output_dir / sim_run).exists():
+                return sim_run
     return None
 
 

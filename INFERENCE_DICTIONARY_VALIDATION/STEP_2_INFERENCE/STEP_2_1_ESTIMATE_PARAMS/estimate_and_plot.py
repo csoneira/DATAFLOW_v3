@@ -51,7 +51,7 @@ PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Import the self-contained estimation module
 sys.path.insert(0, str(INFERENCE_DIR))
-from estimate_parameters import estimate_parameters  # noqa: E402
+from estimate_parameters import estimate_parameters, DISTANCE_FNS  # noqa: E402
 
 logging.basicConfig(
     format="[%(levelname)s] STEP_2.1 — %(message)s", level=logging.INFO
@@ -245,6 +245,10 @@ def _make_random_showcase_l2_contour(
     sample_feat = pd.to_numeric(data_df.loc[ds_idx, feature_cols], errors="coerce").to_numpy(dtype=float)
 
     distance_metric = str(cfg_21.get("distance_metric", "l2_zscore"))
+    # short token for labels/filenames (e.g. 'l2' from 'l2_zscore', 'chi2' from 'chi2')
+    metric_short = distance_metric.split("_")[0]
+    metric_label = "L2" if metric_short == "l2" else metric_short
+
     if distance_metric == "l2_zscore":
         means = dict_feat.mean(axis=0, skipna=True)
         stds = dict_feat.std(axis=0, skipna=True).replace({0.0: np.nan})
@@ -277,17 +281,28 @@ def _make_random_showcase_l2_contour(
         return
 
     cand_mat = dict_mat[z_mask]
-    l2 = _l2_distances(sample_vec, cand_mat)
-    cand_df["l2_distance"] = l2
+
+    # Use the same distance function used by the estimator so the plotted
+    # quantity matches the reported `best_distance` (e.g. chi2, l2_zscore).
+    dist_fn = DISTANCE_FNS.get(distance_metric, DISTANCE_FNS.get(metric_short, None))
+    if dist_fn is None:
+        # Fallback to the original L2 helper if nothing found
+        z_vals = _l2_distances(sample_vec, cand_mat)
+        cand_df["distance_value"] = z_vals
+    else:
+        # compute per-candidate scalar distances using the estimator's funcs
+        z_list = [dist_fn(sample_vec, cand_mat[i]) for i in range(cand_mat.shape[0])]
+        cand_df["distance_value"] = np.array(z_list, dtype=float)
+
     cand_df["flux_for_plot"] = pd.to_numeric(cand_df.get("flux_cm2_min"), errors="coerce")
     cand_df["eff_for_plot"] = pd.to_numeric(cand_df.get("eff_sim_1"), errors="coerce")
-    cand_df = cand_df.dropna(subset=["flux_for_plot", "eff_for_plot", "l2_distance"])
+    cand_df = cand_df.dropna(subset=["flux_for_plot", "eff_for_plot", "distance_value"])
     if len(cand_df) < 3:
         return
 
     x = cand_df["flux_for_plot"].to_numpy(dtype=float)
     y = cand_df["eff_for_plot"].to_numpy(dtype=float)
-    z = cand_df["l2_distance"].to_numpy(dtype=float)
+    z = cand_df["distance_value"].to_numpy(dtype=float)
     z_min = float(np.nanmin(z))
     z_max = float(np.nanmax(z))
     if not np.isfinite(z_min) or not np.isfinite(z_max) or z_min == z_max:
@@ -318,7 +333,7 @@ def _make_random_showcase_l2_contour(
         edgecolors=(1.0, 1.0, 1.0, 0.75), linewidths=0.35, zorder=4
     )
     cb = fig.colorbar(ctf if contour_ok else sc, ax=ax, shrink=0.88)
-    cb.set_label("L2 distance in feature space")
+    cb.set_label(f"{metric_label} distance in feature space")
 
     ax.scatter(
         [true_flux], [true_eff], s=170, marker="*", color="#E45756",
@@ -331,7 +346,7 @@ def _make_random_showcase_l2_contour(
 
     ax.set_xlabel("Flux [cm⁻² min⁻¹]")
     ax.set_ylabel("Efficiency (eff_sim_1)")
-    ax.set_title(f"Random showcase L2 map (dataset_index={ds_idx}, candidates={len(cand_df)})")
+    ax.set_title(f"Random showcase {metric_label} distance map (dataset_index={ds_idx}, candidates={len(cand_df)})")
     ax.legend(loc="best", fontsize=8)
 
     note = (
@@ -345,7 +360,7 @@ def _make_random_showcase_l2_contour(
     )
 
     fig.tight_layout()
-    fig.savefig(PLOTS_DIR / "random_showcase_l2_contour_flux_eff.png")
+    fig.savefig(PLOTS_DIR / "random_showcase_distance_contour_flux_eff.png")
     plt.close(fig)
 
 
@@ -672,8 +687,9 @@ def _make_plots(
             ax.set_ylabel(f"Estimated {label}")
             ax.set_title(f"True vs Est: {label}")
             ax.set_aspect("equal", adjustable="box")
-        fig.suptitle("Parameter estimation: true vs estimated", fontsize=11)
-        fig.tight_layout()
+        fig.suptitle(f"Parameter estimation: true vs estimated (metric={metric})", fontsize=11, y=0.98)
+        # Leave extra room under the suptitle so subplot titles don't collide
+        fig.tight_layout(rect=[0, 0, 1, 0.92])
         fig.savefig(PLOTS_DIR / "true_vs_estimated.png")
         plt.close(fig)
 

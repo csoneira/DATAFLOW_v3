@@ -2,14 +2,15 @@
 """STEP 1.2 — Dictionary and dataset creation.
 
 Takes the collected_data.csv from STEP 1.1 and:
-1. Computes empirical efficiencies (eff_2, eff_3) from trigger topology counts.
+1. Computes empirical efficiencies (eff_1..eff_4) from trigger topology counts.
 2. Filters outliers where eff_2 or eff_3 fall outside configured bounds.
 3. Splits the remaining table into:
    - **dataset**: the full clean table (all rows).
    - **dictionary**: a carefully chosen subsample satisfying:
      a) relative error of eff_2 and eff_3 below a threshold,
-     b) event count above a minimum,
-     c) one entry per unique parameter set (the one with the largest count).
+     b) relative error of eff_1 and eff_4 to fitted acceptance lines below a threshold,
+     c) event count above a minimum,
+     d) one entry per unique parameter set (the one with the largest count).
 4. Produces diagnostic plots showing dictionary quality and coverage.
 
 Output
@@ -90,6 +91,45 @@ def _find_count_prefix(df: pd.DataFrame) -> str:
     raise KeyError("No trigger-topology count columns found (e.g. raw_tt_1234_count).")
 
 
+def _fit_empirical_vs_simulated(
+    df: pd.DataFrame,
+    plane: int,
+) -> tuple[float, float] | None:
+    """Fit empirical = a * simulated + b for one plane."""
+    sim_col = f"eff_sim_{plane}"
+    emp_col = f"eff_empirical_{plane}"
+    sim = pd.to_numeric(df.get(sim_col), errors="coerce")
+    emp = pd.to_numeric(df.get(emp_col), errors="coerce")
+    m = sim.notna() & emp.notna()
+    if m.sum() < 2:
+        return None
+    x = sim[m].to_numpy(dtype=float)
+    y = emp[m].to_numpy(dtype=float)
+    a, b = np.polyfit(x, y, 1)
+    return float(a), float(b)
+
+
+def _compute_fit_relerr_columns(
+    df: pd.DataFrame,
+    plane: int,
+    a: float,
+    b: float,
+) -> None:
+    """Add fit-prediction and fit-relative-error columns for one plane."""
+    sim_col = f"eff_sim_{plane}"
+    emp_col = f"eff_empirical_{plane}"
+    fit_col = f"eff_fitline_{plane}"
+    re_col = f"relerr_eff_{plane}_fit_pct"
+    abs_re_col = f"abs_relerr_eff_{plane}_fit_pct"
+
+    sim = pd.to_numeric(df.get(sim_col), errors="coerce")
+    emp = pd.to_numeric(df.get(emp_col), errors="coerce")
+    fit = a * sim + b
+    df[fit_col] = fit
+    df[re_col] = (emp - fit) / fit.replace({0: np.nan}) * 100.0
+    df[abs_re_col] = df[re_col].abs()
+
+
 # ── Dictionary coverage helpers ──────────────────────────────────────────
 
 def _convex_hull(points: np.ndarray) -> np.ndarray:
@@ -155,7 +195,7 @@ def _min_distance_to_points(queries: np.ndarray, points: np.ndarray, chunk: int 
 
 
 def _plot_dictionary_coverage(dictionary: pd.DataFrame, path) -> None:
-    """NN distance histogram + coverage-vs-radius curve, matching old STEP_5 style."""
+    """Coverage diagnostics in normalized (flux, eff) space."""
     flux_col, eff_col = "flux_cm2_min", "eff_sim_1"
     if flux_col not in dictionary.columns or eff_col not in dictionary.columns:
         log.warning("Cannot plot dictionary coverage: missing %s or %s", flux_col, eff_col)
@@ -182,50 +222,125 @@ def _plot_dictionary_coverage(dictionary: pd.DataFrame, path) -> None:
     rng = np.random.default_rng(42)
     q = rng.random((5000, 2))
     q_min_d = _min_distance_to_points(q, unique_xy)
-    radii = np.linspace(0.005, 0.15, 30)
-    coverage_pct = [float(100.0 * np.mean(q_min_d <= r)) for r in radii]
+    # Convert to "percent of bbox side" units
+    nn_pct = nn_valid * 100.0
+    q_min_pct = q_min_d[np.isfinite(q_min_d)] * 100.0
 
-    # Plot
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-
-    # Left: NN distance histogram
-    # The "fraction of bbox diagonal" unit means: distances are measured after
-    # mapping flux to [0,1] and eff to [0,1], so 0.10 = 10% of the bounding-box
-    # diagonal in that normalised (flux, eff) space.
-    nn_pct = nn_valid * 100.0  # convert to % of bbox side
-    if len(nn_pct) > 0:
-        axes[0].hist(nn_pct, bins=50, color="#F58518", alpha=0.85, edgecolor="white")
-    axes[0].set_xlabel("NN distance [% of bbox side in (flux, eff) space]")
-    axes[0].set_ylabel("Count")
-    axes[0].set_title("Dictionary nearest-neighbor spacing")
-    axes[0].grid(True, alpha=0.2)
-
-    # Right: coverage curve — extend radii to reach 100 %
+    # Coverage curve — extend radii to reach full coverage
     radii_extended = np.linspace(0.005, 0.60, 60)
-    coverage_pct = [float(100.0 * np.mean(q_min_d <= r)) for r in radii_extended]
-    radii_pct = radii_extended * 100.0  # convert to %
-    axes[1].plot(radii_pct, coverage_pct, "o-", color="#4C78A8", markersize=3)
-    axes[1].set_xlim(0, radii_pct[-1])
-    axes[1].set_ylim(0, 105)
-    axes[1].set_xlabel("Coverage radius [% of bbox side in (flux, eff) space]")
-    axes[1].set_ylabel("Covered random points [%]")
-    axes[1].set_title("Dictionary filling by distance-based coverage")
-    axes[1].grid(True, alpha=0.2)
+    coverage_pct = np.array(
+        [float(100.0 * np.mean(q_min_d <= r)) for r in radii_extended],
+        dtype=float,
+    )
+    radii_pct = radii_extended * 100.0
+
+    # Percentiles / thresholds
+    nn_p50, nn_p90, nn_p95 = np.nanpercentile(nn_pct, [50, 90, 95])
+    q_p50, q_p90, q_p95 = np.nanpercentile(q_min_pct, [50, 90, 95])
+    cov_targets = [80, 90, 95]
+    cov_radius_at = {}
+    for t in cov_targets:
+        idx = np.where(coverage_pct >= t)[0]
+        cov_radius_at[t] = float(radii_pct[idx[0]]) if len(idx) else np.nan
+
+    # Plot (2x2)
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10))
+
+    # Top-left: normalized dictionary map colored by local spacing
+    ax = axes[0, 0]
+    sc = ax.scatter(
+        unique_xy[:, 0],
+        unique_xy[:, 1],
+        c=nn_d * 100.0,
+        cmap="viridis",
+        s=35,
+        alpha=0.9,
+        edgecolors="0.25",
+        linewidths=0.3,
+    )
+    hull = _convex_hull(unique_xy)
+    if len(hull) >= 3:
+        closed = np.vstack([hull, hull[0]])
+        ax.plot(closed[:, 0], closed[:, 1], color="#E45756", linewidth=1.5,
+                linestyle="--", label="Convex hull")
+        ax.fill(closed[:, 0], closed[:, 1], color="#E45756", alpha=0.08, zorder=0)
+    cbar = fig.colorbar(sc, ax=ax, pad=0.02, fraction=0.046)
+    cbar.set_label("NN distance [% bbox side]")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("Normalized flux")
+    ax.set_ylabel("Normalized efficiency")
+    ax.set_title("Dictionary map (color = local spacing)")
+    ax.legend(fontsize=8, loc="upper right")
+    ax.grid(True, alpha=0.2)
+
+    # Top-right: NN spacing histogram with percentile guides
+    ax = axes[0, 1]
+    bins = max(20, min(60, int(np.sqrt(len(nn_pct)) * 3)))
+    ax.hist(nn_pct, bins=bins, color="#F58518", alpha=0.85, edgecolor="white")
+    ax.axvline(nn_p50, color="#1D3557", linestyle="--", linewidth=1.2, label=f"P50={nn_p50:.2f}%")
+    ax.axvline(nn_p90, color="#2A9D8F", linestyle="-.", linewidth=1.2, label=f"P90={nn_p90:.2f}%")
+    ax.axvline(nn_p95, color="#E63946", linestyle="-.", linewidth=1.2, label=f"P95={nn_p95:.2f}%")
+    ax.set_xlabel("NN distance [% bbox side]")
+    ax.set_ylabel("Count")
+    ax.set_title("Nearest-neighbor spacing distribution")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.2)
+
+    # Bottom-left: CDF of random-point nearest dictionary distance
+    ax = axes[1, 0]
+    sorted_q = np.sort(q_min_pct)
+    cdf = np.linspace(0.0, 100.0, len(sorted_q))
+    ax.plot(sorted_q, cdf, color="#4C78A8", linewidth=1.8)
+    ax.axvline(q_p50, color="#1D3557", linestyle="--", linewidth=1.2, label=f"P50={q_p50:.2f}%")
+    ax.axvline(q_p90, color="#2A9D8F", linestyle="-.", linewidth=1.2, label=f"P90={q_p90:.2f}%")
+    ax.axvline(q_p95, color="#E63946", linestyle="-.", linewidth=1.2, label=f"P95={q_p95:.2f}%")
+    ax.set_xlim(0.0, max(1.0, float(np.nanmax(sorted_q)) * 1.05))
+    ax.set_ylim(0.0, 100.0)
+    ax.set_xlabel("Distance to nearest dictionary point [% bbox side]")
+    ax.set_ylabel("Random points with distance <= x [%]")
+    ax.set_title("Coverage gap CDF (Monte Carlo)")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.2)
+
+    # Bottom-right: coverage by radius with operating-point markers
+    ax = axes[1, 1]
+    ax.plot(radii_pct, coverage_pct, "o-", color="#4C78A8", markersize=3, linewidth=1.5)
+    for t in cov_targets:
+        ax.axhline(t, color="0.65", linestyle=":", linewidth=1.0)
+        rr = cov_radius_at[t]
+        if np.isfinite(rr):
+            ax.axvline(rr, color="#2A9D8F", linestyle="-.", linewidth=1.2)
+            ax.scatter([rr], [t], color="#2A9D8F", s=25, zorder=3)
+            ax.text(rr + 0.8, t + 1.0, f"{t}% @ {rr:.2f}%", fontsize=8, color="#2A9D8F")
+    ax.set_xlim(0.0, radii_pct[-1])
+    ax.set_ylim(0.0, 105.0)
+    ax.set_xlabel("Coverage radius [% bbox side]")
+    ax.set_ylabel("Covered random points [%]")
+    ax.set_title("Dictionary filling vs coverage radius")
+    ax.grid(True, alpha=0.2)
 
     # Annotate key metrics
     hull = _convex_hull(unique_xy)
     hull_pct = _polygon_area(hull) * 100.0
+    r90 = cov_radius_at.get(90, np.nan)
     info = (f"Unique pts: {len(unique_xy)} | "
             f"Hull area: {hull_pct:.1f}% of bbox | "
-            f"NN median: {np.median(nn_pct):.1f}% of bbox side")
+            f"NN median: {np.median(nn_pct):.2f}% | "
+            f"Radius@90% cov: {r90:.2f}%")
     fig.suptitle(info, fontsize=9)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
 
-def _plot_eff_sim_vs_empirical(dataset: pd.DataFrame, dictionary: pd.DataFrame,
-                                path) -> None:
+def _plot_eff_sim_vs_empirical(
+    dataset: pd.DataFrame,
+    dictionary: pd.DataFrame,
+    path,
+    fit_line_by_plane: dict[int, tuple[float, float]] | None = None,
+) -> None:
     """2×2 scatter of simulated vs empirical efficiency for all 4 planes."""
     fig, axes = plt.subplots(2, 2, figsize=(10, 10), sharex=True, sharey=True)
     min_vals, max_vals = [], []
@@ -260,15 +375,79 @@ def _plot_eff_sim_vs_empirical(dataset: pd.DataFrame, dictionary: pd.DataFrame,
                 ax.scatter(ds[dm], de[dm], s=25, alpha=0.8, marker="x",
                            color="#E45756", linewidths=1.0, zorder=3, label="Dictionary")
         ax.plot([xmin - pad, xmax + pad], [xmin - pad, xmax + pad], "k--", linewidth=1)
-        ax.set_title(f"Plane {plane}")
+        if fit_line_by_plane and plane in fit_line_by_plane:
+            a, b = fit_line_by_plane[plane]
+            xline = np.array([xmin - pad, xmax + pad], dtype=float)
+            yline = a * xline + b
+            ax.plot(
+                xline,
+                yline,
+                linestyle="--",
+                linewidth=1.5,
+                color="#2A9D8F",
+                zorder=4,
+                label=f"fit y={a:.4f}x {b:+.4f}",
+            )
+            ax.set_title(f"Plane {plane} (fit-based dict cut)")
+            ax.legend(fontsize=8, loc="lower right")
+        else:
+            ax.set_title(f"Plane {plane} (direct dict cut)")
         ax.set_xlabel("Simulated efficiency")
         ax.set_ylabel("Empirical efficiency")
         ax.set_xlim(xmin - pad, xmax + pad)
         ax.set_ylim(xmin - pad, xmax + pad)
         ax.set_aspect("equal", adjustable="box")
         ax.grid(True, alpha=0.3)
-    axes[0, 1].legend(fontsize=8, loc="lower right")
-    fig.suptitle("Simulated vs Empirical Efficiency per Plane (grey=data, red×=dict)", fontsize=11)
+    fig.suptitle(
+        "Simulated vs Empirical Efficiency per Plane (grey=data, red×=dict)\n"
+        "Planes 1 & 4 use fit-based cuts (empirical = a·simulated + b).",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_empirical_eff2_vs_eff3(dataset: pd.DataFrame, dictionary: pd.DataFrame, path) -> None:
+    """Single-panel scatter of empirical efficiency plane 2 vs plane 3."""
+    x_col = "eff_empirical_2"
+    y_col = "eff_empirical_3"
+    if x_col not in dataset.columns or y_col not in dataset.columns:
+        log.warning("Cannot plot empirical eff2 vs eff3: missing %s or %s", x_col, y_col)
+        return
+
+    x = pd.to_numeric(dataset[x_col], errors="coerce")
+    y = pd.to_numeric(dataset[y_col], errors="coerce")
+    m = x.notna() & y.notna()
+    if m.sum() == 0:
+        log.warning("No valid points for empirical eff2 vs eff3 plot.")
+        return
+
+    xmin = float(min(x[m].min(), y[m].min()))
+    xmax = float(max(x[m].max(), y[m].max()))
+    pad = 0.02 * (xmax - xmin) if xmax > xmin else 0.01
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.scatter(x[m], y[m], s=12, alpha=0.4, color="#AAAAAA", zorder=2, label="Dataset")
+
+    if not dictionary.empty:
+        dx = pd.to_numeric(dictionary.get(x_col), errors="coerce")
+        dy = pd.to_numeric(dictionary.get(y_col), errors="coerce")
+        dm = dx.notna() & dy.notna()
+        if dm.any():
+            ax.scatter(dx[dm], dy[dm], s=28, alpha=0.85, marker="x",
+                       color="#E45756", linewidths=1.0, zorder=3, label="Dictionary")
+
+    # Reference line where empirical efficiencies in planes 2 and 3 are equal.
+    ax.plot([xmin - pad, xmax + pad], [xmin - pad, xmax + pad], "k--", linewidth=1, label="y = x")
+    ax.set_xlabel("Empirical efficiency (plane 2)")
+    ax.set_ylabel("Empirical efficiency (plane 3)")
+    ax.set_title("Empirical Efficiency: Plane 2 vs Plane 3")
+    ax.set_xlim(xmin - pad, xmax + pad)
+    ax.set_ylim(xmin - pad, xmax + pad)
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="lower right")
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -344,10 +523,11 @@ def _plot_relerr_report(
     path,
     relerr_cut_by_plane: dict[int, float] | None = None,
     min_events_cut: float | None = None,
+    hist_y_scale: str = "log",
 ) -> None:
-    """Comprehensive 2×3 report of relative errors for eff planes 2 and 3.
+    """Comprehensive 4×3 report of relative errors for eff planes 1..4.
 
-    Layout (rows = plane 2, plane 3):
+    Layout (rows = plane 1, plane 2, plane 3, plane 4):
       col 0: relerr histogram (signed, filtered to ±3 %)
       col 1: relerr vs n_events scatter (signed)
       col 2: relerr vs simulated efficiency scatter (signed)
@@ -355,11 +535,20 @@ def _plot_relerr_report(
     BASE_HIST_CLIP_PCT = 3.0  # minimum histogram clip
     BASE_SCATTER_Y_CLIP_PCT = 5.0  # minimum scatter y-range clip
     CUT_COLOR = "#2A9D8F"
-    planes = [2, 3]
+    hist_y_scale = str(hist_y_scale).strip().lower()
+    if hist_y_scale not in {"linear", "log"}:
+        log.warning("Invalid hist_y_scale=%r; falling back to 'log'.", hist_y_scale)
+        hist_y_scale = "log"
+    planes = [1, 2, 3, 4]
     fig, axes = plt.subplots(len(planes), 3, figsize=(16, 5 * len(planes)))
 
     for row, plane in enumerate(planes):
-        re_col = f"relerr_eff_{plane}_pct"
+        if plane in (1, 4):
+            re_col = f"relerr_eff_{plane}_fit_pct"
+            plane_mode = "fit-based"
+        else:
+            re_col = f"relerr_eff_{plane}_pct"
+            plane_mode = "direct"
         sim_col = f"eff_sim_{plane}"
         ev_col = "n_events"
         relerr_cut = None
@@ -406,7 +595,10 @@ def _plot_relerr_report(
             ax.axvline(-relerr_cut, color=CUT_COLOR, linestyle="-.", linewidth=1.5)
         ax.set_xlabel(f"Rel. error eff {plane} [%]")
         ax.set_ylabel("Count")
-        ax.set_title(f"Plane {plane} — Rel. error dist. (|re| ≤ {hist_clip_pct:.1f}%)")
+        ax.set_yscale(hist_y_scale)
+        ax.set_title(
+            f"Plane {plane} ({plane_mode}) — Rel. error dist. (|re| ≤ {hist_clip_pct:.1f}%)"
+        )
         ax.set_xlim(-hist_x_plot_lim, hist_x_plot_lim)
         ax.legend(fontsize=7)
 
@@ -438,7 +630,9 @@ def _plot_relerr_report(
         ax.set_ylim(-scatter_y_plot_lim, scatter_y_plot_lim)
         ax.set_xlabel("Number of events")
         ax.set_ylabel(f"Rel. error eff {plane} [%]")
-        ax.set_title(f"Plane {plane} — Rel. error vs Events (|re| ≤ {scatter_y_clip_pct:.1f}%)")
+        ax.set_title(
+            f"Plane {plane} ({plane_mode}) — Rel. error vs Events (|re| ≤ {scatter_y_clip_pct:.1f}%)"
+        )
         ax.legend(fontsize=7)
 
         # ── Col 2: relerr vs simulated efficiency ──
@@ -461,10 +655,16 @@ def _plot_relerr_report(
         ax.set_ylim(-scatter_y_plot_lim, scatter_y_plot_lim)
         ax.set_xlabel(f"Simulated eff {plane}")
         ax.set_ylabel(f"Rel. error eff {plane} [%]")
-        ax.set_title(f"Plane {plane} — Rel. error vs Sim. eff (|re| ≤ {scatter_y_clip_pct:.1f}%)")
+        ax.set_title(
+            f"Plane {plane} ({plane_mode}) — Rel. error vs Sim. eff (|re| ≤ {scatter_y_clip_pct:.1f}%)"
+        )
         ax.legend(fontsize=7)
 
-    fig.suptitle("Relative Error Report — Efficiency Planes 2 & 3", fontsize=13)
+    fig.suptitle(
+        "Relative Error Report — Efficiency Planes 1, 2, 3 & 4\n"
+        "(planes 1 & 4 computed versus fitted line y = a·x + b)",
+        fontsize=13,
+    )
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -490,7 +690,10 @@ def main() -> int:
     eff3_range = cfg_12.get("outlier_eff_3_range", [0.5, 1.0])
     dict_relerr_eff2_max = cfg_12.get("dictionary_relerr_eff_2_max_pct", 5.0)
     dict_relerr_eff3_max = cfg_12.get("dictionary_relerr_eff_3_max_pct", 5.0)
+    dict_relerr_eff1_fit_max = cfg_12.get("dictionary_relerr_eff_1_fit_max_pct", 3.0)
+    dict_relerr_eff4_fit_max = cfg_12.get("dictionary_relerr_eff_4_fit_max_pct", 3.0)
     dict_min_events = cfg_12.get("dictionary_min_events", 20000)
+    relerr_hist_y_scale = cfg_12.get("relerr_hist_y_scale", "log")
     plot_params = cfg_12.get("plot_parameters", None)  # None = use all param_cols
 
     # ── Load ─────────────────────────────────────────────────────────
@@ -566,17 +769,38 @@ def main() -> int:
     n_outliers = n_before - len(df_clean)
     log.info("  Outlier removal: %d outliers dropped, %d rows remain.", n_outliers, len(df_clean))
 
+    # Fit acceptance-adjusted linear relations for planes 1 and 4:
+    # empirical ≈ a * simulated + b
+    fit_line_by_plane: dict[int, tuple[float, float]] = {}
+    for plane in (1, 4):
+        fit = _fit_empirical_vs_simulated(df_clean, plane)
+        if fit is None:
+            log.warning("  Plane %d fit unavailable; fit-based cut disabled for this plane.", plane)
+            df_clean[f"eff_fitline_{plane}"] = np.nan
+            df_clean[f"relerr_eff_{plane}_fit_pct"] = np.nan
+            df_clean[f"abs_relerr_eff_{plane}_fit_pct"] = np.nan
+            continue
+        a, b = fit
+        fit_line_by_plane[plane] = (a, b)
+        _compute_fit_relerr_columns(df_clean, plane, a, b)
+        log.info("  Plane %d fit: empirical = %.6f * simulated %+.6f", plane, a, b)
+
     # ── Dataset = the full clean table ───────────────────────────────
     dataset = df_clean.copy()
 
     # ── Dictionary selection ─────────────────────────────────────────
     # Criteria:
     # 1. abs relative error of eff_2 and eff_3 < threshold
-    # 2. n_events >= minimum
-    # 3. One entry per unique parameter set: keep the one with most events
+    # 2. abs relative error to fit line for eff_1 and eff_4 < threshold
+    # 3. n_events >= minimum
+    # 4. One entry per unique parameter set: keep the one with most events
     dict_mask = np.ones(len(df_clean), dtype=bool)
     dict_mask &= df_clean["abs_relerr_eff_2_pct"] < dict_relerr_eff2_max
     dict_mask &= df_clean["abs_relerr_eff_3_pct"] < dict_relerr_eff3_max
+    if df_clean["abs_relerr_eff_1_fit_pct"].notna().any():
+        dict_mask &= df_clean["abs_relerr_eff_1_fit_pct"] < dict_relerr_eff1_fit_max
+    if df_clean["abs_relerr_eff_4_fit_pct"].notna().any():
+        dict_mask &= df_clean["abs_relerr_eff_4_fit_pct"] < dict_relerr_eff4_fit_max
     dict_mask &= df_clean["n_events"] >= dict_min_events
 
     dict_candidates = df_clean.loc[dict_mask].copy()
@@ -617,17 +841,47 @@ def main() -> int:
     log.info("Wrote dataset:    %s (%d rows)", dataset_path, len(dataset))
     log.info("Wrote dictionary: %s (%d rows)", dictionary_path, len(dictionary))
 
+    # Record z-plane positions used in this analysis (plane order: 1..4, in mm).
+    z_positions_used = None
+    z_plane_map = None
+    z_cols = [f"z_plane_{i}" for i in range(1, 5)]
+    if all(col in dataset.columns for col in z_cols):
+        z_vals = []
+        for i, col in enumerate(z_cols, start=1):
+            vals = pd.to_numeric(dataset[col], errors="coerce").dropna().unique()
+            if len(vals) == 0:
+                z_vals = []
+                break
+            if len(vals) > 1:
+                log.warning("Multiple %s values found; using first value in summary.", col)
+            z_vals.append(float(vals[0]))
+        if len(z_vals) == 4:
+            z_positions_used = z_vals
+            z_plane_map = {str(i): z for i, z in enumerate(z_vals, start=1)}
+    if z_positions_used is None:
+        cfg_z = config.get("z_position_config")
+        if isinstance(cfg_z, (list, tuple)) and len(cfg_z) >= 4:
+            z_positions_used = [float(cfg_z[i]) for i in range(4)]
+            z_plane_map = {str(i): z for i, z in enumerate(z_positions_used, start=1)}
+
     summary = {
         "input_rows": n_before,
         "outliers_removed": n_outliers,
         "dataset_rows": len(dataset),
         "dictionary_candidates": int(dict_mask.sum()),
         "dictionary_rows": len(dictionary),
+        "z_positions_used_mm": z_positions_used,
+        "z_plane_map_mm": z_plane_map,
         "eff2_range": eff2_range,
         "eff3_range": eff3_range,
+        "fit_line_eff_1": list(fit_line_by_plane[1]) if 1 in fit_line_by_plane else None,
+        "fit_line_eff_4": list(fit_line_by_plane[4]) if 4 in fit_line_by_plane else None,
+        "dict_relerr_eff1_fit_max_pct": dict_relerr_eff1_fit_max,
         "dict_relerr_eff2_max_pct": dict_relerr_eff2_max,
         "dict_relerr_eff3_max_pct": dict_relerr_eff3_max,
+        "dict_relerr_eff4_fit_max_pct": dict_relerr_eff4_fit_max,
         "dict_min_events": dict_min_events,
+        "relerr_hist_y_scale": relerr_hist_y_scale,
     }
     with open(FILES_DIR / "build_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
@@ -637,9 +891,13 @@ def main() -> int:
         dataset,
         dictionary,
         param_cols,
+        fit_line_by_plane=fit_line_by_plane,
+        dict_relerr_eff1_fit_max=dict_relerr_eff1_fit_max,
         dict_relerr_eff2_max=dict_relerr_eff2_max,
         dict_relerr_eff3_max=dict_relerr_eff3_max,
+        dict_relerr_eff4_fit_max=dict_relerr_eff4_fit_max,
         dict_min_events=dict_min_events,
+        relerr_hist_y_scale=relerr_hist_y_scale,
         plot_params=plot_params,
     )
 
@@ -651,9 +909,13 @@ def _make_plots(
     dataset: pd.DataFrame,
     dictionary: pd.DataFrame,
     param_cols: list[str],
+    fit_line_by_plane: dict[int, tuple[float, float]] | None,
+    dict_relerr_eff1_fit_max: float,
     dict_relerr_eff2_max: float,
     dict_relerr_eff3_max: float,
+    dict_relerr_eff4_fit_max: float,
     dict_min_events: float,
+    relerr_hist_y_scale: str,
     plot_params: list[str] | None = None,
 ) -> None:
     """Generate concise diagnostic plots.
@@ -775,16 +1037,19 @@ def _make_plots(
         fig.savefig(PLOTS_DIR / "parameter_scatter_matrix.png")
         plt.close(fig)
 
-    # ── 4. Comprehensive relative error report for eff 2 and 3 ────
+    # ── 4. Comprehensive relative error report for eff 1..4 ────
     _plot_relerr_report(
         dataset,
         dictionary,
         PLOTS_DIR / "relerr_eff_report.png",
         relerr_cut_by_plane={
+            1: dict_relerr_eff1_fit_max,
             2: dict_relerr_eff2_max,
             3: dict_relerr_eff3_max,
+            4: dict_relerr_eff4_fit_max,
         },
         min_events_cut=dict_min_events,
+        hist_y_scale=relerr_hist_y_scale,
     )
 
     # ── 5. Events distribution ───────────────────────────────────────
@@ -809,9 +1074,21 @@ def _make_plots(
     _plot_dictionary_coverage(dictionary, PLOTS_DIR / "dictionary_coverage.png")
 
     # ── 7. Efficiency sim vs empirical (2×2 scatter) ─────────────────
-    _plot_eff_sim_vs_empirical(dataset, dictionary, PLOTS_DIR / "scatter_eff_sim_vs_estimated.png")
+    _plot_eff_sim_vs_empirical(
+        dataset,
+        dictionary,
+        PLOTS_DIR / "scatter_eff_sim_vs_estimated.png",
+        fit_line_by_plane=fit_line_by_plane,
+    )
 
-    # ── 8. Iso-rate contour in flux–eff space ────────────────────────
+    # ── 8. Empirical efficiency 2 vs 3 (single-panel scatter) ──────
+    _plot_empirical_eff2_vs_eff3(
+        dataset,
+        dictionary,
+        PLOTS_DIR / "scatter_empirical_eff2_vs_eff3.png",
+    )
+
+    # ── 9. Iso-rate contour in flux–eff space ────────────────────────
     _plot_iso_rate(dictionary, PLOTS_DIR / "iso_rate_global_rate.png")
 
 
