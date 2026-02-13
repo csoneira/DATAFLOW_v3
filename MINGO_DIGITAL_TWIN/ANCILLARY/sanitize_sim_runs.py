@@ -31,6 +31,63 @@ def _log_warn(message: str) -> None:
     print(f"[{_log_ts()}] [STEP_SANITIZE] [WARN] {message}")
 
 
+def expected_payload_patterns(step_index: int) -> tuple[str, ...]:
+    if step_index == 1:
+        return (
+            "muon_sample_*.chunks.json",
+            "muon_sample_*.pkl",
+            "muon_sample_*.csv",
+        )
+    stem = f"step_{step_index}"
+    return (
+        f"{stem}_chunks.chunks.json",
+        f"{stem}.pkl",
+        f"{stem}.csv",
+    )
+
+
+def detect_broken_sim_run(sim_run_dir: Path, step_index: int) -> str | None:
+    # Empty directories are always trash.
+    has_file = any(path.is_file() for path in sim_run_dir.rglob("*"))
+    if not has_file:
+        return "empty_directory"
+
+    payload_paths: list[Path] = []
+    for pattern in expected_payload_patterns(step_index):
+        payload_paths.extend(sim_run_dir.glob(pattern))
+    if not payload_paths:
+        return "missing_output_payload"
+
+    manifest_paths = [path for path in payload_paths if path.name.endswith(".chunks.json")]
+    for manifest_path in manifest_paths:
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return f"invalid_manifest:{manifest_path.name}"
+
+        chunks = manifest.get("chunks", [])
+        if chunks is None:
+            chunks = []
+        if not isinstance(chunks, list):
+            return f"invalid_chunks_field:{manifest_path.name}"
+        if not chunks:
+            return f"empty_manifest:{manifest_path.name}"
+
+        for chunk_raw in chunks:
+            chunk_path = Path(str(chunk_raw))
+            if not chunk_path.is_absolute():
+                chunk_path = (manifest_path.parent / chunk_path).resolve()
+            if not chunk_path.exists():
+                return f"missing_chunk:{manifest_path.name}"
+            try:
+                if chunk_path.stat().st_size <= 0:
+                    return f"empty_chunk:{chunk_path.name}"
+            except OSError:
+                return f"unreadable_chunk:{chunk_path.name}"
+
+    return None
+
+
 def parse_step_index(step_dir: Path) -> int | None:
     match = re.match(r"STEP_(\d+)_TO_", step_dir.name)
     if not match:
@@ -180,6 +237,7 @@ def main() -> None:
     _log_info(f"Loaded mesh rows: {len(mesh)}")
 
     removed = 0
+    removed_broken = 0
     skipped = 0
     skipped_recent = 0
     skipped_locked = 0
@@ -207,6 +265,18 @@ def main() -> None:
             if age_s < min_age_seconds:
                 skipped_recent += 1
                 continue
+
+            broken_reason = detect_broken_sim_run(sim_run_dir, step_index)
+            if broken_reason is not None:
+                if args.apply:
+                    shutil.rmtree(sim_run_dir)
+                    removed += 1
+                    removed_broken += 1
+                    _log_info(f"DELETED_BROKEN ({broken_reason}): {sim_run_dir}")
+                else:
+                    _log_info(f"DRY-RUN DELETE_BROKEN ({broken_reason}): {sim_run_dir}")
+                continue
+
             step_chain: list[str] | None = None
             meta = find_metadata(sim_run_dir)
             if meta:
@@ -238,6 +308,7 @@ def main() -> None:
     _log_info(
         "Summary: "
         f"removed={removed}, "
+        f"removed_broken={removed_broken}, "
         f"skipped={skipped}, "
         f"skipped_recent={skipped_recent}, "
         f"skipped_locked={skipped_locked}, "

@@ -80,11 +80,11 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.file_selection import select_latest_candidate
+from MASTER.common.file_selection import newest_order_key, select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
-from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
+from MASTER.common.simulated_data_utils import SIM_PARAMS_DEFAULT, resolve_simulated_z_positions
 
 task_number = 1
 
@@ -1716,6 +1716,188 @@ def get_file_path(directory, file_name):
     return os.path.join(directory, file_name)
 
 
+def _as_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _coerce_z_vector(value: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) != 4:
+        return None
+    try:
+        vector = tuple(float(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+    if not all(np.isfinite(item) for item in vector):
+        return None
+    return vector
+
+
+def _normalize_z_vector(z_vector: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    base = float(z_vector[0])
+    return tuple(round(float(value) - base, 6) for value in z_vector)
+
+
+def _iter_priority_vectors(value: object) -> list[tuple[float, float, float, float]]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, np.ndarray)):
+        single = _coerce_z_vector(value)
+        if single is not None:
+            return [single]
+        vectors: list[tuple[float, float, float, float]] = []
+        for entry in value:
+            coerced = _coerce_z_vector(entry)
+            if coerced is not None:
+                vectors.append(coerced)
+        return vectors
+    return []
+
+
+def _load_task_1_z_priority_settings(config_obj: dict) -> dict[str, object]:
+    settings: dict[str, object] = {
+        "enabled": False,
+        "simulated_only": True,
+        "match_mode": "absolute",
+        "source_csv": SIM_PARAMS_DEFAULT,
+        "priority_abs": set(),
+        "priority_norm": set(),
+    }
+
+    node = config_obj.get("task_1_z_position_priority")
+    if not isinstance(node, dict):
+        return settings
+
+    settings["enabled"] = _as_bool(node.get("enabled"), False)
+    settings["simulated_only"] = _as_bool(node.get("simulated_only"), True)
+
+    match_mode = str(node.get("match_mode", "absolute")).strip().lower()
+    if match_mode not in {"absolute", "normalized", "both"}:
+        match_mode = "absolute"
+    settings["match_mode"] = match_mode
+
+    source_csv = node.get("source_csv")
+    if source_csv:
+        settings["source_csv"] = Path(os.path.expanduser(str(source_csv)))
+
+    vectors = _iter_priority_vectors(node.get("vectors_mm"))
+    settings["priority_abs"] = {tuple(round(value, 6) for value in vector) for vector in vectors}
+    settings["priority_norm"] = {_normalize_z_vector(vector) for vector in vectors}
+
+    if settings["enabled"] and not settings["priority_abs"]:
+        print(
+            "Warning: task_1_z_position_priority.enabled is true but vectors_mm is empty. "
+            "Disabling z-priority for this run.",
+            force=True,
+        )
+        settings["enabled"] = False
+
+    return settings
+
+
+def _load_simulated_z_lookup(
+    csv_path: Path,
+) -> dict[str, tuple[float, float, float, float]]:
+    lookup: dict[str, tuple[float, float, float, float]] = {}
+    if not csv_path.exists():
+        print(
+            f"Warning: z-priority lookup CSV not found: {csv_path}. "
+            "Falling back to regular newest-file selection.",
+            force=True,
+        )
+        return lookup
+
+    required_cols = ["file_name", "z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"]
+    try:
+        sim_df = pd.read_csv(csv_path, usecols=required_cols)
+    except Exception as exc:
+        print(
+            f"Warning: failed to load z-priority lookup CSV {csv_path}: {exc}. "
+            "Falling back to regular newest-file selection.",
+            force=True,
+        )
+        return lookup
+
+    for file_name, z1, z2, z3, z4 in sim_df.itertuples(index=False, name=None):
+        file_key = str(file_name).strip().lower()
+        if not file_key:
+            continue
+        try:
+            z_vector = (float(z1), float(z2), float(z3), float(z4))
+        except (TypeError, ValueError):
+            continue
+        if not all(np.isfinite(value) for value in z_vector):
+            continue
+        lookup[file_key] = z_vector
+
+    return lookup
+
+
+def _z_vector_matches_priority(
+    z_vector: tuple[float, float, float, float],
+    settings: dict[str, object],
+) -> bool:
+    abs_vector = tuple(round(float(value), 6) for value in z_vector)
+    norm_vector = _normalize_z_vector(abs_vector)
+    priority_abs = settings.get("priority_abs", set())
+    priority_norm = settings.get("priority_norm", set())
+    match_mode = settings.get("match_mode", "absolute")
+
+    if match_mode == "normalized":
+        return norm_vector in priority_norm
+    if match_mode == "both":
+        return abs_vector in priority_abs or norm_vector in priority_norm
+    return abs_vector in priority_abs
+
+
+def _select_latest_candidate_with_z_priority(
+    files: Iterable[str],
+    station: str,
+    settings: dict[str, object],
+    z_lookup: dict[str, tuple[float, float, float, float]],
+    source_label: str,
+    *,
+    fallback_to_latest: bool = True,
+) -> str | None:
+    candidates = [name for name in files if isinstance(name, str) and name]
+    if not candidates:
+        return None
+
+    if not settings.get("enabled", False):
+        return select_latest_candidate(candidates, station) if fallback_to_latest else None
+
+    prioritized: list[str] = []
+    for name in candidates:
+        key = name.lower()
+        if settings.get("simulated_only", True) and not key.startswith("mi00"):
+            continue
+        z_vector = z_lookup.get(key)
+        if z_vector is None:
+            continue
+        if _z_vector_matches_priority(z_vector, settings):
+            prioritized.append(name)
+
+    if prioritized:
+        selected = max(prioritized, key=lambda name: newest_order_key(name, station))
+        selected_z = z_lookup.get(selected.lower())
+        print(
+            f"[Z_PRIORITY] Selected prioritized file from {source_label}: {selected} "
+            f"z={list(selected_z) if selected_z else 'NA'}",
+            force=True,
+        )
+        return selected
+
+    return select_latest_candidate(candidates, station) if fallback_to_latest else None
+
+
 save_plots = config["save_plots"]
 
 # Create ALL directories if they don't already exist
@@ -1729,12 +1911,29 @@ unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
 completed_files = os.listdir(base_directories["completed_directory"])
 
+task_1_z_priority_settings = _load_task_1_z_priority_settings(config)
+simulated_z_lookup: dict[str, tuple[float, float, float, float]] = {}
+if task_1_z_priority_settings.get("enabled", False):
+    source_csv = Path(task_1_z_priority_settings.get("source_csv", SIM_PARAMS_DEFAULT))
+    simulated_z_lookup = _load_simulated_z_lookup(source_csv)
+    print(
+        f"[Z_PRIORITY] Enabled with {len(task_1_z_priority_settings.get('priority_abs', set()))} "
+        f"configured vector(s); lookup entries={len(simulated_z_lookup)}",
+        force=True,
+    )
+
 if user_file_selection:
     processing_file_path = user_file_path
     file_name = os.path.basename(user_file_path)
 else:
     if last_file_test:
-        latest_unprocessed = select_latest_candidate(unprocessed_files, station)
+        latest_unprocessed = _select_latest_candidate_with_z_priority(
+            unprocessed_files,
+            station,
+            task_1_z_priority_settings,
+            simulated_z_lookup,
+            "UNPROCESSED",
+        )
         if latest_unprocessed:
             file_name = latest_unprocessed
             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
@@ -1747,7 +1946,13 @@ else:
             print(f"File moved to PROCESSING: {processing_file_path}")
 
         else:
-            latest_processing = select_latest_candidate(processing_files, station)
+            latest_processing = _select_latest_candidate_with_z_priority(
+                processing_files,
+                station,
+                task_1_z_priority_settings,
+                simulated_z_lookup,
+                "PROCESSING",
+            )
             if latest_processing:
                 file_name = latest_processing
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
@@ -1761,7 +1966,13 @@ else:
                 print(f"File moved to ERROR: {processing_file_path}")
 
             else:
-                latest_completed = select_latest_candidate(completed_files, station)
+                latest_completed = _select_latest_candidate_with_z_priority(
+                    completed_files,
+                    station,
+                    task_1_z_priority_settings,
+                    simulated_z_lookup,
+                    "COMPLETED",
+                )
                 if latest_completed:
                     file_name = latest_completed
                     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
@@ -1776,48 +1987,99 @@ else:
 
     else:
         if unprocessed_files:
-            print("Shuffling the files in UNPROCESSED...")
-            random.shuffle(unprocessed_files)
-            for file_name in unprocessed_files:
+            priority_file = _select_latest_candidate_with_z_priority(
+                unprocessed_files,
+                station,
+                task_1_z_priority_settings,
+                simulated_z_lookup,
+                "UNPROCESSED",
+                fallback_to_latest=False,
+            )
+            if priority_file is not None:
+                file_name = priority_file
                 unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
-                print(f"Moving '{file_name}' to PROCESSING...")
+                print(f"Moving prioritized '{file_name}' to PROCESSING...")
                 shutil.move(unprocessed_file_path, processing_file_path)
                 print(f"File moved to PROCESSING: {processing_file_path}")
-                break
+            else:
+                print("Shuffling the files in UNPROCESSED...")
+                random.shuffle(unprocessed_files)
+                for file_name in unprocessed_files:
+                    unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                    processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                    completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+                    print(f"Moving '{file_name}' to PROCESSING...")
+                    shutil.move(unprocessed_file_path, processing_file_path)
+                    print(f"File moved to PROCESSING: {processing_file_path}")
+                    break
 
         elif processing_files:
-            print("Shuffling the files in PROCESSING...")
-            random.shuffle(processing_files)
-            for file_name in processing_files:
-                # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+            priority_file = _select_latest_candidate_with_z_priority(
+                processing_files,
+                station,
+                task_1_z_priority_settings,
+                simulated_z_lookup,
+                "PROCESSING",
+                fallback_to_latest=False,
+            )
+            if priority_file is not None:
+                file_name = priority_file
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-
-                print(f"Processing file in PROCESSING: {processing_file_path}")
+                print(f"Processing prioritized file in PROCESSING: {processing_file_path}")
                 error_file_path = os.path.join(base_directories["error_directory"], file_name)
                 print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
                 shutil.move(processing_file_path, error_file_path)
                 processing_file_path = error_file_path
                 print(f"File moved to ERROR: {processing_file_path}")
-                break
+            else:
+                print("Shuffling the files in PROCESSING...")
+                random.shuffle(processing_files)
+                for file_name in processing_files:
+                    # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                    processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                    completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+
+                    print(f"Processing file in PROCESSING: {processing_file_path}")
+                    error_file_path = os.path.join(base_directories["error_directory"], file_name)
+                    print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
+                    shutil.move(processing_file_path, error_file_path)
+                    processing_file_path = error_file_path
+                    print(f"File moved to ERROR: {processing_file_path}")
+                    break
 
         elif completed_files:
             if complete_reanalysis:
-                
-                print("Shuffling the files in COMPLETED...")
-                random.shuffle(completed_files)
-                for file_name in completed_files:
-                    # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                priority_file = _select_latest_candidate_with_z_priority(
+                    completed_files,
+                    station,
+                    task_1_z_priority_settings,
+                    simulated_z_lookup,
+                    "COMPLETED",
+                    fallback_to_latest=False,
+                )
+                if priority_file is not None:
+                    file_name = priority_file
                     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
                     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-
-                    print(f"Moving '{file_name}' to PROCESSING...")
+                    print(f"Moving prioritized '{file_name}' to PROCESSING...")
                     shutil.move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
-                    break
+                else:
+                    print("Shuffling the files in COMPLETED...")
+                    random.shuffle(completed_files)
+                    for file_name in completed_files:
+                        # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+
+                        print(f"Moving '{file_name}' to PROCESSING...")
+                        shutil.move(completed_file_path, processing_file_path)
+                        print(f"File moved to PROCESSING: {processing_file_path}")
+                        break
             else:
                 sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
 
@@ -2103,6 +2365,7 @@ save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace(
 # -------------------------------------------------------------------------------
 
 conf_value = None
+z_source = "unset"
 simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
     basename_no_ext,
     Path(base_directory),
@@ -2124,10 +2387,12 @@ if is_simulated_file and simulated_z_positions is None:
     print("Warning: Simulated file missing param_hash; using default z_positions.")
     found_matching_conf = False
     z_positions = np.array([0, 150, 300, 450])  # In mm
+    z_source = "simulated_default_missing_param_hash"
 elif simulated_z_positions is not None:
     z_positions = np.array(simulated_z_positions, dtype=float)
     found_matching_conf = True
     print(f"Using simulated z_positions from param_hash={simulated_param_hash}")
+    z_source = "simulated_param_hash"
 elif exists_input_file:
     used_input_file = True
     # Ensure `start` and `end` columns are in datetime format
@@ -2153,6 +2418,7 @@ elif exists_input_file:
             conf_value = None
         found_matching_conf = True
         print(selected_conf['conf'])
+        z_source = f"input_file_conf_{selected_conf.get('conf')}"
     else:
         print("Warning: No matching configuration for the date range; selecting closest configuration.")
         before = input_file[input_file["start_day"] <= end_day].sort_values("start_day", ascending=False)
@@ -2167,9 +2433,11 @@ elif exists_input_file:
         except (TypeError, ValueError):
             conf_value = None
         found_matching_conf = True
+        z_source = f"input_file_closest_conf_{selected_conf.get('conf')}"
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
+    z_source = "default_no_input_file"
 
 
 
@@ -2194,18 +2462,27 @@ if np.isnan(z_positions).any() or np.all(z_positions == 0):
                 conf_value = float(selected_conf.get("conf"))
             except (TypeError, ValueError):
                 conf_value = None
+            z_source = f"input_file_nonzero_fallback_conf_{selected_conf.get('conf')}"
         else:
             print("Error: No non-zero z_positions available. Using default z_positions.")
             z_positions = np.array([0, 150, 300, 450])  # In mm
+            z_source = "default_no_nonzero_z_available"
     else:
         print("Error: Invalid z_positions without config fallback. Using default z_positions.")
         z_positions = np.array([0, 150, 300, 450])  # In mm
+        z_source = "default_invalid_without_input"
 
 
 
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
+z_vector_mm = [round(float(value), 3) for value in z_positions.tolist()]
+print(
+    f"[Z_TRACE] file={basename_no_ext} source={z_source} "
+    f"param_hash={simulated_param_hash or 'NA'} z_vector_mm={z_vector_mm}",
+    force=True,
+)
 
 
 
@@ -3447,6 +3724,11 @@ print(f"Filename base: {filename_base}")
 print(f"Execution timestamp: {execution_timestamp}")
 print(f"------------- Any other variable interesting -------------")
 print("\n----------")
+print(
+    f"[Z_TRACE] metadata_append filename_base={filename_base} "
+    f"param_hash={simulated_param_hash or 'NA'} z_vector_mm={z_vector_mm}",
+    force=True,
+)
 
 metadata_specific_csv_path = save_metadata(
     csv_path_specific,

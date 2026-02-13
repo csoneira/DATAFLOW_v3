@@ -82,7 +82,8 @@ def main() -> int:
 
     feature_columns = cfg_21.get("feature_columns", "auto")
     distance_metric = cfg_21.get("distance_metric", "l2_zscore")
-    interpolation_k = int(cfg_21.get("interpolation_k", 5))
+    interpolation_k_cfg = cfg_21.get("interpolation_k", 5)
+    interpolation_k = None if interpolation_k_cfg is None else int(interpolation_k_cfg)
     include_global_rate = cfg_21.get("include_global_rate", True)
     global_rate_col = cfg_21.get("global_rate_col", "events_per_second_global_rate")
     plot_params = config.get("step_1_2", {}).get("plot_parameters", None)
@@ -97,7 +98,10 @@ def main() -> int:
     log.info("Dictionary: %s", dict_path)
     log.info("Dataset:    %s", data_path)
     log.info("Metric:     %s", distance_metric)
-    log.info("K:          %d", interpolation_k)
+    log.info(
+        "K:          %s",
+        "all dictionary candidates" if interpolation_k is None else str(interpolation_k),
+    )
 
     # ── Run estimation ───────────────────────────────────────────────
     result_df = estimate_parameters(
@@ -360,28 +364,277 @@ def _make_plots(
         "axes.spines.top": False, "axes.spines.right": False,
     })
 
-    # ── 1. Distance distribution (IQR-clipped) ─────────────────────
-    distances = result_df["best_distance"].dropna()
+    # ── 1. Distance diagnostics (distribution + method relevance) ───
+    distances = pd.to_numeric(result_df.get("best_distance"), errors="coerce").dropna()
     if not distances.empty:
-        q1, q3 = distances.quantile(0.25), distances.quantile(0.75)
+        q1 = float(distances.quantile(0.25))
+        q3 = float(distances.quantile(0.75))
         iqr = q3 - q1
-        upper_fence = q3 + 1.5 * iqr
-        inliers = distances[distances <= upper_fence]
-        n_outliers = len(distances) - len(inliers)
+        upper_fence = float(q3 + 1.5 * iqr) if np.isfinite(iqr) else float(distances.max())
+        inlier_mask = distances <= upper_fence
+        inliers = distances[inlier_mask]
+        n_outliers = int((~inlier_mask).sum())
 
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.hist(inliers, bins=50, color="#4C78A8", alpha=0.8, edgecolor="white")
-        ax.axvline(inliers.median(), color="#E45756", linestyle="--",
-                   label=f"median = {inliers.median():.4g}")
-        ax.set_xlabel("Best distance")
-        ax.set_ylabel("Count")
-        title = "Distribution of best-match distances"
+        q50 = float(distances.quantile(0.50))
+        q90 = float(distances.quantile(0.90))
+        q95 = float(distances.quantile(0.95))
+
+        fig = plt.figure(figsize=(12, 7.2), constrained_layout=True)
+        gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.15])
+        ax_hist = fig.add_subplot(gs[0, 0])
+        ax_cdf = fig.add_subplot(gs[0, 1])
+        ax_err = fig.add_subplot(gs[1, 0])
+        ax_oper = fig.add_subplot(gs[1, 1])
+
+        # 1A) Core histogram (IQR-clipped) with robust quantiles
+        hist_values = inliers if len(inliers) >= 5 else distances
+        ax_hist.hist(hist_values, bins=45, color="#4C78A8", alpha=0.82, edgecolor="white")
+        ax_hist.axvline(q50, color="#E45756", linestyle="--", linewidth=1.6, label=f"p50 = {q50:.4g}")
+        ax_hist.axvline(q90, color="#F58518", linestyle="-.", linewidth=1.4, label=f"p90 = {q90:.4g}")
+        ax_hist.axvline(q95, color="#72B7B2", linestyle=":", linewidth=1.6, label=f"p95 = {q95:.4g}")
         if n_outliers:
-            title += f"  ({n_outliers} outlier{'s' if n_outliers > 1 else ''}"
-            title += f" above {upper_fence:.3g} removed)"
-        ax.set_title(title)
-        ax.legend(fontsize=8)
-        fig.tight_layout()
+            ax_hist.axvline(
+                upper_fence, color="#B279A2", linestyle="-", linewidth=1.1,
+                label=f"IQR upper fence = {upper_fence:.4g}",
+            )
+        ax_hist.set_xlabel("Best distance")
+        ax_hist.set_ylabel("Count")
+        ax_hist.set_title("Core distance density (IQR-clipped)")
+        ax_hist.legend(fontsize=7.5, loc="upper right")
+        ax_hist.text(
+            0.02,
+            0.98,
+            (
+                f"N={len(distances)} | outliers={n_outliers} "
+                f"({(100.0 * n_outliers / len(distances)):.1f}%)\n"
+                f"median={q50:.3g}, p90={q90:.3g}, p95={q95:.3g}"
+            ),
+            transform=ax_hist.transAxes,
+            va="top",
+            ha="left",
+            fontsize=8,
+            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="0.75", alpha=0.9),
+        )
+
+        # 1B) Coverage view: fraction of rows below distance threshold
+        d_sorted = np.sort(distances.to_numpy(dtype=float))
+        cdf_y = np.arange(1, len(d_sorted) + 1, dtype=float) / len(d_sorted)
+        ax_cdf.plot(d_sorted, cdf_y, color="#54A24B", linewidth=1.8)
+        for value, color, label in [
+            (q50, "#E45756", "p50"),
+            (q90, "#F58518", "p90"),
+            (q95, "#72B7B2", "p95"),
+        ]:
+            ax_cdf.axvline(value, color=color, linestyle="--", linewidth=1.0, alpha=0.8, label=label)
+        ax_cdf.set_xlabel("Best distance threshold")
+        ax_cdf.set_ylabel("Fraction with best_distance <= threshold")
+        ax_cdf.set_ylim(0.0, 1.02)
+        ax_cdf.set_title("Coverage curve (all rows)")
+        ax_cdf.legend(fontsize=7.5, loc="lower right")
+        # Keep the CDF readable when very large outliers exist.
+        cdf_xmax = float(distances.quantile(0.995))
+        if np.isfinite(cdf_xmax) and cdf_xmax > 0 and distances.max() > 1.15 * cdf_xmax:
+            ax_cdf.set_xlim(0.0, cdf_xmax)
+            ax_cdf.text(
+                0.02,
+                0.03,
+                f"Zoomed to 99.5% (max={float(distances.max()):.3g})",
+                transform=ax_cdf.transAxes,
+                ha="left",
+                va="bottom",
+                fontsize=8,
+                color="0.35",
+            )
+
+        # 1C) Distance-vs-error calibration: does distance track inference quality?
+        selected_params: list[str] = []
+        if isinstance(plot_params, (list, tuple, set)):
+            selected_params = [
+                str(p) for p in plot_params
+                if f"true_{p}" in result_df.columns and f"est_{p}" in result_df.columns
+            ]
+        if not selected_params:
+            for pname in ["flux_cm2_min", "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4", "cos_n"]:
+                if f"true_{pname}" in result_df.columns and f"est_{pname}" in result_df.columns:
+                    selected_params.append(pname)
+
+        relerr_cols = []
+        for pname in selected_params:
+            t = pd.to_numeric(result_df[f"true_{pname}"], errors="coerce")
+            e = pd.to_numeric(result_df[f"est_{pname}"], errors="coerce")
+            denom = np.maximum(np.abs(t), 1e-9)
+            relerr_cols.append((((e - t).abs() / denom) * 100.0).rename(pname))
+
+        if relerr_cols:
+            relerr_df = pd.concat(relerr_cols, axis=1)
+            row_relerr = relerr_df.median(axis=1, skipna=True)
+            eval_df = pd.DataFrame({
+                "distance": pd.to_numeric(result_df["best_distance"], errors="coerce"),
+                "agg_relerr_pct": row_relerr,
+            }).dropna()
+        else:
+            eval_df = pd.DataFrame(columns=["distance", "agg_relerr_pct"])
+
+        if len(eval_df) >= 3:
+            ax_err.scatter(
+                eval_df["distance"], eval_df["agg_relerr_pct"],
+                s=15, alpha=0.35, color="#72B7B2", edgecolors="none",
+            )
+            if len(eval_df) >= 20 and eval_df["distance"].nunique() >= 6:
+                q_edges = np.unique(np.quantile(eval_df["distance"], np.linspace(0.0, 1.0, 9)))
+                if len(q_edges) >= 3:
+                    dist_bins = pd.cut(eval_df["distance"], bins=q_edges, include_lowest=True, duplicates="drop")
+                    trend = (
+                        eval_df.assign(dist_bin=dist_bins)
+                        .groupby("dist_bin", observed=True)
+                        .agg(
+                            distance_mid=("distance", "median"),
+                            relerr_median=("agg_relerr_pct", "median"),
+                        )
+                        .dropna()
+                    )
+                    if not trend.empty:
+                        ax_err.plot(
+                            trend["distance_mid"], trend["relerr_median"],
+                            color="#E45756", linewidth=1.7, marker="o",
+                            label="Median |rel.err| across distance quantiles",
+                        )
+
+            pearson = float(eval_df["distance"].corr(eval_df["agg_relerr_pct"], method="pearson"))
+            spearman = float(eval_df["distance"].corr(eval_df["agg_relerr_pct"], method="spearman"))
+            ptxt = f"{pearson:.2f}" if np.isfinite(pearson) else "nan"
+            stxt = f"{spearman:.2f}" if np.isfinite(spearman) else "nan"
+            shown_params = ", ".join(selected_params[:3]) + ("..." if len(selected_params) > 3 else "")
+            ax_err.set_title("Distance vs estimation error")
+            ax_err.set_xlabel("Best distance")
+            ax_err.set_ylabel("Median |relative error| [%]")
+            ax_err.text(
+                0.02,
+                0.98,
+                f"Params: {shown_params}\nPearson={ptxt}, Spearman={stxt}",
+                transform=ax_err.transAxes,
+                va="top",
+                ha="left",
+                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="0.75", alpha=0.9),
+            )
+            y_hi = float(eval_df["agg_relerr_pct"].quantile(0.99))
+            if np.isfinite(y_hi) and y_hi > 0:
+                ax_err.set_ylim(0.0, max(0.5, 1.15 * y_hi))
+            x_hi = float(eval_df["distance"].quantile(0.99))
+            if np.isfinite(x_hi) and x_hi > 0 and eval_df["distance"].max() > 1.15 * x_hi:
+                ax_err.set_xlim(0.0, x_hi)
+                ax_err.text(
+                    0.98,
+                    0.03,
+                    f"Zoomed to p99 (max={float(eval_df['distance'].max()):.3g})",
+                    transform=ax_err.transAxes,
+                    ha="right",
+                    va="bottom",
+                    fontsize=8,
+                    color="0.35",
+                )
+            if ax_err.get_legend_handles_labels()[0]:
+                ax_err.legend(fontsize=7.5, loc="upper right")
+        else:
+            ax_err.text(
+                0.5, 0.5,
+                "Not enough true/estimated\nparameter overlap for\nerror-calibration panel",
+                transform=ax_err.transAxes,
+                ha="center", va="center", fontsize=9,
+            )
+            ax_err.set_title("Distance vs estimation error")
+            ax_err.set_xlabel("Best distance")
+            ax_err.set_ylabel("Median |relative error| [%]")
+
+        # 1D) Distance operating curve: threshold trade-off for coverage vs quality
+        if len(eval_df) >= 20 and eval_df["distance"].nunique() >= 8:
+            thr = np.unique(np.quantile(eval_df["distance"], np.linspace(0.05, 0.95, 15)))
+            if len(thr) >= 3:
+                coverage_pct = []
+                med_relerr = []
+                p90_relerr = []
+                n_eval = float(len(eval_df))
+                for tval in thr:
+                    subset = eval_df[eval_df["distance"] <= tval]
+                    if subset.empty:
+                        coverage_pct.append(np.nan)
+                        med_relerr.append(np.nan)
+                        p90_relerr.append(np.nan)
+                    else:
+                        coverage_pct.append(100.0 * len(subset) / n_eval)
+                        med_relerr.append(float(subset["agg_relerr_pct"].median()))
+                        p90_relerr.append(float(subset["agg_relerr_pct"].quantile(0.90)))
+
+                ax_oper.plot(
+                    thr, coverage_pct, color="#54A24B", linewidth=1.8, marker="o",
+                    markersize=3.2, label="Coverage retained [%]",
+                )
+                ax_oper.set_xlabel("Distance threshold")
+                ax_oper.set_ylabel("Coverage retained [%]", color="#2F6B2D")
+                ax_oper.tick_params(axis="y", labelcolor="#2F6B2D")
+                ax_oper.set_ylim(0.0, 101.0)
+
+                ax_err2 = ax_oper.twinx()
+                ax_err2.plot(
+                    thr, med_relerr, color="#E45756", linewidth=1.6, marker="s",
+                    markersize=3.0, label="Median |rel.err| [%]",
+                )
+                ax_err2.plot(
+                    thr, p90_relerr, color="#F58518", linewidth=1.3, linestyle="--",
+                    label="p90 |rel.err| [%]",
+                )
+                ax_err2.set_ylabel("Error among retained rows [%]", color="#A94D00")
+                ax_err2.tick_params(axis="y", labelcolor="#A94D00")
+
+                star_thr = q90
+                star_subset = eval_df[eval_df["distance"] <= star_thr]
+                if len(star_subset) > 0:
+                    star_cov = 100.0 * len(star_subset) / len(eval_df)
+                    star_med = float(star_subset["agg_relerr_pct"].median())
+                    ax_oper.axvline(star_thr, color="0.45", linestyle=":", linewidth=1.0)
+                    ax_oper.text(
+                        0.02,
+                        0.98,
+                        (
+                            f"At p90 threshold ({star_thr:.3g}):\n"
+                            f"coverage={star_cov:.1f}%, median err={star_med:.2f}%"
+                        ),
+                        transform=ax_oper.transAxes,
+                        va="top",
+                        ha="left",
+                        fontsize=8,
+                        bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="0.75", alpha=0.9),
+                    )
+
+                ax_oper.set_title("Operating curve: threshold trade-off")
+                h1, l1 = ax_oper.get_legend_handles_labels()
+                h2, l2 = ax_err2.get_legend_handles_labels()
+                ax_oper.legend(h1 + h2, l1 + l2, fontsize=7.5, loc="lower right")
+            else:
+                ax_oper.text(
+                    0.5, 0.5, "Insufficient distance spread\nfor operating-curve panel",
+                    transform=ax_oper.transAxes, ha="center", va="center", fontsize=9,
+                )
+                ax_oper.set_title("Operating curve: threshold trade-off")
+                ax_oper.set_xlabel("Distance threshold")
+                ax_oper.set_ylabel("Coverage retained [%]")
+        else:
+            ax_oper.text(
+                0.5, 0.5, "Not enough rows with error estimates\nfor operating-curve panel",
+                transform=ax_oper.transAxes, ha="center", va="center", fontsize=9,
+            )
+            ax_oper.set_title("Operating curve: threshold trade-off")
+            ax_oper.set_xlabel("Distance threshold")
+            ax_oper.set_ylabel("Coverage retained [%]")
+
+        metric = str((cfg_21 or {}).get("distance_metric", "unknown"))
+        k_cfg = (cfg_21 or {}).get("interpolation_k", None)
+        k_label = "all" if k_cfg is None else str(k_cfg)
+        fig.suptitle(
+            f"Best-match distance diagnostics (metric={metric}, IDW K={k_label})",
+            fontsize=11,
+        )
         fig.savefig(PLOTS_DIR / "distance_distribution.png")
         plt.close(fig)
 

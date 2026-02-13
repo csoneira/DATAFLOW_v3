@@ -11,3 +11,5 @@
 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py
 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py
 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh
+rsync
+/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh

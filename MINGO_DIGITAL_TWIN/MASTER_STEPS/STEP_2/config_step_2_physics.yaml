@@ -7,4 +7,4 @@ bounds_mm:
 
 # Variable (to loop on)
 # z_positions: [z1, z2, z3, z4]
-z_positions: random
+z_positions: [30.0, 145.0, 290.0, 435.0]

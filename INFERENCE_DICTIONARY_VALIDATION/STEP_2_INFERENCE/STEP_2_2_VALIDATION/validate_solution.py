@@ -243,6 +243,56 @@ def _make_plots(
         relerr_plot_max += 1.0
     relerr_clip = abs(float(relerr_clip)) if np.isfinite(relerr_clip) else 50.0
 
+    def _rows_with_dictionary_parameter_set() -> pd.Series:
+        """Flag validation rows whose parameter set exists in dictionary.
+
+        Priority:
+        1. `param_hash_x` mapped from dataset via `dataset_index` (robust and exact).
+        2. Fallback tuple match on true parameter columns.
+        """
+        mask = pd.Series(False, index=val.index, dtype=bool)
+
+        # Preferred: exact identifier from dataset row.
+        if (
+            "dataset_index" in val.columns
+            and "param_hash_x" in data_df.columns
+            and "param_hash_x" in dict_df.columns
+        ):
+            idx = pd.to_numeric(val["dataset_index"], errors="coerce")
+            idx_ok = idx.notna() & (idx >= 0) & (idx < len(data_df))
+            if idx_ok.any():
+                row_keys = pd.Series(index=val.index, dtype=object)
+                mapped = data_df.iloc[idx[idx_ok].astype(int).to_numpy()]["param_hash_x"].astype(str).to_numpy()
+                row_keys.loc[idx_ok] = mapped
+                dict_keys = set(dict_df["param_hash_x"].astype(str).dropna().tolist())
+                return row_keys.isin(dict_keys).fillna(False)
+
+        # Fallback: tuple over true physical params (and z planes when available).
+        base_cols = [
+            "flux_cm2_min", "cos_n",
+            "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
+            "z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4",
+        ]
+        dict_cols = [c for c in base_cols if c in dict_df.columns and f"true_{c}" in val.columns]
+        if not dict_cols:
+            return mask
+
+        dict_num = dict_df[dict_cols].apply(pd.to_numeric, errors="coerce")
+        val_num = val[[f"true_{c}" for c in dict_cols]].apply(pd.to_numeric, errors="coerce")
+        # Quantize to suppress tiny float noise in merges/computations.
+        dict_keys = {
+            tuple(np.round(r, 12)) for r in dict_num.to_numpy(dtype=float)
+            if np.all(np.isfinite(r))
+        }
+        if not dict_keys:
+            return mask
+
+        val_keys = [
+            tuple(np.round(r, 12)) if np.all(np.isfinite(r)) else None
+            for r in val_num.to_numpy(dtype=float)
+        ]
+        return pd.Series([k in dict_keys if k is not None else False for k in val_keys], index=val.index)
+
     # Remove stale per-parameter figures so outputs reflect current config only.
     for pattern in (
         "validation_*.png",
@@ -436,8 +486,17 @@ def _make_plots(
         is_dict = val["true_is_dictionary_entry"].astype(str).str.lower().isin(
             ("true", "1", "yes")
         )
+        same_paramset_as_dict = _rows_with_dictionary_parameter_set()
+        overlap_rows = (~is_dict) & same_paramset_as_dict
+        strict_offdict = (~is_dict) & (~same_paramset_as_dict)
+        if overlap_rows.any():
+            log.info(
+                "Excluding %d off-dict rows with dictionary-equivalent parameter set from dict-vs-offdict plots.",
+                int(overlap_rows.sum()),
+            )
+
         in_df = val.loc[is_dict]
-        out_df = val.loc[~is_dict]
+        out_df = val.loc[strict_offdict]
 
         dict_plot_params = selected_params
         for pname in dict_plot_params:
@@ -460,11 +519,11 @@ def _make_plots(
                         label=f"In-dict (n={len(in_vals)})", density=True)
             if not out_vals.empty:
                 ax.hist(out_vals, bins=40, alpha=0.6, color="#d62728",
-                        label=f"Off-dict (n={len(out_vals)})", density=True)
+                        label=f"Off-dict strict (n={len(out_vals)})", density=True)
             ax.set_xlabel(f"Rel. error {pname} [%]")
             ax.set_ylabel("Density")
             ax.set_title(
-                f"In-dict vs off-dict: rel. error {pname} "
+                f"In-dict vs off-dict strict: rel. error {pname} "
                 f"([{relerr_plot_min:.1f}, {relerr_plot_max:.1f}]%)"
             )
             ax.set_xlim(relerr_plot_min, relerr_plot_max)

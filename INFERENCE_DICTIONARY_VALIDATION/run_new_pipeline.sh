@@ -21,9 +21,12 @@ STEPS["1.2"]="${SCRIPT_DIR}/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/build_diction
 STEPS["2.1"]="${SCRIPT_DIR}/STEP_2_INFERENCE/STEP_2_1_ESTIMATE_PARAMS/estimate_and_plot.py"
 STEPS["2.2"]="${SCRIPT_DIR}/STEP_2_INFERENCE/STEP_2_2_VALIDATION/validate_solution.py"
 STEPS["2.3"]="${SCRIPT_DIR}/STEP_2_INFERENCE/STEP_2_3_UNCERTAINTY/build_uncertainty_lut.py"
+STEPS["3.1"]="${SCRIPT_DIR}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION/create_time_series.py"
+STEPS["3.2"]="${SCRIPT_DIR}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_2_SYNTHETIC_TIME_SERIES/synthetic_time_series.py"
+STEPS["3.3"]="${SCRIPT_DIR}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_3_CORRECTION/correction_by_inference.py"
 
 # Ordered list
-STEP_ORDER=("1.1" "1.2" "2.1" "2.2" "2.3")
+STEP_ORDER=("1.1" "1.2" "2.1" "2.2" "2.3" "3.1" "3.2" "3.3")
 
 # Step descriptions
 declare -A STEP_DESC
@@ -32,6 +35,9 @@ STEP_DESC["1.2"]="Build dictionary and dataset (filter outliers, select entries)
 STEP_DESC["2.1"]="Estimate parameters (inverse problem via dictionary matching)"
 STEP_DESC["2.2"]="Validate solution (estimated vs simulated, error analysis)"
 STEP_DESC["2.3"]="Uncertainty assessment (build LUT from error distributions)"
+STEP_DESC["3.1"]="Create synthetic (flux, efficiency) time series"
+STEP_DESC["3.2"]="Build synthetic dataset from time series and dictionary"
+STEP_DESC["3.3"]="Apply inference correction and uncertainty to synthetic dataset"
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -40,6 +46,19 @@ list_steps() {
     for step in "${STEP_ORDER[@]}"; do
         echo "  ${step}  —  ${STEP_DESC[$step]}"
     done
+}
+
+print_help() {
+    local script_name
+    script_name="$(basename "$0")"
+    cat <<EOF
+Usage:
+  ./${script_name}                 Run all steps
+  ./${script_name} <step...>       Run specific steps (e.g. 1.1 2.3)
+  ./${script_name} --from <step>   Run from a specific step onwards
+  ./${script_name} --list          List available steps
+  ./${script_name} -h|--help       Show this help message
+EOF
 }
 
 run_step() {
@@ -59,6 +78,11 @@ run_step() {
 }
 
 # ── Argument parsing ──────────────────────────────────────────────────
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    print_help
+    exit 0
+fi
 
 if [[ "${1:-}" == "--list" ]]; then
     list_steps

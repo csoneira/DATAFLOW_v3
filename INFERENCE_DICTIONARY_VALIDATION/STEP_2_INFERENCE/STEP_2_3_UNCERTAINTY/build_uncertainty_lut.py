@@ -35,6 +35,8 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+import matplotlib.cm as cm
 from matplotlib.patches import Ellipse
 import numpy as np
 import pandas as pd
@@ -557,12 +559,12 @@ def main() -> int:
     if plot_params is None:
         plot_params = config.get("step_1_2", {}).get("plot_parameters", None)
 
-    # Ellipse-plot configuration (simple, optional)
+    # Ellipse-plot configuration (simple, optional).
+    # n_points limits only the number of validation/tested points drawn.
     ellipse_cfg = {
         "params": cfg_31.get("ellipse_params", None),  # e.g. ["flux_cm2_min", "eff_sim_2"]
         "n_points": int(cfg_31.get("ellipse_n_points", 10)),
         "quantile": float(cfg_31.get("ellipse_quantile", 0.68)),
-        "show_dictionary": bool(cfg_31.get("ellipse_show_dictionary", True)),
     }
 
     if not val_path.exists():
@@ -746,7 +748,7 @@ def _make_plots(
         ellipse scatter plot.
     ellipse_cfg : dict or None
         Configuration for ellipse plotting. Keys: 'params', 'n_points',
-        'quantile', 'show_dictionary'.
+        'quantile'. The dictionary overlay always uses all available points.
     """
     # Decide which params to plot
     plot_pnames = [p for p in param_names if p in plot_params] if plot_params else param_names
@@ -785,226 +787,382 @@ def _make_plots(
             except OSError as exc:
                 log.warning("Could not remove old plot %s: %s", old_plot, exc)
 
-    # ── 1. Per-sector histograms in full multidimensional bin space ───
+    # ── 1. Per-sector histograms (columns=n_events bins, rows=parameter combos) ───
     if all_edges:
         val_work = _assign_multidim_bins(val_df, all_edges)
         dim_order = list(all_edges.keys())
-        n_bins_by_dim = [max(1, len(all_edges[d]) - 1) for d in dim_order]
+        has_events_dim = "n_events" in dim_order and f"_bin_n_events" in val_work.columns
+        event_dim = "n_events" if has_events_dim else None
+        row_dims = [d for d in dim_order if d != event_dim] if event_dim is not None else dim_order.copy()
+        event_bins = max(1, len(all_edges[event_dim]) - 1) if event_dim is not None else 1
+        row_shape = [max(1, len(all_edges[d]) - 1) for d in row_dims]
+        row_keys = list(np.ndindex(*row_shape)) if row_shape else [tuple()]
+        hist_edges = np.linspace(relerr_min, relerr_max, 33)
+
         for pname in plot_pnames:
             err_col = f"relerr_{pname}_pct"
             if err_col not in val_work.columns:
                 continue
 
-            all_hist_payload: list[dict[str, object]] = []
-            for sector_key in np.ndindex(*n_bins_by_dim):
-                selector = np.ones(len(val_work), dtype=bool)
-                for dim, bidx in zip(dim_order, sector_key):
-                    selector &= (val_work[f"_bin_{dim}"] == int(bidx)).to_numpy()
-                group = val_work.loc[selector]
+            payload_rows: list[dict[str, object]] = []
+            global_ymax = 0
 
-                raw_errs = pd.to_numeric(group.get(err_col), errors="coerce").to_numpy(dtype=float)
-                raw_errs = raw_errs[np.isfinite(raw_errs)]
-                errs = raw_errs[(raw_errs >= relerr_min) & (raw_errs <= relerr_max)]
-                if len(errs) == 0:
-                    continue
+            for row_key in row_keys:
+                row_selector = np.ones(len(val_work), dtype=bool)
+                for dim, bidx in zip(row_dims, row_key):
+                    row_selector &= (val_work[f"_bin_{dim}"] == int(bidx)).to_numpy()
 
-                outlier_mask = _iqr_outlier_mask(errs, iqr_factor)
-                clean = errs[~outlier_mask]
-                outliers = errs[outlier_mask]
-                all_hist_payload.append(
-                    {
-                        "sector": tuple(int(x) for x in sector_key),
-                        "clean": clean,
-                        "outliers": outliers,
-                    }
-                )
+                row_panels: list[dict[str, object]] = []
+                row_has_data = False
+                for ev_bin in range(event_bins):
+                    selector = row_selector.copy()
+                    if event_dim is not None:
+                        selector &= (val_work[f"_bin_{event_dim}"] == int(ev_bin)).to_numpy()
+                    group = val_work.loc[selector]
 
-            n_hist = len(all_hist_payload)
-            if n_hist > 0:
-                n_cols = min(10, max(1, int(np.ceil(np.sqrt(n_hist)))))
-                n_rows = int(np.ceil(n_hist / n_cols))
-                fig, axes = plt.subplots(
-                    n_rows, n_cols,
-                    figsize=(2.8 * n_cols, 2.2 * n_rows),
-                    squeeze=False,
-                )
-                for idx, payload in enumerate(all_hist_payload):
-                    ax = axes[idx // n_cols, idx % n_cols]
-                    sector_key = payload["sector"]
-                    clean = np.asarray(payload["clean"], dtype=float)
-                    outliers = np.asarray(payload["outliers"], dtype=float)
+                    raw_errs = pd.to_numeric(group.get(err_col), errors="coerce").to_numpy(dtype=float)
+                    total = raw_errs[np.isfinite(raw_errs)]
+                    in_window = total[(total >= relerr_min) & (total <= relerr_max)]
+                    if in_window.size > 0:
+                        outlier_mask = _iqr_outlier_mask(in_window, iqr_factor)
+                        filtered = in_window[~outlier_mask]
+                    else:
+                        filtered = np.array([], dtype=float)
 
-                    if len(clean) > 0:
-                        _, _, patches = ax.hist(
-                            clean, bins=18, alpha=0.75, color="#4C78A8",
-                            edgecolor="white", rasterized=True,
+                    total_in_range = total[(total >= relerr_min) & (total <= relerr_max)]
+                    h_total, _ = np.histogram(total_in_range, bins=hist_edges)
+                    h_filtered, _ = np.histogram(filtered, bins=hist_edges)
+                    panel_ymax = max(int(np.max(h_total)) if h_total.size else 0, int(np.max(h_filtered)) if h_filtered.size else 0)
+                    global_ymax = max(global_ymax, panel_ymax)
+                    row_has_data = row_has_data or (len(total) > 0)
+
+                    row_panels.append(
+                        {
+                            "total_in_range": total_in_range,
+                            "filtered": filtered,
+                            "n_total": int(len(total)),
+                            "n_in_window": int(len(in_window)),
+                            "n_filtered": int(len(filtered)),
+                        }
+                    )
+
+                if row_has_data:
+                    payload_rows.append(
+                        {
+                            "row_key": tuple(int(x) for x in row_key),
+                            "row_lines": _format_sector_bin_lines(row_dims, tuple(int(x) for x in row_key), all_edges, parts_per_line=2),
+                            "panels": row_panels,
+                        }
+                    )
+
+            if not payload_rows:
+                log.info("No non-empty sector histograms to plot for %s.", pname)
+                continue
+
+            n_rows = len(payload_rows)
+            n_cols = event_bins
+            fig, axes = plt.subplots(
+                n_rows,
+                n_cols,
+                figsize=(4.3 * n_cols, 2.8 * n_rows),
+                squeeze=False,
+                constrained_layout=True,
+            )
+
+            y_upper = max(float(global_ymax) * 1.30, 2.0)
+            for r, row_payload in enumerate(payload_rows):
+                row_lines = row_payload.get("row_lines", [])
+                row_text = "\n".join(row_lines) if row_lines else "all parameter bins"
+                for c in range(n_cols):
+                    ax = axes[r, c]
+                    panel = row_payload["panels"][c]
+                    total_in_range = np.asarray(panel["total_in_range"], dtype=float)
+                    filtered = np.asarray(panel["filtered"], dtype=float)
+                    n_total = int(panel["n_total"])
+                    n_in_window = int(panel["n_in_window"])
+                    n_filtered = int(panel["n_filtered"])
+                    n_outside = n_total - n_in_window
+
+                    if total_in_range.size > 0:
+                        ax.hist(
+                            total_in_range,
+                            bins=hist_edges,
+                            histtype="step",
+                            color="#4D4D4D",
+                            linewidth=1.2,
+                            alpha=0.95,
+                            label="Total (in range)",
                         )
-                        for patch in patches:
-                            patch.set_rasterized(True)
-                    if len(outliers) > 0:
-                        _, _, patches = ax.hist(
-                            outliers, bins=10, alpha=0.55, color="#E45756",
-                            edgecolor="white", rasterized=True,
+                    if filtered.size > 0:
+                        ax.hist(
+                            filtered,
+                            bins=hist_edges,
+                            color="#4C78A8",
+                            alpha=0.65,
+                            edgecolor="white",
+                            linewidth=0.35,
+                            label="Filtered (used)",
                         )
-                        for patch in patches:
-                            patch.set_rasterized(True)
+
                     for q in quantiles:
-                        pval = _safe_percentile(clean, q * 100.0)
-                        if np.isfinite(pval):
-                            line = ax.axvline(
-                                pval, linestyle="--", linewidth=0.7, color="#333333",
-                                alpha=0.8,
+                        qv = _safe_percentile(filtered, q * 100.0)
+                        if np.isfinite(qv):
+                            ax.axvline(
+                                qv,
+                                linestyle="--",
+                                linewidth=0.8,
+                                color="#303030",
+                                alpha=0.85,
                             )
-                            line.set_rasterized(True)
 
                     ax.set_xlim(relerr_min, relerr_max)
-                    ax.tick_params(labelsize=5)
-                    bin_lines = _format_sector_bin_lines(dim_order, sector_key, all_edges, parts_per_line=2)
-                    title_lines = [f"{pname} | idx=" + "_".join(str(x) for x in sector_key)]
-                    title_lines.extend(bin_lines)
-                    ax.set_title("\n".join(title_lines), fontsize=5.5)
+                    ax.set_yscale("log")
+                    ax.set_ylim(0.8, y_upper)
+                    ax.grid(True, which="both", alpha=0.26)
+                    ax.tick_params(labelsize=6)
 
-                for idx in range(n_hist, n_rows * n_cols):
-                    axes[idx // n_cols, idx % n_cols].axis("off")
+                    if r == 0:
+                        if event_dim is not None:
+                            lo = float(all_edges[event_dim][c])
+                            hi = float(all_edges[event_dim][c + 1])
+                            ax.set_title(f"n_events [{lo:.0f}, {hi:.0f}]", fontsize=8)
+                        else:
+                            ax.set_title("all n_events", fontsize=8)
 
-                fig.suptitle(
-                    f"Relative-error histograms by multidimensional parameter+events sectors: {pname}",
-                    fontsize=10,
-                )
-                fig.tight_layout()
-                fig.savefig(PLOTS_DIR / f"error_hist_by_events_{pname}.png", dpi=220)
-                plt.close(fig)
-                log.info(
-                    "Histogram mosaic panels for %s (non-empty sectors): %d",
-                    pname,
-                    n_hist,
-                )
-            else:
-                log.info("No non-empty sector histograms to plot for %s.", pname)
+                    if c == 0:
+                        ax.set_ylabel(f"Count (log)\n{row_text}", fontsize=6.4)
+                    if r == n_rows - 1:
+                        ax.set_xlabel(f"Rel. error {pname} [%]", fontsize=7)
 
-    # ── 2. LUT heatmap: uncertainty vs (param, n_events) ─────────────
-    if not lut_df.empty:
-        for pname in plot_pnames:
-            est_centre = f"est_{pname}_centre"
-            ne_centre = "n_events_centre"
-            sig_col = f"sigma_{pname}_std"
-            sig_label = f"σ_{pname} std [%]"
-            if sig_col not in lut_df.columns:
-                sig_col = f"sigma_{pname}_p68"
-                sig_label = f"σ_{pname} p68 [%]"
-
-            if not all(c in lut_df.columns for c in [est_centre, ne_centre, sig_col]):
-                continue
-
-            x = pd.to_numeric(lut_df[est_centre], errors="coerce")
-            y = pd.to_numeric(lut_df[ne_centre], errors="coerce")
-            z = pd.to_numeric(lut_df[sig_col], errors="coerce")
-            m = x.notna() & y.notna() & z.notna()
-            if m.sum() < 3:
-                continue
-
-            fig, ax = plt.subplots(figsize=(7, 5.5))
-            sc = ax.scatter(x[m], y[m], c=z[m], cmap="YlOrRd", s=80,
-                            alpha=0.9, edgecolors="black", linewidths=0.4)
-            fig.colorbar(sc, ax=ax, label=sig_label, shrink=0.85)
-            ax.set_xlabel(f"Estimated {pname}")
-            ax.set_ylabel("Number of events")
-            ax.set_title(f"Uncertainty LUT: {sig_label}")
-            fig.tight_layout()
-            fig.savefig(PLOTS_DIR / f"lut_heatmap_{pname}.png")
-            plt.close(fig)
-
-    # ── 3. Uncertainty vs n_events (show parameter-set dependence) ───
-    ne_centre = "n_events_centre"
-    for pname in plot_pnames:
-        cols_q = [f"sigma_{pname}_std"] + [f"sigma_{pname}_p{int(q*100)}" for q in quantiles]
-        available = [c for c in cols_q if c in lut_df.columns]
-
-        fig, ax = plt.subplots(figsize=(7, 5))
-        drew_from_lut = False
-        guide_x: list[float] = []
-        guide_y: list[float] = []
-
-        # Try using the LUT first (median over parameter-bin cells at each events bin),
-        # while also showing all individual LUT cells as a cloud.
-        if not lut_df.empty and ne_centre in lut_df.columns and available:
-            sig_ref_col = f"sigma_{pname}_std"
-            if sig_ref_col not in lut_df.columns:
-                sig_ref_col = f"sigma_{pname}_p68"
-            if sig_ref_col not in lut_df.columns:
-                sig_ref_col = available[min(len(available) // 2, len(available) - 1)]
-
-            ne_vals = pd.to_numeric(lut_df[ne_centre], errors="coerce")
-            sig_ref = pd.to_numeric(lut_df[sig_ref_col], errors="coerce")
-            m_cells = ne_vals.notna() & sig_ref.notna() & (ne_vals > 0)
-            if m_cells.sum() > 0:
-                ax.scatter(
-                    ne_vals[m_cells], sig_ref[m_cells],
-                    s=28, alpha=0.28, color="#808080",
-                    label="LUT cells (parameter-bin combos)",
-                    zorder=1,
-                )
-
-            colors = ["#4C78A8", "#F58518", "#E45756", "#72B7B2", "#54A24B", "#B279A2"]
-            for i, q_col in enumerate(available):
-                xs: list[float] = []
-                ys: list[float] = []
-                for ne_val in sorted(ne_vals.dropna().unique()):
-                    subset = lut_df.loc[np.isclose(ne_vals, ne_val, atol=1e-6), q_col]
-                    vals = pd.to_numeric(subset, errors="coerce").dropna().to_numpy(dtype=float)
-                    if len(vals) == 0:
-                        continue
-                    med = _safe_median(vals)
-                    if np.isfinite(med):
-                        xs.append(float(ne_val))
-                        ys.append(med)
-                if len(xs) >= 2:
-                    q_label = "std" if q_col.endswith("_std") else q_col.split("_")[-1]
-                    ax.plot(
-                        xs, ys, "o-",
-                        color=colors[i % len(colors)],
-                        markersize=5, linewidth=1.6,
-                        label=f"{q_label} median",
-                        zorder=3,
+                    ax.text(
+                        0.02,
+                        0.98,
+                        f"Ntot={n_total}\nNfilt={n_filtered}\nout={n_outside}",
+                        transform=ax.transAxes,
+                        ha="left",
+                        va="top",
+                        fontsize=6.3,
+                        bbox=dict(boxstyle="round,pad=0.20", facecolor="white", alpha=0.65, edgecolor="#C0C0C0"),
                     )
-                    if q_col == sig_ref_col:
-                        guide_x.extend(xs)
-                        guide_y.extend(ys)
-                    drew_from_lut = True
+                    if r == 0 and c == 0:
+                        ax.legend(loc="upper right", fontsize=6.5, framealpha=0.85)
 
-        if not drew_from_lut:
+            fig.suptitle(
+                f"{pname}: histogram by parameter-bin rows and n_events-bin columns",
+                fontsize=10.5,
+                y=1.01,
+            )
+            fig.savefig(PLOTS_DIR / f"error_hist_by_events_{pname}.png", dpi=220)
             plt.close(fig)
-            continue
+            log.info(
+                "Histogram grid for %s (rows=%d parameter-combo bins, cols=%d event bins).",
+                pname,
+                n_rows,
+                n_cols,
+            )
 
-        # 1/sqrt(N) guide scaled to the median uncertainty trend.
-        gx = np.asarray(guide_x, dtype=float)
-        gy = np.asarray(guide_y, dtype=float)
-        finite = np.isfinite(gx) & np.isfinite(gy) & (gx > 0) & (gy >= 0)
-        if finite.sum() >= 2:
-            med_sigma = _safe_median(gy[finite])
-            med_ne = _safe_median(gx[finite])
-            if med_sigma > 0 and med_ne > 0:
-                scale = med_sigma * np.sqrt(med_ne)
-                x_guide = np.linspace(float(np.nanmin(gx[finite])), float(np.nanmax(gx[finite])), 200)
-                ax.plot(
-                    x_guide, scale / np.sqrt(x_guide), "k--",
-                    linewidth=1, alpha=0.55, label=r"$\propto 1/\sqrt{N}$",
-                    zorder=2,
+    # ── 2. LUT heatmap in flux-eff plane by event-count bins ─────────
+    # Rows: selected parameters (flux row first if present).
+    # Cols: n_events bins (left=low counts, right=high counts for 2 bins).
+    if not lut_df.empty:
+        flux_plane_param = "flux_cm2_min" if f"est_flux_cm2_min" in all_edges else None
+        eff_plane_param = None
+        for candidate in plot_pnames + param_names:
+            if candidate.startswith("eff_") and f"est_{candidate}" in all_edges:
+                eff_plane_param = candidate
+                break
+
+        # Fallbacks if canonical flux/eff are not available.
+        if flux_plane_param is None:
+            for candidate in plot_pnames + param_names:
+                if f"est_{candidate}" in all_edges:
+                    flux_plane_param = candidate
+                    break
+        if eff_plane_param is None:
+            for candidate in plot_pnames + param_names:
+                if candidate != flux_plane_param and f"est_{candidate}" in all_edges:
+                    eff_plane_param = candidate
+                    break
+
+        x_edges = all_edges.get(f"est_{flux_plane_param}") if flux_plane_param else None
+        y_edges = all_edges.get(f"est_{eff_plane_param}") if eff_plane_param else None
+        ne_edges = all_edges.get("n_events")
+        if (
+            flux_plane_param is not None
+            and eff_plane_param is not None
+            and x_edges is not None
+            and y_edges is not None
+            and ne_edges is not None
+            and len(x_edges) >= 2
+            and len(y_edges) >= 2
+            and len(ne_edges) >= 2
+            and f"est_{flux_plane_param}_bin_idx" in lut_df.columns
+            and f"est_{eff_plane_param}_bin_idx" in lut_df.columns
+            and "n_events_bin_idx" in lut_df.columns
+        ):
+            panel_params = [p for p in plot_pnames if p in param_names]
+            if "flux_cm2_min" in panel_params:
+                panel_params = ["flux_cm2_min"] + [p for p in panel_params if p != "flux_cm2_min"]
+            if eff_plane_param in panel_params and "flux_cm2_min" in panel_params:
+                panel_params = (
+                    ["flux_cm2_min", eff_plane_param]
+                    + [p for p in panel_params if p not in {"flux_cm2_min", eff_plane_param}]
                 )
 
-        ax.set_xlabel("Number of events")
-        ax.set_ylabel(f"σ_{pname} [%]")
-        ax.set_title(f"Uncertainty vs events: {pname}")
-        ax.set_xscale("log")
-        ax.legend(fontsize=7)
-        fig.tight_layout()
-        fig.savefig(PLOTS_DIR / f"uncertainty_vs_events_{pname}.png")
-        plt.close(fig)
+            n_rows = max(1, len(panel_params))
+            n_cols = len(ne_edges) - 1
+            n_x = len(x_edges) - 1
+            n_y = len(y_edges) - 1
+            fig, axes = plt.subplots(
+                n_rows,
+                n_cols,
+                figsize=(4.6 * n_cols, 3.7 * n_rows),
+                squeeze=False,
+                constrained_layout=True,
+            )
 
-    # ── 4. Ellipse-plane plot: show simulated (true) pairs, dictionary, and
+            x_bin_all = pd.to_numeric(lut_df[f"est_{flux_plane_param}_bin_idx"], errors="coerce")
+            y_bin_all = pd.to_numeric(lut_df[f"est_{eff_plane_param}_bin_idx"], errors="coerce")
+            ne_bin_all = pd.to_numeric(lut_df["n_events_bin_idx"], errors="coerce")
+
+            # Overlay dictionary points only inside the plotted LUT plane.
+            dict_fx = None
+            dict_ef = None
+            dict_mask_in_plane = None
+            dict_in_plane = 0
+            dict_out_of_plane = 0
+            x_min, x_max = float(x_edges[0]), float(x_edges[-1])
+            y_min, y_max = float(y_edges[0]), float(y_edges[-1])
+            if dict_df is not None and flux_plane_param in dict_df.columns and eff_plane_param in dict_df.columns:
+                dict_fx = pd.to_numeric(dict_df[flux_plane_param], errors="coerce")
+                dict_ef = pd.to_numeric(dict_df[eff_plane_param], errors="coerce")
+                dict_mask_all = dict_fx.notna() & dict_ef.notna()
+                dict_mask_in_plane = (
+                    dict_mask_all
+                    & (dict_fx >= x_min)
+                    & (dict_fx <= x_max)
+                    & (dict_ef >= y_min)
+                    & (dict_ef <= y_max)
+                )
+                dict_in_plane = int(dict_mask_in_plane.sum())
+                dict_out_of_plane = int(dict_mask_all.sum() - dict_in_plane)
+
+            for r, pname in enumerate(panel_params):
+                sig_col = f"sigma_{pname}_std"
+                sig_label = f"σ_{pname} std [%]"
+                if sig_col not in lut_df.columns:
+                    sig_col = f"sigma_{pname}_p68"
+                    sig_label = f"σ_{pname} p68 [%]"
+                if sig_col not in lut_df.columns:
+                    for c in range(n_cols):
+                        axes[r, c].axis("off")
+                    continue
+
+                sigma_all = pd.to_numeric(lut_df[sig_col], errors="coerce")
+                valid_row = x_bin_all.notna() & y_bin_all.notna() & ne_bin_all.notna() & sigma_all.notna()
+
+                # Shared row color scale across event-bin columns.
+                row_vals = sigma_all[valid_row].to_numpy(dtype=float)
+                if row_vals.size == 0:
+                    vmin, vmax = 0.0, 1.0
+                else:
+                    vmin = float(np.nanpercentile(row_vals, 5))
+                    vmax = float(np.nanpercentile(row_vals, 95))
+                    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin >= vmax:
+                        vmin = float(np.nanmin(row_vals))
+                        vmax = float(np.nanmax(row_vals))
+                        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin >= vmax:
+                            vmin, vmax = 0.0, 1.0
+
+                row_mesh = None
+                for c in range(n_cols):
+                    ax = axes[r, c]
+                    use = valid_row & (ne_bin_all.astype("Int64") == c)
+                    z_grid = np.full((n_y, n_x), np.nan, dtype=float)
+                    if use.any():
+                        xb = x_bin_all[use].astype(int)
+                        yb = y_bin_all[use].astype(int)
+                        zv = sigma_all[use]
+                        grouped = (
+                            pd.DataFrame({"xb": xb, "yb": yb, "z": zv})
+                            .groupby(["yb", "xb"], observed=True)["z"]
+                            .median()
+                        )
+                        for (yb_i, xb_i), zmed in grouped.items():
+                            if 0 <= int(xb_i) < n_x and 0 <= int(yb_i) < n_y:
+                                z_grid[int(yb_i), int(xb_i)] = float(zmed)
+
+                    z_masked = np.ma.masked_invalid(z_grid)
+                    row_mesh = ax.pcolormesh(
+                        x_edges,
+                        y_edges,
+                        z_masked,
+                        cmap="YlOrRd",
+                        shading="flat",
+                        alpha=0.45,
+                        vmin=vmin,
+                        vmax=vmax,
+                        zorder=1,
+                    )
+
+                    if dict_fx is not None and dict_ef is not None and dict_mask_in_plane is not None:
+                        if dict_mask_in_plane.any():
+                            ax.scatter(
+                                dict_fx[dict_mask_in_plane],
+                                dict_ef[dict_mask_in_plane],
+                                s=18,
+                                marker="o",
+                                color="#1f4e79",
+                                alpha=0.62,
+                                edgecolors="white",
+                                linewidths=0.30,
+                                zorder=3,
+                            )
+
+                    lo_ev = float(ne_edges[c])
+                    hi_ev = float(ne_edges[c + 1])
+                    ax.set_title(f"{pname} | n_events [{lo_ev:.0f}, {hi_ev:.0f}]")
+                    if r == n_rows - 1:
+                        ax.set_xlabel(f"{flux_plane_param}")
+                    if c == 0:
+                        ax.set_ylabel(f"{eff_plane_param}")
+                    ax.set_xlim(x_min, x_max)
+                    ax.set_ylim(y_min, y_max)
+                    ax.text(
+                        0.02,
+                        0.02,
+                        f"dict in-plane: {dict_in_plane} | out: {dict_out_of_plane}",
+                        transform=ax.transAxes,
+                        ha="left",
+                        va="bottom",
+                        fontsize=6.3,
+                        bbox=dict(boxstyle="round,pad=0.20", facecolor="white", alpha=0.65, edgecolor="#C0C0C0"),
+                        zorder=5,
+                    )
+                    ax.grid(True, alpha=0.18)
+
+                if row_mesh is not None:
+                    fig.colorbar(
+                        row_mesh,
+                        ax=list(axes[r, :]),
+                        label=sig_label,
+                        shrink=0.92,
+                        pad=0.035,
+                        fraction=0.045,
+                        aspect=24,
+                    )
+
+            fig.suptitle(
+                f"LUT uncertainty in {flux_plane_param} vs {eff_plane_param} plane by event-count bins",
+                fontsize=11,
+            )
+            fig.savefig(PLOTS_DIR / "lut_heatmap_eff_flux_plane.png", dpi=170)
+            plt.close(fig)
+
+    # ── 3. Ellipse-plane plot: show simulated (true) pairs, dictionary, and
     #      uncertainty ellipses centred on estimated pairs. (Simple, configurable)
     if ellipse_cfg is None:
-        ellipse_cfg = {"params": None, "n_points": 0, "quantile": 0.68, "show_dictionary": True}
+        ellipse_cfg = {"params": None, "n_points": 0, "quantile": 0.68}
 
     # Decide which two parameters to use
     ppair = None
@@ -1041,25 +1199,94 @@ def _make_plots(
                     sel_idx = np.linspace(0, len(vv) - 1, n_points, dtype=int)
                 sel = vv.iloc[sel_idx]
 
-                fig, ax = plt.subplots(figsize=(7, 6))
+                fig, ax = plt.subplots(figsize=(8.2, 6.4))
+                ax.set_facecolor("#FCFCFD")
                 ax.set_xlabel(x_p)
                 ax.set_ylabel(y_p)
                 ax.set_title(f"Validation: {y_p} vs {x_p} — ellipses (p{int(ellipse_cfg.get('quantile', 0.68)*100)})")
+                ax.grid(True, linestyle="--", linewidth=0.7, alpha=0.35)
 
-                # Plot dictionary entries if requested and available
-                if ellipse_cfg.get("show_dictionary") and dict_df is not None and {x_p, y_p}.issubset(set(dict_df.columns)):
+                # Plot all available validation truths as a light background cloud.
+                n_truth_bg = 0
+                if {true_x_col, true_y_col}.issubset(set(vv.columns)):
+                    vtruth = vv.dropna(subset=[true_x_col, true_y_col])
+                    n_truth_bg = len(vtruth)
+                    if n_truth_bg > 0:
+                        ax.scatter(
+                            vtruth[true_x_col],
+                            vtruth[true_y_col],
+                            marker="o",
+                            s=22,
+                            color="#666666",
+                            alpha=0.34,
+                            edgecolors="white",
+                            linewidths=0.22,
+                            zorder=1,
+                            label=f"Validation truths (all: {n_truth_bg})",
+                        )
+
+                # Plot all dictionary entries for context (no subsampling).
+                n_dict = 0
+                if dict_df is not None and {x_p, y_p}.issubset(set(dict_df.columns)):
                     ddf = dict_df.dropna(subset=[x_p, y_p])
-                    n_dict_plot = min(len(ddf), ellipse_cfg.get("n_points", 10))
-                    if len(ddf) > 0 and n_dict_plot > 0:
-                        # sample evenly for reproducibility
-                        if len(ddf) <= n_dict_plot:
-                            dsel = ddf
-                        else:
-                            didx = np.linspace(0, len(ddf) - 1, n_dict_plot, dtype=int)
-                            dsel = ddf.iloc[didx]
-                        ax.scatter(dsel[x_p], dsel[y_p], marker="^", color="#2ca02c", s=60, label="Dictionary samples")
+                    n_dict = len(ddf)
+                    if n_dict > 0:
+                        ax.scatter(
+                            ddf[x_p],
+                            ddf[y_p],
+                            marker="s",
+                            facecolors="none",
+                            edgecolors="#2F4B7C",
+                            s=30,
+                            alpha=0.86,
+                            linewidths=0.75,
+                            zorder=2,
+                            label=f"Dictionary (all: {n_dict})",
+                        )
 
                 # Plot selected points: ellipses centred at estimates and markers for true values
+                x_series = pd.to_numeric(vv[est_x_col], errors="coerce").to_numpy(dtype=float)
+                y_series = pd.to_numeric(vv[est_y_col], errors="coerce").to_numpy(dtype=float)
+                if {true_x_col, true_y_col}.issubset(set(vv.columns)):
+                    x_true_series = pd.to_numeric(vv[true_x_col], errors="coerce").to_numpy(dtype=float)
+                    y_true_series = pd.to_numeric(vv[true_y_col], errors="coerce").to_numpy(dtype=float)
+                    x_series = np.concatenate([x_series, x_true_series[np.isfinite(x_true_series)]])
+                    y_series = np.concatenate([y_series, y_true_series[np.isfinite(y_true_series)]])
+                x_series = x_series[np.isfinite(x_series)]
+                y_series = y_series[np.isfinite(y_series)]
+                x_span = float(np.nanmax(x_series) - np.nanmin(x_series)) if x_series.size else 1.0
+                y_span = float(np.nanmax(y_series) - np.nanmin(y_series)) if y_series.size else 1.0
+                if not np.isfinite(x_span) or x_span <= 0:
+                    x_span = 1.0
+                if not np.isfinite(y_span) or y_span <= 0:
+                    y_span = 1.0
+
+                arrow_lengths: list[float] = []
+                for _, row in sel.iterrows():
+                    true_x = float(row[true_x_col]) if true_x_col in row and not pd.isna(row[true_x_col]) else np.nan
+                    true_y = float(row[true_y_col]) if true_y_col in row and not pd.isna(row[true_y_col]) else np.nan
+                    est_x = float(row[est_x_col]) if est_x_col in row and not pd.isna(row[est_x_col]) else np.nan
+                    est_y = float(row[est_y_col]) if est_y_col in row and not pd.isna(row[est_y_col]) else np.nan
+                    if np.isfinite(est_x) and np.isfinite(est_y) and np.isfinite(true_x) and np.isfinite(true_y):
+                        dlen = float(np.hypot((true_x - est_x) / x_span, (true_y - est_y) / y_span))
+                        arrow_lengths.append(dlen)
+
+                arrow_norm = None
+                arrow_cmap = None
+                if arrow_lengths:
+                    lmin = float(np.nanmin(arrow_lengths))
+                    lmax = float(np.nanmax(arrow_lengths))
+                    if not np.isfinite(lmin) or not np.isfinite(lmax):
+                        lmin, lmax = 0.0, 1.0
+                    if lmax <= lmin:
+                        lmax = lmin + 1e-12
+                    arrow_norm = Normalize(vmin=lmin, vmax=lmax)
+                    arrow_cmap = plt.get_cmap("viridis")
+
+                ell_label_shown = False
+                est_label_shown = False
+                true_label_shown = False
+                arrows_drawn = 0
                 for _, row in sel.iterrows():
                     est_x = float(row[est_x_col])
                     est_y = float(row[est_y_col])
@@ -1083,19 +1310,103 @@ def _make_plots(
                         sigma_y = sigma_y_pct / 100.0 * abs(est_y)
                         # width/height are diameters
                         ell = Ellipse((est_x, est_y), width=2*sigma_x, height=2*sigma_y,
-                                      edgecolor="#1f77b4", facecolor="none", alpha=0.6, linewidth=1.2)
+                                      edgecolor=(31/255, 119/255, 180/255, 0.90),
+                                      facecolor=(31/255, 119/255, 180/255, 0.22),
+                                      linewidth=1.25)
                         ax.add_patch(ell)
-                        ax.scatter([est_x], [est_y], marker="x", color="#1f77b4", s=40, label="Estimate" if _ == sel.index[0] else "")
+                        if not ell_label_shown:
+                            ax.plot([], [], color="#1f77b4", linewidth=1.25, label="Uncertainty ellipse")
+                            ell_label_shown = True
+                        ax.scatter(
+                            [est_x], [est_y],
+                            marker="x",
+                            color="#1f77b4",
+                            s=48,
+                            zorder=4,
+                            label="Estimate" if not est_label_shown else "",
+                        )
+                        est_label_shown = True
                     else:
-                        ax.scatter([est_x], [est_y], marker="x", color="#1f77b4", s=40, label="Estimate" if _ == sel.index[0] else "")
+                        ax.scatter(
+                            [est_x], [est_y],
+                            marker="x",
+                            color="#1f77b4",
+                            s=48,
+                            zorder=4,
+                            label="Estimate" if not est_label_shown else "",
+                        )
+                        est_label_shown = True
 
                     if true_x is not None and true_y is not None:
-                        ax.scatter([true_x], [true_y], marker="o", color="#d62728", s=30, label="True" if _ == sel.index[0] else "")
-                        # draw line estimate → true
+                        ax.scatter(
+                            [true_x], [true_y],
+                            marker="o",
+                            color="#d62728",
+                            s=34,
+                            zorder=5,
+                            label="True" if not true_label_shown else "",
+                        )
+                        true_label_shown = True
+                        # Draw arrow from estimate → true.
                         if np.isfinite(true_x) and np.isfinite(true_y):
-                            ax.plot([est_x, true_x], [est_y, true_y], color="#888888", linewidth=0.7, alpha=0.7)
+                            dlen = float(np.hypot((true_x - est_x) / x_span, (true_y - est_y) / y_span))
+                            if arrow_norm is not None and arrow_cmap is not None:
+                                arrow_color = arrow_cmap(float(arrow_norm(dlen)))
+                            else:
+                                arrow_color = "#6E6E6E"
+                            # Thick translucent trail to make direction/error magnitude visually clear.
+                            ax.plot(
+                                [est_x, true_x],
+                                [est_y, true_y],
+                                color=arrow_color,
+                                linewidth=4.2,
+                                alpha=0.32,
+                                solid_capstyle="round",
+                                zorder=3,
+                            )
+                            ax.annotate(
+                                "",
+                                xy=(true_x, true_y),
+                                xytext=(est_x, est_y),
+                                arrowprops={
+                                    "arrowstyle": "-|>",
+                                    "color": arrow_color,
+                                    "linewidth": 1.35,
+                                    "alpha": 0.96,
+                                    "mutation_scale": 11,
+                                    "shrinkA": 2,
+                                    "shrinkB": 2,
+                                },
+                                zorder=4,
+                            )
+                            arrows_drawn += 1
 
-                ax.legend(fontsize=8)
+                if arrows_drawn > 0:
+                    ax.plot([], [], color="#6E6E6E", linewidth=1.35, label="Estimate -> True")
+                    if arrow_norm is not None and arrow_cmap is not None:
+                        sm = cm.ScalarMappable(norm=arrow_norm, cmap=arrow_cmap)
+                        sm.set_array([])
+                        cbar = fig.colorbar(sm, ax=ax, pad=0.015, fraction=0.045)
+                        cbar.set_label("Estimate -> true distance (norm.)", fontsize=8)
+                        cbar.ax.tick_params(labelsize=7)
+
+                ax.text(
+                    0.015,
+                    0.985,
+                    f"Dictionary: {n_dict}\nValidation truths: {n_truth_bg}\nSelected tests: {len(sel)}",
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="top",
+                    fontsize=8,
+                    bbox={
+                        "boxstyle": "round,pad=0.28",
+                        "facecolor": "white",
+                        "edgecolor": "#B7B7B7",
+                        "alpha": 0.88,
+                    },
+                )
+
+                ax.legend(fontsize=8, framealpha=0.95)
                 fig.tight_layout()
                 outname = PLOTS_DIR / f"lut_ellipse_{x_p}_{y_p}.png"
                 fig.savefig(outname)

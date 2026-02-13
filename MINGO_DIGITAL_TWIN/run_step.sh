@@ -138,6 +138,22 @@ else
 fi
 DT="$(cd "$(dirname "$0")" && pwd)"
 WORK_CACHE_PATH="/tmp/mingo_digital_twin_run_step_work_cache.csv"
+WORK_STATE_PATH="/tmp/mingo_digital_twin_run_step_state.csv"
+WORK_STUCK_LINES_PATH="/tmp/mingo_digital_twin_run_step_stuck_lines.csv"
+WORK_BROKEN_RUNS_PATH="/tmp/mingo_digital_twin_run_step_broken_runs.csv"
+STRICT_LINE_CLOSURE="${RUN_STEP_STRICT_LINE_CLOSURE:-1}"
+STEP1_STUCK_AGE_S="${RUN_STEP_STEP1_STUCK_AGE_S:-1800}"
+STEP1_BLOCK_LOG_INTERVAL_S="${RUN_STEP_STEP1_BLOCK_LOG_INTERVAL_S:-300}"
+LAST_STEP1_BLOCK_LOG_EPOCH=0
+if [[ "$STRICT_LINE_CLOSURE" != "0" && "$STRICT_LINE_CLOSURE" != "1" ]]; then
+  STRICT_LINE_CLOSURE="1"
+fi
+if ! [[ "$STEP1_STUCK_AGE_S" =~ ^[0-9]+$ ]]; then
+  STEP1_STUCK_AGE_S="1800"
+fi
+if ! [[ "$STEP1_BLOCK_LOG_INTERVAL_S" =~ ^[0-9]+$ ]]; then
+  STEP1_BLOCK_LOG_INTERVAL_S="300"
+fi
 if [[ -n "$CONTINUOUS" && -z "$DEBUG" ]]; then
   QUIET_CONTINUOUS="1"
 fi
@@ -288,19 +304,85 @@ step_has_cached_work() {
     return 0
   fi
   has_work="$(awk -F, -v step="$step" 'NR>1 && $1==step {print $2; exit}' "$WORK_CACHE_PATH")"
+  has_work="${has_work//$'\r'/}"
   if [[ -z "$has_work" ]]; then
     return 0
   fi
   [[ "$has_work" == "1" ]]
 }
 
+work_state_value() {
+  local key="$1"
+  local default_value="${2:-}"
+  local value=""
+  if [[ -f "$WORK_STATE_PATH" ]]; then
+    value="$(awk -F, -v key="$key" 'NR>1 && $1==key {print $2; exit}' "$WORK_STATE_PATH")"
+  fi
+  value="${value//$'\r'/}"
+  if [[ -z "$value" ]]; then
+    printf '%s\n' "$default_value"
+  else
+    printf '%s\n' "$value"
+  fi
+}
+
+step1_new_lines_allowed() {
+  local allowed
+  if [[ "$STRICT_LINE_CLOSURE" != "1" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$WORK_STATE_PATH" ]]; then
+    # Fail closed: if we cannot inspect active lines, do not open new ones.
+    return 1
+  fi
+  allowed="$(work_state_value "step1_new_lines_allowed" "0")"
+  [[ "$allowed" == "1" ]]
+}
+
+maybe_log_step1_blocked() {
+  local now_epoch
+  local active_lines
+  local unopened_lines
+  local stuck_lines
+  local oldest_age
+  local broken_runs
+  now_epoch="$(date +%s)"
+  if (( now_epoch - LAST_STEP1_BLOCK_LOG_EPOCH < STEP1_BLOCK_LOG_INTERVAL_S )); then
+    return 0
+  fi
+  LAST_STEP1_BLOCK_LOG_EPOCH="$now_epoch"
+  active_lines="$(work_state_value "active_open_step1_lines" "unknown")"
+  unopened_lines="$(work_state_value "unopened_step1_lines" "unknown")"
+  stuck_lines="$(work_state_value "stuck_step1_lines" "unknown")"
+  oldest_age="$(work_state_value "oldest_active_step1_age_s" "unknown")"
+  broken_runs="$(work_state_value "broken_runs" "unknown")"
+  log_warn "step=1 status=blocked reason=active-lines strict_line_closure=$STRICT_LINE_CLOSURE active_open_lines=$active_lines unopened_lines=$unopened_lines stuck_lines=$stuck_lines oldest_age_s=$oldest_age broken_runs=$broken_runs"
+  if [[ "$stuck_lines" != "0" ]]; then
+    log_warn "step=1 stuck-line report path=$WORK_STUCK_LINES_PATH"
+  fi
+  if [[ "$broken_runs" != "0" ]]; then
+    log_warn "broken SIM_RUN report path=$WORK_BROKEN_RUNS_PATH"
+  fi
+}
+
 refresh_step_work_cache() {
   local mesh_path="$DT/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"
   local intersteps_dir="$DT/INTERSTEPS"
-  python3 - "$mesh_path" "$intersteps_dir" "$WORK_CACHE_PATH" <<'PY'
+  python3 - \
+    "$mesh_path" \
+    "$intersteps_dir" \
+    "$WORK_CACHE_PATH" \
+    "$WORK_STATE_PATH" \
+    "$WORK_STUCK_LINES_PATH" \
+    "$WORK_BROKEN_RUNS_PATH" \
+    "$STRICT_LINE_CLOSURE" \
+    "$STEP1_STUCK_AGE_S" <<'PY'
 import csv
+import json
 import sys
+import time
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -308,18 +390,29 @@ import pandas as pd
 mesh_path = Path(sys.argv[1])
 intersteps_dir = Path(sys.argv[2])
 out_csv_path = Path(sys.argv[3])
+state_csv_path = Path(sys.argv[4])
+stuck_csv_path = Path(sys.argv[5])
+broken_csv_path = Path(sys.argv[6])
+strict_line_closure = str(sys.argv[7]).strip() == "1"
+try:
+    step1_stuck_age_s = int(float(sys.argv[8]))
+except (TypeError, ValueError):
+    step1_stuck_age_s = 1800
+if step1_stuck_age_s < 0:
+    step1_stuck_age_s = 0
 
 if not mesh_path.exists():
     raise FileNotFoundError(f"param_mesh.csv not found: {mesh_path}")
 
-mesh = pd.read_csv(mesh_path)
-if "done" in mesh.columns:
-    mesh = mesh[mesh["done"].fillna(0).astype(int) != 1]
+mesh_all = pd.read_csv(mesh_path)
+if "done" not in mesh_all.columns:
+    mesh_all["done"] = 0
+mesh_all["done"] = mesh_all["done"].fillna(0).astype(int)
 
 step_cols = [f"step_{idx}_id" for idx in range(1, 11)]
 for col in step_cols:
-    if col not in mesh.columns:
-        mesh[col] = ""
+    if col not in mesh_all.columns:
+        mesh_all[col] = ""
 
 
 def normalize_id(value: object) -> str:
@@ -335,7 +428,9 @@ def normalize_id(value: object) -> str:
 
 
 for col in step_cols:
-    mesh[col] = mesh[col].map(normalize_id)
+    mesh_all[col] = mesh_all[col].map(normalize_id)
+
+mesh = mesh_all[mesh_all["done"] != 1].copy()
 
 
 def output_dir_for_step(step_num: int) -> Path:
@@ -359,7 +454,53 @@ def parse_sim_run_ids(path: Path) -> tuple[str, ...] | None:
     return tuple(normalized)
 
 
+def expected_output_patterns(step_num: int) -> tuple[str, ...]:
+    if step_num == 1:
+        return (
+            "muon_sample_*.chunks.json",
+            "muon_sample_*.pkl",
+            "muon_sample_*.csv",
+        )
+    stem = f"step_{step_num}"
+    return (
+        f"{stem}_chunks.chunks.json",
+        f"{stem}.pkl",
+        f"{stem}.csv",
+    )
+
+
+def has_expected_output(step_num: int, sim_dir: Path) -> tuple[bool, str]:
+    payload_paths: list[Path] = []
+    for pattern in expected_output_patterns(step_num):
+        payload_paths.extend(sim_dir.glob(pattern))
+    if not payload_paths:
+        return False, "missing_output_payload"
+
+    manifest_paths = [path for path in payload_paths if path.name.endswith(".chunks.json")]
+    for manifest_path in manifest_paths:
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return False, f"invalid_manifest:{manifest_path.name}"
+        chunks = manifest.get("chunks", [])
+        if chunks is None:
+            chunks = []
+        if not isinstance(chunks, list):
+            return False, f"invalid_chunks_field:{manifest_path.name}"
+        for chunk_raw in chunks:
+            chunk_path = Path(str(chunk_raw))
+            if not chunk_path.is_absolute():
+                chunk_path = (manifest_path.parent / chunk_path).resolve()
+            if not chunk_path.exists():
+                return False, f"missing_manifest_chunk:{manifest_path.name}"
+
+    return True, "ok"
+
+
 rows: list[tuple[int, int, int, int, int, int]] = []
+broken_count = 0
+broken_records: list[tuple[int, str, str, str]] = []
+max_broken_records = 2000
 
 for step_num in range(1, 11):
     prefix_cols = step_cols[: step_num - 1]
@@ -389,6 +530,11 @@ for step_num in range(1, 11):
             continue
         produced_dirs += 1
         produced_by_prefix[tuple(ids[: step_num - 1])] += 1
+        ok, reason = has_expected_output(step_num, sim_dir)
+        if not ok:
+            broken_count += 1
+            if len(broken_records) < max_broken_records:
+                broken_records.append((step_num, sim_dir.name, reason, str(sim_dir)))
 
     available_prefixes: set[tuple[str, ...]] = set()
     if step_num == 1:
@@ -422,6 +568,90 @@ for step_num in range(1, 11):
         )
     )
 
+# Track unfinished active step_1 lines so scheduler can prevent opening new lines.
+active_step1_ids = set(mesh.loc[mesh["step_1_id"] != "", "step_1_id"].unique().tolist())
+open_step1_ids: set[str] = set()
+for sim_dir in output_dir_for_step(1).glob("SIM_RUN_*"):
+    ids = parse_sim_run_ids(sim_dir)
+    if ids and len(ids) >= 1:
+        open_step1_ids.add(ids[0])
+
+latest_activity_by_step1: dict[str, float] = {}
+for step_num in range(1, 11):
+    for sim_dir in output_dir_for_step(step_num).glob("SIM_RUN_*"):
+        ids = parse_sim_run_ids(sim_dir)
+        if ids is None or not ids:
+            continue
+        step1_id = ids[0]
+        try:
+            mtime = sim_dir.stat().st_mtime
+        except OSError:
+            continue
+        previous = latest_activity_by_step1.get(step1_id)
+        if previous is None or mtime > previous:
+            latest_activity_by_step1[step1_id] = mtime
+
+active_open_step1_ids = sorted(active_step1_ids & open_step1_ids)
+unopened_step1_ids = sorted(active_step1_ids - open_step1_ids)
+
+total_by_step1 = (
+    mesh_all.loc[mesh_all["step_1_id"] != ""]
+    .groupby("step_1_id", dropna=False)
+    .size()
+    .to_dict()
+)
+done_by_step1 = (
+    mesh_all.loc[(mesh_all["step_1_id"] != "") & (mesh_all["done"] == 1)]
+    .groupby("step_1_id", dropna=False)
+    .size()
+    .to_dict()
+)
+pending_by_step1 = (
+    mesh.loc[mesh["step_1_id"] != ""]
+    .groupby("step_1_id", dropna=False)
+    .size()
+    .to_dict()
+)
+
+now_ts = time.time()
+stuck_count = 0
+oldest_active_age_s = 0
+stuck_rows: list[tuple[str, int, int, int, str, int, str]] = []
+for step1_id in active_open_step1_ids:
+    pending_rows = int(pending_by_step1.get(step1_id, 0))
+    total_rows = int(total_by_step1.get(step1_id, pending_rows))
+    done_rows = int(done_by_step1.get(step1_id, max(0, total_rows - pending_rows)))
+    last_activity_ts = latest_activity_by_step1.get(step1_id)
+    if last_activity_ts is None:
+        age_s = -1
+        status = "no_activity"
+    else:
+        age_s = max(0, int(now_ts - last_activity_ts))
+        oldest_active_age_s = max(oldest_active_age_s, age_s)
+        status = "stuck" if age_s >= step1_stuck_age_s else "active"
+    if status in {"stuck", "no_activity"}:
+        stuck_count += 1
+    last_activity_utc = (
+        datetime.fromtimestamp(last_activity_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if last_activity_ts is not None
+        else ""
+    )
+    stuck_rows.append(
+        (
+            step1_id,
+            pending_rows,
+            done_rows,
+            total_rows,
+            last_activity_utc,
+            age_s,
+            status,
+        )
+    )
+
+step1_new_lines_allowed = 1
+if strict_line_closure and active_open_step1_ids:
+    step1_new_lines_allowed = 0
+
 out_csv_path.parent.mkdir(parents=True, exist_ok=True)
 with out_csv_path.open("w", newline="", encoding="utf-8") as handle:
     writer = csv.writer(handle)
@@ -436,18 +666,57 @@ with out_csv_path.open("w", newline="", encoding="utf-8") as handle:
         ]
     )
     writer.writerows(rows)
+
+state_csv_path.parent.mkdir(parents=True, exist_ok=True)
+with state_csv_path.open("w", newline="", encoding="utf-8") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(["key", "value"])
+    writer.writerows(
+        [
+            ("strict_line_closure", int(strict_line_closure)),
+            ("step1_stuck_age_s", step1_stuck_age_s),
+            ("active_open_step1_lines", len(active_open_step1_ids)),
+            ("unopened_step1_lines", len(unopened_step1_ids)),
+            ("stuck_step1_lines", stuck_count),
+            ("oldest_active_step1_age_s", oldest_active_age_s),
+            ("broken_runs", broken_count),
+            ("step1_new_lines_allowed", step1_new_lines_allowed),
+        ]
+    )
+
+stuck_csv_path.parent.mkdir(parents=True, exist_ok=True)
+with stuck_csv_path.open("w", newline="", encoding="utf-8") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(
+        [
+            "step_1_id",
+            "pending_rows",
+            "done_rows",
+            "total_rows",
+            "last_activity_utc",
+            "age_s",
+            "status",
+        ]
+    )
+    writer.writerows(stuck_rows)
+
+broken_csv_path.parent.mkdir(parents=True, exist_ok=True)
+with broken_csv_path.open("w", newline="", encoding="utf-8") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(["step", "sim_run", "reason", "path"])
+    writer.writerows(sorted(broken_records))
 PY
 }
 
 refresh_work_cache_or_disable() {
   if refresh_step_work_cache; then
     if [[ -n "$DEBUG" ]]; then
-      log_info "work cache refreshed: $WORK_CACHE_PATH"
+      log_info "work cache refreshed: cache=$WORK_CACHE_PATH state=$WORK_STATE_PATH stuck=$WORK_STUCK_LINES_PATH broken=$WORK_BROKEN_RUNS_PATH"
     fi
     return 0
   fi
-  log_warn "failed to refresh work cache; continuing without cache"
-  rm -f "$WORK_CACHE_PATH" 2>/dev/null || true
+  log_warn "failed to refresh work cache; continuing without cache/state"
+  rm -f "$WORK_CACHE_PATH" "$WORK_STATE_PATH" "$WORK_STUCK_LINES_PATH" "$WORK_BROKEN_RUNS_PATH" 2>/dev/null || true
   return 0
 }
 
@@ -517,6 +786,17 @@ while true; do
               log_info "step=$step status=cache-skip"
             fi
             continue
+          fi
+
+          if [[ "$step" -eq 1 ]] && [[ "$STRICT_LINE_CLOSURE" == "1" ]]; then
+            if ! step1_new_lines_allowed; then
+              attempted=1
+              maybe_log_step1_blocked
+              if [[ -n "$DEBUG" ]]; then
+                log_info "step=1 status=cache-blocked strict_line_closure=$STRICT_LINE_CLOSURE"
+              fi
+              continue
+            fi
           fi
 
           attempted=1

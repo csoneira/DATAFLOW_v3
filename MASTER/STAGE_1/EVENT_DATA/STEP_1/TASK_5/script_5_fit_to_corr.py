@@ -2215,14 +2215,18 @@ if not reprocessing_parameters.empty:
 # ------------ Input file and data managing to select configuration -------------
 # -------------------------------------------------------------------------------
 
+z_source = "unset"
+
 if simulated_z_positions is not None:
     z_positions = np.array(simulated_z_positions, dtype=float)
     found_matching_conf = True
     print(f"Using simulated z_positions from param_hash={simulated_param_hash}")
+    z_source = "simulated_param_hash"
 elif is_simulated_file:
     print("Warning: Simulated file missing param_hash; using default z_positions.")
     found_matching_conf = False
     z_positions = np.array([0, 150, 300, 450])  # In mm
+    z_source = "simulated_default_missing_param_hash"
 elif exists_input_file:
     # Ensure `start` and `end` columns are in datetime format
     input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
@@ -2243,6 +2247,7 @@ elif exists_input_file:
         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
         found_matching_conf = True
         print(selected_conf['conf'])
+        z_source = f"input_file_conf_{selected_conf.get('conf')}"
     else:
         print("Warning: No matching configuration for the date range; selecting closest configuration.")
         before = input_file[input_file["start_day"] <= end_day].sort_values("start_day", ascending=False)
@@ -2253,13 +2258,21 @@ elif exists_input_file:
         print(f"Selected configuration: {selected_conf['conf']}")
         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
         found_matching_conf = True
+        z_source = f"input_file_closest_conf_{selected_conf.get('conf')}"
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
+    z_source = "default_no_input_file"
 
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
+z_vector_mm = [round(float(value), 3) for value in z_positions.tolist()]
+print(
+    f"[Z_TRACE] file={basename_no_ext} source={z_source} "
+    f"param_hash={simulated_param_hash or 'NA'} z_vector_mm={z_vector_mm}",
+    force=True,
+)
 
 # Save the z_positions in the metadata file
 global_variables['z_P1'] =  z_positions[0]
@@ -3180,6 +3193,11 @@ print(f"Filename base: {filename_base}")
 print(f"Execution timestamp: {execution_timestamp}")
 print(f"------------- Any other variable interesting -------------")
 print("\n----------")
+print(
+    f"[Z_TRACE] metadata_append filename_base={filename_base} "
+    f"param_hash={simulated_param_hash or 'NA'} z_vector_mm={z_vector_mm}",
+    force=True,
+)
 
 metadata_specific_csv_path = save_metadata(
     csv_path_specific,

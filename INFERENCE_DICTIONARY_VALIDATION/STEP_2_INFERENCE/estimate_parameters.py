@@ -18,7 +18,7 @@ The algorithm:
 3. Build feature vectors from selected columns (e.g. raw_tt_*_rate_hz).
 4. Score each candidate using a chosen distance metric on scaled features.
 5. Estimate physical parameters via IDW interpolation over the K nearest
-   candidates.
+   candidates (or all candidates if K is None).
 
 Distance metrics
 ----------------
@@ -128,7 +128,7 @@ def estimate_parameters(
     *,
     feature_columns: str | list[str] = "auto",
     distance_metric: str = "l2_zscore",
-    interpolation_k: int = 5,
+    interpolation_k: int | None = 5,
     z_tol: float = 1e-6,
     include_global_rate: bool = True,
     global_rate_col: str = "events_per_second_global_rate",
@@ -149,9 +149,10 @@ def estimate_parameters(
         raw_tt_*_rate_hz columns.
     distance_metric : str
         One of "l2_zscore", "l2_raw", "chi2", "poisson".
-    interpolation_k : int
+    interpolation_k : int or None
         Number of nearest neighbouring dictionary entries for IDW
-        interpolation (1 = nearest-only).
+        interpolation (1 = nearest-only). If None, use all valid
+        candidates.
     z_tol : float
         Tolerance for z-plane position matching.
     include_global_rate : bool
@@ -197,7 +198,7 @@ def estimate_from_dataframes(
     *,
     feature_columns: str | list[str] = "auto",
     distance_metric: str = "l2_zscore",
-    interpolation_k: int = 5,
+    interpolation_k: int | None = 5,
     z_tol: float = 1e-6,
     include_global_rate: bool = True,
     global_rate_col: str = "events_per_second_global_rate",
@@ -330,8 +331,11 @@ def estimate_from_dataframes(
 
         row_result["best_distance"] = float(valid_distances[0])
 
-        # IDW interpolation over K nearest
-        k_use = min(interpolation_k, len(valid_indices))
+        # IDW interpolation over K nearest (or all when interpolation_k=None)
+        if interpolation_k is None:
+            k_use = len(valid_indices)
+        else:
+            k_use = min(max(1, int(interpolation_k)), len(valid_indices))
         top_indices = valid_indices[:k_use]
         top_distances = valid_distances[:k_use]
 
