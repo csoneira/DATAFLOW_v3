@@ -6,8 +6,8 @@ param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
 param_mesh_sim_run: none
 output_dir: ../../SIMULATED_DATA
 registry_enabled: false
-chunk_rows: 100000
-target_rows: 100000
+chunk_rows: 200000
+target_rows: 200000
 files_per_station_conf: 1
 payload_sampling: sequential_random_start
 subsample_rows: [15000, 20000, 25000, 30000, 35000, 40000, 50000, 55000, 60000, 65000, 70000, 75000, 80000, 85000, 90000, 95000, 100000, 105000, 110000, 115000, 120000, 125000, 130000, 135000, 140000, 145000, 150000]
