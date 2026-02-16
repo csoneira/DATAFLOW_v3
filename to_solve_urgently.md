@@ -1,5 +1,9 @@
 ## Cron + pipeline status check (2026-02-12 08:09 UTC)
 
+- CHECK THE INFERENCE METHOD ON REAL DATA, 
+  - POSSIBLY DATA FROM A HV SCAN, WHICH IS THE MOST CLEAR CASE IN WHICH IT SHOULD BE CORRECTED,
+  - OR FROM THE TIME IN WHICH BOTH MINGOS MEASURED AT THE SAME TIME.
+
 ### Overall status
 - `cron.service` is active and running (`since 2026-02-05 11:01:47 WET`).
 - Core cron logs are updating this morning (main analysis, simulation, bot, stale-lock solver, watchdog state).
