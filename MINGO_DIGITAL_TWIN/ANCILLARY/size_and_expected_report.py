@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import time
 
+import numpy as np
 import pandas as pd
 
 
@@ -90,6 +92,25 @@ def main() -> None:
         action="store_true",
         help="Include done rows in expected counts.",
     )
+    parser.add_argument(
+        "--z-positions",
+        default=None,
+        help=(
+            "Comma-separated z positions to filter param_mesh (matches z_p1..z_pN). "
+            "Provide 1–4 values; only the first N z_p columns are matched."
+        ),
+    )
+    parser.add_argument(
+        "--z-tol",
+        type=float,
+        default=1e-6,
+        help="Absolute tolerance when matching z positions (used with --z-positions).",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show progress and per-step timings.",
+    )
     args = parser.parse_args()
 
     intersteps_dir = Path(args.intersteps_dir).expanduser().resolve()
@@ -100,7 +121,62 @@ def main() -> None:
         raise FileNotFoundError(f"param_mesh.csv not found: {mesh_path}")
 
     mesh = load_mesh(mesh_path, args.include_done)
-    expected = expected_counts_from_mesh(mesh)
+
+    # load full param_mesh (always use for computing expected counts when z filter is used)
+    full_mesh = pd.read_csv(mesh_path)
+
+    # optional filter by z positions (matches z_p1..z_pN)
+    if args.z_positions is not None:
+        z_vals = [v.strip() for v in str(args.z_positions).split(",") if v.strip() != ""]
+        try:
+            z_vals = [float(v) for v in z_vals]
+        except ValueError:
+            raise ValueError("--z-positions must be comma-separated numeric values")
+        z_cols = [c for c in ("z_p1", "z_p2", "z_p3", "z_p4") if c in full_mesh.columns]
+        if len(z_vals) > len(z_cols):
+            raise ValueError("More z values provided than z_p columns available in param_mesh.csv")
+
+        def _z_mask(df: pd.DataFrame) -> pd.Series:
+            m = pd.Series(True, index=df.index)
+            for i, z in enumerate(z_vals):
+                col = z_cols[i]
+                m &= np.isclose(pd.to_numeric(df[col], errors="coerce").astype(float), float(z), atol=args.z_tol, rtol=0)
+            return m
+
+        full_mask = _z_mask(full_mesh)
+        if args.verbose:
+            print(f"Filtered full param_mesh by z positions ({', '.join(map(str, z_vals))}) -> {full_mask.sum()} rows match", flush=True)
+        # expected counts should be computed from the full param_mesh subset (so %done is correct for that z set)
+        expected = expected_counts_from_mesh(full_mesh[full_mask].copy())
+
+        # also restrict the working 'mesh' (which may already be filtered by done) to the same z subset
+        mesh = mesh[_z_mask(mesh)].copy()
+    else:
+        # attempt simple auto-detection: if pending rows (not done) all share a single
+        # fully-specified z_p1..z_pN combination, treat report as filtered for that z set
+        expected = None
+        z_cols = [c for c in ("z_p1", "z_p2", "z_p3", "z_p4") if c in mesh.columns]
+        pending = mesh[mesh.get("done", pd.Series(0, index=mesh.index)) != 1]
+        if not pending.empty and z_cols:
+            # consider only rows with all z columns non-null
+            pending_full_z = pending.dropna(subset=z_cols)
+            if not pending_full_z.empty:
+                unique_z = pending_full_z[z_cols].drop_duplicates()
+                if len(unique_z) == 1:
+                    # auto-apply this z selection to compute expected counts
+                    z_vals = [float(unique_z.iloc[0][c]) for c in z_cols]
+                    full_mask = pd.Series(True, index=full_mesh.index)
+                    for i, z in enumerate(z_vals):
+                        col = z_cols[i]
+                        full_mask &= np.isclose(pd.to_numeric(full_mesh[col], errors="coerce").astype(float), z, atol=args.z_tol, rtol=0)
+                    if args.verbose:
+                        print(f"Auto-detected single active z configuration: {z_vals[:len(z_cols)]}; using it for expected counts", flush=True)
+                    expected = expected_counts_from_mesh(full_mesh[full_mask].copy())
+                    # restrict working mesh as well to same z subset
+                    mesh = mesh[full_mask & (mesh.index.isin(mesh.index))].copy()
+        if expected is None:
+            expected = expected_counts_from_mesh(mesh)
+
     step_dirs = sorted(intersteps_dir.glob("STEP_*_TO_*"))
 
     rows = []
@@ -118,7 +194,13 @@ def main() -> None:
         if "0_TO_1" in step_name or "10_TO_FINAL" in step_name:
             continue
 
+        if args.verbose:
+            print(f"Scanning {step_name} ...", flush=True)
+            t0 = time.perf_counter()
         dirs_now, size_now = count_dirs_and_size(step_dir)
+        if args.verbose:
+            elapsed = time.perf_counter() - t0
+            print(f"  {step_name}: scanned {dirs_now} dirs, {fmt_gb(size_now)} GB in {elapsed:.2f}s", flush=True)
         step_num = int(step_name.split("_")[1])
         exp_dirs = expected.get(step_name, 0)
         available_inputs = available_inputs_for_step(step_num, intersteps_dir, expected)

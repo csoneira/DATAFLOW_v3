@@ -41,7 +41,7 @@ event_data_step1_run_matrix:
   config_refresh_seconds: 60        # min seconds between config reloads
   stations:
     "0": [1] # , 2, 3, 4, 5]
-    #"1": [1, 2, 3, 4, 5]
+    "1": [1] #, 2, 3, 4, 5]
     #"2": [1, 2, 3, 4, 5]
     #"3": [1, 2, 3, 4, 5]
     #"4": [1, 2, 3, 4, 5]
@@ -62,8 +62,8 @@ prepare_reprocessing_metadata:
   remote_user: "rpcuser"                     # SSH user to connect to the remote host.
   remote_directory_root: "/local/experiments/MINGOS"  # Base path that contains MINGO0{station} folders.
   date_range:
-    start: 2025-12-01
-    end: 2025-12-07
+    start: 2024-09-23
+    end: 2024-10-01
 
 # Station-specific size and min-gap thresholds (used by prepare_reprocessing_metadata.sh)
 min_size_mb_1: 4.0

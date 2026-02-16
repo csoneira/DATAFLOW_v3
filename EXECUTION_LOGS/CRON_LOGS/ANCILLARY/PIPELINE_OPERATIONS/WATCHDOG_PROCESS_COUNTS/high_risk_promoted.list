@@ -13,3 +13,4 @@
 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh
 rsync
 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh
+/home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh

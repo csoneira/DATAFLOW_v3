@@ -1230,9 +1230,29 @@ def main() -> int:
         unc_pct_col = f"unc_{pname}_pct"
         unc_abs_col = f"unc_{pname}_abs"
         if est_col in merged.columns and unc_pct_col in merged.columns:
+            # The LUT `sigma_*_pXX` values are percentiles of the *relative error*
+            # distribution computed as |est - true| / |true| * 100.0. Therefore the
+            # percent uncertainty should be converted to an absolute uncertainty
+            # using the *true* value when available. Fall back to the estimate
+            # if the true value is missing or numerically (near-)zero.
             est_v = pd.to_numeric(merged[est_col], errors="coerce").to_numpy(dtype=float)
+            true_col = f"true_{pname}"
+            true_v = (
+                pd.to_numeric(merged.get(true_col), errors="coerce").to_numpy(dtype=float)
+                if true_col in merged.columns else np.full(len(est_v), np.nan, dtype=float)
+            )
             up = pd.to_numeric(merged[unc_pct_col], errors="coerce").to_numpy(dtype=float)
-            merged[unc_abs_col] = np.abs(est_v) * np.abs(up) / 100.0
+
+            # Prefer true-based conversion; fallback to estimate-based when true is
+            # not available or too small to be meaningful (guard threshold matches validation denom).
+            use_true = np.isfinite(true_v) & (np.abs(true_v) > 1e-9)
+            abs_from_true = np.abs(true_v) * np.abs(up) / 100.0
+            abs_from_est = np.abs(est_v) * np.abs(up) / 100.0
+            abs_unc = np.where(use_true, abs_from_true, abs_from_est)
+
+            # Ensure non-finite entries are explicit NaN
+            abs_unc = np.where(np.isfinite(abs_unc), abs_unc, np.nan)
+            merged[unc_abs_col] = abs_unc
         else:
             merged[unc_abs_col] = np.nan
 

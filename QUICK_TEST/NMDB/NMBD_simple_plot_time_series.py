@@ -117,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional output image path (e.g. plot.png). If omitted, show interactively.",
     )
     parser.add_argument(
+        "--output-csv",
+        type=Path,
+        default=None,
+        help="Optional CSV path to write relative-variation (z-score) columns only.",
+    )
+    parser.add_argument(
         "--title",
         default="NMDB Time Series",
         help="Plot title.",
@@ -135,20 +141,56 @@ def main() -> None:
     df = parse_nmdb_table(args.input)
     cols = select_columns(df, args.columns)
 
-    ax = df[cols].plot(figsize=(12, 5), linewidth=1.2)
-    ax.set_title(args.title)
-    ax.set_xlabel("Time (UTC)")
-    ax.set_ylabel("Rate")
-    ax.grid(True, alpha=0.3)
-    ax.legend(title="Station")
+    # compute standardized relative-variation (z-score) for numeric station columns
+    numeric = df[cols].select_dtypes(include="number").columns
+    relvar = df[numeric].apply(
+        lambda col: (col - col.mean()) / (col.std(ddof=0) if col.std(ddof=0) != 0 else 1.0)
+    )
+    relvar.columns = [f"{c}_rel_z" for c in relvar.columns]
+    relvar_out = relvar.reset_index().rename(columns={"timestamp": "time"})
 
-    plt.tight_layout()
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(args.output, dpi=args.dpi)
-        print(f"Saved plot to: {args.output}")
+    if args.output_csv:
+        args.output_csv.parent.mkdir(parents=True, exist_ok=True)
+        relvar_out.to_csv(args.output_csv, index=False)
+        print(f"Saved relative-variation CSV to: {args.output_csv}")
+
+    # --- plotting: rates (top) and z-score relvar (bottom) ---------------------------------
+    default_png = Path(__file__).resolve().with_name("NMBD_simple_plot_time_series.png")
+
+    fig, (ax_rate, ax_rel) = plt.subplots(
+        nrows=2,
+        ncols=1,
+        sharex=True,
+        figsize=(12, 7),
+        gridspec_kw={"height_ratios": [2.2, 1.0]},
+    )
+
+    # top: station rates
+    df[cols].plot(ax=ax_rate, linewidth=1.2)
+    ax_rate.set_title(args.title)
+    ax_rate.set_ylabel("Rate")
+    ax_rate.grid(True, alpha=0.3)
+    ax_rate.legend(title="Station")
+
+    # bottom: standardized relative-variation (z-score)
+    if not relvar.empty:
+        relvar.plot(ax=ax_rel, linewidth=1.0, linestyle="--")
+        ax_rel.set_ylabel("z-score")
+        ax_rel.grid(True, alpha=0.2)
+        ax_rel.legend(title="RelVar (z)", fontsize=8)
     else:
-        plt.show()
+        ax_rel.text(0.5, 0.5, "No numeric columns to compute relvar", ha="center", va="center")
+        ax_rel.set_ylabel("z-score")
+        ax_rel.set_yticks([])
+
+    plt.setp(ax_rel.get_xticklabels(), rotation=30, ha="right", fontsize=8)
+    fig.tight_layout()
+
+    out_path = args.output if args.output else default_png
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=args.dpi)
+    print(f"Saved plot to: {out_path}")
+    plt.close(fig)
 
 
 if __name__ == "__main__":

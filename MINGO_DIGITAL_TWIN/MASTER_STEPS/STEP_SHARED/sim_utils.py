@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import yaml
 import json
+import time
 from datetime import datetime, timezone
 
 
@@ -88,7 +89,17 @@ def list_station_config_files(root_dir: Path) -> Dict[int, Path]:
 
 
 def read_station_config(csv_path: Path) -> pd.DataFrame:
-    df = pd.read_csv(csv_path, header=1, decimal=",", dtype=str)
+    # Be tolerant of transient empty/truncated files (caused by concurrent updates).
+    attempts = 3
+    for attempt in range(attempts):
+        try:
+            df = pd.read_csv(csv_path, header=1, decimal=",", dtype=str)
+            break
+        except pd.errors.EmptyDataError:
+            if attempt < attempts - 1:
+                time.sleep(0.25)
+                continue
+            raise
     df.columns = [col.strip() for col in df.columns]
     for col in ["station", "conf", "P1", "P2", "P3", "P4"]:
         if col in df.columns:
@@ -326,6 +337,60 @@ def resolve_param_mesh(
         if _mesh_ids_changed(mesh, mesh_path):
             write_csv_atomic(mesh, mesh_path, index=False)
     return mesh, mesh_path
+
+
+def check_param_mesh_upstream(
+    mesh_dir: Path,
+    mesh_sim_run: Optional[str],
+    intersteps_dir: Path,
+    target_step: int = 3,
+    seed: Optional[int] = None,
+) -> list[dict]:
+    """Return missing upstream SIM_RUNs required by pending rows in param_mesh.csv.
+
+    - mesh_dir: directory that contains `param_mesh.csv`.
+    - mesh_sim_run: pass-through to `resolve_param_mesh` (e.g. 'none', 'latest', 'random').
+    - intersteps_dir: path to INTERSTEPS root (used to locate upstream STEP_* directories).
+    - target_step: the consumer step that expects upstream outputs (e.g. 3 -> check STEP_2_TO_3).
+
+    Returns list[dict] with keys: param_row_index, prefix_ids, expected_sim_run, expected_path
+    """
+    if target_step <= 1:
+        return []
+    mesh, _ = resolve_param_mesh(mesh_dir, mesh_sim_run, seed)
+    if "done" not in mesh.columns:
+        mesh = mesh.copy()
+        mesh["done"] = 0
+    pending = mesh[mesh["done"] != 1].copy()
+
+    upstream_step = target_step - 1
+    upstream_dir = intersteps_dir / f"STEP_{upstream_step}_TO_{upstream_step + 1}"
+
+    missing: list[dict] = []
+    for idx, row in pending.iterrows():
+        prefix_ids: list[str] = []
+        skip = False
+        for i in range(1, upstream_step + 1):
+            col = f"step_{i}_id"
+            val = row.get(col, "")
+            if pd.isna(val) or str(val).strip() == "":
+                skip = True
+                break
+            prefix_ids.append(str(val))
+        if skip:
+            continue
+        sim_run_name = build_sim_run_name(prefix_ids)
+        expected_path = upstream_dir / sim_run_name
+        if not expected_path.exists():
+            missing.append(
+                {
+                    "param_row_index": int(idx),
+                    "prefix_ids": tuple(prefix_ids),
+                    "expected_sim_run": sim_run_name,
+                    "expected_path": str(expected_path),
+                }
+            )
+    return missing
 
 
 def normalize_param_mesh_ids(mesh: pd.DataFrame, width: int = 3) -> pd.DataFrame:

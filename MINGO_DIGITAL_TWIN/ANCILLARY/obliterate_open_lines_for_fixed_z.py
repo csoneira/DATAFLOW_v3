@@ -55,6 +55,12 @@ def write_csv_atomic(df: pd.DataFrame, path: Path) -> None:
 
 
 def main() -> int:
+    import argparse
+
+    p = argparse.ArgumentParser(prog="obliterate_open_lines_for_fixed_z.py")
+    p.add_argument("--apply", action="store_true", help="Actually mark rows done in param_mesh.csv (destructive).")
+    args = p.parse_args()
+
     dt = Path(__file__).resolve().parents[1]
     mesh_path = dt / "INTERSTEPS/STEP_0_TO_1/param_mesh.csv"
     step2_cfg_path = dt / "MASTER_STEPS/STEP_2/config_step_2_physics.yaml"
@@ -155,7 +161,9 @@ def main() -> int:
             rows_to_mark.extend(mesh.index[line_mask].tolist())
 
     rows_to_mark = sorted(set(rows_to_mark))
-    if rows_to_mark:
+
+    # Non-destructive by default: only perform changes when --apply is passed.
+    if rows_to_mark and args.apply:
         mesh.loc[rows_to_mark, "done"] = 1
         lock_path = mesh_path.with_name(".param_mesh.lock")
         with lock_path.open("a+", encoding="utf-8") as lock_file:
@@ -172,16 +180,22 @@ def main() -> int:
                 write_csv_atomic(latest, mesh_path)
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        changed_flag = 1
+    else:
+        # Dry-run / reporting mode (default): do NOT modify param_mesh.csv
+        changed_flag = 0
 
     print(
         "result "
-        f"changed={1 if rows_to_mark else 0} "
+        f"changed={changed_flag} "
+        f"would_mark={len(rows_to_mark)} "
         f"fixed_step2_ids={','.join(fixed_step2_ids) if fixed_step2_ids else '-'} "
         f"active_open_lines={','.join(active_open_step1_ids) if active_open_step1_ids else '-'} "
         f"dropped_lines={','.join(dropped_lines) if dropped_lines else '-'} "
-        f"rows_marked={len(rows_to_mark)}"
+        f"rows_marked={len(rows_to_mark) if changed_flag else 0}"
     )
-    return 0 if rows_to_mark else 3
+    # Return 0 only when we actually modified the mesh; otherwise return 3 (no-change / dry-run)
+    return 0 if (rows_to_mark and args.apply) else 3
 
 
 if __name__ == "__main__":

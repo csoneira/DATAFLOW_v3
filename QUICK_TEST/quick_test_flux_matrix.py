@@ -155,7 +155,7 @@ def extract_formula_coefficients(summary_txt: Path) -> tuple[float, float, float
     return m11, m12, t1, formula_line
 
 
-def make_plots(df: pd.DataFrame, plots_dir: Path) -> None:
+def make_plots(df: pd.DataFrame, plots_dir: Path, nmdb_relvar_df: pd.DataFrame | None = None) -> None:
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     t = pd.to_datetime(df["time"], errors="coerce")
@@ -164,6 +164,7 @@ def make_plots(df: pd.DataFrame, plots_dir: Path) -> None:
 
     loc = mdates.AutoDateLocator(minticks=3, maxticks=7)
 
+    # --- regular plotting follows
     fig, (ax_rate, ax_eff) = plt.subplots(
         nrows=2,
         ncols=1,
@@ -195,18 +196,151 @@ def make_plots(df: pd.DataFrame, plots_dir: Path) -> None:
     fig.savefig(plots_dir / "01_inputs_over_time.png", dpi=170)
     plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(10, 4.2))
-    ax.plot(t, df["flux_est"], color="C4", lw=1.2)
-    ax.set_title("Estimated flux over time (quick test)")
-    ax.set_xlabel("time")
-    ax.set_ylabel("flux_est")
+    # --- Relvar-only stacked plot (translate up to three series to -1, 0, 1) ---
+    fig, ax = plt.subplots(figsize=(10, 4.4))
+
+    # prepare candidate series (aligned to df['time'])
+    series_map: dict[str, pd.Series] = {}
+
+    # ensure flux_est_rel_z exists (compute if necessary)
+    if "flux_est_rel_z" not in df.columns:
+        try:
+            fm = df["flux_est"].mean()
+            fs = df["flux_est"].std(ddof=0)
+            if fs == 0 or pd.isna(fs):
+                fs = 1.0
+            df["flux_est_rel_z"] = (df["flux_est"] - fm) / fs
+        except Exception:
+            df["flux_est_rel_z"] = pd.NA
+
+    if df["flux_est_rel_z"].notna().any():
+        series_map["flux_est"] = pd.to_numeric(df["flux_est_rel_z"], errors="coerce").fillna(0)
+
+    # prefer full NMDB relvar series (if provided) otherwise use merged columns in df
+    if nmdb_relvar_df is not None:
+        nmdb_plot_cols = [c for c in nmdb_relvar_df.columns if c != "time" and np.issubdtype(nmdb_relvar_df[c].dtype, np.number)]
+        if nmdb_plot_cols:
+            # interpolate NMDB series to df times
+            x_t = (t.astype("int64") // 10 ** 9).to_numpy()
+            x_nmdb = (pd.to_datetime(nmdb_relvar_df["time"]).astype("int64") // 10 ** 9).to_numpy()
+            for c in nmdb_plot_cols:
+                vals = pd.to_numeric(nmdb_relvar_df[c], errors="coerce").fillna(0).to_numpy()
+                interp = np.interp(x_t, x_nmdb, vals, left=0, right=0)
+                series_map[c.replace("_rel_z", "")] = pd.Series(interp, index=df.index)
+    else:
+        nmdb_cols = [c for c in df.columns if c.endswith("_rel_z") and c != "flux_est_rel_z"]
+        for c in nmdb_cols:
+            series_map[c.replace("_rel_z", "")] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+    # select up to three series: flux_est first, then NMDB columns (preserve order)
+    selected = []
+    if "flux_est" in series_map:
+        selected.append("flux_est")
+    for k in series_map:
+        if k != "flux_est":
+            selected.append(k)
+    selected = selected[:3]
+
+    # if none available, draw a placeholder and exit
+    if not selected:
+        ax.text(0.5, 0.5, "No relvar series available", ha="center", va="center")
+        ax.set_yticks([])
+        ax.set_xlabel("time")
+        fig.tight_layout()
+        fig.savefig(plots_dir / "02_flux_est_over_time.png", dpi=170)
+        plt.close(fig)
+        return
+
+    # plot selected series, normalize and translate to offsets in [-1, 1]
+    n = len(selected)
+    offsets = list(np.linspace(-1, 1, n))
+    amplitude = 0.5
+    offsets = [o * amplitude for o in offsets]
+    for i, name in enumerate(selected):
+        vals = series_map[name].to_numpy() if isinstance(series_map[name], pd.Series) else np.asarray(series_map[name])
+        max_abs = np.nanmax(np.abs(vals)) if np.nanmax(np.abs(vals)) != 0 else 1.0
+        norm = (vals / max_abs)
+        ax.plot(t, norm + offsets[i], lw=1.6, label=name)
+
+    ax.set_yticks(offsets)
+    ax.set_yticklabels(selected)
+    ax.set_ylim(-1.4, 1.4)
+    ax.set_title("Translated relvar comparison (-1, 0, +1)")
     ax.grid(True, alpha=0.2)
+    ax.legend(loc="upper right", fontsize=8)
+
+    ax.set_xlabel("time")
     ax.xaxis.set_major_locator(loc)
     ax.xaxis.set_major_formatter(mdates.AutoDateFormatter(loc))
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=8)
+
     fig.tight_layout()
     fig.savefig(plots_dir / "02_flux_est_over_time.png", dpi=170)
     plt.close(fig)
+
+    # --- Combined figure: inputs (rate + efficiencies) + relvar (single file) ---
+    try:
+        fig_c, (ax_c0, ax_c1, ax_c2) = plt.subplots(
+            nrows=3,
+            ncols=1,
+            sharex=True,
+            figsize=(12, 9),
+            gridspec_kw={"height_ratios": [1.1, 1.0, 1.0]},
+        )
+
+        # top: global rate
+        ax_c0.plot(t, df["global_rate_hz"], color="C0", lw=1.2, label="global_rate_hz")
+        ax_c0.set_ylabel("rate [Hz]")
+        ax_c0.grid(True, alpha=0.2)
+        ax_c0.legend(loc="best", fontsize=8)
+
+        # middle: efficiencies (eff_2, eff_3, reference_efficiency)
+        ax_c1.plot(t, df["eff_2"], color="C1", lw=1.0, alpha=0.85, label="eff_2")
+        ax_c1.plot(t, df["eff_3"], color="C2", lw=1.0, alpha=0.85, label="eff_3")
+        # make reference_efficiency visually distinct
+        ax_c1.plot(t, df["reference_efficiency"], color="C3", lw=2.0, alpha=0.95, label="reference_eff")
+        ax_c1.set_ylabel("efficiency")
+        ax_c1.grid(True, alpha=0.2)
+        ax_c1.legend(loc="best", fontsize=8)
+
+        # bottom: relvar (flux_est_rel_z + NMDB relvar)
+        # plot flux_est_rel_z if present
+        if "flux_est_rel_z" in df.columns:
+            ax_c2.plot(t, df["flux_est_rel_z"], color="C4", lw=1.4, label="flux_est (z)")
+
+        # prefer full NMDB relvar series if available (nmdb_relvar_df), else use merged cols in df
+        plotted_nmdb = False
+        if nmdb_relvar_df is not None:
+            nmdb_plot_cols = [c for c in nmdb_relvar_df.columns if c != "time" and np.issubdtype(nmdb_relvar_df[c].dtype, np.number)]
+            if nmdb_plot_cols:
+                nmdb_times = pd.to_datetime(nmdb_relvar_df["time"], errors="coerce")
+                for idx, col in enumerate(nmdb_plot_cols):
+                    ax_c2.plot(nmdb_times, nmdb_relvar_df[col], linestyle="-", lw=1.0, alpha=0.9, label=col, color=f"C{5+idx}")
+                plotted_nmdb = True
+        if not plotted_nmdb:
+            base_cols = {"time", "filename_base", "global_rate_hz", "rate_1234_hz", "eff_2", "eff_3", "reference_efficiency", "flux_est"}
+            rel_cols = [c for c in df.columns if c not in base_cols and (c.endswith("_rel_z") or np.issubdtype(df[c].dtype, np.number))]
+            for idx, col in enumerate(rel_cols):
+                ax_c2.plot(t, df[col], linestyle="--", lw=1.0, alpha=0.9, label=col, color=f"C{5+idx}")
+
+        ax_c2.set_ylabel("z-score")
+        ax_c2.grid(True, alpha=0.18)
+        ax_c2.legend(loc="best", fontsize=8)
+
+        ax_c2.set_xlabel("time")
+        ax_c2.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=7))
+        ax_c2.xaxis.set_major_formatter(mdates.AutoDateFormatter(mdates.AutoDateLocator()))
+        plt.setp(ax_c2.get_xticklabels(), rotation=30, ha="right", fontsize=8)
+
+        fig_c.tight_layout()
+        combined_path = plots_dir / "03_combined_inputs_and_relvar.png"
+        fig_c.savefig(combined_path, dpi=170)
+        # also overwrite the flux_est path so opening 02 shows the combined view
+        fig_c.savefig(plots_dir / "02_flux_est_over_time.png", dpi=170)
+        plt.close(fig_c)
+        print(f"Saved combined figure to: {combined_path} (also wrote 02_flux_est_over_time.png)")
+    except Exception as _e:
+        print(f"Warning: could not create combined figure: {_e!r}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -231,6 +365,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-csv", type=Path, default=DEFAULT_OUTPUT_CSV, help="Output CSV path")
     p.add_argument("--output-info", type=Path, default=DEFAULT_OUTPUT_INFO, help="Output info TXT path")
     p.add_argument("--plots-dir", type=Path, default=DEFAULT_PLOTS_DIR, help="Directory for PNG plots")
+    p.add_argument(
+        "--nmdb-relvar-csv",
+        type=Path,
+        default=QUICK_TEST_DIR / "NMDB" / "NMBD_first_week_of_december_25_relvar.csv",
+        help="Optional NMDB relative-variation CSV (z-scores). If present, values will be aligned and overplotted on the flux_est figure.",
+    )
+    p.add_argument(
+        "--nmdb-merge-tolerance",
+        default="2min",
+        help="Time tolerance when aligning NMDB rows to local times (e.g. '2min').",
+    )
     p.add_argument("--clip-eff", action="store_true", help="Clip efficiencies to [0,1]")
     return p
 
@@ -264,12 +409,16 @@ def main() -> None:
     denom = data["rate_1234_hz"].replace(0, np.nan)
     data["eff_2"] = 1.0 - pd.to_numeric(data["raw_tt_134_rate_hz"], errors="coerce") / denom
     data["eff_3"] = 1.0 - pd.to_numeric(data["raw_tt_124_rate_hz"], errors="coerce") / denom
-    data["reference_efficiency"] = 0.5 * (data["eff_2"] + data["eff_3"])
+    # harmonic mean (give the smaller efficiency more weight): 2 / (1/eff_2 + 1/eff_3)
+    # this handles zeros by resulting in 0 when one eff is 0; NaNs propagate for invalid values
+    denom = (1.0 / data["eff_2"]).replace([np.inf, -np.inf], np.nan) + (1.0 / data["eff_3"]).replace([np.inf, -np.inf], np.nan)
+    data["reference_efficiency"] = 2.0 / denom
     eff_definition = "eff_2=1-raw_tt_134_rate_hz/raw_tt_1234_rate_hz; eff_3=1-raw_tt_124_rate_hz/raw_tt_1234_rate_hz"
 
     if args.clip_eff:
         data["eff_2"] = data["eff_2"].clip(0, 1)
         data["eff_3"] = data["eff_3"].clip(0, 1)
+        data["reference_efficiency"] = data["reference_efficiency"].clip(0, 1)
         data["reference_efficiency"] = data["reference_efficiency"].clip(0, 1)
 
     station_number = args.station if args.station is not None else infer_station_number(args.input, data["filename_base"])
@@ -280,7 +429,7 @@ def main() -> None:
     z_positions = (float(active["P1"]), float(active["P2"]), float(active["P3"]), float(active["P4"]))
 
     m11, m12, t1, formula_line = extract_formula_coefficients(args.formula_summary)
-    eff_term_used = "reference_efficiency = (eff_2 + eff_3)/2"
+    eff_term_used = "reference_efficiency = harmonic mean(eff_2, eff_3) = 2/(1/eff_2 + 1/eff_3)"
     data["flux_est"] = m11 * data["global_rate_hz"] + m12 * data["reference_efficiency"] + t1
 
     out_cols = [
@@ -297,7 +446,64 @@ def main() -> None:
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.output_csv, index=False)
 
-    make_plots(out, args.plots_dir)
+    # Optionally merge NMDB relative-variation CSV (z-scores) into the output for plotting
+    merged_nmdb = False
+    if args.nmdb_relvar_csv:
+        if args.nmdb_relvar_csv.exists():
+            nmdb_df = pd.read_csv(args.nmdb_relvar_csv)
+            # detect time-like column
+            time_col = None
+            for cand in ("time", "Time", "timestamp", "Timestamp"):
+                if cand in nmdb_df.columns:
+                    time_col = cand
+                    break
+            if time_col is None:
+                time_col = nmdb_df.columns[0]
+            # parse time and normalize to timezone-naive UTC so dtypes match our local `time` column
+            nmdb_df["time"] = pd.to_datetime(nmdb_df[time_col], utc=True, errors="coerce").dt.tz_convert(None)
+            nmdb_df = nmdb_df.dropna(subset=["time"]).sort_values("time").reset_index(drop=True)
+            nmdb_value_cols = [c for c in nmdb_df.columns if c not in (time_col, "time") and np.issubdtype(nmdb_df[c].dtype, np.number)]
+            if nmdb_value_cols:
+                merge_tol = pd.Timedelta(args.nmdb_merge_tolerance)
+                out = pd.merge_asof(out.sort_values("time"), nmdb_df[["time"] + nmdb_value_cols].sort_values("time"), on="time", direction="nearest", tolerance=merge_tol)
+                merged_nmdb = True
+                print(f"Merged NMDB relvar columns: {', '.join(nmdb_value_cols)} (tol={merge_tol})")
+            else:
+                print(f"No numeric columns found in {args.nmdb_relvar_csv}; skipping NMDB overlay.")
+        else:
+            print(f"NMDB relvar CSV not found: {args.nmdb_relvar_csv} — skipping overlay.")
+
+    # if merged NMDB relvar, write updated CSV (includes relvar columns)
+    if merged_nmdb:
+        # add flux_est z-score column for inspection (same convention used in the plot)
+        try:
+            flux_mean = out["flux_est"].mean()
+            flux_std = out["flux_est"].std(ddof=0)
+            if flux_std == 0 or pd.isna(flux_std):
+                flux_std = 1.0
+            out["flux_est_rel_z"] = (out["flux_est"] - flux_mean) / flux_std
+        except Exception:
+            out["flux_est_rel_z"] = pd.NA
+
+        try:
+            args.output_csv.parent.mkdir(parents=True, exist_ok=True)
+            out.to_csv(args.output_csv, index=False)
+            print(f"Updated output CSV with NMDB relvar columns: {args.output_csv}")
+        except Exception as _e:
+            print(f"Warning: could not update output CSV with NMDB relvar columns: {_e!r}")
+
+    # primary save (user-specified plots dir)
+    make_plots(out, args.plots_dir, nmdb_relvar_df=(nmdb_df if 'nmdb_df' in locals() else None))
+
+    # if we merged NMDB relvar data, ensure the default QUICK_TEST PLOTS file also contains the overlay
+    default_plots_dir = QUICK_TEST_DIR / "PLOTS"
+    try:
+        same_dir = args.plots_dir.resolve() == default_plots_dir.resolve()
+    except Exception:
+        same_dir = False
+    if merged_nmdb and not same_dir:
+        make_plots(out, default_plots_dir, nmdb_relvar_df=(nmdb_df if 'nmdb_df' in locals() else None))
+        print(f"Also saved NMDB-overlay plots to default plots dir: {default_plots_dir}")
 
     info_lines = [
         f"Input metadata: {args.input}",

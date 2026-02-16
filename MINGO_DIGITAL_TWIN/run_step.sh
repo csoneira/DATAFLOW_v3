@@ -157,7 +157,7 @@ fi
 if ! [[ "$STEP1_BLOCK_LOG_INTERVAL_S" =~ ^[0-9]+$ ]]; then
   STEP1_BLOCK_LOG_INTERVAL_S="300"
 fi
-if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "0" && "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "1" ]]; then
+if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "0" && "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "1" && "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "apply" ]]; then
   OBLITERATE_UNINTERESTING_STEP1_LINES="0"
 fi
 if [[ -n "$CONTINUOUS" && -z "$DEBUG" ]]; then
@@ -375,7 +375,8 @@ obliterate_uninteresting_step1_lines_if_needed() {
   local helper
   local output
   local rc
-  if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "1" ]]; then
+  # Require explicit 'apply' to perform destructive edits.  '1' runs dry-run only.
+  if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" == "0" ]]; then
     return 3
   fi
   helper="$DT/ANCILLARY/obliterate_open_lines_for_fixed_z.py"
@@ -383,7 +384,12 @@ obliterate_uninteresting_step1_lines_if_needed() {
     log_warn "step=1 line-obliterate helper missing: $helper"
     return 2
   fi
-  if output="$(python3 "$helper" 2>&1)"; then
+  if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" == "apply" ]]; then
+    cmd=(python3 "$helper" --apply)
+  else
+    cmd=(python3 "$helper")
+  fi
+  if output="$("${cmd[@]}" 2>&1)"; then
     rc=0
   else
     rc=$?
@@ -754,6 +760,18 @@ refresh_work_cache_or_disable() {
     if [[ -n "$DEBUG" ]]; then
       log_info "work cache refreshed: cache=$WORK_CACHE_PATH state=$WORK_STATE_PATH stuck=$WORK_STUCK_LINES_PATH broken=$WORK_BROKEN_RUNS_PATH"
     fi
+
+    # Run param_mesh ↔ INTERSTEPS consistency checker (non-fatal):
+    # - warns when param_mesh has pending rows but upstream SIM_RUN is missing
+    # - detection only (no automatic fixes)
+    if python3 "$DT/ANCILLARY/check_param_mesh_consistency.py" --mesh "$DT/INTERSTEPS/STEP_0_TO_1/param_mesh.csv" --intersteps "$DT/INTERSTEPS" --step 3 >/tmp/param_mesh_consistency.log 2>&1; then
+      if [[ -n "$DEBUG" ]]; then
+        log_info "param_mesh consistency: OK"
+      fi
+    else
+      log_warn "param_mesh consistency check found missing upstream SIM_RUNs; see /tmp/param_mesh_consistency.log"
+    fi
+
     return 0
   fi
   log_warn "failed to refresh work cache; continuing without cache/state"

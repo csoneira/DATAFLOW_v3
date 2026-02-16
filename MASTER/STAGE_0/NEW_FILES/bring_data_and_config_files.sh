@@ -334,17 +334,16 @@ echo $GID
 # Define output file path
 OUTPUT_FILE="$config_file_directory/input_file_mingo0${station}.csv"
 
-# Download the file using wget with minimal console output
+# Download the file using wget with minimal console output (write to a temp file then move atomically)
 echo "Downloading logbook for Station $station..."
-wget -q --show-progress --no-check-certificate \
+TMP_DL_FILE="$(mktemp "${OUTPUT_FILE}.tmp.XXXXXXXX")"
+if wget -q --show-progress --no-check-certificate \
      "https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&id=${SHEET_ID}&gid=${GID}" \
-     -O "${OUTPUT_FILE}"
-
-
-# Check if download was successful
-if [[ $? -eq 0 ]]; then
+     -O "${TMP_DL_FILE}"; then
+    mv "${TMP_DL_FILE}" "${OUTPUT_FILE}"
     echo "Download completed. Data saved at ${OUTPUT_FILE}."
 else
+    rm -f "${TMP_DL_FILE}"
     log_error "Download failed. Continuing execution."
 fi
 

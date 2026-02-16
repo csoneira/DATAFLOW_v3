@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""Calibrate a compact affine inverse from (global_rate, eff) to flux.
+"""Calibrate an inverse mapping from (global_rate, eff) to flux using a bilinear lookup.
 
 Method (straight to the point)
 1) From a dictionary in (flux, eff, global_rate), estimate local gradients of
-   global_rate in (flux, eff) space.
-2) Keep points whose gradient direction tan(angle)=dR/dE / dR/dF is close to the
-   median (near-parallel iso-rate assumption).
-3) Fit a single global affine model on kept points:
-      global_rate = a*flux + b*eff + c
-4) Invert it analytically:
-      flux = (global_rate - b*eff - c)/a
-   which is equivalent to:
-      [flux]   [1/a   -b/a] [global_rate] + [-c/a]
-      [ eff] = [ 0      1 ] [   eff    ] + [  0 ]
+   global_rate in (flux, eff) space and keep near-parallel iso-rate points.
+2) Build a rectangular grid in (global_rate, eff) and interpolate flux at grid
+   nodes from the kept training points (triangulation).
+3) Use bilinear interpolation on that grid for fast inverse mapping:
+      flux_est = bilinear_lookup(global_rate, eff)
+   A compact global affine linearization is still computed for diagnostics.
+4) Outputs (plots + predictions) are written under PLOTS.
 
-Outputs are written under PURELY_LINEAR/PLOTS.
+This keeps the original gradient-based filtering but switches the inverse used
+at prediction time from a single affine matrix to a bilinear lookup table.
 """
 
 from __future__ import annotations
@@ -93,6 +91,124 @@ class AffineInverse:
 
     def estimate_flux(self, rate: np.ndarray, eff: np.ndarray) -> np.ndarray:
         return self.m11 * rate + self.m12 * eff + self.t1
+
+
+@dataclass
+class BilinearInverse:
+    """Bilinear lookup-table inverse from (global_rate, eff) -> flux.
+
+    - `grid_rate` is 1D increasing array of rate grid points (x axis).
+    - `grid_eff` is 1D increasing array of eff grid points (y axis).
+    - `flux_grid` is a 2D array with shape (len(grid_eff), len(grid_rate)).
+    - `a_flux`, `b_eff`, `c_bias` store a diagnostic global affine fit (rate ≈ a*flux + b*eff + c)
+      so existing plotting/summary code can continue to use the linearization.
+    """
+
+    grid_rate: np.ndarray
+    grid_eff: np.ndarray
+    flux_grid: np.ndarray
+    a_flux: float
+    b_eff: float
+    c_bias: float
+
+    @property
+    def m11(self) -> float:
+        return 1.0 / self.a_flux if abs(self.a_flux) > EPS else float("nan")
+
+    @property
+    def m12(self) -> float:
+        return -self.b_eff / self.a_flux if abs(self.a_flux) > EPS else float("nan")
+
+    @property
+    def t1(self) -> float:
+        return -self.c_bias / self.a_flux if abs(self.a_flux) > EPS else float("nan")
+
+    @property
+    def matrix(self) -> np.ndarray:
+        # present a compact linearization matrix (diagnostic only)
+        return np.array([[self.m11, self.m12], [0.0, 1.0]], dtype=float)
+
+    @property
+    def offset(self) -> np.ndarray:
+        return np.array([self.t1, 0.0], dtype=float)
+
+    def estimate_flux(self, rate: np.ndarray, eff: np.ndarray) -> np.ndarray:
+        """Bilinear interpolation on the precomputed grid. Extrapolates by clipping
+        to the grid edges."""
+        r = np.asarray(rate, dtype=float)
+        e = np.asarray(eff, dtype=float)
+        r_b, e_b = np.broadcast_arrays(r, e)
+        flat_r = r_b.ravel()
+        flat_e = e_b.ravel()
+
+        # locate indices
+        jr = np.searchsorted(self.grid_rate, flat_r)
+        ie = np.searchsorted(self.grid_eff, flat_e)
+
+        j0 = np.clip(jr - 1, 0, len(self.grid_rate) - 2)
+        i0 = np.clip(ie - 1, 0, len(self.grid_eff) - 2)
+        j1 = j0 + 1
+        i1 = i0 + 1
+
+        r0 = self.grid_rate[j0]
+        r1 = self.grid_rate[j1]
+        e0 = self.grid_eff[i0]
+        e1 = self.grid_eff[i1]
+
+        # avoid division by zero
+        denom_r = np.where(r1 - r0 == 0.0, EPS, (r1 - r0))
+        denom_e = np.where(e1 - e0 == 0.0, EPS, (e1 - e0))
+        tx = np.clip((flat_r - r0) / denom_r, 0.0, 1.0)
+        ty = np.clip((flat_e - e0) / denom_e, 0.0, 1.0)
+
+        f00 = self.flux_grid[i0, j0]
+        f10 = self.flux_grid[i0, j1]
+        f01 = self.flux_grid[i1, j0]
+        f11 = self.flux_grid[i1, j1]
+
+        interp_flat = (1.0 - ty) * ((1.0 - tx) * f00 + tx * f10) + ty * ((1.0 - tx) * f01 + tx * f11)
+        return interp_flat.reshape(r_b.shape)
+
+
+@dataclass
+class GlobalBilinear:
+    """Compact global bilinear polynomial approximation:
+
+    flux ≈ a00 + a10*rate + a01*eff + a11*rate*eff
+
+    Represented as a symmetric 3×3 matrix M so
+      flux = [rate, eff, 1]^T @ M @ [rate, eff, 1]
+    (with zero r^2 and e^2 coefficients).
+    """
+
+    a00: float
+    a10: float
+    a01: float
+    a11: float
+    r_min: float
+    r_max: float
+    e_min: float
+    e_max: float
+    # diagnostic linearization (keeps compatibility with plotting code)
+    a_flux: float = float('nan')
+    b_eff: float = float('nan')
+    c_bias: float = float('nan')
+
+    @property
+    def matrix(self) -> np.ndarray:
+        return np.array(
+            [
+                [0.0, self.a11 / 2.0, self.a10 / 2.0],
+                [self.a11 / 2.0, 0.0, self.a01 / 2.0],
+                [self.a10 / 2.0, self.a01 / 2.0, self.a00],
+            ],
+            dtype=float,
+        )
+
+    def estimate_flux(self, rate: np.ndarray | float, eff: np.ndarray | float) -> np.ndarray:
+        r = np.asarray(rate, dtype=float)
+        e = np.asarray(eff, dtype=float)
+        return (self.a00 + self.a10 * r + self.a01 * e + self.a11 * r * e)
 
 
 @dataclass
@@ -248,16 +364,95 @@ def filter_gradients(gx: np.ndarray, gy: np.ndarray) -> tuple[np.ndarray, np.nda
     return tan, keep, med, mad, float(thr)
 
 
-def fit_affine_inverse(df: pd.DataFrame, keep_mask: np.ndarray) -> AffineInverse:
-    x = df["flux"].to_numpy(dtype=float)
-    e = df["eff"].to_numpy(dtype=float)
-    r = df["global_rate_hz"].to_numpy(dtype=float)
+def fit_bilinear_inverse(df: pd.DataFrame, keep_mask: np.ndarray, n_rate: int = 80, n_eff: int = 80) -> BilinearInverse:
+    """Build a bilinear lookup-table inverse (global_rate, eff) -> flux.
 
-    A = np.column_stack([x[keep_mask], e[keep_mask], np.ones(int(keep_mask.sum()))])
-    a, b, c = [float(v) for v in np.linalg.lstsq(A, r[keep_mask], rcond=None)[0]]
-    if abs(a) < EPS:
-        raise RuntimeError("Degenerate fit: coefficient a is too small for inversion.")
-    return AffineInverse(a_flux=a, b_eff=b, c_bias=c)
+    - interpolates flux from kept training points onto a regular (rate x eff) grid
+      using triangulation; grid nodes outside the convex hull are filled by nearest
+      training flux.
+    - returns a BilinearInverse which exposes `estimate_flux(rate, eff)` for use.
+    """
+    flux = df["flux"].to_numpy(dtype=float)
+    eff = df["eff"].to_numpy(dtype=float)
+    rate = df["global_rate_hz"].to_numpy(dtype=float)
+
+    mask = keep_mask & np.isfinite(flux) & np.isfinite(eff) & np.isfinite(rate)
+    if mask.sum() < 6:
+        raise RuntimeError("Not enough valid kept points to build bilinear inverse.")
+
+    rate_k = rate[mask]
+    eff_k = eff[mask]
+    flux_k = flux[mask]
+
+    r_min, r_max = float(np.nanmin(rate_k)), float(np.nanmax(rate_k))
+    e_min, e_max = float(np.nanmin(eff_k)), float(np.nanmax(eff_k))
+    if r_max - r_min < EPS or e_max - e_min < EPS:
+        raise RuntimeError("Degenerate range for rate/eff to build grid.")
+
+    n_rate = max(10, min(int(n_rate), 200))
+    n_eff = max(10, min(int(n_eff), 200))
+    grid_rate = np.linspace(r_min, r_max, n_rate)
+    grid_eff = np.linspace(e_min, e_max, n_eff)
+
+    # interpolate scattered (rate_k, eff_k) -> flux_k onto the rectangular grid
+    tri = Triangulation(rate_k, eff_k)
+    interp = LinearTriInterpolator(tri, flux_k)
+    Rg, Eg = np.meshgrid(grid_rate, grid_eff)
+    Fg = np.asarray(interp(Rg, Eg), dtype=float)
+
+    # fill NaNs (outside convex hull) by nearest training-point flux
+    nan_mask = ~np.isfinite(Fg)
+    if nan_mask.any():
+        qx = Rg[nan_mask].ravel()
+        qy = Eg[nan_mask].ravel()
+        # squared distances between training points and query points (vectorized)
+        dx = rate_k[:, None] - qx[None, :]
+        dy = eff_k[:, None] - qy[None, :]
+        d2 = dx * dx + dy * dy
+        idx = np.argmin(d2, axis=0)
+        Fg[nan_mask] = flux_k[idx]
+
+    # diagnostic global affine fit (rate ≈ a*flux + b*eff + c)
+    A = np.column_stack([flux_k, eff_k, np.ones(flux_k.shape[0])])
+    a, b, c = [float(v) for v in np.linalg.lstsq(A, rate_k, rcond=None)[0]]
+
+    return BilinearInverse(grid_rate=grid_rate, grid_eff=grid_eff, flux_grid=Fg, a_flux=a, b_eff=b, c_bias=c)
+
+
+def fit_global_bilinear(df: pd.DataFrame, keep_mask: np.ndarray) -> GlobalBilinear:
+    """Fit a single global bilinear polynomial to the *kept* training points.
+
+    Model form:
+      flux ≈ a00 + a10*rate + a01*eff + a11*rate*eff
+
+    This is a least-squares fit (kept points only). The returned object
+    exposes `.matrix` (3×3) so the mapping can be written as
+      flux = [rate,eff,1]^T @ M @ [rate,eff,1]
+    """
+    flux = df["flux"].to_numpy(dtype=float)
+    eff = df["eff"].to_numpy(dtype=float)
+    rate = df["global_rate_hz"].to_numpy(dtype=float)
+
+    mask = keep_mask & np.isfinite(flux) & np.isfinite(eff) & np.isfinite(rate)
+    if mask.sum() < 4:
+        raise RuntimeError("Not enough valid kept points to fit global bilinear polynomial.")
+
+    r_k = rate[mask]
+    e_k = eff[mask]
+    f_k = flux[mask]
+
+    # design: [1, r, e, r*e]
+    A = np.column_stack([np.ones_like(r_k), r_k, e_k, r_k * e_k])
+    a00, a10, a01, a11 = [float(v) for v in np.linalg.lstsq(A, f_k, rcond=None)[0]]
+
+    r_min, r_max = float(np.nanmin(r_k)), float(np.nanmax(r_k))
+    e_min, e_max = float(np.nanmin(e_k)), float(np.nanmax(e_k))
+
+    # diagnostic forward affine (rate ≈ a*flux + b*eff + c) kept for plotting
+    Af = np.column_stack([f_k, e_k, np.ones_like(f_k)])
+    a_flux, b_eff, c_bias = [float(v) for v in np.linalg.lstsq(Af, r_k, rcond=None)[0]]
+
+    return GlobalBilinear(a00=a00, a10=a10, a01=a01, a11=a11, r_min=r_min, r_max=r_max, e_min=e_min, e_max=e_max, a_flux=a_flux, b_eff=b_eff, c_bias=c_bias)
 
 
 def compute_metrics(flux_true: np.ndarray, flux_est: np.ndarray) -> tuple[float, float, float, float]:
@@ -408,13 +603,14 @@ def plot_iso_quiver(df: pd.DataFrame, grads: pd.DataFrame, keep: np.ndarray) -> 
     plt.close(fig)
 
 
-def plot_linearized_field(model: AffineInverse, df: pd.DataFrame, keep: np.ndarray) -> None:
-    """Iso-rate map styled like `plot_iso_quiver` but overlaying the affine linearized field.
+def plot_linearized_field(grid_model, global_model, df: pd.DataFrame, keep: np.ndarray) -> None:
+    """Iso-rate map that overlays the piecewise bilinear iso-lines (grid_model)
+    and the single global bilinear polynomial iso-lines (global_model) for direct comparison.
 
-    - uses triangulation + contourf of the *actual* global-rate field for background
-    - draws faint local gradient quivers (same style as `plot_iso_quiver`)
-    - overlays straight, parallel affine iso-rate lines clipped to the plotting limits
-    - keeps the same colourbar, limits and point styling as `02_local_gradients_quiver.png`
+    - background: actual global-rate field (triangulation)
+    - faint local gradient quivers
+    - overlay: grid-based bilinear iso-lines (solid C3)
+    - overlay: global polynomial iso-lines (dashed C4)
     """
     x = df["flux"].to_numpy(dtype=float)
     e = df["eff"].to_numpy(dtype=float)
@@ -432,7 +628,7 @@ def plot_linearized_field(model: AffineInverse, df: pd.DataFrame, keep: np.ndarr
     xi = np.linspace(float(np.nanmin(x[finite])), float(np.nanmax(x[finite])), 240)
     yi = np.linspace(float(np.nanmin(e[finite])), float(np.nanmax(e[finite])), 240)
     Xi, Yi = np.meshgrid(xi, yi)
-    Ri = np.asarray(interp(Xi, Yi), dtype=float)
+    Ri = np.asarray(interp(Rg, Eg), dtype=float) if False else np.asarray(interp(Xi, Yi), dtype=float)
 
     r_min = float(np.nanmin(r[finite]))
     r_max = float(np.nanmax(r[finite]))
@@ -466,13 +662,11 @@ def plot_linearized_field(model: AffineInverse, df: pd.DataFrame, keep: np.ndarr
             width=0.0028,
         )
 
-    # --- blue gradient vector: use the *affine-model* gradient (a, b) so it is
-    # guaranteed perpendicular to the affine iso-lines drawn above.
-    # Keep 'kept' mask for placement, but derive direction from the model.
+    # --- blue gradient vector: use the diagnostic affine linearization (global_model)
     kept = finite & keep
     if kept.sum() >= 1:
-        gmx = float(model.a_flux)  # dRate/dFlux from fitted affine model
-        gmy = float(model.b_eff)   # dRate/dEff from fitted affine model
+        gmx = float(global_model.a_flux)
+        gmy = float(global_model.b_eff)
         gnorm = float(np.hypot(gmx, gmy))
         if gnorm > EPS:
             ux, uy = gmx / gnorm, gmy / gnorm
@@ -482,69 +676,73 @@ def plot_linearized_field(model: AffineInverse, df: pd.DataFrame, keep: np.ndarr
             a_scale = 0.18 * span
             ax.quiver([x0], [e0], [ux], [uy], angles="xy", scale_units="xy", scale=1.0 / a_scale, color="C0", width=0.008)
             ax.scatter([x0], [e0], s=26, color="C0", zorder=6)
-            # add a small text note showing the model gradient components
-            ax.text(x0, e0 - 0.035 * span, f"model grad=({gmx:.2f},{gmy:.2f})", color="C0", fontsize=8, ha="center")
+            ax.text(x0, e0 - 0.035 * span, f"diagnostic grad=({gmx:.2f},{gmy:.2f})", color="C0", fontsize=8, ha="center")
 
-    # --- affine-model iso-rate lines (linearized field) clipped to plotting limits
-    # reuse the same `yi` vertical sampling used for the background
+    # --- compute integer iso-line levels
     eff_lin = yi
-    # Prefer integer iso-lines starting at 9 Hz (9, 10, 11, ...) up to floor(r_max).
-    # Do NOT remove integers below r_min — draw 9..floor(r_max) if possible so the
-    # requested labelled lines (9,10,11,...) are always present when meaningful.
     if r_max - r_min < 1e-6:
         levels = np.array([r_min])
     else:
         if int(np.floor(r_max)) >= 9:
             levels = np.arange(9, int(np.floor(r_max)) + 1, dtype=float)
         else:
-            # fallback: integer ticks that cover the observed span
             levels = np.arange(int(np.floor(r_min)), int(np.ceil(r_max)) + 1, dtype=float)
         levels = np.unique(levels)
 
-    # compute flux positions for all integer iso-lines and determine plot x-limits
-    flux_lines = [((rl - model.b_eff * eff_lin - model.c_bias) / model.a_flux) for rl in levels]
-    # find finite extents of all computed lines
-    finite_flux_vals = np.hstack([f[np.isfinite(f)] for f in flux_lines if np.isfinite(f).any()]) if flux_lines else np.array([])
-    if finite_flux_vals.size:
-        min_flux_line = float(np.nanmin(finite_flux_vals))
-        max_flux_line = float(np.nanmax(finite_flux_vals))
+    # --- grid-model (piecewise bilinear) iso-lines
+    grid_lines = [grid_model.estimate_flux(np.full_like(eff_lin, rl), eff_lin) for rl in levels]
+
+    # --- global polynomial iso-lines
+    poly_lines = [global_model.estimate_flux(np.full_like(eff_lin, rl), eff_lin) for rl in levels]
+
+    # determine plotting x-limits that include both sets of lines
+    all_vals = np.hstack([g[np.isfinite(g)] for g in grid_lines if np.isfinite(g).any()] + [p[np.isfinite(p)] for p in poly_lines if np.isfinite(p).any()]) if levels.size else np.array([])
+    if all_vals.size:
+        min_flux_line = float(np.nanmin(all_vals))
+        max_flux_line = float(np.nanmax(all_vals))
     else:
         min_flux_line = float(np.nanmin(x[finite]))
         max_flux_line = float(np.nanmax(x[finite]))
 
-    # expand x-limits to include the affine lines so they become visible
     x_data_min = float(np.nanmin(x[finite]))
     x_data_max = float(np.nanmax(x[finite]))
     x_min_plot = min(x_data_min, min_flux_line)
     x_max_plot = max(x_data_max, max_flux_line)
-    # add a small margin
     xpad = max(1e-9, 0.03 * (x_max_plot - x_min_plot))
     x_min_plot -= xpad
     x_max_plot += xpad
 
-    # plot each affine iso-line and add an individual label for every integer level
-    first_line = True
+    # plot both sets of iso-lines and labels
+    first_grid = True
     eff_span = float(np.nanmax(e[finite]) - np.nanmin(e[finite]))
     eff_positions = np.linspace(float(np.nanmin(e[finite])) + 0.1 * eff_span, float(np.nanmax(e[finite])) - 0.1 * eff_span, max(1, len(levels)))
 
     for i, rl in enumerate(levels):
-        flux_line = flux_lines[i]
-        # only plot finite points and within the extended plotting x-range
-        mask = np.isfinite(flux_line) & (flux_line >= x_min_plot) & (flux_line <= x_max_plot)
-        if mask.any():
-            lbl = "affine iso-lines" if first_line else "_nolegend_"
-            ax.plot(flux_line[mask], eff_lin[mask], color="C3", lw=1.4, alpha=0.95, label=lbl)
-            first_line = False
+        gline = grid_lines[i]
+        pline = poly_lines[i]
 
-        # place a small label for the integer level at a convenient efficiency
+        mask_g = np.isfinite(gline) & (gline >= x_min_plot) & (gline <= x_max_plot)
+        mask_p = np.isfinite(pline) & (pline >= x_min_plot) & (pline <= x_max_plot)
+
+        if mask_g.any():
+            lbl = "grid bilinear iso-lines" if first_grid else "_nolegend_"
+            ax.plot(gline[mask_g], eff_lin[mask_g], color="C3", lw=1.4, alpha=0.95, label=lbl)
+            first_grid = False
+
+        if mask_p.any():
+            ax.plot(pline[mask_p], eff_lin[mask_p], color="C4", lw=1.0, ls="--", alpha=0.9, label="global bilinear poly" if i == 0 else "_nolegend_")
+
         eff_label = eff_positions[min(i, len(eff_positions) - 1)]
-        flux_label = (rl - model.b_eff * eff_label - model.c_bias) / model.a_flux
+        flux_label_g = float(np.nanmedian(grid_model.estimate_flux(np.array([rl]), np.array([eff_label]))))
+        flux_label_p = float(np.nanmedian(global_model.estimate_flux(np.array([rl]), np.array([eff_label]))))
+        # prefer labeling grid placement if available
+        flux_label = flux_label_g if np.isfinite(flux_label_g) else flux_label_p
         if x_min_plot <= flux_label <= x_max_plot and np.isfinite(flux_label):
             ax.text(
                 flux_label,
                 eff_label,
                 f"{int(round(rl))} Hz",
-                color="C3",
+                color="black",
                 fontsize=8,
                 backgroundcolor=("white"),
                 ha="center",
@@ -552,7 +750,6 @@ def plot_linearized_field(model: AffineInverse, df: pd.DataFrame, keep: np.ndarr
                 bbox=dict(facecolor="white", edgecolor="none", alpha=0.75, pad=1),
             )
 
-    # (no separate median-only annotation — each integer line is labelled)
     # highlight points (same style as iso_quiver)
     ax.scatter(x[finite & ~keep], e[finite & ~keep], s=16, c="0.7", alpha=0.8, label="filtered")
     ax.scatter(x[finite & keep], e[finite & keep], s=20, c="white", edgecolors="0.25", linewidths=0.5, label="kept")
@@ -565,7 +762,9 @@ def plot_linearized_field(model: AffineInverse, df: pd.DataFrame, keep: np.ndarr
     except Exception:
         med_tan = float('nan')
         mad_tan = float('nan')
+
     kept_count = int(np.count_nonzero(finite & keep))
+
     try:
         mean_local_gx = float(np.nanmean(gx[finite & keep]))
         mean_local_gy = float(np.nanmean(gy[finite & keep]))
@@ -576,11 +775,11 @@ def plot_linearized_field(model: AffineInverse, df: pd.DataFrame, keep: np.ndarr
     summary = (
         f"kept={kept_count}\nmedian tan={med_tan:.3f}\nMAD={mad_tan:.3f}\n"
         f"mean local grad=({mean_local_gx:.3f},{mean_local_gy:.3f})\n"
-        f"model (a,b,c)=({model.a_flux:.3f},{model.b_eff:.3f},{model.c_bias:.3f})"
+        f"diag affine=(a,b,c)=({global_model.a_flux:.3f},{global_model.b_eff:.3f},{global_model.c_bias:.3f})"
     )
     ax.text(0.02, 0.98, summary, transform=ax.transAxes, ha="left", va="top", fontsize=8, bbox=dict(facecolor="white", alpha=0.9))
 
-    ax.set_title("Iso-rate map + affine linearized field")
+    ax.set_title("Iso-rate map — grid vs global bilinear")
     ax.set_xlabel("Flux")
     ax.set_ylabel("Efficiency")
     ax.grid(True, alpha=0.2)
@@ -594,7 +793,7 @@ def plot_linearized_field(model: AffineInverse, df: pd.DataFrame, keep: np.ndarr
 
     ax.legend(loc="best")
     fig.tight_layout()
-    fig.savefig(PLOTS / "03_linearized_field_parallel_lines.png", dpi=170)
+    fig.savefig(PLOTS / "03_bilinear_vs_global_comparison.png", dpi=170)
     plt.close(fig)
 
 
@@ -640,14 +839,8 @@ def write_outputs(
     target_csv: Path,
     train_meta: CanonicalMeta,
     target_meta: CanonicalMeta,
-    model: AffineInverse,
-    df_train: pd.DataFrame,
-    grads: pd.DataFrame,
-    tan: np.ndarray,
-    keep_mask: np.ndarray,
-    med: float,
-    mad: float,
-    thr: float,
+    grid_model: BilinearInverse,
+    global_model: GlobalBilinear,
     df_target: pd.DataFrame,
     flux_est: np.ndarray,
     corr: float,
@@ -658,9 +851,8 @@ def write_outputs(
     out = df_target.copy()
     out["flux_est"] = flux_est
     out["flux_error"] = out["flux_est"] - out["flux"]
-    out.to_csv(PLOTS / "08_linearized_predictions.csv", index=False)
+    out.to_csv(PLOTS / "08_bilinear_predictions.csv", index=False)
 
-    # human-readable summary with explicit evidence about filtering and gradients
     lines = []
     lines.append(f"Train CSV: {train_csv}")
     lines.append(f"Target CSV: {target_csv}")
@@ -670,52 +862,33 @@ def write_outputs(
     lines.append("Method justification:")
     lines.append("- We keep only gradient directions near the median tan(angle), assuming")
     lines.append("  local iso-rate lines are approximately parallel in that stable region.")
-    lines.append("- In that region, an affine model rate = a*flux + b*eff + c is sufficient.")
-    lines.append("- The inverse is analytic and gives a single fixed matrix.")
-
+    lines.append("- We build a piecewise bilinear lookup (rate, eff) -> flux from the kept training points and use it for prediction.")
+    lines.append("- A compact global bilinear polynomial (matrix M) is fitted for diagnostics and comparison.")
     lines.append("")
-    lines.append("Gradient-filter diagnostics:")
-    finite_tan = np.isfinite(tan)
-    kept_count = int(np.count_nonzero(finite_tan & keep_mask))
-    total_considered = int(np.count_nonzero(finite_tan))
-    lines.append(f"  tan(angle) median = {med:.6f}")
-    lines.append(f"  tan(angle) MAD    = {mad:.6f}")
-    lines.append(f"  keep threshold     = {thr:.6f}")
-    lines.append(f"  points kept        = {kept_count} / {total_considered}")
-
-    # mean local gradient on the kept points (diagnostic)
-    gxs = grads["grad_drate_dflux"].to_numpy(dtype=float)
-    gys = grads["grad_drate_deff"].to_numpy(dtype=float)
-    mask_kept = (np.isfinite(gxs) & np.isfinite(gys) & np.asarray(keep_mask, dtype=bool))
-    if mask_kept.sum() > 0:
-        mean_gx = float(np.nanmean(gxs[mask_kept]))
-        mean_gy = float(np.nanmean(gys[mask_kept]))
-    else:
-        mean_gx = float("nan")
-        mean_gy = float("nan")
+    lines.append("Inverse mapping (piecewise bilinear lookup):")
+    lines.append(f"  grid shape: eff={len(grid_model.grid_eff)}, rate={len(grid_model.grid_rate)}")
+    lines.append(f"  rate range: [{grid_model.grid_rate[0]:.6g}, {grid_model.grid_rate[-1]:.6g}]")
+    lines.append(f"  eff range:  [{grid_model.grid_eff[0]:.6g}, {grid_model.grid_eff[-1]:.6g}]")
     lines.append("")
-    lines.append("Mean local gradient on kept points (dRate/dFlux, dRate/dEff):")
-    lines.append(f"  ({mean_gx:.6f}, {mean_gy:.6f})")
-
-    lines.append("")
-    lines.append("Fitted forward model:")
-    lines.append(f"  global_rate = {model.a_flux:.12f}*flux + {model.b_eff:.12f}*eff + {model.c_bias:.12f}")
-    lines.append("")
-    lines.append("Inverse matrix (global_rate, eff) -> (flux, eff):")
-    lines.append(np.array2string(model.matrix, precision=12, suppress_small=False))
-    lines.append("offset=" + np.array2string(model.offset, precision=12, suppress_small=False))
+    lines.append("Fitted global bilinear polynomial (diagnostic):")
+    lines.append("  flux ≈ a00 + a10*rate + a01*eff + a11*rate*eff")
+    lines.append(f"  coefficients: a00={global_model.a00:.12f}, a10={global_model.a10:.12f}, a01={global_model.a01:.12f}, a11={global_model.a11:.12f}")
+    lines.append("Matrix M (3×3) such that flux = [rate,eff,1]^T M [rate,eff,1]:")
+    lines.append(np.array2string(global_model.matrix, precision=12, suppress_small=False))
+    lines.append(f"  rate range: [{global_model.r_min:.6g}, {global_model.r_max:.6g}]")
+    lines.append(f"  eff range:  [{global_model.e_min:.6g}, {global_model.e_max:.6g}]")
     lines.append("")
     lines.append("How to use (for each row):")
-    lines.append(f"  flux_est = {model.m11:.12f}*global_rate + {model.m12:.12f}*eff + {model.t1:.12f}")
+    lines.append("  flux_est = grid_model.estimate_flux(global_rate, eff)  # piecewise bilinear lookup (used for predictions)")
     lines.append("  eff_out   = eff")
     lines.append("")
-    lines.append("Validation on target series:")
+    lines.append("Validation on target series (using piecewise bilinear lookup):")
     lines.append(f"  corr={corr:.8f}")
     lines.append(f"  rmse={rmse:.8f}")
     lines.append(f"  mae={mae:.8f}")
     lines.append(f"  mean_flux_bias={bias:.8f}")
 
-    (PLOTS / "00_linear_summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (PLOTS / "00_bilinear_summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> None:
@@ -734,17 +907,21 @@ def main() -> None:
         grads["grad_drate_deff"].to_numpy(dtype=float),
     )
 
-    model = fit_affine_inverse(df_train, keep_mask)
+    # build both models: flexible grid-based bilinear inverse (used for prediction)
+    # and a compact global bilinear polynomial for diagnostics/comparison
+    grid_model = fit_bilinear_inverse(df_train, keep_mask)
+    global_model = fit_global_bilinear(df_train, keep_mask)
 
     rate_t = df_target["global_rate_hz"].to_numpy(dtype=float)
     eff_t = df_target["eff"].to_numpy(dtype=float)
-    flux_est = model.estimate_flux(rate_t, eff_t)
+    # use the piecewise bilinear lookup for predictions (more flexible / non-linear)
+    flux_est = grid_model.estimate_flux(rate_t, eff_t)
 
     flux_true = df_target["flux"].to_numpy(dtype=float)
     corr, rmse, mae, bias = compute_metrics(flux_true, flux_est)
 
     plot_iso_quiver(df_train, grads, keep_mask)
-    plot_linearized_field(model, df_train, keep_mask)
+    plot_linearized_field(grid_model, global_model, df_train, keep_mask)
     plot_tan_histogram(tan, keep_mask, med, thr)
     plot_validation_scatter(df_target, flux_est)
     plot_timeseries(df_target, flux_est)
@@ -754,14 +931,8 @@ def main() -> None:
         target_csv=target_csv,
         train_meta=train_meta,
         target_meta=target_meta,
-        model=model,
-        df_train=df_train,
-        grads=grads,
-        tan=tan,
-        keep_mask=keep_mask,
-        med=med,
-        mad=mad,
-        thr=thr,
+        grid_model=grid_model,
+        global_model=global_model,
         df_target=df_target,
         flux_est=flux_est,
         corr=corr,
@@ -774,12 +945,21 @@ def main() -> None:
     print(f"Target CSV: {target_csv}")
     print(f"Rows (train/target): {len(df_train)}/{len(df_target)}")
     print(f"tan(angle) median={med:.6f}, mad={mad:.6f}, threshold={thr:.6f}, kept={int(keep_mask.sum())}/{len(keep_mask)}")
-    print("\nFinal affine inverse matrix M and offset t:")
-    print(np.array2string(model.matrix, precision=12, suppress_small=False))
-    print("t = " + np.array2string(model.offset, precision=12, suppress_small=False))
-    print("\nApply to each row:")
-    print(f"  flux_est = {model.m11:.12f}*global_rate + {model.m12:.12f}*eff + {model.t1:.12f}")
-    print("\nValidation:")
+
+    print("\nPrediction method: piecewise bilinear lookup (grid)")
+    print(f"  grid shape: eff={len(grid_model.grid_eff)}, rate={len(grid_model.grid_rate)}")
+    print(f"  rate range: [{grid_model.grid_rate[0]:.6g}, {grid_model.grid_rate[-1]:.6g}]")
+    print(f"  eff range:  [{grid_model.grid_eff[0]:.6g}, {grid_model.grid_eff[-1]:.6g}]")
+
+    print("\nDiagnostic: global bilinear polynomial (matrix M)")
+    print(f"  coefficients: a00={global_model.a00:.6g}, a10={global_model.a10:.6g}, a01={global_model.a01:.6g}, a11={global_model.a11:.6g}")
+    print(np.array2string(global_model.matrix, precision=12, suppress_small=False))
+    print(f"  domain: rate=[{global_model.r_min:.6g},{global_model.r_max:.6g}], eff=[{global_model.e_min:.6g},{global_model.e_max:.6g}]")
+
+    print("\nApply to each row (used for predictions):")
+    print("  flux_est = grid_model.estimate_flux(global_rate, eff)  # piecewise bilinear lookup")
+
+    print("\nValidation (piecewise bilinear lookup):")
     print(f"  corr={corr:.6f}, rmse={rmse:.6f}, mae={mae:.6f}, mean_bias={bias:.6f}")
     print(f"Outputs: {PLOTS}")
 

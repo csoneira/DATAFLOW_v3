@@ -1,5 +1,8 @@
 # PURELY_LINEAR Method Guide
 
+Let me see if i understand it (I created the emthod but still i want to make sure eveyrhitng is fine in the code). So the method will calculate the mean gradient, then use that gradient to create a linealired field, then relate that field with a linear function that, given the rate and the efficiency, will give back the flux, is that true? Also it will give the parameters to apply to any other case in /home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/A_SMALL_SIDE_QUEST/TRYING_LINEAR_TRANSFORMATIONS/PURELY_LINEAR/PLOTS/00_linear_summary.txt, and the instructions to use the approximation.
+
+
 ## Purpose
 `try_purely_linear_transform.py` calibrates a **simple affine inverse** to estimate flux from:
 - `global_rate`
@@ -80,12 +83,15 @@ Column selection is automatic (with strict fallbacks):
 
 ## Outputs
 Generated in `PURELY_LINEAR/PLOTS`:
-- `00_linear_summary.txt`: fitted coefficients, matrix, formula, metrics
-- `02_local_gradients_quiver.png`: iso-rate map + gradient vectors + kept/rejected points
-- `04_tan_angle_histogram.png`: tan(angle) filtering diagnostic
+- `00_linear_summary.txt`: fitted coefficients, matrix, formula, metrics — now also includes *gradient/filter diagnostics* (tan(angle) median, MAD, threshold, points kept) and the mean local gradient on the kept points.
+- `02_local_gradients_quiver.png`: iso-rate map + local gradient quivers; the plot includes a small diagnostics box showing median `tan(angle)`, kept count and the mean local gradient.
+- `03_linearized_field_parallel_lines.png`: affine-model iso-lines over the actual field — integer iso-lines (9,10,11,...) are labelled and the model gradient (a,b) is shown as a blue arrow perpendicular to those lines.
+- `04_tan_angle_histogram.png`: tan(angle) filtering diagnostic (now higher resolution) with median/MAD/threshold and kept count boxed on the plot.
 - `05_validation_scatter_flux.png`: estimated vs true flux
 - `06_flux_timeseries_validation.png`: time-series comparison
 - `08_linearized_predictions.csv`: row-level predictions and errors
+
+The plain-text `00_linear_summary.txt` is the authoritative place to read the fitted parameters and the small-sample diagnostics used to justify the affine approximation.
 
 ---
 
