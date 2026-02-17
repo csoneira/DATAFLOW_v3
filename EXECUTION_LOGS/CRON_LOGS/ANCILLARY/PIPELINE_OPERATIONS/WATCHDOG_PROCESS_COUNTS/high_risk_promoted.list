@@ -14,3 +14,5 @@
 rsync
 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh
 /home/mingo/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh
+/home/mingo/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean.sh
+/home/mingo/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh

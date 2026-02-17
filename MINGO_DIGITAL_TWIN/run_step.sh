@@ -147,6 +147,9 @@ STRICT_LINE_CLOSURE="${RUN_STEP_STRICT_LINE_CLOSURE:-1}"
 STEP1_STUCK_AGE_S="${RUN_STEP_STEP1_STUCK_AGE_S:-1800}"
 STEP1_BLOCK_LOG_INTERVAL_S="${RUN_STEP_STEP1_BLOCK_LOG_INTERVAL_S:-300}"
 OBLITERATE_UNINTERESTING_STEP1_LINES="${RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_LINES:-0}"
+# Opt-out behavior: when set to 0 the scheduler will NOT auto-bootstrap missing
+# upstream STEP_2 SIM_RUNs from the param_mesh. Default: enabled (1).
+RUN_STEP_AUTO_BOOTSTRAP_UPSTREAM="${RUN_STEP_AUTO_BOOTSTRAP_UPSTREAM:-1}"
 LAST_STEP1_BLOCK_LOG_EPOCH=0
 if [[ "$STRICT_LINE_CLOSURE" != "0" && "$STRICT_LINE_CLOSURE" != "1" ]]; then
   STRICT_LINE_CLOSURE="1"
@@ -235,7 +238,11 @@ run_step() {
   local rc
   case "$step" in
     1) cmd=(python3 "$DT/MASTER_STEPS/STEP_1/step_1_blank_to_generated.py" --config "$DT/MASTER_STEPS/STEP_1/config_step_1_physics.yaml") ;;
-    2) cmd=(python3 "$DT/MASTER_STEPS/STEP_2/step_2_generated_to_crossing.py" --config "$DT/MASTER_STEPS/STEP_2/config_step_2_physics.yaml") ;;
+    2)
+      # Use the fixed-geometry physics config for STEP_2. Per owner request,
+      # automatic switching to a param-mesh physics YAML has been removed.
+      cmd=(python3 "$DT/MASTER_STEPS/STEP_2/step_2_generated_to_crossing.py" --config "$DT/MASTER_STEPS/STEP_2/config_step_2_physics.yaml" --runtime-config "$DT/MASTER_STEPS/STEP_2/config_step_2_runtime.yaml")
+      ;;
     3) cmd=(python3 "$DT/MASTER_STEPS/STEP_3/step_3_crossing_to_hit.py" --config "$DT/MASTER_STEPS/STEP_3/config_step_3_physics.yaml") ;;
     4) cmd=(python3 "$DT/MASTER_STEPS/STEP_4/step_4_hit_to_measured.py" --config "$DT/MASTER_STEPS/STEP_4/config_step_4_physics.yaml") ;;
     5) cmd=(python3 "$DT/MASTER_STEPS/STEP_5/step_5_measured_to_triggered.py" --config "$DT/MASTER_STEPS/STEP_5/config_step_5_physics.yaml") ;;

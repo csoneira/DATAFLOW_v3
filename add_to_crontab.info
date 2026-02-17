@@ -52,9 +52,6 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # 0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh --force >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CLEANERS/log_clean_dataflow.log 2>&1
 0 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh --select temps --force >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CLEANERS/log_temps_clean_dataflow.log 2>&1
 
-# Ensure simulation hashes (daily at 06:00)
-0 6 * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/ensure_sim_hashes.py --apply >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/ensure_sim_hashes.log 2>&1
-
 # Solve stale locks (force 15 min age and kill matching stale pipelines)
 */5 * * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.py --force-age-minutes 15 --kill-stale-processes >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.cron.log 2>&1
 
@@ -64,8 +61,8 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # Emergency saturation guard: if too many duplicate/pending DATAFLOW jobs pile up, stop them
 */2 * * * * PROC_THRESHOLD=25 DUP_THRESHOLD=5 LOAD_FACTOR=2.0 GRACE_SECONDS=6 /bin/bash /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/stop_execution.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CLEANERS/stop_execution.log 2>&1
 
-# Purge cron logs nightly at 23:00
-0 23 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/ERASE_ALL_CRON_LOGS/erase_cron_logs.log 2>&1
+# Truncate cron logs nightly at 23:00 (keep recent lines only)
+*/15 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/PIPELINE_OPERATIONS/ERASE_ALL_CRON_LOGS/erase_cron_logs.log 2>&1
 
 # NMDB update
 # 0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/log_nmdb_retrieval.log 2>&1
@@ -113,6 +110,9 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 
 # CONVERT THE SIMULATED DATA INTO THE DETECTOR DATA FORMAT 
 */3 * * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag sim_step_final --max-mem-pct 90 --max-swap-pct 95 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/sim_step_final.lock /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/STEP_FINAL/step_final_daq_to_station_dat.log 2>&1
+
+# Ensure simulation hashes (daily at 06:00)
+0 6 * * * /usr/bin/env python3 /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/ensure_sim_hashes.py --apply >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/ensure_sim_hashes.log 2>&1
 
 
 # --------------------------------------------------------------------------------

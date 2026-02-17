@@ -22,6 +22,7 @@ import re
 import matplotlib
 import numpy as np
 import pandas as pd
+import json
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -40,6 +41,7 @@ DEFAULT_ONLINE_RUN_DICT = ROOT / "MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY"
 DEFAULT_OUTPUT_CSV = QUICK_TEST_DIR / "quick_test_flux_output.csv"
 DEFAULT_OUTPUT_INFO = QUICK_TEST_DIR / "quick_test_apply_info.txt"
 DEFAULT_PLOTS_DIR = QUICK_TEST_DIR / "PLOTS"
+CONFIG_FILE = QUICK_TEST_DIR / "quick_test_flux_matrix_config.json"
 
 MI_FILENAME_PATTERN = re.compile(r"mi(?P<station>\d{2})(?P<digits>\d{11})$", re.IGNORECASE)
 FLOAT_PATTERN = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
@@ -155,6 +157,17 @@ def extract_formula_coefficients(summary_txt: Path) -> tuple[float, float, float
     return m11, m12, t1, formula_line
 
 
+def load_local_config() -> dict:
+    """Load JSON config file located next to the script (quietly return empty dict if missing/invalid)."""
+    try:
+        if CONFIG_FILE.exists():
+            with CONFIG_FILE.open("r", encoding="utf-8") as fh:
+                return json.load(fh) or {}
+    except Exception:
+        pass
+    return {}
+
+
 def make_plots(df: pd.DataFrame, plots_dir: Path, nmdb_relvar_df: pd.DataFrame | None = None) -> None:
     plots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -164,186 +177,77 @@ def make_plots(df: pd.DataFrame, plots_dir: Path, nmdb_relvar_df: pd.DataFrame |
 
     loc = mdates.AutoDateLocator(minticks=3, maxticks=7)
 
-    # --- regular plotting follows
-    fig, (ax_rate, ax_eff) = plt.subplots(
-        nrows=2,
-        ncols=1,
-        figsize=(10, 5.8),
-        sharex=True,
-        gridspec_kw={"height_ratios": [1.0, 1.0]},
-    )
+    # NOTE: removed the separate `01_inputs_over_time.png` output — script now produces only one combined plot (user request).
 
-    ax_rate.plot(t, df["global_rate_hz"], color="C0", lw=1.2, label="global_rate_hz")
-    ax_eff.plot(t, df["eff_2"], color="C1", lw=1.0, alpha=0.85, label="eff_2")
-    ax_eff.plot(t, df["eff_3"], color="C2", lw=1.0, alpha=0.85, label="eff_3")
-    ax_eff.plot(t, df["reference_efficiency"], color="C3", lw=1.2, alpha=0.95, label="reference_eff")
+    # NOTE: removed the separate `02_flux_est_over_time.png` relvar-only plot — merged into single-output figure below.
 
-    ax_rate.set_title("Quick test inputs over time")
-    ax_rate.set_ylabel("rate [Hz]")
-    ax_eff.set_ylabel("efficiency")
-    ax_eff.set_xlabel("time")
-    ax_rate.grid(True, alpha=0.2)
-    ax_eff.grid(True, alpha=0.2)
-
-    ax_eff.xaxis.set_major_locator(loc)
-    ax_eff.xaxis.set_major_formatter(mdates.AutoDateFormatter(loc))
-    plt.setp(ax_eff.get_xticklabels(), rotation=30, ha="right", fontsize=8)
-
-    ax_rate.legend(loc="best", fontsize=8)
-    ax_eff.legend(loc="best", fontsize=8)
-
-    fig.tight_layout()
-    fig.savefig(plots_dir / "01_inputs_over_time.png", dpi=170)
-    plt.close(fig)
-
-    # --- Relvar-only stacked plot (translate up to three series to -1, 0, 1) ---
-    fig, ax = plt.subplots(figsize=(10, 4.4))
-
-    # prepare candidate series (aligned to df['time'])
-    series_map: dict[str, pd.Series] = {}
-
-    # ensure flux_est_rel_z exists (compute if necessary)
-    if "flux_est_rel_z" not in df.columns:
-        try:
-            fm = df["flux_est"].mean()
-            fs = df["flux_est"].std(ddof=0)
-            if fs == 0 or pd.isna(fs):
-                fs = 1.0
-            df["flux_est_rel_z"] = (df["flux_est"] - fm) / fs
-        except Exception:
-            df["flux_est_rel_z"] = pd.NA
-
-    if df["flux_est_rel_z"].notna().any():
-        series_map["flux_est"] = pd.to_numeric(df["flux_est_rel_z"], errors="coerce").fillna(0)
-
-    # prefer full NMDB relvar series (if provided) otherwise use merged columns in df
-    if nmdb_relvar_df is not None:
-        nmdb_plot_cols = [c for c in nmdb_relvar_df.columns if c != "time" and np.issubdtype(nmdb_relvar_df[c].dtype, np.number)]
-        if nmdb_plot_cols:
-            # interpolate NMDB series to df times
-            x_t = (t.astype("int64") // 10 ** 9).to_numpy()
-            x_nmdb = (pd.to_datetime(nmdb_relvar_df["time"]).astype("int64") // 10 ** 9).to_numpy()
-            for c in nmdb_plot_cols:
-                vals = pd.to_numeric(nmdb_relvar_df[c], errors="coerce").fillna(0).to_numpy()
-                interp = np.interp(x_t, x_nmdb, vals, left=0, right=0)
-                series_map[c.replace("_rel_z", "")] = pd.Series(interp, index=df.index)
-    else:
-        nmdb_cols = [c for c in df.columns if c.endswith("_rel_z") and c != "flux_est_rel_z"]
-        for c in nmdb_cols:
-            series_map[c.replace("_rel_z", "")] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-
-    # select up to three series: flux_est first, then NMDB columns (preserve order)
-    selected = []
-    if "flux_est" in series_map:
-        selected.append("flux_est")
-    for k in series_map:
-        if k != "flux_est":
-            selected.append(k)
-    selected = selected[:3]
-
-    # if none available, draw a placeholder and exit
-    if not selected:
-        ax.text(0.5, 0.5, "No relvar series available", ha="center", va="center")
-        ax.set_yticks([])
-        ax.set_xlabel("time")
-        fig.tight_layout()
-        fig.savefig(plots_dir / "02_flux_est_over_time.png", dpi=170)
-        plt.close(fig)
-        return
-
-    # plot selected series, normalize and translate to offsets in [-1, 1]
-    n = len(selected)
-    offsets = list(np.linspace(-1, 1, n))
-    amplitude = 0.5
-    offsets = [o * amplitude for o in offsets]
-    for i, name in enumerate(selected):
-        vals = series_map[name].to_numpy() if isinstance(series_map[name], pd.Series) else np.asarray(series_map[name])
-        max_abs = np.nanmax(np.abs(vals)) if np.nanmax(np.abs(vals)) != 0 else 1.0
-        norm = (vals / max_abs)
-        ax.plot(t, norm + offsets[i], lw=1.6, label=name)
-
-    ax.set_yticks(offsets)
-    ax.set_yticklabels(selected)
-    ax.set_ylim(-1.4, 1.4)
-    ax.set_title("Translated relvar comparison (-1, 0, +1)")
-    ax.grid(True, alpha=0.2)
-    ax.legend(loc="upper right", fontsize=8)
-
-    ax.set_xlabel("time")
-    ax.xaxis.set_major_locator(loc)
-    ax.xaxis.set_major_formatter(mdates.AutoDateFormatter(loc))
-    plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=8)
-
-    fig.tight_layout()
-    fig.savefig(plots_dir / "02_flux_est_over_time.png", dpi=170)
-    plt.close(fig)
-
-    # --- Combined figure: inputs (rate + efficiencies) + relvar (single file) ---
+    # --- Single combined figure (points-only) with three separate subplots: rate | efficiencies | flux_est ---
     try:
-        fig_c, (ax_c0, ax_c1, ax_c2) = plt.subplots(
+        fig, (ax_rate, ax_eff, ax_flux) = plt.subplots(
             nrows=3,
             ncols=1,
             sharex=True,
-            figsize=(12, 9),
-            gridspec_kw={"height_ratios": [1.1, 1.0, 1.0]},
+            figsize=(14, 9),
+            gridspec_kw={"height_ratios": [1.0, 1.0, 1.0]},
         )
 
-        # top: global rate
-        ax_c0.plot(t, df["global_rate_hz"], color="C0", lw=1.2, label="global_rate_hz")
-        ax_c0.set_ylabel("rate [Hz]")
-        ax_c0.grid(True, alpha=0.2)
-        ax_c0.legend(loc="best", fontsize=8)
+        # top: global rate (points only)
+        if df["global_rate_hz"].notna().any():
+            ax_rate.plot(t, df["global_rate_hz"], marker="o", linestyle="None", color="C0", markersize=4, alpha=0.9, label="global_rate_hz")
+            ax_rate.set_ylabel("rate [Hz]")
+            ax_rate.grid(True, alpha=0.18)
+            ax_rate.legend(loc="best", fontsize=8)
+        else:
+            ax_rate.text(0.5, 0.5, "No rate data", ha="center", va="center")
+            ax_rate.set_yticks([])
 
-        # middle: efficiencies (eff_2, eff_3, reference_efficiency)
-        ax_c1.plot(t, df["eff_2"], color="C1", lw=1.0, alpha=0.85, label="eff_2")
-        ax_c1.plot(t, df["eff_3"], color="C2", lw=1.0, alpha=0.85, label="eff_3")
-        # make reference_efficiency visually distinct
-        ax_c1.plot(t, df["reference_efficiency"], color="C3", lw=2.0, alpha=0.95, label="reference_eff")
-        ax_c1.set_ylabel("efficiency")
-        ax_c1.grid(True, alpha=0.2)
-        ax_c1.legend(loc="best", fontsize=8)
+        # middle: efficiencies (points only, separate subplot)
+        plotted_any = False
+        if df["eff_2"].notna().any():
+            ax_eff.plot(t, df["eff_2"], marker="o", linestyle="None", color="C1", markersize=4, alpha=0.9, label="eff_2")
+            plotted_any = True
+        if df["eff_3"].notna().any():
+            ax_eff.plot(t, df["eff_3"], marker="o", linestyle="None", color="C2", markersize=4, alpha=0.9, label="eff_3")
+            plotted_any = True
+        if df["reference_efficiency"].notna().any():
+            ax_eff.plot(t, df["reference_efficiency"], marker="o", linestyle="None", color="C3", markersize=5, alpha=0.95, label="reference_eff")
+            plotted_any = True
+        if plotted_any:
+            ax_eff.set_ylabel("efficiency")
+            ax_eff.grid(True, alpha=0.18)
+            ax_eff.legend(loc="best", fontsize=8)
+        else:
+            ax_eff.text(0.5, 0.5, "No efficiency data", ha="center", va="center")
+            ax_eff.set_yticks([])
 
-        # bottom: relvar (flux_est_rel_z + NMDB relvar)
-        # plot flux_est_rel_z if present
-        if "flux_est_rel_z" in df.columns:
-            ax_c2.plot(t, df["flux_est_rel_z"], color="C4", lw=1.4, label="flux_est (z)")
+        # bottom: estimated flux (points only) — kept as its own subplot
+        if "flux_est" in df.columns and df["flux_est"].notna().any():
+            ax_flux.plot(t, df["flux_est"], marker="o", linestyle="None", color="C4", markersize=4, alpha=0.9, label="flux_est")
+            ax_flux.set_ylabel("flux_est")
+            ax_flux.grid(True, alpha=0.18)
+            ax_flux.legend(loc="best", fontsize=8)
+        else:
+            ax_flux.text(0.5, 0.5, "No flux_est available", ha="center", va="center")
+            ax_flux.set_yticks([])
 
-        # prefer full NMDB relvar series if available (nmdb_relvar_df), else use merged cols in df
-        plotted_nmdb = False
-        if nmdb_relvar_df is not None:
-            nmdb_plot_cols = [c for c in nmdb_relvar_df.columns if c != "time" and np.issubdtype(nmdb_relvar_df[c].dtype, np.number)]
-            if nmdb_plot_cols:
-                nmdb_times = pd.to_datetime(nmdb_relvar_df["time"], errors="coerce")
-                for idx, col in enumerate(nmdb_plot_cols):
-                    ax_c2.plot(nmdb_times, nmdb_relvar_df[col], linestyle="-", lw=1.0, alpha=0.9, label=col, color=f"C{5+idx}")
-                plotted_nmdb = True
-        if not plotted_nmdb:
-            base_cols = {"time", "filename_base", "global_rate_hz", "rate_1234_hz", "eff_2", "eff_3", "reference_efficiency", "flux_est"}
-            rel_cols = [c for c in df.columns if c not in base_cols and (c.endswith("_rel_z") or np.issubdtype(df[c].dtype, np.number))]
-            for idx, col in enumerate(rel_cols):
-                ax_c2.plot(t, df[col], linestyle="--", lw=1.0, alpha=0.9, label=col, color=f"C{5+idx}")
+        # shared x formatting
+        ax_flux.set_xlabel("time")
+        ax_flux.xaxis.set_major_locator(loc)
+        ax_flux.xaxis.set_major_formatter(mdates.AutoDateFormatter(loc))
+        plt.setp(ax_flux.get_xticklabels(), rotation=30, ha="right", fontsize=8)
 
-        ax_c2.set_ylabel("z-score")
-        ax_c2.grid(True, alpha=0.18)
-        ax_c2.legend(loc="best", fontsize=8)
-
-        ax_c2.set_xlabel("time")
-        ax_c2.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=7))
-        ax_c2.xaxis.set_major_formatter(mdates.AutoDateFormatter(mdates.AutoDateLocator()))
-        plt.setp(ax_c2.get_xticklabels(), rotation=30, ha="right", fontsize=8)
-
-        fig_c.tight_layout()
+        fig.tight_layout()
         combined_path = plots_dir / "03_combined_inputs_and_relvar.png"
-        fig_c.savefig(combined_path, dpi=170)
-        # also overwrite the flux_est path so opening 02 shows the combined view
-        fig_c.savefig(plots_dir / "02_flux_est_over_time.png", dpi=170)
-        plt.close(fig_c)
-        print(f"Saved combined figure to: {combined_path} (also wrote 02_flux_est_over_time.png)")
+        fig.savefig(combined_path, dpi=170)
+        plt.close(fig)
+        print(f"Saved single-output figure to: {combined_path}")
     except Exception as _e:
-        print(f"Warning: could not create combined figure: {_e!r}")
+        print(f"Warning: could not create single-output figure: {_e!r}")
 
 
 def build_parser() -> argparse.ArgumentParser:
+    cfg = load_local_config()
+
     p = argparse.ArgumentParser(
         description="Quick test: apply affine formula from PURELY_LINEAR to real metadata."
     )
@@ -373,8 +277,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--nmdb-merge-tolerance",
-        default="2min",
+        default=cfg.get("nmdb_merge_tolerance", "2min"),
         help="Time tolerance when aligning NMDB rows to local times (e.g. '2min').",
+    )
+    p.add_argument(
+        "--start-date",
+        default=cfg.get("start_date"),
+        help="Only keep rows with time >= this date (examples: '2025-11' or '2025-11-15').",
+    )
+    p.add_argument(
+        "--end-date",
+        default=cfg.get("end_date"),
+        help="Only keep rows with time <= this date (examples: '2025-12' or '2025-12-31').",
     )
     p.add_argument("--clip-eff", action="store_true", help="Clip efficiencies to [0,1]")
     return p
@@ -394,6 +308,22 @@ def main() -> None:
     data = data.dropna(subset=["time"]).sort_values("time").reset_index(drop=True)
     if data.empty:
         raise RuntimeError("No valid rows after parsing metadata times/rates.")
+
+    # apply optional start/end date filters (keep rows with time within [start_date, end_date])
+    if args.start_date:
+        sd = pd.to_datetime(args.start_date, errors="coerce")
+        if pd.isna(sd):
+            raise RuntimeError(f"Could not parse --start-date: {args.start_date!r}")
+        data = data[data["time"] >= sd].reset_index(drop=True)
+
+    if args.end_date:
+        ed = pd.to_datetime(args.end_date, errors="coerce")
+        if pd.isna(ed):
+            raise RuntimeError(f"Could not parse --end-date: {args.end_date!r}")
+        data = data[data["time"] <= ed].reset_index(drop=True)
+
+    if data.empty:
+        raise RuntimeError(f"No valid rows after applying start/end-date filter ({args.start_date}, {args.end_date})")
 
     data["rate_1234_hz"] = pd.to_numeric(data["raw_tt_1234_rate_hz"], errors="coerce")
 
@@ -512,6 +442,8 @@ def main() -> None:
         f"Applied eff term in this quick test: {eff_term_used}",
         f"Output CSV: {args.output_csv}",
         f"Plots directory: {args.plots_dir}",
+        f"Start-date filter: {args.start_date if args.start_date else 'none'}",
+        f"End-date filter: {args.end_date if args.end_date else 'none'}",
         f"Global rate source in metadata: {rate_source}",
         f"Efficiency definition: {eff_definition}",
         f"Station: MINGO{station_number:02d}",

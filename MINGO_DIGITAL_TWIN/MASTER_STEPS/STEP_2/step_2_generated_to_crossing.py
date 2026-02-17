@@ -483,10 +483,15 @@ def main() -> None:
         if not args.force:
             existing = find_sim_run(output_dir, physics_cfg, upstream_meta)
             if existing:
+                # If multiple input candidates exist, try the next candidate.
                 if len(input_candidates) > 1:
+                    print(f"[DEBUG] existing STEP_2 sim_run {existing} for this upstream input; trying next candidate")
                     continue
-                print(f"SIM_RUN {existing} already exists; skipping (use --force to regenerate).")
-                return
+                # If there is only a single upstream input candidate, allow param_mesh-driven
+                # selection to proceed so we can create additional STEP_2 outputs (different step_2_id)
+                # for the same upstream input. The later existence checks (per sim_run_candidate)
+                # will prevent creating duplicates.
+                print(f"[DEBUG] Found existing STEP_2 sim_run {existing} for this upstream input — continuing to search param_mesh for missing step_2 outputs.")
 
         c_mm_per_ns = float(
             cfg.get("c_mm_per_ns", upstream_meta.get("config", {}).get("c_mm_per_ns", 299.792458))
@@ -532,6 +537,7 @@ def main() -> None:
                 if not step_1_id or not step_2_id_candidate:
                     continue
                 sim_run_candidate = build_sim_run_name([step_1_id, step_2_id_candidate])
+                print(f"[DEBUG] mesh(random) check: sim_run_candidate={sim_run_candidate} exists={(output_dir / sim_run_candidate).exists()} (output_dir={output_dir})")
                 if not (output_dir / sim_run_candidate).exists():
                     param_row = row
                     step_2_id = step_2_id_candidate
@@ -610,6 +616,7 @@ def main() -> None:
                     if not step_1_candidate or not step_2_candidate:
                         continue
                     sim_run_candidate = build_sim_run_name([step_1_candidate, step_2_candidate])
+                    print(f"[DEBUG] mesh(fixed) check: sim_run_candidate={sim_run_candidate} exists={(output_dir / sim_run_candidate).exists()} (output_dir={output_dir})")
                     if not (output_dir / sim_run_candidate).exists():
                         param_row = row
                         param_row_id = int(row_idx)
