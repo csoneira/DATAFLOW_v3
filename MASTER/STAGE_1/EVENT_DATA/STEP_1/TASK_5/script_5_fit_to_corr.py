@@ -15,6 +15,7 @@ a coherent, traceable set of corrected datasets per station.
 """
 # Standard Library
 from ast import literal_eval
+import argparse
 import builtins
 import csv
 from datetime import datetime, timedelta
@@ -94,7 +95,44 @@ task_number = 5
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
 
-VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE"))
+STATION_CHOICES = ("0", "1", "2", "3", "4")
+
+
+def _build_cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run Stage 1 STEP_1 TASK_5 (FIT->CORR).",
+    )
+    parser.add_argument(
+        "station",
+        nargs="?",
+        choices=STATION_CHOICES,
+        help="Station identifier (0, 1, 2, 3, or 4).",
+    )
+    parser.add_argument(
+        "input_file",
+        nargs="?",
+        help="Optional input file path to process instead of auto-selecting.",
+    )
+    parser.add_argument(
+        "--input-file",
+        dest="input_file_flag",
+        help="Optional input file path (named form).",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose execution logging.",
+    )
+    return parser
+
+
+CLI_PARSER = _build_cli_parser()
+CLI_ARGS = CLI_PARSER.parse_args()
+if CLI_ARGS.input_file and CLI_ARGS.input_file_flag:
+    CLI_PARSER.error("Use either positional input_file or --input-file, not both.")
+
+VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or CLI_ARGS.verbose
 _PRINT_ALWAYS_KEYWORDS = (
     "error",
     "warning",
@@ -415,21 +453,17 @@ def add_normalized_count_metadata(
 
 
 run_jupyter_notebook = bool(config.get("run_jupyter_notebook", False))
-if run_jupyter_notebook:
+if CLI_ARGS.station is not None:
+    station = CLI_ARGS.station
+elif run_jupyter_notebook:
     station = str(config.get("jupyter_station_default_task_5", "2"))
 else:
-    # Check if the script has an argument
-    if len(sys.argv) < 2:
-        print("Error: No station provided.")
-        print("Usage: python3 script.py <station>")
-        sys.exit(1)
+    CLI_PARSER.error(
+        "No station provided. Pass <station> or enable run_jupyter_notebook in config_global.yaml."
+    )
 
-    # Get the station argument
-    station = sys.argv[1]
-
-if station not in ["0", "1", "2", "3", "4"]:
-    print("Error: Invalid station. Please provide a valid station (0, 1, 2, 3 or 4).")
-    sys.exit(1)
+if station not in STATION_CHOICES:
+    CLI_PARSER.error("Invalid station. Choose one of: 0, 1, 2, 3, 4.")
 # print(f"Station: {station}")
 
 set_station(station)
@@ -472,8 +506,9 @@ def _coerce_numeric_sequence(raw_value, caster):
     return []
 
 
-if len(sys.argv) == 3:
-    user_file_path = sys.argv[2]
+selected_input_file = CLI_ARGS.input_file_flag or CLI_ARGS.input_file
+if selected_input_file:
+    user_file_path = selected_input_file
     user_file_selection = True
     print("User provided file path:", user_file_path)
 else:

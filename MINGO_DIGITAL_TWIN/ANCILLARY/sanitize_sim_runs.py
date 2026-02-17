@@ -202,7 +202,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--step-final-lock",
-        default="~/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/sim_step_final.lock",
+        default="~/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_step_final.lock",
         help=(
             "Lock file used by STEP_FINAL cron. If locked, STEP_10_TO_FINAL cleanup is skipped "
             "to avoid deleting active inputs."

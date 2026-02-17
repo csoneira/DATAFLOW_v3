@@ -28,10 +28,10 @@ home_directory = Path(os.environ.get("HOME", os.path.expanduser("~")))
 # Define paths relative to the home directory
 # /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml
 CONFIG_PATH = home_directory / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "config_global.yaml"
-SNAPSHOT_DIR = home_directory / "DATAFLOW_v3" / "EXECUTION_LOGS" / "CONFIG_FILES" / "GLOBAL"
+SNAPSHOT_DIR = home_directory / "DATAFLOW_v3" / "OPERATIONS_RUNTIME" / "CONFIG_FILES" / "GLOBAL"
 
 CONFIG_PATH_PARAM = home_directory / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "config_parameters.csv"
-SNAPSHOT_DIR_PARAM = home_directory / "DATAFLOW_v3" / "EXECUTION_LOGS" / "CONFIG_FILES" / "PARAMETERS"
+SNAPSHOT_DIR_PARAM = home_directory / "DATAFLOW_v3" / "OPERATIONS_RUNTIME" / "CONFIG_FILES" / "PARAMETERS"
 
 # Test the paths
 print(f"Config Path: {CONFIG_PATH}")

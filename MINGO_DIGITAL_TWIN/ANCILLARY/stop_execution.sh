@@ -7,7 +7,7 @@ set -u
 
 BASE_DIR="/home/mingo/DATAFLOW_v3"
 LOCK_FILE="/tmp/dataflow_stop_execution.lock"
-LOG_DIR="${BASE_DIR}/EXECUTION_LOGS/CRON_LOGS/ANCILLARY/CLEANERS"
+LOG_DIR="${BASE_DIR}/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS"
 INTERNAL_LOG="${LOG_DIR}/stop_execution_internal.log"
 
 mkdir -p "${LOG_DIR}"

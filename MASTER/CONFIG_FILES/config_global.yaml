@@ -61,9 +61,12 @@ prepare_reprocessing_metadata:
   remote_host: "backuplip"                   # SSH host with the remote raw listings.
   remote_user: "rpcuser"                     # SSH user to connect to the remote host.
   remote_directory_root: "/local/experiments/MINGOS"  # Base path that contains MINGO0{station} folders.
-  date_range:
-    start: 2024-09-23
-    end: 2024-10-01
+  raw_csv_max_age_days: 7                    # Skip remote refresh when local remote_database_<station>.csv is non-empty and newer than this.
+  date_ranges:                               # Keep rows that fall inside ANY of these intervals (UTC).
+    - start: 2024-09-23
+      end: 2024-10-01
+    # - start: 2024-11-10
+    #   end: 2024-11-20
 
 # Station-specific size and min-gap thresholds (used by prepare_reprocessing_metadata.sh)
 min_size_mb_1: 4.0

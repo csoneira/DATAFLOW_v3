@@ -33,7 +33,7 @@ Secondary/confusing factor:
 ## Fix Applied
 
 1. Added a dedicated cron log-path checker script:
-   - `MASTER/ANCILLARY/PIPELINE_OPERATIONS/ENSURE_CRON_LOG_PATHS/ensure_cron_log_paths.sh`
+   - `OPERATIONS/ORCHESTRATION/ENSURE_CRON_LOG_PATHS/ensure_cron_log_paths.sh`
 2. Added cron entry to run checker every minute (`--create-files --quiet`), so all log targets in `add_to_crontab.info` always exist.
 3. Restored STEP_1/2/3 cron command lines to clean form (no inline `mkdir` workaround).
 4. Restarted cron service manually (requires sudo/password in terminal).
@@ -45,7 +45,7 @@ Use these checks:
 ```bash
 service cron status
 pgrep -af "guide_raw_to_corrected.sh -s"
-stat -c '%y %n' /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_{0,1,2,3,4}.log
+stat -c '%y %n' /home/mingo/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_{0,1,2,3,4}.log
 ```
 
 Expected:
@@ -69,12 +69,12 @@ Expected:
 
 ### Root Cause
 
-Hourly cleanup was deleting files inside `EXECUTION_LOGS/CRON_LOGS` while long-lived STEP_1 processes were still running:
+Hourly cleanup was deleting files inside `OPERATIONS_RUNTIME/CRON_LOGS` while long-lived STEP_1 processes were still running:
 
 - cron entry:
   - `add_to_crontab.info` -> `clean_dataflow.sh --force`
 - cleanup behavior before fix:
-  - `MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh` used `find "$CRON_LOG_DIR" -mindepth 1 -delete`
+  - `OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh` used `find "$CRON_LOG_DIR" -mindepth 1 -delete`
 
 When a running process writes to a deleted log file descriptor, data goes to the old (unlinked) inode, not to the newly recreated visible log path. This makes processing real, but visible logs misleading.
 
@@ -82,7 +82,7 @@ When a running process writes to a deleted log file descriptor, data goes to the
 
 Changed cron-log cleanup from **delete** to **truncate** so paths/inodes stay stable for running writers:
 
-- Updated: `MASTER/ANCILLARY/CLEANERS/clean_dataflow.sh`
+- Updated: `OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh`
 - `clean_cronlogs()` now truncates each file (`: > "$file"`) instead of deleting log files/directories.
 
 ### Prevention Rule
@@ -103,7 +103,7 @@ For any long-running cron process:
   - “Acquired run lock …”
   - followed by `Station X already handled by another guide_raw_to_corrected.sh; exiting …`
   - a raw `ps` line with the cron launcher command shows up in the log.
-- No lock file remains in `EXECUTION_LOGS/LOCKS/guide_raw_to_corrected`.
+- No lock file remains in `OPERATIONS_RUNTIME/LOCKS/guide_raw_to_corrected`.
 
 ### Root Cause
 
@@ -125,7 +125,7 @@ Run these checks:
 
 ```bash
 pgrep -af "guide_raw_to_corrected.sh -s 0"
-tail -n 5 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_0.log
+tail -n 5 /home/mingo/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_0.log
 ```
 
 Expected:
@@ -161,7 +161,7 @@ Updated file:
 
 Example (new cron line form):
 ```
-* * * * * /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/guide_raw_to_corrected_s0.lock /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 0 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_0.log 2>&1
+* * * * * /usr/bin/flock -n /home/mingo/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/guide_raw_to_corrected_s0.lock /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 0 >> /home/mingo/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_0.log 2>&1
 ```
 
 ### Verification
@@ -230,7 +230,7 @@ Updated file:
 
 ```bash
 pgrep -af "run_step.sh -c"
-tail -n 5 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/RUN/cron_mingo_digital_twin_continuous.log
+tail -n 5 /home/mingo/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/cron_mingo_digital_twin_continuous.log
 ```
 
 Expected:
@@ -243,7 +243,7 @@ Updated file:
 
 Example (new cron line form):
 ```
-* 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PIPELINE_OPERATIONS/RESOURCE_GATE/resource_gate.sh --tag copernicus_s2 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/cron/copernicus_bring_s2.lock /usr/bin/env python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 2 >> /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_2.log 2>&1
+* 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag copernicus_s2 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n /home/mingo/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/copernicus_bring_s2.lock /usr/bin/env python3 -u /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 2 >> /home/mingo/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_2.log 2>&1
 ```
 
 ### Verification

@@ -9,13 +9,14 @@ add_to_rclone.info
 # ----------------------------------------------------------------------
 STATIONS/
 NOT_ESSENTIAL/
+OPERATIONS_RUNTIME/
 
 # ----------------------------------------------------------------------
 # Runtime locks and throttle markers
 # ----------------------------------------------------------------------
 *.lock
 MASTER/STAGE_0/REPROCESSING/STEP_2/.unpack_shared.lock
-EXECUTION_LOGS/LOG_THROTTLE/*.ts
+OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 
 # ----------------------------------------------------------------------
 # Binary / scientific artifacts

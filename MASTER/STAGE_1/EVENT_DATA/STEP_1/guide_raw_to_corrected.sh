@@ -61,12 +61,13 @@ guide_raw_to_corrected.sh
 Launches the STAGE_1 EVENT_DATA STEP_1 pipeline for a station.
 
 Usage:
-  guide_raw_to_corrected.sh [--station <list>] [--task <list>] [--run-anyway]
+  guide_raw_to_corrected.sh [--station <list>] [--task <list>] [--run-anyway] [--verbose]
 
 Options:
   -s, --station   Station numbers (0-4). Comma-separated or space-separated. Default: all.
   -t, --task      Task IDs to run: 1-5 or "all" (default: all tasks).
   --run-anyway    Skip the check that prevents overlapping guide_raw_to_corrected.sh runs.
+  -v, --verbose   Pass --verbose to each inner STEP_1 Python task script.
   -h, --help      Show this help message and exit.
 
 When multiple stations and tasks are provided, tasks are executed in task-major
@@ -82,6 +83,7 @@ EOF
 station_filter_raw="all"
 task_filter_raw="all"
 run_anyway=false
+task_verbose=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -97,6 +99,10 @@ while [[ $# -gt 0 ]]; do
       run_anyway=true
       shift
       ;;
+    -v|--verbose)
+      task_verbose=true
+      shift
+      ;;
     -h|--help)
       print_help
       exit 0
@@ -108,6 +114,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+TASK_VERBOSE_ARGS=()
+if [[ "$task_verbose" == true ]]; then
+  TASK_VERBOSE_ARGS+=(--verbose)
+fi
 
 # # If the time is 00 in minutes, run pgrep -f 'bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh' | xargs -r kill
 # if [[ "$(date +%M)" == "00" ]]; then
@@ -140,7 +151,7 @@ TASK_LABELS=(
   "fit_to_corr"
 )
 
-TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/TRAFFIC_LIGHT"
+TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
 TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step1_station_task_queue.txt"
 config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
 
@@ -151,7 +162,7 @@ STEP1_RESOURCE_BACKOFF_S=${STEP1_RESOURCE_BACKOFF_S:-15}
 STEP1_ALREADY_RUNNING_LOG_S=${STEP1_ALREADY_RUNNING_LOG_S:-300}
 LAST_CONFIG_REFRESH_TS=0
 LAST_CONFIG_MTIME=0
-GLOBAL_LOG_THROTTLE_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/LOG_THROTTLE"
+GLOBAL_LOG_THROTTLE_DIR="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOG_THROTTLE"
 
 sanitize_key() {
   local key="$1"
@@ -325,7 +336,7 @@ parse_list() {
 ALL_STATIONS=(0 1 2 3 4)
 ALL_TASK_IDS=(1 2 3 4 5)
 
-LOCK_BASE_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/LOCKS/guide_raw_to_corrected"
+LOCK_BASE_DIR="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/guide_raw_to_corrected"
 ARG_LOCK_FILE=""
 ARG_LOCK_FD=""
 LOCK_SIGNATURE_DESC=""
@@ -938,7 +949,7 @@ while true; do
     fi
     log_info "Running station $station task${task_id} (${task_label}) ..."
 
-    if ! python3 -u "$task_script" "$station"; then
+    if ! python3 -u "$task_script" "$station" "${TASK_VERBOSE_ARGS[@]}"; then
       log_warn "Task $(basename "$task_script") failed for station $station; continuing to next pair."
       continue
     fi

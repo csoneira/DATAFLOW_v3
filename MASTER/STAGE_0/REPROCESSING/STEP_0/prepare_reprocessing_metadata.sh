@@ -10,9 +10,15 @@ set -euo pipefail
 tmp_files_to_cleanup=()
 
 cleanup_tmp_files() {
-  for f in "${tmp_files_to_cleanup[@]:-}"; do
-    [[ -n "$f" && -f "$f" ]] && rm -f "$f"
+  local f
+  if (( ${#tmp_files_to_cleanup[@]} == 0 )); then
+    return 0
+  fi
+  for f in "${tmp_files_to_cleanup[@]}"; do
+    [[ -n "$f" && -f "$f" ]] || continue
+    rm -f "$f" || true
   done
+  return 0
 }
 trap cleanup_tmp_files EXIT
 
@@ -36,7 +42,7 @@ Options:
       --plot            Generate the metadata delta histogram PDF using the
                         current clean metadata CSV.
       --update-range    Rebuild the clean metadata CSV from the existing remote_database
-                        using the configured thresholds/date range (no remote fetch).
+                        using the configured thresholds/date range(s) (no remote fetch).
 USAGE
   exit 1
 }
@@ -110,20 +116,21 @@ remote_user="rpcuser"
 remote_directory_root="/local/experiments/MINGOS"
 remote_dir=""
 remote_dir_escaped=""
-date_range_start_label=""
-date_range_end_label=""
-date_range_start_epoch=""
-date_range_end_epoch=""
-date_range_start_epoch_defined=false
-date_range_end_epoch_defined=false
-date_range_start_epoch_int=0
-date_range_end_epoch_int=0
+raw_csv_max_age_days=7
+raw_csv_max_age_seconds=$((raw_csv_max_age_days * 24 * 3600))
+date_ranges_epoch_pairs=""
+declare -a date_ranges_start_epochs=()
+declare -a date_ranges_end_epochs=()
+declare -a date_ranges_display_pairs=()
+date_range_interval_count=0
 date_range_filter_enabled=false
 
 raw_csv="${input_directory}/remote_database_${station}.csv"
 clean_csv="${output_directory}/clean_remote_database_${station}.csv"
 metadata_tracking_csv="${metadata_directory}/metadata_refresh_history.csv"
 metadata_tracking_header="executed_at,remote_file_count,clean_file_count"
+filter_state_file="${metadata_directory}/metadata_filter_state_${station}.txt"
+filter_state_version="1"
 csv_header="basename,filesize_bytes,minutes_to_next"
 
 strip_suffix() {
@@ -164,9 +171,7 @@ config = data.get("prepare_reprocessing_metadata") or {}
 remote_host = config.get("remote_host") or ""
 remote_user = config.get("remote_user") or ""
 remote_root = config.get("remote_directory_root") or ""
-date_block = config.get("date_range") or {}
-start_raw = date_block.get("start")
-end_raw = date_block.get("end")
+raw_csv_max_age_days = config.get("raw_csv_max_age_days")
 
 def normalize_iso(value: str) -> str:
   text = value.strip()
@@ -202,8 +207,53 @@ def parse_epoch(value, is_end=False):
     dt_obj = dt_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
   return int(dt_obj.timestamp())
 
-start_epoch = parse_epoch(start_raw, False)
-end_epoch = parse_epoch(end_raw, True)
+def parse_positive_int(value):
+  if value in ("", None):
+    return None
+  try:
+    parsed = int(float(value))
+  except Exception:
+    return None
+  return parsed if parsed > 0 else None
+
+ranges = []
+
+def add_interval(start_raw, end_raw):
+  start_epoch = parse_epoch(start_raw, False)
+  end_epoch = parse_epoch(end_raw, True)
+  if start_epoch is None and end_epoch is None:
+    return
+  start_label = "" if start_raw in (None, "") else str(start_raw)
+  end_label = "" if end_raw in (None, "") else str(end_raw)
+  ranges.append((start_epoch, end_epoch, start_label, end_label))
+
+legacy_range = config.get("date_range")
+if isinstance(legacy_range, dict):
+  add_interval(legacy_range.get("start"), legacy_range.get("end"))
+
+range_list = config.get("date_ranges")
+if isinstance(range_list, list):
+  for item in range_list:
+    if isinstance(item, dict):
+      add_interval(item.get("start"), item.get("end"))
+
+deduped = []
+seen = set()
+for item in ranges:
+  if item in seen:
+    continue
+  seen.add(item)
+  deduped.append(item)
+
+epochs_serialized = ";".join(
+  f"{'' if start is None else start},{'' if end is None else end}"
+  for start, end, _, _ in deduped
+)
+labels_serialized = ";".join(
+  f"{start_label}|{end_label}"
+  for _, _, start_label, end_label in deduped
+)
+max_age_days = parse_positive_int(raw_csv_max_age_days)
 
 def emit(key, value):
   print(f"{key}={shlex.quote(value if value is not None else '')}")
@@ -211,10 +261,9 @@ def emit(key, value):
 emit("PREP_REMOTE_HOST", str(remote_host))
 emit("PREP_REMOTE_USER", str(remote_user))
 emit("PREP_REMOTE_ROOT", str(remote_root))
-emit("PREP_DATE_RANGE_START", "" if start_raw in (None, "") else str(start_raw))
-emit("PREP_DATE_RANGE_END", "" if end_raw in (None, "") else str(end_raw))
-emit("PREP_DATE_RANGE_START_EPOCH", "" if start_epoch is None else str(start_epoch))
-emit("PREP_DATE_RANGE_END_EPOCH", "" if end_epoch is None else str(end_epoch))
+emit("PREP_DATE_RANGES_EPOCHS", epochs_serialized)
+emit("PREP_DATE_RANGES_LABELS", labels_serialized)
+emit("PREP_RAW_CSV_MAX_AGE_DAYS", "" if max_age_days is None else str(max_age_days))
 PY
   ); then
     eval "$result"
@@ -234,28 +283,71 @@ PY
     remote_directory_root="$override"
   fi
 
-  date_range_start_label="${PREP_DATE_RANGE_START:-}"
-  date_range_end_label="${PREP_DATE_RANGE_END:-}"
-  date_range_start_epoch="${PREP_DATE_RANGE_START_EPOCH:-}"
-  date_range_end_epoch="${PREP_DATE_RANGE_END_EPOCH:-}"
+  override="${PREP_RAW_CSV_MAX_AGE_DAYS:-}"
+  if [[ -n "$override" && "$override" =~ ^[0-9]+$ && "$override" -gt 0 ]]; then
+    raw_csv_max_age_days="$override"
+  fi
+  raw_csv_max_age_seconds=$((10#$raw_csv_max_age_days * 24 * 3600))
 
-  date_range_start_epoch_defined=false
-  date_range_end_epoch_defined=false
+  date_ranges_epoch_pairs="${PREP_DATE_RANGES_EPOCHS:-}"
+  local labels_serialized
+  labels_serialized="${PREP_DATE_RANGES_LABELS:-}"
+
+  date_ranges_start_epochs=()
+  date_ranges_end_epochs=()
+  date_ranges_display_pairs=()
+  date_range_interval_count=0
   date_range_filter_enabled=false
 
-  if [[ -n "$date_range_start_epoch" ]]; then
-    date_range_start_epoch_int=$((10#$date_range_start_epoch))
-    date_range_start_epoch_defined=true
-    date_range_filter_enabled=true
-  else
-    date_range_start_epoch_int=0
+  if [[ -n "$date_ranges_epoch_pairs" ]]; then
+    local -a epoch_chunks=()
+    local -a label_chunks=()
+    IFS=';' read -r -a epoch_chunks <<< "$date_ranges_epoch_pairs"
+    IFS=';' read -r -a label_chunks <<< "$labels_serialized"
+    local idx
+    for idx in "${!epoch_chunks[@]}"; do
+      local chunk start_epoch end_epoch
+      chunk="${epoch_chunks[idx]}"
+      [[ -z "$chunk" || "$chunk" != *,* ]] && continue
+      start_epoch="${chunk%%,*}"
+      end_epoch="${chunk#*,}"
+      if [[ -n "$start_epoch" && ! "$start_epoch" =~ ^[0-9]+$ ]]; then
+        continue
+      fi
+      if [[ -n "$end_epoch" && ! "$end_epoch" =~ ^[0-9]+$ ]]; then
+        continue
+      fi
+      if [[ -z "$start_epoch" && -z "$end_epoch" ]]; then
+        continue
+      fi
+
+      date_ranges_start_epochs+=("$start_epoch")
+      date_ranges_end_epochs+=("$end_epoch")
+
+      local label_chunk start_label end_label
+      label_chunk="${label_chunks[idx]:-}"
+      start_label=""
+      end_label=""
+      if [[ "$label_chunk" == *"|"* ]]; then
+        start_label="${label_chunk%%|*}"
+        end_label="${label_chunk#*|}"
+      fi
+      [[ -z "$start_label" ]] && start_label="-inf"
+      [[ -z "$end_label" ]] && end_label="+inf"
+      date_ranges_display_pairs+=("${start_label} to ${end_label}")
+    done
   fi
-  if [[ -n "$date_range_end_epoch" ]]; then
-    date_range_end_epoch_int=$((10#$date_range_end_epoch))
-    date_range_end_epoch_defined=true
+
+  date_range_interval_count=${#date_ranges_start_epochs[@]}
+  if (( date_range_interval_count > 0 )); then
     date_range_filter_enabled=true
-  else
-    date_range_end_epoch_int=0
+    date_ranges_epoch_pairs=""
+    for idx in "${!date_ranges_start_epochs[@]}"; do
+      if [[ -n "$date_ranges_epoch_pairs" ]]; then
+        date_ranges_epoch_pairs+=";"
+      fi
+      date_ranges_epoch_pairs+="${date_ranges_start_epochs[idx]},${date_ranges_end_epochs[idx]}"
+    done
   fi
 }
 
@@ -265,9 +357,9 @@ remote_dir="${remote_directory_root}/MINGO0${station}/"
 printf -v remote_dir_escaped '%q' "$remote_dir"
 
 if $date_range_filter_enabled; then
-  range_start_display="${date_range_start_label:-"-inf"}"
-  range_end_display="${date_range_end_label:-"+inf"}"
-  log_info "Date range filtering enabled for clean metadata: ${range_start_display} to ${range_end_display} (UTC)."
+  range_display="$(printf '%s; ' "${date_ranges_display_pairs[@]}")"
+  range_display="${range_display%; }"
+  log_info "Date range filtering enabled for clean metadata (${date_range_interval_count} interval(s)): ${range_display} (UTC)."
 fi
 
 load_size_thresholds() {
@@ -395,7 +487,7 @@ ensure_filtered_plot_csv() {
 
   local tmp_filtered_plot
   tmp_filtered_plot=$(mktemp) || return 1
-  if RAW_CSV="$raw_csv" OUT_CSV="$tmp_filtered_plot" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" START_EPOCH="$date_range_start_epoch" END_EPOCH="$date_range_end_epoch" python3 <<'PY'
+  if RAW_CSV="$raw_csv" OUT_CSV="$tmp_filtered_plot" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" DATE_RANGE_EPOCHS="$date_ranges_epoch_pairs" python3 <<'PY'
 import csv
 import datetime as dt
 import os
@@ -406,13 +498,33 @@ out_path = os.environ["OUT_CSV"]
 min_bytes = int(os.environ.get("MIN_BYTES", "0") or 0)
 max_bytes = int(os.environ.get("MAX_BYTES", "0") or 0)
 min_gap = float(os.environ.get("MIN_GAP_MIN", "0") or 0.0)
-start_epoch_env = os.environ.get("START_EPOCH", "").strip()
-end_epoch_env = os.environ.get("END_EPOCH", "").strip()
-start_epoch = int(start_epoch_env) if start_epoch_env else None
-end_epoch = int(end_epoch_env) if end_epoch_env else None
-date_filter_enabled = start_epoch is not None or end_epoch is not None
+date_ranges_env = os.environ.get("DATE_RANGE_EPOCHS", "").strip()
+date_ranges = []
+if date_ranges_env:
+  for chunk in date_ranges_env.split(";"):
+    chunk = chunk.strip()
+    if not chunk or "," not in chunk:
+      continue
+    start_raw, end_raw = chunk.split(",", 1)
+    start_raw = start_raw.strip()
+    end_raw = end_raw.strip()
+    start_epoch = int(start_raw) if start_raw else None
+    end_epoch = int(end_raw) if end_raw else None
+    if start_epoch is None and end_epoch is None:
+      continue
+    date_ranges.append((start_epoch, end_epoch))
+date_filter_enabled = bool(date_ranges)
 
 pattern = re.compile(r"([0-9]{11})$")
+
+def is_in_selected_ranges(epoch: int) -> bool:
+  for start_epoch, end_epoch in date_ranges:
+    if start_epoch is not None and epoch < start_epoch:
+      continue
+    if end_epoch is not None and epoch > end_epoch:
+      continue
+    return True
+  return False
 
 def basename_epoch(base: str):
   match = pattern.search(base)
@@ -455,9 +567,7 @@ with open(raw_path, newline="") as handle:
       epoch = basename_epoch(base)
       if epoch is None:
         continue
-      if start_epoch is not None and epoch < start_epoch:
-        continue
-      if end_epoch is not None and epoch > end_epoch:
+      if not is_in_selected_ranges(epoch):
         continue
     rows.append((base, size, dt_val))
 
@@ -488,7 +598,7 @@ filter_existing_raw_csv() {
   tmp_filtered_plot=$(mktemp) || return 1
   tmp_clean=$(mktemp) || { rm -f "$tmp_filtered_plot"; return 1; }
 
-  if stats=$(RAW_CSV="$raw_csv" OUT_FILTERED="$tmp_filtered_plot" OUT_CLEAN="$tmp_clean" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" START_EPOCH="$date_range_start_epoch" END_EPOCH="$date_range_end_epoch" python3 <<'PY'
+  if stats=$(RAW_CSV="$raw_csv" OUT_FILTERED="$tmp_filtered_plot" OUT_CLEAN="$tmp_clean" MIN_BYTES="$min_filesize_bytes" MAX_BYTES="$max_filesize_bytes" MIN_GAP_MIN="$min_gap_minutes" DATE_RANGE_EPOCHS="$date_ranges_epoch_pairs" python3 <<'PY'
 import csv
 import datetime as dt
 import os
@@ -500,14 +610,34 @@ out_clean = os.environ["OUT_CLEAN"]
 min_bytes = int(os.environ.get("MIN_BYTES", "0") or 0)
 max_bytes = int(os.environ.get("MAX_BYTES", "0") or 0)
 min_gap = float(os.environ.get("MIN_GAP_MIN", "0") or 0.0)
-start_epoch_env = os.environ.get("START_EPOCH", "").strip()
-end_epoch_env = os.environ.get("END_EPOCH", "").strip()
-start_epoch = int(start_epoch_env) if start_epoch_env else None
-end_epoch = int(end_epoch_env) if end_epoch_env else None
-date_filter_enabled = start_epoch is not None or end_epoch is not None
+date_ranges_env = os.environ.get("DATE_RANGE_EPOCHS", "").strip()
+date_ranges = []
+if date_ranges_env:
+  for chunk in date_ranges_env.split(";"):
+    chunk = chunk.strip()
+    if not chunk or "," not in chunk:
+      continue
+    start_raw, end_raw = chunk.split(",", 1)
+    start_raw = start_raw.strip()
+    end_raw = end_raw.strip()
+    start_epoch = int(start_raw) if start_raw else None
+    end_epoch = int(end_raw) if end_raw else None
+    if start_epoch is None and end_epoch is None:
+      continue
+    date_ranges.append((start_epoch, end_epoch))
+date_filter_enabled = bool(date_ranges)
 
 pattern = re.compile(r"([0-9]{11})$")
 epoch_zero = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+
+def is_in_selected_ranges(epoch: int) -> bool:
+  for start_epoch, end_epoch in date_ranges:
+    if start_epoch is not None and epoch < start_epoch:
+      continue
+    if end_epoch is not None and epoch > end_epoch:
+      continue
+    return True
+  return False
 
 def parse_ts(base: str):
   m = pattern.search(base)
@@ -582,13 +712,7 @@ for base, size, dt_val, epoch in zip(bases, sizes, minutes, epochs):
     removed_gap += 1
     continue
   if date_filter_enabled:
-    if epoch is None:
-      removed_date += 1
-      continue
-    if start_epoch is not None and epoch < start_epoch:
-      removed_date += 1
-      continue
-    if end_epoch is not None and epoch > end_epoch:
+    if epoch is None or not is_in_selected_ranges(epoch):
       removed_date += 1
       continue
   filtered.append((base, int(size), "" if dt_val is None else f"{dt_val:.3f}"))
@@ -668,17 +792,19 @@ should_skip_due_to_date_range() {
     return 0
   fi
   local current=$((10#$epoch))
-  if $date_range_start_epoch_defined; then
-    if (( current < date_range_start_epoch_int )); then
-      return 0
+  local idx start_epoch end_epoch
+  for idx in "${!date_ranges_start_epochs[@]}"; do
+    start_epoch="${date_ranges_start_epochs[idx]}"
+    end_epoch="${date_ranges_end_epochs[idx]}"
+    if [[ -n "$start_epoch" ]] && (( current < 10#$start_epoch )); then
+      continue
     fi
-  fi
-  if $date_range_end_epoch_defined; then
-    if (( current > date_range_end_epoch_int )); then
-      return 0
+    if [[ -n "$end_epoch" ]] && (( current > 10#$end_epoch )); then
+      continue
     fi
-  fi
-  return 1
+    return 1
+  done
+  return 0
 }
 
 filter_close_metadata_entries() {
@@ -823,6 +949,93 @@ record_metadata_history() {
   local clean_total="$2"
   ensure_metadata_tracking_csv
   printf '%s,%s,%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$raw_total" "$clean_total" >> "$metadata_tracking_csv"
+}
+
+raw_csv_signature() {
+  local csv_path="$1"
+  if [[ ! -e "$csv_path" ]]; then
+    printf 'missing'
+    return 0
+  fi
+  stat -c '%s:%Y' "$csv_path" 2>/dev/null || printf 'unknown'
+}
+
+calculate_filter_fingerprint() {
+  local raw_signature payload
+  raw_signature=$(raw_csv_signature "$raw_csv")
+  payload=$(
+    cat <<EOF
+version=${filter_state_version}
+station=${station}
+raw_signature=${raw_signature}
+min_filesize_bytes=${min_filesize_bytes}
+max_filesize_bytes=${max_filesize_bytes}
+min_gap_minutes=${min_gap_minutes}
+date_ranges_epoch_pairs=${date_ranges_epoch_pairs}
+EOF
+  )
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$payload" | sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$payload" | shasum -a 256 | awk '{print $1}'
+  else
+    printf '%s' "$payload" | cksum | awk '{print $1 ":" $2}'
+  fi
+}
+
+saved_filter_fingerprint() {
+  if [[ ! -f "$filter_state_file" ]]; then
+    printf ''
+    return 0
+  fi
+  awk -F= '$1=="fingerprint"{print $2; exit}' "$filter_state_file" 2>/dev/null || true
+}
+
+write_filter_state_file() {
+  local fingerprint="$1"
+  local raw_signature
+  raw_signature=$(raw_csv_signature "$raw_csv")
+
+  {
+    printf 'version=%s\n' "$filter_state_version"
+    printf 'updated_at=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf 'station=%s\n' "$station"
+    printf 'raw_csv=%s\n' "$raw_csv"
+    printf 'raw_signature=%s\n' "$raw_signature"
+    printf 'min_filesize_bytes=%s\n' "$min_filesize_bytes"
+    printf 'max_filesize_bytes=%s\n' "$max_filesize_bytes"
+    printf 'min_gap_minutes=%s\n' "$min_gap_minutes"
+    printf 'date_ranges_epoch_pairs=%s\n' "$date_ranges_epoch_pairs"
+    printf 'fingerprint=%s\n' "$fingerprint"
+  } > "$filter_state_file"
+}
+
+should_skip_filter_rebuild() {
+  [[ -s "$raw_csv" ]] || return 1
+  [[ -s "$clean_csv" ]] || return 1
+
+  local current saved
+  current=$(calculate_filter_fingerprint)
+  saved=$(saved_filter_fingerprint)
+  [[ -n "$current" && -n "$saved" && "$current" == "$saved" ]]
+}
+
+rebuild_clean_metadata_if_needed() {
+  if should_skip_filter_rebuild; then
+    log_info "Metadata filtering skipped: raw metadata and filter settings (including date range(s)) are unchanged."
+    return 0
+  fi
+
+  if filter_existing_raw_csv; then
+    local fp
+    fp=$(calculate_filter_fingerprint)
+    if [[ -n "$fp" ]]; then
+      write_filter_state_file "$fp"
+    fi
+    return 0
+  fi
+  return 1
 }
 
 plot_metadata_time_deltas() {
@@ -1166,7 +1379,32 @@ PY
   fi
 }
 
+raw_csv_is_fresh_and_nonempty() {
+  local csv_path="$1"
+  local max_age_seconds="$2"
+
+  [[ -s "$csv_path" ]] || return 1
+  [[ "$max_age_seconds" =~ ^[0-9]+$ ]] || return 1
+
+  local modified_epoch now_epoch age_seconds
+  if ! modified_epoch=$(stat -c %Y "$csv_path" 2>/dev/null); then
+    return 1
+  fi
+  now_epoch=$(date +%s)
+  age_seconds=$((now_epoch - modified_epoch))
+  if (( age_seconds < 0 )); then
+    age_seconds=0
+  fi
+
+  (( age_seconds <= max_age_seconds ))
+}
+
 refresh_metadata_csv() {
+  if raw_csv_is_fresh_and_nonempty "$raw_csv" "$raw_csv_max_age_seconds"; then
+    log_info "Skipping remote metadata refresh: ${raw_csv} is non-empty and not older than ${raw_csv_max_age_days} day(s)."
+    return 0
+  fi
+
   log_info "Refreshing metadata CSV for MINGO0${station} from remote listing..."
 
   local tmp_listing
@@ -1341,7 +1579,7 @@ load_time_thresholds "$station"
 load_size_thresholds "$station"
 
 if $update_range_only; then
-  log_info "Rebuilding clean metadata from existing remote_database_${station}.csv using the configured date range thresholds."
+  log_info "Rebuilding clean metadata from existing remote_database_${station}.csv using the configured date range(s) thresholds."
 fi
 
 if $refresh_metadata; then
@@ -1350,13 +1588,13 @@ if $refresh_metadata; then
   else
     log_info "Metadata refresh could not update the CSV; continuing with existing entries."
   fi
-  # Always rebuild clean/plot CSVs from the current raw file to keep behavior consistent
-  filter_existing_raw_csv || {
+  # Rebuild clean/plot CSVs only when raw metadata or filter settings changed.
+  rebuild_clean_metadata_if_needed || {
     log_info "Unable to build clean metadata from refreshed raw CSV; aborting." >&2
     exit 1
   }
 else
-  filter_existing_raw_csv || {
+  rebuild_clean_metadata_if_needed || {
     log_info "Unable to build clean metadata from existing raw CSV; aborting." >&2
     exit 1
   }

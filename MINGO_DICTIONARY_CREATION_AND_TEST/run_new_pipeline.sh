@@ -14,16 +14,27 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="${SCRIPT_DIR}/config.json"
 
+# Preferred layout: STEP_* directories directly under SCRIPT_DIR.
+# Legacy layout fallback: SCRIPT_DIR/STEPS/STEP_*.
+if [[ -d "${SCRIPT_DIR}/STEP_1_SETUP" && -d "${SCRIPT_DIR}/STEP_2_INFERENCE" && -d "${SCRIPT_DIR}/STEP_3_SYNTHETIC_TIME_SERIES" ]]; then
+    STEP_ROOT="${SCRIPT_DIR}"
+elif [[ -d "${SCRIPT_DIR}/STEPS/STEP_1_SETUP" && -d "${SCRIPT_DIR}/STEPS/STEP_2_INFERENCE" && -d "${SCRIPT_DIR}/STEPS/STEP_3_SYNTHETIC_TIME_SERIES" ]]; then
+    STEP_ROOT="${SCRIPT_DIR}/STEPS"
+else
+    echo "ERROR: Could not locate STEP directories under ${SCRIPT_DIR} or ${SCRIPT_DIR}/STEPS" >&2
+    exit 1
+fi
+
 # Step definitions: label → script
-declare -A STEPS
-STEPS["1.1"]="${SCRIPT_DIR}/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/collect_data.py"
-STEPS["1.2"]="${SCRIPT_DIR}/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/build_dictionary.py"
-STEPS["2.1"]="${SCRIPT_DIR}/STEP_2_INFERENCE/STEP_2_1_ESTIMATE_PARAMS/estimate_and_plot.py"
-STEPS["2.2"]="${SCRIPT_DIR}/STEP_2_INFERENCE/STEP_2_2_VALIDATION/validate_solution.py"
-STEPS["2.3"]="${SCRIPT_DIR}/STEP_2_INFERENCE/STEP_2_3_UNCERTAINTY/build_uncertainty_lut.py"
-STEPS["3.1"]="${SCRIPT_DIR}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION/create_time_series.py"
-STEPS["3.2"]="${SCRIPT_DIR}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_2_SYNTHETIC_TIME_SERIES/synthetic_time_series.py"
-STEPS["3.3"]="${SCRIPT_DIR}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_3_CORRECTION/correction_by_inference.py"
+declare -A STEP_SCRIPTS
+STEP_SCRIPTS["1.1"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/collect_data.py"
+STEP_SCRIPTS["1.2"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/build_dictionary.py"
+STEP_SCRIPTS["2.1"]="${STEP_ROOT}/STEP_2_INFERENCE/STEP_2_1_ESTIMATE_PARAMS/estimate_and_plot.py"
+STEP_SCRIPTS["2.2"]="${STEP_ROOT}/STEP_2_INFERENCE/STEP_2_2_VALIDATION/validate_solution.py"
+STEP_SCRIPTS["2.3"]="${STEP_ROOT}/STEP_2_INFERENCE/STEP_2_3_UNCERTAINTY/build_uncertainty_lut.py"
+STEP_SCRIPTS["3.1"]="${STEP_ROOT}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION/create_time_series.py"
+STEP_SCRIPTS["3.2"]="${STEP_ROOT}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_2_SYNTHETIC_TIME_SERIES/synthetic_time_series.py"
+STEP_SCRIPTS["3.3"]="${STEP_ROOT}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_3_CORRECTION/correction_by_inference.py"
 
 # Ordered list
 STEP_ORDER=("1.1" "1.2" "2.1" "2.2" "2.3" "3.1" "3.2" "3.3")
@@ -63,7 +74,7 @@ EOF
 
 run_step() {
     local step="$1"
-    local script="${STEPS[$step]}"
+    local script="${STEP_SCRIPTS[$step]}"
     if [[ ! -f "$script" ]]; then
         echo "ERROR: Script not found: $script" >&2
         return 1
@@ -115,7 +126,7 @@ fi
 # If specific steps are given, run only those
 if [[ $# -gt 0 ]]; then
     for step in "$@"; do
-        if [[ -z "${STEPS[$step]:-}" ]]; then
+        if [[ -z "${STEP_SCRIPTS[$step]:-}" ]]; then
             echo "ERROR: Unknown step: $step" >&2
             list_steps
             exit 1

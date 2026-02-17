@@ -27,7 +27,7 @@ Options:
 
 When run without arguments (typical cron usage), the script loops
 continuously, processing stations according to the traffic-light queue
-persisted in EXECUTION_LOGS/TRAFFIC_LIGHT. Each station is moved to the end
+persisted in OPERATIONS_RUNTIME/TRAFFIC_LIGHT. Each station is moved to the end
 of the queue as soon as it is selected, so the next invocation continues with
 the following station even if the current run exits early.
 EOF
@@ -76,7 +76,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ALL_STATIONS=(0 1 2 3 4)
-TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/EXECUTION_LOGS/TRAFFIC_LIGHT"
+TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
 TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step3_station_queue.txt"
 
 SELF_INVOCATION_PIDS=()

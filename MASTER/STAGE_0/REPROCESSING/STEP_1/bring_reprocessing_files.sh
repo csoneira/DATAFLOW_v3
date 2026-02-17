@@ -403,7 +403,7 @@ if [[ ! -s "$clean_metadata_csv" ]]; then
     sleep "$refresh_delay_sec"
   fi
 
-  lock_dir="$HOME/DATAFLOW_v3/EXECUTION_LOGS/LOCKS"
+  lock_dir="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS"
   lock_file="${lock_dir}/prepare_reprocessing_metadata_refresh.lock"
   mkdir -p "$lock_dir"
 

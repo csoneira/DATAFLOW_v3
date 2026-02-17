@@ -11,7 +11,7 @@ This repository keeps the operational pipeline and the simulator side-by-side so
 - `MASTER/`: operational pipeline scripts, configs, and shared helpers
 - `STATIONS/`: station-specific stage trees and outputs
 - `FOR_MINGO_SYSTEMS/`: host bootstrap templates (cron and tmux snippets)
-- `EXECUTION_LOGS/`: cron, nohup, and lock files
+- `OPERATIONS_RUNTIME/`: cron, nohup, and lock files
 - `MINGO_DIGITAL_TWIN/`: simulation pipeline, tools, and docs
 - `NOT_ESSENTIAL/`: archived or non-critical assets
 

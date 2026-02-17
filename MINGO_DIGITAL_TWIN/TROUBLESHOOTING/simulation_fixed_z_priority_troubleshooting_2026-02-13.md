@@ -115,7 +115,7 @@ ps -ef | rg 'run_step\.sh -c --no-plots|MASTER_STEPS/STEP_[0-9]+/step_'
 ### 2) Watch simulation progress log
 
 ```bash
-tail -n 80 /home/mingo/DATAFLOW_v3/EXECUTION_LOGS/CRON_LOGS/SIMULATION/RUN/cron_mingo_digital_twin_continuous.log
+tail -n 80 /home/mingo/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/cron_mingo_digital_twin_continuous.log
 ```
 
 Look for `status=progress` lines, not repeated `failed rc=1`.
