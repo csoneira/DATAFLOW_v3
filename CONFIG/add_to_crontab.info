@@ -103,8 +103,8 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
 # Order is fixed inside the script: STEP_0 -> run_step(all, strict 10->1 closure) -> STEP_FINAL.
 * * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/run_main_simulation_cycle.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log 2>&1
 
-# Reset mesh from final outputs (hourly, serialized with main cycle).
-10 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/reset_param_mesh_from_final.py --apply --skip-delete >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/reset_param_mesh_from_final.log 2>&1
+# Reset mesh from final outputs (disabled by request: keep existing param_mesh workflow).
+# 10 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/reset_param_mesh_from_final.py --apply --skip-delete >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/reset_param_mesh_from_final.log 2>&1
 
 # Sanitize old/invalid intermediate runs (every 15 min, serialized with main cycle).
 */15 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py --apply --min-age-seconds 900 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/sanitize_sim_runs.log 2>&1

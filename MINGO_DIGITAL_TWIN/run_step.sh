@@ -150,6 +150,9 @@ OBLITERATE_UNINTERESTING_STEP1_LINES="${RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_
 # Opt-out behavior: when set to 0 the scheduler will NOT auto-bootstrap missing
 # upstream STEP_2 SIM_RUNs from the param_mesh. Default: enabled (1).
 RUN_STEP_AUTO_BOOTSTRAP_UPSTREAM="${RUN_STEP_AUTO_BOOTSTRAP_UPSTREAM:-1}"
+# By default, do not enforce/emit param_mesh upstream consistency warnings.
+# Set to 1 to enable the checker output in /tmp/param_mesh_consistency.log.
+RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY="${RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY:-0}"
 LAST_STEP1_BLOCK_LOG_EPOCH=0
 if [[ "$STRICT_LINE_CLOSURE" != "0" && "$STRICT_LINE_CLOSURE" != "1" ]]; then
   STRICT_LINE_CLOSURE="1"
@@ -162,6 +165,9 @@ if ! [[ "$STEP1_BLOCK_LOG_INTERVAL_S" =~ ^[0-9]+$ ]]; then
 fi
 if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "0" && "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "1" && "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "apply" ]]; then
   OBLITERATE_UNINTERESTING_STEP1_LINES="0"
+fi
+if [[ "$RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY" != "0" && "$RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY" != "1" ]]; then
+  RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY="0"
 fi
 if [[ -n "$CONTINUOUS" && -z "$DEBUG" ]]; then
   QUIET_CONTINUOUS="1"
@@ -768,15 +774,18 @@ refresh_work_cache_or_disable() {
       log_info "work cache refreshed: cache=$WORK_CACHE_PATH state=$WORK_STATE_PATH stuck=$WORK_STUCK_LINES_PATH broken=$WORK_BROKEN_RUNS_PATH"
     fi
 
-    # Run param_mesh ↔ INTERSTEPS consistency checker (non-fatal):
-    # - warns when param_mesh has pending rows but upstream SIM_RUN is missing
-    # - detection only (no automatic fixes)
-    if python3 "$DT/ANCILLARY/check_param_mesh_consistency.py" --mesh "$DT/INTERSTEPS/STEP_0_TO_1/param_mesh.csv" --intersteps "$DT/INTERSTEPS" --step 3 >/tmp/param_mesh_consistency.log 2>&1; then
-      if [[ -n "$DEBUG" ]]; then
-        log_info "param_mesh consistency: OK"
+    # Optional checker (disabled by default): detects missing upstream SIM_RUNs
+    # for pending param_mesh rows. It is diagnostic-only and does not modify data.
+    if [[ "$RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY" == "1" ]]; then
+      if python3 "$DT/ANCILLARY/check_param_mesh_consistency.py" --mesh "$DT/INTERSTEPS/STEP_0_TO_1/param_mesh.csv" --intersteps "$DT/INTERSTEPS" --step 3 >/tmp/param_mesh_consistency.log 2>&1; then
+        if [[ -n "$DEBUG" ]]; then
+          log_info "param_mesh consistency: OK"
+        fi
+      else
+        log_warn "param_mesh consistency check found missing upstream SIM_RUNs; see /tmp/param_mesh_consistency.log"
       fi
-    else
-      log_warn "param_mesh consistency check found missing upstream SIM_RUNs; see /tmp/param_mesh_consistency.log"
+    elif [[ -n "$DEBUG" ]]; then
+      log_info "param_mesh consistency check skipped (RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY=0)"
     fi
 
     return 0
