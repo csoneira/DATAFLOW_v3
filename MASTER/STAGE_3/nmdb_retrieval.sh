@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Put in crontab the following line to run this script every day at 2 AM:
-# 0 2 * * * /bin/bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> /home/mingo/DATAFLOW_v3/MASTER/STAGE_3/update_log.txt 2>&1
+# 0 2 * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> $HOME/DATAFLOW_v3/MASTER/STAGE_3/update_log.txt 2>&1
 
 if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
     cat <<'EOF'

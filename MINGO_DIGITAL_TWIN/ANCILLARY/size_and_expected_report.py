@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Iterable
 import time
 
 import numpy as np
@@ -75,6 +76,97 @@ def estimate_one_line_bytes(
     return 0
 
 
+def format_age(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    mins, sec = divmod(seconds, 60)
+    hrs, mins = divmod(mins, 60)
+    if hrs > 0:
+        return f"{hrs}h{mins:02d}m{sec:02d}s"
+    if mins > 0:
+        return f"{mins}m{sec:02d}s"
+    return f"{sec}s"
+
+
+def newest_age_seconds(paths: Iterable[Path], now_ts: float) -> int | None:
+    mtimes: list[float] = []
+    for path in paths:
+        if path.exists():
+            mtimes.append(path.stat().st_mtime)
+    if not mtimes:
+        return None
+    newest = max(mtimes)
+    return int(max(0.0, now_ts - newest))
+
+
+def tail_lines(path: Path, max_lines: int) -> list[str]:
+    if not path.exists() or max_lines <= 0:
+        return []
+    try:
+        data = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    lines = data.splitlines()
+    if max_lines >= len(lines):
+        return lines
+    return lines[-max_lines:]
+
+
+def health_snapshot(
+    dataflow_root: Path,
+    now_ts: float,
+    tail_n: int,
+) -> tuple[list[str], int, str | None]:
+    logs_root = dataflow_root / "OPERATIONS_RUNTIME" / "CRON_LOGS"
+    step1_logs = sorted(
+        (logs_root / "MAIN_ANALYSIS" / "STAGE_1" / "EVENT_DATA" / "STEP_1").glob("guide_raw_to_corrected_*.log")
+    )
+    # stale_after_seconds is tuned to each job cadence.
+    log_groups: list[tuple[str, list[Path], int]] = [
+        ("sim_cycle", [logs_root / "SIMULATION" / "RUN" / "sim_main_pipeline_cycle.log"], 180),
+        ("step1_all", step1_logs, 180),
+        ("step2_all", [logs_root / "MAIN_ANALYSIS" / "STAGE_1" / "EVENT_DATA" / "STEP_2" / "guide_corrected_to_accumulated_all.log"], 180),
+        ("step3_all", [logs_root / "MAIN_ANALYSIS" / "STAGE_1" / "EVENT_DATA" / "STEP_3" / "guide_accumulated_to_joined_all.log"], 180),
+        ("stale_locks", [logs_root / "ANCILLARY" / "OPERATIONS" / "SOLVE_STALE_LOCKS" / "solve_stale_locks.cron.log"], 420),
+        ("watchdog", [logs_root / "ANCILLARY" / "OPERATIONS" / "WATCHDOG_PROCESS_COUNTS" / "watchdog_process_counts.log"], 420),
+    ]
+
+    lines: list[str] = []
+    for label, paths, stale_after in log_groups:
+        age = newest_age_seconds(paths, now_ts)
+        if age is None:
+            lines.append(f"  {label:<11}: missing")
+            continue
+        status = "OK" if age < stale_after else "STALE"
+        lines.append(f"  {label:<11}: age={format_age(age):>8} status={status}")
+
+    err_patterns = (
+        "traceback",
+        "exception",
+        "error",
+        "failed",
+        "filenotfounderror",
+        "no such file or directory",
+    )
+    error_hits = 0
+    latest_error: str | None = None
+    scan_paths: list[Path] = []
+    for _, paths, _ in log_groups:
+        scan_paths.extend(paths)
+    seen: set[Path] = set()
+    for path in scan_paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        for raw in reversed(tail_lines(path, tail_n)):
+            lowered = raw.lower()
+            if any(token in lowered for token in err_patterns):
+                error_hits += 1
+                if latest_error is None:
+                    latest_error = f"{path.name}: {raw.strip()}"
+
+    return lines, error_hits, latest_error
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Combined size/expected SIM_RUN report.")
     parser.add_argument(
@@ -110,6 +202,26 @@ def main() -> None:
         "--verbose",
         action="store_true",
         help="Show progress and per-step timings.",
+    )
+    parser.add_argument(
+        "--health-always",
+        action="store_true",
+        help="Print the log health snapshot on every run.",
+    )
+    parser.add_argument(
+        "--health-interval-seconds",
+        type=int,
+        default=30,
+        help=(
+            "Print health snapshot only when epoch time is a multiple of this interval. "
+            "Set 0 to disable periodic snapshots."
+        ),
+    )
+    parser.add_argument(
+        "--health-tail-lines",
+        type=int,
+        default=120,
+        help="Number of tail lines per log to scan for recent error-like messages.",
     )
     args = parser.parse_args()
 
@@ -173,7 +285,8 @@ def main() -> None:
                         print(f"Auto-detected single active z configuration: {z_vals[:len(z_cols)]}; using it for expected counts", flush=True)
                     expected = expected_counts_from_mesh(full_mesh[full_mask].copy())
                     # restrict working mesh as well to same z subset
-                    mesh = mesh[full_mask & (mesh.index.isin(mesh.index))].copy()
+                    mesh_mask = full_mask.reindex(mesh.index, fill_value=False)
+                    mesh = mesh[mesh_mask].copy()
         if expected is None:
             expected = expected_counts_from_mesh(mesh)
 
@@ -285,6 +398,25 @@ def main() -> None:
         f"{total_size_cell:>{width_size}} | {total_line_cell:>{width_line}} | {total_pct:>{width_pct}.1f}%"
     )
     print(sep)
+
+    now_ts = time.time()
+    show_health = args.health_always
+    if args.health_interval_seconds > 0 and int(now_ts) % args.health_interval_seconds == 0:
+        show_health = True
+    if show_health:
+        dataflow_root = intersteps_dir.parent.parent
+        health_lines, error_hits, latest_error = health_snapshot(
+            dataflow_root=dataflow_root,
+            now_ts=now_ts,
+            tail_n=args.health_tail_lines,
+        )
+        print()
+        print(f"HEALTH SNAPSHOT @ {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now_ts))}")
+        for line in health_lines:
+            print(line)
+        print(f"  recent_error_hits_in_tails={error_hits}")
+        if latest_error:
+            print(f"  latest_error_line={latest_error}")
 
 
 if __name__ == "__main__":

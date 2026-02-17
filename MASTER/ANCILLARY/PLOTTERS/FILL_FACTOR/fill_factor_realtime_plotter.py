@@ -39,9 +39,8 @@ from MASTER.common.plot_utils import pdf_save_rasterized_page
 STATIONS: Tuple[str, ...] = ("MINGO01", "MINGO02", "MINGO03", "MINGO04")
 PROCESSED_DB_DIR = (
     REPO_ROOT
-    / "MASTER"
-    / "ANCILLARY"
-    / "PIPELINE_OPERATIONS"
+    / "OPERATIONS"
+    / "DATA_MAINTENANCE"
     / "UPDATE_EXECUTION_CSVS"
     / "OUTPUT_FILES"
 )

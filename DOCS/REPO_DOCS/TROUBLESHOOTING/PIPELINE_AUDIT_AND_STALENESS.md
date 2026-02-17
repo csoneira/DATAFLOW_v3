@@ -81,7 +81,7 @@ These are the lists that the pipeline reads to skip work or avoid duplicates.
 
 ### Config Flags That Control Skip Behavior
 
-- `MASTER/CONFIG_FILES/config_global.yaml`
+- `MASTER/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml`
   - `use_processed_as_reject_list_{station}: true|false`
     - If `false`, processed basenames are excluded from reprocessing.
     - If `true`, processed basenames are NOT excluded (use with care).

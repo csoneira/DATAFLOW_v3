@@ -35,6 +35,11 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import select_latest_candidate
+from MASTER.common.path_config import (
+    get_master_config_root,
+    get_repo_root,
+    resolve_home_path_from_config,
+)
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 
 
@@ -107,11 +112,16 @@ from MASTER.common.file_selection import select_latest_candidate
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 
 start_timer(__file__)
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-with open(config_file_path, "r") as config_file:
+config_file_path = (
+    get_master_config_root()
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_2"
+    / "config_step_2.yaml"
+)
+with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
-home_path = config["home_path"]
+home_path = str(resolve_home_path_from_config(config))
 
 
 def save_metadata(metadata_path: str, row: Dict[str, object]) -> Path:
@@ -164,17 +174,28 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 import yaml
 
 start_timer(__file__)
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
+config_file_path = (
+    get_master_config_root()
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_2"
+    / "config_step_2.yaml"
+)
+parameter_config_file_path = (
+    get_master_config_root()
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+    / "config_parameters.csv"
+)
 print(f"Using config file: {config_file_path}")
-with open(config_file_path, "r") as config_file:
+with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
 try:
-    config = update_config_with_parameters(config, parameter_config_file_path, station)
+    config = update_config_with_parameters(config, str(parameter_config_file_path), station)
 except NameError:
     pass
-home_path = config["home_path"]
+home_path = str(resolve_home_path_from_config(config))
 
 # General Settings
 correct_angle = config["correct_angle"]
@@ -246,8 +267,8 @@ print("----------------------------------------------------------------------")
 
 
 # Load calibration
-home_path = config["home_path"]
-tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv"
+home_path = str(resolve_home_path_from_config(config))
+tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv"
 FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
 FEE_calibration = {
     "Width": FEE_calibration_df['Width'].tolist(),
@@ -327,9 +348,16 @@ print("----------------------------------------------------------------------")
 fig_idx = 0
 plot_list = []
 
-config_files_directory = os.path.expanduser(f"~/DATAFLOW_v3/CONFIG_FILES/")
-station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
-config_file_directory = os.path.expanduser(f"~/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}")
+repo_root = get_repo_root()
+config_files_directory = str(get_master_config_root())
+station_directory = str(repo_root / "STATIONS" / f"MINGO0{station}")
+config_file_directory = str(
+    get_master_config_root()
+    / "STAGE_0"
+    / "NEW_FILES"
+    / "ONLINE_RUN_DICTIONARY"
+    / f"STATION_{station}"
+)
 base_event_directory = os.path.join(station_directory, "STAGE_1", "EVENT_DATA")
 step1_to_2_directory = os.path.join(base_event_directory, "STEP_1_TO_2_OUTPUT")
 working_directory = os.path.join(base_event_directory, "STEP_2")
@@ -4079,8 +4107,8 @@ if side_calculations:
             print(induction_section_df)
         
         # Load the LUT
-        # /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/INDUCTION_SECTION
-        induction_section_lut_file = f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/INDUCTION_SECTION/induction_section_lut.csv"
+        # Induction section calibration LUT.
+        induction_section_lut_file = f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_2/INDUCTION_SECTION/induction_section_lut.csv"
         induction_section_lut_df = pd.read_csv(induction_section_lut_file)
 
         # Initialize a list to store the best induction section values for each plane

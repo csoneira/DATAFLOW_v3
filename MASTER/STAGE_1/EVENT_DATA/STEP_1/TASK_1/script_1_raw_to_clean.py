@@ -82,10 +82,27 @@ from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import newest_order_key, select_latest_candidate
+from MASTER.common.path_config import (
+    get_master_config_root,
+    get_repo_root,
+    resolve_home_path_from_config,
+)
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import SIM_PARAMS_DEFAULT, resolve_simulated_z_positions
+from MASTER.common.step1_shared import (
+    add_normalized_count_metadata,
+    apply_step1_task_parameter_overrides,
+    build_events_per_second_metadata,
+    build_step1_cli_parser,
+    build_step1_filtered_print,
+    collect_columns,
+    load_itineraries_from_file,
+    save_metadata,
+    validate_step1_input_file_args,
+    y_pos,
+)
 
 task_number = 1
 
@@ -95,72 +112,18 @@ start_execution_time_counting = datetime.now()
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 
 
-def _build_cli_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Run Stage 1 STEP_1 TASK_1 (RAW->CLEAN).",
-    )
-    parser.add_argument(
-        "station",
-        nargs="?",
-        choices=STATION_CHOICES,
-        help="Station identifier (0, 1, 2, 3, or 4).",
-    )
-    parser.add_argument(
-        "input_file",
-        nargs="?",
-        help="Optional input file path to process instead of auto-selecting.",
-    )
-    parser.add_argument(
-        "--input-file",
-        dest="input_file_flag",
-        help="Optional input file path (named form).",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose execution logging.",
-    )
-    return parser
 
 
-CLI_PARSER = _build_cli_parser()
+CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_1 (RAW->CLEAN).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
-if CLI_ARGS.input_file and CLI_ARGS.input_file_flag:
-    CLI_PARSER.error("Use either positional input_file or --input-file, not both.")
+validate_step1_input_file_args(CLI_PARSER, CLI_ARGS)
 
 VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or CLI_ARGS.verbose
-_PRINT_ALWAYS_KEYWORDS = (
-    "error",
-    "warning",
-    "failed",
-    "exception",
-    "traceback",
-    "usage",
+print = build_step1_filtered_print(
+    verbose=VERBOSE,
+    debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
+    raw_print=builtins.print,
 )
-_print = builtins.print
-
-
-def _debug_logging_enabled() -> bool:
-    return bool(globals().get("debug_mode", False)) or VERBOSE
-
-
-def _is_important_message(message: str) -> bool:
-    lowered = message.lower()
-    if any(keyword in lowered for keyword in _PRINT_ALWAYS_KEYWORDS):
-        return True
-    return "total execution time" in lowered or "data purity" in lowered
-
-
-def print(*args, **kwargs):
-    force = kwargs.pop("force", False)
-    if force or _debug_logging_enabled():
-        _print(*args, **kwargs)
-        return
-    message = " ".join(str(arg) for arg in args)
-    if _is_important_message(message):
-        _print(*args, **kwargs)
-
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -168,289 +131,42 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 
 
 start_timer(__file__)
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-parameter_config_file_path = os.path.join(
-    user_home,
-    "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters_task_1.csv",
+config_root = get_master_config_root()
+config_file_path = config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_task_1.yaml"
+parameter_config_file_path = (
+    config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_parameters_task_1.csv"
 )
-fallback_parameter_config_file_path = os.path.join(
-    user_home,
-    "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv",
+fallback_parameter_config_file_path = (
+    config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "config_parameters.csv"
 )
 print(f"Using config file: {config_file_path}")
-with open(config_file_path, "r") as config_file:
+with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
 debug_mode = bool(config.get("debug_mode", False))
 
 
-def _apply_parameter_overrides(config_obj, station_id):
-    task_path = Path(parameter_config_file_path)
-    if task_path.exists():
-        config_obj = update_config_with_parameters(config_obj, task_path, station_id)
-        print(f"Warning: Loaded task parameters from {task_path}")
-        return config_obj
-    fallback_path = Path(fallback_parameter_config_file_path)
-    if fallback_path.exists():
-        print(f"Warning: Task parameters file not found; falling back to {fallback_path}")
-        config_obj = update_config_with_parameters(config_obj, fallback_path, station_id)
-    else:
-        print(f"Warning: No parameters file found for task 1")
-    return config_obj
 
 
-try:
-    config = _apply_parameter_overrides(config, station)
-except NameError:
-    pass
-home_path = config["home_path"]
+home_path = str(resolve_home_path_from_config(config))
 
 # ~/DATAFLOW_v3/MASTER/ANCILLARY/QUALITY_ASSURANCE
 REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "ANCILLARY" / "QUALITY_ASSURANCE" / "REFERENCE_TABLES"
 
 
-def _normalize_analysis_mode_value(value: object) -> str:
-    if value is None:
-        return ""
-    text = str(value).strip()
-    if text in {"", "0", "1"}:
-        return text
-    if text in {"0.0", "1.0"}:
-        return text[0]
-    if "1" in text:
-        return "1"
-    if "0" in text:
-        return "0"
-    return ""
 
 
-def _sanitize_analysis_mode_rows(rows: List[Dict[str, object]]) -> int:
-    fixed = 0
-    for row in rows:
-        if "analysis_mode" not in row:
-            continue
-        clean_value = _normalize_analysis_mode_value(row.get("analysis_mode"))
-        if row.get("analysis_mode") != clean_value:
-            row["analysis_mode"] = clean_value
-            fixed += 1
-    return fixed
 
 
-def _repair_metadata_file(metadata_path: Path) -> int:
-    original_limit = csv.field_size_limit()
-    csv.field_size_limit(sys.maxsize)
-    try:
-        with metadata_path.open("r", newline="") as handle:
-            reader = csv.DictReader(handle)
-            fieldnames = list(reader.fieldnames or [])
-            rows = [dict(existing) for existing in reader]
-    finally:
-        csv.field_size_limit(original_limit)
-
-    if not fieldnames:
-        return 0
-
-    fixed = _sanitize_analysis_mode_rows(rows)
-    if fixed:
-        with metadata_path.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-    return fixed
 
 
-def save_metadata(
-    metadata_path: str,
-    row: Dict[str, object],
-    preferred_fieldnames: Iterable[str] | None = None,
-) -> Path:
-    """Append *row* to *metadata_path*, preserving all existing columns."""
-    metadata_path = Path(metadata_path)
-    rows: List[Dict[str, object]] = []
-    fieldnames: List[str] = []
-
-    def _normalise(raw: Dict[str, object]) -> Dict[str, object]:
-        return {key: value for key, value in raw.items() if key is not None}
-
-    def _load_existing_rows() -> Tuple[List[str], List[Dict[str, object]]]:
-        with metadata_path.open("r", newline="") as csvfile:
-            reader = csv.DictReader(csvfile)
-            existing_fields = list(reader.fieldnames or [])
-            existing_rows = [_normalise(existing) for existing in reader]
-            return existing_fields, existing_rows
-
-    if metadata_path.exists() and metadata_path.stat().st_size > 0:
-        try:
-            fieldnames, existing_rows = _load_existing_rows()
-        except csv.Error as exc:
-            if "field larger than field limit" in str(exc).lower():
-                fixed = _repair_metadata_file(metadata_path)
-                print(
-                    f"Detected oversized analysis_mode entries in {metadata_path}; normalized {fixed} row(s)."
-                )
-                try:
-                    fieldnames, existing_rows = _load_existing_rows()
-                except csv.Error as err:
-                    raise RuntimeError(
-                        f"Failed to repair metadata file {metadata_path} after detecting oversized fields."
-                    ) from err
-            else:
-                raise
-        rows.extend(existing_rows)
-
-    # Append the new row (making a shallow copy to avoid mutating callers).
-    rows.append(_normalise(dict(row)))
-
-    fixed_during_append = _sanitize_analysis_mode_rows(rows)
-    if fixed_during_append:
-        print(f"Clamped analysis_mode to 0/1 in {fixed_during_append} metadata row(s).")
-
-    # Build the union of all keys while keeping existing order first.
-    seen = set(fieldnames)
-    for item in rows:
-        for key in item.keys():
-            if key not in seen:
-                fieldnames.append(key)
-                seen.add(key)
-
-    if preferred_fieldnames:
-        preferred = [name for name in preferred_fieldnames if name in seen]
-        remainder = [name for name in fieldnames if name not in preferred]
-        fieldnames = preferred + remainder
-        # Keep purity last for readability in filter metadata CSVs.
-        if "data_purity_percentage" in fieldnames:
-            fieldnames = [name for name in fieldnames if name != "data_purity_percentage"] + [
-                "data_purity_percentage"
-            ]
-
-    with metadata_path.open("w", newline="") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for item in rows:
-            formatted = {}
-            for key in fieldnames:
-                if key in EVENTS_PER_SECOND_COLUMNS:
-                    value = item.get(key, 0)
-                    if value in ("", None) or (isinstance(value, float) and math.isnan(value)):
-                        formatted[key] = 0
-                    else:
-                        formatted[key] = value
-                    continue
-                value = item.get(key, "")
-                if value is None or (isinstance(value, float) and math.isnan(value)):
-                    formatted[key] = ""
-                elif isinstance(value, (list, dict)):
-                    formatted[key] = str(value)
-                else:
-                    formatted[key] = value
-            writer.writerow(formatted)
-
-    return metadata_path
 
 
 # -----------------------------------------------------------------------------
 
-EVENTS_PER_SECOND_MAX = 100
-EVENTS_PER_SECOND_COLUMNS = [
-    *(f"events_per_second_{idx}_count" for idx in range(EVENTS_PER_SECOND_MAX + 1)),
-    "events_per_second_total_seconds",
-    "events_per_second_global_rate",
-]
 
 
-def build_events_per_second_metadata(
-    df: pd.DataFrame,
-    time_columns: Tuple[str, ...] = ("datetime", "Time"),
-) -> Dict[str, object]:
-    metadata = {column: 0 for column in EVENTS_PER_SECOND_COLUMNS}
-    if df is None or df.empty:
-        return metadata
-
-    time_col = next((col for col in time_columns if col in df.columns), None)
-    if time_col is not None:
-        times = pd.to_datetime(df[time_col], errors="coerce")
-    elif isinstance(df.index, pd.DatetimeIndex):
-        times = pd.Series(df.index)
-    else:
-        return metadata
-
-    times = pd.Series(times).dropna()
-    if times.empty:
-        return metadata
-
-    times = times.dt.floor("s")
-    start_time = times.min()
-    end_time = times.max()
-    if pd.isna(start_time) or pd.isna(end_time):
-        return metadata
-
-    full_range = pd.date_range(start=start_time, end=end_time, freq="s")
-    events_per_second = (
-        times.value_counts().reindex(full_range, fill_value=0).sort_index()
-    )
-
-    total_seconds = int(events_per_second.size)
-    total_events = int(events_per_second.sum())
-    metadata["events_per_second_total_seconds"] = total_seconds
-    metadata["events_per_second_global_rate"] = (
-        round(total_events / total_seconds, 6) if total_seconds > 0 else 0
-    )
-
-    hist_counts = events_per_second.value_counts()
-    for events_count, seconds_count in hist_counts.items():
-        events_count_int = int(events_count)
-        if 0 <= events_count_int <= EVENTS_PER_SECOND_MAX:
-            metadata[f"events_per_second_{events_count_int}_count"] = int(seconds_count)
-
-    return metadata
 
 
-def add_normalized_count_metadata(
-    metadata: Dict[str, object],
-    denominator_seconds: object,
-) -> None:
-    """
-    Add per-second normalized versions of *_count columns to *metadata*.
-
-    - For typical event-count columns: *_count -> *_rate_hz (count / seconds).
-    - For events_per_second_{k}_count (seconds with k events): -> *_fraction (seconds / seconds).
-    """
-    try:
-        denom = float(denominator_seconds) if denominator_seconds is not None else 0.0
-    except (TypeError, ValueError):
-        denom = 0.0
-
-    metadata["count_rate_denominator_seconds"] = int(denom) if denom > 0 else 0
-
-    if denom <= 0:
-        print("[count-rates] Denominator seconds is 0; skipping normalized count columns.")
-        return
-
-    for key, value in list(metadata.items()):
-        if not isinstance(key, str):
-            continue
-
-        is_count = key.endswith("_count")
-        is_entries = key.endswith(("_entries", "_entries_final", "_entries_initial"))
-        if not (is_count or is_entries):
-            continue
-        try:
-            num = float(value)
-        except (TypeError, ValueError):
-            continue
-        if not np.isfinite(num):
-            continue
-
-        if is_count:
-            if key.startswith("events_per_second_"):
-                out_key = key[: -len("_count")] + "_fraction"
-            else:
-                out_key = key[: -len("_count")] + "_rate_hz"
-        else:
-            out_key = key + "_rate_hz"
-
-        metadata[out_key] = round(num / denom, 6)
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -460,23 +176,20 @@ print("Execution time is:", execution_time)
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
 
-run_jupyter_notebook = bool(config.get("run_jupyter_notebook", False))
-if CLI_ARGS.station is not None:
-    station = CLI_ARGS.station
-elif run_jupyter_notebook:
-    station = str(config.get("jupyter_station_default_task_1", "2"))
-else:
-    CLI_PARSER.error(
-        "No station provided. Pass <station> or enable run_jupyter_notebook in config_global.yaml."
-    )
-
-if station not in STATION_CHOICES:
-    CLI_PARSER.error("Invalid station. Choose one of: 0, 1, 2, 3, 4.")
-# print(f"Station: {station}")
-
+if CLI_ARGS.station is None:
+    CLI_PARSER.error("No station provided. Pass <station>.")
+station = str(CLI_ARGS.station)
 set_station(station)
 
-config = _apply_parameter_overrides(config, station)
+config = apply_step1_task_parameter_overrides(
+    config_obj=config,
+    station_id=station,
+    task_parameter_path=str(parameter_config_file_path),
+    fallback_parameter_path=str(fallback_parameter_config_file_path),
+    task_number=task_number,
+    update_fn=update_config_with_parameters,
+    log_fn=print,
+)
 
 selected_input_file = CLI_ARGS.input_file_flag or CLI_ARGS.input_file
 if selected_input_file:
@@ -493,10 +206,17 @@ print("Creating the necessary directories...")
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 
 # Define base working directory
-home_directory = os.path.expanduser(f"~")
-station_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}")
-config_file_directory = os.path.expanduser(f"~/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}")
-base_directory = os.path.expanduser(f"~/DATAFLOW_v3/STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA")
+repo_root = get_repo_root()
+home_directory = str(repo_root.parent)
+station_directory = str(repo_root / "STATIONS" / f"MINGO0{station}")
+config_file_directory = str(
+    config_root
+    / "STAGE_0"
+    / "NEW_FILES"
+    / "ONLINE_RUN_DICTIONARY"
+    / f"STATION_{station}"
+)
+base_directory = str(repo_root / "STATIONS" / f"MINGO0{station}" / "STAGE_1" / "EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
 metadata_directory = os.path.join(raw_to_list_working_directory, "METADATA")
@@ -766,52 +486,12 @@ else:
     z_4 = 450
 
 ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/ANCILLARY/INPUT_FILES/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
+    f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
 
-def load_itineraries_from_file(file_path: Path, required: bool = True) -> list[list[str]]:
-    """Return itineraries stored as comma-separated lines in *file_path*."""
-    if not file_path.exists():
-        if required:
-            raise FileNotFoundError(f"Cannot find itineraries file: {file_path}")
-        return []
-
-    itineraries: list[list[str]] = []
-    with file_path.open("r", encoding="utf-8") as itinerary_file:
-        print(f"Loading itineraries from {file_path}:")
-        for line_number, raw_line in enumerate(itinerary_file, start=1):
-            stripped_line = raw_line.strip()
-            if not stripped_line or stripped_line.startswith("#"):
-                continue
-            segments = [segment.strip() for segment in stripped_line.split(",") if segment.strip()]
-            if segments:
-                itineraries.append(segments)
-                print(segments)
-
-    if not itineraries and required:
-        raise ValueError(f"Itineraries file {file_path} is empty.")
-
-    return itineraries
 
 
-def write_itineraries_to_file(
-    file_path: Path,
-    itineraries: Iterable[Iterable[str]],
-) -> None:
-    """Persist unique itineraries to *file_path* as comma-separated lines."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    unique_itineraries: dict[tuple[str, ...], None] = {}
-
-    for itinerary in itineraries:
-        itinerary_tuple = tuple(itinerary)
-        if not itinerary_tuple:
-            continue
-        unique_itineraries.setdefault(itinerary_tuple, None)
-
-    with file_path.open("w", encoding="utf-8") as itinerary_file:
-        for itinerary_tuple in unique_itineraries:
-            itinerary_file.write(",".join(itinerary_tuple) + "\n")
 
 
 
@@ -1106,8 +786,6 @@ Q_right_side = Q_side_right_pre_cal_ST
 y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
             np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
 
-def y_pos(y_width):
-    return np.cumsum(y_width) - (np.sum(y_width) + y_width) / 2
 
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 y_width_P1_and_P3 = y_widths[0]
@@ -2232,9 +1910,6 @@ def _apply_bounds(frame: pd.DataFrame, column_names: Iterable[str], lower: float
     subset = frame.loc[:, cols]
     frame.loc[:, cols] = subset.where((subset >= lower) & (subset <= upper), 0)
 
-def _collect_columns(columns: Iterable[str], pattern: re.Pattern[str]) -> list[str]:
-    """Return all column names that match *pattern*."""
-    return [name for name in columns if pattern.match(name)]
 
 # Function to process each line
 def process_line(line):
@@ -2577,9 +2252,9 @@ if status_execution_date is not None:
 working_df["datetime"] = selected_df['datetime']
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 
-print("Columns right after initial assignment (before raw_tt computation):")
-for col in working_df.columns:
-    print(f" - {col}")
+# print("Columns right after initial assignment (before raw_tt computation):")
+# for col in working_df.columns:
+#     print(f" - {col}")
 
 if found_matching_conf and conf_value is not None:
     # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
@@ -2970,10 +2645,10 @@ print("----------------------------------------------------------------------")
 # FILTER 2: TF, TB, QF, QB PRECALIBRATED THRESHOLDS --> 0 if out --------------
 
 working_df.fillna(0, inplace=True)
-T_F_cols = _collect_columns(working_df.columns, T_FRONT_PATTERN)
-T_B_cols = _collect_columns(working_df.columns, T_BACK_PATTERN)
-Q_F_cols = _collect_columns(working_df.columns, Q_FRONT_PATTERN)
-Q_B_cols = _collect_columns(working_df.columns, Q_BACK_PATTERN)
+T_F_cols = collect_columns(working_df.columns, T_FRONT_PATTERN)
+T_B_cols = collect_columns(working_df.columns, T_BACK_PATTERN)
+Q_F_cols = collect_columns(working_df.columns, Q_FRONT_PATTERN)
+Q_B_cols = collect_columns(working_df.columns, Q_BACK_PATTERN)
 
 _debug_plot_filter_group(
     working_df,
@@ -2997,10 +2672,10 @@ _apply_bounds(working_df, Q_B_cols, Q_B_left_pre_cal, Q_B_right_pre_cal)
 if self_trigger:
     working_st_df.fillna(0, inplace=True)
 
-    st_T_F_cols = _collect_columns(working_st_df.columns, T_FRONT_PATTERN)
-    st_T_B_cols = _collect_columns(working_st_df.columns, T_BACK_PATTERN)
-    st_Q_F_cols = _collect_columns(working_st_df.columns, Q_FRONT_PATTERN)
-    st_Q_B_cols = _collect_columns(working_st_df.columns, Q_BACK_PATTERN)
+    st_T_F_cols = collect_columns(working_st_df.columns, T_FRONT_PATTERN)
+    st_T_B_cols = collect_columns(working_st_df.columns, T_BACK_PATTERN)
+    st_Q_F_cols = collect_columns(working_st_df.columns, Q_FRONT_PATTERN)
+    st_Q_B_cols = collect_columns(working_st_df.columns, Q_BACK_PATTERN)
 
     _debug_plot_filter_group(
         working_st_df,
@@ -3555,7 +3230,7 @@ if create_pdf:
 
 
 # Path to save the cleaned dataframe
-# Create output directory if it does not exist /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/DONE/
+# Create output directory if it does not exist.
 os.makedirs(f"{output_directory}", exist_ok=True)
 OUT_PATH = f"{output_directory}/cleaned_{basename_no_ext}.parquet"
 KEY = "df"  # HDF5 key name
@@ -3569,8 +3244,8 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 
 
 # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
-Q_F_cols = _collect_columns(working_df.columns, Q_FRONT_PATTERN)
-Q_B_cols = _collect_columns(working_df.columns, Q_BACK_PATTERN)
+Q_F_cols = collect_columns(working_df.columns, Q_FRONT_PATTERN)
+Q_B_cols = collect_columns(working_df.columns, Q_BACK_PATTERN)
 if create_debug_plots and (Q_F_cols or Q_B_cols):
     debug_cols = Q_F_cols + Q_B_cols
     debug_thresholds = {col: [0] for col in debug_cols}
@@ -3748,11 +3423,11 @@ global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp
 
 print(f"Specific metadata keys to be saved: {len(global_variables)}")
-if VERBOSE:
-    print("----------\nAll global variables to be saved:")
-    for key, value in global_variables.items():
-        print(f"{key}: {value}")
-    print("----------\n")
+# if VERBOSE:
+#     print("----------\nAll global variables to be saved:")
+#     for key, value in global_variables.items():
+#         print(f"{key}: {value}")
+#     print("----------\n")
 
 print("----------\nSpecific metadata to be saved:")
 print(f"Filename base: {filename_base}")
@@ -3774,10 +3449,10 @@ print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 print(
     f"Writing cleaned parquet: rows={len(working_df)} cols={len(working_df.columns)} -> {OUT_PATH}"
 )
-if VERBOSE:
-    print("Columns before saving cleaned parquet:")
-    for col in working_df.columns:
-        print(f" - {col}")
+# if VERBOSE:
+#     print("Columns before saving cleaned parquet:")
+#     for col in working_df.columns:
+#         print(f" - {col}")
 
 # Ensure datetime column is stored with a pandas datetime64 dtype to satisfy pyarrow
 if "datetime" in working_df.columns:

@@ -45,8 +45,8 @@ Key simulator docs:
 - `MINGO_DIGITAL_TWIN/DOCS/coordinate_and_timing_conventions.md`
 
 ## Deployment and operations
-- Operational scripts expect paths rooted at `/home/mingo/DATAFLOW_v3` by default.
-- Cron and tmux templates live under `FOR_MINGO_SYSTEMS/` and are referenced by `add_to_crontab.info` and `add_to_tmux.info` in the repo root.
+- Operational scripts default to paths rooted at `$HOME/DATAFLOW_v3`.
+- Cron and tmux templates live under `FOR_MINGO_SYSTEMS/` and are referenced by `CONFIG/add_to_crontab.info` and `CONFIG/add_to_tmux.info`.
 
 ## Getting started
 - Install Python dependencies from `requirements.list`.

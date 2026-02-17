@@ -123,7 +123,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 RSYNC_RSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=15"
 
 station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
-config_file_directory="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_$station"
+config_file_directory="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/NEW_FILES/ONLINE_RUN_DICTIONARY/STATION_$station"
 stage0_directory="$station_directory/STAGE_0/NEW_FILES"
 stage0_to_1_directory="$station_directory/STAGE_0_to_1"
 metadata_directory="$stage0_directory/METADATA"
@@ -318,7 +318,7 @@ echo "Bringing the input files from the logbook..."
 # ---------------------------------------------
 # Read IDs from YAML (requires PyYAML in Python)
 # ---------------------------------------------
-CONFIG_FILE="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
+CONFIG_FILE="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/NEW_FILES/config_new_files.yaml"
 SHEET_ID=$(yq -r '.logbook.sheet_id' "$CONFIG_FILE")
 GID=$(yq -r ".logbook.gid_by_station.\"$station\"" "$CONFIG_FILE")
 

@@ -83,7 +83,7 @@ elif run_jupyter_notebook:
     station = str(config.get("jupyter_station_default_task_X", "2"))
 else:
     CLI_PARSER.error(
-        "No station provided. Pass <station> or enable run_jupyter_notebook in config_global.yaml."
+        "No station provided. Pass <station> or enable run_jupyter_notebook in TASK_<N>/config_task_<N>.yaml."
     )
 
 if station not in STATION_CHOICES:

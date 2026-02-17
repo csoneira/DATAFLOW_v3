@@ -10,6 +10,7 @@ add_to_rclone.info
 STATIONS/
 NOT_ESSENTIAL/
 OPERATIONS_RUNTIME/
+EXECUTION_LOGS/
 
 # ----------------------------------------------------------------------
 # Runtime locks and throttle markers
@@ -50,7 +51,8 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 *.tsv
 *.json
 *.txt
-!MASTER/CONFIG_FILES/config_parameters_task_*.csv
+!MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_parameters.csv
+!MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_*/config_parameters_task_*.csv
 !grafana/**/*.json
 
 # ----------------------------------------------------------------------

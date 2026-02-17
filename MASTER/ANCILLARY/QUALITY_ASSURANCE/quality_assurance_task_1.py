@@ -6,6 +6,7 @@
 
 
 
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -239,9 +240,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 
-measured_counts_df = pd.read_csv(
-    '/home/mingo/DATAFLOW_v3/TESTS/SIMULATION/measured_type_counts.csv'
-)
+REPO_ROOT = Path(__file__).resolve().parents[3]
+measured_counts_df = pd.read_csv(REPO_ROOT / "TESTS" / "SIMULATION" / "measured_type_counts.csv")
 
 
 # Calculate the ratio of events so eff2 = 1 - 134 / 1234 in the measured counts

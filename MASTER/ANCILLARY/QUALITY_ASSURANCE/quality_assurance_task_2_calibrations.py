@@ -59,6 +59,7 @@ VARIABLE_FILTERS: Dict[str, Dict[str, float]] = {
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "OUTPUT_FILES"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -69,8 +70,15 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 
 
 def load_runs_dataframe(station: int) -> pd.DataFrame:
-    csv_path = Path(
-        f"/home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}/input_file_mingo0{station}.csv"
+    csv_path = (
+        REPO_ROOT
+        / "MASTER"
+        / "CONFIG_FILES"
+        / "STAGE_0"
+        / "NEW_FILES"
+        / "ONLINE_RUN_DICTIONARY"
+        / f"STATION_{station}"
+        / f"input_file_mingo0{station}.csv"
     )
     runs_df = pd.read_csv(csv_path, skiprows=1)
     runs_df["start"] = pd.to_datetime(runs_df["start"])

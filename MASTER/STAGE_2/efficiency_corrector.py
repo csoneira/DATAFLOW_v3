@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -28,8 +29,21 @@ import pandas as pd
 
 pd.plotting.register_matplotlib_converters()
 
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.path_config import get_repo_root
+
 # %%
-DATAFLOW_ROOT = Path("/home/mingo/DATAFLOW_v3")
+DATAFLOW_ROOT = get_repo_root()
 STATIONS_ROOT = DATAFLOW_ROOT / "STATIONS"
 
 

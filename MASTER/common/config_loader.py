@@ -51,12 +51,22 @@ def _resolve_reference_path(base_csv_path: Path, source_task: str) -> Optional[P
         if not ref_path.is_absolute():
             ref_path = base_csv_path.parent / ref_path
         return ref_path
-    if source_task.startswith("task_"):
-        filename = f"config_parameters_{source_task}.csv"
-    elif source_task.isdigit():
-        filename = f"config_parameters_task_{source_task}.csv"
-    else:
-        filename = f"config_parameters_{source_task}.csv"
+    task_match = re.fullmatch(r"task_(\d+)", source_task)
+    if task_match:
+        task_number = task_match.group(1)
+        if base_csv_path.parent.name.startswith("TASK_"):
+            step_1_dir = base_csv_path.parent.parent
+        else:
+            step_1_dir = base_csv_path.parent
+        return step_1_dir / f"TASK_{task_number}" / f"config_parameters_task_{task_number}.csv"
+    if source_task.isdigit():
+        task_number = source_task
+        if base_csv_path.parent.name.startswith("TASK_"):
+            step_1_dir = base_csv_path.parent.parent
+        else:
+            step_1_dir = base_csv_path.parent
+        return step_1_dir / f"TASK_{task_number}" / f"config_parameters_task_{task_number}.csv"
+    filename = f"config_parameters_{source_task}.csv"
     return base_csv_path.parent / filename
 
 

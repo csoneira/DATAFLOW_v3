@@ -1,13 +1,23 @@
 #%%
 
-import os
-import yaml
-user_home = os.path.expanduser("~")
-config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-print(f"Using config file: {config_file_path}")
-with open(config_file_path, "r") as config_file:
-    config = yaml.safe_load(config_file)
-home_path = config["home_path"]
+import sys
+from pathlib import Path
+
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.path_config import get_home_path, get_repo_root
+
+home_path = str(get_home_path())
+repo_root = get_repo_root()
 
 import pandas as pd
 import numpy as np
@@ -43,9 +53,9 @@ regression_plots = False  # Set to True to display individual regression plots f
 # pressure_file_path = 'pressure_OULU.csv'
 # rate_file_path = 'rate_OULU.csv'
 
-pressure_file_path = 'f"{home_path}/DATAFLOW_v3/MASTER/STAGE_3/OULU_pressure.txt'
-rate_file_path = 'f"{home_path}/DATAFLOW_v3/MASTER/STAGE_3/OULU_uncorrected.txt'
-corr_rate_file_path = 'f"{home_path}/DATAFLOW_v3/MASTER/STAGE_3/OULU_corrected.txt'
+pressure_file_path = str(repo_root / "MASTER" / "STAGE_3" / "OULU_pressure.txt")
+rate_file_path = str(repo_root / "MASTER" / "STAGE_3" / "OULU_uncorrected.txt")
+corr_rate_file_path = str(repo_root / "MASTER" / "STAGE_3" / "OULU_corrected.txt")
 
 #%%
 

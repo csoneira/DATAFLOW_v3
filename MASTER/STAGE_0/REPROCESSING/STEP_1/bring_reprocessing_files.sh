@@ -23,6 +23,7 @@ MASTER_DIR="$SCRIPT_DIR"
 while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
   MASTER_DIR="$(dirname "${MASTER_DIR}")"
 done
+REPO_ROOT="$(dirname "${MASTER_DIR}")"
 # STATUS_HELPER="${MASTER_DIR}/common/status_csv.py"
 # STATUS_TIMESTAMP=""
 
@@ -185,8 +186,8 @@ step0_output_directory="${step0_directory}/OUTPUT_FILES"
 
 brought_csv="${metadata_directory}/hld_files_brought.csv"
 brought_csv_header="hld_name,bring_timesamp"
-processed_csv="${MASTER_DIR}/ANCILLARY/PIPELINE_OPERATIONS/UPDATE_EXECUTION_CSVS/OUTPUT_FILES/MINGO0${station}_processed_basenames.csv"
-config_file="${MASTER_DIR}/CONFIG_FILES/config_global.yaml"
+processed_csv="${REPO_ROOT}/OPERATIONS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/OUTPUT_FILES/MINGO0${station}_processed_basenames.csv"
+config_file="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
 
 # STATUS_CSV="${metadata_directory}/bring_reprocessing_files_status.csv"
 # if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
@@ -496,7 +497,7 @@ fi
 
 declare -A processed_basenames=()
 if $skip_processed_exclusion; then
-  log_info "${config_key} is true in config_global.yaml; NOT excluding processed basenames."
+  log_info "${config_key} is true in config_reprocessing.yaml; NOT excluding processed basenames."
 else
   if [[ -s "$processed_csv" ]]; then
     {

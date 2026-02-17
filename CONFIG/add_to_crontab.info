@@ -1,0 +1,317 @@
+# MINGO ANALYSIS PC CRONTAB
+
+# Edit this file to introduce tasks to be run by cron.
+# minute hour day_of_month month day_of_week command
+# Cron files sometimes require ending with a newline, and this case is.
+
+# Updated at 2026-02-17 12:05
+
+SHELL=/bin/bash
+PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
+* * * * * /bin/mkdir -p $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/BACKUP $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CONFIG/COPERNICUS $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/TELEGRAM_BOT $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/VERSION_CONTROL
+* * * * * /bin/mkdir -p $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/AUTO_CLEAR_SWAP $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/ENSURE_CRON_LOG_PATHS $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/ERASE_ALL_CRON_LOGS $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/FLUSH_FROM_UNPROCESSED $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/SEARCH_FOR_ERRORS
+* * * * * /bin/mkdir -p $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/SOLVE_STALE_LOCKS $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/UPDATE_EXECUTION_CSVS $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/RESOURCE_GATE $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/WATCHDOG_PROCESS_COUNTS $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS
+* * * * * /bin/mkdir -p $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/STEP_0 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/STEP_FINAL
+* * * * * /bin/mkdir -p $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/NEW_FILES $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_0 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/SIMULATION
+* * * * * /bin/mkdir -p $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_2 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_3 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_1 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_2
+* * * * * /bin/mkdir -p $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/FILL_FACTOR $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/METADATA/EXECUTION $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/ONLINE_FILE_COUNT $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron
+
+# Replace current crontab with the contents of ~/DATAFLOW_v3/CONFIG/add_to_crontab.info
+* * * * * /usr/bin/crontab $HOME/DATAFLOW_v3/CONFIG/add_to_crontab.info
+
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# ANCILLARY
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# Telegram bot watchdog (runs persistent_telegram_bot_check.sh)
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/TELEGRAM_BOT/cron_persistent_telegram_bot.log 2>&1
+
+# Save copy the core files
+0 5 * * * rsync -av --exclude="STATIONS" --exclude=".git" --exclude=".gitignore" --exclude="OPERATIONS_RUNTIME" $HOME/DATAFLOW_v3/ $HOME/SAFE_DATAFLOW_v3/ >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/BACKUP/rsync_safe_dataflow_v3.log 2>&1
+
+# Setup Copernicus API codes
+0 * * * * /bin/cp $HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/COPERNICUS/.cdsapirc $HOME/.cdsapirc >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CONFIG/COPERNICUS/cdsapirc_copy.log 2>&1
+
+# Save snapshot of the config file
+0 * * * * python3 -u $HOME/DATAFLOW_v3/OPERATIONS/OBSERVABILITY/VERSION_CONTROL/snapshot_config.py >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/VERSION_CONTROL/log_snapshot_config.log 2>&1
+
+# Collect Tracebacks from cron logs
+*/10 * * * * /usr/bin/env python3 $HOME/DATAFLOW_v3/OPERATIONS/OBSERVABILITY/SEARCH_FOR_ERRORS/error_finder.py >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/SEARCH_FOR_ERRORS/error_finder.log 2>&1
+
+# Ensure all cron log paths exist (directories + log files declared in add_to_crontab.info)
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/ENSURE_CRON_LOG_PATHS/ensure_cron_log_paths.sh --create-files --quiet >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/ENSURE_CRON_LOG_PATHS/ensure_cron_log_paths.log 2>&1
+
+# Clean files every hour (forced)
+# 0 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh --force >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/log_clean_dataflow.log 2>&1
+0 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh --select temps --force >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/log_temps_clean_dataflow.log 2>&1
+
+# Solve stale locks (force 15 min age and kill matching stale pipelines)
+*/5 * * * * /usr/bin/env python3 $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/SOLVE_STALE_LOCKS/solve_stale_locks.py --force-age-minutes 15 --kill-stale-processes >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.cron.log 2>&1
+
+# Watchdog: prevent process explosions by capping per-job counts
+*/5 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.cron.log 2>&1
+
+# Emergency saturation guard: if too many duplicate/pending DATAFLOW jobs pile up, stop them
+*/2 * * * * PROC_THRESHOLD=25 DUP_THRESHOLD=5 LOAD_FACTOR=2.0 GRACE_SECONDS=6 /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/stop_execution.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/stop_execution.log 2>&1
+
+# Truncate cron logs nightly at 23:00 (keep recent lines only)
+*/15 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/ERASE_ALL_CRON_LOGS/erase_cron_logs.log 2>&1
+
+# NMDB update
+# 0 2 * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_3/nmdb_retrieval.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/log_nmdb_retrieval.log 2>&1
+
+# Swap autoclear if idle, so the pipeline does not stop because of full swap event though the PC is idle
+*/2 * * * * $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/AUTO_CLEAR_SWAP/auto_clear_swap_if_idle.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/AUTO_CLEAR_SWAP/auto_clear_swap_if_idle.log 2>&1
+
+# Update station_automation_scripts, the directory with the software I made for the stations
+0 1 * * * rsync -avz --delete $HOME/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo01:/home/rpcuser/station_automation_scripts/ >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS/update_mingo01.log 2>&1
+0 2 * * * rsync -avz --delete $HOME/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo02:/home/rpcuser/station_automation_scripts/ >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS/update_mingo02.log 2>&1
+0 3 * * * rsync -avz --delete $HOME/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo03:/home/rpcuser/station_automation_scripts/ >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS/update_mingo03.log 2>&1
+0 4 * * * rsync -avz --delete $HOME/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo04:/home/rpcuser/station_automation_scripts/ >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS/update_mingo04.log 2>&1
+
+# Update the list of processed basenames
+0 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh --not-erase >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/UPDATE_EXECUTION_CSVS/update_execution_csvs.log 2>&1
+
+# Remove the UNPROCESSED files if already in the list of processed
+5 * * * * /bin/bash OPERATIONS/DATA_MAINTENANCE/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.log 2>&1
+
+# Every 30 min: move MINGO00 COMPLETED buffers back to UNPROCESSED (COMPLETED-only cleaner)
+*/30 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/move_completed_to_unprocessed_mingo00.lock /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/DATA_MAINTENANCE/COMPLETED_TO_UNPROCESSED/move_completed_to_unprocessed.sh $HOME/DATAFLOW_v3/STATIONS/MINGO00 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/move_completed_to_unprocessed_mingo00.log 2>&1
+
+# Run Stage 0 reprocessing unpacker for station 1 with limited concurrency
+# (Removed duplicate cron entry; the STEP_2 section below covers stations 1-4.)
+
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# MAIN SIMULATION PIPELINE
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# Single serialized simulation cycle.
+# Order is fixed inside the script: STEP_0 -> run_step(all, strict 10->1 closure) -> STEP_FINAL.
+* * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/run_main_simulation_cycle.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log 2>&1
+
+# Reset mesh from final outputs (hourly, serialized with main cycle).
+10 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/reset_param_mesh_from_final.py --apply --skip-delete >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/reset_param_mesh_from_final.log 2>&1
+
+# Sanitize old/invalid intermediate runs (every 15 min, serialized with main cycle).
+*/15 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py --apply --min-age-seconds 900 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/sanitize_sim_runs.log 2>&1
+
+# Ensure simulation hashes (daily, serialized with main cycle).
+25 6 * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/ensure_sim_hashes.py --apply >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/ensure_sim_hashes.log 2>&1
+
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# MAIN ANALYSIS PIPELINE
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# STAGE_0
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# SIMULATION
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# STAGE_0 - SIMULATION - COPY SIMULATED DATA -------------------------------------
+*/10 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag sim_ingest --max-mem-pct 90 --max-swap-pct 95 --max-cpu-pct 90 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_ingest_station_data.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MASTER/STAGE_0/SIMULATION/ingest_simulated_station_data.py >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/SIMULATION/ingest_simulated_station_data.log 2>&1
+
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# NEW_FILES
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# STAGE_0 - NEW_FILES - BRING CURRENT --------------------------------------------
+*/15 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 1 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/NEW_FILES/bring_data_and_config_files_1.log 2>&1
+*/15 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 2 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/NEW_FILES/bring_data_and_config_files_2.log 2>&1
+*/15 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 3 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/NEW_FILES/bring_data_and_config_files_3.log 2>&1
+*/15 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/NEW_FILES/bring_data_and_config_files.sh 4 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/NEW_FILES/bring_data_and_config_files_4.log 2>&1
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# REPROCESSING
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------------
+# STEP_0
+# --------------------------------------------------------------------------------
+
+# STAGE_0 - REPROCESSING - STEP 0 - UPDATE METADATA (NO-OP AWARE) ----------------------------
+*/5 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh 1 --refresh-metadata >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_0/log_prepare_reprocessing_metadata_1.log 2>&1
+*/5 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh 2 --refresh-metadata >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_0/log_prepare_reprocessing_metadata_2.log 2>&1
+*/5 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh 3 --refresh-metadata >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_0/log_prepare_reprocessing_metadata_3.log 2>&1
+*/5 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh 4 --refresh-metadata >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_0/log_prepare_reprocessing_metadata_4.log 2>&1
+
+# --------------------------------------------------------------------------------
+# STEP_1
+# --------------------------------------------------------------------------------
+
+# STAGE_0 - REPROCESSING - STEP 1 - BRING RANDOM (-r for random, -n for newest) ---------------------------------------
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_bring_s1 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/bring_reprocessing_files_s1.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 1 -r >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_1.log 2>&1
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_bring_s2 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/bring_reprocessing_files_s2.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 2 -r >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_2.log 2>&1
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_bring_s3 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/bring_reprocessing_files_s3.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 3 -r >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_3.log 2>&1
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_bring_s4 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/bring_reprocessing_files_s4.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh 4 -r >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_1/log_bring_reprocessing_files_4.log 2>&1
+
+# --------------------------------------------------------------------------------
+# STEP_2
+# --------------------------------------------------------------------------------
+
+# STAGE_0 - REPROCESSING - STEP 2 - REPROCESSING - UNPACK (-r for random, -n for newest) ---------------------------------------------
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_unpack_s1 -- /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 1 -p 3 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_1.log 2>&1
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_unpack_s2 -- /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 2 -p 3 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_2.log 2>&1
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_unpack_s3 -- /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 3 -p 3 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_3.log 2>&1
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step0_reproc_unpack_s4 -- /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh 4 -p 3 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/REPROCESSING/STEP_2/log_unpack_reprocessing_files_4.log 2>&1
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# STAGE_1
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# COPERNICUS
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# STAGE_1 - COPERNICUS -------------------------------------------------------
+* 1 * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag copernicus_s1 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/copernicus_bring_s1.lock /usr/bin/env python3 -u $HOME/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 1 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_1.log 2>&1
+* 2 * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag copernicus_s2 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/copernicus_bring_s2.lock /usr/bin/env python3 -u $HOME/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 2 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_2.log 2>&1
+* 3 * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag copernicus_s3 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/copernicus_bring_s3.lock /usr/bin/env python3 -u $HOME/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 3 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_3.log 2>&1
+* 4 * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag copernicus_s4 --max-mem-pct 90 --max-swap-pct 80 --max-cpu-pct 90 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/copernicus_bring_s4.lock /usr/bin/env python3 -u $HOME/DATAFLOW_v3/MASTER/STAGE_1/COPERNICUS/STEP_1/copernicus_bring.py 4 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/COPERNICUS/copernicus_bring_4.log 2>&1
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# EVENT_DATA
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------------
+# STEP_1
+# --------------------------------------------------------------------------------
+
+# STAGE_1 - EVENT_DATA - RAW_TO_CORR -----------------------------------------
+* * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/guide_raw_to_corrected_s0.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 0 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_0.log 2>&1
+* * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/guide_raw_to_corrected_s1.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 1 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_1.log 2>&1
+* * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/guide_raw_to_corrected_s2.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 2 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_2.log 2>&1
+* * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/guide_raw_to_corrected_s3.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 3 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_3.log 2>&1
+* * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/guide_raw_to_corrected_s4.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh -s 4 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected_4.log 2>&1
+
+# --------------------------------------------------------------------------------
+# STEP_2
+# --------------------------------------------------------------------------------
+
+# STAGE_1 - EVENT_DATA - ACCUMULATOR -----------------------------------
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step1_step2_accumulate -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/guide_corrected_to_accumulated_all.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh --no-loop >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated_all.log 2>&1
+
+# --------------------------------------------------------------------------------
+# STEP_3
+# --------------------------------------------------------------------------------
+
+# STAGE_1 - EVENT_DATA - STEP_3 DISTRIBUTOR -----------------------------------
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step1_step3_joined -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/guide_accumulated_to_joined_all.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh --no-loop >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined_all.log 2>&1
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# LAB_LOGS
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------------
+# STEP_1
+# --------------------------------------------------------------------------------
+
+# STAGE_1 - LAB_LOGS - STEP_1 - BRING & CLEAN -----------------------------------------
+10 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean.sh 1 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean_1.log 2>&1
+20 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean.sh 2 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean_2.log 2>&1
+30 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean.sh 3 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean_3.log 2>&1
+40 * * * * /bin/bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean.sh 4 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean_4.log 2>&1
+
+# --------------------------------------------------------------------------------
+# STEP_2
+# --------------------------------------------------------------------------------
+
+# STAGE_1 - LAB_LOGS - STEP_2 - MERGE -------------------------------------------------
+20 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge.py 1 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge_1.log 2>&1
+30 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge.py 2 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge_2.log 2>&1
+40 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge.py 3 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge_3.log 2>&1
+50 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge.py 4 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge_4.log 2>&1
+
+# TO BE CONTINUED...
+
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# PLOTTERS
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# FILL FACTOR TRACKER
+*/20 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.py >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/FILL_FACTOR/fill_factor_realtime_plotter.log 2>&1
+
+# EXECUTION METADATA PLOTTER
+*/20 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 --zoom >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/METADATA/EXECUTION/pipeline_data_status_plotter.log 2>&1
+*/30 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --include-step2 -r --include-hv --include-remote-db >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/METADATA/EXECUTION/pipeline_data_status_plotter.log 2>&1
+
+# FILE COUNT TIME SERIES
+0 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/ONLINE_FILE_COUNT/online_file_count_plotter.py >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/ONLINE_FILE_COUNT/online_file_count_plotter.log 2>&1
+
+# FILES BROUGHT VIEW (EXECUTION METADATA)
+0 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --real-time-in-y >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/METADATA/EXECUTION/files_brought_plotter_execution.log 2>&1
+*/30 * * * * python3 -u $HOME/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/EXECUTION/execution_metadata_plotter.py --include-stage0 --real-time-in-y -z >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/METADATA/EXECUTION/files_brought_plotter_real_time.log 2>&1
+
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# OLD
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+
+# # ----------------------------------------
+# # Update the Drive with the processed data
+# # ----------------------------------------
+# 15 * * * * rclone sync $HOME/DATAFLOW_v3/STATIONS/MINGO01/STAGE_2/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO01 --progress
+# 20 * * * * rclone sync $HOME/DATAFLOW_v3/STATIONS/MINGO02/STAGE_2/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO02 --progress
+# 25 * * * * rclone sync $HOME/DATAFLOW_v3/STATIONS/MINGO03/STAGE_2/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO03 --progress
+# 30 * * * * rclone sync $HOME/DATAFLOW_v3/STATIONS/MINGO04/STAGE_2/large_corrected_table.csv gdrive:NETWORK_DATA/MINGO04 --progress
+
+# # -------------------------------------------------------
+# # ANCILLARY. Update the Drive with the raw Monterrey data
+# # -------------------------------------------------------
+# 45 * * * * rclone sync $HOME/DATAFLOW_v3/STATIONS/MINGO04/STAGE_1/EVENT_DATA/RAW/ gdrive:MONTERREY_RAW_DATA --progress

@@ -16,9 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 STATIONS_ROOT = REPO_ROOT / "STATIONS"
 PROCESSED_ROOT = (
     REPO_ROOT
-    / "MASTER"
-    / "ANCILLARY"
-    / "PIPELINE_OPERATIONS"
+    / "OPERATIONS"
+    / "DATA_MAINTENANCE"
     / "UPDATE_EXECUTION_CSVS"
     / "OUTPUT_FILES"
 )

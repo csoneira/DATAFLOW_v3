@@ -101,8 +101,8 @@ HELP_TEXT = (
     "  /execution_report_files_brought - Files brought (execution-time x-axis).\n"
     "  /execution_report_files_brought_zoomed - Files brought (zoomed real-time window).\n\n"
     "Maintenance Tools:\n"
-    "  /clean_dataflow_status - Run clean_dataflow.sh to show disk usage.\n"
-    "  /clean_dataflow_force - Run clean_dataflow.sh --force for cleanup.\n"
+    "  /clean_dataflow_status - Run clean_dataflow.sh --compact to show disk usage.\n"
+    "  /clean_dataflow_force - Run clean_dataflow.sh --force --compact (temps, plots, completed; never metadata).\n"
     "  /restart_bot - Restart this Telegram bot.\n"
     "==========================================="
 )
@@ -165,7 +165,7 @@ def run_cleaner(force: bool = False) -> str:
     if not CLEANER_SCRIPT.exists():
         raise RuntimeError(f"Cleaner script not found: {CLEANER_SCRIPT}")
 
-    command = [str(CLEANER_SCRIPT)]
+    command = [str(CLEANER_SCRIPT), "--compact"]
     if force:
         command.append("--force")
 
@@ -192,7 +192,7 @@ def run_cleaner(force: bool = False) -> str:
         )
     ).strip() or "<no output>"
 
-    mode = "--force" if force else "(disk usage check)"
+    mode = "--force --compact" if force else "--compact (disk usage check)"
     message = (
         f"clean_dataflow.sh {mode} finished with exit code {result.returncode}.\n"
         f"{output}"

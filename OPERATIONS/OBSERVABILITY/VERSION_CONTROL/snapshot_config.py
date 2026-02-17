@@ -3,41 +3,111 @@
 
 from __future__ import annotations
 
+import csv
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Sequence, Tuple
 
-import os
-
-import json
 import yaml
-import csv
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MASTER.common.execution_logger import start_timer
+from MASTER.common.path_config import get_master_config_root, get_repo_root
 
 start_timer(__file__)
 
-# Dynamically get the home directory using the environment variable
-home_directory = Path(os.environ.get("HOME", os.path.expanduser("~")))
+REPO_ROOT = get_repo_root()
+CONFIG_ROOT = get_master_config_root()
+SNAPSHOT_ROOT = REPO_ROOT / "OPERATIONS_RUNTIME" / "CONFIG_FILES"
 
-# Define paths relative to the home directory
-# /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml
-CONFIG_PATH = home_directory / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "config_global.yaml"
-SNAPSHOT_DIR = home_directory / "DATAFLOW_v3" / "OPERATIONS_RUNTIME" / "CONFIG_FILES" / "GLOBAL"
+YAML_CONFIG_TARGETS: Sequence[Tuple[Path, Path, str, str]] = (
+    (
+        REPO_ROOT / "CONFIG" / "config_paths.yaml",
+        SNAPSHOT_ROOT / "GLOBAL_PATHS",
+        "config_paths.json",
+        "global paths config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_0" / "NEW_FILES" / "config_new_files.yaml",
+        SNAPSHOT_ROOT / "STAGE_0_NEW_FILES",
+        "config_new_files.json",
+        "stage 0 new files config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_0" / "REPROCESSING" / "config_reprocessing.yaml",
+        SNAPSHOT_ROOT / "STAGE_0_REPROCESSING",
+        "config_reprocessing.json",
+        "stage 0 reprocessing config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_1" / "COPERNICUS" / "config_copernicus.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_COPERNICUS",
+        "config_copernicus.json",
+        "stage 1 copernicus config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "config_lab_logs.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_LAB_LOGS",
+        "config_lab_logs.json",
+        "stage 1 lab logs config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "config_step_1.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_EVENT_DATA_STEP_1",
+        "config_step_1.json",
+        "stage 1 step 1 runtime config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_task_1.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_EVENT_DATA_STEP_1_TASK_1",
+        "config_task_1.json",
+        "stage 1 step 1 task 1 config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_2" / "config_task_2.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_EVENT_DATA_STEP_1_TASK_2",
+        "config_task_2.json",
+        "stage 1 step 1 task 2 config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_3" / "config_task_3.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_EVENT_DATA_STEP_1_TASK_3",
+        "config_task_3.json",
+        "stage 1 step 1 task 3 config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_4" / "config_task_4.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_EVENT_DATA_STEP_1_TASK_4",
+        "config_task_4.json",
+        "stage 1 step 1 task 4 config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_5" / "config_task_5.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_EVENT_DATA_STEP_1_TASK_5",
+        "config_task_5.json",
+        "stage 1 step 1 task 5 config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_2" / "config_step_2.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_EVENT_DATA_STEP_2",
+        "config_step_2.json",
+        "stage 1 step 2 config",
+    ),
+)
 
-CONFIG_PATH_PARAM = home_directory / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "config_parameters.csv"
-SNAPSHOT_DIR_PARAM = home_directory / "DATAFLOW_v3" / "OPERATIONS_RUNTIME" / "CONFIG_FILES" / "PARAMETERS"
-
-# Test the paths
-print(f"Config Path: {CONFIG_PATH}")
-print(f"Snapshot Directory: {SNAPSHOT_DIR}")
-print(f"Parameters Config Path: {CONFIG_PATH_PARAM}")
-print(f"Parameters Snapshot Directory: {SNAPSHOT_DIR_PARAM}")
+CSV_CONFIG_TARGETS: Sequence[Tuple[Path, Path, str, str]] = (
+    (
+        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "config_parameters.csv",
+        SNAPSHOT_ROOT / "PARAMETERS",
+        "parameters.json",
+        "parameter config",
+    ),
+)
 
 
 def extract_json_payload(snapshot_path: Path) -> str:
@@ -64,8 +134,6 @@ def load_config_as_json(config_path: Path) -> str:
     except FileNotFoundError as exc:
         raise SystemExit(f"Config file not found: {config_path}") from exc
 
-    # YAML can deserialize certain scalars (e.g., dates) into native Python
-    # objects, so ensure everything is serializable before saving snapshots.
     return json.dumps(config_data, indent=2, sort_keys=True, default=str)
 
 
@@ -84,7 +152,7 @@ def load_csv_as_json(config_path: Path) -> str:
 def snapshot_if_changed(
     config_path: Path,
     snapshot_dir: Path,
-    payload_loader,
+    payload_loader: Callable[[Path], str],
     name_suffix: str,
     label: str,
 ) -> bool:
@@ -107,21 +175,23 @@ def snapshot_if_changed(
 
 
 def main() -> int:
-    snapshot_if_changed(
-        CONFIG_PATH,
-        SNAPSHOT_DIR,
-        load_config_as_json,
-        "config.json",
-        "config",
-    )
+    for config_path, snapshot_dir, suffix, label in YAML_CONFIG_TARGETS:
+        snapshot_if_changed(
+            config_path,
+            snapshot_dir,
+            load_config_as_json,
+            suffix,
+            label,
+        )
 
-    snapshot_if_changed(
-        CONFIG_PATH_PARAM,
-        SNAPSHOT_DIR_PARAM,
-        load_csv_as_json,
-        "parameters.json",
-        "parameter config",
-    )
+    for config_path, snapshot_dir, suffix, label in CSV_CONFIG_TARGETS:
+        snapshot_if_changed(
+            config_path,
+            snapshot_dir,
+            load_csv_as_json,
+            suffix,
+            label,
+        )
 
     return 0
 

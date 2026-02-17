@@ -13,22 +13,25 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib.backends.backend_pdf import PdfPages
 
+DT_ROOT = Path(__file__).resolve().parents[2]
+PLOTTER_DIR = Path(__file__).resolve().parent
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot simulation parameter summary to PDF")
     parser.add_argument(
         "--input",
-        default="/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
+        default=str(DT_ROOT / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"),
         help="Path to the proposed/base parameter mesh CSV (e.g. STEP_0_TO_1/param_mesh.csv).",
     )
     parser.add_argument(
         "--output",
-        default="/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/PLOTTERS/MESH/param_mesh_summary.pdf",
+        default=str(PLOTTER_DIR / "param_mesh_summary.pdf"),
         help="Output PDF path",
     )
     parser.add_argument(
         "--completed",
-        default="/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv",
+        default=str(DT_ROOT / "SIMULATED_DATA" / "step_final_simulation_params.csv"),
         help="Path to the completed simulation params CSV (step_final_simulation_params.csv).",
     )
     parser.add_argument(

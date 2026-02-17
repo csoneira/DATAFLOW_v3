@@ -28,6 +28,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.path_config import (
+    get_master_config_root,
+    resolve_home_path_from_config,
+)
 from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 
@@ -154,7 +158,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_config() -> dict:
-    config_file_path = Path.home() / "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
+    config_file_path = (
+        get_master_config_root()
+        / "STAGE_1"
+        / "LAB_LOGS"
+        / "config_lab_logs.yaml"
+    )
     with config_file_path.open("r", encoding="utf-8") as config_file:
         return yaml.safe_load(config_file)
 
@@ -351,7 +360,7 @@ def main() -> int:
     set_station(station)
     start_timer(__file__)
 
-    base_path = Path(config["home_path"]).expanduser()
+    base_path = resolve_home_path_from_config(config)
     station_dir = base_path / "DATAFLOW_v3" / "STATIONS" / f"MINGO0{station}"
     lab_logs_root = station_dir / "STAGE_1" / "LAB_LOGS"
 

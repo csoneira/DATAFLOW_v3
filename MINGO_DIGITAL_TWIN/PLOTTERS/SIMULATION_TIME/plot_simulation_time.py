@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 
-BASE_DIR = Path("/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/PLOTTERS/SIMULATION_TIME")
+BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT = BASE_DIR / "simulation_execution_times.csv"
 DEFAULT_OUTPUT = BASE_DIR / "simulation_execution_time_hist.png"
 

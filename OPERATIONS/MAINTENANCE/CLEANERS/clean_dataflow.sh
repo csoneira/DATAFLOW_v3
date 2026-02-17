@@ -4,6 +4,8 @@ set -euo pipefail
 LC_ALL=C
 shopt -s dotglob nullglob
 
+COMPACT=false
+
 log_ts() {
   date '+%Y-%m-%d %H:%M:%S'
 }
@@ -12,29 +14,43 @@ log_warn() {
   printf '[%s] [CLEAN_DATAFLOW] [WARN] %s\n' "$(log_ts)" "$*" >&2
 }
 
+log_info() {
+  printf '%s\n' "$*"
+}
+
+log_detail() {
+  if [[ "$COMPACT" != true ]]; then
+    printf '%s\n' "$*"
+  fi
+}
+
 usage() {
   cat <<'EOF'
-clean_completed.sh
+clean_dataflow.sh
 Unified cleaner for DATAFLOW_v3 artefacts (COMPLETED_DIRECTORY exports, plot bundles, and Stage-0 buffers).
 
 Usage:
-  clean_completed.sh [--force|-f] [--threshold|-t <percent>] [--select|-s <list>]
+  clean_dataflow.sh [--force|-f] [--threshold|-t <percent>] [--select|-s <list>] [--compact|-c]
 
 Options:
   -h, --help             Show this help message and exit.
   -f, --force            Skip the disk usage threshold check.
+                         When --select is omitted, defaults to: temps,plots,completed.
   -t, --threshold <pct>  Override the disk usage threshold (0-100, default 50).
   -s, --select <list>    Comma-separated list of cleanups to run (temps,plots,completed,cronlogs).
                          May be repeated. Defaults to all when omitted.
+  -c, --compact          Compact output for chat/notification consumers.
 
 Examples:
-  clean_completed.sh
-  clean_completed.sh --threshold 65 --select plots,completed
-  clean_completed.sh --force -s temps
+  clean_dataflow.sh
+  clean_dataflow.sh --threshold 65 --select plots,completed
+  clean_dataflow.sh --force -s temps
+  clean_dataflow.sh --force --compact
 EOF
 }
 
 DEFAULT_SELECTION=(temps plots completed cronlogs)
+FORCE_DEFAULT_SELECTION=(temps plots completed)
 declare -A VALID_TYPES=([temps]=1 [plots]=1 [completed]=1 [cronlogs]=1)
 
 STATIONS_BASE="$HOME/DATAFLOW_v3/STATIONS"
@@ -113,11 +129,17 @@ label_for_type() {
   esac
 }
 
+is_metadata_path() {
+  local path="${1:-}"
+  local upper="${path^^}"
+  [[ "$upper" == *"/METADATA/"* || "$upper" == *"/METADATA" ]]
+}
+
 clean_completed() {
   local type="completed"
   local -a dirs=()
   if [[ ! -d "$STATIONS_BASE" ]]; then
-    echo "Skipping completed cleanup: $STATIONS_BASE not found."
+    log_info "Skipping completed cleanup: $STATIONS_BASE not found."
     TYPE_BEFORE["$type"]=0
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
@@ -151,7 +173,7 @@ clean_completed() {
   done
 
   if (( ${#dirs[@]} == 0 )); then
-    echo "No completed or error directories found."
+    log_info "No completed or error directories found."
     TYPE_BEFORE["$type"]=0
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
@@ -163,18 +185,22 @@ clean_completed() {
   local total_after=0
 
   for dir in "${dirs[@]}"; do
+    if is_metadata_path "$dir"; then
+      log_warn "Skipping metadata path during completed cleanup: $dir"
+      continue
+    fi
     local before after delta
     before=$(du -sb "$dir" | awk '{print $1}')
     total_before=$((total_before + before))
 
-    echo "--> Cleaning $dir"
+    log_detail "--> Cleaning $dir"
     chmod -R u+w "$dir" >/dev/null 2>&1 || true
     find "$dir" -mindepth 1 -delete
 
     after=$(du -sb "$dir" | awk '{print $1}')
     total_after=$((total_after + after))
     delta=$((before - after))
-    echo "   Freed $(format_bytes "$delta")"
+    log_detail "   Freed $(format_bytes "$delta")"
   done
 
   local freed=$((total_before - total_after))
@@ -183,10 +209,10 @@ clean_completed() {
   TYPE_FREED["$type"]=$freed
   TYPE_COUNTS["$type"]=${#dirs[@]}
 
-  echo "Completed/Error directories cleaned: ${#dirs[@]}"
-  echo "   Size before: $(format_bytes "$total_before")"
-  echo "   Size after:  $(format_bytes "$total_after")"
-  echo "   Freed:       $(format_bytes "$freed")"
+  log_info "Completed/Error directories cleaned: ${#dirs[@]}"
+  log_info "   Size before: $(format_bytes "$total_before")"
+  log_info "   Size after:  $(format_bytes "$total_after")"
+  log_info "   Freed:       $(format_bytes "$freed")"
 }
 
 clean_cronlogs() {
@@ -194,7 +220,7 @@ clean_cronlogs() {
   local dir="$CRON_LOG_DIR"
 
   if [[ ! -d "$dir" ]]; then
-    echo "Cron logs directory not found: $dir"
+    log_info "Cron logs directory not found: $dir"
     TYPE_BEFORE["$type"]=0
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
@@ -207,7 +233,7 @@ clean_cronlogs() {
   count=0
   failed=0
 
-  echo "--> Truncating cron log files under $dir (keeping paths/inodes)"
+  log_detail "--> Truncating cron log files under $dir (keeping paths/inodes)"
   chmod -R u+w "$dir" >/dev/null 2>&1 || true
   while IFS= read -r -d '' file; do
     if : >"$file" 2>/dev/null; then
@@ -225,20 +251,20 @@ clean_cronlogs() {
   TYPE_FREED["$type"]=$freed
   TYPE_COUNTS["$type"]=${count:-0}
 
-  echo "Cron logs truncated: ${count:-0} file(s)"
+  log_info "Cron logs truncated: ${count:-0} file(s)"
   if (( failed > 0 )); then
-    echo "   Failed to truncate: ${failed} file(s)"
+    log_info "   Failed to truncate: ${failed} file(s)"
   fi
-  echo "   Size before: $(format_bytes "$before")"
-  echo "   Size after:  $(format_bytes "$after")"
-  echo "   Freed:       $(format_bytes "$freed")"
+  log_info "   Size before: $(format_bytes "$before")"
+  log_info "   Size after:  $(format_bytes "$after")"
+  log_info "   Freed:       $(format_bytes "$freed")"
 }
 
 clean_plots() {
   local type="plots"
   local -a dirs=()
   if [[ ! -d "$STATIONS_BASE" ]]; then
-    echo "Skipping plots cleanup: $STATIONS_BASE not found."
+    log_info "Skipping plots cleanup: $STATIONS_BASE not found."
     TYPE_BEFORE["$type"]=0
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
@@ -251,7 +277,7 @@ clean_plots() {
   done < <(find "$STATIONS_BASE" -maxdepth 8 -type d -name 'PLOTS' -print0 2>/dev/null)
 
   if (( ${#dirs[@]} == 0 )); then
-    echo "No PLOTS directories found."
+    log_info "No PLOTS directories found."
     TYPE_BEFORE["$type"]=0
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
@@ -263,20 +289,24 @@ clean_plots() {
   local total_after=0
 
   for dir in "${dirs[@]}"; do
+    if is_metadata_path "$dir"; then
+      log_warn "Skipping metadata path during plots cleanup: $dir"
+      continue
+    fi
     local before after delta
     before=$(du -sb "$dir" | awk '{print $1}')
     total_before=$((total_before + before))
 
-    echo "--> Cleaning $dir"
+    log_detail "--> Cleaning $dir"
     chmod -R u+w "$dir" >/dev/null 2>&1 || true
     find "$dir" -mindepth 1 -delete
 
     after=$(du -sb "$dir" | awk '{print $1}')
     total_after=$((total_after + after))
     delta=$((before - after))
-    echo "   Size before: $(format_bytes "$before")"
-    echo "   Size after:  $(format_bytes "$after")"
-    echo "   Freed:       $(format_bytes "$delta")"
+    log_detail "   Size before: $(format_bytes "$before")"
+    log_detail "   Size after:  $(format_bytes "$after")"
+    log_detail "   Freed:       $(format_bytes "$delta")"
   done
 
   local freed=$((total_before - total_after))
@@ -285,10 +315,10 @@ clean_plots() {
   TYPE_FREED["$type"]=$freed
   TYPE_COUNTS["$type"]=${#dirs[@]}
 
-  echo "PLOTS directories cleaned: ${#dirs[@]}"
-  echo "   Total before: $(format_bytes "$total_before")"
-  echo "   Total after:  $(format_bytes "$total_after")"
-  echo "   Total freed:  $(format_bytes "$freed")"
+  log_info "PLOTS directories cleaned: ${#dirs[@]}"
+  log_info "   Total before: $(format_bytes "$total_before")"
+  log_info "   Total after:  $(format_bytes "$total_after")"
+  log_info "   Total freed:  $(format_bytes "$freed")"
 }
 
 clean_temps() {
@@ -333,7 +363,7 @@ clean_temps() {
   done
 
   if (( ${#patterns[@]} == 0 )); then
-    echo "No Stage_0 data buffers found under DATAFLOW_v3 or SAFE_DATAFLOW_v3."
+    log_info "No Stage_0 data buffers found under DATAFLOW_v3 or SAFE_DATAFLOW_v3."
     TYPE_BEFORE["$type"]=0
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
@@ -357,11 +387,15 @@ clean_temps() {
       if [[ ! -e "$match" ]]; then
         continue
       fi
+      if is_metadata_path "$match"; then
+        log_warn "Skipping metadata path during temp cleanup: $match"
+        continue
+      fi
 
       local before after delta
       before=$(du -sb "$match" | awk '{print $1}')
       total_before=$((total_before + before))
-      echo "--> Removing $match"
+      log_detail "--> Removing $match"
       chmod -R u+w "$match" >/dev/null 2>&1 || true
       if ! rm -rf -- "$match"; then
         log_warn "unable to remove $match (check permissions)"
@@ -377,9 +411,9 @@ clean_temps() {
       fi
       total_after=$((total_after + after))
       delta=$((before - after))
-      echo "   Freed $(format_bytes "$delta")"
+      log_detail "   Freed $(format_bytes "$delta")"
       if [[ -e "$match" ]]; then
-        echo "   Item still present; manual follow-up may be required." >&2
+        log_warn "Item still present after cleanup: $match"
       fi
     done < <(compgen -G "$pattern" || true)
   done
@@ -391,12 +425,12 @@ clean_temps() {
   TYPE_COUNTS["$type"]=$removed
 
   if (( removed == 0 )); then
-    echo "No temporary files found to delete."
+    log_info "No temporary files found to delete."
   else
-    echo "Temporary artefacts removed: $removed item(s)"
-    echo "   Total before: $(format_bytes "$total_before")"
-    echo "   Total after:  $(format_bytes "$total_after")"
-    echo "   Total freed:  $(format_bytes "$freed")"
+    log_info "Temporary artefacts removed: $removed item(s)"
+    log_info "   Total before: $(format_bytes "$total_before")"
+    log_info "   Total after:  $(format_bytes "$total_after")"
+    log_info "   Total freed:  $(format_bytes "$freed")"
   fi
 }
 
@@ -412,6 +446,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -f|--force)
       FORCE=true
+      shift
+      ;;
+    -c|--compact)
+      COMPACT=true
       shift
       ;;
     -t|--threshold)
@@ -442,10 +480,17 @@ declare -a SELECTED_TYPES=()
 declare -A SEEN_TYPES=()
 
 if ((${#SELECTION_ARGS[@]} == 0)); then
-  for type in "${DEFAULT_SELECTION[@]}"; do
-    SELECTED_TYPES+=("$type")
-    SEEN_TYPES["$type"]=1
-  done
+  if [[ "$FORCE" == true ]]; then
+    for type in "${FORCE_DEFAULT_SELECTION[@]}"; do
+      SELECTED_TYPES+=("$type")
+      SEEN_TYPES["$type"]=1
+    done
+  else
+    for type in "${DEFAULT_SELECTION[@]}"; do
+      SELECTED_TYPES+=("$type")
+      SEEN_TYPES["$type"]=1
+    done
+  fi
 else
   for entry in "${SELECTION_ARGS[@]}"; do
     IFS=',' read -ra tokens <<<"$entry"
@@ -480,43 +525,46 @@ else
   fi
 fi
 
-echo "Selected cleanups: $(join_by ', ' "${SELECTED_TYPES[@]}")"
-echo "Disk usage before cleaning: $(disk_usage_summary)"
+log_info "Selected cleanups: $(join_by ', ' "${SELECTED_TYPES[@]}")"
+log_info "Disk usage before cleaning: $(disk_usage_summary)"
 
 if [[ "$FORCE" == true ]]; then
-  echo "Force flag enabled; skipping disk usage threshold check."
+  if ((${#SELECTION_ARGS[@]} == 0)); then
+    log_info "Force default selection active: $(join_by ', ' "${FORCE_DEFAULT_SELECTION[@]}")"
+  fi
+  log_info "Force flag enabled; skipping disk usage threshold check."
 else
   usage_percent=$(disk_usage_percent)
   if [[ -z "$usage_percent" ]]; then
     echo "Unable to determine disk usage for /home." >&2
     exit 1
   fi
-  echo "Threshold: ${THRESHOLD}%"
+  log_info "Threshold: ${THRESHOLD}%"
   should_clean=$(awk -v usage="$usage_percent" -v threshold="$THRESHOLD" 'BEGIN{usage+=0; threshold+=0; if (usage >= threshold) print 1; else print 0}')
   if [[ "$should_clean" -eq 0 ]]; then
-    echo "Disk usage ${usage_percent}% is below the threshold (${THRESHOLD}%). Use --force to override."
+    log_info "Disk usage ${usage_percent}% is below the threshold (${THRESHOLD}%). Use --force to override."
     exit 0
   fi
-  echo "Disk usage ${usage_percent}% exceeds threshold ${THRESHOLD}%. Proceeding with cleanup."
+  log_info "Disk usage ${usage_percent}% exceeds threshold ${THRESHOLD}%. Proceeding with cleanup."
 fi
 
 for type in "${SELECTED_TYPES[@]}"; do
-  echo
+  log_info ""
   case "$type" in
     temps)
-      echo "=== Cleaning Stage-0 temporary buffers ==="
+      log_info "=== Cleaning Stage-0 temporary buffers ==="
       clean_temps
       ;;
     plots)
-      echo "=== Cleaning plot exports ==="
+      log_info "=== Cleaning plot exports ==="
       clean_plots
       ;;
     completed)
-      echo "=== Cleaning COMPLETED_DIRECTORY exports ==="
+      log_info "=== Cleaning COMPLETED_DIRECTORY exports ==="
       clean_completed
       ;;
     cronlogs)
-      echo "=== Cleaning cron execution logs ==="
+      log_info "=== Cleaning cron execution logs ==="
       clean_cronlogs
       ;;
   esac
@@ -534,15 +582,15 @@ done
 
 overall_freed=$((overall_before - overall_after))
 
-echo
-echo "Summary:"
+log_info ""
+log_info "Summary:"
 for type in "${SELECTED_TYPES[@]}"; do
   label=$(label_for_type "$type")
   freed=${TYPE_FREED["$type"]:-0}
   count=${TYPE_COUNTS["$type"]:-0}
-  echo "  - ${label}: $(format_bytes "$freed") freed across ${count} item(s)"
+  log_info "  - ${label}: $(format_bytes "$freed") freed across ${count} item(s)"
 done
-echo "  Total reclaimed: $(format_bytes "$overall_freed")"
+log_info "  Total reclaimed: $(format_bytes "$overall_freed")"
 
-echo
-echo "Disk usage after cleaning: $(disk_usage_summary)"
+log_info ""
+log_info "Disk usage after cleaning: $(disk_usage_summary)"

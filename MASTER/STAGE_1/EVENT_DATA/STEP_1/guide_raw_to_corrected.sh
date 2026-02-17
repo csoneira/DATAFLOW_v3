@@ -75,7 +75,7 @@ order (e.g., stations 1,2 and tasks 3,4,5 run as: 1-3, 2-3, 1-4, 2-4, 1-5, 2-5),
 looping continuously. If another guide_raw_to_corrected.sh is already running
 for a station, that station is skipped for this invocation.
 
-This script also re-reads config_global.yaml on every outer loop iteration to
+This script also re-reads config_step_1.yaml on every outer loop iteration to
 optionally enable/disable station-task pairs via `event_data_step1_run_matrix`.
 EOF
 }
@@ -120,11 +120,6 @@ if [[ "$task_verbose" == true ]]; then
   TASK_VERBOSE_ARGS+=(--verbose)
 fi
 
-# # If the time is 00 in minutes, run pgrep -f 'bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh' | xargs -r kill
-# if [[ "$(date +%M)" == "00" ]]; then
-#   echo "Killing old instances of guide_raw_to_corrected.sh"
-#   pgrep -f 'bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh' | xargs -r kill
-# fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_DIR="$SCRIPT_DIR"
@@ -153,9 +148,9 @@ TASK_LABELS=(
 
 TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
 TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step1_station_task_queue.txt"
-config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
+config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_step_1.yaml"
 
-# Runtime tuning (overridden by config_global.yaml if present)
+# Runtime tuning (overridden by config_step_1.yaml if present)
 STEP1_CONFIG_REFRESH_S=${STEP1_CONFIG_REFRESH_S:-30}
 STEP1_IDLE_SLEEP_S=${STEP1_IDLE_SLEEP_S:-60}
 STEP1_RESOURCE_BACKOFF_S=${STEP1_RESOURCE_BACKOFF_S:-15}
@@ -694,7 +689,7 @@ log_info "Enabled station-task pairs: ${execution_pairs[*]}"
 
 # dat_files_directory="/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
 
-# Resource gate defaults (overridden by config_global.yaml if present)
+# Resource gate defaults (overridden by config_step_1.yaml if present)
 mem_limit_pct=90
 swap_limit_pct=70
 swap_limit_kb=$((4 * 1024 * 1024)) # 4 GB

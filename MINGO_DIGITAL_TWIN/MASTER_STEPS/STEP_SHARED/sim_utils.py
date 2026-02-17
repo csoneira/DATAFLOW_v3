@@ -35,12 +35,20 @@ Y_WIDTHS = [np.array([63, 63, 63, 98]), np.array([98, 63, 63, 63])]
 
 
 def load_global_home_path() -> str:
-    """Load home_path from config_global.yaml used across DATAFLOW_v3."""
-    user_home = Path.home()
-    config_file = user_home / "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
-    with config_file.open("r") as handle:
-        config = yaml.safe_load(handle)
-    return config["home_path"]
+    """Load home_path from the repository-wide CONFIG/config_paths.yaml."""
+    config_file = (
+        Path(__file__).resolve().parents[3]
+        / "CONFIG"
+        / "config_paths.yaml"
+    )
+    if not config_file.exists():
+        return str(Path.home())
+    with config_file.open("r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle) or {}
+    home_path = config.get("home_path")
+    if not home_path:
+        return str(Path.home())
+    return str(Path(home_path).expanduser())
 
 
 def load_step_configs(

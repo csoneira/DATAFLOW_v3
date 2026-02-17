@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_DIR="${BASE_DIR:-$HOME/DATAFLOW_v3}"
-CONFIG_FILE="${CONFIG_FILE:-$BASE_DIR/MASTER/CONFIG_FILES/config_global.yaml}"
+CONFIG_FILE="${CONFIG_FILE:-$BASE_DIR/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_step_1.yaml}"
 LOG_DIR="${BASE_DIR}/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/RESOURCE_GATE"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/resource_gate.log}"
 
@@ -22,7 +22,7 @@ Usage:
                    [--max-swap-pct N] [--max-swap-kb N] [--max-cpu-pct N] -- <command...>
 
 If resource limits are exceeded, the command is skipped (exit 0) and a log entry is written.
-Defaults load from config_global.yaml -> event_data_resource_limits.
+Defaults load from config_step_1.yaml -> event_data_resource_limits.
 EOF
 }
 

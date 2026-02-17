@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$HOME/DATAFLOW_v3}"
-CRONTAB_FILE="${CRONTAB_FILE:-$REPO_ROOT/add_to_crontab.info}"
+CRONTAB_FILE="${CRONTAB_FILE:-$REPO_ROOT/CONFIG/add_to_crontab.info}"
 CREATE_FILES=false
 QUIET=false
 
@@ -82,4 +82,3 @@ done < <(
 if ! $QUIET; then
   echo "ensure_cron_log_paths: created_dirs=$created_dirs created_files=$created_files"
 fi
-

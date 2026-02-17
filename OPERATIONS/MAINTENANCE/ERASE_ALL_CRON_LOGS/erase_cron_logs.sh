@@ -8,7 +8,7 @@ erase_cron_logs.sh [--dry-run] [--keep-lines N] [--log-dir PATH] [--crontab-file
 
 Keeps only the most recent N lines in cron logs under OPERATIONS_RUNTIME/CRON_LOGS.
 Targets include:
-1) files declared as redirection targets in add_to_crontab.info
+1) files declared as redirection targets in CONFIG/add_to_crontab.info
 2) existing regular files found recursively under the cron log directory
 
 Options:
@@ -22,8 +22,8 @@ EOF
 
 DRY_RUN=false
 KEEP_LINES="${CRON_LOG_KEEP_LINES:-5000}"
-LOG_DIR="${CRON_LOG_DIR:-/home/mingo/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS}"
-CRONTAB_FILE="${CRONTAB_FILE:-/home/mingo/DATAFLOW_v3/add_to_crontab.info}"
+LOG_DIR="${CRON_LOG_DIR:-$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS}"
+CRONTAB_FILE="${CRONTAB_FILE:-$HOME/DATAFLOW_v3/CONFIG/add_to_crontab.info}"
 
 while (( $# > 0 )); do
   case "$1" in

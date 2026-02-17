@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -28,8 +29,25 @@ import pandas as pd
 
 pd.plotting.register_matplotlib_converters()
 
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.path_config import (
+    get_master_config_root,
+    get_repo_root,
+    resolve_home_path_from_config,
+)
+
 # %%
-DATAFLOW_ROOT = Path("/home/mingo/DATAFLOW_v3")
+DATAFLOW_ROOT = get_repo_root()
 STATIONS_ROOT = DATAFLOW_ROOT / "STATIONS"
 
 
@@ -2231,23 +2249,33 @@ if PLAYGROUND_ENABLED:  # noqa: SIM115 - manual toggle; flip to True for ad-hoc 
     
     from MASTER.common.config_loader import update_config_with_parameters
     from MASTER.common.execution_logger import set_station, start_timer 
-    import os
     
     import yaml
     from ast import literal_eval
     
     start_timer(__file__)
-    user_home = os.path.expanduser("~")
-    config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-    parameter_config_file_path = os.path.join(user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_parameters.csv")
+    config_file_path = (
+        get_master_config_root()
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_2"
+        / "config_step_2.yaml"
+    )
+    parameter_config_file_path = (
+        get_master_config_root()
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / "config_parameters.csv"
+    )
     print(f"Using config file: {config_file_path}")
-    with open(config_file_path, "r") as config_file:
+    with config_file_path.open("r", encoding="utf-8") as config_file:
         config = yaml.safe_load(config_file)
     try:
-        config = update_config_with_parameters(config, parameter_config_file_path, station)
+        config = update_config_with_parameters(config, str(parameter_config_file_path), station)
     except NameError:
         pass
-    home_path = config["home_path"]
+    home_path = str(resolve_home_path_from_config(config))
     REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
 
 

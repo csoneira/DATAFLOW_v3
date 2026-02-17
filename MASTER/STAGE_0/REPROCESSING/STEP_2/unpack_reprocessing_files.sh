@@ -104,7 +104,7 @@ while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]];
     MASTER_DIR="$(dirname "${MASTER_DIR}")"
 done
 
-config_file="${MASTER_DIR}/CONFIG_FILES/config_global.yaml"
+config_file="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
 
 read_config_value() {
     local key="$1"

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Kill running bash/python scripts referenced in add_to_crontab.info without touching unrelated processes.
+# Kill running bash/python scripts referenced in CONFIG/add_to_crontab.info without touching unrelated processes.
 set -euo pipefail
 
-BASE_DIR="/home/mingo/DATAFLOW_v3"
-CRON_FILE="$BASE_DIR/add_to_crontab.info"
+BASE_DIR="$HOME/DATAFLOW_v3"
+CRON_FILE="$BASE_DIR/CONFIG/add_to_crontab.info"
 this_pid=$$
 
 if [[ ! -f "$CRON_FILE" ]]; then
@@ -87,4 +87,4 @@ done
 
 # Add this
 echo "Killing the guide_raw_to_corrected.sh process specifically"
-sudo pgrep -f 'bash /home/mingo/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh' | xargs -r kill
+sudo pgrep -f "bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh" | xargs -r kill

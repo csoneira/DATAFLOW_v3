@@ -5,7 +5,7 @@
 
 set -u
 
-BASE_DIR="/home/mingo/DATAFLOW_v3"
+BASE_DIR="$HOME/DATAFLOW_v3"
 LOCK_FILE="/tmp/dataflow_stop_execution.lock"
 LOG_DIR="${BASE_DIR}/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS"
 INTERNAL_LOG="${LOG_DIR}/stop_execution_internal.log"
@@ -112,11 +112,11 @@ mkdir -p "${LOG_DIR}"
   }
 
   declare -a patterns=(
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh"
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py"
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py"
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py"
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/reset_param_mesh_from_final.py"
+    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/run_step.sh"
+    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py"
+    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py"
+    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py"
+    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/reset_param_mesh_from_final.py"
   )
 
   declare -A pid_to_cmd=()

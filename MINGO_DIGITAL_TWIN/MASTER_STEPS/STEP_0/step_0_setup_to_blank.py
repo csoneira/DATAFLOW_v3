@@ -511,12 +511,15 @@ def main() -> None:
         f"runtime={runtime_path if runtime_path else 'auto'}"
     )
 
-    station_root = Path(
-        cfg.get(
-            "station_config_root",
-            "/home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY",
-        )
-    ).expanduser()
+    default_station_root = (
+        Path(__file__).resolve().parents[3]
+        / "MASTER"
+        / "CONFIG_FILES"
+        / "STAGE_0"
+        / "NEW_FILES"
+        / "ONLINE_RUN_DICTIONARY"
+    )
+    station_root = Path(cfg.get("station_config_root", str(default_station_root))).expanduser()
     if not station_root.is_absolute():
         station_root = Path(__file__).resolve().parent / station_root
     if not station_root.exists():

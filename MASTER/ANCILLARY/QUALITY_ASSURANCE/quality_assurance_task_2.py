@@ -43,7 +43,7 @@ print("Columns:")
 print_columns(df)
 
 
-# Read the /home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/ONLINE_RUN_DICTIONARY/STATION_{station}/input_file_mingo0{station}.csv
+# Read the station online-run dictionary CSV for the selected station.
 runs_df = ...
 
 
@@ -232,21 +232,21 @@ factor_tt = 2.0
 
 
 import os as _os
+from pathlib import Path as _Path
 import yaml as _yaml
 
-# Resolve home_path from the same global config used by the simulator
-_user_home = _os.path.expanduser("~")
-_config_file_path = _os.path.join(_user_home, "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml")
-with open(_config_file_path, "r") as _cfg:
-    _cfg_data = _yaml.safe_load(_cfg)
-_home_path = _cfg_data["home_path"]
+# Resolve home_path from the repository-wide CONFIG/config_paths.yaml
+_repo_root = _Path(__file__).resolve().parents[3]
+_config_file_path = _repo_root / "CONFIG" / "config_paths.yaml"
+_cfg_data = {}
+if _config_file_path.exists():
+    with _config_file_path.open("r", encoding="utf-8") as _cfg:
+        _cfg_data = _yaml.safe_load(_cfg) or {}
+_home_path = _Path(str(_cfg_data.get("home_path", _Path.home()))).expanduser()
 
-_counts_csv_path = _os.path.join(
-    _home_path,
-    "DATAFLOW_v3/TESTS/SIMULATION/plane_strip_pair_counts.csv",
-)
+_counts_csv_path = _home_path / "DATAFLOW_v3" / "TESTS" / "SIMULATION" / "plane_strip_pair_counts.csv"
 
-if not _os.path.exists(_counts_csv_path):
+if not _counts_csv_path.exists():
     print(f"Counts CSV not found: {_counts_csv_path}. Run the simulator to generate it.")
 else:
     counts_pivot = pd.read_csv(_counts_csv_path, index_col=0)

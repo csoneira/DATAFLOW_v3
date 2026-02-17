@@ -101,7 +101,7 @@ input_directory="${step0_directory}/INPUT_FILES"
 output_directory="${step0_directory}/OUTPUT_FILES"
 plots_directory="${step0_directory}/PLOTS"
 mkdir -p "$metadata_directory" "$input_directory" "$output_directory" "$plots_directory"
-config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
+config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
 min_filesize_mb=1    # default lower cutoff in MB (overridden by config)
 max_filesize_mb=0    # default upper cutoff in MB; 0 disables upper bound
 min_filesize_bytes=0

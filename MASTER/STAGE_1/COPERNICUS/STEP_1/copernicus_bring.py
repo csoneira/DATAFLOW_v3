@@ -26,6 +26,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MASTER.common.execution_logger import set_station, start_timer
+from MASTER.common.path_config import (
+    get_master_config_root,
+    resolve_home_path_from_config,
+)
 from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 
@@ -167,8 +171,12 @@ def main() -> int:
 
     start_timer(__file__)
 
-    user_home = os.path.expanduser("~")
-    config_file_path = Path(user_home) / "DATAFLOW_v3/MASTER/CONFIG_FILES/config_global.yaml"
+    config_file_path = (
+        get_master_config_root()
+        / "STAGE_1"
+        / "COPERNICUS"
+        / "config_copernicus.yaml"
+    )
     print(f"Using config file: {config_file_path}")
 
     with config_file_path.open("r", encoding="utf-8") as config_file:
@@ -203,7 +211,7 @@ def main() -> int:
     latitude = locations[station]["latitude"]
     longitude = locations[station]["longitude"]
 
-    home_path = Path(config["home_path"]).expanduser()
+    home_path = resolve_home_path_from_config(config)
     station_dir = home_path / "DATAFLOW_v3" / "STATIONS" / f"MINGO0{station}"
     copernicus_root = station_dir / "STAGE_1" / "COPERNICUS"
     step1_root = copernicus_root / "STEP_1"

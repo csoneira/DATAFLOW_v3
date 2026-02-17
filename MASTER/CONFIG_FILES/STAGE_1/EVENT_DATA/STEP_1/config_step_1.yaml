@@ -1,0 +1,20 @@
+event_data_step1_run_matrix:
+  enabled: true
+  mode: whitelist
+  default_tasks: []
+  idle_sleep_seconds: 300
+  already_running_log_seconds: 300
+  config_refresh_seconds: 60
+  stations:
+    "0": [1] # , 2, 3, 4, 5]
+    "1": [1] #, 2, 3, 4, 5]
+    #"2": [1, 2, 3, 4, 5]
+    #"3": [1, 2, 3, 4, 5]
+    #"4": [1, 2, 3, 4, 5]
+
+event_data_resource_limits:
+  mem_used_pct_max: 95
+  swap_used_pct_max: 95
+  swap_used_kb_max: 4194304
+  cpu_used_pct_max: 95
+  resource_backoff_seconds: 20

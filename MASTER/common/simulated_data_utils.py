@@ -5,23 +5,14 @@ from typing import Optional, Tuple, List
 
 import pandas as pd
 
+from MASTER.common.path_config import get_repo_root
 
-SIM_PARAMS_DEFAULT = (
-    Path("~")
-    .expanduser()
-    / "DATAFLOW_v3"
-    / "MINGO_DIGITAL_TWIN"
-    / "SIMULATED_DATA"
-    / "step_final_simulation_params.csv"
-)
 
-SIM_DATA_DIR = (
-    Path("~")
-    .expanduser()
-    / "DATAFLOW_v3"
-    / "MINGO_DIGITAL_TWIN"
-    / "SIMULATED_DATA"
-)
+DATAFLOW_ROOT = get_repo_root()
+
+SIM_PARAMS_DEFAULT = DATAFLOW_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
+
+SIM_DATA_DIR = DATAFLOW_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA"
 
 
 def _normalize_param_hash(value: object) -> Optional[str]:

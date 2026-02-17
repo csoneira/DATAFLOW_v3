@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
+import sys
 from ast import literal_eval
 import re
 from collections import defaultdict, OrderedDict
@@ -41,32 +42,26 @@ from typing import Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import yaml
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.gridspec import GridSpec
 
-PROJECT_ROOT = Path(os.getenv("DATAFLOW_PROJECT_ROOT", Path.home() / "DATAFLOW_v3")).resolve()
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        REPO_ROOT = parent.parent
+        break
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.path_config import get_repo_root
+
+PROJECT_ROOT = Path(os.getenv("DATAFLOW_PROJECT_ROOT", str(get_repo_root()))).resolve()
 STATIONS_DIR = PROJECT_ROOT / "STATIONS"
-CONFIG_PATH = PROJECT_ROOT / "MASTER" / "CONFIG_FILES" / "config_global.yaml"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE"
 CSV_OUTPUT_DIR = DEFAULT_OUTPUT_DIR / "REFERENCE_TABLES"
-
-
-def load_home_path(config_path: Path) -> Path:
-    """Return ``home_path`` declared in *config_path*; fall back to ``~``."""
-    if config_path.exists():
-        with config_path.open("r", encoding="utf-8") as config_file:
-            try:
-                config_data = yaml.safe_load(config_file) or {}
-            except yaml.YAMLError as config_error:
-                raise RuntimeError(f"Unable to parse configuration file {config_path}") from config_error
-            home_path = config_data.get("home_path")
-            if home_path:
-                return Path(home_path).expanduser()
-    return Path.home()
-
-
-HOME_PATH = load_home_path(CONFIG_PATH)
 
 
 TASK_COLUMN_PATTERNS: Dict[str, Tuple[re.Pattern[str], ...]] = {
