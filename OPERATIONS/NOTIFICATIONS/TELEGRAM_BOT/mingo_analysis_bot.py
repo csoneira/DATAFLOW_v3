@@ -29,6 +29,38 @@ PDF_TARGETS = {
         / "definitive_execution_map_report.pdf",
         "description": "Definitive execution map report",
     },
+    "filter_metadata_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "FILTER"
+        / "PLOTS"
+        / "filter_metadata_report.pdf",
+        "description": "Filter metadata report",
+    },
+    "rates_metadata_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "RATES"
+        / "PLOTS"
+        / "rates_metadata_report.pdf",
+        "description": "Rates metadata report",
+    },
+    "execution_metadata_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "EXECUTION"
+        / "PLOTS"
+        / "execution_metadata_report.pdf",
+        "description": "Execution metadata report",
+    },
 }
 
 CLEANER_SCRIPT = (
@@ -44,7 +76,10 @@ HELP_TEXT = (
     "General Commands:\n"
     "  /start or /help - Display this guide.\n\n"
     "PDF Reports:\n"
-    "  /definitive_execution_report - Definitive execution map PDF.\n\n"
+    "  /definitive_execution_report - Definitive execution map PDF.\n"
+    "  /filter_metadata_report - Filter metadata PDF.\n"
+    "  /rates_metadata_report - Rates metadata PDF.\n"
+    "  /execution_metadata_report - Execution metadata PDF.\n\n"
     "Maintenance Tools:\n"
     "  /clean_dataflow_status - Run clean_dataflow.sh --compact to show disk usage.\n"
     "  /clean_dataflow_force - Run clean_dataflow.sh --force --compact (temps, plots, completed; never metadata).\n"

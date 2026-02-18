@@ -8,7 +8,7 @@ try_to_use_reprocessing_table: false
 complete_reanalysis: false
 article_format: false
 # create_plots options: null | debug | usual | all
-create_plots: debug
+create_plots: null
 limit_number: null
 number_of_time_cal_figures: 3
 calibrate_charge_ns_to_fc: true

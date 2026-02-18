@@ -9,7 +9,7 @@ self_trigger: false
 timeseries_and_fits: false
 complete_reanalysis: false
 # create_plots options: null | debug | usual | all
-create_plots: debug
+create_plots: null
 save_rejected_rows: false
 create_reject_plots: false
 limit_number: null

@@ -1,87 +1,310 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Plot task rate histograms and global rate trends gated by Stage 0 basenames."""
 
 from __future__ import annotations
 
 import argparse
 import csv
-import io
-import math
-import os
+from datetime import datetime, timedelta
+import json
+from pathlib import Path
 import re
 import sys
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.colors import LogNorm
+
 
 SCRIPT_PATH = Path(__file__).resolve()
-REPO_ROOT = next(
-    (parent for parent in SCRIPT_PATH.parents if (parent / "MASTER").is_dir()),
-    Path.home() / "DATAFLOW_v3",
-)
+
+
+def detect_repo_root() -> Path:
+    for parent in SCRIPT_PATH.parents:
+        if (parent / "MASTER").is_dir() and (parent / "STATIONS").is_dir():
+            return parent
+    return Path.home() / "DATAFLOW_v3"
+
+
+REPO_ROOT = detect_repo_root()
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.plot_utils import pdf_save_rasterized_page  # noqa: E402
 
-PLOTTER_ROOT = REPO_ROOT / "MASTER" / "ANCILLARY" / "PLOTTERS" / "RATES"
-OUTPUT_DIR = PLOTTER_ROOT / "PLOTS"
-DEFAULT_OUTPUT_NAME = "events_per_second_report.pdf"
 
+STATIONS_ROOT = REPO_ROOT / "STATIONS"
+PLOTTER_DIR = SCRIPT_PATH.parent
+PLOTS_DIR = PLOTTER_DIR / "PLOTS"
+DEFAULT_CONFIG_PATH = PLOTTER_DIR / "rates_metadata_config.json"
+DEFAULT_OUTPUT_FILENAME = "rates_metadata_report.pdf"
+
+TASK_IDS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 RATE_COLUMN_PREFIX = "events_per_second_"
-DEFAULT_MAX_RATE = 100
 
-DEFAULT_STATIONS = ["0", "1", "2", "3", "4"]
-DEFAULT_TASKS = ["1", "2", "3", "4", "5"]
+DEFAULT_MAX_RATE_BIN = 100
+DEFAULT_Y_MAX_HZ = 100.0
+DEFAULT_GLOBAL_RATE_Y_MIN_HZ = 0.0
+DEFAULT_GLOBAL_RATE_Y_MAX_HZ = 100.0
+DEFAULT_GLOBAL_RATE_TIGHT_Y_MIN_HZ = 0.0
+DEFAULT_GLOBAL_RATE_TIGHT_Y_MAX_HZ = 20.0
+DEFAULT_TAIL_ROWS = 0
+DEFAULT_MAX_BIN_GAP_HOURS = 3.0
 
-START_END_COLUMN_CANDIDATES: Sequence[Tuple[str, str]] = (
-    ("start_time", "end_time"),
-    ("Start_Time", "End_Time"),
-    ("start_datetime", "end_datetime"),
-    ("start", "end"),
-)
-
-SINGLE_TIME_COLUMNS = (
-    "center_time",
-    "start_time",
-    "Start_Time",
-    "start_datetime",
-    "start",
-    "datetime",
-    "Time",
-    "execution_timestamp",
-)
-
-FILENAME_PATTERNS: Sequence[Tuple[re.Pattern[str], str]] = (
-    (re.compile(r"(?<!\d)(?P<year>\d{4})[-_]?((?P<month>\d{2})[-_]?)(?P<day>\d{2})[T_\-.]?(?P<hour>\d{2})[\.:_-]?(?P<minute>\d{2})[\.:_-]?(?P<second>\d{2})(?!\d)"), "ymd_hms"),
-    (re.compile(r"(?<!\d)(?P<year>\d{4})[-_]?((?P<doy>\d{3}))[T_\-.]?(?P<hour>\d{2})[\.:_-]?(?P<minute>\d{2})[\.:_-]?(?P<second>\d{2})(?!\d)"), "ydoy_hms"),
-    (re.compile(r"(?<!\d)(?P<year>\d{2})[-_]?((?P<month>\d{2})[-_]?)(?P<day>\d{2})[T_\-.]?(?P<hour>\d{2})[\.:_-]?(?P<minute>\d{2})[\.:_-]?(?P<second>\d{2})(?!\d)"), "y2md_hms"),
-    (re.compile(r"(?<!\d)(?P<year>\d{4})[-_]?((?P<month>\d{2})[-_]?)(?P<day>\d{2})(?!\d)"), "ymd"),
-    (re.compile(r"(?<!\d)(?P<year>\d{2})[-_]?((?P<month>\d{2})[-_]?)(?P<day>\d{2})(?!\d)"), "y2md"),
-)
-
-# MINGO-style: mi0<station><YY><DDD><HH><MM><SS>
-# Example: mi0005265000001 -> YY=05, DDD=265, HH=00, MM=00, SS=01
-MI_FILENAME_PATTERN = re.compile(r"mi0\d(?P<digits>\d{11})$", re.IGNORECASE)
+BASENAME_TIMESTAMP_DIGITS = 11
+FILENAME_TIMESTAMP_PATTERN = re.compile(r"mi0\d(\d{11})$", re.IGNORECASE)
 
 
-@dataclass(frozen=True)
-class MetadataSource:
-    path: Path
-    station: Optional[str]
-    task: Optional[str]
+def configure_matplotlib_style() -> None:
+    plt.style.use("default")
 
 
-def rate_columns(max_rate: int) -> List[str]:
-    return [f"{RATE_COLUMN_PREFIX}{idx}_count" for idx in range(max_rate + 1)]
+def normalize_station_token(token: str) -> Optional[str]:
+    cleaned = token.strip().upper()
+    if not cleaned:
+        return None
+    if cleaned.startswith("MINGO"):
+        cleaned = cleaned[5:]
+    digits = "".join(ch for ch in cleaned if ch.isdigit())
+    if not digits:
+        return None
+    return f"MINGO{int(digits):02d}"
+
+
+def list_available_stations() -> List[str]:
+    if not STATIONS_ROOT.exists():
+        return []
+    stations: List[str] = []
+    for entry in STATIONS_ROOT.iterdir():
+        if entry.is_dir() and re.fullmatch(r"MINGO\d{2}", entry.name.upper()):
+            stations.append(entry.name.upper())
+    stations.sort()
+    return stations
+
+
+def resolve_station_selection(tokens: Sequence[str]) -> List[str]:
+    available = list_available_stations()
+    if not tokens:
+        return available
+
+    selected: List[str] = []
+    invalid: List[str] = []
+    for token in tokens:
+        station = normalize_station_token(str(token))
+        if station is None or station not in available:
+            invalid.append(str(token))
+            continue
+        selected.append(station)
+
+    if invalid:
+        print(
+            "[rates_metadata_plotter] Ignoring unknown station(s): " + ", ".join(invalid),
+            file=sys.stderr,
+        )
+
+    return sorted(dict.fromkeys(selected))
+
+
+def normalize_existing_station_tokens(tokens: Sequence[object]) -> List[str]:
+    available = set(list_available_stations())
+    selected: List[str] = []
+    for token in tokens:
+        station = normalize_station_token(str(token))
+        if station is None or station not in available:
+            continue
+        selected.append(station)
+    return sorted(dict.fromkeys(selected))
+
+
+def normalize_task_selection(values: Sequence[object]) -> List[int]:
+    selected: List[int] = []
+    for value in values:
+        try:
+            task_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if task_id in TASK_IDS:
+            selected.append(task_id)
+    deduped = sorted(dict.fromkeys(selected))
+    return deduped if deduped else list(TASK_IDS)
+
+
+def normalize_basename(value: object) -> str:
+    text = str(value).strip()
+    if not text:
+        return ""
+    return Path(text).stem.strip()
+
+
+def extract_timestamp_from_basename(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+
+    stem = Path(value).stem.strip()
+    if not stem:
+        return None
+
+    try:
+        return datetime.strptime(stem, "%Y-%m-%d_%H.%M.%S")
+    except ValueError:
+        pass
+
+    match = FILENAME_TIMESTAMP_PATTERN.search(stem)
+    if match:
+        digits = match.group(1)
+    else:
+        digits = "".join(ch for ch in stem if ch.isdigit())
+        if len(digits) < BASENAME_TIMESTAMP_DIGITS:
+            return None
+        digits = digits[-BASENAME_TIMESTAMP_DIGITS:]
+
+    try:
+        year = 2000 + int(digits[0:2])
+        day_of_year = int(digits[2:5])
+        hour = int(digits[5:7])
+        minute = int(digits[7:9])
+        second = int(digits[9:11])
+    except ValueError:
+        return None
+
+    if not (1 <= day_of_year <= 366):
+        return None
+    if not (0 <= hour <= 23):
+        return None
+    if not (0 <= minute <= 59):
+        return None
+    if not (0 <= second <= 59):
+        return None
+
+    base = datetime(year, 1, 1)
+    return base + timedelta(
+        days=day_of_year - 1,
+        hours=hour,
+        minutes=minute,
+        seconds=second,
+    )
+
+
+def _ordered_unique(values: Iterable[str]) -> List[str]:
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for value in values:
+        candidate = value.strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        ordered.append(candidate)
+    return ordered
+
+
+def _station_token_map(station: str) -> Dict[str, str]:
+    clean = station.strip()
+    tokens: Dict[str, str] = {
+        "station": clean,
+        "station_lower": clean.lower(),
+        "station_upper": clean.upper(),
+    }
+    digits = "".join(ch for ch in clean if ch.isdigit())
+    if digits:
+        stripped = digits.lstrip("0") or "0"
+        tokens["id"] = stripped
+        tokens["id02"] = stripped.zfill(2)
+        tokens["mingo_id"] = f"mingo{stripped}"
+        tokens["mingo_id02"] = f"mingo{tokens['id02']}"
+    return tokens
+
+
+def _station_file_candidates(
+    station: str,
+    patterns: Sequence[str],
+    fallback: Optional[str] = None,
+) -> List[str]:
+    tokens = _station_token_map(station)
+    generated: List[str] = []
+    for pattern in patterns:
+        try:
+            generated.append(pattern.format(**tokens))
+        except KeyError:
+            continue
+    if fallback:
+        generated.append(fallback)
+    return _ordered_unique(generated)
+
+
+def _resolve_station_metadata_file(
+    directory: Path,
+    station: str,
+    patterns: Sequence[str],
+    fallback: Optional[str] = None,
+) -> Optional[Path]:
+    for filename in _station_file_candidates(station, patterns, fallback):
+        candidate = directory / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_allowed_basenames(station: str) -> Set[str]:
+    root = STATIONS_ROOT / station
+
+    if station == "MINGO00":
+        stage0_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
+    else:
+        metadata_dir = root / "STAGE_0" / "REPROCESSING" / "STEP_0" / "OUTPUT_FILES"
+        stage0_csv = _resolve_station_metadata_file(
+            metadata_dir,
+            station,
+            (
+                "clean_remote_database_{id}.csv",
+                "clean_remote_database_{id02}.csv",
+                "clean_remote_database_{station_lower}.csv",
+                "clean_remote_database_{station}.csv",
+                "clean_remote_database_{mingo_id}.csv",
+                "clean_remote_database_{mingo_id02}.csv",
+            ),
+        )
+
+    if stage0_csv is None or not stage0_csv.exists():
+        print(
+            f"[rates_metadata_plotter] Stage 0 basename source missing for {station}.",
+            file=sys.stderr,
+        )
+        return set()
+
+    try:
+        df = pd.read_csv(stage0_csv)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(
+            f"[rates_metadata_plotter] Failed to read {stage0_csv}: {exc}",
+            file=sys.stderr,
+        )
+        return set()
+
+    basename_col = None
+    for candidate in ("basename", "filename_base", "hld_name", "dat_name"):
+        if candidate in df.columns:
+            basename_col = candidate
+            break
+
+    if basename_col is None:
+        print(
+            f"[rates_metadata_plotter] Missing basename column in {stage0_csv}.",
+            file=sys.stderr,
+        )
+        return set()
+
+    return {
+        normalize_basename(value)
+        for value in df[basename_col].astype(str)
+        if normalize_basename(value)
+    }
+
+
+def rate_columns(max_rate_bin: int) -> List[str]:
+    return [f"{RATE_COLUMN_PREFIX}{idx}_count" for idx in range(max_rate_bin + 1)]
 
 
 def read_header_columns(path: Path) -> List[str]:
@@ -90,552 +313,242 @@ def read_header_columns(path: Path) -> List[str]:
         return next(reader, [])
 
 
-def build_usecols(
-    header_cols: Sequence[str],
-    last_columns: int,
-    max_rate: int,
-    preferred_time_columns: Sequence[str],
-) -> Optional[List[str]]:
-    if last_columns <= 0:
+def resolve_usecols(path: Path, max_rate_bin: int) -> Optional[List[str]]:
+    header_cols = read_header_columns(path)
+    if not header_cols:
         return None
 
-    tail_cols = (
-        list(header_cols[-last_columns:])
-        if last_columns < len(header_cols)
-        else list(header_cols)
-    )
-
-    required: set[str] = set(tail_cols)
-    required.update(rate_columns(max_rate))
+    required = set(rate_columns(max_rate_bin))
     required.update(
-        [
-            "events_per_second_total_seconds",
-            "events_per_second_global_rate",
+        {
             "filename_base",
             "execution_timestamp",
-        ]
+            "events_per_second_total_seconds",
+            "events_per_second_global_rate",
+        }
     )
-    required.update(preferred_time_columns)
-    required.update(list(SINGLE_TIME_COLUMNS))
-    for start_col, end_col in START_END_COLUMN_CANDIDATES:
-        required.add(start_col)
-        required.add(end_col)
-
     return [col for col in header_cols if col in required]
 
 
-def read_csv_tail(path: Path, n_rows: int, usecols: Optional[Sequence[str]]) -> pd.DataFrame:
-    if n_rows <= 0:
-        return pd.read_csv(path, low_memory=False, usecols=usecols)
-
-    with path.open("rb") as handle:
-        header_line = handle.readline()
-        if not header_line:
-            return pd.DataFrame()
-
-        handle.seek(0, os.SEEK_END)
-        file_size = handle.tell()
-        block_size = 8192
-        buffer = b""
-        remaining = file_size
-
-        while remaining > 0 and buffer.count(b"\n") <= n_rows:
-            read_size = min(block_size, remaining)
-            remaining -= read_size
-            handle.seek(remaining)
-            buffer = handle.read(read_size) + buffer
-
-    header_str = header_line.decode("utf-8", errors="replace").strip()
-    lines = buffer.splitlines()
-    if lines and lines[0].decode("utf-8", errors="replace").strip() == header_str:
-        lines = lines[1:]
-    tail_lines = lines[-n_rows:] if n_rows < len(lines) else lines
-
-    text = header_str + "\n" + "\n".join(
-        line.decode("utf-8", errors="replace") for line in tail_lines
-    )
-
-    return pd.read_csv(io.StringIO(text), low_memory=False, usecols=usecols)
-
-
-def ensure_rate_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
-    """Ensure all *columns* exist, adding missing ones in a non-fragmenting way."""
-    missing = [col for col in columns if col not in df.columns]
-    if not missing:
-        return df
-    missing_df = pd.DataFrame(0, index=df.index, columns=missing)
-    # pd.concat avoids the repeated frame.insert() pattern that fragments DataFrames.
-    return pd.concat([df, missing_df], axis=1)
-
-
-def metadata_sources(
-    stations: Sequence[str], tasks: Sequence[str], explicit_paths: Sequence[Path]
-) -> List[MetadataSource]:
-    sources: List[MetadataSource] = []
-
-    for path in explicit_paths:
-        sources.append(MetadataSource(path=path, station=None, task=None))
-
-    for station in stations:
-        for task in tasks:
-            path = (
-                REPO_ROOT
-                / "STATIONS"
-                / f"MINGO0{station}"
-                / "STAGE_1"
-                / "EVENT_DATA"
-                / "STEP_1"
-                / f"TASK_{task}"
-                / "METADATA"
-                / f"task_{task}_metadata_specific.csv"
-            )
-            if path.exists():
-                sources.append(MetadataSource(path=path, station=station, task=task))
-
-    unique: Dict[Path, MetadataSource] = {}
-    for source in sources:
-        unique[source.path] = source
-
-    return list(unique.values())
-
-
-def read_metadata_csv(
-    source: MetadataSource,
+def load_task_metadata(
+    station: str,
+    task_id: int,
+    allowed_basenames: Set[str],
+    max_rate_bin: int,
     tail_rows: int,
-    last_columns: int,
-    max_rate: int,
-    preferred_time_columns: Sequence[str],
 ) -> pd.DataFrame:
-    header_cols = read_header_columns(source.path)
-    usecols = build_usecols(header_cols, last_columns, max_rate, preferred_time_columns)
-    df = read_csv_tail(source.path, tail_rows, usecols=usecols)
-    df["_source_csv"] = str(source.path)
-    if source.station is not None:
-        df["station"] = source.station
-    if source.task is not None:
-        df["task"] = source.task
-    return df
-
-
-def parse_time_value(value: object) -> Optional[pd.Timestamp]:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
-        return None
-
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if not cleaned:
-            return None
-        for fmt in (
-            "%Y-%m-%d_%H.%M.%S",
-            "%Y-%m-%d_%H.%M.%S.%f",
-            "%Y-%m-%d %H.%M.%S",
-            "%Y-%m-%d %H.%M.%S.%f",
-        ):
-            try:
-                return pd.Timestamp(datetime.strptime(cleaned, fmt))
-            except ValueError:
-                pass
-        if "_" in cleaned or "." in cleaned:
-            alt = cleaned.replace("_", " ").replace(".", ":")
-            parsed_alt = pd.to_datetime(alt, errors="coerce")
-            if not pd.isna(parsed_alt):
-                return parsed_alt
-
-    if isinstance(value, (int, float)):
-        if math.isnan(value):
-            return None
-        if value > 1e12:
-            return pd.to_datetime(int(value), unit="ms", errors="coerce")
-        if value > 1e9:
-            return pd.to_datetime(int(value), unit="s", errors="coerce")
+    metadata_csv = (
+        STATIONS_ROOT
+        / station
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / f"TASK_{task_id}"
+        / "METADATA"
+        / f"task_{task_id}_metadata_specific.csv"
+    )
+    if not metadata_csv.exists():
+        return pd.DataFrame()
 
     try:
-        parsed = pd.to_datetime(value, errors="coerce")
-    except (ValueError, TypeError):
-        return None
+        usecols = resolve_usecols(metadata_csv, max_rate_bin)
+        df = pd.read_csv(metadata_csv, usecols=usecols, low_memory=False)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(
+            f"[rates_metadata_plotter] Failed to read {metadata_csv}: {exc}",
+            file=sys.stderr,
+        )
+        return pd.DataFrame()
 
-    if pd.isna(parsed):
-        return None
-    return parsed
+    if df.empty or "filename_base" not in df.columns:
+        return pd.DataFrame()
 
+    if tail_rows > 0:
+        df = df.tail(tail_rows).copy()
+    else:
+        df = df.copy()
 
-def parse_time_from_filename(filename: str) -> Optional[pd.Timestamp]:
-    if not filename:
-        return None
+    df["basename"] = df["filename_base"].map(normalize_basename)
+    df = df[df["basename"].str.startswith("mi", na=False)]
 
-    # Prefer explicit MINGO basename decoding (YY + day-of-year + time).
-    match = MI_FILENAME_PATTERN.search(filename)
-    if match:
-        digits = match.group("digits")
-        try:
-            year = 2000 + int(digits[0:2])
-            doy = int(digits[2:5])
-            hour = int(digits[5:7])
-            minute = int(digits[7:9])
-            second = int(digits[9:11])
-            base = datetime(year, 1, 1) + timedelta(days=doy - 1)
-            return pd.Timestamp(base.replace(hour=hour, minute=minute, second=second))
-        except (ValueError, OverflowError):
-            pass
+    if allowed_basenames:
+        df = df[df["basename"].isin(allowed_basenames)]
+    else:
+        df = df.iloc[0:0]
 
-    for pattern, kind in FILENAME_PATTERNS:
-        match = pattern.search(filename)
-        if not match:
-            continue
-        parts = match.groupdict()
-        try:
-            if kind == "ydoy_hms":
-                year = int(parts["year"])
-                doy = int(parts["doy"])
-                hour = int(parts["hour"])
-                minute = int(parts["minute"])
-                second = int(parts["second"])
-                return pd.Timestamp(datetime(year, 1, 1) + timedelta(days=doy - 1, hours=hour, minutes=minute, seconds=second))
-            if kind in ("ymd_hms", "y2md_hms"):
-                year = int(parts["year"])
-                if year < 100:
-                    year = 2000 + year if year < 80 else 1900 + year
-                month = int(parts["month"])
-                day = int(parts["day"])
-                hour = int(parts["hour"])
-                minute = int(parts["minute"])
-                second = int(parts["second"])
-                return pd.Timestamp(datetime(year, month, day, hour, minute, second))
-            if kind in ("ymd", "y2md"):
-                year = int(parts["year"])
-                if year < 100:
-                    year = 2000 + year if year < 80 else 1900 + year
-                month = int(parts["month"])
-                day = int(parts["day"])
-                return pd.Timestamp(datetime(year, month, day, 12, 0, 0))
-        except (ValueError, KeyError):
-            continue
+    if df.empty:
+        return pd.DataFrame()
 
-    return None
+    df["file_timestamp"] = pd.to_datetime(
+        df["basename"].map(extract_timestamp_from_basename),
+        errors="coerce",
+    )
 
+    df["events_per_second_total_seconds"] = pd.to_numeric(
+        df.get("events_per_second_total_seconds", pd.Series([np.nan] * len(df))),
+        errors="coerce",
+    ).fillna(0.0)
 
-def derive_center_time(
-    row: pd.Series, preferred_columns: Sequence[str]
-) -> Optional[pd.Timestamp]:
-    for start_col, end_col in START_END_COLUMN_CANDIDATES:
-        if start_col in row and end_col in row:
-            start_val = parse_time_value(row.get(start_col))
-            end_val = parse_time_value(row.get(end_col))
-            if start_val is not None and end_val is not None:
-                return start_val + (end_val - start_val) / 2
-            if start_val is not None:
-                return start_val
+    df["events_per_second_global_rate"] = pd.to_numeric(
+        df.get("events_per_second_global_rate", pd.Series([np.nan] * len(df))),
+        errors="coerce",
+    )
 
-    for col in preferred_columns:
-        if col in row:
-            candidate = parse_time_value(row.get(col))
-            if candidate is not None:
-                return candidate
+    expected_rate_cols = rate_columns(max_rate_bin)
+    for col in expected_rate_cols:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
-    for col in SINGLE_TIME_COLUMNS:
-        if col in row:
-            candidate = parse_time_value(row.get(col))
-            if candidate is not None:
-                return candidate
+    missing_global = df["events_per_second_global_rate"].isna()
+    if missing_global.any():
+        counts = df.loc[missing_global, expected_rate_cols]
+        total_events = (counts * np.arange(max_rate_bin + 1)).sum(axis=1)
+        denom = df.loc[missing_global, "events_per_second_total_seconds"].replace(0, np.nan)
+        df.loc[missing_global, "events_per_second_global_rate"] = (total_events / denom).fillna(0.0)
 
-    filename = row.get("filename_base")
-    if isinstance(filename, str):
-        candidate = parse_time_from_filename(filename)
-        if candidate is not None:
-            return candidate
+    df = df[df["file_timestamp"].notna()].copy()
+    if df.empty:
+        return pd.DataFrame()
 
-    execution_timestamp = row.get("execution_timestamp")
-    if execution_timestamp is not None:
-        candidate = parse_time_value(execution_timestamp)
-        if candidate is not None:
-            return candidate
-
-    return None
+    df = df.drop_duplicates(subset=["basename"], keep="last")
+    df["task"] = task_id
+    return df.sort_values("file_timestamp").reset_index(drop=True)
 
 
-def compute_time_edges(times: np.ndarray, fallback_seconds: float) -> np.ndarray:
-    if len(times) == 1:
-        delta_days = fallback_seconds / 86400 if fallback_seconds > 0 else 0.5
-        return np.array([times[0] - delta_days / 2, times[0] + delta_days / 2])
+def compute_time_edges(times_num: np.ndarray, fallback_seconds: float = 60.0) -> np.ndarray:
+    if times_num.size == 1:
+        half = max(fallback_seconds / 86400.0 / 2.0, 1.0 / 1440.0)
+        return np.array([times_num[0] - half, times_num[0] + half])
 
-    deltas = np.diff(times)
-    median_delta = np.median(deltas[deltas > 0]) if np.any(deltas > 0) else 0.5
-    edges = np.empty(len(times) + 1)
-    edges[1:-1] = (times[:-1] + times[1:]) / 2
-    edges[0] = times[0] - median_delta / 2
-    edges[-1] = times[-1] + median_delta / 2
+    diffs = np.diff(times_num)
+    positive = diffs[diffs > 0]
+    if positive.size == 0:
+        delta = max(fallback_seconds / 86400.0, 1.0 / 1440.0)
+    else:
+        delta = float(np.median(positive))
+
+    edges = np.empty(times_num.size + 1, dtype=float)
+    edges[1:-1] = (times_num[:-1] + times_num[1:]) / 2.0
+    edges[0] = times_num[0] - delta / 2.0
+    edges[-1] = times_num[-1] + delta / 2.0
     return edges
 
 
-def plot_rate_heatmap(
-    pdf: PdfPages,
-    times: np.ndarray,
-    rate_matrix: np.ndarray,
-    total_seconds: np.ndarray,
-    rate_values: np.ndarray,
-    title: str,
-    log_color: bool,
+def build_intervalized_rate_matrix(
+    times_num: np.ndarray,
+    freq_matrix: np.ndarray,
+    max_bin_gap_hours: float,
     fallback_seconds: float,
-    x_limits: Optional[Tuple[float, float]] = None,
-) -> None:
-    if times.size == 0:
-        return
+) -> Tuple[np.ndarray, np.ndarray]:
+    if times_num.size == 0:
+        return np.array([], dtype=float), np.empty((freq_matrix.shape[0], 0), dtype=float)
 
-    sorted_idx = np.argsort(times)
-    times = times[sorted_idx]
-    rate_matrix = rate_matrix[:, sorted_idx]
-    total_seconds = total_seconds[sorted_idx]
-
-    x_edges = compute_time_edges(times, fallback_seconds)
-    y_edges = np.arange(rate_values.min() - 0.5, rate_values.max() + 1.5, 1)
-
-    denom = np.where(total_seconds > 0, total_seconds, np.nan)
-    freq_matrix = rate_matrix / denom
-    masked = np.ma.masked_where(freq_matrix <= 0, freq_matrix)
-
-    fig, ax = plt.subplots(figsize=(14, 6))
-    cmap = plt.cm.viridis
-    if log_color:
-        vmax = np.nanmax(freq_matrix) if np.nanmax(freq_matrix) > 0 else 1.0
-        norm = LogNorm(vmin=max(1e-5, vmax / 1e5), vmax=vmax)
+    fallback_days = max(float(fallback_seconds), 1.0) / 86400.0
+    diffs = np.diff(times_num)
+    positive_diffs = diffs[diffs > 0]
+    if positive_diffs.size > 0:
+        tail_days = float(np.median(positive_diffs))
     else:
-        norm = None
+        tail_days = fallback_days
 
-    mesh = ax.pcolormesh(
-        x_edges,
-        y_edges,
-        masked,
-        cmap=cmap,
-        shading="auto",
-        norm=norm,
-    )
-    ax.set_title(title)
-    ax.set_xlabel("Center time of file")
-    ax.set_ylabel("Events per second")
-    ax.set_ylim(rate_values.min(), rate_values.max())
-    if x_limits is not None:
-        ax.set_xlim(x_limits[0], x_limits[1])
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
-    ax.grid(False)
+    if np.isfinite(max_bin_gap_hours):
+        max_gap_days = max(float(max_bin_gap_hours), 1.0 / 3600.0) / 24.0
+        tail_days = min(tail_days, max_gap_days)
+    else:
+        max_gap_days = np.inf
 
-    cbar = fig.colorbar(mesh, ax=ax, pad=0.01)
-    cbar.set_label("Occurrence rate (Hz)")
+    intervals: List[Tuple[float, float, Optional[int]]] = []
+    for idx, start in enumerate(times_num):
+        start_v = float(start)
+        if idx < times_num.size - 1:
+            next_v = float(times_num[idx + 1])
+            if np.isfinite(max_gap_days):
+                end_v = min(next_v, start_v + max_gap_days)
+            else:
+                end_v = next_v
+        else:
+            end_v = start_v + max(tail_days, fallback_days / 2.0)
 
-    fig.autofmt_xdate()
-    pdf_save_rasterized_page(pdf, fig)
-    plt.close(fig)
+        if end_v <= start_v:
+            end_v = start_v + fallback_days / 2.0
 
+        intervals.append((start_v, end_v, idx))
 
-def plot_global_histogram(
-    pdf: PdfPages,
-    rate_values: np.ndarray,
-    total_counts: np.ndarray,
-    title: str,
-) -> None:
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(rate_values, total_counts, color="#2a6f97")
-    ax.set_title(title)
-    ax.set_xlabel("Events per second")
-    ax.set_ylabel("Total seconds")
-    ax.set_xlim(rate_values.min() - 1, rate_values.max() + 1)
-    ax.grid(True, axis="y", alpha=0.3)
-    pdf_save_rasterized_page(pdf, fig)
-    plt.close(fig)
+        if idx < times_num.size - 1:
+            next_v = float(times_num[idx + 1])
+            if end_v < next_v:
+                intervals.append((end_v, next_v, None))
 
+    x_edges = np.empty(len(intervals) + 1, dtype=float)
+    plot_matrix = np.empty((freq_matrix.shape[0], len(intervals)), dtype=float)
+    x_edges[0] = intervals[0][0]
 
-def plot_global_rate_trend(
-    pdf: PdfPages,
-    times: np.ndarray,
-    rates: np.ndarray,
-    title: str,
-    x_limits: Optional[Tuple[float, float]] = None,
-) -> None:
-    if times.size == 0:
-        return
-    valid = np.isfinite(rates) & (rates > 0)
-    if not np.any(valid):
-        return
-    fig, ax = plt.subplots(figsize=(12, 4.5))
-    times = times[valid]
-    rates = rates[valid]
-    sorted_idx = np.argsort(times)
-    ax.plot(times[sorted_idx], rates[sorted_idx], color="#264653", linewidth=1.5)
-    ax.scatter(times[sorted_idx], rates[sorted_idx], s=20, color="#2a9d8f")
-    ax.set_title(title)
-    ax.set_xlabel("Center time of file")
-    ax.set_ylabel("Global rate (events / second)")
-    if x_limits is not None:
-        ax.set_xlim(x_limits[0], x_limits[1])
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
-    ax.grid(True, alpha=0.3)
-    fig.autofmt_xdate()
-    pdf_save_rasterized_page(pdf, fig)
-    plt.close(fig)
+    for col_idx, (_start_v, end_v, src_col) in enumerate(intervals):
+        x_edges[col_idx + 1] = end_v
+        if src_col is None:
+            plot_matrix[:, col_idx] = np.nan
+        else:
+            plot_matrix[:, col_idx] = freq_matrix[:, src_col]
+
+    return x_edges, plot_matrix
 
 
-def plot_task_rate_trends(
-    pdf: PdfPages,
-    df: pd.DataFrame,
-    title: str,
-    x_limits: Optional[Tuple[float, float]] = None,
-) -> None:
-    if "task" not in df.columns or df.empty:
-        return
-
-    tasks = [task for task in df["task"].dropna().unique()]
-    if not tasks:
-        return
-
-    def sort_key(value: object) -> Tuple[int, str]:
-        text = str(value)
-        return (0, text.zfill(3)) if text.isdigit() else (1, text)
-
-    tasks = sorted(tasks, key=sort_key)
-    colors = plt.cm.tab10(np.linspace(0, 1, max(1, min(len(tasks), 10))))
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    for idx, task in enumerate(tasks):
-        task_df = df[df["task"] == task].copy()
-        if task_df.empty:
+def station_time_bounds(task_data: Dict[int, pd.DataFrame]) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
+    chunks: List[pd.Series] = []
+    for df in task_data.values():
+        if df.empty:
             continue
-        task_times = mdates.date2num(task_df["center_time"].to_numpy())
-        task_rates = task_df["events_per_second_global_rate"].to_numpy(dtype=float)
-        valid = np.isfinite(task_rates) & (task_rates > 0)
-        if not np.any(valid):
-            continue
-        task_times = task_times[valid]
-        task_rates = task_rates[valid]
-        sorted_idx = np.argsort(task_times)
-        color = colors[idx % len(colors)]
-        label = f"Task {task}"
-        ax.plot(
-            task_times[sorted_idx],
-            task_rates[sorted_idx],
-            color=color,
-            linewidth=1.6,
-            label=label,
-        )
-        ax.scatter(
-            task_times[sorted_idx],
-            task_rates[sorted_idx],
-            s=18,
-            color=color,
-            alpha=0.75,
-        )
+        chunks.append(pd.to_datetime(df["file_timestamp"], errors="coerce"))
 
-    ax.set_title(title)
-    ax.set_xlabel("Center time of file")
-    ax.set_ylabel("Global rate (events / second)")
+    if not chunks:
+        return None
+
+    combined = pd.concat(chunks, ignore_index=True).dropna()
+    if combined.empty:
+        return None
+
+    lower = pd.Timestamp(combined.min())
+    upper = pd.Timestamp(combined.max())
+    if lower == upper:
+        upper = lower + timedelta(minutes=1)
+    return lower, upper
+
+
+def plot_task_histogram_axis(
+    ax: plt.Axes,
+    df: pd.DataFrame,
+    max_rate_bin: int,
+    y_max_hz: float,
+    max_bin_gap_hours: float,
+    title: str,
+    x_limits: Optional[Tuple[pd.Timestamp, pd.Timestamp]],
+) -> None:
+    ax.set_title(title, fontsize=10)
+    ax.set_ylabel("Hz")
+    ax.set_ylim(0.0, y_max_hz)
+    cmap = plt.get_cmap("viridis")
+    # Keep empty/masked regions visually consistent with the histogram's lowest color.
+    ax.set_facecolor(cmap(0.0))
+
     if x_limits is not None:
         ax.set_xlim(x_limits[0], x_limits[1])
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="upper right", fontsize="small")
-    fig.autofmt_xdate()
-    pdf_save_rasterized_page(pdf, fig)
-    plt.close(fig)
 
-
-def build_file_key(df: pd.DataFrame) -> pd.Series:
-    """Return a stable per-file key for matching across tasks."""
-    filename = df.get("filename_base")
-    if filename is None:
-        return pd.Series([pd.NA] * len(df), index=df.index, dtype="string")
-
-    if "station" in df.columns:
-        station = df["station"].astype("string")
-        return station.fillna("") + ":" + filename.astype("string").fillna("")
-
-    return filename.astype("string").fillna("")
-
-
-def filter_to_common_files_across_tasks(
-    df: pd.DataFrame,
-    tasks: Sequence[object],
-    file_key_col: str,
-) -> pd.DataFrame:
-    """Keep only rows whose file key exists for *all* tasks in *tasks*."""
-    if df.empty or not tasks:
-        return df
-
-    task_sets: List[set[str]] = []
-    for task in tasks:
-        subset = df[df["task"] == task]
-        keys = subset[file_key_col].dropna().astype(str)
-        task_sets.append(set(keys.tolist()))
-
-    if not task_sets:
-        return df.iloc[0:0].copy()
-
-    common = set.intersection(*task_sets)
-    if not common:
-        return df.iloc[0:0].copy()
-
-    return df[df[file_key_col].astype(str).isin(common)].copy()
-
-
-def plot_matched_file_traces(
-    pdf: PdfPages,
-    df: pd.DataFrame,
-    tasks: Sequence[object],
-    value_col: str,
-    title: str,
-    ylabel: str,
-) -> None:
-    if df.empty or not tasks or value_col not in df.columns:
-        return
-
-    pivot = df.pivot_table(index="_file_key", columns="task", values=value_col, aggfunc="last")
-    ordered_tasks = [task for task in tasks if task in pivot.columns]
-    if not ordered_tasks:
-        return
-    pivot = pivot[ordered_tasks].dropna(axis=0, how="any")
-    if pivot.empty:
-        return
-
-    x = np.arange(len(ordered_tasks))
-    fig, ax = plt.subplots(figsize=(12, 5))
-    for _, row in pivot.iterrows():
-        ax.plot(
-            x,
-            row.to_numpy(dtype=float),
-            color="0.55",
-            alpha=0.25,
-            linewidth=1.0,
+    if df.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "No eligible rows",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=9,
+            color="dimgray",
         )
+        return
 
-    median = pivot.median(axis=0).to_numpy(dtype=float)
-    mean = pivot.mean(axis=0).to_numpy(dtype=float)
-    ax.plot(x, median, color="#264653", linewidth=2.2, label="Median")
-    ax.plot(x, mean, color="#2a9d8f", linewidth=1.8, linestyle="--", label="Mean")
-
-    ax.set_title(f"{title} (matched files: {len(pivot)})")
-    ax.set_xlabel("Task")
-    ax.set_ylabel(ylabel)
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"{t}" for t in ordered_tasks])
-    ax.grid(True, axis="y", alpha=0.3)
-    ax.legend(loc="best", fontsize="small")
-    pdf_save_rasterized_page(pdf, fig)
-    plt.close(fig)
-
-
-def summarize_rate_counts(df: pd.DataFrame, rate_cols: Sequence[str]) -> np.ndarray:
-    counts = df[rate_cols].fillna(0).apply(pd.to_numeric, errors="coerce").fillna(0)
-    return counts.sum(axis=0).to_numpy(dtype=float)
-
-
-def sort_task_values(values: Iterable[object]) -> List[object]:
-    def sort_key(value: object) -> Tuple[int, str]:
-        text = str(value)
-        return (0, text.zfill(3)) if text.isdigit() else (1, text)
-
-    return sorted(values, key=sort_key)
-
-
-def build_rate_arrays(df: pd.DataFrame, rate_cols: Sequence[str]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    times = mdates.date2num(df["center_time"].to_numpy())
-    rate_matrix = (
+    rate_cols = rate_columns(max_rate_bin)
+    matrix = (
         df[rate_cols]
         .fillna(0)
         .apply(pd.to_numeric, errors="coerce")
@@ -643,335 +556,440 @@ def build_rate_arrays(df: pd.DataFrame, rate_cols: Sequence[str]) -> Tuple[np.nd
         .to_numpy(dtype=float)
         .T
     )
-    total_seconds = df["events_per_second_total_seconds"].to_numpy(dtype=float)
-    return times, rate_matrix, total_seconds
+
+    total_seconds = pd.to_numeric(
+        df["events_per_second_total_seconds"],
+        errors="coerce",
+    ).fillna(0.0).to_numpy(dtype=float)
+
+    denom = np.where(total_seconds > 0, total_seconds, np.nan)
+    freq_matrix = matrix / denom
+
+    time_nums = mdates.date2num(pd.to_datetime(df["file_timestamp"]).to_numpy())
+    sort_idx = np.argsort(time_nums)
+    time_nums = time_nums[sort_idx]
+    freq_matrix = freq_matrix[:, sort_idx]
+
+    fallback_seconds = float(np.nanmedian(total_seconds)) if total_seconds.size else 60.0
+    if not np.isfinite(fallback_seconds) or fallback_seconds <= 0:
+        fallback_seconds = 60.0
+    x_edges, plot_matrix = build_intervalized_rate_matrix(
+        times_num=time_nums,
+        freq_matrix=freq_matrix,
+        max_bin_gap_hours=max_bin_gap_hours,
+        fallback_seconds=fallback_seconds,
+    )
+    masked = np.ma.masked_where(~np.isfinite(plot_matrix) | (plot_matrix <= 0), plot_matrix)
+    y_edges = np.arange(-0.5, max_rate_bin + 1.5, 1.0)
+
+    ax.pcolormesh(
+        x_edges,
+        y_edges,
+        masked,
+        cmap=cmap,
+        shading="auto",
+    )
+
+    ax.grid(False)
 
 
-def parse_args() -> argparse.Namespace:
+def plot_global_rate_axis(
+    ax: plt.Axes,
+    task_data: Dict[int, pd.DataFrame],
+    tasks: Sequence[int],
+    global_rate_y_min_hz: float,
+    global_rate_y_max_hz: float,
+    x_limits: Optional[Tuple[pd.Timestamp, pd.Timestamp]],
+    title: str,
+) -> None:
+    ax.set_title(title, fontsize=10)
+    ax.set_ylabel("Hz")
+    ax.set_ylim(global_rate_y_min_hz, global_rate_y_max_hz)
+    ax.grid(True, axis="y", alpha=0.3, linestyle="--", linewidth=0.5)
+
+    if x_limits is not None:
+        ax.set_xlim(x_limits[0], x_limits[1])
+
+    cmap = plt.get_cmap("tab10")
+    plotted = False
+
+    for idx, task_id in enumerate(tasks):
+        df = task_data.get(task_id, pd.DataFrame())
+        if df.empty:
+            continue
+
+        task_df = df[["file_timestamp", "events_per_second_global_rate"]].copy()
+        task_df["events_per_second_global_rate"] = pd.to_numeric(
+            task_df["events_per_second_global_rate"], errors="coerce"
+        )
+        task_df = task_df.dropna(subset=["file_timestamp", "events_per_second_global_rate"])
+        if task_df.empty:
+            continue
+
+        task_df = task_df.sort_values("file_timestamp")
+        color = cmap(idx % cmap.N)
+
+        ax.plot(
+            task_df["file_timestamp"],
+            task_df["events_per_second_global_rate"],
+            linewidth=1.2,
+            color=color,
+            label=f"Task {task_id}",
+        )
+        ax.scatter(
+            task_df["file_timestamp"],
+            task_df["events_per_second_global_rate"],
+            s=10,
+            color=color,
+            alpha=0.8,
+        )
+        plotted = True
+
+    if plotted:
+        ax.legend(loc="upper left", ncols=min(len(tasks), 3), fontsize=8)
+    else:
+        ax.text(
+            0.5,
+            0.5,
+            "No global-rate data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=9,
+            color="dimgray",
+        )
+
+
+def plot_station_page(
+    station: str,
+    task_data: Dict[int, pd.DataFrame],
+    tasks: Sequence[int],
+    pdf: PdfPages,
+    y_max_hz: float,
+    global_rate_y_min_hz: float,
+    global_rate_y_max_hz: float,
+    global_rate_tight_y_min_hz: float,
+    global_rate_tight_y_max_hz: float,
+    max_rate_bin: int,
+    max_bin_gap_hours: float,
+    allowed_count: int,
+) -> None:
+    n_rows = len(tasks) + 2
+    fig_height = max(11.0, 1.95 * n_rows)
+
+    fig, axes = plt.subplots(
+        n_rows,
+        1,
+        figsize=(16, fig_height),
+        sharex=True,
+        constrained_layout=True,
+    )
+
+    if n_rows == 1:
+        axes = [axes]  # type: ignore[list-item]
+
+    fig.suptitle(
+        f"{station} - Rates metadata (clean_remote/imported basenames: {allowed_count})",
+        fontsize=13,
+    )
+
+    x_limits = station_time_bounds(task_data)
+    station_max_gap = np.inf if station == "MINGO00" else max_bin_gap_hours
+
+    for row_idx, task_id in enumerate(tasks):
+        ax = axes[row_idx]
+        plot_task_histogram_axis(
+            ax=ax,
+            df=task_data.get(task_id, pd.DataFrame()),
+            max_rate_bin=max_rate_bin,
+            y_max_hz=y_max_hz,
+            max_bin_gap_hours=station_max_gap,
+            title=f"Task {task_id} - Events/s histogram over file time",
+            x_limits=x_limits,
+        )
+
+    global_ax = axes[-2]
+    plot_global_rate_axis(
+        ax=global_ax,
+        task_data=task_data,
+        tasks=tasks,
+        global_rate_y_min_hz=global_rate_y_min_hz,
+        global_rate_y_max_hz=global_rate_y_max_hz,
+        x_limits=x_limits,
+        title="Global rate by task",
+    )
+
+    global_tight_ax = axes[-1]
+    plot_global_rate_axis(
+        ax=global_tight_ax,
+        task_data=task_data,
+        tasks=tasks,
+        global_rate_y_min_hz=global_rate_tight_y_min_hz,
+        global_rate_y_max_hz=global_rate_tight_y_max_hz,
+        x_limits=x_limits,
+        title="Global rate by task (tight view)",
+    )
+
+    global_tight_ax.set_xlabel("Basename timestamp")
+    global_tight_ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
+
+    pdf_save_rasterized_page(pdf, fig, dpi=150)
+    plt.close(fig)
+
+
+def default_output_path() -> Path:
+    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    return PLOTS_DIR / DEFAULT_OUTPUT_FILENAME
+
+
+def load_config(config_path: Path) -> Dict[str, object]:
+    if not config_path.exists():
+        return {}
+
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise ValueError(f"Failed to parse config JSON {config_path}: {exc}") from exc
+
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Config file must contain a JSON object: {config_path}")
+    return loaded
+
+
+def resolve_output_path(raw_output: Optional[str], config_path: Path) -> Path:
+    if not raw_output:
+        return default_output_path()
+    candidate = Path(raw_output).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return (config_path.parent / candidate).resolve()
+
+
+def resolve_runtime_options(
+    args: argparse.Namespace,
+) -> Tuple[List[str], List[int], float, float, float, float, float, int, int, float, Path]:
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
+
+    if args.stations is not None:
+        stations = resolve_station_selection(args.stations)
+    else:
+        cfg_stations = config.get("stations", [])
+        if not isinstance(cfg_stations, list):
+            raise ValueError("'stations' in config must be a list")
+        normalized = normalize_existing_station_tokens(cfg_stations)
+        stations = normalized if normalized else list_available_stations()
+
+    if args.tasks is not None:
+        tasks = normalize_task_selection(args.tasks)
+    else:
+        cfg_tasks = config.get("tasks", list(TASK_IDS))
+        if not isinstance(cfg_tasks, list):
+            raise ValueError("'tasks' in config must be a list")
+        tasks = normalize_task_selection(cfg_tasks)
+
+    if args.y_max_hz is not None:
+        y_max_hz = float(args.y_max_hz)
+    else:
+        try:
+            y_max_hz = float(config.get("y_max_hz", DEFAULT_Y_MAX_HZ))
+        except (TypeError, ValueError):
+            raise ValueError("'y_max_hz' in config must be numeric")
+    if y_max_hz <= 0:
+        raise ValueError("'y_max_hz' must be > 0")
+
+    try:
+        global_rate_y_min_hz = float(
+            config.get("global_rate_y_min_hz", DEFAULT_GLOBAL_RATE_Y_MIN_HZ)
+        )
+    except (TypeError, ValueError):
+        raise ValueError("'global_rate_y_min_hz' in config must be numeric")
+
+    try:
+        global_rate_y_max_hz = float(
+            config.get("global_rate_y_max_hz", DEFAULT_GLOBAL_RATE_Y_MAX_HZ)
+        )
+    except (TypeError, ValueError):
+        raise ValueError("'global_rate_y_max_hz' in config must be numeric")
+
+    if global_rate_y_max_hz <= global_rate_y_min_hz:
+        raise ValueError("'global_rate_y_max_hz' must be > 'global_rate_y_min_hz'")
+
+    try:
+        global_rate_tight_y_min_hz = float(
+            config.get("global_rate_tight_y_min_hz", DEFAULT_GLOBAL_RATE_TIGHT_Y_MIN_HZ)
+        )
+    except (TypeError, ValueError):
+        raise ValueError("'global_rate_tight_y_min_hz' in config must be numeric")
+
+    try:
+        global_rate_tight_y_max_hz = float(
+            config.get("global_rate_tight_y_max_hz", DEFAULT_GLOBAL_RATE_TIGHT_Y_MAX_HZ)
+        )
+    except (TypeError, ValueError):
+        raise ValueError("'global_rate_tight_y_max_hz' in config must be numeric")
+
+    if global_rate_tight_y_max_hz <= global_rate_tight_y_min_hz:
+        raise ValueError("'global_rate_tight_y_max_hz' must be > 'global_rate_tight_y_min_hz'")
+
+    if args.max_rate_bin is not None:
+        max_rate_bin = int(args.max_rate_bin)
+    else:
+        try:
+            max_rate_bin = int(config.get("max_rate_bin", DEFAULT_MAX_RATE_BIN))
+        except (TypeError, ValueError):
+            raise ValueError("'max_rate_bin' in config must be integer")
+    if max_rate_bin <= 0:
+        raise ValueError("'max_rate_bin' must be > 0")
+
+    try:
+        tail_rows = int(config.get("tail_rows", DEFAULT_TAIL_ROWS))
+    except (TypeError, ValueError):
+        raise ValueError("'tail_rows' in config must be integer")
+    if tail_rows < 0:
+        raise ValueError("'tail_rows' in config must be >= 0")
+
+    if args.max_bin_gap_hours is not None:
+        max_bin_gap_hours = float(args.max_bin_gap_hours)
+    else:
+        try:
+            max_bin_gap_hours = float(
+                config.get("max_bin_gap_hours", DEFAULT_MAX_BIN_GAP_HOURS)
+            )
+        except (TypeError, ValueError):
+            raise ValueError("'max_bin_gap_hours' in config must be numeric")
+    if max_bin_gap_hours <= 0:
+        raise ValueError("'max_bin_gap_hours' must be > 0")
+
+    output_raw = args.output
+    if output_raw is None:
+        config_output = config.get("output")
+        output_raw = str(config_output) if config_output is not None else None
+    output_path = resolve_output_path(output_raw, config_path)
+
+    return (
+        stations,
+        tasks,
+        y_max_hz,
+        global_rate_y_min_hz,
+        global_rate_y_max_hz,
+        global_rate_tight_y_min_hz,
+        global_rate_tight_y_max_hz,
+        max_rate_bin,
+        tail_rows,
+        max_bin_gap_hours,
+        output_path,
+    )
+
+
+def ensure_output_directory(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Plot events-per-second metadata histograms from stage-1 specific metadata.")
+        description=(
+            "Generate rates metadata report with clean_remote/imported basename gating."
+        )
+    )
+    parser.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help=f"Path to JSON config (default: {DEFAULT_CONFIG_PATH}).",
+    )
     parser.add_argument(
         "--stations",
-        nargs="*",
-        default=DEFAULT_STATIONS,
-        help="Stations to scan (default: 0 1 2 3 4).",
+        nargs="+",
+        default=None,
+        help="Station selection override (e.g. MINGO00 MINGO01).",
     )
     parser.add_argument(
         "--tasks",
-        nargs="*",
-        default=DEFAULT_TASKS,
-        help="Tasks to scan (default: 1 2 3 4 5).",
-    )
-    parser.add_argument(
-        "--metadata-paths",
-        nargs="*",
-        default=[],
-        help="Explicit metadata CSV paths to include.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default=str(OUTPUT_DIR),
-        help="Directory for output plots.",
-    )
-    parser.add_argument(
-        "--output-name",
-        default=DEFAULT_OUTPUT_NAME,
-        help="Output PDF filename.",
-    )
-    parser.add_argument(
-        "--max-rate",
+        nargs="+",
         type=int,
-        default=DEFAULT_MAX_RATE,
-        help="Maximum events-per-second bin to read (default: 100).",
+        default=None,
+        help="Task id override (subset of 1 2 3 4 5).",
     )
     parser.add_argument(
-        "--tail",
+        "--y-max-hz",
+        type=float,
+        default=None,
+        help="Y-axis max (Hz) for task histograms.",
+    )
+    parser.add_argument(
+        "--max-rate-bin",
         type=int,
-        default=0,
-        help="Only read the last N rows from each CSV (default: 0 = all rows).",
+        default=None,
+        help="Max events-per-second bin to read/plot.",
     )
     parser.add_argument(
-        "--last-columns",
-        type=int,
-        default=0,
-        help="Only read the last N columns (plus required time/rate columns).",
+        "--max-bin-gap-hours",
+        type=float,
+        default=None,
+        help="Max histogram bin extent to the next file (hours). Ignored for MINGO00.",
     )
     parser.add_argument(
-        "--time-columns",
-        default="",
-        help="Comma-separated list of preferred time columns (overrides defaults).",
+        "--output",
+        default=None,
+        help="Output PDF path override (absolute or config-relative).",
     )
-    xfb_group = parser.add_mutually_exclusive_group()
-    xfb_group.add_argument(
-        "--x-from-basename",
-        dest="x_from_basename",
-        action="store_true",
-        default=True,
-        help="Use timestamp parsed from filename_base for the x-axis (default: enabled).",
-    )
-    xfb_group.add_argument(
-        "--no-x-from-basename",
-        dest="x_from_basename",
-        action="store_false",
-        help="Do NOT use timestamp parsed from filename_base for the x-axis.",
-    )
-    parser.add_argument(
-        "--linear-color",
-        action="store_true",
-        help="Use linear color scale instead of log.",
-    )
-    parser.add_argument(
-        "--show",
-        action="store_true",
-        help="Display plots interactively after saving.",
-    )
-    return parser.parse_args()
+    return parser
 
 
-def main() -> int:
-    args = parse_args()
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+def main() -> None:
+    configure_matplotlib_style()
+    args = build_parser().parse_args()
 
-    preferred_time_columns = [
-        col.strip() for col in args.time_columns.split(",") if col.strip()
-    ]
+    (
+        stations,
+        tasks,
+        y_max_hz,
+        global_rate_y_min_hz,
+        global_rate_y_max_hz,
+        global_rate_tight_y_min_hz,
+        global_rate_tight_y_max_hz,
+        max_rate_bin,
+        tail_rows,
+        max_bin_gap_hours,
+        output_path,
+    ) = resolve_runtime_options(args)
 
-    explicit_paths = [Path(path).expanduser() for path in args.metadata_paths]
-    sources = metadata_sources(args.stations, args.tasks, explicit_paths)
+    if not stations:
+        raise RuntimeError("No stations selected or discovered.")
 
-    if not sources:
-        print("No metadata CSVs found. Provide --metadata-paths or ensure station folders exist.")
-        return 1
+    ensure_output_directory(output_path)
 
-    frames = []
-    for source in sources:
-        try:
-            frames.append(
-                read_metadata_csv(
-                    source,
-                    tail_rows=args.tail,
-                    last_columns=args.last_columns,
-                    max_rate=args.max_rate,
-                    preferred_time_columns=preferred_time_columns,
+    with PdfPages(output_path) as pdf:
+        for station in stations:
+            allowed_basenames = load_allowed_basenames(station)
+            task_data: Dict[int, pd.DataFrame] = {}
+            for task_id in tasks:
+                task_data[task_id] = load_task_metadata(
+                    station=station,
+                    task_id=task_id,
+                    allowed_basenames=allowed_basenames,
+                    max_rate_bin=max_rate_bin,
+                    tail_rows=tail_rows,
                 )
-            )
-        except Exception as exc:
-            print(f"Warning: failed to read {source.path}: {exc}")
 
-    if not frames:
-        print("No metadata rows loaded.")
-        return 1
-
-    df = pd.concat(frames, ignore_index=True)
-
-    max_rate = max(0, args.max_rate)
-    rate_cols = rate_columns(max_rate)
-    df = ensure_rate_columns(df, rate_cols)
-    # De-fragment after loading/column-normalization to avoid slowdowns + warnings.
-    df = df.copy()
-
-    if args.x_from_basename and "filename_base" in df.columns:
-        df["center_time"] = df["filename_base"].astype(str).map(parse_time_from_filename)
-        missing = df["center_time"].isna()
-        if missing.any():
-            df.loc[missing, "center_time"] = df.loc[missing].apply(
-                lambda row: derive_center_time(row, preferred_time_columns), axis=1
-            )
-    else:
-        df["center_time"] = df.apply(
-            lambda row: derive_center_time(row, preferred_time_columns), axis=1
-        )
-    df = df[~df["center_time"].isna()].copy()
-    if df.empty:
-        print("No rows with a usable center time. Use --time-columns to specify a time column.")
-        return 1
-
-    df["center_time"] = pd.to_datetime(df["center_time"], errors="coerce")
-    df = df[~df["center_time"].isna()].copy()
-
-    df["events_per_second_total_seconds"] = pd.to_numeric(
-        df.get("events_per_second_total_seconds", pd.Series([np.nan] * len(df))),
-        errors="coerce",
-    ).fillna(0)
-    df["events_per_second_total_seconds"] = df["events_per_second_total_seconds"].astype(float)
-
-    df["events_per_second_global_rate"] = pd.to_numeric(
-        df.get("events_per_second_global_rate", pd.Series([np.nan] * len(df))),
-        errors="coerce",
-    )
-
-    if df["events_per_second_global_rate"].isna().all():
-        rates_per_row = (
-            df[rate_cols]
-            .fillna(0)
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0)
-        )
-        totals = df["events_per_second_total_seconds"].replace(0, np.nan)
-        total_events = (rates_per_row.mul(np.arange(max_rate + 1), axis=1)).sum(axis=1)
-        df["events_per_second_global_rate"] = (total_events / totals).fillna(0)
-
-    rate_values = np.arange(0, max_rate + 1)
-    total_counts = summarize_rate_counts(df, rate_cols)
-    global_times, global_rate_matrix, global_total_seconds = build_rate_arrays(df, rate_cols)
-    fallback_seconds = float(df["events_per_second_total_seconds"].median())
-    # Share time-axis bounds across all time-series plots for easier comparison.
-    x_limits: Optional[Tuple[float, float]] = None
-    if global_times.size:
-        x_limits = (float(np.nanmin(global_times)), float(np.nanmax(global_times)))
-
-    tasks = (
-        sort_task_values(df["task"].dropna().unique())
-        if "task" in df.columns
-        else []
-    )
-    df_rate_dedup = df
-    df_rate_matched = pd.DataFrame()
-    matched_file_count = 0
-    if tasks and "filename_base" in df.columns and "task" in df.columns:
-        df_rate_dedup = df.copy()
-        df_rate_dedup["_file_key"] = build_file_key(df_rate_dedup)
-        df_rate_dedup = df_rate_dedup[
-            df_rate_dedup["_file_key"].notna()
-            & (df_rate_dedup["_file_key"].astype(str).str.len() > 0)
-        ].copy()
-        # Keep the latest entry per (task, file) from the metadata CSVs.
-        df_rate_dedup = df_rate_dedup.drop_duplicates(subset=["task", "_file_key"], keep="last")
-        if len(tasks) > 1:
-            df_rate_matched = filter_to_common_files_across_tasks(
-                df_rate_dedup, tasks=tasks, file_key_col="_file_key"
-            )
-            if not df_rate_matched.empty:
-                matched_file_count = int(df_rate_matched["_file_key"].nunique())
-
-    report_path = output_dir / args.output_name
-
-    with PdfPages(report_path) as pdf:
-        summary_lines = [
-            f"Total files: {len(df)}",
-            f"Stations: {', '.join(sorted(df['station'].dropna().unique())) if 'station' in df.columns else 'n/a'}",
-            f"Tasks: {', '.join(sorted(df['task'].dropna().unique())) if 'task' in df.columns else 'n/a'}",
-            f"Total seconds (sum): {int(df['events_per_second_total_seconds'].sum())}",
-        ]
-        if matched_file_count and len(tasks) > 1:
-            summary_lines.append(
-                f"Matched files across tasks ({', '.join(str(t) for t in tasks)}): {matched_file_count}"
-            )
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.axis("off")
-        ax.text(0.02, 0.95, "Events-per-second metadata report", fontsize=14, weight="bold", va="top")
-        ax.text(0.02, 0.75, "\n".join(summary_lines), fontsize=11, va="top")
-        pdf_save_rasterized_page(pdf, fig)
-        plt.close(fig)
-
-        if len(tasks) > 1:
-            for task in tasks:
-                task_df = df[df["task"] == task].copy()
-                if task_df.empty:
-                    continue
-                task_times, task_rate_matrix, task_total_seconds = build_rate_arrays(task_df, rate_cols)
-                task_fallback = float(task_df["events_per_second_total_seconds"].median())
-                plot_rate_heatmap(
-                    pdf,
-                    times=task_times,
-                    rate_matrix=task_rate_matrix,
-                    total_seconds=task_total_seconds,
-                    rate_values=rate_values,
-                    title=f"Events per second occurrence rate per file (Task {task})",
-                    log_color=not args.linear_color,
-                    fallback_seconds=task_fallback,
-                    x_limits=x_limits,
-                )
-        else:
-            plot_rate_heatmap(
-                pdf,
-                times=global_times,
-                rate_matrix=global_rate_matrix,
-                total_seconds=global_total_seconds,
-                rate_values=rate_values,
-                title="Events per second occurrence rate per file",
-                log_color=not args.linear_color,
-                fallback_seconds=fallback_seconds,
-                x_limits=x_limits,
-            )
-
-        plot_global_histogram(
-            pdf,
-            rate_values=rate_values,
-            total_counts=total_counts,
-            title="Global events-per-second histogram (all files)",
-        )
-
-        plot_global_rate_trend(
-            pdf,
-            times=global_times,
-            rates=df["events_per_second_global_rate"].to_numpy(dtype=float),
-            title="Global rate per file",
-            x_limits=x_limits,
-        )
-
-        plot_task_rate_trends(
-            pdf,
-            df=df,
-            title="Global event rate per file by task",
-            x_limits=x_limits,
-        )
-
-        if len(tasks) > 1 and matched_file_count == 0 and "filename_base" in df.columns and "task" in df.columns:
-            fig, ax = plt.subplots(figsize=(11, 3))
-            ax.axis("off")
-            ax.text(
-                0.02,
-                0.75,
-                "Matched-by-filename view",
-                fontsize=13,
-                weight="bold",
-                va="top",
-            )
-            ax.text(
-                0.02,
-                0.45,
-                "No filenames were found in common across all selected tasks.\n"
-                "Try increasing --tail (or reading full files) so each task includes the same filenames,\n"
-                "or restrict --tasks to those you want to compare.",
-                fontsize=11,
-                va="top",
-            )
-            pdf_save_rasterized_page(pdf, fig)
-            plt.close(fig)
-
-        if len(tasks) > 1 and not df_rate_matched.empty:
-            plot_task_rate_trends(
-                pdf,
-                df=df_rate_matched,
-                title="Global event rate per file by task (matched by filename_base)",
-                x_limits=x_limits,
-            )
-            plot_matched_file_traces(
-                pdf,
-                df=df_rate_matched,
+            plot_station_page(
+                station=station,
+                task_data=task_data,
                 tasks=tasks,
-                value_col="events_per_second_global_rate",
-                title="Global rate per file across tasks",
-                ylabel="Global rate (events / second)",
-            )
-            plot_matched_file_traces(
-                pdf,
-                df=df_rate_matched,
-                tasks=tasks,
-                value_col="events_per_second_total_seconds",
-                title="Time span per file across tasks",
-                ylabel="Total seconds (start-to-end window)",
+                pdf=pdf,
+                y_max_hz=y_max_hz,
+                global_rate_y_min_hz=global_rate_y_min_hz,
+                global_rate_y_max_hz=global_rate_y_max_hz,
+                global_rate_tight_y_min_hz=global_rate_tight_y_min_hz,
+                global_rate_tight_y_max_hz=global_rate_tight_y_max_hz,
+                max_rate_bin=max_rate_bin,
+                max_bin_gap_hours=max_bin_gap_hours,
+                allowed_count=len(allowed_basenames),
             )
 
-    print(f"Saved report to {report_path}")
-
-    if args.show:
-        plt.show()
-
-    return 0
+    print(f"Saved rates metadata report: {output_path}")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
