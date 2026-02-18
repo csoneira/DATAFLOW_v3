@@ -491,7 +491,7 @@ def plot_station_page(
     right_plotted = _plot_overlay(
         ax=right_ax,
         x_col="execution_timestamp",
-        title=f"Tasks 1-5 - Execution timestamp (last {last_hours:g}h)",
+        title=f"Tasks 1-5 - Exec. time (last {last_hours:g}h)",
         x_limits=right_limits,
         right_window_only=True,
     )

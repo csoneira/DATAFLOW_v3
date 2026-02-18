@@ -328,8 +328,8 @@ base_directories = {
 
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
-    # If save_plots is False, skip creating the figure_directory
-    if directory == base_directories["figure_directory"] and not save_plots:
+    # Skip figure directories at startup; create lazily after selecting a file.
+    if directory in (base_directories["base_figure_directory"], base_directories["figure_directory"]):
         continue
     os.makedirs(directory, exist_ok=True)
 
@@ -339,8 +339,6 @@ debug_plot_directory = os.path.join(
     f"FIGURES_EXEC_ON_{date_execution}",
 )
 debug_fig_idx = 1
-if create_debug_plots:
-    os.makedirs(debug_plot_directory, exist_ok=True)
 
 def _debug_plot_filter_group(
     df: pd.DataFrame,
@@ -1087,8 +1085,8 @@ def get_file_path(directory, file_name):
 # Create ALL directories if they don't already exist
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
-    # If save_plots is False, skip creating the figure_directory
-    if directory == base_directories["figure_directory"] and not save_plots:
+    # Skip figure directories at startup; create lazily after selecting a file.
+    if directory in (base_directories["base_figure_directory"], base_directories["figure_directory"]):
         continue
     os.makedirs(directory, exist_ok=True)
 
@@ -1234,6 +1232,8 @@ else:
 
 # This is for all cases
 file_path = processing_file_path
+if save_plots:
+    os.makedirs(base_directories["figure_directory"], exist_ok=True)
 
 the_filename = os.path.basename(file_path)
 print(f"File to process: {the_filename}")
