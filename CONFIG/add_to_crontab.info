@@ -4,7 +4,7 @@
 # minute hour day_of_month month day_of_week command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Updated at 2026-02-17 12:05
+# Updated at 2026-02-18 16:54
 
 SHELL=/bin/bash
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
@@ -36,7 +36,7 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 * * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/TELEGRAM_BOT/cron_persistent_telegram_bot.log 2>&1
 
 # Save copy the core files
-0 5 * * * rsync -av --exclude="STATIONS" --exclude=".git" --exclude=".gitignore" --exclude="OPERATIONS_RUNTIME" $HOME/DATAFLOW_v3/ $HOME/SAFE_DATAFLOW_v3/ >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/BACKUP/rsync_safe_dataflow_v3.log 2>&1
+0 5 * * * rsync -av --exclude-from="$HOME/DATAFLOW_v3/CONFIG/safe_dataflow_rsync_excludes.list" $HOME/DATAFLOW_v3/ $HOME/SAFE_DATAFLOW_v3/ >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/BACKUP/rsync_safe_dataflow_v3.log 2>&1
 
 # Setup Copernicus API codes
 0 * * * * /bin/cp $HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/COPERNICUS/.cdsapirc $HOME/.cdsapirc >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CONFIG/COPERNICUS/cdsapirc_copy.log 2>&1
