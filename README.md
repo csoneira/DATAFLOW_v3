@@ -25,7 +25,7 @@ Stages:
 - Stage 3 (external context and analytics): incorporate NMDB data and build enriched tables.
 
 Key locations:
-- `MASTER/STAGE_0/`, `MASTER/STAGE_1/`, `MASTER/STAGE_2/`, `MASTER/STAGE_3/`
+- `MASTER/STAGES/STAGE_0/`, `MASTER/STAGES/STAGE_1/`, `MASTER/STAGES/STAGE_2/`, `MASTER/STAGES/STAGE_3/`
 - `MASTER/ANCILLARY/`: monitors, bots, plotters, and utility scripts
 - `FOR_MINGO_SYSTEMS/`: tmux and cron templates for production deployment
 

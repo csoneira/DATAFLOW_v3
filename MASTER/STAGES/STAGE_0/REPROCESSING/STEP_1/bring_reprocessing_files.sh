@@ -358,7 +358,7 @@ working_metadata_csv="${input_directory}/clean_remote_database_${station}.csv"
 csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 csv_header="basename"
 
-metadata_prep_script="${MASTER_DIR}/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh"
+metadata_prep_script="${MASTER_DIR}/STAGES/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh"
 if $refresh_metadata || $plot_hist; then
   if [[ ! -x "$metadata_prep_script" ]]; then
     log_info "Metadata preparation script not found at $metadata_prep_script" >&2

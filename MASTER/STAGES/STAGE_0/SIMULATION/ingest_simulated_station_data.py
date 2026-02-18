@@ -137,7 +137,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    repo_root = Path(__file__).resolve().parents[3]
+    current_path = Path(__file__).resolve()
+    master_dir = next((p for p in current_path.parents if p.name == "MASTER"), None)
+    if master_dir is None:
+        raise RuntimeError(f"Unable to resolve MASTER directory from {current_path}")
+    repo_root = master_dir.parent
     source_dir = Path(args.source_dir).expanduser().resolve()
     source_dir.mkdir(parents=True, exist_ok=True)
     if not source_dir.is_dir():
