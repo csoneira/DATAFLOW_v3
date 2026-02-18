@@ -147,7 +147,8 @@ TASK_LABELS=(
 )
 
 TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
-TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step1_station_task_queue.txt"
+TRAFFIC_QUEUE_FILE=""
+TRAFFIC_QUEUE_FILE_PREFIX="stage1_step1_station_task_queue"
 config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_step_1.yaml"
 
 # Runtime tuning (overridden by config_step_1.yaml if present)
@@ -467,6 +468,11 @@ validate_tasks() {
 
 validate_stations "${stations_requested[@]}"
 validate_tasks "${tasks_requested[@]}"
+
+queue_station_key="$(IFS='-'; echo "${stations_requested[*]}")"
+queue_task_key="$(IFS='-'; echo "${tasks_requested[*]}")"
+queue_signature="$(sanitize_key "s${queue_station_key}_t${queue_task_key}")"
+TRAFFIC_QUEUE_FILE="${TRAFFIC_LIGHT_DIR}/${TRAFFIC_QUEUE_FILE_PREFIX}_${queue_signature}.txt"
 
 refresh_execution_pairs_from_config() {
   local cfg_path="$config_file"

@@ -93,6 +93,12 @@ def build_avalanche(
     out = df.copy()
     n = len(out)
     tt_array = np.full(n, "", dtype=object)
+    theta_col = next((col for col in ("Theta_gen", "theta", "theta_rad") if col in out.columns), None)
+    angle_path_factor = np.ones(n, dtype=float)
+    if theta_col is not None:
+        cos_theta = np.abs(np.cos(out[theta_col].to_numpy(dtype=float)))
+        cos_theta = np.clip(cos_theta, 1e-3, None)
+        angle_path_factor = 1.0 / cos_theta
 
     for plane_idx in range(1, 5):
         x_col = f"X_gen_{plane_idx}"
@@ -111,7 +117,9 @@ def build_avalanche(
             eff = 1.0 - 1e-6
         ion_lambda = -np.log(1.0 - eff)
         ions = np.zeros(n, dtype=int)
-        ions[hit_mask] = rng.poisson(ion_lambda, size=hit_mask.sum())
+        if hit_mask.any():
+            ion_lambda_eff = ion_lambda * angle_path_factor[hit_mask]
+            ions[hit_mask] = rng.poisson(ion_lambda_eff)
         avalanche_exists = ions > 0
 
         avalanche_x = np.where(avalanche_exists, x_vals, np.nan)
@@ -138,7 +146,7 @@ def build_avalanche(
 
 
 def prune_step3(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "tt_avalanche"}
+    keep = {"event_id", "T_thick_s", "Theta_gen", "Phi_gen", "tt_avalanche"}
     for plane_idx in range(1, 5):
         keep.add(f"T_sum_{plane_idx}_ns")
         keep.add(f"avalanche_ion_{plane_idx}")

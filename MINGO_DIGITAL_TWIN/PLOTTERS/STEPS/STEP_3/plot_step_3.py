@@ -28,6 +28,154 @@ def normalize_tt_series(series: pd.Series) -> pd.Series:
     return tt
 
 
+def _theta_column(df: pd.DataFrame) -> str | None:
+    for col in ("Theta_gen", "theta", "theta_rad"):
+        if col in df.columns:
+            return col
+    return None
+
+
+def plot_theta_efficiency(df: pd.DataFrame, pdf: PdfPages, n_bins: int = 10) -> None:
+    theta_col = _theta_column(df)
+    if theta_col is None or "tt_avalanche" not in df.columns:
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.axis("off")
+        ax.text(
+            0.5,
+            0.5,
+            "Theta-binned efficiency skipped (missing Theta_gen/theta or tt_avalanche).",
+            ha="center",
+            va="center",
+            fontsize=11,
+        )
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+        return
+
+    theta = df[theta_col].to_numpy(dtype=float)
+    tt = normalize_tt_series(df["tt_avalanche"]).fillna("").astype(str).to_numpy()
+    valid = np.isfinite(theta) & (tt != "")
+    if not valid.any():
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.axis("off")
+        ax.text(
+            0.5,
+            0.5,
+            "Theta-binned efficiency skipped (no valid events with theta and tt_avalanche).",
+            ha="center",
+            va="center",
+            fontsize=11,
+        )
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+        return
+
+    theta_vals = theta[valid]
+    tt_vals = tt[valid]
+    theta_edges = np.linspace(0.0, np.pi / 2.0, int(n_bins) + 1)
+    bin_idx = np.digitize(theta_vals, theta_edges, right=False) - 1
+    in_range = (bin_idx >= 0) & (bin_idx < n_bins)
+    bin_idx = bin_idx[in_range]
+    tt_vals = tt_vals[in_range]
+
+    n1234 = np.zeros(n_bins, dtype=int)
+    n134 = np.zeros(n_bins, dtype=int)
+    n124 = np.zeros(n_bins, dtype=int)
+    for b in range(n_bins):
+        in_bin = bin_idx == b
+        if not in_bin.any():
+            continue
+        tt_bin = tt_vals[in_bin]
+        n1234[b] = int(np.sum(tt_bin == "1234"))
+        n134[b] = int(np.sum(tt_bin == "134"))
+        n124[b] = int(np.sum(tt_bin == "124"))
+
+    eff2 = np.full(n_bins, np.nan, dtype=float)
+    eff3 = np.full(n_bins, np.nan, dtype=float)
+    ok = n1234 > 0
+    eff2[ok] = 1.0 - (n134[ok] / n1234[ok])
+    eff3[ok] = 1.0 - (n124[ok] / n1234[ok])
+    sigma_eff2 = np.full(n_bins, np.nan, dtype=float)
+    sigma_eff3 = np.full(n_bins, np.nan, dtype=float)
+    if ok.any():
+        den = n1234[ok].astype(float)
+        den_sigma = np.sqrt(np.maximum(den, 1.0))
+
+        num2 = n134[ok].astype(float)
+        num2_sigma = np.sqrt(np.maximum(num2, 1.0))
+        sigma_eff2[ok] = np.sqrt((num2_sigma / den) ** 2 + ((num2 * den_sigma) / (den ** 2)) ** 2)
+
+        num3 = n124[ok].astype(float)
+        num3_sigma = np.sqrt(np.maximum(num3, 1.0))
+        sigma_eff3[ok] = np.sqrt((num3_sigma / den) ** 2 + ((num3 * den_sigma) / (den ** 2)) ** 2)
+
+    eff2_lo = np.clip(eff2 - sigma_eff2, 0.0, 1.05)
+    eff2_hi = np.clip(eff2 + sigma_eff2, 0.0, 1.05)
+    eff3_lo = np.clip(eff3 - sigma_eff3, 0.0, 1.05)
+    eff3_hi = np.clip(eff3 + sigma_eff3, 0.0, 1.05)
+
+    theta_centers_deg = np.degrees(0.5 * (theta_edges[:-1] + theta_edges[1:]))
+    theta_edges_deg = np.degrees(theta_edges)
+    width = 0.38 * (theta_edges_deg[1] - theta_edges_deg[0])
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
+
+    ax2 = axes[0]
+    ax2.bar(theta_centers_deg - width / 2.0, n1234, width=width, color="tab:blue", alpha=0.70, label="N1234")
+    ax2.bar(theta_centers_deg + width / 2.0, n134, width=width, color="tab:orange", alpha=0.70, label="N134")
+    ax2.set_ylabel("Counts")
+    ax2.set_title("eff2(theta) = 1 - N134/N1234")
+    ax2.grid(alpha=0.20)
+    ax2_eff = ax2.twinx()
+    ax2_eff.fill_between(
+        theta_centers_deg,
+        eff2_lo,
+        eff2_hi,
+        color="tab:red",
+        alpha=0.20,
+        linewidth=0,
+        label="eff2 ±1σ (Poisson)",
+    )
+    ax2_eff.axhline(1.0, color="gray", linestyle="--", alpha=0.5, linewidth=1.2, label="eff=1 reference")
+    ax2_eff.plot(theta_centers_deg, eff2, color="tab:red", marker="o", label="eff2")
+    ax2_eff.set_ylabel("eff2")
+    ax2_eff.set_ylim(0.5, 1.05)
+    h1, l1 = ax2.get_legend_handles_labels()
+    h2, l2 = ax2_eff.get_legend_handles_labels()
+    ax2.legend(h1 + h2, l1 + l2, loc="upper right")
+
+    ax3 = axes[1]
+    ax3.bar(theta_centers_deg - width / 2.0, n1234, width=width, color="tab:blue", alpha=0.70, label="N1234")
+    ax3.bar(theta_centers_deg + width / 2.0, n124, width=width, color="tab:green", alpha=0.70, label="N124")
+    ax3.set_ylabel("Counts")
+    ax3.set_xlabel("Theta (deg)")
+    ax3.set_title("eff3(theta) = 1 - N124/N1234")
+    ax3.grid(alpha=0.20)
+    ax3_eff = ax3.twinx()
+    ax3_eff.fill_between(
+        theta_centers_deg,
+        eff3_lo,
+        eff3_hi,
+        color="tab:red",
+        alpha=0.20,
+        linewidth=0,
+        label="eff3 ±1σ (Poisson)",
+    )
+    ax3_eff.axhline(1.0, color="gray", linestyle="--", alpha=0.5, linewidth=1.2, label="eff=1 reference")
+    ax3_eff.plot(theta_centers_deg, eff3, color="tab:red", marker="o", label="eff3")
+    ax3_eff.set_ylabel("eff3")
+    ax3_eff.set_ylim(0.5, 1.05)
+    h1, l1 = ax3.get_legend_handles_labels()
+    h2, l2 = ax3_eff.get_legend_handles_labels()
+    ax3.legend(h1 + h2, l1 + l2, loc="upper right")
+
+    fig.tight_layout()
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+
 def plot_avalanche_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     # tt_avalanche counts
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -82,7 +230,7 @@ def plot_avalanche_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     plt.close(fig)
 
     # Avalanche center positions (2D density)
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharex=True, sharey=True)
     for plane_idx, ax in enumerate(axes.flatten(), start=1):
         x_col = f"avalanche_x_{plane_idx}"
         y_col = f"avalanche_y_{plane_idx}"
@@ -102,7 +250,7 @@ def plot_avalanche_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     plt.close(fig)
 
     # Avalanche size vs ionizations scatter
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharex=True, sharey=True)
     for plane_idx, ax in enumerate(axes.flatten(), start=1):
         size_col = f"avalanche_size_electrons_{plane_idx}"
         ion_col = f"avalanche_ion_{plane_idx}"
@@ -123,6 +271,9 @@ def plot_avalanche_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
+    # Angular behavior diagnostic from tt_avalanche multiplicity.
+    plot_theta_efficiency(df, pdf, n_bins=10)
+
 def find_any_chunk_for_step(step: int) -> Path | None:
     root = Path(__file__).resolve().parents[3] / "INTERSTEPS"
     parts = sorted(root.glob(f"**/step_{step}_chunks/part_*.pkl"))
@@ -132,7 +283,7 @@ def find_any_chunk_for_step(step: int) -> Path | None:
     if manifests:
         try:
             j = json.loads(manifests[0].read_text())
-            parts_list = [p for p in j.get("parts", []) if p.endswith(".pkl")]
+            parts_list = [p for p in (j.get("parts") or j.get("chunks") or []) if str(p).endswith(".pkl")]
             if parts_list:
                 return Path(parts_list[0])
         except Exception:
@@ -143,7 +294,7 @@ def find_any_chunk_for_step(step: int) -> Path | None:
 def load_df(path: Path) -> pd.DataFrame:
     if path.name.endswith(".chunks.json"):
         j = json.loads(path.read_text())
-        parts = [p for p in j.get("parts", []) if p.endswith(".pkl")]
+        parts = [p for p in (j.get("parts") or j.get("chunks") or []) if str(p).endswith(".pkl")]
         if parts:
             path = Path(parts[0])
         else:

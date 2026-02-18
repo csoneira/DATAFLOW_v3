@@ -208,6 +208,14 @@ def main() -> None:
             "to avoid deleting active inputs."
         ),
     )
+    parser.add_argument(
+        "--delete-no-mesh-match",
+        action="store_true",
+        help=(
+            "Also delete stale SIM_RUN directories whose step-id chain does not match any row "
+            "in param_mesh.csv (typically leftovers from previous mesh generations)."
+        ),
+    )
     args = parser.parse_args()
 
     intersteps_dir = Path(args.intersteps_dir).expanduser().resolve()
@@ -238,6 +246,7 @@ def main() -> None:
 
     removed = 0
     removed_broken = 0
+    removed_no_mesh_match = 0
     skipped = 0
     skipped_recent = 0
     skipped_locked = 0
@@ -292,8 +301,17 @@ def main() -> None:
                 continue
             combo_done = combo_done_in_mesh(mesh, step_chain, step_index)
             if combo_done is None:
-                unknown += 1
-                _log_warn(f"SKIP (no mesh match): {sim_run_dir}")
+                if args.delete_no_mesh_match:
+                    if args.apply:
+                        shutil.rmtree(sim_run_dir)
+                        removed += 1
+                        removed_no_mesh_match += 1
+                        _log_info(f"DELETED_NO_MESH_MATCH: {sim_run_dir}")
+                    else:
+                        _log_info(f"DRY-RUN DELETE_NO_MESH_MATCH: {sim_run_dir}")
+                else:
+                    unknown += 1
+                    _log_warn(f"SKIP (no mesh match): {sim_run_dir}")
                 continue
             if not combo_done:
                 skipped += 1
@@ -309,6 +327,7 @@ def main() -> None:
         "Summary: "
         f"removed={removed}, "
         f"removed_broken={removed_broken}, "
+        f"removed_no_mesh_match={removed_no_mesh_match}, "
         f"skipped={skipped}, "
         f"skipped_recent={skipped_recent}, "
         f"skipped_locked={skipped_locked}, "

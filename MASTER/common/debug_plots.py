@@ -33,6 +33,7 @@ def plot_debug_histograms(
     bins: int = 80,
     max_cols_per_fig: int = 12,
     show: bool = False,
+    y_scale: str = "log",
 ) -> int:
     """Save debug histogram grids for *columns*, with optional threshold lines."""
     if df is None or not columns:
@@ -65,7 +66,10 @@ def plot_debug_histograms(
                 continue
 
             ax.hist(series, bins=bins, color="C0", alpha=0.7)
-            ax.set_yscale("log")
+            if y_scale in {"linear", "log"}:
+                ax.set_yscale(y_scale)
+            else:
+                ax.set_yscale("log")
             ax.set_title(col)
             ax.set_xlabel("value")
             ax.set_ylabel("count")

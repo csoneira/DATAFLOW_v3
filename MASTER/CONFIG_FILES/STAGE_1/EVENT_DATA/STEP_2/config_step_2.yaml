@@ -35,4 +35,6 @@ blurring_sigma_angular: 2
 blurring_xy: false
 blurring_sigma_xy: 0.05
 draw_angular_regions: true
+theta_boundaries: [5, 15, 25]
+region_layout: [1, 8, 8, 8]
 time_to_min: false

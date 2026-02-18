@@ -996,8 +996,9 @@ T_sum_RPC_right = config["T_sum_RPC_right"]
 det_pos_filter = config["det_pos_filter"]
 det_theta_left_filter = config["det_theta_left_filter"]
 det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_left_filter = config["det_phi_left_filter"]
-det_phi_right_filter = config["det_phi_right_filter"]
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config["det_slowness_filter_left"]
 det_slowness_filter_right = config["det_slowness_filter_right"]
 
@@ -1068,7 +1069,7 @@ phi_left_filter = det_phi_left_filter
 phi_right_filter = det_phi_right_filter
 
 if create_debug_plots:
-    def _emit_param_debug(param_label, columns, thresholds):
+    def _emit_param_debug(param_label, columns, thresholds, y_scale="log"):
         cols_present = [col for col in columns if col in working_df.columns]
         if not cols_present:
             return
@@ -1082,6 +1083,7 @@ if create_debug_plots:
             title=f"Task 5 pre-filter: {param_label} [tunable] (station {station})",
             out_dir=debug_plot_directory,
             fig_idx=debug_fig_idx,
+            y_scale=y_scale,
         )
 
     _emit_param_debug(
@@ -1098,6 +1100,7 @@ if create_debug_plots:
         "theta_left/right_filter",
         ["det_theta", "theta"],
         [theta_left_filter, theta_right_filter],
+        y_scale="linear",
     )
     _emit_param_debug(
         "phi_left/right_filter",
@@ -1242,8 +1245,9 @@ T_sum_RPC_right = config["T_sum_RPC_right"]
 det_pos_filter = config["det_pos_filter"]
 det_theta_left_filter = config["det_theta_left_filter"]
 det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_left_filter = config["det_phi_left_filter"]
-det_phi_right_filter = config["det_phi_right_filter"]
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config["det_slowness_filter_left"]
 det_slowness_filter_right = config["det_slowness_filter_right"]
 
@@ -1591,8 +1595,9 @@ T_sum_RPC_right = config["T_sum_RPC_right"]
 det_pos_filter = config["det_pos_filter"]
 det_theta_left_filter = config["det_theta_left_filter"]
 det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_left_filter = config["det_phi_left_filter"]
-det_phi_right_filter = config["det_phi_right_filter"]
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config["det_slowness_filter_left"]
 det_slowness_filter_right = config["det_slowness_filter_right"]
 
@@ -1814,33 +1819,7 @@ if raw_data_len == 0 and not self_trigger:
     print("No coincidence nor self-trigger events.")
     sys.exit(1)
 
-theta_boundaries_raw = config.get("theta_boundaries", [])
-region_layout_raw = config.get("region_layout", [])
-
-theta_boundaries = _coerce_numeric_sequence(theta_boundaries_raw, float)
-theta_values = []
-for b in theta_boundaries:
-    if isinstance(b, (int, float)) and np.isfinite(b):
-        b_float = float(b)
-        if 0 <= b_float <= 90 and b_float not in theta_values:
-            theta_values.append(b_float)
-theta_boundaries = theta_values
-
-region_layout = _coerce_numeric_sequence(region_layout_raw, int)
-region_layout = [max(1, int(abs(n))) for n in region_layout if isinstance(n, (int, float))]
-
-expected_regions = len(theta_boundaries) + 1
-if not region_layout:
-    region_layout = [1] * expected_regions
-elif len(region_layout) < expected_regions:
-    region_layout = region_layout + [region_layout[-1]] * (expected_regions - len(region_layout))
-elif len(region_layout) > expected_regions:
-    region_layout = region_layout[:expected_regions]
-
-if not theta_boundaries:
-    theta_boundaries = []
-
-print(f"Theta boundaries (degrees): {theta_boundaries}")
+print("TASK_5 angular-region segmentation disabled.")
 
 correct_angle = bool(config.get("correct_angle", False))
 global_variables['correct_angle'] = correct_angle
@@ -1849,121 +1828,6 @@ df = working_df.copy()
 main_df = working_df.copy()
 main_df['Theta_fit'] = main_df['theta']
 main_df['Phi_fit'] = main_df['phi']
-
-def plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout, theta_right_limit=np.pi / 2.5):
-
-    # Only use boundaries below or equal to theta_right_limit
-    max_deg = np.degrees(theta_right_filter)
-    valid_boundaries = [b for b in theta_boundaries if b <= max_deg]
-    all_bounds = [0] + valid_boundaries + [max_deg]
-    radii = [np.radians(b) for b in all_bounds]
-
-    # Draw concentric circles (excluding outermost edge)
-    for r in radii[1:-1]:
-        ax.plot(np.linspace(0, 2 * np.pi, 1000), [r] * 1000, color='white', linestyle='--', linewidth=3)
-
-    # Draw radial lines within each ring
-    for i, (r0, r1, n_phi) in enumerate(zip(radii[:-1], radii[1:], region_layout[:len(radii)-1])):
-        if n_phi <= 1:
-            continue
-        delta_phi = 2 * np.pi / n_phi
-        for j in range(n_phi):
-            phi = j * delta_phi
-            ax.plot([phi, phi], [r0, r1], color='white', linestyle='--', linewidth=3)
-
-def classify_region_flexible(row, theta_boundaries, region_layout):
-    theta = row['theta'] * 180 / np.pi
-    phi = (row['phi'] * 180 / np.pi + row.get('phi_north', 0)) % 360
-    phi = ((phi + 180) % 360) - 180  # map to [-180, 180)
-
-    # Build region bins: [0, t1), [t1, t2), ..., [tn, 90]
-    all_bounds = [0] + theta_boundaries + [90]
-    for i, (tmin, tmax) in enumerate(zip(all_bounds[:-1], all_bounds[1:])):
-        if tmin <= theta < tmax or (i == len(region_layout) - 1 and theta == 90):
-            n_phi = region_layout[i]
-            if n_phi == 1:
-                return f'R{i}.0'
-            else:
-                bin_width = 360 / n_phi
-                idx = int((phi + 180) // bin_width) % n_phi
-                return f'R{i}.{idx}'
-        
-    return 'None'
-
-# Input parameters
-theta_right_limit = np.pi / 2.5
-
-# Compute angular boundaries
-max_deg = np.degrees(theta_right_limit)
-valid_boundaries = [b for b in theta_boundaries if b <= max_deg]
-all_bounds_deg = [0] + valid_boundaries + [max_deg]
-radii = np.radians(all_bounds_deg)
-
-print(f"Plots are: {create_plots}")
-
-if create_plots:
-    
-    print("----------------------- Drawing angular regions ----------------------")
-    
-    # Initialize plot
-    fig, ax = plt.subplots(subplot_kw={'polar': True}, figsize=(8, 8))
-    ax.set_facecolor(plt.cm.viridis(0.0))
-    ax.set_title("Region Labels for Specified Angular Segmentation", color='white')
-    ax.set_theta_zero_location('N')
-
-    # Draw concentric θ boundaries (including outermost)
-    for r in radii[1:]:
-        ax.plot(np.linspace(0, 2 * np.pi, 1000), [r] * 1000,
-                color='white', linestyle='--', linewidth=3)
-
-    # Draw radial (φ) separators for each region layout
-    for i, (r0, r1, n_phi) in enumerate(zip(radii[:-1], radii[1:], region_layout[:len(radii) - 1])):
-        if n_phi > 1:
-            delta_phi = 2 * np.pi / n_phi
-            for j in range(n_phi):
-                phi = j * delta_phi
-                ax.plot([phi, phi], [r0, r1], color='white', linestyle='--', linewidth=1.5)
-
-    # Annotate region labels
-    for i, (r0, r1, n_phi) in enumerate(zip(radii[:-1], radii[1:], region_layout[:len(radii) - 1])):
-        r_label = (r0 + r1) / 2
-        if n_phi == 1:
-            ax.text(0, r_label, f'R{i}.0', ha='center', va='center',
-                    color='white', fontsize=10, weight='bold')
-        else:
-            dphi = 2 * np.pi / n_phi
-            for j in range(n_phi):
-                phi_label = (j + 0.5) * dphi
-                ax.text(phi_label, r_label, f'R{i}.{j}', ha='center', va='center',
-                        rotation=0, rotation_mode='anchor',
-                        color='white', fontsize=10, weight='bold')
-
-    # Add radius labels slightly *outside* the outermost circle for clarity
-    for r_deg in all_bounds_deg[1:]:
-        r_rad = np.radians(r_deg)
-        ax.text(np.pi + 0.09, r_rad - 0.05, f'{int(round(r_deg))}°', ha='center', va='bottom',
-                color='white', fontsize=10, alpha=0.9)
-
-    ax.grid(color='white', linestyle=':', linewidth=0.5, alpha=0.1)
-    ax.set_xticks(np.linspace(0, 2 * np.pi, 8, endpoint=False))
-    ax.set_yticklabels([])
-
-    # Final layout
-    title = "Region Labels for Specified Angular Segmentation"
-    ax.set_ylim(0, theta_right_limit)
-    plt.suptitle(title, fontsize=16, color='white')
-    plt.tight_layout()
-    if save_plots:
-        final_filename = f'{fig_idx}_{title.replace(" ", "_")}.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
-    if show_plots:
-        plt.show()
-    plt.close()
-
-#%%
 
 if create_plots:
     
@@ -2086,8 +1950,6 @@ if create_plots or create_essential_plots:
 
         ax.set_facecolor(colors(0.0))  # darkest background in colormap
         ax.set_title(f'definitive_tt = {tt_val}', fontsize=14)
-            
-        plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout)
             
         # Limit in radius in theta_right_filter
         ax.set_ylim(0, theta_right_filter)
@@ -2377,8 +2239,6 @@ if create_plots or create_essential_plots:
         ax.set_facecolor(colors(0.0))  # darkest background in colormap
         ax.set_title(f'definitive_tt = {tt_val}', fontsize=14)
             
-        plot_polar_region_grid_flexible(ax, theta_boundaries, region_layout)
-            
         # Limit in radius in theta_right_filter
         ax.set_ylim(0, theta_right_filter)
             
@@ -2405,7 +2265,236 @@ if create_plots or create_essential_plots:
         plt.show()
     plt.close()
 
-df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundaries, region_layout), axis=1)
+if create_plots or create_essential_plots:
+    print("--------------- Simple efficiency vs theta (3v4 planes) -------------")
+
+    if CORR_TT_COLUMN not in df.columns:
+        print(f"Warning: {CORR_TT_COLUMN} column missing, skipping simple efficiency-vs-theta plot.")
+    else:
+        if "theta" not in df.columns:
+            print("Warning: theta column missing, skipping simple efficiency-vs-theta plot.")
+            theta_vals_all = None
+            corr_tt_vals = None
+        else:
+            theta_vals_all = pd.to_numeric(df["theta"], errors="coerce")
+            corr_tt_vals = pd.to_numeric(df[CORR_TT_COLUMN], errors="coerce").fillna(0).astype(int)
+
+        if theta_vals_all is not None and corr_tt_vals is not None:
+            right_theta_eff = float(pd.to_numeric(det_theta_right_filter, errors="coerce"))
+            if not np.isfinite(right_theta_eff) or right_theta_eff <= 0:
+                right_theta_eff = np.pi / 2.5
+            n_theta_bins_eff = 10
+            bins_theta_eff = np.linspace(0, right_theta_eff, n_theta_bins_eff + 1)
+            theta_centers_eff = 0.5 * (bins_theta_eff[:-1] + bins_theta_eff[1:])
+
+            theta_np = theta_vals_all.to_numpy(dtype=float, copy=False)
+            corr_np = corr_tt_vals.to_numpy(dtype=int, copy=False)
+            valid = (
+                np.isfinite(theta_np)
+                & (theta_np >= 0)
+                & (theta_np <= right_theta_eff)
+                & np.isin(corr_np, [1234, 134, 124])
+            )
+            theta_vals_eff = theta_np[valid]
+            corr_tt_eff = corr_np[valid]
+
+            counts_1234, _ = np.histogram(theta_vals_eff[corr_tt_eff == 1234], bins=bins_theta_eff)
+            counts_134, _ = np.histogram(theta_vals_eff[corr_tt_eff == 134], bins=bins_theta_eff)
+            counts_124, _ = np.histogram(theta_vals_eff[corr_tt_eff == 124], bins=bins_theta_eff)
+
+            if counts_1234.sum() == 0:
+                print("Warning: No corr_tt==1234 events in theta range, skipping simple efficiency-vs-theta plot.")
+            else:
+                eff_2 = np.full_like(theta_centers_eff, np.nan, dtype=float)
+                eff_3 = np.full_like(theta_centers_eff, np.nan, dtype=float)
+                err_2 = np.full_like(theta_centers_eff, np.nan, dtype=float)
+                err_3 = np.full_like(theta_centers_eff, np.nan, dtype=float)
+                nonzero_den = counts_1234 > 0
+                n4 = counts_1234.astype(float)
+                n134 = counts_134.astype(float)
+                n124 = counts_124.astype(float)
+
+                # Efficiencies requested by user:
+                #   eff_2 = 1 - N134 / N1234
+                #   eff_3 = 1 - N124 / N1234
+                eff_2[nonzero_den] = 1.0 - (n134[nonzero_den] / n4[nonzero_den])
+                eff_3[nonzero_den] = 1.0 - (n124[nonzero_den] / n4[nonzero_den])
+
+                # Poisson error propagation for ratio N3/N4 (independent counts):
+                # sigma_r^2 = (sigma_N3/N4)^2 + (N3*sigma_N4/N4^2)^2, sigma_N = sqrt(N)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    err_2[nonzero_den] = np.sqrt(
+                        (np.sqrt(n134[nonzero_den]) / n4[nonzero_den]) ** 2
+                        + ((n134[nonzero_den] * np.sqrt(n4[nonzero_den])) / (n4[nonzero_den] ** 2)) ** 2
+                    )
+                    err_3[nonzero_den] = np.sqrt(
+                        (np.sqrt(n124[nonzero_den]) / n4[nonzero_den]) ** 2
+                        + ((n124[nonzero_den] * np.sqrt(n4[nonzero_den])) / (n4[nonzero_den] ** 2)) ** 2
+                    )
+
+                valid_w2 = nonzero_den & np.isfinite(eff_2) & np.isfinite(err_2) & (err_2 > 0)
+                valid_w3 = nonzero_den & np.isfinite(eff_3) & np.isfinite(err_3) & (err_3 > 0)
+                if np.any(valid_w2):
+                    weights_2 = 1.0 / np.square(err_2[valid_w2])
+                    mean_eff_2 = float(np.sum(weights_2 * eff_2[valid_w2]) / np.sum(weights_2))
+                else:
+                    mean_eff_2 = float(np.nanmean(eff_2[nonzero_den])) if np.any(nonzero_den) else np.nan
+                if np.any(valid_w3):
+                    weights_3 = 1.0 / np.square(err_3[valid_w3])
+                    mean_eff_3 = float(np.sum(weights_3 * eff_3[valid_w3]) / np.sum(weights_3))
+                else:
+                    mean_eff_3 = float(np.nanmean(eff_3[nonzero_den])) if np.any(nonzero_den) else np.nan
+
+                theta_centers_eff_deg = np.degrees(theta_centers_eff)
+                right_theta_eff_deg = np.degrees(right_theta_eff)
+                cos_theta_centers = np.cos(theta_centers_eff)
+                cos_theta_safe = np.clip(np.abs(cos_theta_centers), 1e-6, None)
+                sec_theta_centers = 1.0 / cos_theta_safe
+                valid_eff_bins = nonzero_den & (np.isfinite(eff_2) | np.isfinite(eff_3))
+
+                def _xlimits_from_values(values: np.ndarray, default_limits: tuple[float, float]) -> tuple[float, float]:
+                    vals = np.asarray(values, dtype=float)
+                    vals = vals[np.isfinite(vals)]
+                    if vals.size == 0:
+                        return default_limits
+                    vmin = float(np.min(vals))
+                    vmax = float(np.max(vals))
+                    if vals.size > 1:
+                        unique_vals = np.unique(np.sort(vals))
+                        if unique_vals.size > 1:
+                            step = float(np.median(np.diff(unique_vals)))
+                            if np.isfinite(step) and step > 0:
+                                pad = 0.5 * step
+                            else:
+                                pad = 0.02 * (vmax - vmin if vmax > vmin else 1.0)
+                        else:
+                            pad = 0.05 * max(abs(vmin), 1.0)
+                    else:
+                        pad = 0.05 * max(abs(vmin), 1.0)
+                    if vmax <= vmin:
+                        pad = max(pad, 0.05 * max(abs(vmin), 1.0))
+                    return vmin - pad, vmax + pad
+
+                theta_xlim = _xlimits_from_values(
+                    theta_centers_eff_deg[valid_eff_bins],
+                    (0.0, right_theta_eff_deg),
+                )
+                sec_xlim = _xlimits_from_values(
+                    sec_theta_centers[valid_eff_bins],
+                    (float(np.nanmin(sec_theta_centers)), float(np.nanmax(sec_theta_centers))),
+                )
+
+                fig_eff, (ax_eff, ax_eff_cos) = plt.subplots(
+                    nrows=2,
+                    ncols=1,
+                    figsize=(7, 10),
+                )
+
+                ax_eff.plot(
+                    theta_centers_eff_deg,
+                    eff_2,
+                    marker="o",
+                    linewidth=1.8,
+                    label=r"$\epsilon_2 = 1 - N_{134}/N_{1234}$",
+                    color="tab:blue",
+                )
+                ax_eff.plot(
+                    theta_centers_eff_deg,
+                    eff_3,
+                    marker="s",
+                    linewidth=1.8,
+                    label=r"$\epsilon_3 = 1 - N_{124}/N_{1234}$",
+                    color="tab:green",
+                )
+                ax_eff.fill_between(
+                    theta_centers_eff_deg,
+                    np.clip(eff_2 - err_2, 0.0, 1.05),
+                    np.clip(eff_2 + err_2, 0.0, 1.05),
+                    alpha=0.2,
+                    color="tab:blue",
+                )
+                ax_eff.fill_between(
+                    theta_centers_eff_deg,
+                    np.clip(eff_3 - err_3, 0.0, 1.05),
+                    np.clip(eff_3 + err_3, 0.0, 1.05),
+                    alpha=0.2,
+                    color="tab:green",
+                )
+                if np.isfinite(mean_eff_2):
+                    ax_eff.axhline(
+                        mean_eff_2,
+                        linestyle="--",
+                        linewidth=1.4,
+                        alpha=0.35,
+                        color="tab:blue",
+                        label=rf"w-mean $\epsilon_2$ = {mean_eff_2:.3f}",
+                    )
+                if np.isfinite(mean_eff_3):
+                    ax_eff.axhline(
+                        mean_eff_3,
+                        linestyle="--",
+                        linewidth=1.4,
+                        alpha=0.35,
+                        color="tab:green",
+                        label=rf"w-mean $\epsilon_3$ = {mean_eff_3:.3f}",
+                    )
+                ax_eff.set_xlim(*theta_xlim)
+                ax_eff.set_ylim(0.5, 1.05)
+                ax_eff.set_ylabel("Efficiency")
+                ax_eff.set_title("Simple Angular Efficiencies (3-plane vs 4-plane)")
+                ax_eff.grid(True, alpha=0.3)
+                ax_eff.legend(fontsize="small")
+
+                ax_eff_cos.plot(
+                    sec_theta_centers,
+                    eff_2,
+                    marker="o",
+                    linewidth=1.8,
+                    label=r"$\epsilon_2$ vs $\sec(\theta_{\mathrm{bin}})$",
+                    color="tab:blue",
+                )
+                ax_eff_cos.plot(
+                    sec_theta_centers,
+                    eff_3,
+                    marker="s",
+                    linewidth=1.8,
+                    label=r"$\epsilon_3$ vs $\sec(\theta_{\mathrm{bin}})$",
+                    color="tab:green",
+                )
+                ax_eff_cos.fill_between(
+                    sec_theta_centers,
+                    np.clip(eff_2 - err_2, 0.0, 1.05),
+                    np.clip(eff_2 + err_2, 0.0, 1.05),
+                    alpha=0.2,
+                    color="tab:blue",
+                )
+                ax_eff_cos.fill_between(
+                    sec_theta_centers,
+                    np.clip(eff_3 - err_3, 0.0, 1.05),
+                    np.clip(eff_3 + err_3, 0.0, 1.05),
+                    alpha=0.2,
+                    color="tab:green",
+                )
+                ax_eff_cos.set_xlim(*sec_xlim)
+                ax_eff_cos.set_ylim(0.5, 1.05)
+                ax_eff_cos.set_xlabel(r"$\sec(\theta_{\mathrm{bin}}) = 1/\cos(\theta_{\mathrm{bin}})$")
+                ax_eff_cos.set_ylabel("Efficiency")
+                ax_eff_cos.set_title(r"Efficiency vs $\sec(\theta_{\mathrm{bin}})$")
+                ax_eff_cos.grid(True, alpha=0.3)
+                ax_eff_cos.legend(fontsize="small")
+                plt.tight_layout()
+
+                if save_plots:
+                    final_filename = f"{fig_idx}_theta_efficiency_simple_3v4.png"
+                    fig_idx += 1
+                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                    plot_list.append(save_fig_path)
+                    plt.savefig(save_fig_path, format="png")
+                if show_plots:
+                    plt.show()
+                plt.close()
+
+df['region'] = "all"
 print(df['region'].value_counts())
 
 working_df = df.copy()
@@ -2439,6 +2528,14 @@ if create_pdf:
                 # print(f"Deleted {png}")
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
+        
+        # Remove run-specific figure directory if all PNGs were deleted
+        figure_directory = base_directories["figure_directory"]
+        if os.path.exists(figure_directory):
+            if not os.listdir(figure_directory):
+                os.rmdir(figure_directory)
+            else:
+                print(f"Figure directory not empty, skipping removal: {figure_directory}")
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.

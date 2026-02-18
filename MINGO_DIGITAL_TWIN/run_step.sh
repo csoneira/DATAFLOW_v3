@@ -23,6 +23,7 @@ Notes:
   --force-continuous is only valid with -c/--continuous.
   Set RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_LINES=1 to auto-close active
   step_1 lines that have no pending rows compatible with fixed STEP_2 z_positions.
+  Set RUN_STEP_AUTOCLEAN_CONFLICTS=0 to disable automatic stale INTERSTEPS cleanup.
 EOF
 }
 
@@ -153,6 +154,10 @@ RUN_STEP_AUTO_BOOTSTRAP_UPSTREAM="${RUN_STEP_AUTO_BOOTSTRAP_UPSTREAM:-1}"
 # By default, do not enforce/emit param_mesh upstream consistency warnings.
 # Set to 1 to enable the checker output in /tmp/param_mesh_consistency.log.
 RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY="${RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY:-0}"
+# Auto-clean stale/broken conflicting SIM_RUN directories before scheduling work.
+RUN_STEP_AUTOCLEAN_CONFLICTS="${RUN_STEP_AUTOCLEAN_CONFLICTS:-1}"
+RUN_STEP_AUTOCLEAN_MIN_AGE_S="${RUN_STEP_AUTOCLEAN_MIN_AGE_S:-300}"
+RUN_STEP_AUTOCLEAN_DELETE_NO_MESH_MATCH="${RUN_STEP_AUTOCLEAN_DELETE_NO_MESH_MATCH:-1}"
 LAST_STEP1_BLOCK_LOG_EPOCH=0
 if [[ "$STRICT_LINE_CLOSURE" != "0" && "$STRICT_LINE_CLOSURE" != "1" ]]; then
   STRICT_LINE_CLOSURE="1"
@@ -168,6 +173,15 @@ if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" != "0" && "$OBLITERATE_UNINTERESTI
 fi
 if [[ "$RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY" != "0" && "$RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY" != "1" ]]; then
   RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY="0"
+fi
+if [[ "$RUN_STEP_AUTOCLEAN_CONFLICTS" != "0" && "$RUN_STEP_AUTOCLEAN_CONFLICTS" != "1" ]]; then
+  RUN_STEP_AUTOCLEAN_CONFLICTS="1"
+fi
+if [[ "$RUN_STEP_AUTOCLEAN_DELETE_NO_MESH_MATCH" != "0" && "$RUN_STEP_AUTOCLEAN_DELETE_NO_MESH_MATCH" != "1" ]]; then
+  RUN_STEP_AUTOCLEAN_DELETE_NO_MESH_MATCH="1"
+fi
+if ! [[ "$RUN_STEP_AUTOCLEAN_MIN_AGE_S" =~ ^[0-9]+$ ]]; then
+  RUN_STEP_AUTOCLEAN_MIN_AGE_S="300"
 fi
 if [[ -n "$CONTINUOUS" && -z "$DEBUG" ]]; then
   QUIET_CONTINUOUS="1"
@@ -566,9 +580,11 @@ for step_num in range(1, 11):
     prefix_cols = step_cols[: step_num - 1]
     current_col = step_cols[step_num - 1]
     needed_by_prefix: dict[tuple[str, ...], int] = {}
+    needed_step1_ids: set[str] = set()
 
     if step_num == 1:
-        needed_by_prefix[tuple()] = int(mesh[current_col][mesh[current_col] != ""].nunique())
+        needed_step1_ids = set(mesh.loc[mesh[current_col] != "", current_col].tolist())
+        needed_by_prefix[tuple()] = len(needed_step1_ids)
     else:
         subset = mesh[prefix_cols + [current_col]].copy()
         valid = subset[current_col] != ""
@@ -584,17 +600,25 @@ for step_num in range(1, 11):
 
     produced_by_prefix: Counter[tuple[str, ...]] = Counter()
     produced_dirs = 0
+    produced_step1_ids: set[str] = set()
     for sim_dir in output_dir_for_step(step_num).glob("SIM_RUN_*"):
         ids = parse_sim_run_ids(sim_dir)
         if ids is None or len(ids) < step_num:
             continue
         produced_dirs += 1
-        produced_by_prefix[tuple(ids[: step_num - 1])] += 1
+        if step_num == 1:
+            produced_step1_ids.add(ids[0])
+        else:
+            produced_by_prefix[tuple(ids[: step_num - 1])] += 1
         ok, reason = has_expected_output(step_num, sim_dir)
         if not ok:
             broken_count += 1
             if len(broken_records) < max_broken_records:
                 broken_records.append((step_num, sim_dir.name, reason, str(sim_dir)))
+
+    if step_num == 1:
+        # Count only step_1 IDs that are still required by the current mesh.
+        produced_by_prefix[tuple()] = len(produced_step1_ids & needed_step1_ids)
 
     available_prefixes: set[tuple[str, ...]] = set()
     if step_num == 1:
@@ -795,6 +819,54 @@ refresh_work_cache_or_disable() {
   return 0
 }
 
+autoclean_conflicting_runs() {
+  local sanitize_script
+  local -a cmd
+  local output
+  local rc
+  local summary
+
+  if [[ "$RUN_STEP_AUTOCLEAN_CONFLICTS" != "1" ]]; then
+    return 0
+  fi
+  if [[ -n "$PLOT_ONLY" ]]; then
+    return 0
+  fi
+
+  sanitize_script="$DT/ANCILLARY/sanitize_sim_runs.py"
+  if [[ ! -f "$sanitize_script" ]]; then
+    log_warn "autoclean skipped (missing script: $sanitize_script)"
+    return 0
+  fi
+
+  cmd=(python3 "$sanitize_script" --apply --min-age-seconds "$RUN_STEP_AUTOCLEAN_MIN_AGE_S")
+  if [[ "$RUN_STEP_AUTOCLEAN_DELETE_NO_MESH_MATCH" == "1" ]]; then
+    cmd+=(--delete-no-mesh-match)
+  fi
+
+  if output="$("${cmd[@]}" 2>&1)"; then
+    summary="$(printf '%s\n' "$output" | awk '/Summary:/ {line=$0} END{print line}')"
+    if [[ -z "$summary" ]]; then
+      summary="autoclean completed"
+    fi
+    if [[ -n "$DEBUG" ]]; then
+      log_info "$summary"
+    else
+      log_info "$summary"
+    fi
+    return 0
+  fi
+
+  rc=$?
+  summary="$(printf '%s\n' "$output" | awk '/Summary:/ {line=$0} END{print line}')"
+  if [[ -n "$summary" ]]; then
+    log_warn "autoclean failed rc=$rc ($summary)"
+  else
+    log_warn "autoclean failed rc=$rc"
+  fi
+  return 0
+}
+
 run_step_with_progress() {
   local step="$1"
   local output_dir
@@ -847,6 +919,7 @@ while true; do
   fi
   case "$STEP" in
     all)
+      autoclean_conflicting_runs
       failed_steps=0
       while true; do
         refresh_work_cache_or_disable
@@ -915,6 +988,7 @@ while true; do
       log_info "all steps completed in ${cycle_elapsed}s"
       ;;
     from)
+      autoclean_conflicting_runs
       start_step="${ARGS[1]:-}"
       if [[ -z "$start_step" ]]; then
         log_error "Usage: $0 from <step_number> [--no-plots]"
@@ -930,6 +1004,7 @@ while true; do
       log_info "steps ${start_step}-10 completed in ${cycle_elapsed}s"
       ;;
     *)
+      autoclean_conflicting_runs
       if ! run_step "$STEP"; then
         step_failed="1"
       fi

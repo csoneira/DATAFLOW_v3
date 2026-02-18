@@ -631,8 +631,9 @@ calibrate_strip_Q_pedestal_q_quantile = config.get("calibrate_strip_Q_pedestal_q
 
 scatter_2d_and_fit_new_xlim_left = config.get("scatter_2d_and_fit_new_xlim_left", -5)
 scatter_2d_and_fit_new_xlim_right = config.get("scatter_2d_and_fit_new_xlim_right", 200)
-scatter_2d_and_fit_new_ylim_bottom = config.get("scatter_2d_and_fit_new_ylim_bottom", -11)
-scatter_2d_and_fit_new_ylim_top = config.get("scatter_2d_and_fit_new_ylim_top", 11)
+scatter_2d_and_fit_new_ylim_abs = abs(float(config.get("scatter_2d_and_fit_new_ylim_abs", config.get("scatter_2d_and_fit_new_ylim_top", 11))))
+scatter_2d_and_fit_new_ylim_top = scatter_2d_and_fit_new_ylim_abs
+scatter_2d_and_fit_new_ylim_bottom = -scatter_2d_and_fit_new_ylim_abs
 
 calibrate_strip_T_dif_T_rel_th = config.get("calibrate_strip_T_dif_T_rel_th", 0.1)
 calibrate_strip_T_dif_T_abs_th = config.get("calibrate_strip_T_dif_T_abs_th", 1)
@@ -3154,6 +3155,14 @@ if create_pdf:
                 # print(f"Deleted {png}")
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
+        
+        # Remove run-specific figure directory if all PNGs were deleted
+        figure_directory = base_directories["figure_directory"]
+        if os.path.exists(figure_directory):
+            if not os.listdir(figure_directory):
+                os.rmdir(figure_directory)
+            else:
+                print(f"Figure directory not empty, skipping removal: {figure_directory}")
                 
 
 # Path to save the cleaned dataframe

@@ -12,6 +12,6 @@ default_z_positions:
 complete_reanalysis: false
 stratos_save: false
 # create_plots options: null | debug | usual | all
-create_plots: null
+create_plots: debug
 limit_number: null
 y_new_method: true

@@ -4,9 +4,6 @@ T_sum_RPC_right,,,,,,task_3
 det_pos_filter,,,,,,task_4
 det_theta_left_filter,,,,,,task_4
 det_theta_right_filter,,,,,,task_4
-det_phi_left_filter,,,,,,task_4
-det_phi_right_filter,,,,,,task_4
+det_phi_filter_abs,,,,,,task_4
 det_slowness_filter_left,,,,,,task_4
 det_slowness_filter_right,,,,,,task_4
-theta_boundaries,[5 15 25],[5 15 25],[5 15 25],[5 15 25],[5 15 25],
-region_layout,[1 8 8 8],[1 8 8 8],[1 8 8 8],[1 8 8 8],[1 8 8 8],

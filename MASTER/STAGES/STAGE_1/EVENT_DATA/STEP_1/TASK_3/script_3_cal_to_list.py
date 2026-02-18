@@ -258,21 +258,25 @@ T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_left = config["T_dif_RPC_left"]
-T_dif_RPC_right = config["T_dif_RPC_right"]
+T_dif_RPC_abs = abs(float(config.get("T_dif_RPC_abs", config.get("T_dif_RPC_right", 0.8))))
+T_dif_RPC_right = T_dif_RPC_abs
+T_dif_RPC_left = -T_dif_RPC_abs
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_left = config["Q_dif_RPC_left"]
-Q_dif_RPC_right = config["Q_dif_RPC_right"]
-Y_RPC_left = config["Y_RPC_left"]
-Y_RPC_right = config["Y_RPC_right"]
+Q_dif_RPC_abs = abs(float(config.get("Q_dif_RPC_abs", config.get("Q_dif_RPC_right", 4))))
+Q_dif_RPC_right = Q_dif_RPC_abs
+Q_dif_RPC_left = -Q_dif_RPC_abs
+Y_RPC_abs = abs(float(config.get("Y_RPC_abs", config.get("Y_RPC_right", 200))))
+Y_RPC_right = Y_RPC_abs
+Y_RPC_left = -Y_RPC_abs
 
 # Alternative fitter filter
 det_pos_filter = config.get("det_pos_filter", 800)
 det_theta_left_filter = config.get("det_theta_left_filter", 0)
 det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_left_filter = config.get("det_phi_left_filter", -3.141592)
-det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
@@ -727,21 +731,25 @@ T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_left = config["T_dif_RPC_left"]
-T_dif_RPC_right = config["T_dif_RPC_right"]
+T_dif_RPC_abs = abs(float(config.get("T_dif_RPC_abs", config.get("T_dif_RPC_right", 0.8))))
+T_dif_RPC_right = T_dif_RPC_abs
+T_dif_RPC_left = -T_dif_RPC_abs
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_left = config["Q_dif_RPC_left"]
-Q_dif_RPC_right = config["Q_dif_RPC_right"]
-Y_RPC_left = config["Y_RPC_left"]
-Y_RPC_right = config["Y_RPC_right"]
+Q_dif_RPC_abs = abs(float(config.get("Q_dif_RPC_abs", config.get("Q_dif_RPC_right", 4))))
+Q_dif_RPC_right = Q_dif_RPC_abs
+Q_dif_RPC_left = -Q_dif_RPC_abs
+Y_RPC_abs = abs(float(config.get("Y_RPC_abs", config.get("Y_RPC_right", 200))))
+Y_RPC_right = Y_RPC_abs
+Y_RPC_left = -Y_RPC_abs
 
 # Alternative fitter filter
 det_pos_filter = config.get("det_pos_filter", 800)
 det_theta_left_filter = config.get("det_theta_left_filter", 0)
 det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_left_filter = config.get("det_phi_left_filter", -3.141592)
-det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
@@ -974,21 +982,25 @@ T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 # Once calculated the RPC variables
 T_sum_RPC_left = config["T_sum_RPC_left"]
 T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_left = config["T_dif_RPC_left"]
-T_dif_RPC_right = config["T_dif_RPC_right"]
+T_dif_RPC_abs = abs(float(config.get("T_dif_RPC_abs", config.get("T_dif_RPC_right", 0.8))))
+T_dif_RPC_right = T_dif_RPC_abs
+T_dif_RPC_left = -T_dif_RPC_abs
 Q_RPC_left = config["Q_RPC_left"]
 Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_left = config["Q_dif_RPC_left"]
-Q_dif_RPC_right = config["Q_dif_RPC_right"]
-Y_RPC_left = config["Y_RPC_left"]
-Y_RPC_right = config["Y_RPC_right"]
+Q_dif_RPC_abs = abs(float(config.get("Q_dif_RPC_abs", config.get("Q_dif_RPC_right", 4))))
+Q_dif_RPC_right = Q_dif_RPC_abs
+Q_dif_RPC_left = -Q_dif_RPC_abs
+Y_RPC_abs = abs(float(config.get("Y_RPC_abs", config.get("Y_RPC_right", 200))))
+Y_RPC_right = Y_RPC_abs
+Y_RPC_left = -Y_RPC_abs
 
 # Alternative fitter filter
 det_pos_filter = config.get("det_pos_filter", 800)
 det_theta_left_filter = config.get("det_theta_left_filter", 0)
 det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_left_filter = config.get("det_phi_left_filter", -3.141592)
-det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
@@ -3571,6 +3583,14 @@ if create_pdf:
                 # print(f"Deleted {png}")
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
+        
+        # Remove run-specific figure directory if all PNGs were deleted
+        figure_directory = base_directories["figure_directory"]
+        if os.path.exists(figure_directory):
+            if not os.listdir(figure_directory):
+                os.rmdir(figure_directory)
+            else:
+                print(f"Figure directory not empty, skipping removal: {figure_directory}")
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.

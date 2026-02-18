@@ -99,7 +99,7 @@ def calculate_intersections(
 
 
 def prune_step2(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "tt_crossing"}
+    keep = {"event_id", "T_thick_s", "Theta_gen", "Phi_gen", "tt_crossing"}
     for plane_idx in range(1, 5):
         keep.add(f"X_gen_{plane_idx}")
         keep.add(f"Y_gen_{plane_idx}")

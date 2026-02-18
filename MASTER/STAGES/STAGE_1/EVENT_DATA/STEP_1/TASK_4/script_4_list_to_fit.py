@@ -1413,8 +1413,9 @@ T_sum_RPC_right = config["T_sum_RPC_right"]
 det_pos_filter = config["det_pos_filter"]
 det_theta_left_filter = config["det_theta_left_filter"]
 det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_left_filter = config["det_phi_left_filter"]
-det_phi_right_filter = config["det_phi_right_filter"]
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config["det_slowness_filter_left"]
 det_slowness_filter_right = config["det_slowness_filter_right"]
 
@@ -1824,8 +1825,9 @@ T_sum_RPC_right = config["T_sum_RPC_right"]
 det_pos_filter = config["det_pos_filter"]
 det_theta_left_filter = config["det_theta_left_filter"]
 det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_left_filter = config["det_phi_left_filter"]
-det_phi_right_filter = config["det_phi_right_filter"]
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config["det_slowness_filter_left"]
 det_slowness_filter_right = config["det_slowness_filter_right"]
 
@@ -2243,8 +2245,9 @@ T_sum_RPC_right = config["T_sum_RPC_right"]
 det_pos_filter = config["det_pos_filter"]
 det_theta_left_filter = config["det_theta_left_filter"]
 det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_left_filter = config["det_phi_left_filter"]
-det_phi_right_filter = config["det_phi_right_filter"]
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config["det_slowness_filter_left"]
 det_slowness_filter_right = config["det_slowness_filter_right"]
 

@@ -1,11 +1,10 @@
 parameter,default,station_1,station_2,station_3,station_4,source_task
 T_sum_RPC_left,,,,,,task_3
 T_sum_RPC_right,,,,,,task_3
-det_pos_filter,1100,1100,1100,1100,1100,
+det_pos_filter,1500,1500,1500,1500,1500,
 det_theta_left_filter,0,0,0,0,0,
 det_theta_right_filter,1.5708,1.5708,1.5708,1.5708,1.5708,
-det_phi_left_filter,-3.141592,-3.141592,-3.141592,-3.141592,-3.141592,
-det_phi_right_filter,3.141592,3.141592,3.141592,3.141592,3.141592,
+det_phi_filter_abs,3.141592,3.141592,3.141592,3.141592,3.141592,
 det_slowness_filter_left,-0.04,-0.04,-0.04,-0.04,-0.04,
 det_slowness_filter_right,0.06,0.06,0.06,0.06,0.06,
 det_res_ystr_filter,500,500,500,500,500,
@@ -40,6 +39,9 @@ n_planes_timtrack,4,4,4,4,4,
 time_window_fitting,true,true,true,true,true,
 charge_plot_limit_left,0,0,0,0,0,
 charge_plot_limit_right,100,100,100,100,100,
+charge_plot_event_limit_right,400,400,400,400,400,
+delta_s_left,-0.0003,-0.0003,-0.0003,-0.0003,-0.0003,
+delta_s_right,0.0003,0.0003,0.0003,0.0003,0.0003,
 low_tt_min,10,,,,,
 low_tt_zero_cols,"['x', 'xp', 'y', 'yp', 't0', 's']",,,,,
 definitive_nonzero_cols,"['x', 'y', 's', 't0', 'theta', 'phi']",,,,,

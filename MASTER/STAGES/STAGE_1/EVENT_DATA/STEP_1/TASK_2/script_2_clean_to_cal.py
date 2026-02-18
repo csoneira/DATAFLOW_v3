@@ -602,8 +602,9 @@ T_sum_RPC_right = config.get("T_sum_RPC_right", 7)
 det_pos_filter = config.get("det_pos_filter", 800)
 det_theta_left_filter = config.get("det_theta_left_filter", 0)
 det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_left_filter = config.get("det_phi_left_filter", -3.141592)
-det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
@@ -681,8 +682,9 @@ calibrate_strip_Q_pedestal_q_quantile = config.get("calibrate_strip_Q_pedestal_q
 
 scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
 scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
-scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
-scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
+scatter_2d_and_fit_new_ylim_abs = abs(float(config.get("scatter_2d_and_fit_new_ylim_abs", config.get("scatter_2d_and_fit_new_ylim_top", 11))))
+scatter_2d_and_fit_new_ylim_top = scatter_2d_and_fit_new_ylim_abs
+scatter_2d_and_fit_new_ylim_bottom = -scatter_2d_and_fit_new_ylim_abs
 
 calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
 calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
@@ -697,15 +699,18 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_dif_left = config["q_dif_left"]
-q_dif_right = config["q_dif_right"]
+q_dif_abs = abs(float(config.get("q_dif_abs", config.get("q_dif_right", 40))))
+q_dif_right = q_dif_abs
+q_dif_left = -q_dif_abs
 
-Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
-Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
+Q_sum_semidiff_abs = abs(float(config.get("Q_sum_semidiff_abs", config.get("Q_sum_semidiff_right", 10))))
+Q_sum_semidiff_right = Q_sum_semidiff_abs
+Q_sum_semidiff_left = -Q_sum_semidiff_abs
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
-T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
+T_sum_corrected_dif_abs = abs(float(config.get("T_sum_corrected_dif_abs", config.get("T_sum_corrected_dif_right", 5))))
+T_sum_corrected_dif_right = T_sum_corrected_dif_abs
+T_sum_corrected_dif_left = -T_sum_corrected_dif_abs
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -1666,8 +1671,9 @@ T_sum_RPC_right = config.get("T_sum_RPC_right", 7)
 det_pos_filter = config.get("det_pos_filter", 800)
 det_theta_left_filter = config.get("det_theta_left_filter", 0)
 det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_left_filter = config.get("det_phi_left_filter", -3.141592)
-det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
@@ -1743,8 +1749,9 @@ calibrate_strip_Q_pedestal_q_quantile = config.get("calibrate_strip_Q_pedestal_q
 
 scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
 scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
-scatter_2d_and_fit_new_ylim_bottom = config["scatter_2d_and_fit_new_ylim_bottom"]
-scatter_2d_and_fit_new_ylim_top = config["scatter_2d_and_fit_new_ylim_top"]
+scatter_2d_and_fit_new_ylim_abs = abs(float(config.get("scatter_2d_and_fit_new_ylim_abs", config.get("scatter_2d_and_fit_new_ylim_top", 11))))
+scatter_2d_and_fit_new_ylim_top = scatter_2d_and_fit_new_ylim_abs
+scatter_2d_and_fit_new_ylim_bottom = -scatter_2d_and_fit_new_ylim_abs
 
 calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
 calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
@@ -1759,15 +1766,18 @@ delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
 q_sum_right = config["q_sum_right"]
-q_dif_left = config["q_dif_left"]
-q_dif_right = config["q_dif_right"]
+q_dif_abs = abs(float(config.get("q_dif_abs", config.get("q_dif_right", 40))))
+q_dif_right = q_dif_abs
+q_dif_left = -q_dif_abs
 
-Q_sum_semidiff_left = config["Q_sum_semidiff_left"]
-Q_sum_semidiff_right = config["Q_sum_semidiff_right"]
+Q_sum_semidiff_abs = abs(float(config.get("Q_sum_semidiff_abs", config.get("Q_sum_semidiff_right", 10))))
+Q_sum_semidiff_right = Q_sum_semidiff_abs
+Q_sum_semidiff_left = -Q_sum_semidiff_abs
 Q_sum_semisum_left = config["Q_sum_semisum_left"]
 Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_dif_left = config["T_sum_corrected_dif_left"]
-T_sum_corrected_dif_right = config["T_sum_corrected_dif_right"]
+T_sum_corrected_dif_abs = abs(float(config.get("T_sum_corrected_dif_abs", config.get("T_sum_corrected_dif_right", 5))))
+T_sum_corrected_dif_right = T_sum_corrected_dif_abs
+T_sum_corrected_dif_left = -T_sum_corrected_dif_abs
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -7303,6 +7313,14 @@ if create_pdf:
                 # print(f"Deleted {png}")
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
+        
+        # Remove run-specific figure directory if all PNGs were deleted
+        figure_directory = base_directories["figure_directory"]
+        if os.path.exists(figure_directory):
+            if not os.listdir(figure_directory):
+                os.rmdir(figure_directory)
+            else:
+                print(f"Figure directory not empty, skipping removal: {figure_directory}")
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.

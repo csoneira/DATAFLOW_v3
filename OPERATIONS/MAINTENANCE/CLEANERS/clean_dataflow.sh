@@ -263,6 +263,7 @@ clean_cronlogs() {
 clean_plots() {
   local type="plots"
   local -a dirs=()
+  declare -A seen_dirs=()
   if [[ ! -d "$STATIONS_BASE" ]]; then
     log_info "Skipping plots cleanup: $STATIONS_BASE not found."
     TYPE_BEFORE["$type"]=0
@@ -273,8 +274,24 @@ clean_plots() {
   fi
 
   while IFS= read -r -d '' dir; do
+    if [[ -n ${seen_dirs["$dir"]:-} ]]; then
+      continue
+    fi
+    seen_dirs["$dir"]=1
     dirs+=("$dir")
   done < <(find "$STATIONS_BASE" -maxdepth 8 -type d -name 'PLOTS' -print0 2>/dev/null)
+
+  # Explicitly cover STEP_1 TASK debug subfolders used by cron execution.
+  # If parent PLOTS is already queued, skip DEBUG_PLOTS to avoid duplicate work.
+  while IFS= read -r -d '' dir; do
+    local parent_plot_dir
+    parent_plot_dir="${dir%/DEBUG_PLOTS}"
+    if [[ -n ${seen_dirs["$parent_plot_dir"]:-} || -n ${seen_dirs["$dir"]:-} ]]; then
+      continue
+    fi
+    seen_dirs["$dir"]=1
+    dirs+=("$dir")
+  done < <(find "$STATIONS_BASE" -type d -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/PLOTS/DEBUG_PLOTS' -print0 2>/dev/null)
 
   if (( ${#dirs[@]} == 0 )); then
     log_info "No PLOTS directories found."
@@ -289,6 +306,10 @@ clean_plots() {
   local total_after=0
 
   for dir in "${dirs[@]}"; do
+    if [[ ! -d "$dir" ]]; then
+      log_warn "Skipping vanished plots path: $dir"
+      continue
+    fi
     if is_metadata_path "$dir"; then
       log_warn "Skipping metadata path during plots cleanup: $dir"
       continue
