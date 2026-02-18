@@ -199,6 +199,7 @@ is_reprocessing_step_enabled() {
   local decision
   decision=$(python3 - "$cfg_path" "$station_id" "$step_id" <<'PY' || true
 import sys
+from pathlib import Path
 
 cfg_path, station_raw, step_raw = sys.argv[1:4]
 
@@ -264,6 +265,22 @@ step_id = parse_int(step_raw)
 if station_id is None or step_id is None:
     print("1")
     raise SystemExit(0)
+
+repo_root = Path.home() / "DATAFLOW_v3"
+if str(repo_root) not in sys.path:
+    sys.path.append(str(repo_root))
+
+try:
+    from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
+    selection = load_selection_for_paths(
+        [cfg_path],
+        master_config_root=repo_root / "MASTER" / "CONFIG_FILES",
+    )
+    if not station_is_selected(station_id, selection.stations):
+        print("0")
+        raise SystemExit(0)
+except Exception:
+    pass
 
 try:
     with open(cfg_path, "r", encoding="utf-8") as handle:

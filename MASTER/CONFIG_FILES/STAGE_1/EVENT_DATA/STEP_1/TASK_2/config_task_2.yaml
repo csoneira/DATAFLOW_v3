@@ -1,12 +1,14 @@
 last_file_test: true
-date_range:
-  start: null
-  end: null
+selection:
+  stations: [0, 1]
+  date_ranges:
+    - start: 2024-09-16
+      end: 2024-09-30
 try_to_use_reprocessing_table: false
 complete_reanalysis: false
 article_format: false
 # create_plots options: null | debug | usual | all
-create_plots: null
+create_plots: debug
 limit_number: null
 number_of_time_cal_figures: 3
 calibrate_charge_ns_to_fc: true

@@ -2,4 +2,8 @@ test_mode: false
 weeks_behind_requested: 1
 max_weeks_allowed: 2
 degree_apotema: 0.25
-date_ranges: []
+selection:
+  stations: [0, 1]
+  date_ranges:
+    - start: 2024-09-16
+      end: 2024-09-30

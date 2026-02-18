@@ -2,8 +2,18 @@
 # Kill running bash/python scripts referenced in CONFIG/add_to_crontab.info without touching unrelated processes.
 set -euo pipefail
 
-BASE_DIR="$HOME/DATAFLOW_v3"
-CRON_FILE="$BASE_DIR/CONFIG/add_to_crontab.info"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$SCRIPT_DIR"
+while [[ "$REPO_ROOT" != "/" && ! -f "$REPO_ROOT/CONFIG/add_to_crontab.info" ]]; do
+  REPO_ROOT="$(dirname "$REPO_ROOT")"
+done
+
+if [[ "$REPO_ROOT" == "/" ]]; then
+  echo "Unable to locate repository root from: $SCRIPT_DIR" >&2
+  exit 1
+fi
+
+CRON_FILE="$REPO_ROOT/CONFIG/add_to_crontab.info"
 this_pid=$$
 
 if [[ ! -f "$CRON_FILE" ]]; then
@@ -11,50 +21,64 @@ if [[ ! -f "$CRON_FILE" ]]; then
   exit 1
 fi
 
-declare -A scripts=()
-while IFS= read -r line; do
-  # Skip comments/blank/env lines
-  [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
-  [[ "$line" == *"="* && "${line%%=*}" != "$line" ]] && continue
+strip_cron_fields() {
+  awk '{ $1=$2=$3=$4=$5=""; sub(/^ +/,""); print }' <<<"$1"
+}
 
-  # Strip the first 5 cron fields to get the command
-  command=$(echo "$line" | awk '{ $1=$2=$3=$4=$5=""; sub(/^ +/,""); print }')
+clean_token() {
+  local token="$1"
+  token="${token//$'\r'/}"
+  token="${token#\"}"
+  token="${token%\"}"
+  token="${token#\'}"
+  token="${token%\'}"
+  while [[ "$token" == [\(\[\{]* ]]; do
+    token="${token:1}"
+  done
+  while [[ "$token" == *[\)\]\}\,\;] ]]; do
+    token="${token%?}"
+  done
+  printf '%s' "$token"
+}
+
+expand_path_token() {
+  local token="$1"
+  local expanded="$token"
+  if [[ "$expanded" == *'$'* ]]; then
+    expanded="$(eval "printf '%s' \"$expanded\"")"
+  fi
+  if [[ "$expanded" != /* && "$expanded" == */* ]]; then
+    expanded="$REPO_ROOT/$expanded"
+  fi
+  printf '%s' "$expanded"
+}
+
+declare -A scripts=()
+declare -A script_names=()
+
+while IFS= read -r line; do
+  trimmed="${line#"${line%%[![:space:]]*}"}"
+  [[ -z "$trimmed" || "$trimmed" == \#* ]] && continue
+
+  if [[ "$trimmed" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+    eval "export $trimmed"
+    continue
+  fi
+
+  command="$(strip_cron_fields "$trimmed")"
   [[ -z "$command" ]] && continue
 
   read -ra parts <<<"$command"
-  [[ ${#parts[@]} -eq 0 ]] && continue
-
-  launcher=${parts[0]}
-  script=""
-
-  case "$launcher" in
-    /bin/bash|bash)
-      [[ ${#parts[@]} -ge 2 ]] || continue
-      script="${parts[1]}"
-      ;;
-    python|python3|/usr/bin/python|/usr/bin/python3|/usr/bin/env)
-      # Find the first non-flag argument (the script path)
-      for ((i=1; i<${#parts[@]}; i++)); do
-        token="${parts[$i]}"
-        [[ "$token" == "python" || "$token" == "python3" ]] && continue
-        [[ "$token" == -* ]] && continue
-        script="$token"
-        break
-      done
-      ;;
-    *)
+  for part in "${parts[@]}"; do
+    token="$(clean_token "$part")"
+    [[ -z "$token" ]] && continue
+    if [[ "$token" != *.sh && "$token" != *.py ]]; then
       continue
-      ;;
-  esac
-
-  [[ -z "$script" ]] && continue
-
-  # Normalize relative paths to absolute (assume relative to BASE_DIR)
-  if [[ "$script" != /* ]]; then
-    script="$BASE_DIR/$script"
-  fi
-
-  scripts["$script"]=1
+    fi
+    expanded="$(expand_path_token "$token")"
+    scripts["$expanded"]=1
+    script_names["$(basename "$expanded")"]=1
+  done
 done < "$CRON_FILE"
 
 if (( ${#scripts[@]} == 0 )); then
@@ -64,11 +88,23 @@ fi
 
 declare -A kill_list=()
 for script in "${!scripts[@]}"; do
-  # Look for running processes whose command contains the script path
+  [[ -z "$script" || "$script" == *'$'* ]] && continue
   while IFS= read -r pid; do
     [[ -z "$pid" || "$pid" == "$this_pid" ]] && continue
     kill_list["$pid"]="$script"
   done < <(pgrep -f -- "$script" || true)
+done
+
+for script_name in "${!script_names[@]}"; do
+  [[ -z "$script_name" ]] && continue
+  while IFS= read -r pid; do
+    [[ -z "$pid" || "$pid" == "$this_pid" ]] && continue
+    cmdline="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    [[ -z "$cmdline" ]] && continue
+    if [[ "$cmdline" == *"/$script_name"* || "$cmdline" == *" $script_name "* || "$cmdline" == *" $script_name" ]]; then
+      kill_list["$pid"]="${kill_list[$pid]:-$script_name}"
+    fi
+  done < <(pgrep -f -- "$script_name" || true)
 done
 
 if (( ${#kill_list[@]} == 0 )); then
@@ -84,7 +120,3 @@ for pid in "${!kill_list[@]}"; do
     echo "Failed to kill PID $pid (script match: $script)" >&2
   fi
 done
-
-# Add this
-echo "Killing the guide_raw_to_corrected.sh process specifically"
-sudo pgrep -f "bash $HOME/DATAFLOW_v3/MASTER/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh" | xargs -r kill

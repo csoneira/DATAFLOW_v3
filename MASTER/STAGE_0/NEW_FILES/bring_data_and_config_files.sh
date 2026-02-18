@@ -76,119 +76,50 @@ is_new_files_station_enabled() {
   local decision
   decision=$(python3 - "$cfg_path" "$station_id" <<'PY' || true
 import sys
+from pathlib import Path
 
 cfg_path, station_raw = sys.argv[1:3]
 
 try:
-  import yaml
-except ImportError:
+  station_id = int(str(station_raw).strip())
+except Exception:
   print("1")
   raise SystemExit(0)
 
-def parse_int(value):
+repo_root = Path.home() / "DATAFLOW_v3"
+if str(repo_root) not in sys.path:
+  sys.path.append(str(repo_root))
+
+enabled = True
+try:
+  import yaml
+except Exception:
+  yaml = None
+
+if yaml is not None:
   try:
-    return int(str(value).strip())
+    with open(cfg_path, "r", encoding="utf-8") as handle:
+      data = yaml.safe_load(handle) or {}
   except Exception:
-    return None
+    data = {}
+  node = data.get("new_files_run_matrix")
+  if isinstance(node, dict):
+    enabled = bool(node.get("enabled", False))
 
-def normalize_stations(value):
-  if value is None:
-    return None
-  if isinstance(value, str):
-    text = value.strip().lower()
-    if not text:
-      return []
-    if text == "all":
-      return "all"
-    out = []
-    for token in text.replace(";", ",").split(","):
-      token = token.strip()
-      if not token:
-        continue
-      try:
-        out.append(int(token))
-      except Exception:
-        continue
-    return out
-  if isinstance(value, (list, tuple, set)):
-    out = []
-    for item in value:
-      if isinstance(item, str):
-        parsed = normalize_stations(item)
-        if parsed == "all":
-          return "all"
-        if isinstance(parsed, list):
-          out.extend(parsed)
-          continue
-      try:
-        out.append(int(item))
-      except Exception:
-        continue
-    return out
-  if isinstance(value, (int, float)):
-    try:
-      return [int(value)]
-    except Exception:
-      return []
-  return []
-
-station_id = parse_int(station_raw)
-if station_id is None:
-  print("1")
+if not enabled:
+  print("0")
   raise SystemExit(0)
 
 try:
-  with open(cfg_path, "r", encoding="utf-8") as handle:
-    data = yaml.safe_load(handle) or {}
+  from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
+
+  selection = load_selection_for_paths(
+    [cfg_path],
+    master_config_root=repo_root / "MASTER" / "CONFIG_FILES",
+  )
+  print("1" if station_is_selected(station_id, selection.stations) else "0")
 except Exception:
-  data = {}
-
-node = data.get("new_files_run_matrix")
-if not isinstance(node, dict):
   print("1")
-  raise SystemExit(0)
-
-if not bool(node.get("enabled", False)):
-  print("1")
-  raise SystemExit(0)
-
-mode = str(node.get("mode", "whitelist")).strip().lower()
-stations_node = node.get("stations")
-if isinstance(stations_node, dict):
-  station_list = normalize_stations(stations_node.get(str(station_id)))
-  if station_list is None:
-    station_list = normalize_stations(stations_node.get("0"))
-else:
-  station_list = normalize_stations(stations_node)
-
-default_stations = normalize_stations(node.get("default_stations", []))
-
-if mode == "blacklist":
-  disabled = False
-  if station_list is None:
-    if default_stations == "all":
-      disabled = True
-    elif isinstance(default_stations, list) and station_id in default_stations:
-      disabled = True
-  elif station_list == "all":
-    disabled = True
-  elif isinstance(station_list, list) and station_id in station_list:
-    disabled = True
-  print("0" if disabled else "1")
-  raise SystemExit(0)
-
-allowed = False
-if station_list is None:
-  if default_stations == "all":
-    allowed = True
-  elif isinstance(default_stations, list) and station_id in default_stations:
-    allowed = True
-elif station_list == "all":
-  allowed = True
-elif isinstance(station_list, list) and station_id in station_list:
-  allowed = True
-
-print("1" if allowed else "0")
 PY
   )
 
@@ -196,7 +127,7 @@ PY
 }
 
 if ! is_new_files_station_enabled "$station"; then
-  log_info "Skipping station ${station}: disabled by new_files_run_matrix."
+  log_info "Skipping station ${station}: disabled by selection/new_files_run_matrix."
   exit 0
 fi
 
@@ -207,101 +138,36 @@ declare -a date_ranges_display_pairs=()
 
 load_new_files_date_ranges() {
   local result
-  if ! result=$(python3 - "$NEW_FILES_CONFIG_FILE" <<'PY'
+  if ! result=$(python3 - "$NEW_FILES_CONFIG_FILE" "$station" <<'PY'
 import sys
 import shlex
-import datetime as dt
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
+from pathlib import Path
 
 cfg_path = sys.argv[1]
+station_raw = sys.argv[2]
+repo_root = Path.home() / "DATAFLOW_v3"
+if str(repo_root) not in sys.path:
+    sys.path.append(str(repo_root))
 
-def load_yaml(path):
-    if yaml is None:
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle) or {}
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+epochs = ""
+labels = ""
+try:
+    from MASTER.common.selection_config import (
+        load_selection_for_paths,
+        serialize_date_ranges_for_shell,
+    )
 
-def normalize_iso(text: str) -> str:
-    text = text.strip()
-    if text.endswith("Z") and "T" in text:
-        text = text[:-1] + "+00:00"
-    return text
+    selection = load_selection_for_paths(
+        [cfg_path],
+        master_config_root=repo_root / "MASTER" / "CONFIG_FILES",
+    )
+    from MASTER.common.selection_config import effective_date_ranges_for_station
 
-def parse_epoch(value, is_end=False):
-    if value in ("", None):
-        return None
-    text = normalize_iso(str(value))
-    if not text:
-        return None
-    parsed = None
-    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            if fmt is None:
-                parsed = dt.datetime.fromisoformat(text)
-            else:
-                parsed = dt.datetime.strptime(text, fmt)
-            break
-        except Exception:
-            parsed = None
-    if parsed is None:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    else:
-        parsed = parsed.astimezone(dt.timezone.utc)
-    if is_end and "T" not in text and " " not in text:
-        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
-    return int(parsed.timestamp())
+    ranges = effective_date_ranges_for_station(station_raw, selection.date_ranges)
+    epochs, labels = serialize_date_ranges_for_shell(ranges)
+except Exception:
+    pass
 
-ranges = []
-
-def add_interval(start_raw, end_raw):
-    start_epoch = parse_epoch(start_raw, is_end=False)
-    end_epoch = parse_epoch(end_raw, is_end=True)
-    if start_epoch is None and end_epoch is None:
-        return
-    start_label = "" if start_raw in (None, "") else str(start_raw)
-    end_label = "" if end_raw in (None, "") else str(end_raw)
-    ranges.append((start_epoch, end_epoch, start_label, end_label))
-
-def collect(source):
-    if not isinstance(source, dict):
-        return
-    legacy = source.get("date_range")
-    if isinstance(legacy, dict):
-        add_interval(legacy.get("start"), legacy.get("end"))
-    range_list = source.get("date_ranges")
-    if isinstance(range_list, list):
-        for item in range_list:
-            if isinstance(item, dict):
-                add_interval(item.get("start"), item.get("end"))
-    nested = source.get("new_files_date_selection")
-    if isinstance(nested, dict):
-        collect(nested)
-
-collect(load_yaml(cfg_path))
-
-deduped = []
-seen = set()
-for item in ranges:
-    if item in seen:
-        continue
-    seen.add(item)
-    deduped.append(item)
-
-epochs = ";".join(
-    f"{'' if start is None else start},{'' if end is None else end}"
-    for start, end, _, _ in deduped
-)
-labels = ";".join(f"{a}|{b}" for _, _, a, b in deduped)
 print(f"NEW_FILES_DATE_RANGES_EPOCHS={shlex.quote(epochs)}")
 print(f"NEW_FILES_DATE_RANGES_LABELS={shlex.quote(labels)}")
 PY

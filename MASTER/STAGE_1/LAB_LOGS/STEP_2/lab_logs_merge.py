@@ -33,6 +33,11 @@ from MASTER.common.path_config import (
     get_master_config_root,
     resolve_home_path_from_config,
 )
+from MASTER.common.selection_config import (
+    effective_date_ranges_for_station,
+    load_selection_for_paths,
+    station_is_selected,
+)
 from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 CREATE_NEW_CSV = True
@@ -205,18 +210,16 @@ def _collect_date_ranges(node: Mapping[str, object], ranges: List[Tuple[Optional
         _collect_date_ranges(nested, ranges)
 
 
-def load_lab_logs_date_ranges() -> List[Tuple[Optional[date], Optional[date]]]:
-    ranges: List[Tuple[Optional[date], Optional[date]]] = []
-    _collect_date_ranges(_load_yaml_mapping(LAB_LOGS_CONFIG_SHARED), ranges)
-    _collect_date_ranges(_load_yaml_mapping(LAB_LOGS_CONFIG_STEP2), ranges)
-    deduped: List[Tuple[Optional[date], Optional[date]]] = []
-    seen: set[Tuple[Optional[date], Optional[date]]] = set()
-    for item in ranges:
-        if item in seen:
-            continue
-        seen.add(item)
-        deduped.append(item)
-    return deduped
+def load_lab_logs_date_ranges(
+    station: Optional[int | str] = None,
+) -> List[Tuple[Optional[date], Optional[date]]]:
+    selection = load_selection_for_paths(
+        [LAB_LOGS_CONFIG_SHARED, LAB_LOGS_CONFIG_STEP2],
+        master_config_root=MASTER_CONFIG_ROOT,
+    )
+    if station is None:
+        return list(selection.date_ranges)
+    return list(effective_date_ranges_for_station(station, selection.date_ranges))
 
 
 def extract_date_from_filename(path: Path) -> Optional[date]:
@@ -486,6 +489,14 @@ def main() -> int:
     args = parse_args()
 
     station = args.station
+    selection = load_selection_for_paths(
+        [LAB_LOGS_CONFIG_SHARED, LAB_LOGS_CONFIG_STEP2],
+        master_config_root=MASTER_CONFIG_ROOT,
+    )
+    if not station_is_selected(station, selection.stations):
+        print(f"Station {station} skipped by selection.stations.")
+        return 0
+
     set_station(station)
     start_timer(__file__)
 
@@ -506,7 +517,7 @@ def main() -> int:
     # status_timestamp = append_status_row(status_csv_path)
 
     outlier_limits = load_outlier_limits()
-    date_ranges = load_lab_logs_date_ranges()
+    date_ranges = list(effective_date_ranges_for_station(station, selection.date_ranges))
     if date_ranges:
         human_ranges = []
         for start_day, end_day in date_ranges:

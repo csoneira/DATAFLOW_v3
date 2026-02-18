@@ -11,7 +11,8 @@ add_to_rclone.info
 STATIONS/
 NOT_ESSENTIAL/
 OPERATIONS_RUNTIME/
-EXECUTION_LOGS
+EXECUTION_LOGS/
+.ATTIC/
 
 # ----------------------------------------------------------------------
 # Runtime locks and throttle markers

@@ -30,6 +30,11 @@ from MASTER.common.path_config import (
     get_master_config_root,
     resolve_home_path_from_config,
 )
+from MASTER.common.selection_config import (
+    effective_date_ranges_for_station,
+    resolve_selection_from_configs,
+    station_is_selected,
+)
 from MASTER.common.status_csv import append_status_row, mark_status_complete
 
 
@@ -224,8 +229,10 @@ def resolve_requested_days(
     config: Mapping[str, object],
     *,
     hard_end_day: date,
+    configured_ranges: Optional[Sequence[Tuple[Optional[date], Optional[date]]]] = None,
 ) -> List[date]:
-    configured_ranges = _collect_config_date_ranges(config)
+    if configured_ranges is None:
+        configured_ranges = _collect_config_date_ranges(config)
     if configured_ranges:
         requested_set: Set[date] = set()
         for start_day, end_day in configured_ranges:
@@ -275,6 +282,14 @@ def main() -> int:
 
     station = int(sys.argv[1])
     print(f"Station: {station}")
+    selection = resolve_selection_from_configs(
+        [config],
+        master_config_root=get_master_config_root(),
+    )
+    if not station_is_selected(station, selection.stations):
+        print(f"Station {station} skipped by selection.stations.")
+        return 0
+
     set_station(station)
 
     locations = {
@@ -308,7 +323,13 @@ def main() -> int:
     existing_days = parse_existing_days(output_root)
 
     end_day = (datetime.now() - timedelta(days=5)).date()
-    requested_days = resolve_requested_days(config, hard_end_day=end_day)
+    requested_days = resolve_requested_days(
+        config,
+        hard_end_day=end_day,
+        configured_ranges=list(
+            effective_date_ranges_for_station(station, selection.date_ranges)
+        ),
+    )
     if not requested_days:
         print("No valid date ranges resolved from config. Nothing to do.")
         return 0

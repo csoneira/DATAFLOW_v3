@@ -1,8 +1,10 @@
 crontab_execution: true
 last_file_test: true
-date_range:
-  start: null
-  end: null
+selection:
+  stations: [0, 1]
+  date_ranges:
+    - start: 2024-09-16
+      end: 2024-09-30
 self_trigger: false
 timeseries_and_fits: false
 complete_reanalysis: false

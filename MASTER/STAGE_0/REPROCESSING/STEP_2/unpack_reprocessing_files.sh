@@ -106,6 +106,7 @@ done
 
 config_file_shared="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
 config_file_step="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/STEP_2/config_step_2.yaml"
+UNPACKER_ROOT="${MASTER_DIR}/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES"
 
 is_reprocessing_step_enabled() {
     local station_id="$1"
@@ -114,8 +115,9 @@ is_reprocessing_step_enabled() {
     [[ -f "$cfg_path" ]] || return 0
 
     local decision
-    decision=$(python3 - "$cfg_path" "$station_id" "$step_id" <<'PY' || true
+decision=$(python3 - "$cfg_path" "$station_id" "$step_id" <<'PY' || true
 import sys
+from pathlib import Path
 
 cfg_path, station_raw, step_raw = sys.argv[1:4]
 
@@ -181,6 +183,22 @@ step_id = parse_int(step_raw)
 if station_id is None or step_id is None:
     print("1")
     raise SystemExit(0)
+
+repo_root = Path.home() / "DATAFLOW_v3"
+if str(repo_root) not in sys.path:
+    sys.path.append(str(repo_root))
+
+try:
+    from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
+    selection = load_selection_for_paths(
+        [cfg_path],
+        master_config_root=repo_root / "MASTER" / "CONFIG_FILES",
+    )
+    if not station_is_selected(station_id, selection.stations):
+        print("0")
+        raise SystemExit(0)
+except Exception:
+    pass
 
 try:
     with open(cfg_path, "r", encoding="utf-8") as handle:
@@ -581,8 +599,8 @@ move_step1_outputs_to_unprocessed() {
     fi
 }
 
-hld_input_directory=$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/mingo${station_code}/data/daqData/rawData/dat # <--------------------------------------------
-asci_output_directory=$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/mingo${station_code}/data/daqData/asci # <--------------------------------------------
+hld_input_directory="${UNPACKER_ROOT}/system/devices/TRB3/mingo${station_code}/data/daqData/rawData/dat" # <--------------------------------------------
+asci_output_directory="${UNPACKER_ROOT}/system/devices/TRB3/mingo${station_code}/data/daqData/asci" # <--------------------------------------------
 dest_directory="$stage0_to_1_directory"
 
 route_dat_outputs() {
@@ -903,7 +921,7 @@ process_single_hld() {
         export RPCSYSTEM="mingo${station_code}"
         export RPCRUNMODE=oneRun
 
-        if ! "$HOME/DATAFLOW_v3/MASTER/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/bin/unpack.sh"; then
+        if ! "${UNPACKER_ROOT}/bin/unpack.sh"; then
             echo "Unpacking failed for $filename. Moving in-flight files to ERROR." >&2
             local failed_path failed_name
             for failed_path in "$hld_input_directory/$filename" "$hld_input_directory/$new_filename" "$processing_path"; do

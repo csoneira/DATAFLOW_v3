@@ -85,8 +85,8 @@ from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
-    file_name_in_date_range,
-    load_date_range_from_config,
+    file_name_in_any_date_range,
+    load_date_ranges_from_config,
     select_latest_candidate,
     sync_unprocessed_with_date_range,
 )
@@ -97,6 +97,7 @@ from MASTER.common.path_config import (
     resolve_master_config_root_from_config,
 )
 from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
@@ -186,6 +187,14 @@ config = apply_step1_task_parameter_overrides(
     update_fn=update_config_with_parameters,
     log_fn=print,
 )
+
+selection_config = load_selection_for_paths(
+    [config_file_path],
+    master_config_root=config_root,
+)
+if not station_is_selected(station, selection_config.stations):
+    print(f"Station {station} skipped by selection.stations.")
+    sys.exit(0)
 
 # Cron job switch that decides if completed files can be revisited.
 complete_reanalysis = config.get("complete_reanalysis", False)
@@ -545,23 +554,29 @@ sync_unprocessed_with_date_range(
     unprocessed_directory=base_directories["unprocessed_directory"],
     out_of_date_directory=base_directories["out_of_date_directory"],
     log_fn=print,
+    station_id=station,
+    master_config_root=config_root,
 )
 unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
 completed_files = os.listdir(base_directories["completed_directory"])
-date_range_start, date_range_end = load_date_range_from_config(config)
-if date_range_start is not None or date_range_end is not None:
+date_ranges = load_date_ranges_from_config(
+    config,
+    station_id=station,
+    master_config_root=config_root,
+)
+if date_ranges:
     processing_before = len(processing_files)
     completed_before = len(completed_files)
     processing_files = [
         name
         for name in processing_files
-        if file_name_in_date_range(name, date_range_start, date_range_end)
+        if file_name_in_any_date_range(name, date_ranges)
     ]
     completed_files = [
         name
         for name in completed_files
-        if file_name_in_date_range(name, date_range_start, date_range_end)
+        if file_name_in_any_date_range(name, date_ranges)
     ]
     skipped_processing = processing_before - len(processing_files)
     skipped_completed = completed_before - len(completed_files)

@@ -106,6 +106,7 @@ is_reprocessing_step_enabled() {
   local decision
   decision=$(python3 - "$cfg_path" "$station_id" "$step_id" <<'PY' || true
 import sys
+from pathlib import Path
 
 cfg_path, station_raw, step_raw = sys.argv[1:4]
 
@@ -171,6 +172,22 @@ step_id = parse_int(step_raw)
 if station_id is None or step_id is None:
   print("1")
   raise SystemExit(0)
+
+repo_root = Path.home() / "DATAFLOW_v3"
+if str(repo_root) not in sys.path:
+  sys.path.append(str(repo_root))
+
+try:
+  from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
+  selection = load_selection_for_paths(
+    [cfg_path],
+    master_config_root=repo_root / "MASTER" / "CONFIG_FILES",
+  )
+  if not station_is_selected(station_id, selection.stations):
+    print("0")
+    raise SystemExit(0)
+except Exception:
+  pass
 
 try:
   with open(cfg_path, "r", encoding="utf-8") as handle:
@@ -290,10 +307,10 @@ load_prepare_metadata_config() {
   [[ -f "$cfg_shared_path" || -f "$cfg_step_path" ]] || return 0
 
   local result
-  if result=$(python3 - "$cfg_shared_path" "$cfg_step_path" <<'PY'
+  if result=$(python3 - "$cfg_shared_path" "$cfg_step_path" "$station" <<'PY'
 import sys
 import shlex
-import datetime as dt
+from pathlib import Path
 
 try:
   import yaml
@@ -302,6 +319,7 @@ except ImportError:
 
 cfg_shared_path = sys.argv[1]
 cfg_step_path = sys.argv[2]
+station_raw = sys.argv[3]
 
 def load_yaml_dict(path):
   if yaml is None or not path:
@@ -330,40 +348,6 @@ remote_user = config.get("remote_user") or ""
 remote_root = config.get("remote_directory_root") or ""
 raw_csv_max_age_days = config.get("raw_csv_max_age_days")
 
-def normalize_iso(value: str) -> str:
-  text = value.strip()
-  if text.endswith("Z") and "T" in text:
-    text = text[:-1] + "+00:00"
-  return text
-
-def parse_epoch(value, is_end=False):
-  if value in ("", None):
-    return None
-  text = str(value)
-  if not text.strip():
-    return None
-  text = normalize_iso(text)
-  dt_obj = None
-  parsers = [None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]
-  for fmt in parsers:
-    try:
-      if fmt is None:
-        dt_obj = dt.datetime.fromisoformat(text)
-      else:
-        dt_obj = dt.datetime.strptime(text, fmt)
-      break
-    except Exception:
-      dt_obj = None
-  if dt_obj is None:
-    return None
-  if dt_obj.tzinfo is None:
-    dt_obj = dt_obj.replace(tzinfo=dt.timezone.utc)
-  else:
-    dt_obj = dt_obj.astimezone(dt.timezone.utc)
-  if is_end and "T" not in text and " " not in text:
-    dt_obj = dt_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
-  return int(dt_obj.timestamp())
-
 def parse_positive_int(value):
   if value in ("", None):
     return None
@@ -373,52 +357,28 @@ def parse_positive_int(value):
     return None
   return parsed if parsed > 0 else None
 
-ranges = []
+repo_root = Path.home() / "DATAFLOW_v3"
+if str(repo_root) not in sys.path:
+  sys.path.append(str(repo_root))
 
-def add_interval(start_raw, end_raw):
-  start_epoch = parse_epoch(start_raw, False)
-  end_epoch = parse_epoch(end_raw, True)
-  if start_epoch is None and end_epoch is None:
-    return
-  start_label = "" if start_raw in (None, "") else str(start_raw)
-  end_label = "" if end_raw in (None, "") else str(end_raw)
-  ranges.append((start_epoch, end_epoch, start_label, end_label))
+epochs_serialized = ""
+labels_serialized = ""
+try:
+  from MASTER.common.selection_config import (
+    load_selection_for_paths,
+    serialize_date_ranges_for_shell,
+  )
 
-def collect_ranges(source):
-  if not isinstance(source, dict):
-    return
-  legacy_range = source.get("date_range")
-  if isinstance(legacy_range, dict):
-    add_interval(legacy_range.get("start"), legacy_range.get("end"))
-  range_list = source.get("date_ranges")
-  if isinstance(range_list, list):
-    for item in range_list:
-      if isinstance(item, dict):
-        add_interval(item.get("start"), item.get("end"))
+  selection = load_selection_for_paths(
+    [cfg_shared_path, cfg_step_path],
+    master_config_root=repo_root / "MASTER" / "CONFIG_FILES",
+  )
+  from MASTER.common.selection_config import effective_date_ranges_for_station
+  ranges = effective_date_ranges_for_station(station_raw, selection.date_ranges)
+  epochs_serialized, labels_serialized = serialize_date_ranges_for_shell(ranges)
+except Exception:
+  pass
 
-# Backward compatible order:
-# 1) shared top-level keys, 2) merged prepare_reprocessing_metadata block,
-# 3) step top-level keys (if used).
-collect_ranges(shared_data)
-collect_ranges(config)
-collect_ranges(step_data)
-
-deduped = []
-seen = set()
-for item in ranges:
-  if item in seen:
-    continue
-  seen.add(item)
-  deduped.append(item)
-
-epochs_serialized = ";".join(
-  f"{'' if start is None else start},{'' if end is None else end}"
-  for start, end, _, _ in deduped
-)
-labels_serialized = ";".join(
-  f"{start_label}|{end_label}"
-  for _, _, start_label, end_label in deduped
-)
 max_age_days = parse_positive_int(raw_csv_max_age_days)
 
 def emit(key, value):

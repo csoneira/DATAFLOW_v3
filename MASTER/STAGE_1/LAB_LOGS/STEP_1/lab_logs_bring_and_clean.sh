@@ -81,6 +81,44 @@ LAB_LOGS_CONFIG_SHARED="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/c
 LAB_LOGS_CONFIG_STEP1="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/STEP_1/config_step_1.yaml"
 LAB_LOGS_COLUMN_COUNTS_CSV="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/STEP_1/config_step_1.csv"
 
+is_lab_logs_station_enabled() {
+  local station_id="$1"
+  local decision
+  decision=$(python3 - "$station_id" "$LAB_LOGS_CONFIG_SHARED" "$LAB_LOGS_CONFIG_STEP1" <<'PY' || true
+import sys
+from pathlib import Path
+
+station_raw, shared_cfg, step_cfg = sys.argv[1:4]
+
+try:
+    station_id = int(str(station_raw).strip())
+except Exception:
+    print("1")
+    raise SystemExit(0)
+
+repo_root = Path.home() / "DATAFLOW_v3"
+if str(repo_root) not in sys.path:
+    sys.path.append(str(repo_root))
+
+try:
+    from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
+    selection = load_selection_for_paths(
+        [shared_cfg, step_cfg],
+        master_config_root=repo_root / "MASTER" / "CONFIG_FILES",
+    )
+    print("1" if station_is_selected(station_id, selection.stations) else "0")
+except Exception:
+    print("1")
+PY
+  )
+  [[ "$decision" != "0" ]]
+}
+
+if ! is_lab_logs_station_enabled "$station"; then
+  echo "Skipping station ${station}: disabled by selection.stations."
+  exit 0
+fi
+
 date_range_filter_enabled=false
 declare -a date_ranges_start_epochs=()
 declare -a date_ranges_end_epochs=()
@@ -88,103 +126,38 @@ declare -a date_ranges_display_pairs=()
 
 load_lab_logs_date_ranges() {
   local result
-  if ! result=$(python3 - "$LAB_LOGS_CONFIG_SHARED" "$LAB_LOGS_CONFIG_STEP1" <<'PY'
+  if ! result=$(python3 - "$LAB_LOGS_CONFIG_SHARED" "$LAB_LOGS_CONFIG_STEP1" "$station" <<'PY'
 import sys
 import shlex
-import datetime as dt
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
+from pathlib import Path
 
 shared_path = sys.argv[1]
 step_path = sys.argv[2]
+station_raw = sys.argv[3]
 
-def load_yaml(path):
-    if yaml is None:
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle) or {}
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+repo_root = Path.home() / "DATAFLOW_v3"
+if str(repo_root) not in sys.path:
+    sys.path.append(str(repo_root))
 
-def normalize_iso(text: str) -> str:
-    text = text.strip()
-    if text.endswith("Z") and "T" in text:
-        text = text[:-1] + "+00:00"
-    return text
+epochs = ""
+labels = ""
+try:
+    from MASTER.common.selection_config import (
+        load_selection_for_paths,
+        serialize_date_ranges_for_shell,
+    )
 
-def parse_epoch(value, is_end=False):
-    if value in ("", None):
-        return None
-    text = normalize_iso(str(value))
-    if not text:
-        return None
-    parsed = None
-    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            if fmt is None:
-                parsed = dt.datetime.fromisoformat(text)
-            else:
-                parsed = dt.datetime.strptime(text, fmt)
-            break
-        except Exception:
-            parsed = None
-    if parsed is None:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    else:
-        parsed = parsed.astimezone(dt.timezone.utc)
-    if is_end and "T" not in text and " " not in text:
-        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
-    return int(parsed.timestamp())
+    selection = load_selection_for_paths(
+        [shared_path, step_path],
+        master_config_root=repo_root / "MASTER" / "CONFIG_FILES",
+    )
+    from MASTER.common.selection_config import effective_date_ranges_for_station
 
-ranges = []
+    ranges = effective_date_ranges_for_station(station_raw, selection.date_ranges)
+    epochs, labels = serialize_date_ranges_for_shell(ranges)
+except Exception:
+    pass
 
-def add_interval(start_raw, end_raw):
-    start_epoch = parse_epoch(start_raw, is_end=False)
-    end_epoch = parse_epoch(end_raw, is_end=True)
-    if start_epoch is None and end_epoch is None:
-        return
-    start_label = "" if start_raw in (None, "") else str(start_raw)
-    end_label = "" if end_raw in (None, "") else str(end_raw)
-    ranges.append((start_epoch, end_epoch, start_label, end_label))
-
-def collect(source):
-    if not isinstance(source, dict):
-        return
-    legacy = source.get("date_range")
-    if isinstance(legacy, dict):
-        add_interval(legacy.get("start"), legacy.get("end"))
-    rlist = source.get("date_ranges")
-    if isinstance(rlist, list):
-        for item in rlist:
-            if isinstance(item, dict):
-                add_interval(item.get("start"), item.get("end"))
-    nested = source.get("lab_logs_date_selection")
-    if isinstance(nested, dict):
-        collect(nested)
-
-for node in (load_yaml(shared_path), load_yaml(step_path)):
-    collect(node)
-
-deduped = []
-seen = set()
-for item in ranges:
-    if item in seen:
-        continue
-    seen.add(item)
-    deduped.append(item)
-
-epochs = ";".join(
-    f"{'' if start is None else start},{'' if end is None else end}"
-    for start, end, _, _ in deduped
-)
-labels = ";".join(f"{a}|{b}" for _, _, a, b in deduped)
 print(f"LAB_LOGS_DATE_RANGES_EPOCHS={shlex.quote(epochs)}")
 print(f"LAB_LOGS_DATE_RANGES_LABELS={shlex.quote(labels)}")
 PY
@@ -306,8 +279,6 @@ load_column_counts_config
 mingo_direction="mingo0$station"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 RSYNC_RSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=15"
-
-python_script_path="$HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_2/log_aggregate_and_join.py"
 
 LAB_LOGS_ROOT="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/STAGE_1/LAB_LOGS"
 STEP1_ROOT="${LAB_LOGS_ROOT}/STEP_1"
