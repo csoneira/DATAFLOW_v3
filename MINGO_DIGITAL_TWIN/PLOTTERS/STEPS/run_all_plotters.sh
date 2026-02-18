@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Run all step plotters (STEP_1 .. STEP_10) and report per-step status
 cd "$(dirname "$0")" || exit 2
-# discover plot scripts under STEP_*/* and run each with proper exit-code handling
-SCRIPTS=( $(ls -1 STEP_*/plot_step_*.py 2>/dev/null || true) )
+# discover plot scripts under STEP_*/* and run each with numeric step ordering
+mapfile -t SCRIPTS < <(printf '%s\n' STEP_*/plot_step_*.py 2>/dev/null | sort -V)
 if [ ${#SCRIPTS[@]} -eq 0 ]; then
   echo "No step plotter scripts found under $(pwd)/STEP_*" >&2
   exit 2

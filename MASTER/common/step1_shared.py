@@ -152,6 +152,54 @@ def normalize_analysis_mode_value(value: object) -> str:
     return ""
 
 
+def _normalize_plot_mode(raw_value: object) -> str:
+    if raw_value is None:
+        return "none"
+    if isinstance(raw_value, bool):
+        return "all" if raw_value else "none"
+
+    mode = str(raw_value).strip().lower()
+    if mode in {"", "none", "null", "false", "0", "off"}:
+        return "none"
+    if mode in {"debug"}:
+        return "debug"
+    if mode in {"usual", "standard", "normal"}:
+        return "usual"
+    if mode in {"all", "true", "1", "on"}:
+        return "all"
+
+    raise ValueError(
+        "Invalid create_plots value. Use one of: null/none, debug, usual, all."
+    )
+
+
+def resolve_step1_plot_options(
+    config_obj: Dict[str, object],
+) -> Tuple[str, bool, bool, bool, bool, bool, bool]:
+    """Return normalized plotting mode and derived plotting toggles.
+
+    Output tuple:
+    (plot_mode, create_plots, create_essential_plots, save_plots,
+     create_pdf, show_plots, create_debug_plots)
+    """
+    plot_mode = _normalize_plot_mode(config_obj.get("create_plots", None))
+    create_plots = plot_mode in {"usual", "all"}
+    create_debug_plots = plot_mode in {"debug", "all"}
+    create_essential_plots = create_plots
+    save_plots = plot_mode != "none"
+    create_pdf = save_plots
+    show_plots = False
+    return (
+        plot_mode,
+        create_plots,
+        create_essential_plots,
+        save_plots,
+        create_pdf,
+        show_plots,
+        create_debug_plots,
+    )
+
+
 def sanitize_analysis_mode_rows(rows: List[Dict[str, object]]) -> int:
     fixed = 0
     for row in rows:

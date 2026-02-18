@@ -13,6 +13,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
+Y_WIDTHS = [np.array([63, 63, 63, 98], dtype=float), np.array([98, 63, 63, 63], dtype=float)]
+
 
 def normalize_tt(series: pd.Series) -> pd.Series:
     tt = series.astype("string").fillna("")
@@ -35,6 +37,131 @@ def plot_hit_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     plt.close(fig)
 
 
+def compute_mode_charge(values: np.ndarray) -> float:
+    positive = values[np.isfinite(values) & (values > 0)]
+    if positive.size == 0:
+        return 1.0
+    counts, edges = np.histogram(positive, bins="auto")
+    if counts.size == 0 or edges.size < 2:
+        median = float(np.nanmedian(positive))
+        return max(1.0, median if np.isfinite(median) else 1.0)
+    mode_idx = int(np.argmax(counts))
+    mode_val = 0.5 * (edges[mode_idx] + edges[mode_idx + 1])
+    if not np.isfinite(mode_val) or mode_val <= 0:
+        median = float(np.nanmedian(positive))
+        return max(1.0, median if np.isfinite(median) else 1.0)
+    return float(max(1.0, mode_val))
+
+
+def strip_edges_mm_for_plane(plane_idx: int) -> np.ndarray:
+    widths = Y_WIDTHS[0] if plane_idx in (1, 3) else Y_WIDTHS[1]
+    total_width = float(np.sum(widths))
+    lower_edges = -total_width / 2.0 + np.cumsum(np.concatenate(([0.0], widths[:-1])))
+    upper_edges = lower_edges + widths
+    return np.unique(np.concatenate([lower_edges, upper_edges]))
+
+
+def plot_multi_event_thrown_clouds(
+    step4_df: pd.DataFrame,
+    avalanche_source_df: pd.DataFrame,
+    pdf: PdfPages,
+    n_events: int,
+    n_points: int,
+    seed: int | None,
+    avalanche_width_mm: float,
+    width_scale_exponent: float,
+    width_scale_max: float,
+) -> None:
+    if "tt_hit" not in step4_df.columns:
+        return
+    if avalanche_source_df is None or avalanche_source_df.empty:
+        return
+
+    required_cols: list[str] = []
+    for plane_idx in range(1, 5):
+        required_cols.extend(
+            [
+                f"avalanche_x_{plane_idx}",
+                f"avalanche_y_{plane_idx}",
+                f"avalanche_size_electrons_{plane_idx}",
+            ]
+        )
+    if not all(col in avalanche_source_df.columns for col in required_cols):
+        return
+
+    n_common = min(len(step4_df), len(avalanche_source_df))
+    if n_common == 0:
+        return
+
+    tt_hit_vals = normalize_tt(step4_df["tt_hit"].iloc[:n_common]).fillna("").astype(str).to_numpy()
+    full_hit_mask = tt_hit_vals == "1234"
+
+    x_vals: dict[int, np.ndarray] = {}
+    y_vals: dict[int, np.ndarray] = {}
+    q_vals: dict[int, np.ndarray] = {}
+    mode_charge: dict[int, float] = {}
+    valid_all_planes = np.ones(n_common, dtype=bool)
+    for plane_idx in range(1, 5):
+        x_arr = avalanche_source_df[f"avalanche_x_{plane_idx}"].iloc[:n_common].to_numpy(dtype=float)
+        y_arr = avalanche_source_df[f"avalanche_y_{plane_idx}"].iloc[:n_common].to_numpy(dtype=float)
+        q_arr = avalanche_source_df[f"avalanche_size_electrons_{plane_idx}"].iloc[:n_common].to_numpy(dtype=float)
+        plane_valid = np.isfinite(x_arr) & np.isfinite(y_arr) & np.isfinite(q_arr) & (q_arr > 0)
+        valid_all_planes &= plane_valid
+        x_vals[plane_idx] = x_arr
+        y_vals[plane_idx] = y_arr
+        q_vals[plane_idx] = q_arr
+        mode_charge[plane_idx] = compute_mode_charge(q_arr)
+
+    candidates = np.where(full_hit_mask & valid_all_planes)[0]
+    if candidates.size == 0:
+        return
+
+    rng = np.random.default_rng(seed if seed is not None else 1)
+    n_pick = min(max(1, int(n_events)), candidates.size)
+    selected = np.sort(rng.choice(candidates, size=n_pick, replace=False))
+    colors = ["#d62728", "#ff7f0e", "#2ca02c", "#1f77b4", "#9467bd"]
+    x_min, x_max = -150.0, 150.0
+    y_min, y_max = -143.0, 143.0
+
+    fig, axes = plt.subplots(2, 2, figsize=(11.0, 9.0))
+    for plane_idx in range(1, 5):
+        ax = axes[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        for edge in strip_edges_mm_for_plane(plane_idx):
+            ax.axhline(edge, color="gray", linestyle="--", linewidth=0.8, alpha=0.4)
+
+        for col_idx, event_idx in enumerate(selected):
+            color = colors[col_idx % len(colors)]
+            center_x = float(x_vals[plane_idx][event_idx])
+            center_y = float(y_vals[plane_idx][event_idx])
+            aval_q = float(q_vals[plane_idx][event_idx])
+            mode_q = mode_charge[plane_idx]
+            base_scale = aval_q / mode_q if mode_q > 0 else 0.0
+            if base_scale > 0:
+                width_scale = min(width_scale_max, base_scale ** width_scale_exponent)
+            else:
+                width_scale = 0.0
+            sigma = max(1.0, float(avalanche_width_mm * width_scale))
+
+            points_rng = np.random.default_rng(int(rng.integers(0, 2 ** 32 - 1)))
+            x_pts = center_x + points_rng.normal(0.0, sigma, n_points)
+            y_pts = center_y + points_rng.normal(0.0, sigma, n_points)
+
+            ax.scatter(x_pts, y_pts, s=4, alpha=0.36, color=color, rasterized=True)
+            ax.scatter([center_x], [center_y], s=26, color=color, marker="x")
+
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_title(f"Plane {plane_idx} thrown points ({n_pick} events)")
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+
+    fig.suptitle(f"Thrown-point clouds: {n_pick} full-hit events overlaid per plane (tt_hit=1234)")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.965))
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+
 def plot_step4_summary(
     df: pd.DataFrame,
     pdf: PdfPages,
@@ -43,6 +170,11 @@ def plot_step4_summary(
     point_seed: int | None = None,
     thrown_points: dict | None = None,
     examples_df: pd.DataFrame | None = None,
+    avalanche_df: pd.DataFrame | None = None,
+    avalanche_width_mm: float = 40.0,
+    width_scale_exponent: float = 0.1,
+    width_scale_max: float = 2.0,
+    n_avalanche_events: int = 5,
 ) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
     axes = axes.flatten()
@@ -151,99 +283,31 @@ def plot_step4_summary(
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
-    # Single-event thrown-point cloud (MASTER_STEPS-style)
-    # - pick one event that has at least one avalanche center and draw many sampled points
-    examples_source = examples_df if examples_df is not None else df
-    if examples_source is not None and not examples_source.empty:
-        # candidate events must have at least one plane with finite avalanche center
-        center_mask = np.zeros(len(examples_source), dtype=bool)
-        for p in range(1, 5):
-            ax_col = f"avalanche_x_{p}"
-            ay_col = f"avalanche_y_{p}"
-            if ax_col in examples_source.columns and ay_col in examples_source.columns:
-                xv = examples_source[ax_col].to_numpy(dtype=float)
-                yv = examples_source[ay_col].to_numpy(dtype=float)
-                center_mask |= (~np.isnan(xv)) & (~np.isnan(yv))
-        if center_mask.any():
-            rng_single = np.random.default_rng(point_seed if point_seed is not None else 1)
-            sel_idx = int(rng_single.choice(np.where(center_mask)[0]))
-            n_points = int(points_per_plane) if points_per_plane and points_per_plane > 0 else 2000
+    avalanche_source = avalanche_df if avalanche_df is not None else df
+    n_common = min(len(df), len(avalanche_source)) if avalanche_source is not None else len(df)
+    n_points = int(points_per_plane) if points_per_plane and points_per_plane > 0 else 2000
+    plot_multi_event_thrown_clouds(
+        step4_df=df,
+        avalanche_source_df=avalanche_source,
+        pdf=pdf,
+        n_events=n_avalanche_events,
+        n_points=n_points,
+        seed=point_seed,
+        avalanche_width_mm=avalanche_width_mm,
+        width_scale_exponent=width_scale_exponent,
+        width_scale_max=width_scale_max,
+    )
 
-            fig, axes = plt.subplots(2, 2, figsize=(10, 9))
-            for plane_idx in range(1, 5):
-                ax = axes[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
-                ax_col = f"avalanche_x_{plane_idx}"
-                ay_col = f"avalanche_y_{plane_idx}"
-                if ax_col not in examples_source.columns or ay_col not in examples_source.columns:
-                    ax.axis("off")
-                    continue
-                center_x = examples_source.iloc[sel_idx][ax_col]
-                center_y = examples_source.iloc[sel_idx][ay_col]
-                if np.isnan(center_x) or np.isnan(center_y):
-                    ax.axis("off")
-                    continue
-
-                # determine sampling sigma: prefer scaled width, fall back to sensible default
-                scaled_col = f"avalanche_scaled_width_{plane_idx}"
-                if scaled_col in examples_source.columns:
-                    try:
-                        sigma = float(examples_source.iloc[sel_idx][scaled_col])
-                    except Exception:
-                        sigma = 40.0
-                else:
-                    # fallback: try avalanche size -> crude proxy, else use 40 mm
-                    aval_col = f"avalanche_size_electrons_{plane_idx}"
-                    if aval_col in examples_source.columns:
-                        try:
-                            aval_val = float(examples_source.iloc[sel_idx][aval_col])
-                            sigma = float(max(1.0, min(80.0, np.cbrt(aval_val))))
-                        except Exception:
-                            sigma = 40.0
-                    else:
-                        sigma = 40.0
-
-                points_rng = np.random.default_rng(point_seed if point_seed is not None else 1)
-                x_pts = center_x + points_rng.normal(0.0, sigma, n_points)
-                y_pts = center_y + points_rng.normal(0.0, sigma, n_points)
-
-                ax.scatter(x_pts, y_pts, s=4, alpha=0.35, rasterized=True)
-                ax.scatter([center_x], [center_y], s=40, color="black", marker="x")
-
-                title = f"Plane {plane_idx} thrown points"
-                aval_col = f"avalanche_size_electrons_{plane_idx}"
-                if aval_col in examples_source.columns:
-                    try:
-                        aval_val = float(examples_source.iloc[sel_idx][aval_col])
-                        title += f" (avalanche={aval_val:,.0f} e-)"
-                    except Exception:
-                        pass
-                ax.set_title(title)
-                ax.set_xlabel("X (mm)")
-                ax.set_ylabel("Y (mm)")
-
-                lim = max(150.0, 4.0 * sigma)
-                ax.set_xlim(center_x - lim, center_x + lim)
-                ax.set_ylim(center_y - lim, center_y + lim)
-
-            tt_label = ""
-            if "tt_hit" in examples_source.columns:
-                try:
-                    tt_label = normalize_tt(examples_source["tt_hit"]).iloc[sel_idx]
-                except Exception:
-                    tt_label = ""
-            fig.suptitle(f"Avalanche thrown-point cloud — single example (row={sel_idx} tt={tt_label})")
-            fig.tight_layout()
-            pdf.savefig(fig, dpi=150)
-            plt.close(fig)
     fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
+    drew_ratio = False
     for plane_idx, ax in enumerate(axes, start=1):
         aval_col = f"avalanche_size_electrons_{plane_idx}"
         strip_cols = [c for c in df.columns if c.startswith(f"Y_mea_{plane_idx}_s")]
-        if aval_col not in df.columns or not strip_cols:
+        if aval_col not in avalanche_source.columns or not strip_cols or n_common <= 0:
             ax.axis("off")
             continue
-        aval_vals = df[aval_col].to_numpy(dtype=float)
-        strip_vals = df[strip_cols].to_numpy(dtype=float)
+        aval_vals = avalanche_source[aval_col].to_numpy(dtype=float)[:n_common]
+        strip_vals = df[strip_cols].to_numpy(dtype=float)[:n_common]
         qsum_total = strip_vals.sum(axis=1)
         mask = (aval_vals > 0) & (qsum_total > 0)
         ratios = np.zeros_like(aval_vals)
@@ -257,32 +321,439 @@ def plot_step4_summary(
         ax.set_xlim(left=0)
         for patch in ax.patches:
             patch.set_rasterized(True)
-    axes[-1].set_xlabel("qsum / avalanche size")
-    fig.tight_layout()
-    pdf.savefig(fig, dpi=150)
+        drew_ratio = True
+    if drew_ratio:
+        axes[-1].set_xlabel("qsum / avalanche size")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
+    drew_qsum_vs_aval = False
+    for plane_idx, ax in enumerate(axes, start=1):
+        aval_col = f"avalanche_size_electrons_{plane_idx}"
+        strip_cols = [c for c in df.columns if c.startswith(f"Y_mea_{plane_idx}_s")]
+        if aval_col not in avalanche_source.columns or not strip_cols or n_common <= 0:
+            ax.axis("off")
+            continue
+        aval_vals = avalanche_source[aval_col].to_numpy(dtype=float)[:n_common]
+        strip_vals = df[strip_cols].to_numpy(dtype=float)[:n_common]
+        qsum_total = strip_vals.sum(axis=1)
+        mask = (aval_vals > 0) & (qsum_total > 0)
+        qsum_total = qsum_total[mask]
+        aval_vals = aval_vals[mask]
+        if len(aval_vals) == 0:
+            ax.axis("off")
+            continue
+        ax.hist(qsum_total, bins=120, color="seagreen", alpha=0.8, label="qsum total")
+        ax.hist(aval_vals, bins=120, color="darkorange", alpha=0.5, label="avalanche size")
+        ax.set_title(f"Plane {plane_idx} qsum total vs avalanche size")
+        ax.set_xlim(left=0)
+        ax.legend()
+        for patch in ax.patches:
+            patch.set_rasterized(True)
+        drew_qsum_vs_aval = True
+    if drew_qsum_vs_aval:
+        axes[-1].set_xlabel("electrons")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
+    drew_qsum_zoom = False
+    for plane_idx, ax in enumerate(axes, start=1):
+        strip_cols = [c for c in df.columns if c.startswith(f"Y_mea_{plane_idx}_s")]
+        if not strip_cols:
+            ax.axis("off")
+            continue
+        strip_vals = df[strip_cols].to_numpy(dtype=float)
+        qsum_total = strip_vals.sum(axis=1)
+        qsum_total = qsum_total[qsum_total > 0]
+        if len(qsum_total) == 0:
+            ax.axis("off")
+            continue
+        median_val = float(np.median(qsum_total))
+        if not np.isfinite(median_val) or median_val <= 0:
+            ax.axis("off")
+            continue
+        zoom_vals = qsum_total[qsum_total <= median_val]
+        ax.hist(zoom_vals, bins=80, color="teal", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx} qsum total (0 to median)")
+        ax.set_xlim(0, median_val)
+        for patch in ax.patches:
+            patch.set_rasterized(True)
+        drew_qsum_zoom = True
+    if drew_qsum_zoom:
+        axes[-1].set_xlabel("electrons")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
+    drew_scatter = False
+    for plane_idx, ax in enumerate(axes, start=1):
+        aval_col = f"avalanche_size_electrons_{plane_idx}"
+        strip_cols = [c for c in df.columns if c.startswith(f"Y_mea_{plane_idx}_s")]
+        if aval_col not in avalanche_source.columns or not strip_cols or n_common <= 0:
+            ax.axis("off")
+            continue
+        aval_vals = avalanche_source[aval_col].to_numpy(dtype=float)[:n_common]
+        strip_vals = df[strip_cols].to_numpy(dtype=float)[:n_common]
+        qsum_total = strip_vals.sum(axis=1)
+        mask = (aval_vals > 0) & (qsum_total > 0)
+        aval_vals = aval_vals[mask]
+        qsum_total = qsum_total[mask]
+        if len(aval_vals) == 0:
+            ax.axis("off")
+            continue
+        ax.scatter(
+            aval_vals,
+            qsum_total,
+            s=2,
+            alpha=0.2,
+            rasterized=True,
+        )
+        ax.set_title(f"Plane {plane_idx} qsum total vs avalanche size")
+        ax.set_xlabel("avalanche size")
+        ax.set_ylabel("qsum total")
+        drew_scatter = True
+    if drew_scatter:
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
+    drew_ion_scatter = False
+    for plane_idx, ax in enumerate(axes, start=1):
+        ion_col = f"avalanche_ion_{plane_idx}"
+        strip_cols = [c for c in df.columns if c.startswith(f"Y_mea_{plane_idx}_s")]
+        if ion_col not in avalanche_source.columns or not strip_cols or n_common <= 0:
+            ax.axis("off")
+            continue
+        ion_vals = avalanche_source[ion_col].to_numpy(dtype=float)[:n_common]
+        strip_vals = df[strip_cols].to_numpy(dtype=float)[:n_common]
+        qsum_total = strip_vals.sum(axis=1)
+        mask = (ion_vals > 0) & (qsum_total > 0)
+        ion_vals = ion_vals[mask]
+        qsum_total = qsum_total[mask]
+        if len(ion_vals) == 0:
+            ax.axis("off")
+            continue
+        ax.scatter(
+            ion_vals,
+            qsum_total,
+            s=2,
+            alpha=0.2,
+            rasterized=True,
+        )
+        ax.set_title(f"Plane {plane_idx} ionization vs induced qsum")
+        ax.set_xlabel("ionizations")
+        ax.set_ylabel("qsum total")
+        drew_ion_scatter = True
+    if drew_ion_scatter:
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
+    drew_avalanche_size = False
+    for plane_idx, ax in enumerate(axes, start=1):
+        col = f"avalanche_size_electrons_{plane_idx}"
+        if col not in avalanche_source.columns:
+            ax.axis("off")
+            continue
+        vals = avalanche_source[col].to_numpy(dtype=float)
+        vals = vals[vals > 0]
+        if len(vals) == 0:
+            ax.axis("off")
+            continue
+        ax.hist(vals, bins=80, color="darkorange", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx} avalanche size")
+        ax.set_xlim(left=0)
+        for patch in ax.patches:
+            patch.set_rasterized(True)
+        drew_avalanche_size = True
+    if drew_avalanche_size:
+        axes[-1].set_xlabel("avalanche size (electrons)")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
+    drew_width_scale = False
+    for plane_idx, ax in enumerate(axes, start=1):
+        col = f"avalanche_width_scale_{plane_idx}"
+        if col in avalanche_source.columns:
+            vals = avalanche_source[col].to_numpy(dtype=float)
+            vals = vals[vals > 0]
+        else:
+            aval_col = f"avalanche_size_electrons_{plane_idx}"
+            if aval_col not in avalanche_source.columns:
+                ax.axis("off")
+                continue
+            aval_vals = avalanche_source[aval_col].to_numpy(dtype=float)
+            mode_q = compute_mode_charge(aval_vals)
+            base_scale = np.where(aval_vals > 0, aval_vals / mode_q, 0.0)
+            vals = np.power(
+                base_scale,
+                width_scale_exponent,
+                where=base_scale > 0,
+                out=np.zeros_like(base_scale),
+            )
+            vals = np.minimum(vals, width_scale_max)
+            vals = vals[vals > 0]
+        if len(vals) == 0:
+            ax.axis("off")
+            continue
+        ax.hist(vals, bins=80, color="seagreen", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx} width scale")
+        ax.set_xlim(left=0)
+        for patch in ax.patches:
+            patch.set_rasterized(True)
+        drew_width_scale = True
+    if drew_width_scale:
+        axes[-1].set_xlabel("width scale (charge / mode charge)")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
+    drew_scaled_width = False
+    for plane_idx, ax in enumerate(axes, start=1):
+        col = f"avalanche_scaled_width_{plane_idx}"
+        if col in avalanche_source.columns:
+            vals = avalanche_source[col].to_numpy(dtype=float)
+            vals = vals[vals > 0]
+        else:
+            aval_col = f"avalanche_size_electrons_{plane_idx}"
+            if aval_col not in avalanche_source.columns:
+                ax.axis("off")
+                continue
+            aval_vals = avalanche_source[aval_col].to_numpy(dtype=float)
+            mode_q = compute_mode_charge(aval_vals)
+            base_scale = np.where(aval_vals > 0, aval_vals / mode_q, 0.0)
+            width_scale = np.power(
+                base_scale,
+                width_scale_exponent,
+                where=base_scale > 0,
+                out=np.zeros_like(base_scale),
+            )
+            width_scale = np.minimum(width_scale, width_scale_max)
+            vals = avalanche_width_mm * width_scale
+            vals = vals[vals > 0]
+        if len(vals) == 0:
+            ax.axis("off")
+            continue
+        ax.hist(vals, bins=80, color="slateblue", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx} scaled width")
+        ax.set_xlim(left=0)
+        for patch in ax.patches:
+            patch.set_rasterized(True)
+        drew_scaled_width = True
+    if drew_scaled_width:
+        axes[-1].set_xlabel("scaled width (mm)")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    drew_qsum_plane = False
+    for plane_idx, ax in enumerate(axes.flatten(), start=1):
+        strip_cols = [c for c in df.columns if c.startswith(f"Y_mea_{plane_idx}_s")]
+        if not strip_cols:
+            ax.axis("off")
+            continue
+        vals = df[strip_cols].to_numpy(dtype=float).sum(axis=1)
+        vals = vals[vals > 0]
+        if len(vals) == 0:
+            ax.axis("off")
+            continue
+        ax.hist(vals, bins=120, color="seagreen", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx} qsum total")
+        ax.set_xlabel("qsum total")
+        drew_qsum_plane = True
+    if drew_qsum_plane:
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+    drew_y_grid = False
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            ax = axes[plane_idx - 1, strip_idx - 1]
+            col = f"Y_mea_{plane_idx}_s{strip_idx}"
+            if col not in df.columns:
+                ax.axis("off")
+                continue
+            vals = df[col].to_numpy(dtype=float)
+            vals = vals[vals > 0]
+            if len(vals) == 0:
+                ax.axis("off")
+                continue
+            ax.hist(vals, bins=80, color="seagreen", alpha=0.8)
+            ax.set_title(f"P{plane_idx} S{strip_idx}")
+            ax.set_xlabel("qsum")
+            drew_y_grid = True
+    if drew_y_grid:
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    drew_x_plane = False
+    for plane_idx, ax in enumerate(axes.flatten(), start=1):
+        strip_cols = [c for c in df.columns if c.startswith(f"X_mea_{plane_idx}_s")]
+        if not strip_cols:
+            ax.axis("off")
+            continue
+        vals = df[strip_cols].to_numpy(dtype=float).ravel()
+        vals = vals[~np.isnan(vals)]
+        if len(vals) == 0:
+            ax.axis("off")
+            continue
+        ax.hist(vals, bins=80, color="darkorange", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx} X_mea")
+        ax.set_xlabel("X_mea (mm)")
+        drew_x_plane = True
+    if drew_x_plane:
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+    drew_x_grid = False
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            ax = axes[plane_idx - 1, strip_idx - 1]
+            col = f"X_mea_{plane_idx}_s{strip_idx}"
+            if col not in df.columns:
+                ax.axis("off")
+                continue
+            vals = df[col].to_numpy(dtype=float)
+            vals = vals[~np.isnan(vals)]
+            if len(vals) == 0:
+                ax.axis("off")
+                continue
+            ax.hist(vals, bins=80, color="darkorange", alpha=0.8)
+            ax.set_title(f"P{plane_idx} S{strip_idx}")
+            ax.set_xlabel("X_mea (mm)")
+            drew_x_grid = True
+    if drew_x_grid:
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    drew_t_plane = False
+    for plane_idx, ax in enumerate(axes.flatten(), start=1):
+        strip_cols = [c for c in df.columns if c.startswith(f"T_sum_meas_{plane_idx}_s")]
+        if not strip_cols:
+            ax.axis("off")
+            continue
+        vals = df[strip_cols].to_numpy(dtype=float).ravel()
+        vals = vals[~np.isnan(vals)]
+        if len(vals) == 0:
+            ax.axis("off")
+            continue
+        ax.hist(vals, bins=80, color="slateblue", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx} T_sum_meas")
+        ax.set_xlabel("T_sum_meas (ns)")
+        drew_t_plane = True
+    if drew_t_plane:
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+    drew_t_grid = False
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            ax = axes[plane_idx - 1, strip_idx - 1]
+            col = f"T_sum_meas_{plane_idx}_s{strip_idx}"
+            if col not in df.columns:
+                ax.axis("off")
+                continue
+            vals = df[col].to_numpy(dtype=float)
+            vals = vals[~np.isnan(vals)]
+            if len(vals) == 0:
+                ax.axis("off")
+                continue
+            ax.hist(vals, bins=80, color="slateblue", alpha=0.8)
+            ax.set_title(f"P{plane_idx} S{strip_idx}")
+            ax.set_xlabel("T_sum_meas (ns)")
+            drew_t_grid = True
+    if drew_t_grid:
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
     if include_thrown_points and thrown_points:
         fig, axes = plt.subplots(2, 2, figsize=(10, 9))
+        drew_any = False
         for plane_idx in range(1, 5):
             ax = axes[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
             points = thrown_points.get(plane_idx)
             if not points:
                 ax.axis("off")
                 continue
-            x_pts = points["x"]
-            y_pts = points["y"]
+            x_pts = np.asarray(points.get("x", []), dtype=float).ravel()
+            y_pts = np.asarray(points.get("y", []), dtype=float).ravel()
+            n_pts = min(x_pts.size, y_pts.size)
+            if n_pts == 0:
+                ax.axis("off")
+                continue
+            x_pts = x_pts[:n_pts]
+            y_pts = y_pts[:n_pts]
             charge = points.get("charge")
             if charge is None:
-                sc = ax.scatter(x_pts, y_pts, s=6, alpha=0.6)
+                ax.scatter(x_pts, y_pts, s=6, alpha=0.72, color="#1f77b4", rasterized=True)
                 ax.set_title(f"Plane {plane_idx} thrown points")
             else:
-                sc = ax.scatter(x_pts, y_pts, c=charge, s=8, cmap="viridis")
-                ax.set_title(f"Plane {plane_idx} thrown points (Q={charge:,.0f})")
+                charge_arr = np.asarray(charge, dtype=float).ravel()
+                if charge_arr.size == 1:
+                    q_value = float(charge_arr[0])
+                    ax.scatter(
+                        x_pts,
+                        y_pts,
+                        color="#1f77b4",
+                        s=8,
+                        alpha=0.72,
+                        rasterized=True,
+                    )
+                    ax.set_title(f"Plane {plane_idx} thrown points (Q={q_value:,.0f})")
+                elif charge_arr.size > 1:
+                    c_vals = charge_arr[:n_pts] if charge_arr.size >= n_pts else np.resize(charge_arr, n_pts)
+                    ax.scatter(x_pts, y_pts, c=c_vals, s=8, cmap="Blues", alpha=0.72, rasterized=True)
+                    ax.set_title(f"Plane {plane_idx} thrown points (colored by charge)")
+                else:
+                    ax.scatter(x_pts, y_pts, s=6, alpha=0.72, color="#1f77b4", rasterized=True)
+                    ax.set_title(f"Plane {plane_idx} thrown points")
             ax.set_xlabel("X (mm)")
             ax.set_ylabel("Y (mm)")
-        fig.tight_layout()
-        pdf.savefig(fig, dpi=150)
+            ax.set_aspect("equal", adjustable="box")
+            drew_any = True
+        if drew_any:
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
 # helpers to find/load chunk ---------------------------------------------------
@@ -296,7 +767,7 @@ def find_any_chunk_for_step(step: int) -> Path | None:
     if manifests:
         try:
             j = json.loads(manifests[0].read_text())
-            parts_list = [p for p in j.get("parts", []) if p.endswith(".pkl")]
+            parts_list = [p for p in (j.get("parts") or j.get("chunks") or []) if str(p).endswith(".pkl")]
             if parts_list:
                 return Path(parts_list[0])
         except Exception:
@@ -307,7 +778,7 @@ def find_any_chunk_for_step(step: int) -> Path | None:
 def load_df(path: Path) -> pd.DataFrame:
     if path.name.endswith(".chunks.json"):
         j = json.loads(path.read_text())
-        parts = [p for p in j.get("parts", []) if p.endswith(".pkl")]
+        parts = [p for p in (j.get("parts") or j.get("chunks") or []) if str(p).endswith(".pkl")]
         if parts:
             path = Path(parts[0])
         else:
@@ -315,6 +786,51 @@ def load_df(path: Path) -> pd.DataFrame:
     if path.suffix == ".pkl":
         return pd.read_pickle(path)
     raise ValueError("Unsupported chunk type")
+
+
+def find_step_manifest_for_sample(sample_path: Path, step: int) -> Path | None:
+    manifest_name = f"step_{step}_chunks.chunks.json"
+    if sample_path.name == manifest_name:
+        return sample_path
+    if sample_path.parent.name == f"step_{step}_chunks":
+        candidate = sample_path.parent.parent / manifest_name
+        if candidate.exists():
+            return candidate
+    candidate = sample_path.parent / manifest_name
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def load_step4_plot_context(sample_path: Path) -> tuple[pd.DataFrame | None, dict]:
+    manifest_path = find_step_manifest_for_sample(sample_path, step=4)
+    if manifest_path is None or not manifest_path.exists():
+        return None, {}
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except Exception:
+        return None, {}
+
+    metadata = manifest.get("metadata", {}) if isinstance(manifest, dict) else {}
+    cfg = metadata.get("config", {}) if isinstance(metadata, dict) else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+
+    source_dataset = metadata.get("source_dataset") if isinstance(metadata, dict) else None
+    if not source_dataset:
+        return None, cfg
+
+    source_path = Path(str(source_dataset))
+    if not source_path.is_absolute():
+        source_path = (manifest_path.parent / source_path).resolve()
+    else:
+        source_path = source_path.resolve()
+    if not source_path.exists():
+        return None, cfg
+    try:
+        return load_df(source_path), cfg
+    except Exception:
+        return None, cfg
 
 
 def main() -> None:
@@ -325,12 +841,40 @@ def main() -> None:
         return
     print(f"Using sample: {sample}")
     df = load_df(sample)
+    avalanche_df, step4_cfg = load_step4_plot_context(sample)
+    if avalanche_df is not None:
+        print("Loaded upstream STEP 3 dataset for avalanche cloud plotting.")
+
+    points_per_plane = int(step4_cfg.get("charge_share_points", 2000))
+    point_seed = step4_cfg.get("seed")
+    if point_seed is not None:
+        try:
+            point_seed = int(point_seed)
+        except Exception:
+            point_seed = None
+    avalanche_width_mm = float(step4_cfg.get("avalanche_width_mm", 40.0))
+    width_scale_exponent = float(step4_cfg.get("width_scale_exponent", 0.1))
+    width_scale_max = float(step4_cfg.get("width_scale_max", 2.0))
+
     out_dir = Path(__file__).resolve().parent / "PLOTS"
     out_dir.mkdir(exist_ok=True)
     out_path = out_dir / f"step_{step}_sample_plots.pdf"
     with PdfPages(out_path) as pdf:
         plot_hit_summary(df, pdf)
-        plot_step4_summary(df, pdf)
+        plot_step4_summary(
+            df,
+            pdf,
+            include_thrown_points=False,
+            points_per_plane=points_per_plane,
+            point_seed=point_seed,
+            thrown_points=None,
+            examples_df=df,
+            avalanche_df=avalanche_df,
+            avalanche_width_mm=avalanche_width_mm,
+            width_scale_exponent=width_scale_exponent,
+            width_scale_max=width_scale_max,
+            n_avalanche_events=5,
+        )
     print(f"Saved {out_path}")
 
 

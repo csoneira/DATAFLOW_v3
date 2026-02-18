@@ -92,6 +92,7 @@ def plot_step2_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
         bars = axes[3].bar(vc.index.astype(str), vc.values, color="slateblue", alpha=0.8)
         for patch in bars:
             patch.set_rasterized(True)
+        axes[3].set_title("tt_crossing")
     else:
         axes[3].axis("off")
 

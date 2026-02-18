@@ -1,0 +1,25 @@
+prepare_reprocessing_metadata:
+  remote_host: backuplip
+  remote_user: rpcuser
+  remote_directory_root: /local/experiments/MINGOS
+  raw_csv_max_age_days: 7
+
+min_size_mb_1: 4.0
+max_size_mb_1: 8.0
+min_gap_minutes_1: 5
+max_gap_minutes_1: 120
+
+min_size_mb_2: 2.2
+max_size_mb_2: 3.7
+min_gap_minutes_2: 5
+max_gap_minutes_2: 140
+
+min_size_mb_3: 2.2
+max_size_mb_3: 3.3
+min_gap_minutes_3: 5
+max_gap_minutes_3: 40
+
+min_size_mb_4: 4.5
+max_size_mb_4: 6.1
+min_gap_minutes_4: 5
+max_gap_minutes_4: 140

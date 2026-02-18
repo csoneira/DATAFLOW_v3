@@ -60,7 +60,7 @@ end
 
 subgraph OUT["OUTPUT (representation only)"]
   direction TB
-  SF["STEP FINAL: Station .dat formatting\nOutput: SIMULATED_DATA/mi00YYDDDHHMMSS.dat"]:::fmt
+  SF["STEP FINAL: Station .dat formatting\nOutput: SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat"]:::fmt
 end
 
 S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10 --> SF
@@ -77,7 +77,8 @@ classDef fmt fill:#f2f2f2,stroke:#333333,stroke-width:1px,color:#0b2233;
 - `MASTER_STEPS/STEP_SHARED`: shared utilities (sim-run registry, chunked I/O, geometry helpers).
 - `INTERSTEPS/STEP_<X>_TO_<Y>`: per-step outputs and sim-run registries.
 - `INTERSTEPS/STEP_0_TO_1`: parameter mesh (param_mesh.csv) for step-ID selection.
-- `SIMULATED_DATA`: station-style .dat outputs and step_final registries.
+- `SIMULATED_DATA`: step_final registries and metadata.
+- `SIMULATED_DATA/FILES`: station-style .dat outputs.
 - `DOCS`: technical documentation, data dictionary, and interface contracts.
 
 ## Running the pipeline

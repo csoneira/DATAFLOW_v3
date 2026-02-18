@@ -716,15 +716,12 @@ def write_chunked_output(
         buffered_rows += len(df)
         maybe_flush_buffer()
 
-    if full_chunks == 0 and buffered_rows > 0:
+    if buffered_rows > 0:
         flush_chunk(pd.concat(buffer, ignore_index=True))
         buffered_rows = 0
         buffer = []
-    else:
-        buffered_rows = 0
-        buffer = []
 
-    row_count = full_chunks * chunk_rows + buffered_rows
+    row_count = total_rows
     manifest = {
         "version": 1,
         "chunks": chunk_paths,

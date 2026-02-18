@@ -81,7 +81,12 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.file_selection import select_latest_candidate
+from MASTER.common.file_selection import (
+    file_name_in_date_range,
+    load_date_range_from_config,
+    select_latest_candidate,
+    sync_unprocessed_with_date_range,
+)
 from MASTER.common.path_config import (
     get_master_config_root,
     get_repo_root,
@@ -100,6 +105,7 @@ from MASTER.common.step1_shared import (
     collect_columns,
     load_itineraries_from_file,
     save_metadata,
+    resolve_step1_plot_options,
     validate_step1_input_file_args,
     y_pos,
 )
@@ -110,9 +116,6 @@ task_number = 4
 start_execution_time_counting = datetime.now()
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
-
-
-
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_4 (LIST->FIT).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -156,30 +159,10 @@ fallback_parameter_config_file_path = (
 print(f"Using config file: {config_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
-debug_mode = bool(config.get("debug_mode", False))
-
-
-
+debug_mode = False
 
 home_path = str(resolve_home_path_from_config(config))
 REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
     global fig_idx
@@ -313,7 +296,6 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         plt.show()
     plt.close()
 
-
 # Time series + histogram helper ------------------------------------------------
 def _safe_hist_params(series, max_bins=50):
     """Return (bins, range) for hist; avoid zero-range/invalid bins."""
@@ -330,7 +312,6 @@ def _safe_hist_params(series, max_bins=50):
     unique_count = int(finite_series.nunique())
     bins = int(min(max_bins, max(1, unique_count)))
     return bins, (vmin, vmax)
-
 
 def plot_ts_with_side_hist(df, columns, time_col, title, width_ratios=(3, 1)):
     """Plot time series with side histograms for each column."""
@@ -389,7 +370,6 @@ def plot_ts_with_side_hist(df, columns, time_col, title, width_ratios=(3, 1)):
     if show_plots:
         plt.show()
     plt.close()
-
 
 # Reject-only histograms/scatters ------------------------------------------------
 def plot_histograms_grid(df, columns, title_prefix, max_bins=60, cols_per_fig=16):
@@ -461,7 +441,6 @@ def plot_histograms_grid(df, columns, title_prefix, max_bins=60, cols_per_fig=16
             plt.show()
         plt.close()
 
-
 def plot_scatter_simple(df, x_col, y_col, title, max_points=200000):
     """Plot a simple scatter with optional downsampling."""
     global fig_idx
@@ -502,7 +481,6 @@ def plot_scatter_simple(df, x_col, y_col, title, max_points=200000):
     if show_plots:
         plt.show()
     plt.close()
-
 
 def plot_reject_diagnostics(
     df,
@@ -548,7 +526,6 @@ def plot_reject_diagnostics(
             f"{label}_det_x_det_y_{basename}",
             max_points=scatter_max,
         )
-
 
 #%%
 
@@ -680,13 +657,11 @@ def plot_err_only_ts_hist(df, base_cols, time_col, title):
         plt.show()
     plt.close()
 
-
 #%%
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
 # -----------------------------------------------------------------------------
-
 
 if CLI_ARGS.station is None:
     CLI_PARSER.error("No station provided. Pass <station>.")
@@ -766,6 +741,7 @@ base_directories = {
     "temp_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TEMP_FILES"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/UNPROCESSED_DIRECTORY"),
+    "out_of_date_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/OUT_OF_DATE_DIRECTORY"),
     "error_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/ERROR_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
@@ -778,12 +754,15 @@ base_directories = {
 
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
-create_debug_plots = bool(config.get("create_debug_plots", False))
+(
+    plot_mode,
+    create_plots,
+    create_essential_plots,
+    save_plots,
+    create_pdf,
+    show_plots,
+    create_debug_plots,
+) = resolve_step1_plot_options(config)
 save_rejected_rows = config.get("save_rejected_rows", False)
 create_reject_plots = config.get("create_reject_plots", False)
 if create_reject_plots:
@@ -796,27 +775,13 @@ reject_plot_hist_bins = int(config.get("reject_plot_hist_bins", 60))
 reject_plot_hist_cols_per_fig = int(config.get("reject_plot_hist_cols_per_fig", 16))
 reject_plot_scatter_max_points = int(config.get("reject_plot_scatter_max_points", 200000))
 
-create_plots = config["create_plots"]
 if create_plots:
     # When Task 4 plotting is enabled, force full plotting outputs for this task.
     create_essential_plots = True
     save_plots = True
     create_pdf = True
 
-create_plots_task_4_station_0 = config.get("create_plots_task_4_station_0", False)
-
-
-
 # Create ALL directories if they don't already exist
-save_plots = config["save_plots"]
-
-# if station == "0" and create_plots_task_4_station_0:
-if create_plots_task_4_station_0:
-    print("Overriding create_plots to True due to Task 4 setting for station 0.")
-    create_plots = True
-    create_essential_plots = True
-    save_plots = True
-    create_pdf = True
 
 for directory in base_directories.values():
     # If save_plots is False, skip creating the figure_directory
@@ -863,9 +828,7 @@ unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
 
-
 last_file_test = bool(config.get("last_file_test", False))
-
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -902,7 +865,6 @@ def process_file(source_path, dest_path):
 def get_file_path(directory, file_name):
     return os.path.join(directory, file_name)
 
-
 # Create ALL directories if they don't already exist
 
 for directory in base_directories.values():
@@ -910,9 +872,6 @@ for directory in base_directories.values():
     if directory == base_directories["figure_directory"] and not save_plots:
         continue
     os.makedirs(directory, exist_ok=True)
-
-
-
 
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
@@ -937,7 +896,6 @@ raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
-
 
 # Ordered list from highest to lowest priority
 LEVELS = [
@@ -988,7 +946,6 @@ for d in LEVELS:
 
     seen |= (current_files - duplicates)
 
-
 # Search in all this directories for empty files and move them to the empty_files_directory
 for directory in [raw_directory, unprocessed_directory, processing_directory, completed_directory]:
     files = os.listdir(directory)
@@ -1010,7 +967,6 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             now = time.time()
             os.utime(empty_destination_path, (now, now))
 
-
 # Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
@@ -1030,7 +986,6 @@ for file_name in files_to_move:
         print(f"Move {file_name} to UNPROCESSED directory.")
     except Exception as e:
         print(f"Failed to move {file_name}: {e}")
-
 
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
@@ -1063,17 +1018,40 @@ if os.path.exists(input_file_config_path):
 else:
     exists_input_file = False
     print("Input configuration file does not exist.")
-    default_z_positions = config.get("default_z_positions", [0, 150, 300, 450])
-    if isinstance(default_z_positions, (list, tuple)) and len(default_z_positions) >= 4:
-        z_1, z_2, z_3, z_4 = default_z_positions[:4]
-    else:
-        z_1, z_2, z_3, z_4 = 0, 150, 300, 450
 
-
-
+sync_unprocessed_with_date_range(
+    config=config,
+    unprocessed_directory=base_directories["unprocessed_directory"],
+    out_of_date_directory=base_directories["out_of_date_directory"],
+    log_fn=print,
+)
 unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
 completed_files = os.listdir(base_directories["completed_directory"])
+date_range_start, date_range_end = load_date_range_from_config(config)
+if date_range_start is not None or date_range_end is not None:
+    processing_before = len(processing_files)
+    completed_before = len(completed_files)
+    processing_files = [
+        name
+        for name in processing_files
+        if file_name_in_date_range(name, date_range_start, date_range_end)
+    ]
+    completed_files = [
+        name
+        for name in completed_files
+        if file_name_in_date_range(name, date_range_start, date_range_end)
+    ]
+    skipped_processing = processing_before - len(processing_files)
+    skipped_completed = completed_before - len(completed_files)
+    if skipped_processing > 0:
+        print(
+            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY."
+        )
+    if skipped_completed > 0:
+        print(
+            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
+        )
 
 if user_file_selection:
     processing_file_path = user_file_path
@@ -1227,14 +1205,11 @@ if status_execution_date is not None:
         completion_fraction=0.25,
     )
 
-
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
 right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 
 # if limit:
 #     print(f'Taking the first {limit_number} rows.')
-
-
 
 # Read the data file into a DataFrame
 KEY = "df"
@@ -1290,7 +1265,6 @@ if create_debug_plots:
             max_cols_per_fig=20,
         )
 
-
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
     def _derive_tt(row: pd.Series) -> str:
@@ -1342,7 +1316,6 @@ working_df["processed_tt"] = working_df["list_tt"].astype(int)
 if "cal_tt" not in working_df.columns:
     working_df["cal_tt"] = working_df["processed_tt"]
 
-
 # List all names of columns
 
 # Original number of events
@@ -1355,8 +1328,6 @@ if status_execution_date is not None:
         completion_fraction=0.5,
     )
 
-
-
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
@@ -1365,20 +1336,12 @@ ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
-
-
-
-
-
-
-
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
+fast_mode = False
+debug_mode = False
 last_file_test = config["last_file_test"]
 
-
-limit = config["limit"]
-limit_number = config["limit_number"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Charge calibration to fC
 
@@ -1406,30 +1369,12 @@ number_of_TT_executions = config["number_of_TT_executions"]
 
 # Validation
 
-
-residual_plots_fast = config["residual_plots_fast"]
-
 timtrack_iteration = config["timtrack_iteration"]
-timtrack_iteration_fast = config["timtrack_iteration_fast"]
-timtrack_iteration_debug = config["timtrack_iteration_debug"]
-
-time_calibration_fast = config["time_calibration_fast"]
-time_calibration_debug = config["time_calibration_debug"]
-
-charge_front_back_fast = config["charge_front_back_fast"]
-charge_front_back_debug = config["charge_front_back_debug"]
-
-
 
 complete_reanalysis = config["complete_reanalysis"]
 
-limit = config["limit"]
-limit_fast = config["limit_fast"]
-limit_debug = config["limit_debug"]
-
-limit_number = config["limit_number"]
-limit_number_fast = config["limit_number_fast"]
-limit_number_debug = config["limit_number_debug"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
@@ -1490,7 +1435,6 @@ coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_
 beta = config["beta"]
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
 
-
 # X
 strip_length = config["strip_length"]
 narrow_strip = config["narrow_strip"]
@@ -1525,34 +1469,16 @@ T_clip_max_ST = config.get("T_clip_max_ST", 100)
 Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
 Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
-
-
-
-
-
-
-
-
-
-
-
 time_window_fitting = config["time_window_fitting"]
 
 charge_plot_limit_left = config["charge_plot_limit_left"]
 charge_plot_limit_right = config["charge_plot_limit_right"]
 charge_plot_event_limit_right = config.get("charge_plot_event_limit_right", 400)
 
-
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
-
-
-
-
-
-
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
@@ -1612,31 +1538,18 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if fast_mode:
+if False:
     print('Working in fast mode.')
-    residual_plots = residual_plots_fast
-    timtrack_iteration = timtrack_iteration_fast
-    time_calibration = time_calibration_fast
-    charge_front_back = charge_front_back_fast
-    limit = limit_fast
-    limit_number = limit_number_fast
 
-if debug_mode:
+if False:
     print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = timtrack_iteration_debug
-    time_calibration = time_calibration_debug
-    charge_front_back = charge_front_back_debug
-    limit = limit_debug
-    limit_number = limit_number_debug
 
-if debug_mode:
+if False:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
 
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
-
 
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
@@ -1645,20 +1558,14 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-
-
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
 
-
-
-
 # Y ---------------------------------------------------------------------------
 y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
             np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
 
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 y_width_P1_and_P3 = y_widths[0]
@@ -1683,7 +1590,7 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if debug_mode:
+if False:
     T_clip_min = T_clip_min_debug
     T_clip_max = T_clip_max_debug
     Q_clip_min = Q_clip_min_debug
@@ -1701,14 +1608,10 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-
-
-
 global_variables['analysis_mode'] = 0
 global_variables['unc_y'] = anc_sy
 global_variables['unc_tsum'] = anc_sts
 global_variables['unc_tdif'] = anc_std
-
 
 TRACK_COMBINATIONS: tuple[str, ...] = (
     "12", "13", "14", "23", "24", "34",
@@ -1756,7 +1659,6 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
 
 reprocessing_parameters = pd.DataFrame()
 
-
 def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
     """Return matching reprocessing parameters for *basename* or an empty frame."""
     station_str = str(station_id).zfill(2)
@@ -1773,7 +1675,6 @@ def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basenam
     matches = table_df[table_df["filename_base"] == basename]
     return matches.reset_index(drop=True)
 
-
 def _fit_gaussian_sigma(series: pd.Series) -> float:
     """Return Gaussian sigma for *series* ignoring zeros/NaNs; NaN if insufficient data."""
     arr = np.asarray(series)
@@ -1786,16 +1687,13 @@ def _fit_gaussian_sigma(series: pd.Series) -> float:
         return np.nan
     return float(abs(sigma)) if np.isfinite(sigma) else np.nan
 
-
 filter_metrics: dict[str, float] = {}
-
 
 def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
     pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
     filter_metrics[name] = round(pct, 4)
     print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
-
 
 def record_residual_sigmas(df: pd.DataFrame) -> None:
     """Fit Gaussian sigmas for residual columns per track combination and plane."""
@@ -1823,7 +1721,6 @@ def record_residual_sigmas(df: pd.DataFrame) -> None:
                     continue  # avoid recording meaningless NaNs
                 global_variables[key] = sigma
 
-
 reprocessing_values: dict[str, object] = {}
 
 reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
@@ -1849,16 +1746,15 @@ if not reprocessing_parameters.empty:
 
 self_trigger = bool(config.get("self_trigger", False))
 
-
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
+fast_mode = False
+debug_mode = False
 last_file_test = config["last_file_test"]
 
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
 
-limit = config["limit"]
-limit_number = config["limit_number"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Charge calibration to fC
 
@@ -1886,29 +1782,10 @@ number_of_TT_executions = config["number_of_TT_executions"]
 
 # Validation
 
-
-residual_plots_fast = config["residual_plots_fast"]
-
 timtrack_iteration = config["timtrack_iteration"]
-timtrack_iteration_fast = config["timtrack_iteration_fast"]
-timtrack_iteration_debug = config["timtrack_iteration_debug"]
 
-time_calibration_fast = config["time_calibration_fast"]
-time_calibration_debug = config["time_calibration_debug"]
-
-charge_front_back_fast = config["charge_front_back_fast"]
-charge_front_back_debug = config["charge_front_back_debug"]
-
-
-
-
-limit = config["limit"]
-limit_fast = config["limit_fast"]
-limit_debug = config["limit_debug"]
-
-limit_number = config["limit_number"]
-limit_number_fast = config["limit_number_fast"]
-limit_number_debug = config["limit_number_debug"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
@@ -1966,7 +1843,6 @@ coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_
 beta = config["beta"]
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
 
-
 # X
 strip_length = config["strip_length"]
 narrow_strip = config["narrow_strip"]
@@ -2001,29 +1877,16 @@ T_clip_max_ST = config.get("T_clip_max_ST", 100)
 Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
 Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
-
-
-
-
-
-
-
-
-
-
-
 time_window_fitting = config["time_window_fitting"]
 
 charge_plot_limit_left = config["charge_plot_limit_left"]
 charge_plot_limit_right = config["charge_plot_limit_right"]
 charge_plot_event_limit_right = config.get("charge_plot_event_limit_right", 400)
 
-
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
-
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
@@ -2083,31 +1946,18 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if fast_mode:
+if False:
     print('Working in fast mode.')
-    residual_plots = residual_plots_fast
-    timtrack_iteration = timtrack_iteration_fast
-    time_calibration = time_calibration_fast
-    charge_front_back = charge_front_back_fast
-    limit = limit_fast
-    limit_number = limit_number_fast
 
-if debug_mode:
+if False:
     print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = timtrack_iteration_debug
-    time_calibration = time_calibration_debug
-    charge_front_back = charge_front_back_debug
-    limit = limit_debug
-    limit_number = limit_number_debug
 
-if debug_mode:
+if False:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
 
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
-
 
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
@@ -2116,20 +1966,14 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-
-
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
 
-
-
-
 # Y ---------------------------------------------------------------------------
 y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
             np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
 
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 y_width_P1_and_P3 = y_widths[0]
@@ -2154,7 +1998,7 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if debug_mode:
+if False:
     T_clip_min = T_clip_min_debug
     T_clip_max = T_clip_max_debug
     Q_clip_min = Q_clip_min_debug
@@ -2172,7 +2016,6 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
 datetime_value = working_df['datetime'].iloc[0]
 end_datetime_value = working_df['datetime'].iloc[-1]
@@ -2188,9 +2031,6 @@ start_time = datetime_value
 end_time = end_datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
-
-
-
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -2209,11 +2049,6 @@ if create_plots == False:
         save_pdf_filename = "essential_" + save_pdf_filename
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
-
-
-
-
-
 
 # -------------------------------------------------------------------------------
 # ------------ Input file and data managing to select configuration -------------
@@ -2287,7 +2122,6 @@ else:
     z_positions = np.array([0, 150, 300, 450])  # In mm
     z_source = "default_no_input_file"
 
-
 def _zpos_from_conf(row):
     return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
 
@@ -2315,7 +2149,6 @@ if np.isnan(z_positions).any() or np.all(z_positions == 0):
         z_positions = np.array([0, 150, 300, 450])  # In mm
         z_source = "default_invalid_without_input"
 
-
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
@@ -2332,18 +2165,15 @@ global_variables['z_P2'] =  z_positions[1]
 global_variables['z_P3'] =  z_positions[2]
 global_variables['z_P4'] =  z_positions[3]
 
-
-
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
+fast_mode = False
+debug_mode = False
 last_file_test = config["last_file_test"]
 
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
-create_essential_plots = config["create_essential_plots"]
 
-limit = config["limit"]
-limit_number = config["limit_number"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Charge calibration to fC
 
@@ -2371,29 +2201,10 @@ number_of_TT_executions = config["number_of_TT_executions"]
 
 # Validation
 
-
-residual_plots_fast = config["residual_plots_fast"]
-
 timtrack_iteration = config["timtrack_iteration"]
-timtrack_iteration_fast = config["timtrack_iteration_fast"]
-timtrack_iteration_debug = config["timtrack_iteration_debug"]
 
-time_calibration_fast = config["time_calibration_fast"]
-time_calibration_debug = config["time_calibration_debug"]
-
-charge_front_back_fast = config["charge_front_back_fast"]
-charge_front_back_debug = config["charge_front_back_debug"]
-
-
-
-
-limit = config["limit"]
-limit_fast = config["limit_fast"]
-limit_debug = config["limit_debug"]
-
-limit_number = config["limit_number"]
-limit_number_fast = config["limit_number_fast"]
-limit_number_debug = config["limit_number_debug"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
@@ -2451,7 +2262,6 @@ coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_
 beta = config["beta"]
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
 
-
 # X
 strip_length = config["strip_length"]
 narrow_strip = config["narrow_strip"]
@@ -2486,29 +2296,16 @@ T_clip_max_ST = config.get("T_clip_max_ST", 100)
 Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
 Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
-
-
-
-
-
-
-
-
-
-
-
 time_window_fitting = config["time_window_fitting"]
 
 charge_plot_limit_left = config["charge_plot_limit_left"]
 charge_plot_limit_right = config["charge_plot_limit_right"]
 charge_plot_event_limit_right = config.get("charge_plot_event_limit_right", 400)
 
-
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
-
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
@@ -2568,33 +2365,18 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if fast_mode:
+if False:
     print('Working in fast mode.')
-    residual_plots = residual_plots_fast
-    timtrack_iteration = timtrack_iteration_fast
-    time_calibration = time_calibration_fast
-    charge_front_back = charge_front_back_fast
-    limit = limit_fast
-    limit_number = limit_number_fast
 
-if debug_mode:
+if False:
     print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = timtrack_iteration_debug
-    time_calibration = time_calibration_debug
-    charge_front_back = charge_front_back_debug
-    limit = limit_debug
-    limit_number = limit_number_debug
 
-
-
-if debug_mode:
+if False:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
 
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
-
 
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
@@ -2603,20 +2385,14 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-
-
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
 
-
-
-
 # Y ---------------------------------------------------------------------------
 y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
             np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
 
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 y_width_P1_and_P3 = y_widths[0]
@@ -2641,7 +2417,7 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if debug_mode:
+if False:
     T_clip_min = T_clip_min_debug
     T_clip_max = T_clip_max_debug
     Q_clip_min = Q_clip_min_debug
@@ -2659,16 +2435,10 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-
-
-
-
 raw_data_len = len(working_df)
 if raw_data_len == 0 and not self_trigger:
     print("No coincidence nor self-trigger events.")
     sys.exit(1)
-
-
 
 #%%
 
@@ -2734,13 +2504,11 @@ if raw_data_len == 0 and not self_trigger:
 #             plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 #             plt.show()
 
-
 # #%%
 
 # # Detached processed_tt label for plotting (fallback only if not set by alt loop)
 # if "det_processed_tt" not in working_df.columns:
 #     working_df["det_processed_tt"] = working_df.get("processed_tt", 0)
-
 
 # # Select events to plot based on the charge of the planes
 
@@ -2884,9 +2652,7 @@ if raw_data_len == 0 and not self_trigger:
 #                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 #                 plt.show()
 
-
 # #%%
-
 
 # # Plane color palette for consistent plotting
 # plane_colors = {1: "red", 2: "green", 3: "blue", 4: "purple"}
@@ -2894,7 +2660,6 @@ if raw_data_len == 0 and not self_trigger:
 # bin_number = 100
 # max_bin = 100
 # hist_diff_stats = {}  # {combo_int: { "p1-p2": {"pos": sum_positive, "neg": sum_negative} }}
-
 
 # # Overlayed histograms and differences on the same axes (one histogram positive, the other negative, plus the difference)
 # if create_plots:
@@ -2970,19 +2735,15 @@ if raw_data_len == 0 and not self_trigger:
 #                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 #                 plt.show()
 
-
 # #%%
-
 
 # # Plane color palette for consistent plotting
 # plane_colors = {1: "red", 2: "green", 3: "blue", 4: "purple"}
 # hist_store = {}  # {combo_int: {plane_id: (hist, bin_edges)}}
 # hist_comparison_stats = []  # records for later dataframe summary
 
-
 # bin_number = 70
 # max_bin = 40
-
 
 # # Store per-combo, per-plane charge histograms and compare to reference combo
 # hist_range = (0, max_bin)
@@ -3117,8 +2878,6 @@ if raw_data_len == 0 and not self_trigger:
 
 # #%%
 
-
-
 # # Print nicely in the terminal the hist_comparison_stats noise_pct per plane and combo
 # if hist_comparison_stats:
 #     print("Histogram Comparison Noise Summary (vs reference combo {}):".format(reference_combo))
@@ -3137,10 +2896,7 @@ if raw_data_len == 0 and not self_trigger:
 
     
 
-
-
 # #%%
-
 
 # # Make a nice 4 row x combo length column python table in the spirit of plot_tt_correlation,
 # # where the value shown is noise_pct and the background color is using that value in turbo colormap
@@ -3180,10 +2936,7 @@ if raw_data_len == 0 and not self_trigger:
 #     plt.show()
     
 
-
 # #%%
-
-
 
 # # Make a nice 4 row x combo length column python table in the spirit of plot_tt_correlation,
 # # where the value shown is noise_pct and the background color is using that value in turbo colormap
@@ -3223,9 +2976,7 @@ if raw_data_len == 0 and not self_trigger:
 #     plt.tight_layout()
 #     plt.show()
 
-
 # #%%
-
 
 # if create_plots:
 #     # Detached method plots (per combination)
@@ -3293,8 +3044,6 @@ if raw_data_len == 0 and not self_trigger:
 #                 plt.show()
 
 # #%%
-
-
 
 # # I want a calculation of efficiency which is simply counting how many list_tt 1234 are compared to list_tt 234 for eff 1,
 # # 1234 vs 134 for eff 2, 1234 vs 124 for eff 3, 1234 vs 123 for eff 4. But I want to do a loop in charge threshold from 0 to 80
@@ -3367,9 +3116,7 @@ if raw_data_len == 0 and not self_trigger:
 #     plt.tight_layout()
 #     plt.show()
 
-
 # #%%
-
 
 # # Contour plots scanning separate thresholds for 1234 and missing combo (per plane)
 # if create_plots and "list_tt" in working_df.columns:
@@ -3409,15 +3156,7 @@ if raw_data_len == 0 and not self_trigger:
 #         # fig.tight_layout(rect=[0, 0, 1, 0.98])
 #         plt.show()
 
-
-
-
-
-
-
-
 #%%
-
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -3473,7 +3212,6 @@ def fit_3d_line(
 
     chi2 = np.einsum('ij,ij->', res, res) / (sx**2 + sy**2 + sz**2)
     return (xz0, yz0, float(theta), float(phi), float(chi2), dict(zip(plane_ids, res_td)), dict(zip(plane_ids, res_y)))
-
 
 # ---------------------------------------------------------------------------
 # ---------------------------- Loop starts here -----------------------------
@@ -3598,7 +3336,6 @@ for det_iteration in range(repeat + 1):
                     t_rel_p = getattr(trk, f'P{p}_T_sum_final') - tsum_lo[0]
                     det_ext_res_tsum_arr[i, p - 1] = t_rel_p - (k_lo * s_rel_p + b_lo)
 
-
     # 4.  Assemble all results and join once
     all_res = {**fit_res, **slow_res}
     all_res['det_ext_res_ystr_1'] = det_ext_res_ystr_arr[:, 0]
@@ -3621,7 +3358,6 @@ for det_iteration in range(repeat + 1):
     working_df = working_df.drop(columns=dupes, errors='ignore')
     working_df = working_df.join(new_cols)
     working_df = working_df.copy()
-
 
     # # Filter according to residual ------------------------------------------------
     # det_changed_event_count = 0
@@ -3658,7 +3394,6 @@ for det_iteration in range(repeat + 1):
     # )
     # 
     # det_iteration += 1
-
 
 # ---------------------------------------------------------------------------
 # Put every value close to 0 to effectively 0 -------------------------------
@@ -3699,7 +3434,6 @@ if create_plots:
     if show_plots:
         plt.show()
     plt.close()
-
 
 def plot_ts_err_with_hist(df, base_cols, time_col, title):
     """Plot combined data: data TS+hist and error TS+hist (4 columns per variable)."""
@@ -3819,7 +3553,6 @@ if remove_small:
         n_total if n_total else 0,
     )
 
-
 # det_bounds_changed = np.zeros(len(working_df), dtype=bool)
 # for col in working_df.columns:
 #     # Alternative fitting results
@@ -3854,7 +3587,6 @@ if remove_small:
 
 print("Alternative fitting done.")
 
-
 #%%
 
 # Build detached (independent) variables
@@ -3865,7 +3597,6 @@ working_df["det_phi"] = working_df.get("det_phi", 0)
 working_df["det_s"] = working_df.get("det_s", 0)
 working_df["det_t0"] = working_df.get("det_s_ordinate", 0)
 
-
 for p in range(1, 5):
     working_df[f"det_res_ystr_{p}"] = working_df.get(f"det_res_ystr_{p}", 0)
     working_df[f"det_res_tsum_{p}"] = working_df.get(f"det_res_tsum_{p}", 0)
@@ -3875,7 +3606,6 @@ for p in range(1, 5):
     working_df[f"det_ext_res_tdif_{p}"] = working_df.get(f"det_ext_res_tdif_{p}", 0)
 
 #%%
-
 
 if create_plots:
     # Detached method plots (per combination)
@@ -3907,10 +3637,7 @@ if create_plots:
                     title=f"detached_residuals_combo_{combo}",
                 )
 
-
 #%%
-
-
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -3924,7 +3651,6 @@ if fixed_speed:
 else:
     print("Slowness not fixed.")
     npar = 6
-
 
 def fmgx(nvar, npar, vs, ss, zi): # G matrix for t measurements in X-axis
     mg = np.zeros([nvar, npar])
@@ -4342,20 +4068,9 @@ for iteration in range(repeat + 1):
     # # --------------------------------------------------------------------------------
     # iteration += 1
 
-
 #%%
 
-
-
-
-
-
-
-
-
 #%%
-
-
 
 # ------------------------------------------------------------------------------------
 # End of TimTrack loop ---------------------------------------------------------------
@@ -4451,7 +4166,6 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
             title=f"timtrack_residuals_combo_{combo}",
         )
 
-
 #%%
 
 # Combine detached and TimTrack estimates ------------------------------------
@@ -4490,7 +4204,6 @@ for base, det_prefix, tim_prefix in residual_sets:
         tim_vals = working_df[tim_col].to_numpy(copy=False) if tim_col in working_df else np.zeros(len(working_df))
         working_df[f"{base}_{p}"] = 0.5 * (det_vals + tim_vals)
         working_df[f"{base}_{p}_err"] = 0.5 * (det_vals - tim_vals)
-
 
 if create_debug_plots:
     def _emit_param_debug(param_label, columns, thresholds, *, tag="tunable"):
@@ -4607,7 +4320,6 @@ if create_debug_plots:
         [-det_ext_res_tdif_filter, det_ext_res_tdif_filter],
     )
 
-
 # print("----------------------------------------------------------------------")
 # print("-------------------------- New definitions ---------------------------")
 # print("----------------------------------------------------------------------")
@@ -4641,7 +4353,6 @@ def compute_definitive_tt(row):
 
 working_df["definitive_tt"] = working_df.apply(compute_definitive_tt, axis=1)
 
-
 if create_plots and "processed_tt" in working_df.columns and "datetime" in working_df.columns:
     for combo in TRACK_COMBINATIONS:
         try:
@@ -4668,9 +4379,7 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
             title=f"combined_residuals_combo_{combo}",
         )
 
-
 #%%
-
 
 # Time series and fittings
 
@@ -4899,7 +4608,6 @@ if timeseries_and_fits:
 #         cond_zero = (working_df[col] == 0)
 #         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
 
-
 # print("----------------------------------------------------------------------")
 # print("------------------ TimTrack convergence comprobation -----------------")
 # print("----------------------------------------------------------------------")
@@ -4953,14 +4661,11 @@ if timeseries_and_fits:
 #         plt.show()
 #     plt.close()
 
-
 # print("----------------------------------------------------------------------")
 # print("------------------ Slowness residual comprobation ---------------------")
 # print("----------------------------------------------------------------------")
 
 # working_df['delta_s'] = working_df['det_s'] - working_df['s']  # Calculate the difference from the speed of light
-
-
 
 # if create_plots:
 #     print("Plotting residuals of det_s - s for each original_tt to processed_tt case...")
@@ -5029,7 +4734,6 @@ if timeseries_and_fits:
 #         plt.show()
 #     plt.close()
 
-
 # print("----------------------------------------------------------------------")
 # print("--------------------- Comparison results filter ----------------------")
 # print("----------------------------------------------------------------------")
@@ -5038,10 +4742,6 @@ if timeseries_and_fits:
 #     # TimTrack results
 #     if 'delta_s' == col:
 #         working_df.loc[:, col] = np.where((working_df[col] > delta_s_right) | (working_df[col] < delta_s_left), 0, working_df[col])
-
-
-
-
 
 # working_df['x'] = ( working_df['x'] + working_df['det_x'] ) / 2
 # working_df['y'] = ( working_df['y'] + working_df['det_y'] ) / 2
@@ -5082,9 +4782,6 @@ if timeseries_and_fits:
 
 # working_df['chi_timtrack'] = working_df['th_chi']
 # working_df['chi_alternative'] = working_df['det_th_chi']
-
-
-
 
 print("----------------------------------------------------------------------")
 print("-------------------- Real tracking trigger type ----------------------")
@@ -5133,7 +4830,6 @@ tracking_df = pd.DataFrame({'tracking_tt': tracking_vals}, index=working_df.inde
 working_df = working_df.drop(columns=tracking_df.columns.intersection(working_df.columns), errors='ignore')
 working_df = working_df.join(tracking_df)
 working_df = working_df.copy()
-
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -5317,7 +5013,6 @@ if time_window_fitting:
                 plt.show()
             plt.close()
 
-
 # -----------------------------------------------------------------------------
 # Last filterings -------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -5362,7 +5057,6 @@ if low_tt_zeroed_count > 0:
         low_tt_zeroed_df["zeroed_cols"] = ",".join(cols_to_zero)
     if cols_to_zero:
         working_df.loc[low_tt_mask, cols_to_zero] = 0
-
 
 # -----------------------------------------------------------------------------
 # -------------- Correlate trigger types in different stages ------------------
@@ -5413,7 +5107,6 @@ def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_id
     plt.close()
 
     return fig_idx + 1
-
 
 if create_plots:
     fig_idx = plot_tt_correlation(
@@ -5468,7 +5161,6 @@ if create_plots or create_essential_plots:
         save_plots=save_plots,
         plot_list=plot_list
     )
-
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -5739,7 +5431,6 @@ for tt_col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "defini
             print(f"Could not list unique values for {tt_col}")
 print("----------------------------------------------------------------------")
 
-
 print("----------------------------------------------------------------------")
 print("----------------------- Calculating some stuff -----------------------")
 print("----------------------------------------------------------------------")
@@ -5759,7 +5450,6 @@ record_filter_metric(
     ancillary_before - len(df_plot_ancillary),
     ancillary_before if ancillary_before else 0,
 )
-
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
@@ -5795,7 +5485,6 @@ if create_plots:
         plot_histograms_and_gaussian(subset_data, residual_columns, f"External Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
 
 # -----------------------------------------------------------------------------------------------------------------------------
-
 
 if create_plots or create_essential_plots:
     
@@ -5881,9 +5570,6 @@ if create_plots or create_essential_plots:
         plt.show()
     plt.close()
 
-
-
-
 if create_plots:
     
     df_filtered = df_plot_ancillary.copy()
@@ -5967,8 +5653,6 @@ if create_plots:
     plt.close()
 
 # -----------------------------------------------------------------------------------------------------------------------------
-
-
 
 if create_plots:
 
@@ -6106,7 +5790,6 @@ if create_plots:
         plt.close()
         return fig_idx
 
-
     # df_cases_2 = [
     #     ([("processed_tt", 12, 12)], "1-2 cases"),
     #     ([("processed_tt", 23, 23)], "2-3 cases"),
@@ -6240,7 +5923,6 @@ if create_plots:
     #     ([("original_tt", 13, 13), ("definitive_tt", 13, 13)], "original=13, processed=13"),
     # ]
 
-
     # # Charge of each plane -------------------------------------------------------------------
     # for filters, title in df_cases_2:
     #     # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
@@ -6262,7 +5944,6 @@ if create_plots:
     #         fig_idx,
     #         plot_list
     #     )
-
 
     # # Residues --------------------------------------------------------------------------------------
     # for filters, title in df_cases_2:
@@ -6470,8 +6151,6 @@ if create_plots:
 
 # ------------------------------------------------------------------------------------------------------
 
-
-
 # if create_plots:
 #     df_filtered = df_plot_ancillary.copy()
 #     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
@@ -6509,9 +6188,6 @@ if create_plots:
 #         plt.show()
 #     plt.close()
 
-
-
-
 if create_plots:
     df_filtered = df_plot_ancillary.copy()
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
@@ -6548,8 +6224,6 @@ if create_plots:
     if show_plots:
         plt.show()
     plt.close()
-
-
 
 # if create_plots:
 
@@ -6621,7 +6295,6 @@ if create_plots:
 #     if show_plots:
 #         plt.show()
 #     plt.close()
-
 
 if create_plots:
 
@@ -6720,7 +6393,6 @@ if create_plots:
         plt.show()
     plt.close()
 
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("-------------------------- Save and finish ---------------------------")
@@ -6739,8 +6411,6 @@ for col in working_df.select_dtypes(include=[np.floating]).columns:
     original_dtype = working_df[col].dtype
     rounded_series = working_df[col].apply(round_to_4_significant_digits)
     working_df.loc[:, col] = rounded_series.astype(original_dtype, copy=False)
-
-
 
 # Save the data ---------------------------------------------------------------
 # if save_full_data: # Save a full version of the data, for different studies and debugging
@@ -6838,7 +6508,6 @@ if self_trigger:
         if show_plots: plt.show()
         plt.close()
 
-
 if self_trigger:
     if create_plots:
    
@@ -6897,8 +6566,6 @@ if self_trigger:
         plt.close()
 # ------------------------------------------------------------------------------------------------------------------------
 
-
-
 # -----------------------------------------------------------------------------
 # Update pipeline status CSV with list events metadata
 # -----------------------------------------------------------------------------
@@ -6907,7 +6574,6 @@ def _pipeline_strip_suffix(name: str) -> str:
         if name.endswith(suffix):
             return name[: -len(suffix)]
     return name
-
 
 def _pipeline_compute_start_timestamp(base: str) -> str:
     digits = base[-11:]
@@ -6924,7 +6590,6 @@ def _pipeline_compute_start_timestamp(base: str) -> str:
         except ValueError:
             return ''
     return ''
-
 
 # def _update_pipeline_csv_for_list_event() -> None:
 #     csv_headers = [
@@ -7013,12 +6678,7 @@ def _pipeline_compute_start_timestamp(base: str) -> str:
 #         writer.writeheader()
 #         writer.writerows(rows)
 
-
 # _update_pipeline_csv_for_list_event()
-
-
-
-
 
 # -----------------------------------------------------------------------------
 # Create and save the PDF -----------------------------------------------------
@@ -7054,7 +6714,6 @@ if create_pdf:
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
 
-
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
 files = os.listdir(figure_directory) if os.path.exists(figure_directory) else []
@@ -7084,8 +6743,6 @@ if user_file_selection == False:
         print(f"Input file already absent (maybe previously processed): {file_path}")
         print("Skipping move; fitted output stays in OUTPUT_FILES.")
 
-
-
 # Store the current time at the end
 end_execution_time_counting = datetime.now()
 time_taken = (end_execution_time_counting - start_execution_time_counting).total_seconds() / 60
@@ -7096,7 +6753,6 @@ print(f"Time taken for the whole execution: {time_taken:.2f} minutes")
 print("----------------------------------------------------------------------")
 print("------------------- Finished list_events creation --------------------")
 print("----------------------------------------------------------------------\n\n\n")
-
 
 record_residual_sigmas(working_df)
 
@@ -7137,13 +6793,6 @@ fit_tt_columns = {
 }
 working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
 
-
-
-
-
-
-
-
 tt_columns_desired = ['datetime', 'raw_tt', 'clean_tt', 'cal_tt', 'list_tt', 'tracking_tt', 'definitive_tt', 'fit_tt']
 tt_columns_present = [col for col in tt_columns_desired if col in working_df.columns]
 param_hash_cols = ["param_hash"] if "param_hash" in working_df.columns else []
@@ -7156,7 +6805,6 @@ columns_to_keep = (
         'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
 
         # Charge
-
 
         # # Chisqs
         # 'chi_timtrack', 'chi_alternative',
@@ -7171,10 +6819,6 @@ columns_to_keep = (
 
 working_df = working_df[columns_to_keep]
 
-
-
-
-
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
 os.makedirs(f"{output_directory}", exist_ok=True)
@@ -7188,20 +6832,11 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 # (Here, you would have your data cleaning code before saving)
 # working_df = ...
 
-
-
-
-
-
 # Print all column names in the dataframe
 print("Columns in the final dataframe:")
 for col in working_df.columns:
     print(f" - {col}")
     
-
-
-
-
 
 # def collect_columns(columns: Iterable[str], pattern: re.Pattern[str]) -> list[str]:
 #     """Return all column names that match *pattern*."""
@@ -7213,11 +6848,6 @@ for col in working_df.columns:
 # # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
 # Q_cols = collect_columns(working_df.columns, Q_SUM_PATTERN)
 # working_df = working_df[(working_df[Q_cols] != 0).any(axis=1)]
-
-
-
-
-
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 fit_tt_total = len(working_df)
@@ -7304,7 +6934,6 @@ metadata_filter_csv_path = save_metadata(
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
-
 # -------------------------------------------------------------------------------
 # Execution metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
@@ -7325,7 +6954,6 @@ metadata_execution_csv_path = save_metadata(
     },
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
-
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------

@@ -5,6 +5,7 @@ import argparse
 from pathlib import Path
 from typing import Iterable
 import time
+import subprocess
 
 import numpy as np
 import pandas as pd
@@ -40,6 +41,22 @@ def expected_counts_from_mesh(mesh: pd.DataFrame) -> dict[str, int]:
     return counts
 
 
+def expected_all_zero(expected: dict[str, int]) -> bool:
+    return all(int(expected.get(f"STEP_{step}_TO_{step + 1}", 0)) == 0 for step in range(1, 11))
+
+
+def observed_counts_from_intersteps(intersteps_dir: Path) -> dict[str, int]:
+    observed: dict[str, int] = {}
+    for step in range(1, 11):
+        step_name = f"STEP_{step}_TO_{step + 1}"
+        step_dir = intersteps_dir / step_name
+        if not step_dir.exists():
+            observed[step_name] = 0
+            continue
+        observed[step_name] = len(list(step_dir.glob("SIM_RUN_*")))
+    return observed
+
+
 def available_inputs_for_step(step: int, intersteps_dir: Path, expected: dict[str, int]) -> int:
     if step == 1:
         return expected.get("STEP_1_TO_2", 0)
@@ -57,6 +74,37 @@ def count_dirs_and_size(step_dir: Path) -> tuple[int, int]:
             if item.is_file():
                 total_bytes += item.stat().st_size
     return len(dirs), total_bytes
+
+
+def count_files_and_size(
+    dir_path: Path,
+    pattern: str = "*",
+    *,
+    now_ts: float | None = None,
+    recent_seconds: int | None = None,
+) -> tuple[int, int, int | None, int]:
+    if not dir_path.exists():
+        return 0, 0, None, 0
+    files = [p for p in dir_path.glob(pattern) if p.is_file()]
+    total_bytes = 0
+    newest_mtime: float | None = None
+    recent_count = 0
+    for file_path in files:
+        stat = file_path.stat()
+        total_bytes += stat.st_size
+        if newest_mtime is None or stat.st_mtime > newest_mtime:
+            newest_mtime = stat.st_mtime
+        if now_ts is not None and recent_seconds is not None and (now_ts - stat.st_mtime) <= recent_seconds:
+            recent_count += 1
+    newest_age = int(max(0.0, now_ts - newest_mtime)) if now_ts is not None and newest_mtime is not None else None
+    return len(files), total_bytes, newest_age, recent_count
+
+
+def resolve_step_final_dat_dir(sim_data_dir: Path) -> Path:
+    files_dir = sim_data_dir / "FILES"
+    if files_dir.exists():
+        return files_dir
+    return sim_data_dir
 
 
 def fmt_gb(size_bytes: int) -> str:
@@ -85,6 +133,12 @@ def format_age(seconds: int) -> str:
     if mins > 0:
         return f"{mins}m{sec:02d}s"
     return f"{sec}s"
+
+
+def format_age_opt(seconds: int | None) -> str:
+    if seconds is None:
+        return "n/a"
+    return format_age(seconds)
 
 
 def newest_age_seconds(paths: Iterable[Path], now_ts: float) -> int | None:
@@ -167,6 +221,44 @@ def health_snapshot(
     return lines, error_hits, latest_error
 
 
+def process_running(pattern: str) -> bool:
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", pattern],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return out.returncode == 0 and bool(out.stdout.strip())
+
+
+def step_final_status_label(
+    pending_rows: int,
+    step_final_running: bool,
+    sim_params_age: int | None,
+    newest_dat_age: int | None,
+    sim_cycle_age: int | None,
+) -> str:
+    if pending_rows <= 0:
+        return "DONE"
+    ref_age = sim_params_age if sim_params_age is not None else newest_dat_age
+    if step_final_running:
+        if ref_age is None:
+            return "RUNNING"
+        if ref_age <= 120:
+            return "ACTIVE"
+        if ref_age <= 600:
+            return "RUNNING_SLOW"
+        return "RUNNING_STALE"
+    if ref_age is not None and ref_age <= 120:
+        return "BETWEEN_CYCLES"
+    if sim_cycle_age is not None and sim_cycle_age <= 180:
+        return "WAITING_CYCLE"
+    return "STALE"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Combined size/expected SIM_RUN report.")
     parser.add_argument(
@@ -181,8 +273,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--include-done",
+        dest="include_done",
         action="store_true",
-        help="Include done rows in expected counts.",
+        default=True,
+        help="Include done rows in expected counts (default).",
+    )
+    parser.add_argument(
+        "--exclude-done",
+        dest="include_done",
+        action="store_false",
+        help="Exclude done rows from expected counts (pending-only view).",
     )
     parser.add_argument(
         "--z-positions",
@@ -232,10 +332,12 @@ def main() -> None:
     if not mesh_path.exists():
         raise FileNotFoundError(f"param_mesh.csv not found: {mesh_path}")
 
+    now_ts = time.time()
     mesh = load_mesh(mesh_path, args.include_done)
 
     # load full param_mesh (always use for computing expected counts when z filter is used)
     full_mesh = pd.read_csv(mesh_path)
+    full_mesh_for_progress = full_mesh.copy()
 
     # optional filter by z positions (matches z_p1..z_pN)
     if args.z_positions is not None:
@@ -260,6 +362,7 @@ def main() -> None:
             print(f"Filtered full param_mesh by z positions ({', '.join(map(str, z_vals))}) -> {full_mask.sum()} rows match", flush=True)
         # expected counts should be computed from the full param_mesh subset (so %done is correct for that z set)
         expected = expected_counts_from_mesh(full_mesh[full_mask].copy())
+        full_mesh_for_progress = full_mesh[full_mask].copy()
 
         # also restrict the working 'mesh' (which may already be filtered by done) to the same z subset
         mesh = mesh[_z_mask(mesh)].copy()
@@ -284,11 +387,22 @@ def main() -> None:
                     if args.verbose:
                         print(f"Auto-detected single active z configuration: {z_vals[:len(z_cols)]}; using it for expected counts", flush=True)
                     expected = expected_counts_from_mesh(full_mesh[full_mask].copy())
+                    full_mesh_for_progress = full_mesh[full_mask].copy()
                     # restrict working mesh as well to same z subset
                     mesh_mask = full_mask.reindex(mesh.index, fill_value=False)
                     mesh = mesh[mesh_mask].copy()
         if expected is None:
             expected = expected_counts_from_mesh(mesh)
+
+    expected_fallback_used = False
+    if expected_all_zero(expected):
+        observed = observed_counts_from_intersteps(intersteps_dir)
+        if any(v > 0 for v in observed.values()):
+            expected = {
+                key: max(int(expected.get(key, 0)), int(observed.get(key, 0)))
+                for key in observed
+            }
+            expected_fallback_used = True
 
     step_dirs = sorted(intersteps_dir.glob("STEP_*_TO_*"))
 
@@ -343,6 +457,66 @@ def main() -> None:
         total_bytes += size_now
         total_expected_bytes += size_expected
         total_one_line_bytes += one_line_bytes
+
+    # Add STEP_FINAL progress/growth row so activity remains visible after STEP_1..STEP_9 reach 100%.
+    sim_data_dir = intersteps_dir.parent / "SIMULATED_DATA"
+    sim_dat_dir = resolve_step_final_dat_dir(sim_data_dir)
+    step10_final_dir = intersteps_dir / "STEP_10_TO_FINAL"
+    step10_inputs = len(list(step10_final_dir.glob("SIM_RUN_*"))) if step10_final_dir.exists() else 0
+    step_final_files, step_final_size, step_final_latest_age, step_final_recent_5m = count_files_and_size(
+        sim_dat_dir,
+        "*.dat",
+        now_ts=now_ts,
+        recent_seconds=300,
+    )
+    sim_params_path = sim_data_dir / "step_final_simulation_params.csv"
+    sim_params_age = newest_age_seconds([sim_params_path], now_ts)
+    sim_cycle_log = (
+        intersteps_dir.parent.parent
+        / "OPERATIONS_RUNTIME"
+        / "CRON_LOGS"
+        / "SIMULATION"
+        / "RUN"
+        / "sim_main_pipeline_cycle.log"
+    )
+    sim_cycle_age = newest_age_seconds([sim_cycle_log], now_ts)
+    step_final_running = process_running("step_final_daq_to_station_dat.py")
+    if "done" in full_mesh_for_progress.columns:
+        done_series = pd.to_numeric(full_mesh_for_progress["done"], errors="coerce").fillna(0).astype(int)
+        step_final_now = int((done_series == 1).sum())
+    else:
+        step_final_now = 0
+    step_final_exp = max(int(len(full_mesh_for_progress)), int(step10_inputs))
+    step_final_exp = max(step_final_exp, step_final_now)
+    if step_final_now > 0:
+        step_final_size_expected = int((step_final_size / step_final_now) * step_final_exp)
+    else:
+        step_final_size_expected = 0
+    step_final_one_line = estimate_one_line_bytes(
+        step_final_now,
+        step_final_size,
+        step_final_exp,
+        step_final_size_expected,
+    )
+    step_final_pct = (step_final_now / step_final_exp * 100.0) if step_final_exp else 0.0
+    rows.append(
+        (
+            "STEP_FINAL",
+            step_final_now,
+            step_final_exp,
+            step10_inputs,
+            step_final_size,
+            step_final_size_expected,
+            step_final_one_line,
+            step_final_pct,
+        )
+    )
+    total_dirs += step_final_now
+    total_expected_dirs += step_final_exp
+    total_inputs += step10_inputs
+    total_bytes += step_final_size
+    total_expected_bytes += step_final_size_expected
+    total_one_line_bytes += step_final_one_line
 
     width_step = max(len(row[0]) for row in rows + [("TOTAL", 0, 0, 0, 0, 0, 0, 0.0)])
     width_dirs = max(
@@ -399,7 +573,48 @@ def main() -> None:
     )
     print(sep)
 
-    now_ts = time.time()
+    pending_final = max(0, step_final_exp - step_final_now)
+    step_final_state = step_final_status_label(
+        pending_final,
+        step_final_running,
+        sim_params_age,
+        step_final_latest_age,
+        sim_cycle_age,
+    )
+    step_final_hint: str | None = None
+    cycle_tail = tail_lines(sim_cycle_log, 200)
+    auto_remap_hits = sum("auto-remapped pending row index" in line for line in cycle_tail)
+    no_match_hits = sum("No matching param_mesh row found" in line for line in cycle_tail)
+    if auto_remap_hits > 0:
+        step_final_hint = f"auto_remapped_rows={auto_remap_hits}"
+    elif no_match_hits > 0:
+        step_final_hint = f"no_matching_param_mesh_rows={no_match_hits}"
+    elif any("Sampling interrupted" in line for line in cycle_tail):
+        step_final_hint = "sampling_interrupted_recently"
+    elif any("stage=step_final status=start" in line for line in cycle_tail):
+        step_final_hint = "step_final_started_recently"
+
+    print()
+    print(f"STEP_FINAL MONITOR @ {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now_ts))}")
+    print(
+        f"  status={step_final_state} process={'RUNNING' if step_final_running else 'IDLE'} "
+        f"pending={pending_final}/{step_final_exp}"
+    )
+    print(
+        f"  sim_params_age={format_age_opt(sim_params_age):>8} "
+        f"newest_dat_age={format_age_opt(step_final_latest_age):>8} "
+        f"new_dat_5m={step_final_recent_5m}"
+    )
+    print(
+        f"  sim_cycle_log_age={format_age_opt(sim_cycle_age):>8} "
+        f"step10_inputs={step10_inputs} "
+        f"dat_files={step_final_files}"
+    )
+    if step_final_hint:
+        print(f"  hint={step_final_hint}")
+    if expected_fallback_used:
+        print("  report_fallback=expected_counts_from_observed_step_dirs")
+
     show_health = args.health_always
     if args.health_interval_seconds > 0 and int(now_ts) % args.health_interval_seconds == 0:
         show_health = True

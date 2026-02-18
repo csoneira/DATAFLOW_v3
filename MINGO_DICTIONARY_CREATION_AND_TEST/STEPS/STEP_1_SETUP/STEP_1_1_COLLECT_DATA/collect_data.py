@@ -34,8 +34,14 @@ import pandas as pd
 
 # ── Paths ────────────────────────────────────────────────────────────────
 STEP_DIR = Path(__file__).resolve().parent
-PIPELINE_DIR = STEP_DIR.parents[1]  # INFERENCE_DICTIONARY_VALIDATION
-REPO_ROOT = PIPELINE_DIR.parent      # DATAFLOW_v3
+# Support both layouts:
+#   - <pipeline>/STEP_1_SETUP/STEP_1_1_COLLECT_DATA
+#   - <pipeline>/STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA
+if STEP_DIR.parents[1].name == "STEPS":
+    PIPELINE_DIR = STEP_DIR.parents[2]
+else:
+    PIPELINE_DIR = STEP_DIR.parents[1]
+REPO_ROOT = PIPELINE_DIR.parent
 DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"

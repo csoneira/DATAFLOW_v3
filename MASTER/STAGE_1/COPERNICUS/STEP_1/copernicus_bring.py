@@ -7,7 +7,7 @@ import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Iterable, List, Sequence, Set
+from typing import Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import cdsapi
 import pandas as pd
@@ -166,6 +166,89 @@ def daterange(start_day: date, end_day: date) -> List[date]:
     return [start_day + timedelta(days=offset) for offset in range(span + 1)]
 
 
+def _parse_config_day(value: object) -> Optional[date]:
+    if value in ("", None):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z") and "T" in text:
+        text = text[:-1] + "+00:00"
+    parsed: Optional[datetime] = None
+    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            if fmt is None:
+                parsed = datetime.fromisoformat(text)
+            else:
+                parsed = datetime.strptime(text, fmt)
+            break
+        except Exception:
+            parsed = None
+    if parsed is None:
+        return None
+    return parsed.date()
+
+
+def _collect_config_date_ranges(config: Mapping[str, object]) -> List[Tuple[Optional[date], Optional[date]]]:
+    ranges: List[Tuple[Optional[date], Optional[date]]] = []
+
+    legacy_range = config.get("date_range")
+    if isinstance(legacy_range, Mapping):
+        start_day = _parse_config_day(legacy_range.get("start"))
+        end_day = _parse_config_day(legacy_range.get("end"))
+        if start_day is not None or end_day is not None:
+            ranges.append((start_day, end_day))
+
+    range_list = config.get("date_ranges")
+    if isinstance(range_list, list):
+        for item in range_list:
+            if not isinstance(item, Mapping):
+                continue
+            start_day = _parse_config_day(item.get("start"))
+            end_day = _parse_config_day(item.get("end"))
+            if start_day is None and end_day is None:
+                continue
+            ranges.append((start_day, end_day))
+
+    deduped: List[Tuple[Optional[date], Optional[date]]] = []
+    seen: Set[Tuple[Optional[date], Optional[date]]] = set()
+    for item in ranges:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def resolve_requested_days(
+    config: Mapping[str, object],
+    *,
+    hard_end_day: date,
+) -> List[date]:
+    configured_ranges = _collect_config_date_ranges(config)
+    if configured_ranges:
+        requested_set: Set[date] = set()
+        for start_day, end_day in configured_ranges:
+            range_start = start_day if start_day is not None else date(2023, 7, 1)
+            range_end = end_day if end_day is not None else hard_end_day
+            if range_end > hard_end_day:
+                range_end = hard_end_day
+            if range_start > range_end:
+                continue
+            requested_set.update(daterange(range_start, range_end))
+        return sorted(requested_set)
+
+    test_mode = bool(config.get("test_mode", False))
+    weeks_behind_requested = int(config.get("weeks_behind_requested", 1))
+    if test_mode:
+        start_day = (datetime.now() - timedelta(weeks=weeks_behind_requested)).date()
+    else:
+        start_day = date(2023, 7, 1)
+    if start_day > hard_end_day:
+        start_day = hard_end_day
+    return daterange(start_day, hard_end_day)
+
+
 def main() -> int:
     print_banner()
 
@@ -182,9 +265,7 @@ def main() -> int:
     with config_file_path.open("r", encoding="utf-8") as config_file:
         config = yaml.safe_load(config_file)
 
-    test_mode = config["test_mode"]
-    weeks_behind_requested = config["weeks_behind_requested"]
-    max_weeks_allowed = config["max_weeks_allowed"]
+    max_weeks_allowed = config.get("max_weeks_allowed")
     degree_apotema = config["degree_apotema"]
 
     if len(sys.argv) < 2:
@@ -226,16 +307,11 @@ def main() -> int:
 
     existing_days = parse_existing_days(output_root)
 
-    if test_mode:
-        start_day = (datetime.now() - timedelta(weeks=weeks_behind_requested)).date()
-    else:
-        start_day = date(2023, 7, 1)
-
     end_day = (datetime.now() - timedelta(days=5)).date()
-    if start_day > end_day:
-        start_day = end_day
-
-    requested_days = daterange(start_day, end_day)
+    requested_days = resolve_requested_days(config, hard_end_day=end_day)
+    if not requested_days:
+        print("No valid date ranges resolved from config. Nothing to do.")
+        return 0
     missing_days = [day for day in requested_days if day not in existing_days]
 
     if not missing_days:

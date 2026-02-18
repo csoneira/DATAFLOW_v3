@@ -5,4 +5,11 @@ logbook:
     '2': 600987525
     '3': 376764978
     '4': 1268265225
-    '5': 1331842924
+
+new_files_run_matrix:
+  enabled: true
+  mode: whitelist
+  default_stations: []
+  stations: [1, 2, 3, 4]
+
+date_ranges: []

@@ -104,28 +104,170 @@ while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]];
     MASTER_DIR="$(dirname "${MASTER_DIR}")"
 done
 
-config_file="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
+config_file_shared="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
+config_file_step="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/STEP_2/config_step_2.yaml"
+
+is_reprocessing_step_enabled() {
+    local station_id="$1"
+    local step_id="$2"
+    local cfg_path="$config_file_shared"
+    [[ -f "$cfg_path" ]] || return 0
+
+    local decision
+    decision=$(python3 - "$cfg_path" "$station_id" "$step_id" <<'PY' || true
+import sys
+
+cfg_path, station_raw, step_raw = sys.argv[1:4]
+
+try:
+    import yaml
+except ImportError:
+    print("1")
+    raise SystemExit(0)
+
+def parse_int(value):
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+def normalize_steps(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return []
+        if text == "all":
+            return "all"
+        out = []
+        for token in text.replace(";", ",").split(","):
+            token = token.strip().lower()
+            if not token:
+                continue
+            if token.startswith("step_"):
+                token = token.split("step_", 1)[1]
+            elif token.startswith("step"):
+                token = token[4:]
+            try:
+                out.append(int(token))
+            except Exception:
+                continue
+        return out
+    if isinstance(value, (list, tuple, set)):
+        out = []
+        for item in value:
+            if isinstance(item, str):
+                parsed = normalize_steps(item)
+                if parsed == "all":
+                    return "all"
+                if isinstance(parsed, list):
+                    out.extend(parsed)
+                    continue
+            try:
+                out.append(int(item))
+            except Exception:
+                continue
+        return out
+    if isinstance(value, (int, float)):
+        try:
+            return [int(value)]
+        except Exception:
+            return []
+    return []
+
+station_id = parse_int(station_raw)
+step_id = parse_int(step_raw)
+if station_id is None or step_id is None:
+    print("1")
+    raise SystemExit(0)
+
+try:
+    with open(cfg_path, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+except Exception:
+    data = {}
+
+node = data.get("reprocessing_run_matrix")
+if not isinstance(node, dict):
+    print("1")
+    raise SystemExit(0)
+
+if not bool(node.get("enabled", False)):
+    print("1")
+    raise SystemExit(0)
+
+mode = str(node.get("mode", "whitelist")).strip().lower()
+stations_node = node.get("stations")
+if not isinstance(stations_node, dict):
+    stations_node = {}
+
+default_steps = normalize_steps(node.get("default_steps", []))
+station_steps = normalize_steps(stations_node.get(str(station_id)))
+if station_steps is None:
+    station_steps = normalize_steps(stations_node.get("0"))
+
+if mode == "blacklist":
+    disabled = False
+    if station_steps is None:
+        if default_steps == "all":
+            disabled = True
+        elif isinstance(default_steps, list) and step_id in default_steps:
+            disabled = True
+    elif station_steps == "all":
+        disabled = True
+    elif isinstance(station_steps, list) and step_id in station_steps:
+        disabled = True
+    print("0" if disabled else "1")
+    raise SystemExit(0)
+
+allowed = False
+if station_steps is None:
+    if default_steps == "all":
+        allowed = True
+    elif isinstance(default_steps, list) and step_id in default_steps:
+        allowed = True
+elif station_steps == "all":
+    allowed = True
+elif isinstance(station_steps, list) and step_id in station_steps:
+    allowed = True
+
+print("1" if allowed else "0")
+PY
+    )
+
+    [[ "$decision" != "0" ]]
+}
+
+if ! is_reprocessing_step_enabled "$station" 2; then
+    log_info "Skipping station ${station}: STEP_2 disabled by reprocessing_run_matrix."
+    exit 0
+fi
 
 read_config_value() {
     local key="$1"
-    [[ ! -f "$config_file" ]] && return 0
-    python3 - "$key" "$config_file" <<'PY' || true
+    python3 - "$key" "$config_file_step" "$config_file_shared" <<'PY' || true
 import re
 import sys
 
 key = sys.argv[1]
-path = sys.argv[2]
+paths = [sys.argv[2], sys.argv[3]]
 value = None
 pattern = re.compile(rf"\s*{re.escape(key)}\s*:\s*(\S+)")
-try:
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            match = pattern.match(line)
-            if match:
-                value = match.group(1)
-                break
-except FileNotFoundError:
-    pass
+for path in paths:
+    if not path:
+        continue
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                match = pattern.match(line)
+                if match:
+                    value = match.group(1)
+                    break
+    except FileNotFoundError:
+        continue
+    if value:
+        break
 
 if value:
     print(value.strip())

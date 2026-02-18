@@ -2,3 +2,4 @@ test_mode: false
 weeks_behind_requested: 1
 max_weeks_allowed: 2
 degree_apotema: 0.25
+date_ranges: []

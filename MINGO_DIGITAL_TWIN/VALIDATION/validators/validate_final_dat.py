@@ -160,6 +160,9 @@ def run(
 
     twin_root = any_art.interstep_dir.parents[1]
     simulated_data = twin_root / "SIMULATED_DATA"
+    simulated_dat_dir = simulated_data / "FILES"
+    if not simulated_dat_dir.exists():
+        simulated_dat_dir = simulated_data
     params_path = simulated_data / "step_final_simulation_params.csv"
 
     params_df = _load_sim_params(params_path)
@@ -180,7 +183,7 @@ def run(
             metric_name="n_dat_files",
             metric_value=0,
             status="FAIL",
-            notes=str(simulated_data),
+            notes=str(simulated_dat_dir),
         )
         return rb.to_frame().reindex(columns=RESULT_COLUMNS)
 

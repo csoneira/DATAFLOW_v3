@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -33,6 +34,8 @@ from MASTER.common.path_config import (
     resolve_home_path_from_config,
 )
 from MASTER.common.status_csv import append_status_row, mark_status_complete
+
+CREATE_NEW_CSV = True
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,104 @@ LOG_SPECS: Sequence[LogSpec] = (
     ),
 )
 
+MASTER_CONFIG_ROOT = get_master_config_root()
+LAB_LOGS_CONFIG_SHARED = MASTER_CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "config_lab_logs.yaml"
+LAB_LOGS_CONFIG_STEP2 = MASTER_CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "STEP_2" / "config_step_2.yaml"
+LAB_LOGS_OUTLIER_CSV_STEP2 = MASTER_CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "STEP_2" / "config_step_2.csv"
+FILENAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def _load_yaml_mapping(path: Path) -> Mapping[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            loaded = yaml.safe_load(handle) or {}
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _parse_date_value(value: object) -> Optional[date]:
+    if value in ("", None):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z") and "T" in text:
+        text = text[:-1] + "+00:00"
+    parsed: Optional[datetime] = None
+    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            if fmt is None:
+                parsed = datetime.fromisoformat(text)
+            else:
+                parsed = datetime.strptime(text, fmt)
+            break
+        except Exception:
+            parsed = None
+    if parsed is None:
+        return None
+    return parsed.date()
+
+
+def _collect_date_ranges(node: Mapping[str, object], ranges: List[Tuple[Optional[date], Optional[date]]]) -> None:
+    if not isinstance(node, dict):
+        return
+    legacy = node.get("date_range")
+    if isinstance(legacy, dict):
+        start_val = _parse_date_value(legacy.get("start"))
+        end_val = _parse_date_value(legacy.get("end"))
+        if start_val is not None or end_val is not None:
+            ranges.append((start_val, end_val))
+    range_list = node.get("date_ranges")
+    if isinstance(range_list, list):
+        for item in range_list:
+            if not isinstance(item, dict):
+                continue
+            start_val = _parse_date_value(item.get("start"))
+            end_val = _parse_date_value(item.get("end"))
+            if start_val is None and end_val is None:
+                continue
+            ranges.append((start_val, end_val))
+    nested = node.get("lab_logs_date_selection")
+    if isinstance(nested, dict):
+        _collect_date_ranges(nested, ranges)
+
+
+def load_lab_logs_date_ranges() -> List[Tuple[Optional[date], Optional[date]]]:
+    ranges: List[Tuple[Optional[date], Optional[date]]] = []
+    _collect_date_ranges(_load_yaml_mapping(LAB_LOGS_CONFIG_SHARED), ranges)
+    _collect_date_ranges(_load_yaml_mapping(LAB_LOGS_CONFIG_STEP2), ranges)
+    deduped: List[Tuple[Optional[date], Optional[date]]] = []
+    seen: set[Tuple[Optional[date], Optional[date]]] = set()
+    for item in ranges:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def extract_date_from_filename(path: Path) -> Optional[date]:
+    match = FILENAME_DATE_RE.search(path.name)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def date_in_ranges(day_value: date, ranges: Sequence[Tuple[Optional[date], Optional[date]]]) -> bool:
+    for start_day, end_day in ranges:
+        if start_day is not None and day_value < start_day:
+            continue
+        if end_day is not None and day_value > end_day:
+            continue
+        return True
+    return False
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -157,15 +258,44 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_config() -> dict:
-    config_file_path = (
-        get_master_config_root()
-        / "STAGE_1"
-        / "LAB_LOGS"
-        / "config_lab_logs.yaml"
-    )
-    with config_file_path.open("r", encoding="utf-8") as config_file:
-        return yaml.safe_load(config_file)
+def load_outlier_limits() -> Dict[str, Sequence[float]]:
+    config_file_path = LAB_LOGS_OUTLIER_CSV_STEP2
+    try:
+        config_df = pd.read_csv(config_file_path)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Outlier limits CSV not found: {config_file_path}"
+        ) from exc
+
+    if config_df.empty:
+        return {}
+
+    normalized_columns = {str(col).strip().lower(): col for col in config_df.columns}
+    required = ("column", "lower", "upper")
+    if not all(name in normalized_columns for name in required):
+        raise ValueError(
+            f"{config_file_path} must include the columns: column, lower, upper"
+        )
+
+    column_col = normalized_columns["column"]
+    lower_col = normalized_columns["lower"]
+    upper_col = normalized_columns["upper"]
+
+    limits: Dict[str, Sequence[float]] = {}
+    for index, row in config_df.iterrows():
+        column_name = str(row[column_col]).strip()
+        if not column_name or column_name.lower() == "nan":
+            continue
+        try:
+            lower = float(row[lower_col])
+            upper = float(row[upper_col])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid numeric bounds in {config_file_path} at row {index + 2}"
+            ) from exc
+        limits[column_name] = (lower, upper)
+
+    return limits
 
 
 def move_step1_outputs_to_unprocessed(
@@ -354,13 +484,12 @@ def resolve_actual_path(path: Path, moves: Mapping[Path, Path]) -> Path:
 
 def main() -> int:
     args = parse_args()
-    config = load_config()
 
     station = args.station
     set_station(station)
     start_timer(__file__)
 
-    base_path = resolve_home_path_from_config(config)
+    base_path = resolve_home_path_from_config()
     station_dir = base_path / "DATAFLOW_v3" / "STATIONS" / f"MINGO0{station}"
     lab_logs_root = station_dir / "STAGE_1" / "LAB_LOGS"
 
@@ -376,7 +505,18 @@ def main() -> int:
     # status_csv_path = step2_root / "log_aggregate_and_join_status.csv"
     # status_timestamp = append_status_row(status_csv_path)
 
-    outlier_limits = config.get("outlier_limits", {})
+    outlier_limits = load_outlier_limits()
+    date_ranges = load_lab_logs_date_ranges()
+    if date_ranges:
+        human_ranges = []
+        for start_day, end_day in date_ranges:
+            start_text = start_day.isoformat() if start_day is not None else "-inf"
+            end_text = end_day.isoformat() if end_day is not None else "+inf"
+            human_ranges.append(f"{start_text} to {end_text}")
+        print(
+            "Date range filtering enabled for LAB_LOGS STEP_2: "
+            + "; ".join(human_ranges)
+        )
 
     if not args.dry_run:
         unprocessed_root.mkdir(parents=True, exist_ok=True)
@@ -397,6 +537,16 @@ def main() -> int:
         candidate_files.extend(
             sorted(path for path in completed_root.glob("**/*") if path.is_file())
         )
+
+    if date_ranges:
+        filtered_candidates: List[Path] = []
+        for file_path in candidate_files:
+            day_value = extract_date_from_filename(file_path)
+            if day_value is None:
+                continue
+            if date_in_ranges(day_value, date_ranges):
+                filtered_candidates.append(file_path)
+        candidate_files = filtered_candidates
 
     if not candidate_files:
         print("No cleaned lab log files found to process.")
@@ -422,6 +572,8 @@ def main() -> int:
 
         for day_key, day_frame in df.groupby(df.index.date):
             if day_frame.empty:
+                continue
+            if date_ranges and not date_in_ranges(day_key, date_ranges):
                 continue
             resampled = day_frame.resample("1min").mean()
             if resampled.empty:
@@ -476,7 +628,7 @@ def main() -> int:
 
         if args.dry_run:
             print(f"  [dry-run] would write {output_path}")
-        else:
+        elif CREATE_NEW_CSV:
             output_parent.mkdir(parents=True, exist_ok=True)
             merged.reset_index().to_csv(output_path, index=False, float_format="%.5g")
             print(f"  Wrote {output_path}")

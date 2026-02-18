@@ -81,7 +81,13 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.file_selection import newest_order_key, select_latest_candidate
+from MASTER.common.file_selection import (
+    file_name_in_date_range,
+    load_date_range_from_config,
+    newest_order_key,
+    select_latest_candidate,
+    sync_unprocessed_with_date_range,
+)
 from MASTER.common.path_config import (
     get_master_config_root,
     get_repo_root,
@@ -100,6 +106,7 @@ from MASTER.common.step1_shared import (
     collect_columns,
     load_itineraries_from_file,
     save_metadata,
+    resolve_step1_plot_options,
     validate_step1_input_file_args,
     y_pos,
 )
@@ -110,9 +117,6 @@ task_number = 1
 start_execution_time_counting = datetime.now()
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
-
-
-
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_1 (RAW->CLEAN).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -128,8 +132,6 @@ print = build_step1_filtered_print(
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
 
-
-
 start_timer(__file__)
 config_root = get_master_config_root()
 config_file_path = config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_task_1.yaml"
@@ -142,31 +144,14 @@ fallback_parameter_config_file_path = (
 print(f"Using config file: {config_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
-debug_mode = bool(config.get("debug_mode", False))
-
-
-
+debug_mode = False
 
 home_path = str(resolve_home_path_from_config(config))
 
 # ~/DATAFLOW_v3/MASTER/ANCILLARY/QUALITY_ASSURANCE
 REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "ANCILLARY" / "QUALITY_ASSURANCE" / "REFERENCE_TABLES"
 
-
-
-
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
-
-
-
-
-
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -234,7 +219,6 @@ if task_number == 5:
 else:
     output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
 
-
 # Define directory paths relative to base_directory
 base_directories = {
     "stratos_list_events_directory": os.path.join(home_directory, "STRATOS_XY_DIRECTORY"),
@@ -252,6 +236,7 @@ base_directories = {
     "temp_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TEMP_FILES"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/UNPROCESSED_DIRECTORY"),
+    "out_of_date_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/OUT_OF_DATE_DIRECTORY"),
     "error_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/ERROR_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
@@ -263,9 +248,16 @@ base_directories = {
     "metadata_directory": metadata_directory,
 }
 
+(
+    plot_mode,
+    create_plots,
+    create_essential_plots,
+    save_plots,
+    create_pdf,
+    show_plots,
+    create_debug_plots,
+) = resolve_step1_plot_options(config)
 
-save_plots = config["save_plots"]
-create_debug_plots = bool(config.get("create_debug_plots", False))
 debug_plot_directory = os.path.join(
     base_directories["base_plots_directory"],
     "DEBUG_PLOTS",
@@ -274,7 +266,6 @@ debug_plot_directory = os.path.join(
 debug_fig_idx = 1
 if create_debug_plots:
     os.makedirs(debug_plot_directory, exist_ok=True)
-
 
 def _debug_plot_filter_group(
     df: pd.DataFrame,
@@ -326,7 +317,6 @@ csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 status_filename_base = ""
 status_execution_date = None
-
 
 raw_directory = base_directories["raw_directory"]
 unprocessed_directory = base_directories["unprocessed_directory"]
@@ -394,7 +384,6 @@ for d in LEVELS:
 
     seen |= (current_files - duplicates)
 
-
 # Search in all this directories for empty files and move them to the empty_files_directory
 for directory in [raw_directory, unprocessed_directory, processing_directory, completed_directory]:
     files = os.listdir(directory)
@@ -415,7 +404,6 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             shutil.move(file_empty, empty_destination_path)
             now = time.time()
             os.utime(empty_destination_path, (now, now))
-
 
 # Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
@@ -442,7 +430,6 @@ for file_name in files_to_move:
         print(f"Move {file_name} to UNPROCESSED directory.")
     except Exception as e:
         print(f"Failed to move {file_name}: {e}")
-
 
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
@@ -489,26 +476,24 @@ ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
-
-
-
-
-
-
 not_use_q_semisum = False
 
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
+fast_mode = False
+debug_mode = False
 last_file_test = config["last_file_test"]
 
 # Accessing all the variables from the configuration
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
-limit = config["limit"]
-limit_number = config["limit_number"]
+(
+    plot_mode,
+    create_plots,
+    create_essential_plots,
+    save_plots,
+    create_pdf,
+    show_plots,
+    create_debug_plots,
+) = resolve_step1_plot_options(config)
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 force_replacement = config["force_replacement"]
 article_format = config["article_format"]
 
@@ -535,30 +520,10 @@ time_window_filtering = config["time_window_filtering"]
 
 EXPECTED_COLUMNS_config = config["EXPECTED_COLUMNS_config"]
 
-residual_plots_fast = config["residual_plots_fast"]
-
-timtrack_iteration_fast = config["timtrack_iteration_fast"]
-timtrack_iteration_debug = config["timtrack_iteration_debug"]
-
-time_calibration_fast = config["time_calibration_fast"]
-time_calibration_debug = config["time_calibration_debug"]
-
-charge_front_back_fast = config["charge_front_back_fast"]
-charge_front_back_debug = config["charge_front_back_debug"]
-
-create_plots = config["create_plots"]
-
-
 complete_reanalysis = config["complete_reanalysis"]
 
-
-limit = config["limit"]
-limit_fast = config["limit_fast"]
-limit_debug = config["limit_debug"]
-
-limit_number = config["limit_number"]
-limit_number_fast = config["limit_number_fast"]
-limit_number_debug = config["limit_number_debug"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
@@ -663,15 +628,6 @@ scatter_2d_and_fit_new_ylim_top = config.get("scatter_2d_and_fit_new_ylim_top", 
 calibrate_strip_T_dif_T_rel_th = config.get("calibrate_strip_T_dif_T_rel_th", 0.1)
 calibrate_strip_T_dif_T_abs_th = config.get("calibrate_strip_T_dif_T_abs_th", 1)
 
-
-
-
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
@@ -724,27 +680,13 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if fast_mode:
+if False:
     print('Working in fast mode.')
-    residual_plots = residual_plots_fast
-    timtrack_iteration = timtrack_iteration_fast
-    time_calibration = time_calibration_fast
-    charge_front_back = charge_front_back_fast
-    create_plots = create_plots_fast
-    limit = limit_fast
-    limit_number = limit_number_fast
 
-if debug_mode:
+if False:
     print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = timtrack_iteration_debug
-    time_calibration = time_calibration_debug
-    charge_front_back = charge_front_back_debug
-    create_plots = create_plots_debug
-    limit = limit_debug
-    limit_number = limit_number_debug
 
-if debug_mode:
+if False:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
 
@@ -781,11 +723,9 @@ Q_B_right_pre_cal_ST = Q_side_right_pre_cal_ST
 Q_left_side = Q_side_left_pre_cal_ST
 Q_right_side = Q_side_right_pre_cal_ST
 
-
 # Y ---------------------------------------------------------------------------
 y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
             np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
 
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 y_width_P1_and_P3 = y_widths[0]
@@ -810,7 +750,7 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if debug_mode:
+if False:
     T_clip_min = T_clip_min_debug
     T_clip_max = T_clip_max_debug
     Q_clip_min = Q_clip_min_debug
@@ -828,7 +768,6 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-
 # the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
 # 0 -> regular analysis
 # 1 -> repeated, careful analysis
@@ -845,7 +784,6 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
 
 filter_metrics: dict[str, float] = {}
 
-
 def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
     pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
@@ -853,7 +791,6 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
     print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
 
 reprocessing_parameters = pd.DataFrame()
-
 
 def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
     """Return matching reprocessing parameters for *basename* or an empty frame."""
@@ -870,7 +807,6 @@ def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basenam
         return pd.DataFrame()
     matches = table_df[table_df["filename_base"] == basename]
     return matches.reset_index(drop=True)
-
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -985,7 +921,6 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
     offset = ( plateau_left + plateau_right ) / 2
     
     return offset
-
 
 def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     
@@ -1112,11 +1047,9 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
         
     return pedestal
 
-
 enumerate = builtins.enumerate
 def polynomial(x, *coeffs):
     return sum(c * x**i for i, c in enumerate(coeffs))
-
 
 def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     global fig_idx
@@ -1187,7 +1120,6 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
         plt.close()
     return coeffs
 
-
 def interpolate_fast_charge(width):
         """
         Interpolates the Fast Charge for given Width values using cubic spline interpolation.
@@ -1226,7 +1158,6 @@ def summary(vector):
     mu, std = norm.fit(vector)
     return mu
 
-
 def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     global fig_idx, coincidence_window_cal_ns
     fig = plt.figure(figsize=(8, 5))
@@ -1259,7 +1190,6 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
         plt.savefig(save_fig_path, format='png')
     if show_plots: plt.show()
     plt.close()
-
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
     global fig_idx
@@ -1392,7 +1322,6 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         plt.show()
     plt.close()
 
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------- Data reading and preprocessing ---------------------")
@@ -1428,7 +1357,6 @@ def process_file(source_path, dest_path):
 def get_file_path(directory, file_name):
     return os.path.join(directory, file_name)
 
-
 def _as_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -1441,7 +1369,6 @@ def _as_bool(value: object, default: bool = False) -> bool:
         return False
     return default
 
-
 def _coerce_z_vector(value: object) -> tuple[float, float, float, float] | None:
     if not isinstance(value, (list, tuple, np.ndarray)) or len(value) != 4:
         return None
@@ -1453,11 +1380,9 @@ def _coerce_z_vector(value: object) -> tuple[float, float, float, float] | None:
         return None
     return vector
 
-
 def _normalize_z_vector(z_vector: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
     base = float(z_vector[0])
     return tuple(round(float(value) - base, 6) for value in z_vector)
-
 
 def _iter_priority_vectors(value: object) -> list[tuple[float, float, float, float]]:
     if value is None:
@@ -1473,7 +1398,6 @@ def _iter_priority_vectors(value: object) -> list[tuple[float, float, float, flo
                 vectors.append(coerced)
         return vectors
     return []
-
 
 def _load_task_1_z_priority_settings(config_obj: dict) -> dict[str, object]:
     settings: dict[str, object] = {
@@ -1515,7 +1439,6 @@ def _load_task_1_z_priority_settings(config_obj: dict) -> dict[str, object]:
 
     return settings
 
-
 def _load_simulated_z_lookup(
     csv_path: Path,
 ) -> dict[str, tuple[float, float, float, float]]:
@@ -1553,7 +1476,6 @@ def _load_simulated_z_lookup(
 
     return lookup
 
-
 def _z_vector_matches_priority(
     z_vector: tuple[float, float, float, float],
     settings: dict[str, object],
@@ -1569,7 +1491,6 @@ def _z_vector_matches_priority(
     if match_mode == "both":
         return abs_vector in priority_abs or norm_vector in priority_norm
     return abs_vector in priority_abs
-
 
 def _select_latest_candidate_with_z_priority(
     files: Iterable[str],
@@ -1610,9 +1531,6 @@ def _select_latest_candidate_with_z_priority(
 
     return select_latest_candidate(candidates, station) if fallback_to_latest else None
 
-
-save_plots = config["save_plots"]
-
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
     # If save_plots is False, skip creating the figure_directory
@@ -1620,9 +1538,39 @@ for directory in base_directories.values():
         continue
     os.makedirs(directory, exist_ok=True)
 
+sync_unprocessed_with_date_range(
+    config=config,
+    unprocessed_directory=base_directories["unprocessed_directory"],
+    out_of_date_directory=base_directories["out_of_date_directory"],
+    log_fn=print,
+)
 unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
 completed_files = os.listdir(base_directories["completed_directory"])
+date_range_start, date_range_end = load_date_range_from_config(config)
+if date_range_start is not None or date_range_end is not None:
+    processing_before = len(processing_files)
+    completed_before = len(completed_files)
+    processing_files = [
+        name
+        for name in processing_files
+        if file_name_in_date_range(name, date_range_start, date_range_end)
+    ]
+    completed_files = [
+        name
+        for name in completed_files
+        if file_name_in_date_range(name, date_range_start, date_range_end)
+    ]
+    skipped_processing = processing_before - len(processing_files)
+    skipped_completed = completed_before - len(completed_files)
+    if skipped_processing > 0:
+        print(
+            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY."
+        )
+    if skipped_completed > 0:
+        print(
+            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
+        )
 
 task_1_z_priority_settings = _load_task_1_z_priority_settings(config)
 simulated_z_lookup: dict[str, tuple[float, float, float, float]] = {}
@@ -1873,7 +1821,6 @@ if status_execution_date is not None:
         completion_fraction=0.25,
     )
 
-
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
 right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 
@@ -1910,7 +1857,6 @@ def _apply_bounds(frame: pd.DataFrame, column_names: Iterable[str], lower: float
     subset = frame.loc[:, cols]
     frame.loc[:, cols] = subset.where((subset >= lower) & (subset <= upper), 0)
 
-
 # Function to process each line
 def process_line(line):
     line = ZERO_TOKEN_PATTERN.sub('0', line)  # Replace '0000.0000' with '0'
@@ -1937,14 +1883,6 @@ def is_valid_date(values):
         return True
     except ValueError:  # In case of non-numeric values
         return False
-
-
-
-
-
-
-
-
 
 # -----------------------------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------------------------
@@ -2029,7 +1967,6 @@ if 'column_6' in read_df.columns:
 if value_columns:
     read_df[value_columns] = read_df[value_columns].astype(np.float32, copy=False)
 
-
 print("----------------------------------------------------------------------")
 print("-------------------------- Filter 1: by date -------------------------")
 print("----------------------------------------------------------------------")
@@ -2068,7 +2005,6 @@ start_time = datetime_value
 end_time = end_datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
-
 
 # -------------------------------------------------------------------------------
 # ------------ Input file and data managing to select configuration -------------
@@ -2149,8 +2085,6 @@ else:
     z_positions = np.array([0, 150, 300, 450])  # In mm
     z_source = "default_no_input_file"
 
-
-
 def _zpos_from_conf(row):
     return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
 
@@ -2182,8 +2116,6 @@ if np.isnan(z_positions).any() or np.all(z_positions == 0):
         z_positions = np.array([0, 150, 300, 450])  # In mm
         z_source = "default_invalid_without_input"
 
-
-
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
@@ -2193,8 +2125,6 @@ print(
     f"param_hash={simulated_param_hash or 'NA'} z_vector_mm={z_vector_mm}",
     force=True,
 )
-
-
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -2293,7 +2223,6 @@ if self_trigger:
                     col4 = f'{key}_4'
                     working_st_df[[col2, col4]] = working_st_df[[col4, col2]].values  # swap columns
 
-
 # ----------------------------------------------------------------------------------
 # Count the number of non-zero entries per channel in the whole dataframe ----------
 # ----------------------------------------------------------------------------------
@@ -2308,7 +2237,6 @@ for key, idx_range in column_indices.items():
         count = (working_df[colname] != 0).sum()
         global_var_name = f"{key}_{i}_entries_original"
         global_variables[global_var_name] = count
-
 
 # ----------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------
@@ -2341,7 +2269,6 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
     df[column_name] = df.apply(_derive_tt, axis=1)
     df[column_name] = df[column_name].apply(builtins.int)
     return df
-
 
 # Apply the function to the DataFrame
 working_df = compute_tt(working_df, "raw_tt")
@@ -2413,7 +2340,6 @@ if self_trigger:
 
         if show_plots: plt.show()
         plt.close()
-
 
 # -----------------------------------------------------------------------------
 # New channel-wise plot -------------------------------------------------------
@@ -2497,7 +2423,6 @@ if create_plots:
 
     if show_plots: plt.show()
     plt.close(fig_Q)
-
 
 if self_trigger:
     if create_plots or create_essential_plots:
@@ -2668,7 +2593,6 @@ _apply_bounds(working_df, T_B_cols, T_B_left_pre_cal, T_B_right_pre_cal)
 _apply_bounds(working_df, Q_F_cols, Q_F_left_pre_cal, Q_F_right_pre_cal)
 _apply_bounds(working_df, Q_B_cols, Q_B_left_pre_cal, Q_B_right_pre_cal)
 
-
 if self_trigger:
     working_st_df.fillna(0, inplace=True)
 
@@ -2694,7 +2618,6 @@ if self_trigger:
     _apply_bounds(working_st_df, st_T_B_cols, T_B_left_pre_cal_ST, T_B_right_pre_cal_ST)
     _apply_bounds(working_st_df, st_Q_F_cols, Q_F_left_pre_cal_ST, Q_F_right_pre_cal_ST)
     _apply_bounds(working_st_df, st_Q_B_cols, Q_B_left_pre_cal_ST, Q_B_right_pre_cal_ST)
-
 
 # -----------------------------------------------------------------------------
 # New channel-wise plot -------------------------------------------------------
@@ -2774,7 +2697,6 @@ if create_plots:
 
     if show_plots: plt.show()
     plt.close(fig_Q)
-
 
 # Per trigger type
 create_super_essential_plots = False
@@ -2859,7 +2781,6 @@ if create_plots or create_super_essential_plots:
         if show_plots: plt.show()
         plt.close(fig_Q)
 
-
 if create_plots or create_essential_plots:
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
@@ -2916,7 +2837,6 @@ if create_plots or create_essential_plots:
 
     # Close the plot to avoid excessive memory usage
     plt.close(fig_TQ)
-
 
 if self_trigger:
     if create_plots or create_essential_plots:
@@ -2992,7 +2912,6 @@ if low_value_cols:
     os.utime(final_path, (now, now))
     sys.exit(1)
 
-
 # Go plane by plane and strip by strip, and if F is zero or B is zero, set the other to zero too, per row.
 for plane in range(1, 5):
     for strip in range(1, 5):
@@ -3015,7 +2934,6 @@ for plane in range(1, 5):
             percentage = (changes_made / len(working_df)) * 100
             print(f"[P{plane}s{strip}] Set to zero {changes_made} values, {percentage:.2f}% of total rows.")
             global_variables[f"zeroed_percentage_P{plane}s{strip}"] = percentage
-
 
 if time_window_filtering:
     
@@ -3131,12 +3049,9 @@ if time_window_filtering:
         if show_plots: plt.show()
         plt.close(fig)
 
-
 if os.path.exists(temp_file):
     print("Removing temporary file...")
     os.remove(temp_file)
-
-
 
 if create_plots or create_essential_plots:
     # Initialize figure and axes for scatter plot of Time vs Charge
@@ -3195,7 +3110,6 @@ if create_plots or create_essential_plots:
     # Close the plot to avoid excessive memory usage
     plt.close(fig_TQ)
 
-
 # -----------------------------------------------------------------------------
 # Create and save the PDF -----------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -3227,8 +3141,6 @@ if create_pdf:
                 print(f"Error: {e.filename} - {e.strerror}.")
                 
 
-
-
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
 os.makedirs(f"{output_directory}", exist_ok=True)
@@ -3241,7 +3153,6 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 # --- Example: your cleaned DataFrame is called working_df ---
 # (Here, you would have your data cleaning code before saving)
 # working_df = ...
-
 
 # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
 Q_F_cols = collect_columns(working_df.columns, Q_FRONT_PATTERN)
@@ -3285,7 +3196,6 @@ if component_cols:
         removed_all_zero,
         len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
     )
-
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 # Compute clean trigger types on the filtered dataframe
@@ -3338,13 +3248,8 @@ for key, idx_range in column_indices.items():
         global_var_name = f"{key}_{i}_entries_final"
         global_variables[global_var_name] = count
 
-
-
-
-
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
-
 
 # End of the execution time
 end_time_execution = datetime.now()
@@ -3357,7 +3262,6 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
-
 
  
 # -------------------------------------------------------------------------------
@@ -3407,7 +3311,6 @@ metadata_execution_csv_path = save_metadata(
     },
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
-
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------
@@ -3469,7 +3372,6 @@ if "param_hash" not in working_df.columns:
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Cleaned dataframe saved to: {OUT_PATH}")
-
 
 # Move the original datafile to COMPLETED -------------------------------------
 print("Moving file to COMPLETED directory...")

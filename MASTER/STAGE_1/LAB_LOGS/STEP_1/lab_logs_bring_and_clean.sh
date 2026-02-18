@@ -63,6 +63,11 @@ fi
 station=${args[0]}
 echo "Station: $station"
 
+if [[ ! "$station" =~ ^[1-4]$ ]]; then
+  log_error "Invalid station number. Please provide a number between 1 and 4."
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_DIR="$SCRIPT_DIR"
 while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
@@ -72,10 +77,235 @@ done
 # STATUS_TIMESTAMP=""
 # STATUS_CSV=""
 
+LAB_LOGS_CONFIG_SHARED="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/config_lab_logs.yaml"
+LAB_LOGS_CONFIG_STEP1="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/STEP_1/config_step_1.yaml"
+LAB_LOGS_COLUMN_COUNTS_CSV="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/STEP_1/config_step_1.csv"
+
+date_range_filter_enabled=false
+declare -a date_ranges_start_epochs=()
+declare -a date_ranges_end_epochs=()
+declare -a date_ranges_display_pairs=()
+
+load_lab_logs_date_ranges() {
+  local result
+  if ! result=$(python3 - "$LAB_LOGS_CONFIG_SHARED" "$LAB_LOGS_CONFIG_STEP1" <<'PY'
+import sys
+import shlex
+import datetime as dt
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+shared_path = sys.argv[1]
+step_path = sys.argv[2]
+
+def load_yaml(path):
+    if yaml is None:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def normalize_iso(text: str) -> str:
+    text = text.strip()
+    if text.endswith("Z") and "T" in text:
+        text = text[:-1] + "+00:00"
+    return text
+
+def parse_epoch(value, is_end=False):
+    if value in ("", None):
+        return None
+    text = normalize_iso(str(value))
+    if not text:
+        return None
+    parsed = None
+    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            if fmt is None:
+                parsed = dt.datetime.fromisoformat(text)
+            else:
+                parsed = dt.datetime.strptime(text, fmt)
+            break
+        except Exception:
+            parsed = None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    else:
+        parsed = parsed.astimezone(dt.timezone.utc)
+    if is_end and "T" not in text and " " not in text:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return int(parsed.timestamp())
+
+ranges = []
+
+def add_interval(start_raw, end_raw):
+    start_epoch = parse_epoch(start_raw, is_end=False)
+    end_epoch = parse_epoch(end_raw, is_end=True)
+    if start_epoch is None and end_epoch is None:
+        return
+    start_label = "" if start_raw in (None, "") else str(start_raw)
+    end_label = "" if end_raw in (None, "") else str(end_raw)
+    ranges.append((start_epoch, end_epoch, start_label, end_label))
+
+def collect(source):
+    if not isinstance(source, dict):
+        return
+    legacy = source.get("date_range")
+    if isinstance(legacy, dict):
+        add_interval(legacy.get("start"), legacy.get("end"))
+    rlist = source.get("date_ranges")
+    if isinstance(rlist, list):
+        for item in rlist:
+            if isinstance(item, dict):
+                add_interval(item.get("start"), item.get("end"))
+    nested = source.get("lab_logs_date_selection")
+    if isinstance(nested, dict):
+        collect(nested)
+
+for node in (load_yaml(shared_path), load_yaml(step_path)):
+    collect(node)
+
+deduped = []
+seen = set()
+for item in ranges:
+    if item in seen:
+        continue
+    seen.add(item)
+    deduped.append(item)
+
+epochs = ";".join(
+    f"{'' if start is None else start},{'' if end is None else end}"
+    for start, end, _, _ in deduped
+)
+labels = ";".join(f"{a}|{b}" for _, _, a, b in deduped)
+print(f"LAB_LOGS_DATE_RANGES_EPOCHS={shlex.quote(epochs)}")
+print(f"LAB_LOGS_DATE_RANGES_LABELS={shlex.quote(labels)}")
+PY
+  ); then
+    return 0
+  fi
+
+  eval "$result"
+  local serialized="${LAB_LOGS_DATE_RANGES_EPOCHS:-}"
+  local labels="${LAB_LOGS_DATE_RANGES_LABELS:-}"
+  date_ranges_start_epochs=()
+  date_ranges_end_epochs=()
+  date_ranges_display_pairs=()
+  date_range_filter_enabled=false
+
+  if [[ -n "$serialized" ]]; then
+    local -a epoch_chunks=()
+    local -a label_chunks=()
+    IFS=';' read -r -a epoch_chunks <<< "$serialized"
+    IFS=';' read -r -a label_chunks <<< "$labels"
+    local idx
+    for idx in "${!epoch_chunks[@]}"; do
+      local chunk="${epoch_chunks[idx]}"
+      [[ -z "$chunk" || "$chunk" != *,* ]] && continue
+      local start_epoch="${chunk%%,*}"
+      local end_epoch="${chunk#*,}"
+      [[ -n "$start_epoch" && ! "$start_epoch" =~ ^[0-9]+$ ]] && continue
+      [[ -n "$end_epoch" && ! "$end_epoch" =~ ^[0-9]+$ ]] && continue
+      [[ -z "$start_epoch" && -z "$end_epoch" ]] && continue
+      date_ranges_start_epochs+=("$start_epoch")
+      date_ranges_end_epochs+=("$end_epoch")
+
+      local label_chunk="${label_chunks[idx]:-}"
+      local start_label=""
+      local end_label=""
+      if [[ "$label_chunk" == *"|"* ]]; then
+        start_label="${label_chunk%%|*}"
+        end_label="${label_chunk#*|}"
+      fi
+      [[ -z "$start_label" ]] && start_label="-inf"
+      [[ -z "$end_label" ]] && end_label="+inf"
+      date_ranges_display_pairs+=("${start_label} to ${end_label}")
+    done
+  fi
+
+  if (( ${#date_ranges_start_epochs[@]} > 0 )); then
+    date_range_filter_enabled=true
+    local range_display
+    range_display="$(printf '%s; ' "${date_ranges_display_pairs[@]}")"
+    range_display="${range_display%; }"
+    log_info "Date range filtering enabled (${#date_ranges_start_epochs[@]} interval(s)): ${range_display}."
+  fi
+}
+
+filename_matches_date_ranges() {
+  local file_path="$1"
+  if ! $date_range_filter_enabled; then
+    return 0
+  fi
+
+  local base_name="${file_path##*/}"
+  if [[ ! "$base_name" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then
+    return 1
+  fi
+
+  local ymd="${BASH_REMATCH[1]}"
+  local file_epoch
+  file_epoch=$(date -u -d "${ymd} 12:00:00" +%s 2>/dev/null) || return 1
+
+  local idx
+  for idx in "${!date_ranges_start_epochs[@]}"; do
+    local start_epoch="${date_ranges_start_epochs[idx]}"
+    local end_epoch="${date_ranges_end_epochs[idx]}"
+    if [[ -n "$start_epoch" && "$file_epoch" -lt "$start_epoch" ]]; then
+      continue
+    fi
+    if [[ -n "$end_epoch" && "$file_epoch" -gt "$end_epoch" ]]; then
+      continue
+    fi
+    return 0
+  done
+  return 1
+}
+
+declare -A COLUMN_COUNTS=(
+  ["Flow0_"]=5
+  ["hv0_"]=22
+  ["Odroid_"]=4
+  ["rates_"]=12
+  ["sensors_bus0_"]=8
+  ["sensors_bus1_"]=8
+)
+
+load_column_counts_config() {
+  local cfg="$LAB_LOGS_COLUMN_COUNTS_CSV"
+  [[ -f "$cfg" ]] || return 0
+  local header_seen=false
+  while IFS=',' read -r prefix expected _rest; do
+    prefix="${prefix//$'\r'/}"
+    expected="${expected//$'\r'/}"
+    if ! $header_seen; then
+      header_seen=true
+      if [[ "${prefix,,}" == "prefix" ]]; then
+        continue
+      fi
+    fi
+    [[ -z "$prefix" || -z "$expected" ]] && continue
+    [[ ! "$expected" =~ ^[0-9]+$ ]] && continue
+    COLUMN_COUNTS["$prefix"]="$expected"
+  done < "$cfg"
+}
+
+load_lab_logs_date_ranges
+load_column_counts_config
+
 # ----------------------------------------------
 
 # Additional paths
 mingo_direction="mingo0$station"
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
+RSYNC_RSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=15"
 
 python_script_path="$HOME/DATAFLOW_v3/MASTER/STAGE_1/LAB_LOGS/STEP_2/log_aggregate_and_join.py"
 
@@ -105,17 +335,19 @@ mkdir -p "${STEP1_ROOT}" "${STEP1_INPUT_UNPROCESSED}" "${STEP1_INPUT_COMPLETED}"
 
 local_destination="${STEP1_INPUT_UNPROCESSED}"
 OUTPUT_DIR="${STEP1_OUTPUT}"
+rsync_file_list=""
+filtered_rsync_file_list=""
+
+cleanup_tmp_files() {
+    [[ -n "$rsync_file_list" ]] && rm -f "$rsync_file_list"
+    [[ -n "$filtered_rsync_file_list" ]] && rm -f "$filtered_rsync_file_list"
+}
+trap cleanup_tmp_files EXIT
 
 
 echo '--------------------------- bash script starts ---------------------------'
 
 # Sync data from the remote server
-EXCLUDES=(
-    "--exclude=/clean_*"
-    "--exclude=/done/clean_*"
-    "--exclude=/done/merged_*"
-)
-
 declare -A SEEN_RELATIVE_PATHS
 
 if [[ -d "${STEP1_INPUT_UNPROCESSED}" ]]; then
@@ -134,22 +366,54 @@ if [[ -d "${STEP1_INPUT_COMPLETED}" ]]; then
     done < <(find "${STEP1_INPUT_COMPLETED}" -type f -print0 2>/dev/null || true)
 fi
 
-for rel_path in "${!SEEN_RELATIVE_PATHS[@]}"; do
-    EXCLUDES+=("--exclude=/${rel_path}")
-done
+rsync_file_list=$(mktemp)
+filtered_rsync_file_list=$(mktemp)
 
-rsync -avz "${EXCLUDES[@]}" \
-    "$mingo_direction:/home/rpcuser/logs/" "${local_destination}/"
+remote_find_cmd=$(printf 'cd %q && find . -type f -name %s -printf %s' \
+  "/home/rpcuser/logs" "'*.log'" "'%P\0'")
+
+if ssh "${SSH_OPTS[@]}" "$mingo_direction" "$remote_find_cmd" > "$rsync_file_list"; then
+    if [[ -s "$rsync_file_list" ]]; then
+        : > "$filtered_rsync_file_list"
+        while IFS= read -r -d '' candidate; do
+            candidate=${candidate//$'\r'/}
+            candidate=${candidate#./}
+            [[ -z "$candidate" ]] && continue
+
+            local_name="${candidate##*/}"
+            if [[ "$local_name" == clean_* || "$local_name" == merged_* ]]; then
+                continue
+            fi
+            if [[ "$candidate" == done/clean_* || "$candidate" == done/merged_* ]]; then
+                continue
+            fi
+            if [[ -n ${SEEN_RELATIVE_PATHS["$candidate"]+_} ]]; then
+                continue
+            fi
+            if ! filename_matches_date_ranges "$candidate"; then
+                continue
+            fi
+            printf '%s\0' "$candidate" >> "$filtered_rsync_file_list"
+        done < "$rsync_file_list"
+
+        if [[ -s "$filtered_rsync_file_list" ]]; then
+            if ! RSYNC_RSH="$RSYNC_RSH_CMD" rsync -avz --ignore-existing \
+                --files-from="$filtered_rsync_file_list" \
+                --from0 \
+                "$mingo_direction:/home/rpcuser/logs/" "${local_destination}/"; then
+                log_warn "rsync encountered an error while fetching lab logs."
+            fi
+        else
+            echo "No .log files eligible for transfer after filters."
+        fi
+    else
+        echo "No .log files found to transfer."
+    fi
+else
+    log_warn "unable to list remote lab logs from ${mingo_direction}."
+fi
 
 echo 'Received data from remote computer'
-
-declare -A COLUMN_COUNTS
-COLUMN_COUNTS["Flow0_"]=5
-COLUMN_COUNTS["hv0_"]=22
-COLUMN_COUNTS["Odroid_"]=4
-COLUMN_COUNTS["rates_"]=12
-COLUMN_COUNTS["sensors_bus0_"]=8
-COLUMN_COUNTS["sensors_bus1_"]=8
 
 move_to_completed() {
     local file_path=$1
@@ -169,6 +433,11 @@ process_file() {
     local file=$1
     local move_after=$2
     local filename=$(basename "$file")
+
+    if ! filename_matches_date_ranges "$filename"; then
+        return
+    fi
+
     local output_file="$OUTPUT_DIR/$filename"
 
     # Check if the file needs to be processed

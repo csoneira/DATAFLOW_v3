@@ -324,6 +324,10 @@ def _append_param_row(
     else:
         mesh = pd.DataFrame()
         mesh["done"] = []
+    if "param_set_id" not in mesh.columns:
+        mesh["param_set_id"] = pd.NA
+    if "param_date" not in mesh.columns:
+        mesh["param_date"] = pd.NA
     mesh["done"] = mesh["done"].fillna(0).astype(int)
 
     if z_positions.empty:
@@ -433,7 +437,18 @@ def _append_param_row(
                     "eff_p4": float(effs[3]),
                 }
             )
-    mesh = pd.concat([mesh, pd.DataFrame(new_rows)], ignore_index=True)
+    new_rows_df = pd.DataFrame(new_rows)
+    for col in mesh.columns:
+        if col not in new_rows_df.columns:
+            new_rows_df[col] = pd.NA
+    for col in new_rows_df.columns:
+        if col not in mesh.columns:
+            mesh[col] = pd.NA
+    new_rows_df = new_rows_df[mesh.columns]
+    if mesh.empty:
+        mesh = new_rows_df.copy()
+    else:
+        mesh = pd.concat([mesh, new_rows_df], ignore_index=True)
     mesh = _assign_step_ids(mesh)
     if "param_set_id" in mesh.columns:
         mesh = mesh.sort_values("param_set_id").reset_index(drop=True)

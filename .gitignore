@@ -3,6 +3,7 @@
 # ----------------------------------------------------------------------
 .github/workflows/bug-detector.yml
 add_to_rclone.info
+/home/mingo/DATAFLOW_v3/OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/TERMINAL_PASSWORD.txt
 
 # ----------------------------------------------------------------------
 # Runtime directories (data-heavy, generated outside source control)
@@ -10,7 +11,7 @@ add_to_rclone.info
 STATIONS/
 NOT_ESSENTIAL/
 OPERATIONS_RUNTIME/
-EXECUTION_LOGS/
+EXECUTION_LOGS
 
 # ----------------------------------------------------------------------
 # Runtime locks and throttle markers
@@ -53,6 +54,7 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 *.txt
 !MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_parameters.csv
 !MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_*/config_parameters_task_*.csv
+!MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/config_lab_logs.csv
 !grafana/**/*.json
 
 # ----------------------------------------------------------------------

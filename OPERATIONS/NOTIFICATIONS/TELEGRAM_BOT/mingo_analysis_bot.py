@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import shlex
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -14,71 +16,18 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 TELEGRAM_DIR = Path(__file__).resolve().parent
 TOKEN_PATH = TELEGRAM_DIR / "API_TOKEN.txt"
 RESTART_SCRIPT = TELEGRAM_DIR / "kill_bot_and_restart.sh"
+TERMINAL_PASSWORD_PATH = TELEGRAM_DIR / "TERMINAL_PASSWORD.txt"
 
 PDF_TARGETS = {
-    "fill_factor_timeseries": {
+    "definitive_execution_report": {
         "path": BASE_DIR
         / "MASTER"
         / "ANCILLARY"
         / "PLOTTERS"
-        / "FILL_FACTOR"
+        / "DEFINITIVE_EXECUTION"
         / "PLOTS"
-        / "fill_factor_timeseries.pdf",
-        "description": "Fill-factor coverage report",
-    },
-    "execution_report_realtime_hv": {
-        "path": BASE_DIR
-        / "MASTER"
-        / "ANCILLARY"
-        / "PLOTTERS"
-        / "METADATA"
-        / "EXECUTION"
-        / "PLOTS"
-        / "execution_metadata_report_real_time_hv.pdf",
-        "description": "Execution metadata report (real-time HV)",
-    },
-    "execution_report_zoomed": {
-        "path": BASE_DIR
-        / "MASTER"
-        / "ANCILLARY"
-        / "PLOTTERS"
-        / "METADATA"
-        / "EXECUTION"
-        / "PLOTS"
-        / "execution_metadata_report_zoomed.pdf",
-        "description": "Execution metadata report (zoomed)",
-    },
-    "online_file_count": {
-        "path": BASE_DIR
-        / "MASTER"
-        / "ANCILLARY"
-        / "PLOTTERS"
-        / "ONLINE_FILE_COUNT"
-        / "PLOTS"
-        / "online_file_count_report.pdf",
-        "description": "Online file count report",
-    },
-    "execution_report_files_brought": {
-        "path": BASE_DIR
-        / "MASTER"
-        / "ANCILLARY"
-        / "PLOTTERS"
-        / "METADATA"
-        / "EXECUTION"
-        / "PLOTS"
-        / "execution_metadata_report_files_brought.pdf",
-        "description": "Files brought view (execution timestamp on X axis)",
-    },
-    "execution_report_files_brought_zoomed": {
-        "path": BASE_DIR
-        / "MASTER"
-        / "ANCILLARY"
-        / "PLOTTERS"
-        / "METADATA"
-        / "EXECUTION"
-        / "PLOTS"
-        / "execution_metadata_report_files_brought_zoomed.pdf",
-        "description": "Files brought view (zoomed real-time window)",
+        / "definitive_execution_map_report.pdf",
+        "description": "Definitive execution map report",
     },
 }
 
@@ -86,6 +35,7 @@ CLEANER_SCRIPT = (
     BASE_DIR / "OPERATIONS" / "MAINTENANCE" / "CLEANERS" / "clean_dataflow.sh"
 )
 MAX_MESSAGE_CHARS = 3500
+TERMINAL_COMMAND_TIMEOUT_SEC = 300
 
 HELP_TEXT = (
     "===========================================\n"
@@ -94,15 +44,12 @@ HELP_TEXT = (
     "General Commands:\n"
     "  /start or /help - Display this guide.\n\n"
     "PDF Reports:\n"
-    "  /fill_factor_timeseries - Fill-factor coverage PDF.\n"
-    "  /execution_report_realtime_hv - Execution metadata (real-time HV overlay).\n"
-    "  /execution_report_zoomed - Execution metadata (zoomed view).\n"
-    "  /online_file_count - Online file count report.\n"
-    "  /execution_report_files_brought - Files brought (execution-time x-axis).\n"
-    "  /execution_report_files_brought_zoomed - Files brought (zoomed real-time window).\n\n"
+    "  /definitive_execution_report - Definitive execution map PDF.\n\n"
     "Maintenance Tools:\n"
     "  /clean_dataflow_status - Run clean_dataflow.sh --compact to show disk usage.\n"
     "  /clean_dataflow_force - Run clean_dataflow.sh --force --compact (temps, plots, completed; never metadata).\n"
+    "  /terminal <password> - Enable terminal mode for this chat.\n"
+    "  /exit - Disable terminal mode.\n"
     "  /restart_bot - Restart this Telegram bot.\n"
     "==========================================="
 )
@@ -122,6 +69,20 @@ def load_token(token_path: Path) -> str:
 
 
 bot = telebot.TeleBot(load_token(TOKEN_PATH))
+TERMINAL_ACTIVE_CHATS: set[int] = set()
+TERMINAL_CHAT_CWDS: dict[int, Path] = {}
+
+
+def load_terminal_password(password_path: Path) -> str | None:
+    if not password_path.exists():
+        logging.warning("Terminal mode disabled: password file not found at %s", password_path)
+        return None
+
+    password = password_path.read_text(encoding="utf-8").strip()
+    if not password:
+        logging.warning("Terminal mode disabled: password file %s is empty", password_path)
+        return None
+    return password
 
 
 def send_pdf(chat_id: int, pdf_path: Path, description: str) -> None:
@@ -143,6 +104,8 @@ def send_pdf(chat_id: int, pdf_path: Path, description: str) -> None:
 def register_static_pdf_command(command: str, path: Path, description: str) -> None:
     @bot.message_handler(commands=[command])
     def handler(message, pdf_path=path, caption=description):  # type: ignore[misc]
+        if maybe_handle_terminal_message(message):
+            return
         send_pdf(message.chat.id, pdf_path, caption)
 
 
@@ -152,6 +115,8 @@ for command, payload in PDF_TARGETS.items():
 
 @bot.message_handler(commands=["start", "help"])
 def send_welcome(message):
+    if maybe_handle_terminal_message(message):
+        return
     bot.send_message(message.chat.id, HELP_TEXT)
 
 
@@ -200,6 +165,90 @@ def run_cleaner(force: bool = False) -> str:
     return truncate_message(message)
 
 
+def get_chat_cwd(chat_id: int) -> Path:
+    cwd = TERMINAL_CHAT_CWDS.get(chat_id, BASE_DIR)
+    if not cwd.exists() or not cwd.is_dir():
+        cwd = BASE_DIR
+        TERMINAL_CHAT_CWDS[chat_id] = cwd
+    return cwd
+
+
+def maybe_handle_cd_command(chat_id: int, command_text: str) -> str | None:
+    try:
+        tokens = shlex.split(command_text)
+    except ValueError as exc:
+        return truncate_message(f"$ {command_text}\nInvalid command syntax: {exc}")
+
+    if not tokens or tokens[0] != "cd":
+        return None
+
+    if len(tokens) > 2:
+        return truncate_message(f"$ {command_text}\nUsage: cd <path>")
+
+    current_cwd = get_chat_cwd(chat_id)
+    target_raw = tokens[1] if len(tokens) == 2 else "~"
+    target_expanded = os.path.expandvars(os.path.expanduser(target_raw))
+    target = Path(target_expanded)
+    if not target.is_absolute():
+        target = (current_cwd / target).resolve()
+    else:
+        target = target.resolve()
+
+    if not target.exists():
+        return truncate_message(
+            f"$ {command_text}\nExit code: 1\n/bin/bash: line 1: cd: {target}: No such file or directory"
+        )
+
+    if not target.is_dir():
+        return truncate_message(
+            f"$ {command_text}\nExit code: 1\n/bin/bash: line 1: cd: {target}: Not a directory"
+        )
+
+    TERMINAL_CHAT_CWDS[chat_id] = target
+    return truncate_message(f"$ {command_text}\nExit code: 0\nCurrent directory: {target}")
+
+
+def run_terminal_command(command_text: str, cwd: Path) -> str:
+    try:
+        result = subprocess.run(
+            command_text,
+            cwd=str(cwd),
+            shell=True,
+            executable="/bin/bash",
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=TERMINAL_COMMAND_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial = "".join(
+            part
+            for part in (
+                exc.stdout or "",
+                "\n" if exc.stdout and exc.stderr else "",
+                exc.stderr or "",
+            )
+        ).strip()
+        body = partial or "<no output>"
+        return truncate_message(
+            f"$ {command_text}\nTimed out after {TERMINAL_COMMAND_TIMEOUT_SEC}s.\n{body}"
+        )
+    except Exception as exc:  # pragma: no cover - defensive for runtime failures
+        return truncate_message(f"$ {command_text}\nExecution failed: {exc}")
+
+    output = "".join(
+        part
+        for part in (
+            result.stdout or "",
+            "\n" if result.stdout and result.stderr else "",
+            result.stderr or "",
+        )
+    ).strip() or "<no output>"
+    return truncate_message(
+        f"$ {command_text}\nExit code: {result.returncode}\n{output}"
+    )
+
+
 def trigger_restart() -> None:
     if not RESTART_SCRIPT.exists():
         raise RuntimeError(f"Restart script not found: {RESTART_SCRIPT}")
@@ -209,6 +258,31 @@ def trigger_restart() -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def maybe_handle_terminal_message(message) -> bool:
+    chat_id = message.chat.id
+    if chat_id not in TERMINAL_ACTIVE_CHATS:
+        return False
+
+    text = (message.text or "").strip()
+    if not text:
+        bot.send_message(chat_id, "Terminal mode is active. Send a command or use /exit.")
+        return True
+
+    if text == "/exit":
+        TERMINAL_ACTIVE_CHATS.discard(chat_id)
+        TERMINAL_CHAT_CWDS.pop(chat_id, None)
+        bot.send_message(chat_id, "Terminal mode disabled.")
+        return True
+
+    cd_response = maybe_handle_cd_command(chat_id, text)
+    if cd_response is not None:
+        bot.send_message(chat_id, cd_response)
+        return True
+
+    bot.send_message(chat_id, run_terminal_command(text, get_chat_cwd(chat_id)))
+    return True
 
 
 def _handle_cleaner_command(message, force: bool) -> None:
@@ -224,16 +298,60 @@ def _handle_cleaner_command(message, force: bool) -> None:
 
 @bot.message_handler(commands=["clean_dataflow_status"])
 def handle_clean_dataflow_status(message):  # type: ignore[misc]
+    if maybe_handle_terminal_message(message):
+        return
     _handle_cleaner_command(message, force=False)
 
 
 @bot.message_handler(commands=["clean_dataflow_force"])
 def handle_clean_dataflow_force(message):  # type: ignore[misc]
+    if maybe_handle_terminal_message(message):
+        return
     _handle_cleaner_command(message, force=True)
+
+
+@bot.message_handler(commands=["terminal"])
+def handle_terminal(message):  # type: ignore[misc]
+    chat_id = message.chat.id
+    terminal_password = load_terminal_password(TERMINAL_PASSWORD_PATH)
+    if terminal_password is None:
+        bot.send_message(chat_id, "Terminal mode is disabled because no password is configured.")
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.send_message(chat_id, "Usage: /terminal <password>")
+        return
+
+    provided = parts[1].strip()
+    if provided != terminal_password:
+        bot.send_message(chat_id, "Wrong password.")
+        return
+
+    TERMINAL_ACTIVE_CHATS.add(chat_id)
+    TERMINAL_CHAT_CWDS[chat_id] = BASE_DIR
+    bot.send_message(
+        chat_id,
+        f"Terminal mode enabled. Current directory: {BASE_DIR}\n"
+        "Any text will run as a shell command. Use /exit to leave.",
+    )
+
+
+@bot.message_handler(commands=["exit"])
+def handle_exit(message):  # type: ignore[misc]
+    chat_id = message.chat.id
+    if chat_id in TERMINAL_ACTIVE_CHATS:
+        TERMINAL_ACTIVE_CHATS.discard(chat_id)
+        TERMINAL_CHAT_CWDS.pop(chat_id, None)
+        bot.send_message(chat_id, "Terminal mode disabled.")
+        return
+    bot.send_message(chat_id, "Terminal mode is not active.")
 
 
 @bot.message_handler(commands=["restart_bot"])
 def handle_restart_bot(message):  # type: ignore[misc]
+    if maybe_handle_terminal_message(message):
+        return
     chat_id = message.chat.id
     bot.send_message(chat_id, "Restart command received. Attempting to restart bot...")
     try:
@@ -248,6 +366,9 @@ def handle_restart_bot(message):  # type: ignore[misc]
 @bot.message_handler(func=lambda message: True, content_types=["text"])
 def handle_unknown_text(message):
     """Fallback handler: show the start/help message for any unrecognized text."""
+    if maybe_handle_terminal_message(message):
+        return
+
     if message.text.strip() in ("", None):
         bot.send_message(message.chat.id, HELP_TEXT)
         return
@@ -259,6 +380,9 @@ def handle_unknown_text(message):
             "/help",
             "/clean_dataflow_status",
             "/clean_dataflow_force",
+            "/terminal",
+            "/exit",
+            "/restart_bot",
         }
     )
 

@@ -414,7 +414,20 @@ def summarize_artifacts(artifacts: dict[str, StepArtifact]) -> dict[str, Any]:
 
 
 def list_dat_files(simulated_data_dir: Path, max_files: int | None = None) -> list[Path]:
-    files = sorted(simulated_data_dir.glob("mi*.dat"), key=lambda p: p.stat().st_mtime)
+    files: list[Path] = []
+    seen_names: set[str] = set()
+    candidate_dirs = [simulated_data_dir / "FILES", simulated_data_dir]
+    for directory in candidate_dirs:
+        if not directory.exists():
+            continue
+        for path in sorted(directory.glob("mi*.dat")):
+            if not path.is_file():
+                continue
+            if path.name in seen_names:
+                continue
+            seen_names.add(path.name)
+            files.append(path)
+    files.sort(key=lambda p: p.stat().st_mtime)
     if max_files is None:
         return files
     return files[-max_files:]

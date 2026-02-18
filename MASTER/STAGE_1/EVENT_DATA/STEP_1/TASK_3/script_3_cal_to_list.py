@@ -80,7 +80,12 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.file_selection import select_latest_candidate
+from MASTER.common.file_selection import (
+    file_name_in_date_range,
+    load_date_range_from_config,
+    select_latest_candidate,
+    sync_unprocessed_with_date_range,
+)
 from MASTER.common.path_config import (
     get_master_config_root,
     get_repo_root,
@@ -99,6 +104,7 @@ from MASTER.common.step1_shared import (
     collect_columns,
     load_itineraries_from_file,
     save_metadata,
+    resolve_step1_plot_options,
     validate_step1_input_file_args,
     y_pos,
 )
@@ -109,9 +115,6 @@ task_number = 3
 start_execution_time_counting = datetime.now()
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
-
-
-
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_3 (CAL->LIST).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -155,10 +158,8 @@ fallback_parameter_config_file_path = (
 print(f"Using config file: {config_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
-debug_mode = bool(config.get("debug_mode", False))
+debug_mode = False
 home_path = str(resolve_home_path_from_config(config))
-
-
 
 if CLI_ARGS.station is None:
     CLI_PARSER.error("No station provided. Pass <station>.")
@@ -177,7 +178,6 @@ config = apply_step1_task_parameter_overrides(
 home_path = str(resolve_home_path_from_config(config))
 REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
 
-
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
@@ -186,28 +186,25 @@ ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
-
-
-
-
-
-
 not_use_q_semisum = False
 
 stratos_save = config["stratos_save"]
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
+fast_mode = False
+debug_mode = False
 last_file_test = config["last_file_test"]
 
 # Accessing all the variables from the configuration
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
-create_debug_plots = bool(config.get("create_debug_plots", False))
-limit = config["limit"]
-limit_number = config["limit_number"]
+(
+    plot_mode,
+    create_plots,
+    create_essential_plots,
+    save_plots,
+    create_pdf,
+    show_plots,
+    create_debug_plots,
+) = resolve_step1_plot_options(config)
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Charge calibration to fC
 
@@ -230,31 +227,11 @@ y_new_method = config["y_new_method"]
 
 # Validation
 
-
-residual_plots_fast = config["residual_plots_fast"]
-
-timtrack_iteration_fast = config["timtrack_iteration_fast"]
-timtrack_iteration_debug = config["timtrack_iteration_debug"]
-
-time_calibration_fast = config["time_calibration_fast"]
-time_calibration_debug = config["time_calibration_debug"]
-
-charge_front_back_fast = config["charge_front_back_fast"]
-charge_front_back_debug = config["charge_front_back_debug"]
-
-create_plots = config["create_plots"]
-
-
 complete_reanalysis = config["complete_reanalysis"]
 complete_reanalysis = True
 
-limit = config["limit"]
-limit_fast = config["limit_fast"]
-limit_debug = config["limit_debug"]
-
-limit_number = config["limit_number"]
-limit_number_fast = config["limit_number_fast"]
-limit_number_debug = config["limit_number_debug"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
@@ -291,7 +268,6 @@ det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
-
 # TimTrack filter
 
 # Fitting comparison
@@ -305,7 +281,6 @@ det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 # Variables to modify
 beta = config.get("beta", 1)
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-
 
 # X
 strip_length = config.get("strip_length", 300)
@@ -337,25 +312,10 @@ T_clip_max_ST = config.get("T_clip_max_ST", 100)
 Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
 Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
-
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
@@ -415,33 +375,18 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if fast_mode:
+if False:
     print('Working in fast mode.')
-    residual_plots = residual_plots_fast
-    timtrack_iteration = timtrack_iteration_fast
-    time_calibration = time_calibration_fast
-    charge_front_back = charge_front_back_fast
-    create_plots = create_plots_fast
-    limit = limit_fast
-    limit_number = limit_number_fast
 
-if debug_mode:
+if False:
     print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = timtrack_iteration_debug
-    time_calibration = time_calibration_debug
-    charge_front_back = charge_front_back_debug
-    create_plots = create_plots_debug
-    limit = limit_debug
-    limit_number = limit_number_debug
 
-if debug_mode:
+if False:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
 
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
-
 
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
@@ -450,15 +395,10 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-
-
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-
-
-
 
 # Y ---------------------------------------------------------------------------
 
@@ -478,7 +418,7 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if debug_mode:
+if False:
     T_clip_min = T_clip_min_debug
     T_clip_max = T_clip_max_debug
     Q_clip_min = Q_clip_min_debug
@@ -512,7 +452,6 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
 )
 
 filter_metrics: dict[str, float] = {}
-
 
 def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
@@ -548,7 +487,6 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
 
 reprocessing_parameters = pd.DataFrame()
 
-
 def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
     """Return matching reprocessing parameters for *basename* or an empty frame."""
     station_str = str(station_id).zfill(2)
@@ -565,10 +503,6 @@ def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basenam
     matches = table_df[table_df["filename_base"] == basename]
     return matches.reset_index(drop=True)
 
-
-
-
-
 # -----------------------------------------------------------------------------
 # Input selection --------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -580,7 +514,6 @@ if selected_input_file:
     print("User provided file path:", user_file_path)
 else:
     user_file_selection = False
-
 
 repo_root = get_repo_root()
 station_directory = str(repo_root / "STATIONS" / f"MINGO0{station}")
@@ -620,12 +553,7 @@ else:
     else:
         z_1, z_2, z_3, z_4 = 0, 150, 300, 450
 
-
 self_trigger = False
-
-
-
-
 
 print("Creating the necessary directories...")
 
@@ -652,7 +580,6 @@ if task_number == 5:
 else:
     output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
 
-
 # Define directory paths relative to base_directory
 base_directories = {
     "stratos_list_events_directory": os.path.join(home_directory, "STRATOS_XY_DIRECTORY"),
@@ -670,6 +597,7 @@ base_directories = {
     "temp_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TEMP_FILES"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/UNPROCESSED_DIRECTORY"),
+    "out_of_date_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/OUT_OF_DATE_DIRECTORY"),
     "error_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/ERROR_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
@@ -726,47 +654,29 @@ unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
 # Events per second metadata helpers ------------------------------------------
 # -----------------------------------------------------------------------------
 
-
-
-
-
-
-
 not_use_q_semisum = False
 
 stratos_save = config["stratos_save"]
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
+fast_mode = False
+debug_mode = False
 last_file_test = config["last_file_test"]
 
 # Accessing all the variables from the configuration
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
-limit = config["limit"]
-limit_number = config["limit_number"]
+(
+    plot_mode,
+    create_plots,
+    create_essential_plots,
+    save_plots,
+    create_pdf,
+    show_plots,
+    create_debug_plots,
+) = resolve_step1_plot_options(config)
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Charge calibration to fC
 
@@ -789,29 +699,8 @@ y_new_method = config["y_new_method"]
 
 # Validation
 
-
-residual_plots_fast = config["residual_plots_fast"]
-
-timtrack_iteration_fast = config["timtrack_iteration_fast"]
-timtrack_iteration_debug = config["timtrack_iteration_debug"]
-
-time_calibration_fast = config["time_calibration_fast"]
-time_calibration_debug = config["time_calibration_debug"]
-
-charge_front_back_fast = config["charge_front_back_fast"]
-charge_front_back_debug = config["charge_front_back_debug"]
-
-create_plots = config["create_plots"]
-
-
-
-limit = config["limit"]
-limit_fast = config["limit_fast"]
-limit_debug = config["limit_debug"]
-
-limit_number = config["limit_number"]
-limit_number_fast = config["limit_number_fast"]
-limit_number_debug = config["limit_number_debug"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
@@ -848,7 +737,6 @@ det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
-
 # TimTrack filter
 
 # Fitting comparison
@@ -862,7 +750,6 @@ det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 # Variables to modify
 beta = config.get("beta", 1)
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-
 
 # X
 strip_length = config.get("strip_length", 300)
@@ -892,25 +779,10 @@ T_clip_max_ST = config.get("T_clip_max_ST", 100)
 Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
 Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
-
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
@@ -970,33 +842,18 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if fast_mode:
+if False:
     print('Working in fast mode.')
-    residual_plots = residual_plots_fast
-    timtrack_iteration = timtrack_iteration_fast
-    time_calibration = time_calibration_fast
-    charge_front_back = charge_front_back_fast
-    create_plots = create_plots_fast
-    limit = limit_fast
-    limit_number = limit_number_fast
 
-if debug_mode:
+if False:
     print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = timtrack_iteration_debug
-    time_calibration = time_calibration_debug
-    charge_front_back = charge_front_back_debug
-    create_plots = create_plots_debug
-    limit = limit_debug
-    limit_number = limit_number_debug
 
-if debug_mode:
+if False:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
 
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
-
 
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
@@ -1005,15 +862,10 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-
-
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-
-
-
 
 # Y ---------------------------------------------------------------------------
 
@@ -1033,7 +885,7 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if debug_mode:
+if False:
     T_clip_min = T_clip_min_debug
     T_clip_max = T_clip_max_debug
     Q_clip_min = Q_clip_min_debug
@@ -1053,22 +905,25 @@ Q_clip_max_ST = Q_clip_max_ST
 
 self_trigger = False
 
-
 not_use_q_semisum = False
 
 stratos_save = config["stratos_save"]
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
+fast_mode = False
+debug_mode = False
 last_file_test = config["last_file_test"]
 
 # Accessing all the variables from the configuration
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
-limit = config["limit"]
-limit_number = config["limit_number"]
+(
+    plot_mode,
+    create_plots,
+    create_essential_plots,
+    save_plots,
+    create_pdf,
+    show_plots,
+    create_debug_plots,
+) = resolve_step1_plot_options(config)
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Charge calibration to fC
 
@@ -1091,27 +946,8 @@ y_new_method = config["y_new_method"]
 
 # Validation
 
-
-residual_plots_fast = config["residual_plots_fast"]
-
-timtrack_iteration_fast = config["timtrack_iteration_fast"]
-timtrack_iteration_debug = config["timtrack_iteration_debug"]
-
-time_calibration_fast = config["time_calibration_fast"]
-time_calibration_debug = config["time_calibration_debug"]
-
-charge_front_back_fast = config["charge_front_back_fast"]
-charge_front_back_debug = config["charge_front_back_debug"]
-
-create_plots = config["create_plots"]
-
-limit = config["limit"]
-limit_fast = config["limit_fast"]
-limit_debug = config["limit_debug"]
-
-limit_number = config["limit_number"]
-limit_number_fast = config["limit_number_fast"]
-limit_number_debug = config["limit_number_debug"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
@@ -1148,7 +984,6 @@ det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 
-
 # TimTrack filter
 
 # Fitting comparison
@@ -1162,7 +997,6 @@ det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
 # Variables to modify
 beta = config.get("beta", 1)
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-
 
 # X
 strip_length = config.get("strip_length", 300)
@@ -1192,19 +1026,6 @@ T_clip_max_ST = config.get("T_clip_max_ST", 100)
 Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
 Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 charge_per_strip_plot_threshold = config["charge_per_strip_plot_threshold"]
 charge_per_plane_plot_threshold = config["charge_per_plane_plot_threshold"]
 
@@ -1212,7 +1033,6 @@ charge_per_plane_plot_threshold = config["charge_per_plane_plot_threshold"]
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
-
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
@@ -1272,39 +1092,18 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if fast_mode:
+if False:
     print('Working in fast mode.')
-    residual_plots = residual_plots_fast
-    timtrack_iteration = timtrack_iteration_fast
-    time_calibration = time_calibration_fast
-    charge_front_back = charge_front_back_fast
-    create_plots = create_plots_fast
-    limit = limit_fast
-    limit_number = limit_number_fast
 
-if debug_mode:
+if False:
     print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = timtrack_iteration_debug
-    time_calibration = time_calibration_debug
-    charge_front_back = charge_front_back_debug
-    create_plots = create_plots_debug
-    limit = limit_debug
-    limit_number = limit_number_debug
 
-
-
-
-
-
-
-if debug_mode:
+if False:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
 
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
-
 
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
@@ -1313,17 +1112,10 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-
-
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-
-
-
-
-
 
 c_mm_ns = c/1000000
 print(c_mm_ns)
@@ -1341,7 +1133,7 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if debug_mode:
+if False:
     T_clip_min = T_clip_min_debug
     T_clip_max = T_clip_max_debug
     Q_clip_min = Q_clip_min_debug
@@ -1358,11 +1150,6 @@ T_clip_min_ST = T_clip_min_ST
 T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
-
-
-
-
-
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -1407,9 +1194,6 @@ for directory in base_directories.values():
         continue
     os.makedirs(directory, exist_ok=True)
 
-
-
-
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
 
@@ -1433,7 +1217,6 @@ raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
-
 
 # Ordered list from highest to lowest priority
 LEVELS = [
@@ -1484,7 +1267,6 @@ for d in LEVELS:
 
     seen |= (current_files - duplicates)
 
-
 # Search in all this directories for empty files and move them to the empty_files_directory
 for directory in [raw_directory, unprocessed_directory, processing_directory, completed_directory]:
     files = os.listdir(directory)
@@ -1506,7 +1288,6 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             now = time.time()
             os.utime(empty_destination_path, (now, now))
 
-
 # Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
@@ -1527,7 +1308,6 @@ for file_name in files_to_move:
     except Exception as e:
         print(f"Failed to move {file_name}: {e}")
 
-
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
 files = os.listdir(figure_directory) if os.path.exists(figure_directory) else []
@@ -1537,9 +1317,39 @@ if files:  # Check if the directory contains any files
     for file in files:
         os.remove(os.path.join(figure_directory, file))
 
+sync_unprocessed_with_date_range(
+    config=config,
+    unprocessed_directory=base_directories["unprocessed_directory"],
+    out_of_date_directory=base_directories["out_of_date_directory"],
+    log_fn=print,
+)
 unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
 completed_files = os.listdir(base_directories["completed_directory"])
+date_range_start, date_range_end = load_date_range_from_config(config)
+if date_range_start is not None or date_range_end is not None:
+    processing_before = len(processing_files)
+    completed_before = len(completed_files)
+    processing_files = [
+        name
+        for name in processing_files
+        if file_name_in_date_range(name, date_range_start, date_range_end)
+    ]
+    completed_files = [
+        name
+        for name in completed_files
+        if file_name_in_date_range(name, date_range_start, date_range_end)
+    ]
+    skipped_processing = processing_before - len(processing_files)
+    skipped_completed = completed_before - len(completed_files)
+    if skipped_processing > 0:
+        print(
+            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY."
+        )
+    if skipped_completed > 0:
+        print(
+            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
+        )
 
 if user_file_selection:
     processing_file_path = user_file_path
@@ -1696,9 +1506,6 @@ if not reprocessing_parameters.empty:
         key: value for key, value in reprocessing_values.items() if value is not None
     }
 
-
-
-
 analysis_date = datetime.now().strftime("%Y-%m-%d")
 print(f"Analysis date and time: {analysis_date}")
 
@@ -1727,13 +1534,11 @@ if status_execution_date is not None:
         completion_fraction=0.25,
     )
 
-
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
 right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 
 if limit:
     print(f'Taking the first {limit_number} rows.')
-
 
 # Read the data file into a DataFrame
 KEY = "df"
@@ -1811,11 +1616,9 @@ if status_execution_date is not None:
         completion_fraction=0.5,
     )
 
-
 # --- Continue your calibration or analysis code here ---
 # e.g.:
 # run_calibration(working_df)
-
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
 if "datetime" in working_df.columns:
@@ -1861,7 +1664,6 @@ end_time = end_datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
 
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print(f"------------- Starting date is {save_filename_suffix} -------------------") # This is longer so it displays nicely
@@ -1878,9 +1680,6 @@ if create_plots == False:
         save_pdf_filename = "essential_" + save_pdf_filename
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
-
-
-
 
 # -------------------------------------------------------------------------------
 # ------------ Input file and data managing to select configuration -------------
@@ -1938,7 +1737,6 @@ else:
     z_positions = np.array([0, 150, 300, 450])  # In mm
     z_source = "default_no_input_file"
 
-
 def _zpos_from_conf(row):
     return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
 
@@ -1966,7 +1764,6 @@ if np.isnan(z_positions).any() or np.all(z_positions == 0):
         z_positions = np.array([0, 150, 300, 450])  # In mm
         z_source = "default_invalid_without_input"
 
-
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
@@ -1984,8 +1781,6 @@ for plane_index, z_value in enumerate(z_positions, start=1):
     z_float = float(z_value)
     working_df[z_col] = z_float
     global_variables[z_col] = z_float
-
-
 
 print("----------------------------------------------------------------------")
 print("---------------- Binary topology of active strips --------------------")
@@ -2068,11 +1863,9 @@ if create_plots:
         plt.show()
     plt.close()
 
-
 print("----------------------------------------------------------------------")
 print("----------------- Some more tests (multi-strip data) -----------------")
 print("----------------------------------------------------------------------")
-
 
 if create_plots:
 
@@ -2182,10 +1975,6 @@ if create_plots:
                     plt.show()
                 plt.close()
 
-
-
-
-
 if create_super_essential_plots:
 
     patterns_of_interest = ['1100', '0110', '0011', '1001', '1010', '0101']
@@ -2236,9 +2025,6 @@ if create_super_essential_plots:
     if show_plots:
         plt.show()
     plt.close()
-
-
-
 
 if create_super_essential_plots:
 
@@ -2295,7 +2081,6 @@ if create_super_essential_plots:
     if show_plots:
         plt.show()
     plt.close()
-
 
 if create_plots:
 
@@ -2357,12 +2142,6 @@ if create_plots:
         if show_plots:
             plt.show()
         plt.close()
-
-
-
-
-
-
 
 if create_plots:
 
@@ -2517,7 +2296,6 @@ if create_plots:
     if show_plots:
         plt.show()
     plt.close()
-
 
 calculate_sigmas_adjacent = False
 
@@ -2704,7 +2482,6 @@ if calculate_sigmas_adjacent:
                 plt.show()
             plt.close()
 
-
     
 
     if create_super_essential_plots:
@@ -2842,7 +2619,6 @@ if calculate_sigmas_adjacent:
                         # Store sigma1 result
                         all_results_loop[(f'Charge_1_{charge_limit_1:.1f}', f'Charge_2_{charge_limit_2:.1f}', f'Plane_{i_plane}', pattern)] = popt
 
-
         # Plot especifically the sigmas vs charge limit for each plane and pattern, one row per plane, one column per pattern
 
         # Sigma 1
@@ -2872,7 +2648,6 @@ if calculate_sigmas_adjacent:
                             sigma2_values.append(sigma2)
                 
                 print(sigma1_values)
-
 
                 # Build unique sorted axes for charge_1 and charge_2
                 charge1_values = charge_limits_1
@@ -2937,7 +2712,6 @@ if calculate_sigmas_adjacent:
             plt.show()
         plt.close()
 
-
         # Sigma 2
         # Plot especifically the sigmas vs charge limit for each plane and pattern, one row per plane, one column per pattern
         fig, axs = plt.subplots(4, len(patterns_of_interest), figsize=(18, 24), sharex=True, sharey=True)
@@ -2966,7 +2740,6 @@ if calculate_sigmas_adjacent:
                             sigma2_values.append(sigma2)
                 
                 print(sigma1_values)
-
 
                 # Build unique sorted axes for charge_1 and charge_2
                 charge1_values = charge_limits_1
@@ -3031,7 +2804,6 @@ if calculate_sigmas_adjacent:
             plt.show()
         plt.close()
 
-
 print("----------------------------------------------------------------------")
 print("----------------------- Y position calculation -----------------------")
 print("----------------------------------------------------------------------")
@@ -3039,7 +2811,6 @@ print("----------------------------------------------------------------------")
 # Y ---------------------------------------------------------------------------
 y_widths = [np.array([narrow_strip, narrow_strip, narrow_strip, wide_strip]), 
             np.array([wide_strip, narrow_strip, narrow_strip, narrow_strip])]
-
 
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 y_width_P1_and_P3 = y_widths[0]
@@ -3104,7 +2875,6 @@ if y_new_method:
     # Insert all new Y_ columns at once
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
 
-
 if create_plots:
 
     for cal_tt in [ 12, 23, 34, 1234, 123, 234, 124, 13, 14, 24, 134]:
@@ -3148,7 +2918,6 @@ if create_plots:
         plt.close()
 
 print("Y position calculated.")
-
 
 print("----------------------------------------------------------------------")
 print("------------ Last comprobation to the per-strip variables ------------")
@@ -3211,7 +2980,6 @@ if create_plots or create_essential_plots:
         if show_plots: plt.show()
         plt.close()
 
-
 if self_trigger:
     if create_plots:
         
@@ -3270,7 +3038,6 @@ if self_trigger:
             if show_plots: plt.show()
             plt.close()
 
-
 print("----------------------------------------------------------------------")
 print("----------------- Setting the variables of each RPC ------------------")
 print("----------------------------------------------------------------------")
@@ -3320,8 +3087,6 @@ for i_plane in range(1, 5):
 
 # Concatenate all new final columns at once
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
-
-
 
 if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
@@ -3382,8 +3147,6 @@ if create_plots:
     if show_plots: plt.show()
     plt.close()
 
-
-
 if create_plots:
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
@@ -3443,9 +3206,6 @@ if create_plots:
     if show_plots: plt.show()
     plt.close()
 
-
-
-
 print("----------------------------------------------------------------------")
 print("------ Put Tsum in reference to the first strip that is not zero -----")
 print("----------------------------------------------------------------------")
@@ -3466,7 +3226,6 @@ vals_normalized[~nonzero_mask] = 0
 vals_normalized[~has_signal] = 0
 working_df[cols] = vals_normalized
 
-
 # Helper to track how many events remain non-zero for key variables around Filter 6
 def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
     for i_plane in range(1, 5):
@@ -3481,7 +3240,6 @@ def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
             if col in df:
                 count = int((df[col] != 0).sum())
                 global_variables[f"P{i_plane}_{label}_nonzero_{tag}"] = count
-
 
 filter6_cols: list[str] = []
 for i_plane in range(1, 5):
@@ -3616,7 +3374,6 @@ if filter6_cols and filter6_before_zero_mask is not None:
 
 record_filter6_counts(working_df, "after_filter6")
 
-
 # ----------------------------------------------------------------------------------------------------------------
 # if stratos_save and station == 2:
 if stratos_save:
@@ -3640,7 +3397,6 @@ if stratos_save:
     # Save DataFrame to CSV (correcting the method name)
     filtered_stratos_df.to_csv(save_stratos, index=False, float_format="%.1f")
 # ----------------------------------------------------------------------------------------------------------------
-
 
 # Same for hexbin
 if create_plots or create_essential_plots:
@@ -3699,9 +3455,6 @@ if create_plots or create_essential_plots:
         plt.savefig(save_fig_path, format='png')
     if show_plots: plt.show()
     plt.close()
-
-
-
 
 # # Hexbin + histogram "pairgrid" per plane
 # if create_plots or create_essential_plots:
@@ -3779,9 +3532,6 @@ if create_plots or create_essential_plots:
 
 #         plt.close(fig)
 
-
-
-
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
     if len(plot_list) > 0:
@@ -3808,10 +3558,6 @@ if create_pdf:
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
 
-
-
-
-
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
 os.makedirs(f"{output_directory}", exist_ok=True)
@@ -3825,9 +3571,6 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 # (Here, you would have your data cleaning code before saving)
 # working_df = ...
 
-
-
-
 # Remove the columns in the form "T*_T_sum_*", "T*_T_dif_*", "Q*_Q_sum_*", "Q*_Q_dif_*", do a loop from 1 to 4
 cols_to_remove = []
 for i_plane in range(1, 5):
@@ -3839,13 +3582,6 @@ for i_plane in range(1, 5):
 working_df.drop(columns=cols_to_remove, inplace=True, errors='ignore')
     
     
-
-
-
-
-
-
-
 
 # Pattern for P1_Q_sum_*, P2_Q_sum_*, P3_Q_sum_*, P4_Q_sum_*
 Q_SUM_PATTERN = re.compile(r'^P[1-4]_Q_sum_.*$')
@@ -3894,13 +3630,6 @@ if component_cols:
         removed_all_zero,
         len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
     )
-
-
-
-
-
-
-
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 list_tt_columns = {
@@ -3958,8 +3687,6 @@ if VERBOSE:
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
 
-
-
 # End of the execution time
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
@@ -3971,7 +3698,6 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
-
 
 # -------------------------------------------------------------------------------
 # Filter metadata (ancillary) ---------------------------------------------------
@@ -4020,7 +3746,6 @@ metadata_execution_csv_path = save_metadata(
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
-
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
@@ -4058,11 +3783,9 @@ metadata_specific_csv_path = save_metadata(
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
-
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Listed dataframe saved to: {OUT_PATH}")
-
 
 # Move the original datafile to COMPLETED -------------------------------------
 print("Moving file to COMPLETED directory...")

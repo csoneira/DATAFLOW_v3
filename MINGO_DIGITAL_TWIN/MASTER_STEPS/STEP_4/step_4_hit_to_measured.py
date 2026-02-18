@@ -981,15 +981,15 @@ def main() -> None:
             buffered_rows += len(out_chunk)
             maybe_flush_buffer()
 
-        if full_chunks == 0 and buffered_rows > 0:
+        if buffered_rows > 0:
             full_df = pd.concat(buffer_full, ignore_index=True)
             plot_full = pd.concat(buffer_plot, ignore_index=True)
             flush_chunk(full_df, plot_full)
             buffered_rows = 0
-        else:
-            buffered_rows = 0
+            buffer_full = []
+            buffer_plot = []
 
-        row_count = full_chunks * int(chunk_rows) + buffered_rows
+        row_count = total_rows
         manifest = {
             "version": 1,
             "chunks": chunk_paths,

@@ -1,42 +1,19 @@
 crontab_execution: true
-fast_mode: false
-debug_mode: false
 last_file_test: true
-run_jupyter_notebook: false
-jupyter_station_default_task_4: '3'
+date_range:
+  start: null
+  end: null
 self_trigger: false
 timeseries_and_fits: false
-default_z_positions:
-- 0
-- 150
-- 300
-- 450
 complete_reanalysis: false
-create_plots: false
-create_essential_plots: false
-save_plots: true
-create_pdf: false
-show_plots: false
-create_debug_plots: false
+# create_plots options: null | debug | usual | all
+create_plots: null
 save_rejected_rows: false
 create_reject_plots: false
-create_plots_task_4_station_0: false
-limit: false
-limit_number: 10000
-limit_fast: false
-limit_number_fast: 10000
-limit_debug: true
-limit_number_debug: 10000
-residual_plots_fast: false
-charge_front_back_fast: false
-charge_front_back_debug: false
-time_calibration_fast: false
-time_calibration_debug: false
+limit_number: null
 alternative_iteration: false
 number_of_det_executions: 2
 fixed_speed: false
 res_ana_removing_planes: true
 timtrack_iteration: true
-timtrack_iteration_fast: false
-timtrack_iteration_debug: false
 number_of_TT_executions: 1

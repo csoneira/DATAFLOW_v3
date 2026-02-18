@@ -9,7 +9,7 @@ Inputs:
 - Runtime config: `config_step_final_runtime.yaml`
 
 Outputs:
-- `SIMULATED_DATA/mi00YYDDDHHMMSS.dat`
+- `SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat`
 - `SIMULATED_DATA/step_final_output_registry.json`
 - `SIMULATED_DATA/step_final_simulation_params.csv`
 

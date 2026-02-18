@@ -82,7 +82,12 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
-from MASTER.common.file_selection import select_latest_candidate
+from MASTER.common.file_selection import (
+    file_name_in_date_range,
+    load_date_range_from_config,
+    select_latest_candidate,
+    sync_unprocessed_with_date_range,
+)
 from MASTER.common.path_config import (
     get_master_config_root,
     get_repo_root,
@@ -101,6 +106,7 @@ from MASTER.common.step1_shared import (
     collect_columns,
     load_itineraries_from_file,
     save_metadata,
+    resolve_step1_plot_options,
     validate_step1_input_file_args,
     y_pos,
 )
@@ -111,9 +117,6 @@ task_number = 2
 start_execution_time_counting = datetime.now()
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
-
-
-
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_2 (CLEAN->CAL).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -157,10 +160,7 @@ fallback_parameter_config_file_path = (
 print(f"Using config file: {config_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
-debug_mode = bool(config.get("debug_mode", False))
-
-
-
+debug_mode = False
 
 home_path = str(resolve_home_path_from_config(config))
 REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
@@ -168,24 +168,9 @@ QA_CALIBRATION_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "ANCILLARY" / 
 current_conf_number: Optional[int] = None
 found_calibration = False
 
-
-
-
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
 # Events per second metadata helpers ------------------------------------------
 # -----------------------------------------------------------------------------
-
-
-
-
-
-
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------
@@ -213,7 +198,6 @@ if selected_input_file:
     print("User provided file path:", user_file_path)
 else:
     user_file_selection = False
-
 
 repo_root = get_repo_root()
 station_directory = str(repo_root / "STATIONS" / f"MINGO0{station}")
@@ -256,28 +240,28 @@ else:
     z_3 = 300
     z_4 = 450
 
-
 self_trigger = False
-
 
 not_use_q_semisum = False
 
-fast_mode = config["fast_mode"]
-debug_mode = config["debug_mode"]
+fast_mode = False
+debug_mode = False
 last_file_test = config["last_file_test"]
 
 # Accessing all the variables from the configuration
-create_plots = config["create_plots"]
-create_essential_plots = config["create_essential_plots"]
-save_plots = config["save_plots"]
-show_plots = config["show_plots"]
-create_pdf = config["create_pdf"]
-create_debug_plots = bool(config.get("create_debug_plots", False))
-limit = config["limit"]
-limit_number = config["limit_number"]
+(
+    plot_mode,
+    create_plots,
+    create_essential_plots,
+    save_plots,
+    create_pdf,
+    show_plots,
+    create_debug_plots,
+) = resolve_step1_plot_options(config)
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 number_of_time_cal_figures = config["number_of_time_cal_figures"]
 article_format = config["article_format"]
-
 
 print("Creating the necessary directories...")
 
@@ -304,7 +288,6 @@ if task_number == 5:
 else:
     output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
 
-
 # Define directory paths relative to base_directory
 base_directories = {
     "stratos_list_events_directory": os.path.join(home_directory, "STRATOS_XY_DIRECTORY"),
@@ -322,6 +305,7 @@ base_directories = {
     "temp_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TEMP_FILES"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/UNPROCESSED_DIRECTORY"),
+    "out_of_date_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/OUT_OF_DATE_DIRECTORY"),
     "error_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/ERROR_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
@@ -348,7 +332,6 @@ debug_plot_directory = os.path.join(
 debug_fig_idx = 1
 if create_debug_plots:
     os.makedirs(debug_plot_directory, exist_ok=True)
-
 
 def _debug_plot_filter_group(
     df: pd.DataFrame,
@@ -413,7 +396,6 @@ unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
 
-
 # Ordered list from highest to lowest priority
 LEVELS = [
     completed_directory,
@@ -463,7 +445,6 @@ for d in LEVELS:
 
     seen |= (current_files - duplicates)
 
-
 # Search in all this directories for empty files and move them to the empty_files_directory
 for directory in [raw_directory, unprocessed_directory, processing_directory, completed_directory]:
     files = os.listdir(directory)
@@ -485,7 +466,6 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             now = time.time()
             os.utime(empty_destination_path, (now, now))
 
-
 # Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 unprocessed_files = set(os.listdir(unprocessed_directory))
@@ -505,7 +485,6 @@ for file_name in files_to_move:
         print(f"Move {file_name} to UNPROCESSED directory.")
     except Exception as e:
         print(f"Failed to move {file_name}: {e}")
-
 
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
@@ -543,11 +522,6 @@ else:
     z_3 = 300
     z_4 = 450
 
-
-
-
-
-
 # Charge calibration to fC
 calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
 
@@ -575,33 +549,15 @@ old_timing_method = config["old_timing_method"]
 # Validation
 validate_charge_pedestal_calibration = config["validate_charge_pedestal_calibration"]
 
-
-residual_plots_fast = config["residual_plots_fast"]
-
-timtrack_iteration_fast = config["timtrack_iteration_fast"]
-timtrack_iteration_debug = config["timtrack_iteration_debug"]
-
 time_calibration = config["time_calibration"]
-time_calibration_fast = config["time_calibration_fast"]
-time_calibration_debug = config["time_calibration_debug"]
 
 charge_front_back = config["charge_front_back"]
-charge_front_back_fast = config["charge_front_back_fast"]
-charge_front_back_debug = config["charge_front_back_debug"]
-
-create_plots = config["create_plots"]
-
 
 complete_reanalysis = config["complete_reanalysis"]
 complete_reanalysis = True
 
-limit = config["limit"]
-limit_fast = config["limit_fast"]
-limit_debug = config["limit_debug"]
-
-limit_number = config["limit_number"]
-limit_number_fast = config["limit_number_fast"]
-limit_number_debug = config["limit_number_debug"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
@@ -641,7 +597,6 @@ det_phi_left_filter = config.get("det_phi_left_filter", -3.141592)
 det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
-
 
 # TimTrack filter
 res_ystr_filter = config.get("res_ystr_filter", 500)
@@ -753,12 +708,6 @@ crosstalk_fit_sigma_max = config["crosstalk_fit_sigma_max"]
 
 slewing_correction_r2_threshold = config["slewing_correction_r2_threshold"]
 
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
@@ -824,7 +773,6 @@ time_sum_distance = 30
 #     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 # ])
 
-
 time_sum_reference = np.array([
     [0., 0.34735892,0.45303939,-0.36284147],
     [0.8596194, 0.82903959,1.95702226,1.23050699],
@@ -832,35 +780,18 @@ time_sum_reference = np.array([
     [0.08731539,-0.61900897,-0.39471968,-0.07661417]
 ])
 
-
-
-if fast_mode:
+if False:
     print('Working in fast mode.')
-    residual_plots = residual_plots_fast
-    timtrack_iteration = timtrack_iteration_fast
-    time_calibration = time_calibration_fast
-    charge_front_back = charge_front_back_fast
-    create_plots = create_plots_fast
-    limit = limit_fast
-    limit_number = limit_number_fast
 
-if debug_mode:
+if False:
     print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = timtrack_iteration_debug
-    time_calibration = time_calibration_debug
-    charge_front_back = charge_front_back_debug
-    create_plots = create_plots_debug
-    limit = limit_debug
-    limit_number = limit_number_debug
 
-if debug_mode:
+if False:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
 
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
-
 
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
@@ -869,20 +800,14 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-
-
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
 
-
-
-
 # Y ---------------------------------------------------------------------------
 y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
             np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
 
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 y_width_P1_and_P3 = y_widths[0]
@@ -907,7 +832,7 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if debug_mode:
+if False:
     T_clip_min = T_clip_min_debug
     T_clip_max = T_clip_max_debug
     Q_clip_min = Q_clip_min_debug
@@ -954,26 +879,21 @@ filter_metrics: dict[str, float] = {
     name: 0.0 for name in FILTER_METRIC_NAMES if name != "data_purity_percentage"
 }
 
-
 def record_activity_metric(name: str, affected: float, total: float, label: str = "affected") -> None:
     """Record a generic percentage metric."""
     pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
     filter_metrics[name] = round(pct, 4)
     print(f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)")
 
-
 def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
     record_activity_metric(name, removed, total, label="removed")
 
-
 STRIP_COMPONENT_PATTERN = re.compile(r"^[QT]\d+_(Q|T)_(sum|dif)_\d+$")
-
 
 def collect_strip_component_columns(columns: Iterable[str]) -> list[str]:
     """Collect Task-2 calibrated component columns used by strip-level zeroing."""
     return [name for name in columns if STRIP_COMPONENT_PATTERN.match(name)]
-
 
 def snapshot_nonzero_mask(df: pd.DataFrame, columns: Iterable[str]) -> tuple[list[str], np.ndarray]:
     """Capture a boolean mask of non-zero values before a zeroing operation."""
@@ -982,7 +902,6 @@ def snapshot_nonzero_mask(df: pd.DataFrame, columns: Iterable[str]) -> tuple[lis
         return [], np.empty((len(df), 0), dtype=bool)
     values = df.loc[:, tracked_columns].to_numpy(copy=False)
     return tracked_columns, np.isfinite(values) & (values != 0)
-
 
 def record_zeroing_step_metrics(
     step_prefix: str,
@@ -1021,11 +940,6 @@ def record_zeroing_step_metrics(
     record_activity_metric(rows_metric, rows_affected, n_rows, label="rows affected")
     record_activity_metric(values_metric, values_zeroed, total_values, label="values zeroed")
 
-
-
-
-
-
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
     df = df.copy()
@@ -1061,7 +975,6 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
 reprocessing_parameters = pd.DataFrame()
 
 reprocessing_values: dict[str, object] = {}
-
 
 def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
     """
@@ -1102,7 +1015,6 @@ def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basenam
     found_calibration = True
     return matches.reset_index(drop=True)
 
-
 def _format_value_for_print(value: object) -> object:
     """Recursively convert NumPy scalars/arrays into native Python types."""
     if isinstance(value, (np.floating, np.integer)):
@@ -1115,23 +1027,13 @@ def _format_value_for_print(value: object) -> object:
         return {key: _format_value_for_print(val) for key, val in value.items()}
     return value
 
-
 def _format_dict_for_print(data: dict) -> dict:
     """Return *data* with NumPy containers converted to native Python types."""
     return {key: _format_value_for_print(value) for key, value in data.items()}
 
-
-
-
-
-
-
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
-
-
-
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -1176,9 +1078,39 @@ for directory in base_directories.values():
         continue
     os.makedirs(directory, exist_ok=True)
 
+sync_unprocessed_with_date_range(
+    config=config,
+    unprocessed_directory=base_directories["unprocessed_directory"],
+    out_of_date_directory=base_directories["out_of_date_directory"],
+    log_fn=print,
+)
 unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
 processing_files = os.listdir(base_directories["processing_directory"])
 completed_files = os.listdir(base_directories["completed_directory"])
+date_range_start, date_range_end = load_date_range_from_config(config)
+if date_range_start is not None or date_range_end is not None:
+    processing_before = len(processing_files)
+    completed_before = len(completed_files)
+    processing_files = [
+        name
+        for name in processing_files
+        if file_name_in_date_range(name, date_range_start, date_range_end)
+    ]
+    completed_files = [
+        name
+        for name in completed_files
+        if file_name_in_date_range(name, date_range_start, date_range_end)
+    ]
+    skipped_processing = processing_before - len(processing_files)
+    skipped_completed = completed_before - len(completed_files)
+    if skipped_processing > 0:
+        print(
+            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY."
+        )
+    if skipped_completed > 0:
+        print(
+            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
+        )
 
 if user_file_selection:
     processing_file_path = user_file_path
@@ -1311,9 +1243,6 @@ if is_simulated_file:
     else:
         print("Warning: Simulated param_hash missing; default z_positions will be used.")
 
-
-
-
 analysis_date = datetime.now().strftime("%Y-%m-%d")
 print(f"Analysis date and time: {analysis_date}")
 
@@ -1342,13 +1271,11 @@ if status_execution_date is not None:
         completion_fraction=0.25,
     )
 
-
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
 right_limit_time = pd.to_datetime("1-1-2100", format='%d-%m-%Y')
 
 if limit:
     print(f'Taking the first {limit_number} rows.')
-
 
 # Read the data file into a DataFrame
 
@@ -1432,16 +1359,13 @@ record_filter_metric(
     original_number_of_events if original_number_of_events else 0,
 )
 
-
 clean_tt_counts_initial = working_df["clean_tt"].value_counts()
 for tt_value, count in clean_tt_counts_initial.items():
     global_variables[f"clean_tt_{tt_value}_count"] = int(count)
 
-
 # --- Continue your calibration or analysis code here ---
 # e.g.:
 # run_calibration(working_df)
-
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
 datetime_value = working_df['datetime'].iloc[0]
@@ -1459,7 +1383,6 @@ end_time = end_datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
 
-
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print(f"------------- Starting date is {save_filename_suffix} -------------------") # This is longer so it displays nicely
@@ -1476,8 +1399,6 @@ if create_plots == False:
         save_pdf_filename = "essential_" + save_pdf_filename
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
-
-
 
 # -------------------------------------------------------------------------------
 # ------------ Input file and data managing to select configuration -------------
@@ -1547,9 +1468,6 @@ else:
     current_conf_number = None
     z_source = "default_no_input_file"
 
-
-
-
 def _zpos_from_conf(row):
     return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
 
@@ -1582,8 +1500,6 @@ if np.isnan(z_positions).any() or np.all(z_positions == 0):
         z_positions = np.array([0, 150, 300, 450])  # In mm
         z_source = "default_invalid_without_input"
 
-
-
 # Print the resulting z_positions
 z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
@@ -1593,9 +1509,6 @@ print(
     f"param_hash={simulated_param_hash or 'NA'} z_vector_mm={z_vector_mm}",
     force=True,
 )
-
-
-
 
 if try_to_use_reprocessing_table:
 
@@ -1666,16 +1579,9 @@ else:
 
 # sys.exit("DEBUG: Exiting after loading reprocessing parameters.")
 
-
 ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
-
-
-
-
-
-
 
 # Charge calibration to fC
 calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
@@ -1704,31 +1610,12 @@ old_timing_method = config["old_timing_method"]
 # Validation
 validate_charge_pedestal_calibration = config["validate_charge_pedestal_calibration"]
 
-
-residual_plots_fast = config["residual_plots_fast"]
-
-timtrack_iteration_fast = config["timtrack_iteration_fast"]
-timtrack_iteration_debug = config["timtrack_iteration_debug"]
-
 time_calibration = config["time_calibration"]
-time_calibration_fast = config["time_calibration_fast"]
-time_calibration_debug = config["time_calibration_debug"]
 
 charge_front_back = config["charge_front_back"]
-charge_front_back_fast = config["charge_front_back_fast"]
-charge_front_back_debug = config["charge_front_back_debug"]
 
-create_plots = config["create_plots"]
-
-
-
-limit = config["limit"]
-limit_fast = config["limit_fast"]
-limit_debug = config["limit_debug"]
-
-limit_number = config["limit_number"]
-limit_number_fast = config["limit_number_fast"]
-limit_number_debug = config["limit_number_debug"]
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
@@ -1768,7 +1655,6 @@ det_phi_left_filter = config.get("det_phi_left_filter", -3.141592)
 det_phi_right_filter = config.get("det_phi_right_filter", 3.141592)
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
 det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
-
 
 # TimTrack filter
 res_ystr_filter = config.get("res_ystr_filter", 500)
@@ -1878,14 +1764,10 @@ crosstalk_fit_sigma_max = config["crosstalk_fit_sigma_max"]
 
 slewing_correction_r2_threshold = config["slewing_correction_r2_threshold"]
 
-
-
-
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
 # -----------------------------------------------------------------------------
-
 
 # -----------------------------------------------------------------------------
 # Variables to not touch unless necessary -------------------------------------
@@ -1945,33 +1827,18 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if fast_mode:
+if False:
     print('Working in fast mode.')
-    residual_plots = residual_plots_fast
-    timtrack_iteration = timtrack_iteration_fast
-    time_calibration = time_calibration_fast
-    charge_front_back = charge_front_back_fast
-    create_plots = create_plots_fast
-    limit = limit_fast
-    limit_number = limit_number_fast
 
-if debug_mode:
+if False:
     print('Working in debug mode.')
-    residual_plots = True
-    timtrack_iteration = timtrack_iteration_debug
-    time_calibration = time_calibration_debug
-    charge_front_back = charge_front_back_debug
-    create_plots = create_plots_debug
-    limit = limit_debug
-    limit_number = limit_number_debug
 
-if debug_mode:
+if False:
     T_F_left_pre_cal = T_side_left_pre_cal_debug
     T_F_right_pre_cal = T_side_right_pre_cal_debug
 
     T_B_left_pre_cal = T_side_left_pre_cal_debug
     T_B_right_pre_cal = T_side_right_pre_cal_debug
-
 
 else:
     T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
@@ -1980,20 +1847,14 @@ else:
     T_B_left_pre_cal = T_side_left_pre_cal_default
     T_B_right_pre_cal = T_side_right_pre_cal_default
 
-
-
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
 T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
 
-
-
-
 # Y ---------------------------------------------------------------------------
 y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
             np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
 
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
 y_width_P1_and_P3 = y_widths[0]
@@ -2018,7 +1879,7 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if debug_mode:
+if False:
     T_clip_min = T_clip_min_debug
     T_clip_max = T_clip_max_debug
     Q_clip_min = Q_clip_min_debug
@@ -2035,9 +1896,6 @@ T_clip_min_ST = T_clip_min_ST
 T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
-
-
-
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -2155,7 +2013,6 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
 
 global index_of_cal_plot
 index_of_cal_plot = 1
-
 
 def _compute_derivative_pedestal_metrics(
     Q_values: np.ndarray,
@@ -2325,8 +2182,6 @@ def _compute_derivative_pedestal_metrics(
     )
     return metrics
 
-
-
 def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     
     global index_of_cal_plot
@@ -2477,7 +2332,6 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     
     pedestal = derivative_offset
     return pedestal
-
 
 def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     
@@ -2633,8 +2487,6 @@ def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = Fals
             plt.savefig(save_fig_path, format='png')
 
         plt.close()
-
-
 
     # -----------------------------------------------------------------------------------------
     
@@ -2844,11 +2696,9 @@ def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = Fals
     pedestal = offset + offset_cal
     return pedestal
 
-
 enumerate = builtins.enumerate
 def polynomial(x, *coeffs):
     return sum(c * x**i for i, c in enumerate(coeffs))
-
 
 def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     global fig_idx
@@ -2920,7 +2770,6 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
         plt.close()
     return coeffs
 
-
 def interpolate_fast_charge(width):
         """
         Interpolates the Fast Charge for given Width values using cubic spline interpolation.
@@ -2959,7 +2808,6 @@ def summary(vector):
     mu, std = norm.fit(vector)
     return mu
 
-
 def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     global fig_idx, coincidence_window_cal_ns
     fig = plt.figure(figsize=(8, 5))
@@ -2992,7 +2840,6 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
         plt.savefig(save_fig_path, format='png')
     if show_plots: plt.show()
     plt.close()
-
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
     global fig_idx
@@ -3125,13 +2972,6 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         plt.show()
     plt.close()
 
-
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -3188,7 +3028,6 @@ if calculate_Q_sum_calibration:
         QB_pedestal.append(QB_pedestal_component)
     QB_pedestal = np.array(QB_pedestal)
 
-
     # Change the values for the ones in 
     if global_variables["analysis_mode"] == 1:
         for M in [1, 2, 3, 4]:
@@ -3204,7 +3043,6 @@ if calculate_Q_sum_calibration:
                     print("Using smoothed Q_B pedestal for P",M,"s",s)
                     QB_pedestal[M-1][s-1] = qb_value
 
-
     print("\nFront Charge Pedestal:")
     print(QF_pedestal)
     print("\nBack Charge Pedestal:")
@@ -3219,7 +3057,6 @@ if calculate_Q_sum_calibration:
         for j in range(4):
             mask = charge_test_copy[f'{key}_B_{j+1}'] != 0
             charge_test.loc[mask, f'{key}_B_{j+1}'] -= QB_pedestal[i][j]
-
 
     # Plot histograms of all the pedestal substractions
     validate_charge_pedestal_calibration = False
@@ -3360,7 +3197,6 @@ if calculate_Q_sum_calibration:
             if show_plots: plt.show()
             plt.close(fig_Q)
 
-
     # ----------------------------------------------------------------------------------
     # ----------------------- Charge calibration from ns to fC -------------------------
     # ----------------------------------------------------------------------------------
@@ -3443,7 +3279,6 @@ if calculate_Q_sum_calibration:
                 plt.show()
             plt.close(fig_Q)
 
-
     if self_trigger:
         print("--------------------------------------------------------------------------")
         print("---------------- SELF TRIGGER Charge pedestal calibration-----------------")
@@ -3497,7 +3332,6 @@ if calculate_Q_sum_calibration:
             for j in range(4):
                 mask = charge_test_copy[f'{key}_B_{j+1}'] != 0
                 charge_test.loc[mask, f'{key}_B_{j+1}'] -= QB_pedestal_ST[i][j]
-
 
         # Plot histograms of all the pedestal substractions
         if validate_charge_pedestal_calibration:
@@ -3636,7 +3470,6 @@ else:
     QB_pedestal = Q_sum_calibration
     print("Skipping Charge Pedestal Calibration as per configuration.")
 
-
 if calculate_T_dif_calibration:
     print("----------------------------------------------------------------------")
     print("------------------- Position offset calibration ----------------------")
@@ -3660,7 +3493,6 @@ if calculate_T_dif_calibration:
         Tdiff_cal.append(Tdiff_cal_component)
     Tdiff_cal = np.array(Tdiff_cal)
 
-
     # Change the values for the ones in 
     if global_variables["analysis_mode"] == 1:
         for M in [1, 2, 3, 4]:
@@ -3670,7 +3502,6 @@ if calculate_T_dif_calibration:
                 if tdif_value is not None:
                     print("Using smoothed T_diff for P",M,"s",s)
                     Tdiff_cal[M-1][s-1] = tdif_value
-
 
     print("\nTime diff. offset:")
     print(Tdiff_cal, "\n")
@@ -3722,7 +3553,6 @@ if calculate_T_dif_calibration:
                 plt.savefig(save_fig_path, format='png')
             if show_plots: plt.show()
             plt.close(fig_Q)
-
 
     if self_trigger:    
         print("----------------------------------------------------------------------")
@@ -3839,7 +3669,6 @@ for key in ['T1', 'T2', 'T3', 'T4']:
 
     working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
 
-
 # Count non-zero entries in the new _T_sum, _T_diff, _Q_sum, _Q_diff columns
 def record_strip_entries(df: pd.DataFrame, suffix: str) -> None:
     """Store per-plane/strip entry counts using the canonical T_sum columns."""
@@ -3851,12 +3680,7 @@ def record_strip_entries(df: pd.DataFrame, suffix: str) -> None:
             count = int((df[colname] != 0).sum())
             global_variables[f"P{plane}_s{strip}_entries_{suffix}"] = count
 
-
 record_strip_entries(working_df, "original")
-
-
-
-
 
 if self_trigger:
 
@@ -3879,7 +3703,6 @@ if self_trigger:
             new_cols[f'{key.replace("T", "Q")}_Q_dif_{i+1}'] = (Q_F[:, i] - Q_B[:, i]) / 2
 
         working_st_df = pd.concat([working_st_df, pd.DataFrame(new_cols, index=working_st_df.index)], axis=1)
-
 
 if create_plots:
 
@@ -3928,8 +3751,6 @@ if create_plots:
     if show_plots: 
         plt.show()
     plt.close()
-
-
 
 if time_window_filtering:
     
@@ -4047,15 +3868,10 @@ if time_window_filtering:
         if show_plots: plt.show()
         plt.close(fig)
 
-
-
-
-
 # Print the unique types in clean_tt column
 iteration_tt_check += 1
 unique_tt_types = working_df['clean_tt'].unique()
 print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
-
 
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -4101,8 +3917,6 @@ for col in working_df.columns:
         working_df[col] = np.where((working_df[col] > Q_right_pre_cal) | (working_df[col] < Q_left_pre_cal), 0, working_df[col])
     if 'Q_diff' in col:
         working_df[col] = np.where((working_df[col] > Q_dif_pre_cal_threshold) | (working_df[col] < -Q_dif_pre_cal_threshold), 0, working_df[col])
-
-
 
 if create_plots:
 
@@ -4154,7 +3968,6 @@ if create_plots:
         plt.show()
     plt.close()
 
-
 print("----------------------------------------------------------------------")
 print("----------- Charge sum pedestal, calibration and filtering -----------")
 print("----------------------------------------------------------------------")
@@ -4176,7 +3989,6 @@ for col in working_df.columns:
     if 'Q_sum' in col:
         working_df[col] = np.where((working_df[col] > Q_sum_right_cal) | (working_df[col] < Q_sum_left_cal), 0, working_df[col])
 
-
 if self_trigger: 
     for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
         for j in range(4):
@@ -4185,7 +3997,6 @@ if self_trigger:
     for col in working_st_df.columns:
         if 'Q_sum' in col:
             working_st_df[col] = np.where((working_st_df[col] > Q_sum_right_cal) | (working_st_df[col] < Q_sum_left_cal), 0, working_st_df[col])
-
 
 print("----------------------------------------------------------------------")
 print("----------------- Time diff calibration and filtering ----------------")
@@ -4207,7 +4018,6 @@ for col in working_df.columns:
     if 'T_diff' in col:
         working_df[col] = np.where((working_df[col] > T_dif_cal_threshold) | (working_df[col] < -T_dif_cal_threshold), 0, working_df[col])
 
-
 if self_trigger:
     for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         for j in range(4):
@@ -4216,7 +4026,6 @@ if self_trigger:
     for col in working_st_df.columns:
         if 'T_diff' in col:
             working_st_df[col] = np.where((working_st_df[col] > T_dif_cal_threshold) | (working_st_df[col] < -T_dif_cal_threshold), 0, working_st_df[col])
-
 
 print("----------------------------------------------------------------------")
 print("---------------- Charge diff calibration and filtering ---------------")
@@ -4238,7 +4047,6 @@ _debug_plot_filter_group(
 for col in working_df.columns:
     if 'Q_dif' in col:
         working_df[col] = np.where((working_df[col] > Q_dif_cal_threshold) | (working_df[col] < -Q_dif_cal_threshold), 0, working_df[col])
-
 
 if self_trigger:
     
@@ -4306,7 +4114,6 @@ if create_plots:
     if show_plots: 
         plt.show()
     plt.close()
-
 
 print("----------------------------------------------------------------------")
 print("------------------- Charge front-back correction ---------------------")
@@ -4395,7 +4202,6 @@ else:
     print('Charge front-back correction was selected to not be performed.')
     Q_dif_cal_threshold_FB = Q_dif_cal_threshold_FB_wide
 
-
 print("----------------------------------------------------------------------")
 print("------------- Filter 5: charge difference FB filtering ---------------")
 _debug_plot_filter_group(
@@ -4407,7 +4213,6 @@ _debug_plot_filter_group(
 for col in working_df.columns:
     if 'Q_diff' in col:
         working_df[col] = np.where(np.abs(working_df[col]) < Q_dif_cal_threshold_FB, working_df[col], 0)
-
 
 if self_trigger:
     for col in working_st_df.columns:
@@ -4469,7 +4274,6 @@ if create_plots:
         plt.show()
     plt.close()
 
-
 print("----------------------------------------------------------------------")
 print("---------- Filter if any variable in the strip is 0 (1/3) ------------")
 print("----------------------------------------------------------------------")
@@ -4521,7 +4325,6 @@ record_zeroing_step_metrics(
     working_df,
 )
 
-
 if self_trigger:
     
     total_events = len(working_st_df)
@@ -4548,15 +4351,12 @@ if self_trigger:
             # Zero the affected values
             working_st_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
-
 # Print the unique types in clean_tt column
 iteration_tt_check += 1
 unique_tt_types = working_df['clean_tt'].unique()
 print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
-
 if create_plots:
-
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
     plot_df = working_df.copy()
@@ -4605,7 +4405,6 @@ if create_plots:
     if show_plots: 
         plt.show()
     plt.close()
-
 
 if self_trigger:
     if create_plots:
@@ -4658,9 +4457,6 @@ if self_trigger:
         if show_plots: 
             plt.show()
         plt.close()
-
-
-
 
 if slewing_correction:
     
@@ -4900,7 +4696,6 @@ if slewing_correction:
                 plt.show()
             plt.close()
 
-
     # -------------------------------------------------------------------
     # Slewing histograms
     # -------------------------------------------------------------------
@@ -5071,7 +4866,6 @@ if slewing_correction:
             if show_plots:
                 plt.show()
             plt.close()
-
 
     # THE FIT ----------------------------------------------------------------
     
@@ -5396,7 +5190,6 @@ if slewing_correction:
             if show_plots:
                 plt.show()
             plt.close()
-
 
 print("----------------------------------------------------------------------")
 print("----------------------- Time sum calibration -------------------------")
@@ -5984,7 +5777,6 @@ else:
     working_df['CRT_avg'] = 1000 # An extreme time to not crush the program
     print("Calibration in times was set to the reference! (calibration was not performed)\n", calibration_times)
 
-
 # Turn the matrix into a list of lists for easier access
 Tsum_cal = [list(calibration_times[i]) for i in range(len(calibration_times))]
 
@@ -6005,17 +5797,14 @@ for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         mask = working_df[f'{key}_T_sum_{j+1}'] != 0
         working_df.loc[mask, f'{key}_T_sum_{j+1}'] += Tsum_cal[i][j]
 
-
 # Print the unique types in clean_tt column
 iteration_tt_check += 1
 unique_tt_types = working_df['clean_tt'].unique()
 print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
-
 print("----------------------------------------------------------------------")
 print("--------------- Cross-talk filtering, will be set to 0 ---------------")
 print("----------------------------------------------------------------------")
-
 
 crosstalk_pedestal = {
     "crstlk_pedestal_P1s1": 0, "crstlk_pedestal_P1s2": 0, "crstlk_pedestal_P1s3": 0, "crstlk_pedestal_P1s4": 0,
@@ -6058,7 +5847,6 @@ crosstalk_linear = {
     "crstlk_mx_b_P3s1": [0, 0], "crstlk_mx_b_P3s2": [0, 0], "crstlk_mx_b_P3s3": [0, 0], "crstlk_mx_b_P3s4": [0, 0],
     "crstlk_mx_b_P4s1": [0, 0], "crstlk_mx_b_P4s2": [0, 0], "crstlk_mx_b_P4s3": [0, 0], "crstlk_mx_b_P4s4": [0, 0]
 }
-
 
 crosstalk_removal_and_recalibration = True
 
@@ -6131,8 +5919,6 @@ if crosstalk_removal_and_recalibration:
                 if pedestal_value is not None:
                     print("Using smoothed crosstalk pedestal for P",M,"s",s)
                     crosstalk_pedestal[f'crstlk_pedestal_P{M}s{s}'] = pedestal_value
-
-
 
     print("\nCrosstalk limit after fitting a gaussian to the peak:")
     print(_format_dict_for_print(crosstalk_limits))
@@ -6293,8 +6079,6 @@ if crosstalk_removal_and_recalibration:
                 mask = working_st_df[f'Q{key}_Q_sum_{j+1}'] != 0
                 working_st_df.loc[mask, f'Q{key}_Q_sum_{j+1}'] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
 
-
-
 # Fitted the crosstalk or not, the zoom is displayed
 if create_plots:
 # if create_plots or create_essential_plots:
@@ -6335,12 +6119,10 @@ if create_plots:
     if show_plots: plt.show()
     plt.close(fig_Q)
 
-
 # Print the unique types in clean_tt column
 iteration_tt_check += 1
 unique_tt_types = working_df['clean_tt'].unique()
 print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
-
 
 # Per trigger type
 if create_plots:
@@ -6387,8 +6169,6 @@ if create_plots:
             plt.savefig(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close(fig_Q)
-
-
 
 print("----------------------------------------------------------------------")
 print("---------- Filter if any variable in the strip is 0 (2/3) ------------")
@@ -6441,22 +6221,17 @@ record_zeroing_step_metrics(
     working_df,
 )
 
-
-
-
 # Drop legacy front/back columns without logging every column
 fb_columns = [col for col in working_df.columns if "_F_" in col or "_B_" in col]
 if fb_columns:
     working_df.drop(columns=fb_columns, inplace=True)
     print(f"Removed {len(fb_columns)} legacy _F_/_B_ columns.")
 
-
 # Drop column if they have *_crstlk in them
 # crstlk_columns = [col for col in working_df.columns if "_crstlk" in col]
 # if crstlk_columns:
 #     working_df.drop(columns=crstlk_columns, inplace=True)
 #     print(f"Removed {len(crstlk_columns)} columns with '_crstlk' in their names.")
-
 
 # Print the unique types in clean_tt column
 iteration_tt_check += 1
@@ -6519,7 +6294,6 @@ if slewing_correction:
             key = (int(row['plane1']), int(row['strip1']), int(row['plane2']), int(row['strip2']))
             fit_dict[key] = (row['a_semisum'], row['b_semidiff'], row['c_offset'])
 
-
     # Apply slewing correction event-by-event
     for idx, row in working_df.iterrows():
         # Identify strips with valid T and Q in this event
@@ -6579,8 +6353,6 @@ if slewing_correction:
                 corrected_value = mean_correction + np.mean(values)
                 working_df.at[idx, f"T{p}_T_sum_{s}"] = corrected_value
 
-
-
 if create_plots or create_essential_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -6633,8 +6405,6 @@ if create_plots or create_essential_plots:
         plt.show()
     plt.close()
 
-
-
 # print("----------------------------------------------------------------------")
 # print("----- Time sum setting reference to the upper-most non-zero strip -----")
 # print("----------------------------------------------------------------------")
@@ -6656,7 +6426,6 @@ if create_plots or create_essential_plots:
 #                 t_sum_col = f'T{plane}_T_sum_{strip}'
 #                 if row[t_sum_col] != 0:
 #                     working_df.at[idx, t_sum_col] = row[t_sum_col] - max_tsum
-
 
 #     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
 #     plot_df = working_df.copy()
@@ -6770,14 +6539,12 @@ if create_plots or create_essential_plots:
 #             # Zero the affected values
 #             working_st_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
 
-
 time_study_tsum = True
 
 if time_study_tsum:
     print("----------------------------------------------------------------------")
     print("----------------- Filter the Tsum values -----------------------------")
     print("----------------------------------------------------------------------")
-
 
     # I want you now to go pair by pair and plot the histograms of the Tsum differences, grouping all trigger types
     tt_values = working_df['clean_tt'].unique()
@@ -6970,7 +6737,6 @@ if time_study_tsum:
                             plt.show()
                         plt.close(fig)
 
-
     # # Define the sum of two Gaussians
     # def double_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
     #     return (A1 * np.exp(-(x - mu1)**2 / (2 * sigma1**2)) +
@@ -6997,7 +6763,6 @@ if time_study_tsum:
     #         # Fallback to midpoint if optimization fails
     #         x_max = (mu1 + mu2) / 2
     #         return x_max, double_gaussian(x_max, A1, mu1, sigma1, A2, mu2, sigma2)
-
 
     # def find_threshold_crossings(f, popt, max_val, rel_th=0.01, x_range=(-10, 10), tol=1e-2):
     #     """
@@ -7087,7 +6852,6 @@ if time_study_tsum:
     #         mask = (series >= q_low) & (series <= q_high)
     #         working_df.loc[~mask & (series != 0), col] = 0.0
 
-
     #     fig, axs = plt.subplots(4, 4, figsize=(20, 16))
     #     fig.suptitle("Double Gaussian Fits for $T_\\mathrm{sum}$ Distributions", fontsize=16)
 
@@ -7142,7 +6906,6 @@ if time_study_tsum:
     #         plt.show()
     #     plt.close()
 
-
 print("----------------------------------------------------------------------")
 print("---------- Filter if any variable in the strip is 0 (4/3) ------------")
 print("----------------------------------------------------------------------")
@@ -7194,12 +6957,9 @@ record_zeroing_step_metrics(
     working_df,
 )
 
-
 print("----------------------------------------------------------------------")
 print("--------------------- Using clean_tt as trigger ----------------------")
 print("----------------------------------------------------------------------")
-
-
 
 if time_window_filtering:
     print("----------------------------------------------------------------------")
@@ -7325,7 +7085,6 @@ if time_window_filtering:
             if show_plots: plt.show()
             plt.close(fig)
 
-
     if create_plots:
         # Identify all _T_sum_ columns
         T_sum_columns = working_df.filter(regex='_T_sum_').columns
@@ -7392,9 +7151,6 @@ if time_window_filtering:
                 plt.show()
             plt.close()
 
-
-
-
 print("----------------------------------------------------------------------")
 print("---------- Filter if any variable in the strip is 0 (5/3) ------------")
 print("----------------------------------------------------------------------")
@@ -7448,18 +7204,15 @@ record_zeroing_step_metrics(
 
 working_df = working_df.copy()
 
-
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Save the metadata, calibrations and monitoring stuff ------------------------
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-
 the_filename = "placeholder"
 analysis_date = datetime.now().strftime("%Y-%m-%d")
 print(f"Analysis date and time: {analysis_date}")
-
 
 # Include pedestal and calibration parameters
 for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
@@ -7480,7 +7233,6 @@ for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
         global_variables[f'{module}_s{strip}_Q_B'] = QB_pedestal[i][j]
         global_variables[f'{module}_s{strip}_T_sum'] = Tsum_cal[i][j]
         global_variables[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j]
-
 
 # # Load or initialize metadata DataFrame
 # if os.path.exists(csv_path):
@@ -7511,8 +7263,6 @@ for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
 # metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
 # print(f'{csv_path} updated with the calibration summary.')
 
-
-
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
     if len(plot_list) > 0:
@@ -7539,8 +7289,6 @@ if create_pdf:
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
 
-
-
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
 os.makedirs(f"{output_directory}", exist_ok=True)
@@ -7554,13 +7302,8 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 # (Here, you would have your data cleaning code before saving)
 # working_df = ...
 
-
-
-
-
 # Pattern for Q4_Q_sum_3, Q4_Q_sum_4, Q3_Q_sum_3...
 Q_SUM_PATTERN = re.compile(r"^Q\d+_Q_sum_\d+$")
-
 
 # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
 Q_cols = collect_columns(working_df.columns, Q_SUM_PATTERN)
@@ -7599,11 +7342,6 @@ if component_cols:
         removed_all_zero,
         len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
     )
-
-
-
-
-
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 
@@ -7662,20 +7400,10 @@ print(f"Final number of events in the dataframe: {final_number_of_events}")
 # for col in working_df.columns:
 #     print(f" - {col}")
 
-
-
 record_strip_entries(working_df, "final")
-
-
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
-
-
-
-
-
-
 
 # End of the execution time
 end_time_execution = datetime.now()
@@ -7688,7 +7416,6 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
-
 
  
 # -------------------------------------------------------------------------------
@@ -7717,7 +7444,6 @@ metadata_filter_csv_path = save_metadata(
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
-
 # -------------------------------------------------------------------------------
 # Execution metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
@@ -7739,7 +7465,6 @@ metadata_execution_csv_path = save_metadata(
     },
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
-
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------
@@ -7778,11 +7503,9 @@ metadata_specific_csv_path = save_metadata(
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
-
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Calibrated dataframe saved to: {OUT_PATH}")
-
 
 # Move the original datafile to COMPLETED -------------------------------------
 print("Moving file to COMPLETED directory...")

@@ -1,29 +1,12 @@
-fast_mode: false
-debug_mode: false
 last_file_test: true
-run_jupyter_notebook: false
-jupyter_station_default_task_1: '2'
+date_range:
+  start: null
+  end: null
 complete_reanalysis: false
 force_replacement: true
 article_format: false
-create_plots: false
-create_essential_plots: false
-save_plots: true
-create_pdf: false
-show_plots: false
-create_debug_plots: false
-limit: false
-limit_number: 10000
-limit_fast: false
-limit_number_fast: 10000
-limit_debug: true
-limit_number_debug: 10000
+# create_plots options: null | debug | usual | all
+create_plots: all
+limit_number: null
 EXPECTED_COLUMNS_config: 71
-residual_plots_fast: false
-charge_front_back_fast: false
-charge_front_back_debug: false
 time_window_filtering: true
-time_calibration_fast: false
-time_calibration_debug: false
-timtrack_iteration_fast: false
-timtrack_iteration_debug: false

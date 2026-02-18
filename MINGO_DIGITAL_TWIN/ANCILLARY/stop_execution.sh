@@ -116,7 +116,6 @@ mkdir -p "${LOG_DIR}"
     "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py"
     "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py"
     "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py"
-    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/reset_param_mesh_from_final.py"
   )
 
   declare -A pid_to_cmd=()

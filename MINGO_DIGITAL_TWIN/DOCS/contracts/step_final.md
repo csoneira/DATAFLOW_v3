@@ -15,7 +15,7 @@ Format STEP 10 outputs into station-style .dat files and register outputs.
 
 ## Output schema
 Outputs:
-- `SIMULATED_DATA/mi00YYDDDHHMMSS.dat` (ASCII text).
+- `SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat` (ASCII text).
 - `SIMULATED_DATA/step_final_output_registry.json`.
 - `SIMULATED_DATA/step_final_simulation_params.csv`.
 

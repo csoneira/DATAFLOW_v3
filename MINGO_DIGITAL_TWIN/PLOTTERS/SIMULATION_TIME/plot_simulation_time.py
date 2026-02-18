@@ -199,6 +199,7 @@ def main() -> None:
 
     # Requested: log-scale on x-axis (exec_time_s) in upper panel.
     ax_hist.set_xscale("log")
+    ax_hist.set_yscale("log")
 
     # Time series panel: timestamp_utc in x, exec_time_s in y (log-scale)
     for step in plotted_steps:

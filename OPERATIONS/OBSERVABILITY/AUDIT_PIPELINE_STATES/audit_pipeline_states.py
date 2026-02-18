@@ -118,33 +118,52 @@ STAGE_RANK = [
     ("imported", "Imported"),
 ]
 
-STAGE_COLORS = {
-    "Processed": "#2e7d32",
-    "Step 3 Split": "#00695c",
-    "Step 2 Output": "#0277bd",
-    "Step 1 Output": "#1565c0",
-    "Task 5 Output": "#283593",
-    "Task 5 Processing": "#5e35b1",
-    "Task 5 Unprocessed": "#7b1fa2",
-    "Task 4 Output": "#6a1b9a",
-    "Task 4 Processing": "#ad1457",
-    "Task 4 Unprocessed": "#c2185b",
-    "Task 3 Output": "#c62828",
-    "Task 3 Processing": "#d32f2f",
-    "Task 3 Unprocessed": "#e53935",
-    "Task 2 Output": "#ef6c00",
-    "Task 2 Processing": "#f57c00",
-    "Task 2 Unprocessed": "#fb8c00",
-    "Task 1 Output": "#f9a825",
-    "Task 1 Processing": "#fbc02d",
-    "Task 1 Unprocessed": "#fdd835",
-    "Stage0_to_1": "#8d6e63",
-    "Raw Brought": "#9e9e9e",
-    "Reproc HLD Brought": "#6d4c41",
-    "Reproc Dat Unpacked": "#546e7a",
-    "Imported": "#455a64",
-    "Unknown": "#757575",
-}
+STATION_ZERO = "0"
+STATION_ZERO_DISABLED_FLAGS = {"reproc_hld_brought", "reproc_dat_unpacked"}
+TURBO_DISCRETE_HEX = [
+    "#30123b",
+    "#3b2f80",
+    "#434eba",
+    "#466be3",
+    "#4685fa",
+    "#3ba0fd",
+    "#28bceb",
+    "#1ad2d2",
+    "#1ae4b6",
+    "#32f298",
+    "#55fa76",
+    "#80ff53",
+    "#a4fc3c",
+    "#bef434",
+    "#d9e436",
+    "#eecf3a",
+    "#faba39",
+    "#fe9e2f",
+    "#fb7e21",
+    "#f26014",
+    "#e4450a",
+    "#d02f05",
+    "#b91e02",
+    "#9b0f01",
+    "#7a0403",
+]
+
+
+def build_stage_colors() -> Dict[str, str]:
+    labels = [label for _flag, label in STAGE_RANK] + ["Unknown"]
+    return {
+        label: TURBO_DISCRETE_HEX[idx % len(TURBO_DISCRETE_HEX)]
+        for idx, label in enumerate(labels)
+    }
+
+
+STAGE_COLORS = build_stage_colors()
+
+
+def active_flags_for_station(station: str) -> List[str]:
+    if station == STATION_ZERO:
+        return [flag for flag in KNOWN_FLAGS if flag not in STATION_ZERO_DISABLED_FLAGS]
+    return list(KNOWN_FLAGS)
 
 
 def parse_station_list(text: str) -> List[str]:
@@ -421,23 +440,24 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         count_csv_rows(imported),
     )
 
-    hld_brought = station_dir / "STAGE_0" / "REPROCESSING" / "STEP_1" / "METADATA" / "hld_files_brought.csv"
-    add_entry(
-        "reject_list",
-        hld_brought,
-        "Reprocessing Step 1: HLD basenames already brought.",
-        "MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh",
-        count_csv_rows(hld_brought),
-    )
+    if station != STATION_ZERO:
+        hld_brought = station_dir / "STAGE_0" / "REPROCESSING" / "STEP_1" / "METADATA" / "hld_files_brought.csv"
+        add_entry(
+            "reject_list",
+            hld_brought,
+            "Reprocessing Step 1: HLD basenames already brought.",
+            "MASTER/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh",
+            count_csv_rows(hld_brought),
+        )
 
-    dat_unpacked = station_dir / "STAGE_0" / "REPROCESSING" / "STEP_2" / "METADATA" / "dat_files_unpacked.csv"
-    add_entry(
-        "reject_list",
-        dat_unpacked,
-        "Reprocessing Step 2: dat files already unpacked.",
-        "MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh",
-        count_csv_rows(dat_unpacked),
-    )
+        dat_unpacked = station_dir / "STAGE_0" / "REPROCESSING" / "STEP_2" / "METADATA" / "dat_files_unpacked.csv"
+        add_entry(
+            "reject_list",
+            dat_unpacked,
+            "Reprocessing Step 2: dat files already unpacked.",
+            "MASTER/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh",
+            count_csv_rows(dat_unpacked),
+        )
 
     processed = PROCESSED_ROOT / f"MINGO0{station}_processed_basenames.csv"
     add_entry(
@@ -605,35 +625,36 @@ def collect_station_states(
     )
     mark_events(imported_events, "imported", str(imported_path))
 
-    hld_brought_path = (
-        station_dir
-        / "STAGE_0"
-        / "REPROCESSING"
-        / "STEP_1"
-        / "METADATA"
-        / "hld_files_brought.csv"
-    )
-    hld_brought_events = load_csv_basename_events(
-        hld_brought_path,
-        base_columns=("hld_name", "basename"),
-        timestamp_columns=("bring_timesamp", "bring_timestamp", "timestamp"),
-    )
-    mark_events(hld_brought_events, "reproc_hld_brought", str(hld_brought_path))
+    if station != STATION_ZERO:
+        hld_brought_path = (
+            station_dir
+            / "STAGE_0"
+            / "REPROCESSING"
+            / "STEP_1"
+            / "METADATA"
+            / "hld_files_brought.csv"
+        )
+        hld_brought_events = load_csv_basename_events(
+            hld_brought_path,
+            base_columns=("hld_name", "basename"),
+            timestamp_columns=("bring_timesamp", "bring_timestamp", "timestamp"),
+        )
+        mark_events(hld_brought_events, "reproc_hld_brought", str(hld_brought_path))
 
-    dat_unpacked_path = (
-        station_dir
-        / "STAGE_0"
-        / "REPROCESSING"
-        / "STEP_2"
-        / "METADATA"
-        / "dat_files_unpacked.csv"
-    )
-    dat_unpacked_events = load_csv_basename_events(
-        dat_unpacked_path,
-        base_columns=("dat_name", "basename"),
-        timestamp_columns=("execution_timestamp", "timestamp"),
-    )
-    mark_events(dat_unpacked_events, "reproc_dat_unpacked", str(dat_unpacked_path))
+        dat_unpacked_path = (
+            station_dir
+            / "STAGE_0"
+            / "REPROCESSING"
+            / "STEP_2"
+            / "METADATA"
+            / "dat_files_unpacked.csv"
+        )
+        dat_unpacked_events = load_csv_basename_events(
+            dat_unpacked_path,
+            base_columns=("dat_name", "basename"),
+            timestamp_columns=("execution_timestamp", "timestamp"),
+        )
+        mark_events(dat_unpacked_events, "reproc_dat_unpacked", str(dat_unpacked_path))
 
     processed_path = PROCESSED_ROOT / f"MINGO0{station}_processed_basenames.csv"
     processed_events = load_csv_basename_events(
@@ -1089,7 +1110,11 @@ th { background: #f4f4f4; text-align: left; }
         html_parts.append(f"<h2>Basename States (top {len(limited)} by age)</h2>")
         html_parts.append("<table><thead><tr>")
         base_columns = ["station", "basename", "stage", "last_seen", "age_hours", "reason", "last_seen_source"]
-        flag_columns = [flag for flag, _label in STAGE_RANK if flag in KNOWN_FLAGS]
+        flag_columns = [
+            flag
+            for flag, _label in STAGE_RANK
+            if flag in KNOWN_FLAGS and any(item.get(flag, "") for item in limited)
+        ]
         for col in base_columns + flag_columns:
             html_parts.append(f"<th>{_html_escape(col)}</th>")
         html_parts.append("</tr></thead><tbody>")
@@ -1186,9 +1211,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     for station in stations:
         states, last_seen, last_seen_source, inventory = collect_station_states(station)
+        station_flags = active_flags_for_station(station)
+        if station == STATION_ZERO:
+            for flags in states.values():
+                for disabled_flag in STATION_ZERO_DISABLED_FLAGS:
+                    flags.pop(disabled_flag, None)
         inventory_rows.extend(inventory)
         counts = summarize_counts(states)
-        for flag in all_flags:
+        for flag in station_flags:
             summary_rows.append(
                 {"station": station, "flag": flag, "count": str(counts.get(flag, 0))}
             )

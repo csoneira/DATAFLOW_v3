@@ -66,6 +66,341 @@ if [[ ! "$station" =~ ^[1-4]$ ]]; then
   exit 1
 fi
 
+NEW_FILES_CONFIG_FILE="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/NEW_FILES/config_new_files.yaml"
+
+is_new_files_station_enabled() {
+  local station_id="$1"
+  local cfg_path="$NEW_FILES_CONFIG_FILE"
+  [[ -f "$cfg_path" ]] || return 0
+
+  local decision
+  decision=$(python3 - "$cfg_path" "$station_id" <<'PY' || true
+import sys
+
+cfg_path, station_raw = sys.argv[1:3]
+
+try:
+  import yaml
+except ImportError:
+  print("1")
+  raise SystemExit(0)
+
+def parse_int(value):
+  try:
+    return int(str(value).strip())
+  except Exception:
+    return None
+
+def normalize_stations(value):
+  if value is None:
+    return None
+  if isinstance(value, str):
+    text = value.strip().lower()
+    if not text:
+      return []
+    if text == "all":
+      return "all"
+    out = []
+    for token in text.replace(";", ",").split(","):
+      token = token.strip()
+      if not token:
+        continue
+      try:
+        out.append(int(token))
+      except Exception:
+        continue
+    return out
+  if isinstance(value, (list, tuple, set)):
+    out = []
+    for item in value:
+      if isinstance(item, str):
+        parsed = normalize_stations(item)
+        if parsed == "all":
+          return "all"
+        if isinstance(parsed, list):
+          out.extend(parsed)
+          continue
+      try:
+        out.append(int(item))
+      except Exception:
+        continue
+    return out
+  if isinstance(value, (int, float)):
+    try:
+      return [int(value)]
+    except Exception:
+      return []
+  return []
+
+station_id = parse_int(station_raw)
+if station_id is None:
+  print("1")
+  raise SystemExit(0)
+
+try:
+  with open(cfg_path, "r", encoding="utf-8") as handle:
+    data = yaml.safe_load(handle) or {}
+except Exception:
+  data = {}
+
+node = data.get("new_files_run_matrix")
+if not isinstance(node, dict):
+  print("1")
+  raise SystemExit(0)
+
+if not bool(node.get("enabled", False)):
+  print("1")
+  raise SystemExit(0)
+
+mode = str(node.get("mode", "whitelist")).strip().lower()
+stations_node = node.get("stations")
+if isinstance(stations_node, dict):
+  station_list = normalize_stations(stations_node.get(str(station_id)))
+  if station_list is None:
+    station_list = normalize_stations(stations_node.get("0"))
+else:
+  station_list = normalize_stations(stations_node)
+
+default_stations = normalize_stations(node.get("default_stations", []))
+
+if mode == "blacklist":
+  disabled = False
+  if station_list is None:
+    if default_stations == "all":
+      disabled = True
+    elif isinstance(default_stations, list) and station_id in default_stations:
+      disabled = True
+  elif station_list == "all":
+    disabled = True
+  elif isinstance(station_list, list) and station_id in station_list:
+    disabled = True
+  print("0" if disabled else "1")
+  raise SystemExit(0)
+
+allowed = False
+if station_list is None:
+  if default_stations == "all":
+    allowed = True
+  elif isinstance(default_stations, list) and station_id in default_stations:
+    allowed = True
+elif station_list == "all":
+  allowed = True
+elif isinstance(station_list, list) and station_id in station_list:
+  allowed = True
+
+print("1" if allowed else "0")
+PY
+  )
+
+  [[ "$decision" != "0" ]]
+}
+
+if ! is_new_files_station_enabled "$station"; then
+  log_info "Skipping station ${station}: disabled by new_files_run_matrix."
+  exit 0
+fi
+
+date_range_filter_enabled=false
+declare -a date_ranges_start_epochs=()
+declare -a date_ranges_end_epochs=()
+declare -a date_ranges_display_pairs=()
+
+load_new_files_date_ranges() {
+  local result
+  if ! result=$(python3 - "$NEW_FILES_CONFIG_FILE" <<'PY'
+import sys
+import shlex
+import datetime as dt
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+cfg_path = sys.argv[1]
+
+def load_yaml(path):
+    if yaml is None:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def normalize_iso(text: str) -> str:
+    text = text.strip()
+    if text.endswith("Z") and "T" in text:
+        text = text[:-1] + "+00:00"
+    return text
+
+def parse_epoch(value, is_end=False):
+    if value in ("", None):
+        return None
+    text = normalize_iso(str(value))
+    if not text:
+        return None
+    parsed = None
+    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            if fmt is None:
+                parsed = dt.datetime.fromisoformat(text)
+            else:
+                parsed = dt.datetime.strptime(text, fmt)
+            break
+        except Exception:
+            parsed = None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    else:
+        parsed = parsed.astimezone(dt.timezone.utc)
+    if is_end and "T" not in text and " " not in text:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return int(parsed.timestamp())
+
+ranges = []
+
+def add_interval(start_raw, end_raw):
+    start_epoch = parse_epoch(start_raw, is_end=False)
+    end_epoch = parse_epoch(end_raw, is_end=True)
+    if start_epoch is None and end_epoch is None:
+        return
+    start_label = "" if start_raw in (None, "") else str(start_raw)
+    end_label = "" if end_raw in (None, "") else str(end_raw)
+    ranges.append((start_epoch, end_epoch, start_label, end_label))
+
+def collect(source):
+    if not isinstance(source, dict):
+        return
+    legacy = source.get("date_range")
+    if isinstance(legacy, dict):
+        add_interval(legacy.get("start"), legacy.get("end"))
+    range_list = source.get("date_ranges")
+    if isinstance(range_list, list):
+        for item in range_list:
+            if isinstance(item, dict):
+                add_interval(item.get("start"), item.get("end"))
+    nested = source.get("new_files_date_selection")
+    if isinstance(nested, dict):
+        collect(nested)
+
+collect(load_yaml(cfg_path))
+
+deduped = []
+seen = set()
+for item in ranges:
+    if item in seen:
+        continue
+    seen.add(item)
+    deduped.append(item)
+
+epochs = ";".join(
+    f"{'' if start is None else start},{'' if end is None else end}"
+    for start, end, _, _ in deduped
+)
+labels = ";".join(f"{a}|{b}" for _, _, a, b in deduped)
+print(f"NEW_FILES_DATE_RANGES_EPOCHS={shlex.quote(epochs)}")
+print(f"NEW_FILES_DATE_RANGES_LABELS={shlex.quote(labels)}")
+PY
+  ); then
+    return 0
+  fi
+
+  eval "$result"
+  local serialized="${NEW_FILES_DATE_RANGES_EPOCHS:-}"
+  local labels="${NEW_FILES_DATE_RANGES_LABELS:-}"
+  date_ranges_start_epochs=()
+  date_ranges_end_epochs=()
+  date_ranges_display_pairs=()
+  date_range_filter_enabled=false
+
+  if [[ -n "$serialized" ]]; then
+    local -a epoch_chunks=()
+    local -a label_chunks=()
+    IFS=';' read -r -a epoch_chunks <<< "$serialized"
+    IFS=';' read -r -a label_chunks <<< "$labels"
+    local idx
+    for idx in "${!epoch_chunks[@]}"; do
+      local chunk="${epoch_chunks[idx]}"
+      [[ -z "$chunk" || "$chunk" != *,* ]] && continue
+      local start_epoch="${chunk%%,*}"
+      local end_epoch="${chunk#*,}"
+      [[ -n "$start_epoch" && ! "$start_epoch" =~ ^[0-9]+$ ]] && continue
+      [[ -n "$end_epoch" && ! "$end_epoch" =~ ^[0-9]+$ ]] && continue
+      [[ -z "$start_epoch" && -z "$end_epoch" ]] && continue
+      date_ranges_start_epochs+=("$start_epoch")
+      date_ranges_end_epochs+=("$end_epoch")
+
+      local label_chunk="${label_chunks[idx]:-}"
+      local start_label=""
+      local end_label=""
+      if [[ "$label_chunk" == *"|"* ]]; then
+        start_label="${label_chunk%%|*}"
+        end_label="${label_chunk#*|}"
+      fi
+      [[ -z "$start_label" ]] && start_label="-inf"
+      [[ -z "$end_label" ]] && end_label="+inf"
+      date_ranges_display_pairs+=("${start_label} to ${end_label}")
+    done
+  fi
+
+  if (( ${#date_ranges_start_epochs[@]} > 0 )); then
+    date_range_filter_enabled=true
+    local range_display
+    range_display="$(printf '%s; ' "${date_ranges_display_pairs[@]}")"
+    range_display="${range_display%; }"
+    log_info "Date range filtering enabled (${#date_ranges_start_epochs[@]} interval(s)): ${range_display}."
+  fi
+}
+
+extract_file_epoch_from_name() {
+  local file_path="$1"
+  local name="${file_path##*/}"
+  name="${name%.dat}"
+  if [[ "$name" =~ ([0-9]{11})$ ]]; then
+    local key="${BASH_REMATCH[1]}"
+    local yy="${key:0:2}"
+    local doy="${key:2:3}"
+    local hh="${key:5:2}"
+    local mm="${key:7:2}"
+    local ss="${key:9:2}"
+    if (( 10#$doy < 1 || 10#$doy > 366 )); then
+      return 1
+    fi
+    local day_index=$((10#$doy - 1))
+    date -u -d "20${yy}-01-01 +${day_index} days ${hh}:${mm}:${ss}" +%s 2>/dev/null
+    return $?
+  fi
+  return 1
+}
+
+filename_matches_date_ranges() {
+  local file_path="$1"
+  if ! $date_range_filter_enabled; then
+    return 0
+  fi
+  local file_epoch
+  file_epoch=$(extract_file_epoch_from_name "$file_path") || return 1
+  local idx
+  for idx in "${!date_ranges_start_epochs[@]}"; do
+    local start_epoch="${date_ranges_start_epochs[idx]}"
+    local end_epoch="${date_ranges_end_epochs[idx]}"
+    if [[ -n "$start_epoch" && "$file_epoch" -lt "$start_epoch" ]]; then
+      continue
+    fi
+    if [[ -n "$end_epoch" && "$file_epoch" -gt "$end_epoch" ]]; then
+      continue
+    fi
+    return 0
+  done
+  return 1
+}
+
+load_new_files_date_ranges
+
 # --------------------------------------------------------------------------------------------
 # Prevent the script from running multiple instances -----------------------------------------
 # --------------------------------------------------------------------------------------------
@@ -250,6 +585,9 @@ if [[ $connection_ok -eq 1 ]]; then
         if [[ -n ${logged_files["$candidate"]+_} ]]; then
           continue
         fi
+        if ! filename_matches_date_ranges "$candidate"; then
+          continue
+        fi
         printf '%s\0' "$candidate" >> "$filtered_rsync_file_list"
       done < "$rsync_file_list"
 
@@ -318,7 +656,7 @@ echo "Bringing the input files from the logbook..."
 # ---------------------------------------------
 # Read IDs from YAML (requires PyYAML in Python)
 # ---------------------------------------------
-CONFIG_FILE="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/NEW_FILES/config_new_files.yaml"
+CONFIG_FILE="$NEW_FILES_CONFIG_FILE"
 SHEET_ID=$(yq -r '.logbook.sheet_id' "$CONFIG_FILE")
 GID=$(yq -r ".logbook.gid_by_station.\"$station\"" "$CONFIG_FILE")
 

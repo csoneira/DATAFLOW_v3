@@ -23,7 +23,10 @@ def plot_trigger_summary(df: pd.DataFrame, output_path: Path) -> None:
             for patch in bars:
                 patch.set_rasterized(True)
         ax.set_title("tt_trigger counts")
-        pdf.savefig(fig)
+        ax.set_xlabel("tt_trigger")
+        ax.set_ylabel("Counts")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
         fig, axes = plt.subplots(4, 4, figsize=(12, 10))
@@ -32,6 +35,9 @@ def plot_trigger_summary(df: pd.DataFrame, output_path: Path) -> None:
                 ax = axes[plane_idx - 1, strip_idx - 1]
                 tf_col = f"T_front_{plane_idx}_s{strip_idx}"
                 tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+                if tf_col not in df.columns and tb_col not in df.columns:
+                    ax.axis("off")
+                    continue
                 if tf_col in df.columns:
                     vals = df[tf_col].to_numpy(dtype=float)
                     vals = vals[(~np.isnan(vals)) & (vals != 0)]
@@ -41,7 +47,38 @@ def plot_trigger_summary(df: pd.DataFrame, output_path: Path) -> None:
                     vals = vals[(~np.isnan(vals)) & (vals != 0)]
                     ax.hist(vals, bins=80, color="darkorange", alpha=0.6)
                 ax.set_title(f"P{plane_idx} S{strip_idx}")
-        pdf.savefig(fig)
+                ax.set_xlabel("time (ns)")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+        for plane_idx in range(1, 5):
+            for strip_idx in range(1, 5):
+                ax = axes[plane_idx - 1, strip_idx - 1]
+                qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+                qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+                if qf_col not in df.columns and qb_col not in df.columns:
+                    ax.axis("off")
+                    continue
+                if qf_col in df.columns:
+                    vals = df[qf_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="steelblue", alpha=0.6)
+                if qb_col in df.columns:
+                    vals = df[qb_col].to_numpy(dtype=float)
+                    vals = vals[vals != 0]
+                    ax.hist(vals, bins=80, color="darkorange", alpha=0.6)
+                ax.set_title(f"P{plane_idx} S{strip_idx}")
+                ax.set_xlabel("charge")
+        for ax in axes.flatten():
+            for patch in ax.patches:
+                patch.set_rasterized(True)
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
 
@@ -54,7 +91,7 @@ def find_any_chunk_for_step(step: int) -> Path | None:
     if manifests:
         try:
             j = json.loads(manifests[0].read_text())
-            parts_list = [p for p in j.get("parts", []) if p.endswith(".pkl")]
+            parts_list = [p for p in (j.get("parts") or j.get("chunks") or []) if str(p).endswith(".pkl")]
             if parts_list:
                 return Path(parts_list[0])
         except Exception:
@@ -65,7 +102,7 @@ def find_any_chunk_for_step(step: int) -> Path | None:
 def load_df(path: Path) -> pd.DataFrame:
     if path.name.endswith(".chunks.json"):
         j = json.loads(path.read_text())
-        parts = [p for p in j.get("parts", []) if p.endswith(".pkl")]
+        parts = [p for p in (j.get("parts") or j.get("chunks") or []) if str(p).endswith(".pkl")]
         if parts:
             path = Path(parts[0])
         else:

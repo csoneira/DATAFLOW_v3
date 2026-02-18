@@ -94,6 +94,147 @@ if ! $refresh_metadata && ! $plot_hist && ! $update_range_only; then
   usage
 fi
 
+config_file_shared="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
+config_file_step="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/REPROCESSING/STEP_0/config_step_0.yaml"
+
+is_reprocessing_step_enabled() {
+  local station_id="$1"
+  local step_id="$2"
+  local cfg_path="$config_file_shared"
+  [[ -f "$cfg_path" ]] || return 0
+
+  local decision
+  decision=$(python3 - "$cfg_path" "$station_id" "$step_id" <<'PY' || true
+import sys
+
+cfg_path, station_raw, step_raw = sys.argv[1:4]
+
+try:
+  import yaml
+except ImportError:
+  print("1")
+  raise SystemExit(0)
+
+def parse_int(value):
+  try:
+    return int(str(value).strip())
+  except Exception:
+    return None
+
+def normalize_steps(value):
+  if value is None:
+    return None
+  if isinstance(value, str):
+    text = value.strip().lower()
+    if not text:
+      return []
+    if text == "all":
+      return "all"
+    out = []
+    for token in text.replace(";", ",").split(","):
+      token = token.strip().lower()
+      if not token:
+        continue
+      if token.startswith("step_"):
+        token = token.split("step_", 1)[1]
+      elif token.startswith("step"):
+        token = token[4:]
+      try:
+        out.append(int(token))
+      except Exception:
+        continue
+    return out
+  if isinstance(value, (list, tuple, set)):
+    out = []
+    for item in value:
+      if isinstance(item, str):
+        parsed = normalize_steps(item)
+        if parsed == "all":
+          return "all"
+        if isinstance(parsed, list):
+          out.extend(parsed)
+          continue
+      try:
+        out.append(int(item))
+      except Exception:
+        continue
+    return out
+  if isinstance(value, (int, float)):
+    try:
+      return [int(value)]
+    except Exception:
+      return []
+  return []
+
+station_id = parse_int(station_raw)
+step_id = parse_int(step_raw)
+if station_id is None or step_id is None:
+  print("1")
+  raise SystemExit(0)
+
+try:
+  with open(cfg_path, "r", encoding="utf-8") as handle:
+    data = yaml.safe_load(handle) or {}
+except Exception:
+  data = {}
+
+node = data.get("reprocessing_run_matrix")
+if not isinstance(node, dict):
+  print("1")
+  raise SystemExit(0)
+
+if not bool(node.get("enabled", False)):
+  print("1")
+  raise SystemExit(0)
+
+mode = str(node.get("mode", "whitelist")).strip().lower()
+stations_node = node.get("stations")
+if not isinstance(stations_node, dict):
+  stations_node = {}
+
+default_steps = normalize_steps(node.get("default_steps", []))
+station_steps = normalize_steps(stations_node.get(str(station_id)))
+if station_steps is None:
+  station_steps = normalize_steps(stations_node.get("0"))
+
+if mode == "blacklist":
+  disabled = False
+  if station_steps is None:
+    if default_steps == "all":
+      disabled = True
+    elif isinstance(default_steps, list) and step_id in default_steps:
+      disabled = True
+  elif station_steps == "all":
+    disabled = True
+  elif isinstance(station_steps, list) and step_id in station_steps:
+    disabled = True
+  print("0" if disabled else "1")
+  raise SystemExit(0)
+
+# whitelist (default)
+allowed = False
+if station_steps is None:
+  if default_steps == "all":
+    allowed = True
+  elif isinstance(default_steps, list) and step_id in default_steps:
+    allowed = True
+elif station_steps == "all":
+  allowed = True
+elif isinstance(station_steps, list) and step_id in station_steps:
+  allowed = True
+
+print("1" if allowed else "0")
+PY
+  )
+
+  [[ "$decision" != "0" ]]
+}
+
+if ! is_reprocessing_step_enabled "$station" 0; then
+  log_info "Skipping station ${station}: STEP_0 disabled by reprocessing_run_matrix."
+  exit 0
+fi
+
 station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}"
 step0_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_0"
 metadata_directory="${step0_directory}/METADATA"
@@ -101,7 +242,7 @@ input_directory="${step0_directory}/INPUT_FILES"
 output_directory="${step0_directory}/OUTPUT_FILES"
 plots_directory="${step0_directory}/PLOTS"
 mkdir -p "$metadata_directory" "$input_directory" "$output_directory" "$plots_directory"
-config_file="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
+
 min_filesize_mb=1    # default lower cutoff in MB (overridden by config)
 max_filesize_mb=0    # default upper cutoff in MB; 0 disables upper bound
 min_filesize_bytes=0
@@ -144,11 +285,12 @@ strip_suffix() {
 }
 
 load_prepare_metadata_config() {
-  local cfg_path="$config_file"
-  [[ -f "$cfg_path" ]] || return 0
+  local cfg_shared_path="$config_file_shared"
+  local cfg_step_path="$config_file_step"
+  [[ -f "$cfg_shared_path" || -f "$cfg_step_path" ]] || return 0
 
   local result
-  if result=$(python3 - "$cfg_path" <<'PY'
+  if result=$(python3 - "$cfg_shared_path" "$cfg_step_path" <<'PY'
 import sys
 import shlex
 import datetime as dt
@@ -158,16 +300,31 @@ try:
 except ImportError:
   yaml = None
 
-cfg_path = sys.argv[1]
-data = {}
-if yaml is not None:
-  try:
-    with open(cfg_path, "r") as handle:
-      data = yaml.safe_load(handle) or {}
-  except Exception:
-    data = {}
+cfg_shared_path = sys.argv[1]
+cfg_step_path = sys.argv[2]
 
-config = data.get("prepare_reprocessing_metadata") or {}
+def load_yaml_dict(path):
+  if yaml is None or not path:
+    return {}
+  try:
+    with open(path, "r") as handle:
+      loaded = yaml.safe_load(handle) or {}
+    return loaded if isinstance(loaded, dict) else {}
+  except Exception:
+    return {}
+
+shared_data = load_yaml_dict(cfg_shared_path)
+step_data = load_yaml_dict(cfg_step_path)
+shared_cfg = shared_data.get("prepare_reprocessing_metadata")
+step_cfg = step_data.get("prepare_reprocessing_metadata")
+if not isinstance(shared_cfg, dict):
+  shared_cfg = {}
+if not isinstance(step_cfg, dict):
+  step_cfg = {}
+
+config = {}
+config.update(shared_cfg)
+config.update(step_cfg)
 remote_host = config.get("remote_host") or ""
 remote_user = config.get("remote_user") or ""
 remote_root = config.get("remote_directory_root") or ""
@@ -227,15 +384,24 @@ def add_interval(start_raw, end_raw):
   end_label = "" if end_raw in (None, "") else str(end_raw)
   ranges.append((start_epoch, end_epoch, start_label, end_label))
 
-legacy_range = config.get("date_range")
-if isinstance(legacy_range, dict):
-  add_interval(legacy_range.get("start"), legacy_range.get("end"))
+def collect_ranges(source):
+  if not isinstance(source, dict):
+    return
+  legacy_range = source.get("date_range")
+  if isinstance(legacy_range, dict):
+    add_interval(legacy_range.get("start"), legacy_range.get("end"))
+  range_list = source.get("date_ranges")
+  if isinstance(range_list, list):
+    for item in range_list:
+      if isinstance(item, dict):
+        add_interval(item.get("start"), item.get("end"))
 
-range_list = config.get("date_ranges")
-if isinstance(range_list, list):
-  for item in range_list:
-    if isinstance(item, dict):
-      add_interval(item.get("start"), item.get("end"))
+# Backward compatible order:
+# 1) shared top-level keys, 2) merged prepare_reprocessing_metadata block,
+# 3) step top-level keys (if used).
+collect_ranges(shared_data)
+collect_ranges(config)
+collect_ranges(step_data)
 
 deduped = []
 seen = set()
@@ -364,10 +530,11 @@ fi
 
 load_size_thresholds() {
   local station_id="$1"
-  local cfg_path="$config_file"
-  if [[ -f "$cfg_path" ]]; then
+  local cfg_shared_path="$config_file_shared"
+  local cfg_step_path="$config_file_step"
+  if [[ -f "$cfg_shared_path" || -f "$cfg_step_path" ]]; then
     local result
-    if result=$(python3 - "$station_id" "$cfg_path" <<'PY'
+    if result=$(python3 - "$station_id" "$cfg_shared_path" "$cfg_step_path" <<'PY'
 import sys
 try:
   import yaml
@@ -376,15 +543,28 @@ except ImportError:
   sys.exit(0)
 
 station = sys.argv[1]
-cfg_path = sys.argv[2]
-with open(cfg_path, "r") as f:
-  data = yaml.safe_load(f) or {}
+cfg_shared_path = sys.argv[2]
+cfg_step_path = sys.argv[3]
+
+def load_yaml_dict(path):
+  if not path:
+    return {}
+  try:
+    with open(path, "r") as f:
+      loaded = yaml.safe_load(f) or {}
+    return loaded if isinstance(loaded, dict) else {}
+  except Exception:
+    return {}
+
+shared_data = load_yaml_dict(cfg_shared_path)
+step_data = load_yaml_dict(cfg_step_path)
 
 def get(key):
-  try:
-    val = data.get(key)
-  except AttributeError:
-    return ""
+  val = None
+  if key in shared_data:
+    val = shared_data.get(key)
+  if key in step_data and step_data.get(key) is not None:
+    val = step_data.get(key)
   if val is None:
     return ""
   try:
@@ -423,10 +603,11 @@ PY
 
 load_time_thresholds() {
   local station_id="$1"
-  local cfg_path="$config_file"
-  if [[ -f "$cfg_path" ]]; then
+  local cfg_shared_path="$config_file_shared"
+  local cfg_step_path="$config_file_step"
+  if [[ -f "$cfg_shared_path" || -f "$cfg_step_path" ]]; then
     local result
-    if result=$(python3 - "$station_id" "$cfg_path" <<'PY'
+    if result=$(python3 - "$station_id" "$cfg_shared_path" "$cfg_step_path" <<'PY'
 import sys
 try:
   import yaml
@@ -435,15 +616,28 @@ except ImportError:
   sys.exit(0)
 
 station = sys.argv[1]
-cfg_path = sys.argv[2]
-with open(cfg_path, "r") as f:
-  data = yaml.safe_load(f) or {}
+cfg_shared_path = sys.argv[2]
+cfg_step_path = sys.argv[3]
+
+def load_yaml_dict(path):
+  if not path:
+    return {}
+  try:
+    with open(path, "r") as f:
+      loaded = yaml.safe_load(f) or {}
+    return loaded if isinstance(loaded, dict) else {}
+  except Exception:
+    return {}
+
+shared_data = load_yaml_dict(cfg_shared_path)
+step_data = load_yaml_dict(cfg_step_path)
 
 def get(key):
-  try:
-    val = data.get(key)
-  except AttributeError:
-    return ""
+  val = None
+  if key in shared_data:
+    val = shared_data.get(key)
+  if key in step_data and step_data.get(key) is not None:
+    val = step_data.get(key)
   if val is None:
     return ""
   try:

@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from matplotlib.artist import Artist  # noqa: E402
 from matplotlib.offsetbox import DrawingArea, TextArea, HPacker, VPacker  # noqa: E402
+from matplotlib.spines import Spine  # noqa: E402
 
 __all__ = [
     "rasterize_figure",
@@ -23,7 +24,7 @@ __all__ = [
 ]
 
 
-UNSUPPORTED_RASTER_TYPES = (TextArea, DrawingArea, HPacker, VPacker)
+UNSUPPORTED_RASTER_TYPES = (TextArea, DrawingArea, HPacker, VPacker, Spine)
 
 
 def rasterize_figure(fig: plt.Figure, rasterized_predicate: Callable[[Artist], bool] | None = None) -> None:

@@ -13,6 +13,7 @@ DATAFLOW_ROOT = get_repo_root()
 SIM_PARAMS_DEFAULT = DATAFLOW_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
 
 SIM_DATA_DIR = DATAFLOW_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA"
+SIM_DATA_FILES_DIR = SIM_DATA_DIR / "FILES"
 
 
 def _normalize_param_hash(value: object) -> Optional[str]:
@@ -49,6 +50,7 @@ def find_simulated_dat_path(basename_no_ext: str, base_directory: Path) -> Optio
         base_directory / "STEP_1" / "TASK_1" / "INPUT_FILES" / "PROCESSING_DIRECTORY",
         base_directory / "STEP_1" / "TASK_1" / "INPUT_FILES" / "UNPROCESSED_DIRECTORY",
         base_directory / "STAGE_0_to_1",
+        SIM_DATA_FILES_DIR,
         SIM_DATA_DIR,
     ]
     for directory in candidate_dirs:

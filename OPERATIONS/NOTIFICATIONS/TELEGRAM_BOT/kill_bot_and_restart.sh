@@ -6,7 +6,7 @@ set -euo pipefail
 
 # ----- CONFIGURE BELOW -----
 SERVICE_NAME=""                          # e.g. my-telegram-bot.service (leave empty if not using systemd)
-BOT_CMD="/usr/bin/python3 $HOME/DATAFLOW_v3/OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh"   # full command to start the bot (used when SERVICE_NAME is empty)
+BOT_CMD="/bin/bash $HOME/DATAFLOW_v3/OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh"   # full command to start the bot (used when SERVICE_NAME is empty)
 BOT_NAME="mingo_analysis_bot.py"                # pattern used to find running bot with pgrep -f (fallback if BOT_CMD is not unique)
 LOG_FILE="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/NOHUP_LOGS/kill_bot_nohup.log"      # where nohup will append logs
 WAIT_SEC=1                               # seconds to wait for graceful shutdown

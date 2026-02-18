@@ -3,7 +3,7 @@
 STEP_FINAL: format DAQ data and emit station .dat files with assigned date ranges.
 
 Inputs: Step 10 output (step_10 or step_10_chunks).
-Outputs: SIMULATED_DATA/SIM_RUN_<N>/mi00YYDDDHHMMSS.dat
+Outputs: SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat
          + step_final_output_registry.json.
 """
 
@@ -47,15 +47,15 @@ def _log_ts() -> str:
 
 
 def _log_info(message: str) -> None:
-    print(f"[{_log_ts()}] [STEP_FINAL] {message}")
+    print(f"[{_log_ts()}] [STEP_FINAL] {message}", flush=True)
 
 
 def _log_warn(message: str) -> None:
-    print(f"[{_log_ts()}] [STEP_FINAL] [WARN] {message}")
+    print(f"[{_log_ts()}] [STEP_FINAL] [WARN] {message}", flush=True)
 
 
 def _log_err(message: str) -> None:
-    print(f"[{_log_ts()}] [STEP_FINAL] [ERROR] {message}")
+    print(f"[{_log_ts()}] [STEP_FINAL] [ERROR] {message}", flush=True)
 
 
 def format_value(val: float) -> str:
@@ -439,6 +439,25 @@ def parse_bool(value: object, default: bool = False) -> bool:
     return default
 
 
+def relocate_root_dat_files(output_dir: Path, dat_output_dir: Path) -> int:
+    moved = 0
+    if output_dir == dat_output_dir:
+        return moved
+    for legacy_dat in sorted(output_dir.glob("mi0*.dat")):
+        if not legacy_dat.is_file():
+            continue
+        destination = dat_output_dir / legacy_dat.name
+        if destination.exists():
+            _log_warn(
+                "Skipping relocation of legacy .dat because destination exists: "
+                f"{legacy_dat} -> {destination}"
+            )
+            continue
+        legacy_dat.replace(destination)
+        moved += 1
+    return moved
+
+
 def normalize_mesh_layout(mesh: pd.DataFrame) -> pd.DataFrame:
     z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
     head_cols = ["done", "param_set_id", "param_date"]
@@ -597,13 +616,18 @@ def expected_file_count_for_run(
     file_plans: list[dict[str, object]],
     payload_sampling: str,
     total_rows: int,
+    allow_reuse_when_short: bool,
 ) -> int:
     if payload_sampling != "sequential_random_start" or total_rows < 0:
         return len(file_plans)
     expected = 0
     for plan in file_plans:
         requested = int(plan["requested_rows"])
-        if str(plan["kind"]) == "subsample" and requested > total_rows:
+        if (
+            str(plan["kind"]) == "subsample"
+            and requested > total_rows
+            and not allow_reuse_when_short
+        ):
             continue
         expected += 1
     return expected
@@ -697,11 +721,11 @@ def collect_input_row_counts(
             _log_warn(f"Skipping unreadable input {path}: {exc}")
             continue
         row_counts.append(total)
-        print(f"Input rows: {path} -> {total}")
+        print(f"Input rows: {path} -> {total}", flush=True)
     if not row_counts:
         raise ValueError("No readable input paths available for STEP_FINAL.")
     total_rows = int(sum(row_counts))
-    print(f"Total rows across inputs: {total_rows}")
+    print(f"Total rows across inputs: {total_rows}", flush=True)
     return row_counts, total_rows
 
 
@@ -775,6 +799,7 @@ def sample_payloads_sequential(
     chunk_rows: int | None,
     rng: np.random.Generator,
     total_rows: int | None = None,
+    allow_reuse_when_short: bool = False,
 ) -> tuple[list[str], int, list[float] | None, int]:
     if total_rows is None:
         _, total_rows = collect_input_row_counts(input_paths, chunk_rows)
@@ -782,13 +807,101 @@ def sample_payloads_sequential(
         raise ValueError("No rows available in the input data.")
     if target_rows <= 0:
         raise ValueError("target_rows must be positive.")
-    if total_rows < target_rows:
+    if total_rows < target_rows and not allow_reuse_when_short:
         raise ValueError(
             f"Requested {target_rows} rows but only {total_rows} are available for sequential sampling."
         )
 
+    if allow_reuse_when_short:
+        base_payloads: list[str] = []
+        base_offsets_raw: list[float] | None = None
+        use_thick: bool | None = None
+        for path in input_paths:
+            try:
+                input_iter, _, _ = iter_input_frames(path, chunk_rows)
+                for chunk in input_iter:
+                    if chunk.empty:
+                        continue
+                    has_thick = "T_thick_s" in chunk.columns
+                    if use_thick is None:
+                        use_thick = has_thick
+                    elif use_thick != has_thick:
+                        raise ValueError("Inconsistent T_thick_s presence across input chunks.")
+                    for row in chunk.itertuples(index=False):
+                        row_dict = row._asdict()
+                        base_payloads.append(build_payload(row_dict))
+                        if use_thick:
+                            if base_offsets_raw is None:
+                                base_offsets_raw = []
+                            base_offsets_raw.append(float(row_dict.get("T_thick_s", 0.0)) or 0.0)
+            except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+                _log_warn(f"Skipping unreadable input during sequential sampling {path}: {exc}")
+                continue
+
+        if not base_payloads:
+            raise RuntimeError("No payload rows were collected for sequential sampling.")
+
+        total_rows = len(base_payloads)
+        if total_rows <= 0:
+            raise RuntimeError("No payload rows were collected for sequential sampling.")
+
+        start_idx = int(rng.integers(0, total_rows))
+        print(
+            f"Sequential sampling start index ({target_rows} rows, reuse={allow_reuse_when_short}): {start_idx}",
+            flush=True,
+        )
+
+        rotated_payloads = base_payloads[start_idx:] + base_payloads[:start_idx]
+
+        rotated_offsets: list[float] | None = None
+        cycle_period = 0.0
+        if base_offsets_raw is not None and len(base_offsets_raw) == total_rows:
+            raw_min = min(base_offsets_raw)
+            raw_max = max(base_offsets_raw)
+            positive_deltas = [
+                float(curr - prev)
+                for prev, curr in zip(base_offsets_raw[:-1], base_offsets_raw[1:])
+                if float(curr - prev) > 0.0
+            ]
+            min_step = min(positive_deltas) if positive_deltas else 1e-6
+            base_span = max(0.0, float(raw_max - raw_min))
+            base_period = base_span + min_step
+            raw_rot = base_offsets_raw[start_idx:] + base_offsets_raw[:start_idx]
+            normalized_rot: list[float] = []
+            wrap_shift = 0.0
+            prev_raw: float | None = None
+            for raw_val in raw_rot:
+                current = float(raw_val)
+                if prev_raw is not None and current < prev_raw:
+                    wrap_shift += base_period
+                normalized_rot.append(current + wrap_shift)
+                prev_raw = current
+            first = normalized_rot[0]
+            rotated_offsets = [val - first for val in normalized_rot]
+            cycle_period = rotated_offsets[-1] + min_step if rotated_offsets else base_period
+
+        if target_rows <= total_rows:
+            payloads = rotated_payloads[:target_rows]
+            offsets = rotated_offsets[:target_rows] if rotated_offsets is not None else None
+            return payloads, total_rows, offsets, start_idx
+
+        full_cycles, remainder = divmod(target_rows, total_rows)
+        payloads: list[str] = []
+        offsets: list[float] | None = [] if rotated_offsets is not None else None
+        for cycle_idx in range(full_cycles):
+            payloads.extend(rotated_payloads)
+            if offsets is not None and rotated_offsets is not None:
+                shift = cycle_idx * cycle_period
+                offsets.extend([val + shift for val in rotated_offsets])
+        if remainder > 0:
+            payloads.extend(rotated_payloads[:remainder])
+            if offsets is not None and rotated_offsets is not None:
+                shift = full_cycles * cycle_period
+                offsets.extend([val + shift for val in rotated_offsets[:remainder]])
+        return payloads, total_rows, offsets, start_idx
+
     start_idx = int(rng.integers(0, total_rows - target_rows + 1))
-    print(f"Sequential sampling start index ({target_rows} rows): {start_idx}")
+    print(f"Sequential sampling start index ({target_rows} rows): {start_idx}", flush=True)
 
     remaining_skip = start_idx
     remaining_take = target_rows
@@ -852,6 +965,7 @@ def write_with_timestamps(
     rng: np.random.Generator,
     offsets_s: list[float] | None = None,
     param_hash: str | None = None,
+    truncate_at_day_end: bool = True,
 ) -> tuple[int, datetime | None]:
     day_end = datetime(start_time.year, start_time.month, start_time.day) + timedelta(days=1)
     rows_written = 0
@@ -866,7 +980,7 @@ def write_with_timestamps(
             else:
                 event_time = current_time
 
-            if event_time >= day_end:
+            if truncate_at_day_end and event_time >= day_end:
                 break
 
             year = event_time.year
@@ -940,15 +1054,23 @@ def main() -> None:
     output_dir = Path(cfg.get("output_dir", "../../SIMULATED_DATA"))
     if not output_dir.is_absolute():
         output_dir = Path(__file__).resolve().parent / output_dir
+    dat_output_dir = output_dir / "FILES"
     ensure_dir(output_dir)
+    ensure_dir(dat_output_dir)
     _log_info(f"Input dir: {input_dir}")
     _log_info(f"Output dir: {output_dir}")
+    _log_info(f"Dat output dir: {dat_output_dir}")
+    relocated = relocate_root_dat_files(output_dir, dat_output_dir)
+    if relocated > 0:
+        _log_info(f"Relocated legacy root .dat files into FILES/: moved={relocated}")
 
     rate_hz = float(cfg.get("rate_hz", 0.0))
     chunk_rows = cfg.get("chunk_rows")
     payload_sampling = str(cfg.get("payload_sampling", "random")).lower()
     if payload_sampling not in {"random", "sequential_random_start"}:
         raise ValueError("payload_sampling must be 'random' or 'sequential_random_start'.")
+    allow_reuse_when_short = parse_bool(cfg.get("allow_reuse_when_short"), False)
+    truncate_at_day_end = parse_bool(cfg.get("truncate_at_day_end"), True)
 
     input_glob = cfg.get("input_glob", "**/step_10_chunks.chunks.json")
     input_collect = str(cfg.get("input_collect", "matching")).lower()
@@ -1033,64 +1155,162 @@ def main() -> None:
 
             if "done" not in mesh.columns:
                 mesh["done"] = 0
-            has_param_set_id = "param_set_id" in mesh.columns
-            has_param_date = "param_date" in mesh.columns
-            if has_param_set_id:
-                pending_mask = mesh["param_set_id"].isna()
+            mesh = normalize_param_mesh_ids(mesh)
+            if "param_set_id" not in mesh.columns:
+                mesh["param_set_id"] = pd.Series(pd.NA, index=mesh.index, dtype="Int64")
+                _log_warn("param_mesh missing param_set_id column; auto-added for persistent tracking.")
+            if "param_date" not in mesh.columns:
+                mesh["param_date"] = pd.Series(pd.NA, index=mesh.index, dtype="string")
+                _log_warn("param_mesh missing param_date column; auto-added for persistent tracking.")
             else:
-                pending_mask = pd.Series(True, index=mesh.index)
-            mask = (mesh["done"] != 1) & pending_mask
-            mask &= np.isclose(mesh["cos_n"].astype(float), float(step1_cfg.get("cos_n")))
-            mask &= np.isclose(mesh["flux_cm2_min"].astype(float), float(step1_cfg.get("flux_cm2_min")))
-            mask &= np.isclose(mesh["eff_p1"].astype(float), float(effs[0]))
-            mask &= np.isclose(mesh["eff_p2"].astype(float), float(effs[1]))
-            mask &= np.isclose(mesh["eff_p3"].astype(float), float(effs[2]))
-            mask &= np.isclose(mesh["eff_p4"].astype(float), float(effs[3]))
-            abs_mask = mask.copy()
-            abs_mask &= np.isclose(mesh["z_p1"].astype(float), float(z_positions[0]))
-            abs_mask &= np.isclose(mesh["z_p2"].astype(float), float(z_positions[1]))
-            abs_mask &= np.isclose(mesh["z_p3"].astype(float), float(z_positions[2]))
-            abs_mask &= np.isclose(mesh["z_p4"].astype(float), float(z_positions[3]))
-            candidates = mesh[abs_mask]
-            if candidates.empty:
+                mesh["param_date"] = mesh["param_date"].astype("string")
+            has_param_set_id = True
+            has_param_date = True
+            pending_param_mask = mesh["param_set_id"].isna()
+
+            sim_run_tokens = str(sim_run).split("_")
+            sim_run_step_ids = sim_run_tokens[2:] if str(sim_run).startswith("SIM_RUN_") else []
+
+            def _base_mask(*, include_done: bool, require_pending_param_set: bool) -> pd.Series:
+                out = pd.Series(True, index=mesh.index)
+                if not include_done:
+                    out &= mesh["done"] != 1
+                if require_pending_param_set and has_param_set_id:
+                    out &= pending_param_mask
+                out &= np.isclose(mesh["cos_n"].astype(float), float(step1_cfg.get("cos_n")))
+                out &= np.isclose(mesh["flux_cm2_min"].astype(float), float(step1_cfg.get("flux_cm2_min")))
+                out &= np.isclose(mesh["eff_p1"].astype(float), float(effs[0]))
+                out &= np.isclose(mesh["eff_p2"].astype(float), float(effs[1]))
+                out &= np.isclose(mesh["eff_p3"].astype(float), float(effs[2]))
+                out &= np.isclose(mesh["eff_p4"].astype(float), float(effs[3]))
+                return out
+
+            def _z_filter(mask_in: pd.Series) -> pd.DataFrame:
+                abs_mask = mask_in.copy()
+                abs_mask &= np.isclose(mesh["z_p1"].astype(float), float(z_positions[0]))
+                abs_mask &= np.isclose(mesh["z_p2"].astype(float), float(z_positions[1]))
+                abs_mask &= np.isclose(mesh["z_p3"].astype(float), float(z_positions[2]))
+                abs_mask &= np.isclose(mesh["z_p4"].astype(float), float(z_positions[3]))
+                candidates_local = mesh[abs_mask]
+                if not candidates_local.empty:
+                    return candidates_local
                 base = mesh["z_p1"].astype(float)
-                rel_mask = mask.copy()
+                rel_mask = mask_in.copy()
                 rel_mask &= np.isclose(mesh["z_p1"].astype(float) - base, float(z_positions[0]))
                 rel_mask &= np.isclose(mesh["z_p2"].astype(float) - base, float(z_positions[1]))
                 rel_mask &= np.isclose(mesh["z_p3"].astype(float) - base, float(z_positions[2]))
                 rel_mask &= np.isclose(mesh["z_p4"].astype(float) - base, float(z_positions[3]))
-                candidates = mesh[rel_mask]
+                return mesh[rel_mask]
+
+            candidates = _z_filter(_base_mask(include_done=False, require_pending_param_set=True))
             if candidates.empty:
-                full_mask = mesh["done"] != 1
-                full_mask &= np.isclose(mesh["cos_n"].astype(float), float(step1_cfg.get("cos_n")))
-                full_mask &= np.isclose(mesh["flux_cm2_min"].astype(float), float(step1_cfg.get("flux_cm2_min")))
-                full_mask &= np.isclose(mesh["eff_p1"].astype(float), float(effs[0]))
-                full_mask &= np.isclose(mesh["eff_p2"].astype(float), float(effs[1]))
-                full_mask &= np.isclose(mesh["eff_p3"].astype(float), float(effs[2]))
-                full_mask &= np.isclose(mesh["eff_p4"].astype(float), float(effs[3]))
-                base = mesh["z_p1"].astype(float)
-                abs_full = full_mask.copy()
-                abs_full &= np.isclose(mesh["z_p1"].astype(float), float(z_positions[0]))
-                abs_full &= np.isclose(mesh["z_p2"].astype(float), float(z_positions[1]))
-                abs_full &= np.isclose(mesh["z_p3"].astype(float), float(z_positions[2]))
-                abs_full &= np.isclose(mesh["z_p4"].astype(float), float(z_positions[3]))
-                rel_full = full_mask.copy()
-                rel_full &= np.isclose(mesh["z_p1"].astype(float) - base, float(z_positions[0]))
-                rel_full &= np.isclose(mesh["z_p2"].astype(float) - base, float(z_positions[1]))
-                rel_full &= np.isclose(mesh["z_p3"].astype(float) - base, float(z_positions[2]))
-                rel_full &= np.isclose(mesh["z_p4"].astype(float) - base, float(z_positions[3]))
-                candidates = mesh[abs_full]
-                if candidates.empty:
-                    candidates = mesh[rel_full]
+                candidates = _z_filter(_base_mask(include_done=False, require_pending_param_set=False))
             if candidates.empty:
-                _log_warn("No matching param_mesh row found for this parameter set; skipping.")
-                continue
+                candidates = _z_filter(_base_mask(include_done=True, require_pending_param_set=False))
+
+            # Auto-repair 1: remap one pending row with matching geometry to the incoming combo.
+            if candidates.empty:
+                z_only_mask = pd.Series(True, index=mesh.index)
+                z_only_mask &= mesh["done"] != 1
+                z_candidates = _z_filter(z_only_mask)
+                if not z_candidates.empty:
+                    remap_index = int(z_candidates.index[0])
+                    mesh.loc[remap_index, "cos_n"] = float(step1_cfg.get("cos_n"))
+                    mesh.loc[remap_index, "flux_cm2_min"] = float(step1_cfg.get("flux_cm2_min"))
+                    mesh.loc[remap_index, "eff_p1"] = float(effs[0])
+                    mesh.loc[remap_index, "eff_p2"] = float(effs[1])
+                    mesh.loc[remap_index, "eff_p3"] = float(effs[2])
+                    mesh.loc[remap_index, "eff_p4"] = float(effs[3])
+                    mesh.loc[remap_index, "z_p1"] = float(z_positions[0])
+                    mesh.loc[remap_index, "z_p2"] = float(z_positions[1])
+                    mesh.loc[remap_index, "z_p3"] = float(z_positions[2])
+                    mesh.loc[remap_index, "z_p4"] = float(z_positions[3])
+                    for idx, raw_step_id in enumerate(sim_run_step_ids[:10], start=1):
+                        col = f"step_{idx}_id"
+                        if col not in mesh.columns:
+                            continue
+                        try:
+                            mesh.loc[remap_index, col] = f"{int(raw_step_id):03d}"
+                        except (TypeError, ValueError):
+                            mesh.loc[remap_index, col] = str(raw_step_id)
+                    if has_param_set_id:
+                        mesh.loc[remap_index, "param_set_id"] = pd.NA
+                    if has_param_date:
+                        mesh.loc[remap_index, "param_date"] = pd.NA
+                    mesh.loc[remap_index, "done"] = 0
+                    _log_warn(
+                        "No exact param_mesh match found; "
+                        f"auto-remapped pending row index={remap_index} for sim_run={sim_run}."
+                    )
+                    candidates = mesh.loc[[remap_index]]
+
+            # Auto-repair 2: append a new row if nothing usable exists.
+            if candidates.empty:
+                auto_row = {col: pd.NA for col in mesh.columns}
+                auto_row["done"] = 0
+                auto_row["cos_n"] = float(step1_cfg.get("cos_n"))
+                auto_row["flux_cm2_min"] = float(step1_cfg.get("flux_cm2_min"))
+                auto_row["eff_p1"] = float(effs[0])
+                auto_row["eff_p2"] = float(effs[1])
+                auto_row["eff_p3"] = float(effs[2])
+                auto_row["eff_p4"] = float(effs[3])
+                auto_row["z_p1"] = float(z_positions[0])
+                auto_row["z_p2"] = float(z_positions[1])
+                auto_row["z_p3"] = float(z_positions[2])
+                auto_row["z_p4"] = float(z_positions[3])
+                for idx, raw_step_id in enumerate(sim_run_step_ids[:10], start=1):
+                    col = f"step_{idx}_id"
+                    if col not in mesh.columns:
+                        continue
+                    try:
+                        auto_row[col] = f"{int(raw_step_id):03d}"
+                    except (TypeError, ValueError):
+                        auto_row[col] = str(raw_step_id)
+                if has_param_set_id:
+                    auto_row["param_set_id"] = pd.NA
+                if has_param_date:
+                    auto_row["param_date"] = pd.NA
+                mesh = pd.concat([mesh, pd.DataFrame([auto_row])], ignore_index=True)
+                append_index = int(len(mesh) - 1)
+                _log_warn(
+                    "No matching param_mesh row found; "
+                    f"auto-appended row index={append_index} for sim_run={sim_run}."
+                )
+                candidates = mesh.loc[[append_index]]
+
             if len(candidates) > 1:
-                raise ValueError("Multiple matching param_mesh rows found; cannot assign param_set_id.")
+                ranked = candidates.copy()
+                ranked["_done_rank"] = pd.to_numeric(ranked["done"], errors="coerce").fillna(0).astype(int)
+                sort_cols = ["_done_rank"]
+                sort_asc = [True]
+                if has_param_set_id:
+                    ranked["_pid_rank"] = ranked["param_set_id"].isna().astype(int)
+                    sort_cols.append("_pid_rank")
+                    sort_asc.append(False)
+                ranked = ranked.sort_values(sort_cols, ascending=sort_asc)
+                chosen_index = int(ranked.index[0])
+                _log_warn(
+                    "Multiple matching param_mesh rows found; "
+                    f"auto-selecting row index={chosen_index} of {len(candidates)}."
+                )
+                candidates = mesh.loc[[chosen_index]]
             param_row = candidates.iloc[0]
             param_row_index = int(param_row.name)
-            existing_param_set_id = param_row.get("param_set_id") if has_param_set_id else pd.NA
-            existing_param_date = param_row.get("param_date") if has_param_date else pd.NA
+            current_done_flag = int(
+                pd.to_numeric(
+                    pd.Series([mesh.loc[param_row_index, "done"]]),
+                    errors="coerce",
+                ).fillna(0).astype(int).iloc[0]
+            )
+            if current_done_flag == 1:
+                mesh.loc[param_row_index, "done"] = 0
+                _log_warn(
+                    "Selected a completed param_mesh row; "
+                    f"reset done=0 for row index={param_row_index}."
+                )
+                param_row = mesh.loc[param_row_index]
+            existing_param_set_id = param_row.get("param_set_id")
+            existing_param_date = param_row.get("param_date")
             sim_params_df = None
             sim_params_combo_keys: pd.Series | None = None
             sim_params_needs_write = False
@@ -1105,28 +1325,26 @@ def main() -> None:
                     sim_params_needs_write = True
                 sim_params_combo_keys = build_sim_params_combo_keys(sim_params_df)
             if pd.isna(existing_param_set_id) or pd.isna(existing_param_date):
-                if has_param_set_id:
-                    existing_ids = mesh["param_set_id"].dropna()
-                elif sim_params_df is not None and "param_set_id" in sim_params_df.columns:
-                    existing_ids = sim_params_df["param_set_id"].dropna()
-                else:
-                    existing_ids = pd.Series([], dtype="float64")
+                existing_ids = pd.to_numeric(mesh["param_set_id"], errors="coerce").dropna()
+                if sim_params_df is not None and "param_set_id" in sim_params_df.columns:
+                    sim_ids = pd.to_numeric(sim_params_df["param_set_id"], errors="coerce").dropna()
+                    if not sim_ids.empty:
+                        if existing_ids.empty:
+                            existing_ids = sim_ids
+                        else:
+                            existing_ids = pd.concat([existing_ids, sim_ids], ignore_index=True)
                 next_id = int(existing_ids.max()) + 1 if not existing_ids.empty else 1
                 if sim_params_df is not None and "param_date" in sim_params_df.columns:
                     existing_dates = sim_params_df["param_date"].dropna()
-                elif has_param_date:
-                    existing_dates = mesh["param_date"].dropna()
                 else:
-                    existing_dates = pd.Series([], dtype="object")
+                    existing_dates = mesh["param_date"].dropna()
                 if not existing_dates.empty:
                     last_date = parse_param_datetime(str(existing_dates.iloc[-1])).date()
                     next_date = last_date + timedelta(days=1)
                 else:
                     next_date = date(2000, 1, 1)
-                if has_param_set_id:
-                    mesh.loc[param_row.name, "param_set_id"] = next_id
-                if has_param_date:
-                    mesh.loc[param_row.name, "param_date"] = next_date.isoformat()
+                mesh.loc[param_row.name, "param_set_id"] = next_id
+                mesh.loc[param_row.name, "param_date"] = next_date.isoformat()
                 param_set_id = next_id
                 param_date = next_date.isoformat()
             else:
@@ -1165,7 +1383,12 @@ def main() -> None:
         for sub_rows in subsample_rows:
             file_plans.append({"kind": "subsample", "requested_rows": int(sub_rows)})
 
-        expected_for_run = expected_file_count_for_run(file_plans, payload_sampling, total_rows)
+        expected_for_run = expected_file_count_for_run(
+            file_plans,
+            payload_sampling,
+            total_rows,
+            allow_reuse_when_short,
+        )
         combo_key = build_single_combo_key(
             step1_cfg.get("cos_n"),
             step1_cfg.get("flux_cm2_min"),
@@ -1173,7 +1396,18 @@ def main() -> None:
             [float(effs[0]), float(effs[1]), float(effs[2]), float(effs[3])],
         )
         existing_for_run = 0
-        if sim_params_combo_keys is not None and combo_key is not None:
+        if sim_params_df is not None and "param_set_id" in sim_params_df.columns:
+            sim_param_ids = pd.to_numeric(sim_params_df["param_set_id"], errors="coerce")
+            existing_for_run = int((sim_param_ids == int(param_set_id)).sum())
+        # Legacy fallback: only use combo matching when simulation params
+        # has no param_set_id column yet.
+        if (
+            existing_for_run == 0
+            and sim_params_df is not None
+            and "param_set_id" not in sim_params_df.columns
+            and sim_params_combo_keys is not None
+            and combo_key is not None
+        ):
             existing_for_run = int((sim_params_combo_keys == combo_key).sum())
         if registry_enabled and existing_for_run < expected_for_run:
             existing_for_run = max(
@@ -1199,12 +1433,14 @@ def main() -> None:
                 f"({existing_for_run}/{expected_for_run})."
             )
 
-        sim_dir = output_dir
+        sim_dir = dat_output_dir
         ensure_dir(sim_dir)
         dir_used_names = used_output_names[sim_dir]
         next_start = datetime.combine(base_time.date(), datetime.min.time())
         new_param_rows: list[dict] = []
         sampling_failed = False
+        skipped_subsample_rows_due_short: list[int] = []
+        target_short_warned = False
 
         for subfile_index, plan in enumerate(file_plans):
             file_kind = str(plan["kind"])
@@ -1215,15 +1451,22 @@ def main() -> None:
             try:
                 if payload_sampling == "sequential_random_start":
                     if total_rows < desired_rows:
-                        if file_kind == "subsample":
+                        if allow_reuse_when_short:
                             _log_warn(
-                                f"Skipping subsample_rows={desired_rows}; only {total_rows} source rows available."
+                                "Requested more rows than available in source; "
+                                f"reusing sequential payloads to reach {desired_rows} rows "
+                                f"(source rows={total_rows})."
                             )
-                            continue
-                        _log_warn(
-                            f"Requested {desired_rows} rows but only {total_rows} available; using {total_rows}."
-                        )
-                        desired_rows = total_rows
+                        else:
+                            if file_kind == "subsample":
+                                skipped_subsample_rows_due_short.append(desired_rows)
+                                continue
+                            if not target_short_warned:
+                                _log_warn(
+                                    f"Requested {desired_rows} rows but only {total_rows} available; using {total_rows}."
+                                )
+                                target_short_warned = True
+                            desired_rows = total_rows
 
                     payloads, _, thick_offsets, sample_start_index = sample_payloads_sequential(
                         input_paths,
@@ -1231,6 +1474,7 @@ def main() -> None:
                         chunk_rows,
                         rng,
                         total_rows=total_rows,
+                        allow_reuse_when_short=allow_reuse_when_short,
                     )
                 else:
                     payloads, total_rows, thick_offsets = sample_payloads(
@@ -1276,6 +1520,7 @@ def main() -> None:
                 rng,
                 offsets_s=thick_offsets,
                 param_hash=param_hash,
+                truncate_at_day_end=truncate_at_day_end,
             )
 
             if rows_written == 0:
@@ -1364,6 +1609,15 @@ def main() -> None:
 
             _log_info(
                 f"Saved {out_path} (param_set_id={param_set_id}, requested_rows={requested_for_file}, selected_rows={selected_rows})"
+            )
+
+        if skipped_subsample_rows_due_short:
+            skipped_sorted = sorted(set(skipped_subsample_rows_due_short))
+            skipped_count = len(skipped_subsample_rows_due_short)
+            _log_warn(
+                "Skipping oversize subsample requests "
+                f"(count={skipped_count}, min={skipped_sorted[0]}, max={skipped_sorted[-1]}), "
+                f"only {total_rows} source rows available."
             )
 
         if not new_param_rows and sim_params_needs_write and sim_params_df is not None:

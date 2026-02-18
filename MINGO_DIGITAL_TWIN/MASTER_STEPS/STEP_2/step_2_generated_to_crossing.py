@@ -754,15 +754,12 @@ def main() -> None:
         if skipped_chunks:
             print(f"[WARN] STEP_2 skipped {skipped_chunks} missing/unreadable chunks.")
 
-        if full_chunks == 0 and buffered_rows > 0:
+        if buffered_rows > 0:
             flush_chunk(pd.concat(buffer, ignore_index=True))
             buffered_rows = 0
             buffer = []
-        else:
-            buffered_rows = 0
-            buffer = []
 
-        metadata["row_count"] = full_chunks * int(chunk_rows) + buffered_rows
+        metadata["row_count"] = total_rows
         manifest_out = {
             "version": 1,
             "chunks": chunk_paths,
