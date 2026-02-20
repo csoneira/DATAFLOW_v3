@@ -9,6 +9,7 @@ import pickle
 
 import numpy as np
 import pandas as pd
+import math
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -322,6 +323,17 @@ def main() -> None:
     out_path = out_dir / f"step_{step}_sample_plots.pdf"
     with PdfPages(out_path) as pdf:
         plot_avalanche_summary(df, pdf)
+
+        # muon differential flux plot moved to STEP_8 — removed from STEP_3 to avoid duplication
+
+        # combined comparison: STEP 1, 2, 3, 10 (centralized implementation)
+        try:
+            from MINGO_DIGITAL_TWIN.PLOTTERS.STEPS.COMMON.angular_flux import plot_muon_flux_steps_comparison
+        except Exception:
+            plot_muon_flux_steps_comparison = None
+        if plot_muon_flux_steps_comparison:
+            plot_muon_flux_steps_comparison(pdf, sample_path=sample)
+
     print(f"Saved {out_path}")
 
 

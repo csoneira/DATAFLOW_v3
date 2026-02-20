@@ -1090,6 +1090,9 @@ def main() -> None:
     mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
     if not mesh_dir.is_absolute():
         mesh_dir = Path(__file__).resolve().parent / mesh_dir
+    mesh_mismatch_strategy = str(cfg.get("param_mesh_mismatch_strategy", "skip")).strip().lower()
+    if mesh_mismatch_strategy not in {"skip", "auto_repair"}:
+        raise ValueError("config param_mesh_mismatch_strategy must be 'skip' or 'auto_repair'.")
 
     requested_rows = int(cfg.get("target_rows", 50000))
     if requested_rows <= 0:
@@ -1205,11 +1208,19 @@ def main() -> None:
             candidates = _z_filter(_base_mask(include_done=False, require_pending_param_set=True))
             if candidates.empty:
                 candidates = _z_filter(_base_mask(include_done=False, require_pending_param_set=False))
-            if candidates.empty:
+            if candidates.empty and mesh_mismatch_strategy == "auto_repair":
                 candidates = _z_filter(_base_mask(include_done=True, require_pending_param_set=False))
 
-            # Auto-repair 1: remap one pending row with matching geometry to the incoming combo.
-            if candidates.empty:
+            if candidates.empty and mesh_mismatch_strategy != "auto_repair":
+                _log_warn(
+                    "No exact param_mesh match for incoming STEP_FINAL run; "
+                    f"skipping sim_run={sim_run} because param_mesh_mismatch_strategy=skip."
+                )
+                continue
+
+            # Auto-repair 1 (opt-in): remap one pending row with matching geometry
+            # to the incoming combo.
+            if candidates.empty and mesh_mismatch_strategy == "auto_repair":
                 z_only_mask = pd.Series(True, index=mesh.index)
                 z_only_mask &= mesh["done"] != 1
                 z_candidates = _z_filter(z_only_mask)
@@ -1244,8 +1255,8 @@ def main() -> None:
                     )
                     candidates = mesh.loc[[remap_index]]
 
-            # Auto-repair 2: append a new row if nothing usable exists.
-            if candidates.empty:
+            # Auto-repair 2 (opt-in): append a new row if nothing usable exists.
+            if candidates.empty and mesh_mismatch_strategy == "auto_repair":
                 auto_row = {col: pd.NA for col in mesh.columns}
                 auto_row["done"] = 0
                 auto_row["cos_n"] = float(step1_cfg.get("cos_n"))
@@ -1303,12 +1314,11 @@ def main() -> None:
                 ).fillna(0).astype(int).iloc[0]
             )
             if current_done_flag == 1:
-                mesh.loc[param_row_index, "done"] = 0
-                _log_warn(
-                    "Selected a completed param_mesh row; "
-                    f"reset done=0 for row index={param_row_index}."
+                _log_info(
+                    "Skipping SIM_RUN because matched param_mesh row is already completed "
+                    f"(row_index={param_row_index})."
                 )
-                param_row = mesh.loc[param_row_index]
+                continue
             existing_param_set_id = param_row.get("param_set_id")
             existing_param_date = param_row.get("param_date")
             sim_params_df = None

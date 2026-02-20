@@ -683,7 +683,7 @@ def plot_step4_summary(
 
 
 def prune_step4(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "tt_hit"}
+    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "tt_hit"}
     for plane_idx in range(1, 5):
         for strip_idx in range(1, 5):
             keep.add(f"Y_mea_{plane_idx}_s{strip_idx}")
@@ -881,7 +881,7 @@ def main() -> None:
         chunk: pd.DataFrame,
         debug_state: dict,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        needed_cols = {"event_id", "T_thick_s"}
+        needed_cols = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
         for plane_idx in range(1, 5):
             needed_cols.update(
                 {
@@ -1028,7 +1028,7 @@ def main() -> None:
     else:
         df, upstream_meta = load_with_metadata(input_path)
         print(f"Loaded {len(df):,} rows from {input_path.name}")
-        needed_cols = {"event_id", "X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
+        needed_cols = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
         for plane_idx in range(1, 5):
             needed_cols.update(
                 {

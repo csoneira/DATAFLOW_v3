@@ -1,0 +1,6 @@
+# Configuration for X/Y limits for 2D histograms in STEP_8 plots
+xy_hist_limits:
+  x_min: -1000
+  x_max: 1000
+  y_min: -1000
+  y_max: 1000

@@ -7,6 +7,7 @@ DT_DIR="${ROOT_DIR}/MINGO_DIGITAL_TWIN"
 STEP0_SCRIPT="${DT_DIR}/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py"
 RUN_STEP_SCRIPT="${DT_DIR}/run_step.sh"
 STEP_FINAL_SCRIPT="${DT_DIR}/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py"
+REPAIR_MESH_IDS_SCRIPT="${DT_DIR}/ANCILLARY/repair_param_mesh_step_ids.py"
 PRUNE_MESH_SCRIPT="${DT_DIR}/ANCILLARY/prune_completed_param_mesh_rows.py"
 FREQUENCY_CONFIG_FILE_DEFAULT="${DT_DIR}/CONFIG_FILES/sim_main_pipeline_frequency.conf"
 DEFAULT_MIN_INTERVAL_SECONDS=180
@@ -149,6 +150,10 @@ main() {
   log_info "cycle status=start"
 
   if ! run_stage "step_0" /usr/bin/env python3 "${STEP0_SCRIPT}"; then
+    failed=1
+  fi
+
+  if ! run_stage "repair_mesh_step_ids" /usr/bin/env python3 "${REPAIR_MESH_IDS_SCRIPT}" --apply; then
     failed=1
   fi
 

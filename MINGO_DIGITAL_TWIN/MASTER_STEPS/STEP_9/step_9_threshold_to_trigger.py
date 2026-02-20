@@ -91,7 +91,7 @@ def apply_trigger(df: pd.DataFrame, triggers: List[str]) -> pd.DataFrame:
 
 
 def prune_step9(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "tt_trigger"}
+    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "tt_trigger"}
     for plane_idx in range(1, 5):
         for strip_idx in range(1, 5):
             keep.add(f"T_front_{plane_idx}_s{strip_idx}")

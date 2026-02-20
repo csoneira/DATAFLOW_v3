@@ -4,6 +4,7 @@ input_sim_run: all
 input_collect: matching
 param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
 param_mesh_sim_run: none
+param_mesh_mismatch_strategy: skip
 output_dir: ../../SIMULATED_DATA
 registry_enabled: false
 chunk_rows: 200000
@@ -12,4 +13,4 @@ files_per_station_conf: 1
 payload_sampling: sequential_random_start
 allow_reuse_when_short: false
 truncate_at_day_end: false
-subsample_rows: [15000, 20000, 25000, 30000, 35000, 40000, 50000, 55000, 60000, 65000, 70000, 75000, 80000, 85000, 90000, 95000, 100000, 105000, 110000, 115000, 120000, 125000, 130000, 135000, 140000, 145000, 150000]
+subsample_rows: [25000, 50000, 75000, 100000, 125000, 150000]

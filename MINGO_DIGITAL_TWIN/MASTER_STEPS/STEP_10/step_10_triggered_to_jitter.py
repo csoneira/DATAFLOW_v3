@@ -85,7 +85,7 @@ def apply_jitter(
 
 
 def prune_step10(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "daq_jitter_ns"}
+    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "daq_jitter_ns"}
     for plane_idx in range(1, 5):
         for strip_idx in range(1, 5):
             keep.add(f"T_front_{plane_idx}_s{strip_idx}")
@@ -173,8 +173,183 @@ def plot_rate_by_tt(df: pd.DataFrame, pdf: PdfPages) -> bool:
     return True
 
 
-def load_sample_df(path: Path, max_rows: int, seed: int | None) -> pd.DataFrame | None:
-    if not path.exists():
+def plot_muon_differential_flux_vs_angle(df: pd.DataFrame, pdf: PdfPages) -> bool:
+    if "Theta_gen" not in df.columns or "T_thick_s" not in df.columns:
+        return False
+    if "X_gen" not in df.columns or "Y_gen" not in df.columns:
+        return False
+
+    theta = df["Theta_gen"].to_numpy(dtype=float)
+    theta = theta[np.isfinite(theta)]
+    theta = theta[(theta >= 0.0) & (theta <= np.pi / 2.0)]
+    if theta.size < 20:
+        return False
+
+    t0_s = df["T_thick_s"].to_numpy(dtype=float)
+    t0_s = t0_s[np.isfinite(t0_s)]
+    if t0_s.size == 0:
+        return False
+    sec_min = int(np.floor(np.min(t0_s)))
+    sec_max = int(np.floor(np.max(t0_s)))
+    duration_s = float(sec_max - sec_min + 1)
+    if not np.isfinite(duration_s) or duration_s <= 0.0:
+        return False
+
+    x_vals = df["X_gen"].to_numpy(dtype=float)
+    x_vals = x_vals[np.isfinite(x_vals)]
+    y_vals = df["Y_gen"].to_numpy(dtype=float)
+    y_vals = y_vals[np.isfinite(y_vals)]
+    if x_vals.size < 2 or y_vals.size < 2:
+        return False
+    x_spread_mm = float(np.max(x_vals) - np.min(x_vals))
+    y_spread_mm = float(np.max(y_vals) - np.min(y_vals))
+    area_mm2 = x_spread_mm * y_spread_mm
+    area_cm2 = area_mm2 / 100.0
+    if not np.isfinite(area_cm2) or area_cm2 <= 0.0:
+        return False
+
+    theta_edges = np.linspace(0.0, np.pi / 2.0, 31)
+    theta_centers = 0.5 * (theta_edges[1:] + theta_edges[:-1])
+    counts, _ = np.histogram(theta, bins=theta_edges)
+    delta_omega = 2.0 * np.pi * (np.cos(theta_edges[:-1]) - np.cos(theta_edges[1:]))
+
+    valid = (counts > 0) & np.isfinite(delta_omega) & (delta_omega > 0.0)
+    if not np.any(valid):
+        return False
+
+    duration_min = duration_s / 60.0
+    if not np.isfinite(duration_min) or duration_min <= 0.0:
+        return False
+
+    theta_deg = np.degrees(theta_centers[valid])
+    delta_omega_valid = delta_omega[valid]
+    counts_valid = counts[valid].astype(float)
+    dndt_dadomega = counts_valid / (duration_min * area_cm2 * delta_omega_valid)
+    dndt_dadomega_err = np.sqrt(counts_valid) / (duration_min * area_cm2 * delta_omega_valid)
+
+    fig, (ax_top, ax_bottom) = plt.subplots(
+        2,
+        1,
+        figsize=(8.5, 8.8),
+        sharex=True,
+        gridspec_kw={"height_ratios": [2.0, 1.1]},
+    )
+    ax_top.errorbar(
+        theta_deg,
+        dndt_dadomega,
+        yerr=dndt_dadomega_err,
+        fmt="o",
+        markersize=4,
+        linewidth=1.0,
+        color="black",
+        ecolor="gray",
+        capsize=2,
+        label=(
+            f"Sample (N={theta.size}, T={duration_min:.3f} min, "
+            f"Axy={area_cm2:.2f} cm^2)"
+        ),
+    )
+
+    fit_theta = theta_centers[valid]
+    fit_counts = counts_valid
+    fit_flux = dndt_dadomega
+    fit_cos = np.cos(fit_theta)
+    fit_ok = (fit_counts > 0.0) & (fit_flux > 0.0) & (fit_cos > 0.0)
+    n_fit_out: float | None = None
+    i0_fit_out: float | None = None
+    if np.count_nonzero(fit_ok) >= 3:
+        x_fit = np.log(np.clip(fit_cos[fit_ok], 1e-12, 1.0))
+        y_fit = np.log(fit_flux[fit_ok])
+        w_fit = fit_counts[fit_ok]
+        sw = float(np.sum(w_fit))
+        sx = float(np.sum(w_fit * x_fit))
+        sy = float(np.sum(w_fit * y_fit))
+        sxx = float(np.sum(w_fit * x_fit * x_fit))
+        sxy = float(np.sum(w_fit * x_fit * y_fit))
+        den = sw * sxx - sx * sx
+        if np.isfinite(den) and abs(den) > 1e-15 and np.isfinite(sw) and sw > 0.0:
+            n_fit = (sw * sxy - sx * sy) / den
+            ln_a_fit = (sy - n_fit * sx) / sw
+            if np.isfinite(n_fit) and np.isfinite(ln_a_fit):
+                a_fit = float(np.exp(ln_a_fit))
+                n_fit_out = float(n_fit)
+                i0_fit_out = float(a_fit)
+                theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
+                cos_curve = np.clip(np.cos(theta_curve), 1e-12, 1.0)
+                model_curve = a_fit * np.power(cos_curve, n_fit)
+                fit_label = (
+                    r"Fit: $I(\theta)=I_0\cdot\cos^{n}(\theta)$"
+                    + "\n"
+                    + rf"$I_0={a_fit:.3e}$ min$^{{-1}}$ cm$^{{-2}}$ sr$^{{-1}}$, $n={n_fit:.2f}$"
+                )
+                ax_top.plot(
+                    np.degrees(theta_curve),
+                    model_curve,
+                    color="crimson",
+                    linewidth=1.6,
+                    label=fit_label,
+                )
+
+    cumulative_flux = np.cumsum(dndt_dadomega * delta_omega_valid)
+    cumulative_flux_err = np.sqrt(np.cumsum((dndt_dadomega_err * delta_omega_valid) ** 2))
+    theta_upper_deg = np.degrees(theta_edges[1:])[valid]
+    ax_bottom.step(
+        theta_upper_deg,
+        cumulative_flux,
+        where="post",
+        color="navy",
+        linewidth=1.4,
+        label=r"Data cumulative: $\int_0^\theta I(\theta')\,d\Omega$",
+    )
+    ax_bottom.fill_between(
+        theta_upper_deg,
+        np.maximum(0.0, cumulative_flux - cumulative_flux_err),
+        cumulative_flux + cumulative_flux_err,
+        step="post",
+        color="steelblue",
+        alpha=0.25,
+        label="Data 1-sigma band",
+    )
+
+    if n_fit_out is not None and i0_fit_out is not None:
+        theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
+        cum_model = (
+            2.0
+            * np.pi
+            * i0_fit_out
+            / (n_fit_out + 1.0)
+            * (1.0 - np.power(np.clip(np.cos(theta_curve), 0.0, 1.0), n_fit_out + 1.0))
+        )
+        ax_bottom.plot(
+            np.degrees(theta_curve),
+            cum_model,
+            color="crimson",
+            linewidth=1.5,
+            label="Fit cumulative from I0*cos^n(theta)",
+        )
+
+    ax_top.set_title("Muon differential flux vs zenith angle (area-normalized)")
+    ax_top.set_ylabel("I(theta) [min^-1 cm^-2 sr^-1]")
+    ax_top.set_xlim(0.0, 90.0)
+    ax_top.set_ylim(bottom=0.0)
+    ax_top.grid(alpha=0.3)
+    ax_top.legend(loc="upper right")
+
+    ax_bottom.set_xlabel("Zenith angle theta (deg)")
+    ax_bottom.set_ylabel("Accumulated flux\n[min^-1 cm^-2]")
+    ax_bottom.set_xlim(0.0, 90.0)
+    ax_bottom.set_ylim(bottom=0.0)
+    ax_bottom.grid(alpha=0.3)
+    ax_bottom.legend(loc="upper left")
+
+    fig.tight_layout()
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+    return True
+
+
+def load_sample_df(path: Path | None, max_rows: int, seed: int | None) -> pd.DataFrame | None:
+    if path is None or path.name == "" or not path.exists():
         return None
     frames = []
     total = 0
@@ -354,6 +529,9 @@ def plot_jitter_summary(
             added_tt = plot_rate_by_tt(rate_df, pdf)
             if not added_tt:
                 print("Step 10 plots: skipped rate-by-TT summary (T_thick_s or tt column missing).")
+        added_flux = plot_muon_differential_flux_vs_angle(df, pdf)
+        if not added_flux:
+            print("Step 10 plots: skipped muon differential flux plot (missing gen/time columns).")
         if closure_dfs and cfg7 is not None and cfg10 is not None:
             plot_timing_closure_summary(
                 closure_dfs.get("step6"),

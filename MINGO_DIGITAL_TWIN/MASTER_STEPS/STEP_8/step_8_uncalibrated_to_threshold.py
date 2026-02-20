@@ -110,7 +110,7 @@ def apply_threshold(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
 
 
 def prune_step8(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s"}
+    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
     for plane_idx in range(1, 5):
         for strip_idx in range(1, 5):
             keep.add(f"T_front_{plane_idx}_s{strip_idx}")

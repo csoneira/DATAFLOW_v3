@@ -33,7 +33,24 @@ from STEP_SHARED.sim_utils import (
 )
 
 
-def _assign_step_ids(mesh: pd.DataFrame) -> pd.DataFrame:
+def _max_existing_step1_id(intersteps_dir: Path) -> int:
+    step1_dir = intersteps_dir / "STEP_1_TO_2"
+    if not step1_dir.exists():
+        return 0
+    max_id = 0
+    for sim_dir in step1_dir.glob("SIM_RUN_*"):
+        name = sim_dir.name
+        if not name.startswith("SIM_RUN_"):
+            continue
+        first_token = name[len("SIM_RUN_") :].split("_", 1)[0]
+        try:
+            max_id = max(max_id, int(float(first_token)))
+        except (TypeError, ValueError):
+            continue
+    return max_id
+
+
+def _assign_step_ids(mesh: pd.DataFrame, *, intersteps_dir: Path | None = None) -> pd.DataFrame:
     mesh = mesh.copy()
     def _ensure_column(name: str) -> None:
         if name not in mesh.columns:
@@ -62,7 +79,7 @@ def _assign_step_ids(mesh: pd.DataFrame) -> pd.DataFrame:
     for idx in range(1, 11):
         _ensure_column(f"step_{idx}_id")
 
-    def assign_ids(cols: list[str], id_col: str) -> None:
+    def assign_ids(cols: list[str], id_col: str, seed_min_id: int = 0) -> None:
         existing = {}
         if mesh[id_col].notna().any():
             for _, row in mesh[mesh[id_col].notna()].iterrows():
@@ -70,7 +87,7 @@ def _assign_step_ids(mesh: pd.DataFrame) -> pd.DataFrame:
                 parsed = _parse_step_id(row[id_col])
                 if parsed is not None:
                     existing.setdefault(key, parsed)
-        next_id = max(existing.values(), default=0) + 1
+        next_id = max(max(existing.values(), default=0), int(seed_min_id)) + 1
         for i, row in mesh.iterrows():
             if pd.notna(row[id_col]):
                 continue
@@ -81,7 +98,10 @@ def _assign_step_ids(mesh: pd.DataFrame) -> pd.DataFrame:
             mesh.at[i, id_col] = f"{existing[key]:03d}"
         _normalize_step_id_column(id_col)
 
-    assign_ids(["cos_n", "flux_cm2_min"], "step_1_id")
+    seed_step1_id = 0
+    if intersteps_dir is not None:
+        seed_step1_id = _max_existing_step1_id(intersteps_dir)
+    assign_ids(["cos_n", "flux_cm2_min"], "step_1_id", seed_min_id=seed_step1_id)
     assign_ids(["z_p1", "z_p2", "z_p3", "z_p4"], "step_2_id")
     assign_ids(["eff_p1", "eff_p2", "eff_p3", "eff_p4"], "step_3_id")
     for idx in range(4, 11):
@@ -449,7 +469,7 @@ def _append_param_row(
         mesh = new_rows_df.copy()
     else:
         mesh = pd.concat([mesh, new_rows_df], ignore_index=True)
-    mesh = _assign_step_ids(mesh)
+    mesh = _assign_step_ids(mesh, intersteps_dir=mesh_path.parent.parent)
     if "param_set_id" in mesh.columns:
         mesh = mesh.sort_values("param_set_id").reset_index(drop=True)
     z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]

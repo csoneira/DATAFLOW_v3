@@ -19,10 +19,10 @@ regular_mesh_relative_span: 0.5
 
 # Step 3
 ## Efficiencies
-efficiencies: [0.7, 1]
+efficiencies: [0.5, 1]
 efficiencies_identical: true
 
 # Optional: generate multiple rows per run, sharing selected columns.
-repeat_samples: 5
-shared_columns: [cos_n, flux_cm2_min]  # also supports efficiencies or z_positions
-expand_z_positions: true  # when true, use all z positions for each sampled row
+repeat_samples: 3
+shared_columns: [cos_n, flux_cm2_min]  # keep empty to avoid forcing repeated flux/cos across a batch
+expand_z_positions: true  # one sampled geometry per new line

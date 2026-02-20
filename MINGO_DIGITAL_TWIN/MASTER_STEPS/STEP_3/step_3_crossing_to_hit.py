@@ -146,7 +146,7 @@ def build_avalanche(
 
 
 def prune_step3(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "Theta_gen", "Phi_gen", "tt_avalanche"}
+    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "tt_avalanche"}
     for plane_idx in range(1, 5):
         keep.add(f"T_sum_{plane_idx}_ns")
         keep.add(f"avalanche_ion_{plane_idx}")

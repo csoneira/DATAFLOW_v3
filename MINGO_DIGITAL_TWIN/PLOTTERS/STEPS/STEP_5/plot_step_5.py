@@ -8,6 +8,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import math
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -22,7 +23,7 @@ def pick_tt_column(df: pd.DataFrame) -> str | None:
     return None
 
 
-def plot_signal_summary(df: pd.DataFrame, output_path: Path) -> None:
+def plot_signal_summary(df: pd.DataFrame, output_path: Path, sample_path: Path | None = None) -> None:
     with PdfPages(output_path) as pdf:
         tt_col = pick_tt_column(df)
         if tt_col:
@@ -161,6 +162,8 @@ def plot_signal_summary(df: pd.DataFrame, output_path: Path) -> None:
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
+        # muon differential flux plot intentionally omitted from STEP 5 (use STEP_1/STEP_10 for generator/trigger diagnostics).
+
 def find_any_chunk_for_step(step: int) -> Path | None:
     root = Path(__file__).resolve().parents[3] / "INTERSTEPS"
     parts = sorted(root.glob(f"**/step_{step}_chunks/part_*.pkl"))
@@ -176,6 +179,10 @@ def find_any_chunk_for_step(step: int) -> Path | None:
         except Exception:
             return manifests[0]
     return None
+
+
+# muon differential flux plotting removed from STEP_5 — see STEP_1 / STEP_10 for canonical implementation
+# (function intentionally deleted to avoid duplication and keep STEP_5 focused on measured/trigger diagnostics)
 
 
 def load_df(path: Path) -> pd.DataFrame:
@@ -202,7 +209,7 @@ def main() -> None:
     out_dir = Path(__file__).resolve().parent / "PLOTS"
     out_dir.mkdir(exist_ok=True)
     out_path = out_dir / f"step_{step}_sample_plots.pdf"
-    plot_signal_summary(df, out_path)
+    plot_signal_summary(df, out_path, sample_path=sample)
     print(f"Saved {out_path}")
 
 
