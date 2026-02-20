@@ -4,7 +4,7 @@
 # minute hour day_of_month month day_of_week command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Updated at 2026-02-18 16:54
+# Updated at 2026-02-20 16:50
 
 SHELL=/bin/bash
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
@@ -285,6 +285,10 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 
 # METADATA PLOTTERS (sequential runner: definitive -> filter -> rates -> execution)
 */10 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/create_metadata_plots.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/create_metadata_plots.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/create_metadata_plots.log 2>&1
+
+# SIMULATION PLOTTERS
+*/30 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/run_simulation_plots.lock /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/PLOTTERS/run_simulation_plots.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/run_simulation_plots.log 2>&1
+
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------

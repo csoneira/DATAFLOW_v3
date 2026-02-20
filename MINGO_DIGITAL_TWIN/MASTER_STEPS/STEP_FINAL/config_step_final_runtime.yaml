@@ -13,4 +13,4 @@ files_per_station_conf: 1
 payload_sampling: sequential_random_start
 allow_reuse_when_short: false
 truncate_at_day_end: false
-subsample_rows: [25000, 50000, 75000, 100000, 125000, 150000]
+subsample_rows: [25000, 50000, 75000, 100000]

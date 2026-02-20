@@ -1,5 +1,9 @@
 # To do list
 
+
+- put the efficiencies in the csvs as 4 columns, and not a string of four values, just as it is done with the z positions.
+
+
 ## Urgent
 - [ ] Put the ideas of the scripts of /home/mingo/DATAFLOW_v3/NOT_ESSENTIAL/tools in the VALIDATION folder.
 - [ ] Move the plotting codes inside of the scripts in the /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS to PLOTTERS oo have them there displayed right. VALIDATION should be only for validation plots, PLOTTERS is for cool plots that we want to have for the paper and conferences and to explain the method, etc.

@@ -613,5 +613,45 @@ for type in "${SELECTED_TYPES[@]}"; do
 done
 log_info "  Total reclaimed: $(format_bytes "$overall_freed")"
 
+
+# Clean SIMULATION_DATA_JUNK MINGO_DIGITAL_TWIN/INTERSTEPS directories
+SIM_JUNK_BASE="$HOME/SIMULATION_DATA_JUNK"
+if [[ -d "$SIM_JUNK_BASE" ]]; then
+  log_info "Cleaning SIMULATION_DATA_JUNK/*/MINGO_DIGITAL_TWIN/INTERSTEPS directories..."
+  count=0
+  freed=0
+  while IFS= read -r -d '' dir; do
+    if [[ -d "$dir" ]]; then
+      size_before=$(du -sb "$dir" 2>/dev/null | awk '{print $1}')
+      rm -rf "$dir"
+      ((count++))
+      ((freed+=size_before))
+      log_detail "  Removed $dir ($(format_bytes "$size_before"))"
+    fi
+  done < <(find "$SIM_JUNK_BASE" -mindepth 3 -maxdepth 3 -type d -path '*/MINGO_DIGITAL_TWIN/INTERSTEPS' -print0)
+  log_info "  - SIMULATION_DATA_JUNK INTERSTEPS: $(format_bytes "$freed") freed across $count item(s)"
+else
+  log_info "SIMULATION_DATA_JUNK base directory not found: $SIM_JUNK_BASE"
+fi
+
+# Clean SIMULATION_DATA_JUNK MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES directories
+if [[ -d "$SIM_JUNK_BASE" ]]; then
+  log_info "Cleaning SIMULATION_DATA_JUNK/*/MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES directories..."
+  count=0
+  freed=0
+  while IFS= read -r -d '' dir; do
+    if [[ -d "$dir" ]]; then
+      size_before=$(du -sb "$dir" 2>/dev/null | awk '{print $1}')
+      rm -rf "$dir"
+      ((count++))
+      ((freed+=size_before))
+      log_detail "  Removed $dir ($(format_bytes "$size_before"))"
+    fi
+  done < <(find "$SIM_JUNK_BASE" -mindepth 4 -maxdepth 4 -type d -path '*/MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES' -print0)
+  log_info "  - SIMULATION_DATA_JUNK SIMULATED_DATA/FILES: $(format_bytes "$freed") freed across $count item(s)"
+else
+  log_info "SIMULATION_DATA_JUNK base directory not found: $SIM_JUNK_BASE"
+fi
+
 log_info ""
 log_info "Disk usage after cleaning: $(disk_usage_summary)"

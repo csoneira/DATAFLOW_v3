@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """Telegram bot that serves analysis PDFs on demand."""
 
 from __future__ import annotations
@@ -61,6 +62,22 @@ PDF_TARGETS = {
         / "execution_metadata_report.pdf",
         "description": "Execution metadata report",
     },
+    "param_mesh_summary": {
+        "path": BASE_DIR
+        / "MINGO_DIGITAL_TWIN"
+        / "PLOTTERS"
+        / "MESH"
+        / "param_mesh_summary.pdf",
+        "description": "Param mesh summary PDF",
+    },
+    "simulation_execution_time_hist": {
+        "path": BASE_DIR
+        / "MINGO_DIGITAL_TWIN"
+        / "PLOTTERS"
+        / "SIMULATION_TIME"
+        / "simulation_execution_time_hist.pdf",
+        "description": "Simulation execution time histogram",
+    },
 }
 
 CLEANER_SCRIPT = (
@@ -75,7 +92,10 @@ HELP_TEXT = (
     "===========================================\n\n"
     "General Commands:\n"
     "  /start or /help - Display this guide.\n\n"
-    "PDF Reports:\n"
+    "SIMULATION PDF Reports:\n"
+    "  /param_mesh_summary - Param mesh summary PDF.\n"
+    "  /simulation_execution_time_hist - Simulation execution time histogram PDF.\n\n"
+    "ANALYSIS PDF Reports:\n"
     "  /definitive_execution_report - Definitive execution map PDF.\n"
     "  /filter_metadata_report - Filter metadata PDF.\n"
     "  /rates_metadata_report - Rates metadata PDF.\n"

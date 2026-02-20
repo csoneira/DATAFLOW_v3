@@ -173,6 +173,48 @@ def normalize_step_params(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def expand_params(raw_params: list[str], merged_df: pd.DataFrame) -> list[str]:
+    """Expand config tokens into actual numeric column names present in merged_df.
+
+    Supported expansions:
+    - "efficiencies" -> expands to ["eff_p1", "eff_p2", "eff_p3", "eff_p4"] if those
+      columns exist and are numeric.
+    - "eff_1" / "eff1" -> maps to "eff_p1" (supports indices 1..4).
+
+    Returns a list of unique numeric column names that exist in merged_df, preserving order.
+    """
+    expanded: list[str] = []
+    for p in raw_params:
+        if isinstance(p, str) and p.lower().startswith("eff"):
+            # token formats: "efficiencies", "efficiencies", "eff_1", "eff1", "eff_p1"
+            if p == "efficiencies":
+                eff_cols = [c for c in ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
+                            if c in merged_df.columns and pd.api.types.is_numeric_dtype(merged_df[c])]
+                expanded.extend(eff_cols)
+                continue
+            # match eff_1, eff1, eff-p1, eff_p1
+            import re
+
+            m = re.match(r"^eff[_\-]?([1-4])$", p, flags=re.IGNORECASE)
+            if m:
+                idx = int(m.group(1))
+                col = f"eff_p{idx}"
+                if col in merged_df.columns and pd.api.types.is_numeric_dtype(merged_df[col]):
+                    expanded.append(col)
+                continue
+            # if user already specified eff_p1..eff_p4, we'll treat below in default branch
+        # default: keep the token as-is (will be filtered later)
+        expanded.append(p)
+
+    # Final filter: only keep numeric columns that exist in merged_df and preserve order/uniqueness
+    final: list[str] = []
+    for p in expanded:
+        if p in merged_df.columns and pd.api.types.is_numeric_dtype(merged_df[p]):
+            if p not in final:
+                final.append(p)
+    return final
+
+
 def build_completed_mask(mesh_df: pd.DataFrame, completed_df: pd.DataFrame, decimals: int = 6) -> pd.Series:
     key_cols = [
         "cos_n",
@@ -210,6 +252,7 @@ def split_by_status(df: pd.DataFrame, completed_mask: pd.Series) -> tuple[pd.Dat
 
 
 def main() -> None:
+
     args = parse_args()
     input_path = Path(args.input)
     completed_path = Path(args.completed)
@@ -224,6 +267,11 @@ def main() -> None:
         raise FileNotFoundError(f"Completed params file not found: {completed_path}")
     completed_params = pd.read_csv(completed_path)
     completed_params = normalize_step_params(completed_params)
+
+    # Outer join on columns with matching names and dtypes only
+    shared_cols = [col for col in df.columns if col in completed_params.columns and df[col].dtype == completed_params[col].dtype]
+    merged_df = pd.merge(df, completed_params, on=shared_cols, how="outer", suffixes=("_input", "_completed"))
+    # merged_df now contains all rows from both input and completed CSVs, matching only on columns with same dtype
 
     required = [
         "cos_n",
@@ -255,134 +303,37 @@ def main() -> None:
     prod_41 = eff_p4 * eff_p1
 
     with PdfPages(output_path) as pdf:
-        fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        if same_eff_n_mask.any():
-            same_eff_n_completed = df.loc[completed_mask & same_eff_n_mask]
-            same_eff_n_in_process = df.loc[~completed_mask & same_eff_n_mask]
-            if not same_eff_n_in_process.empty:
-                ax.scatter(
-                    same_eff_n_in_process["flux_cm2_min"],
-                    same_eff_n_in_process["eff_p1"],
-                    s=20,
-                    alpha=0.6,
-                    color=IN_PROCESS_COLOR,
-                    label="In process",
-                )
-            if not same_eff_n_completed.empty:
-                ax.scatter(
-                    same_eff_n_completed["flux_cm2_min"],
-                    same_eff_n_completed["eff_p1"],
-                    s=24,
-                    alpha=0.7,
-                    color=COMPLETED_COLOR,
-                    label="Completed",
-                )
-            ax.set_xlabel("flux_cm2_min")
-            ax.set_ylabel("efficiency")
-            ax.set_title(
-                f"Flux vs efficiency for equal efficiencies and cos_n = {args.n_value:g}"
-            )
-            if not same_eff_n_in_process.empty or not same_eff_n_completed.empty:
-                ax.legend(fontsize=8)
-            ax.grid(True, alpha=0.2)
-        else:
-            ax.text(
-                0.5,
-                0.5,
-                f"No rows for eff_p1=eff_p2=eff_p3=eff_p4 and cos_n = {args.n_value:g}",
-                ha="center",
-                va="center",
-            )
-            ax.set_axis_off()
-        fig.tight_layout()
-        pdf.savefig(fig)
-        plt.close(fig)
+        # --- Parameter matrix plot (pairplot style) ---
+        import yaml
+        config_path = PLOTTER_DIR / "plot_param_mesh_config.yaml"
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        raw_params = config.get("params", [])
+        # Expand tokens (supports "efficiencies", "eff_1" / "eff1", and "eff_pN")
+        param_list = expand_params(raw_params, merged_df)
+        n = len(param_list)
+        if n > 0:
+            fig, axes = plt.subplots(n, n, figsize=(3*n, 3*n))
+            for i in range(n):
+                for j in range(n):
+                    ax = axes[i, j] if n > 1 else axes
+                    x = merged_df[param_list[j]]
+                    y = merged_df[param_list[i]]
+                    if i == j:
+                        ax.hist(x.dropna(), bins=40, color="#1f77b4", alpha=0.8)
+                        ax.set_ylabel("")
+                        ax.set_xlabel(param_list[i])
+                    elif i > j:
+                        ax.scatter(x, y, s=10, alpha=0.5, color="#2ca02c")
+                        ax.set_xlabel(param_list[j])
+                        ax.set_ylabel(param_list[i])
+                    else:
+                        ax.axis("off")
+            fig.suptitle("Parameter Matrix (Histograms & Scatter Plots)", fontsize=14)
+            fig.tight_layout(rect=[0, 0, 1, 0.97])
+            pdf.savefig(fig)
+            plt.close(fig)
 
-        fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        add_scatter(ax, completed_df, in_process_df)
-        ax.set_title(
-            f"cos_n vs flux_cm2_min (completed: {len(completed_df)}, in process: {len(in_process_df)})"
-        )
-        fig.tight_layout()
-        pdf.savefig(fig)
-        plt.close(fig)
-
-        fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        add_rows_per_file_hist(ax, completed_params)
-        fig.tight_layout()
-        pdf.savefig(fig)
-        plt.close(fig)
-
-        fig, axes = plt.subplots(3, 3, figsize=(10, 9))
-        for ax in axes.ravel():
-            ax.set_visible(False)
-
-        layout = {
-            (0, 0): (prod_12, "eff_p1 * eff_p2"),
-            (0, 2): (prod_23, "eff_p2 * eff_p3"),
-            (2, 0): (prod_41, "eff_p4 * eff_p1"),
-            (2, 2): (prod_34, "eff_p3 * eff_p4"),
-            (0, 1): (eff_p1, "eff_p1"),
-            (1, 2): (eff_p2, "eff_p2"),
-            (2, 1): (eff_p3, "eff_p3"),
-            (1, 0): (eff_p4, "eff_p4"),
-            (1, 1): (prod_all, "eff_p1 * eff_p2 * eff_p3 * eff_p4"),
-        }
-
-        for (row, col), (data, title) in layout.items():
-            ax = axes[row, col]
-            ax.set_visible(True)
-            comp_data = data.loc[completed_mask]
-            in_process_data = data.loc[~completed_mask]
-            add_status_hist(ax, comp_data, in_process_data, title)
-
-        fig.suptitle("Efficiency Histograms", fontsize=12)
-        legend_handles = []
-        if len(in_process_df):
-            legend_handles.append(Patch(color=IN_PROCESS_COLOR, label="In process"))
-        if len(completed_df):
-            legend_handles.append(Patch(color=COMPLETED_COLOR, label="Completed"))
-        if legend_handles:
-            fig.legend(handles=legend_handles, loc="upper right", fontsize=8)
-        fig.tight_layout(rect=[0, 0, 1, 0.96])
-        pdf.savefig(fig)
-        plt.close(fig)
-
-        same_eff_df = df.loc[same_eff_mask].copy()
-
-        fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        if n_mask.any():
-            add_status_hist(
-                ax,
-                df.loc[completed_mask & n_mask, "flux_cm2_min"],
-                df.loc[~completed_mask & n_mask, "flux_cm2_min"],
-                f"Flux histogram for cos_n = {args.n_value:g}",
-            )
-            ax.set_xlabel("flux_cm2_min")
-            ax.set_ylabel("count")
-        else:
-            ax.text(0.5, 0.5, f"No rows found for cos_n = {args.n_value:g}", ha="center", va="center")
-            ax.set_axis_off()
-        fig.tight_layout()
-        pdf.savefig(fig)
-        plt.close(fig)
-
-        fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        if same_eff_df.empty:
-            ax.text(0.5, 0.5, "No rows where eff_p1 = eff_p2 = eff_p3 = eff_p4", ha="center", va="center")
-            ax.set_axis_off()
-        else:
-            add_status_hist(
-                ax,
-                df.loc[completed_mask & same_eff_mask, "flux_cm2_min"],
-                df.loc[~completed_mask & same_eff_mask, "flux_cm2_min"],
-                "Flux histogram for rows with equal efficiencies",
-            )
-            ax.set_xlabel("flux_cm2_min")
-            ax.set_ylabel("count")
-        fig.tight_layout()
-        pdf.savefig(fig)
-        plt.close(fig)
 
 
 if __name__ == "__main__":

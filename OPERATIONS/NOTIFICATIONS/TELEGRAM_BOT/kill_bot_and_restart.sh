@@ -53,12 +53,12 @@ else
     echo "No running bot processes found for pattern: '$PATTERN'"
 fi
 
-# ensure log file directory exists
-mkdir -p "$(dirname "$LOG_FILE")"
-touch "$LOG_FILE"
+# # ensure log file directory exists
+# mkdir -p "$(dirname "$LOG_FILE")"
+# touch "$LOG_FILE"
 
-echo "Starting bot with command: $BOT_CMD"
-# start in background and detach
-nohup bash -c "$BOT_CMD" >>"$LOG_FILE" 2>&1 &
+# echo "Starting bot with command: $BOT_CMD"
+# # start in background and detach
+# nohup bash -c "$BOT_CMD" >>"$LOG_FILE" 2>&1 &
 
-echo "Bot restarted. Logs appended to: $LOG_FILE"
+# echo "Bot restarted. Logs appended to: $LOG_FILE"
