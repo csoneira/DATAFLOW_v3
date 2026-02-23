@@ -109,6 +109,83 @@ def append_registry_basenames(registry_path: Path, basenames: list[str]) -> None
         )
 
 
+def find_ground_truth_basenames(station_root: Path) -> set[str]:
+    """Return basenames found in the station downstream file structure.
+
+    Searches the two fixed locations described in the prompt and returns
+    a set of filename stems that start with ``mi00``. The caller is
+    responsible for filtering the prefix and for any further use.
+    """
+    truth: set[str] = set()
+
+    # first location: STAGE_0_to_1/**/*. any file under that tree
+    stage01 = station_root / "STAGE_0_to_1"
+    for p in stage01.rglob("*"):
+        if p.is_file():
+            truth.add(p.stem)
+
+    # second location: STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/*/*
+    step1 = station_root / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+    for task in step1.glob("TASK_*"):
+        input_base = task / "INPUT_FILES"
+        for subdir in input_base.glob("*"):
+            if not subdir.is_dir():
+                continue
+            for f in subdir.glob("*"):
+                if f.is_file():
+                    truth.add(f.stem)
+
+    # filter by prefix
+    return {b for b in truth if b.startswith("mi00")}
+
+
+def sync_registry_with_ground_truth(registry_path: Path, station_root: Path) -> tuple[int, int]:
+    """Ensure ``registry_path`` matches the ground truth set.
+
+    Returns a pair ``(added, removed)`` counts.  The CSV is rewritten
+    atomically; existing ``execution_timestamp`` values are preserved for
+    basenames that remain, and a fresh timestamp is assigned to new entries.
+    """
+    truth = find_ground_truth_basenames(station_root)
+
+    existing: dict[str, str] = {}
+    if registry_path.exists():
+        with registry_path.open("r", encoding="ascii", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                b = (row.get("basename") or "").strip()
+                if not b:
+                    continue
+                ts = (row.get("execution_timestamp") or "").strip()
+                existing[b] = ts or now_timestamp()
+
+    truth_set = set(truth)
+    existing_set = set(existing.keys())
+
+    to_add = sorted(truth_set - existing_set)
+    to_remove = sorted(existing_set - truth_set)
+
+    if to_add or to_remove:
+        # build new row list preserving timestamps where available
+        new_rows: list[dict[str, str]] = []
+        timestamp_now = now_timestamp()
+        for b in sorted(truth_set):
+            new_rows.append(
+                {
+                    "basename": b,
+                    "execution_timestamp": existing.get(b, timestamp_now),
+                }
+            )
+        tmp_path = registry_path.with_suffix(registry_path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="ascii", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=REGISTRY_FIELDS)
+            writer.writeheader()
+            writer.writerows(new_rows)
+        tmp_path.replace(registry_path)
+
+    return len(to_add), len(to_remove)
+
+
 def relocate_legacy_root_dat_files(source_dir: Path) -> int:
     if source_dir.name != "FILES":
         return 0
@@ -182,11 +259,16 @@ def main() -> None:
 
     append_registry_basenames(registry_path, new_registry_basenames)
 
+    # final sync against the downstream filesystem; this will remove any
+    # stale basenames and add any that slipped through the other mechanisms.
+    added_count, removed_count = sync_registry_with_ground_truth(registry_path, station_root)
+
     print(
         f"Moved {moved} .dat files from {source_dir} into {stage01_dir}; "
         f"relocated {relocated} legacy root .dat files into {source_dir}; "
         f"normalized {normalized_registry_rows} existing registry rows with execution_timestamp; "
-        f"backfilled {len(missing_from_registry)} basenames into {registry_path}"
+        f"backfilled {len(missing_from_registry)} basenames into {registry_path}; "
+        f"sync added {added_count}, removed {removed_count}, final count={len(find_ground_truth_basenames(station_root))}"
     )
 
 

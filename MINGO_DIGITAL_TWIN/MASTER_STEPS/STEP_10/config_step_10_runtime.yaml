@@ -3,5 +3,5 @@ input_glob: "**/step_9_chunks.chunks.json"
 input_sim_run: random
 output_format: pkl
 output_dir: ../../INTERSTEPS/STEP_10_TO_FINAL
-chunk_rows: 200000
+chunk_rows: 100000
 plot_sample_rows: true

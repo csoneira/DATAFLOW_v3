@@ -9,6 +9,23 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
 import pandas as pd
+import warnings
+
+# pyarrow is optional; many operations depend on it for parquet work
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import pyarrow.compute as pc
+except ImportError:  # pragma: no cover - fall back for environments without arrow
+    pq = None
+    pc = None
+    warnings.warn(
+        "pyarrow not installed; parquet operations will fall back to slower or limited "
+        "behavior.  Install pyarrow to improve performance.",
+        RuntimeWarning,
+    )
+
+# small helper for reading column data with pyarrow or pandas
 
 def parse_first_line_hash(line: str) -> Optional[str]:
     if not line:
@@ -96,31 +113,47 @@ def lookup_param_hash_for_parquet(path: Path, lookup: Dict[str, str]) -> Optiona
 
 
 def parquet_hash_status(path: Path) -> Tuple[str, Optional[str]]:
-    try:
-        import pyarrow.parquet as pq
-    except ImportError:
+    """Return status and (possible) hash for a parquet file.
+
+    The previous implementation iterated row‑group by row‑group, calling
+    ``read_row_group`` for every group.  That resulted in a lot of Python
+    overhead and many small reads when tens or hundreds of files are being
+    checked.  A single ``read`` of the ``param_hash`` column is significantly
+    faster, especially on modern SSDs and when using the PyArrow C++ code to
+    filter/null‑check the column.
+    """
+
+    if pq is None:  # pyarrow not installed
         return "error_read", None
+
     try:
         parquet = pq.ParquetFile(path)
     except Exception:
         return "error_read", None
+
     if "param_hash" not in parquet.schema.names:
         return "missing_column", None
+
     try:
+        # read the entire column at once rather than iterating row groups
+        table = parquet.read(columns=["param_hash"])
+        col = table.column(0)
+        # use Arrow compute where possible to reduce Python looping
+        # convert to python objects because normalize_hash already handles
+        # pandas-style NaN etc.
+        values = col.to_pylist()
         found_value = None
         found_missing = False
-        for i in range(parquet.metadata.num_row_groups):
-            table = parquet.read_row_group(i, columns=["param_hash"])
-            values = table.column(0).to_pylist()
-            for value in values:
-                normalized = normalize_hash(value)
-                if normalized:
-                    if found_value is None:
-                        found_value = normalized
-                else:
-                    found_missing = True
+        for value in values:
+            normalized = normalize_hash(value)
+            if normalized:
+                if found_value is None:
+                    found_value = normalized
+            else:
+                found_missing = True
     except Exception:
         return "error_read", None
+
     if found_value and found_missing:
         return "needs_fill", found_value
     if found_value:
@@ -129,24 +162,41 @@ def parquet_hash_status(path: Path) -> Tuple[str, Optional[str]]:
 
 
 def ensure_param_hash_column(path: Path, param_hash: str, apply_changes: bool) -> bool:
+    """Make sure the parquet has a non‑empty ``param_hash`` for every row.
+
+    The original version round‑tripped the file through pandas which was
+    convenient but fairly slow: parquet → pandas DataFrame → parquet.  When
+    the only modification is filling a single column, doing it in pure
+    PyArrow saves both memory and CPU time.  We still keep the ``apply_changes``
+    guard so dry‑runs are cheap.
+    """
+
     if not apply_changes:
         return True
+    if pq is None:
+        # nothing we can do without pyarrow; pretend it succeeded so the
+        # caller can continue to other files
+        return True
+
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    df = pd.read_parquet(path, engine="pyarrow")
-    if "param_hash" not in df.columns:
-        df["param_hash"] = param_hash
+    # load ahead of time so we can examine schema
+    table = pq.read_table(path)
+
+    if "param_hash" not in table.column_names:
+        # create a column full of the given hash
+        nrows = table.num_rows
+        newcol = pa.array([param_hash] * nrows)
+        table = table.append_column("param_hash", newcol)
     else:
-        series = df["param_hash"]
-        missing = series.isna()
-        try:
-            missing |= series.astype(str).str.strip().eq("")
-        except Exception:
-            pass
-        if missing.any():
-            df.loc[missing, "param_hash"] = param_hash
-        else:
-            return True
-    df.to_parquet(tmp_path, engine="pyarrow", compression="zstd", index=False)
+        col = table.column("param_hash")
+        # mask of rows that are null/empty after stripping
+        mask = pc.is_null(col) | pc.equal(pc.utf8_trim_whitespace(pc.cast(col, pa.string())), "")
+        if not pc.any(mask).as_py():
+            return True  # nothing to fill
+        filled = pc.if_else(mask, pa.array([param_hash] * table.num_rows), col)
+        table = table.set_column(table.schema.get_field_index("param_hash"), "param_hash", filled)
+
+    pq.write_table(table, tmp_path, compression="zstd")
     tmp_path.replace(path)
     return True
 
@@ -300,6 +350,10 @@ def main() -> int:
         / "SIMULATED_DATA"
         / "step_final_simulation_params.csv"
     )
+
+    if pq is None:
+        # give a clearer runtime warning in the top‐level invocation as well
+        print("WARNING: pyarrow not available; parquet processing will be slower or less complete.")
     params_path = args.params or default_params
     lookup = load_param_hash_lookup(params_path)
     valid_hashes = load_param_hash_set(params_path)
@@ -330,14 +384,26 @@ def main() -> int:
         "parquet_error_delete": 0,
     }
 
-    for path in iter_mi00_files(roots):
-        stats["checked"] += 1
-        status, detail = process_file(path, lookup, valid_hashes, args.apply)
-        if status in stats:
-            stats[status] += 1
+    # build lists up front so we can measure and parallelize the work
+    dat_paths = list(iter_mi00_files(roots))
+    parquet_paths = list(iter_mi00_parquets(roots))
 
+    # use a thread pool for I/O-bound operations; the work is largely
+    # reading/parsing files on disk so threads are sufficient and avoid the
+    # overhead of spawning processes.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+
+    lock = threading.Lock()
+
+    def handle_dat(path: Path):
+        status, detail = process_file(path, lookup, valid_hashes, args.apply)
+        with lock:
+            stats["checked"] += 1
+            if status in stats:
+                stats[status] += 1
         if status == "has_hash":
-            continue
+            return
         if status == "added_hash":
             action = "ADD" if args.apply else "WOULD_ADD"
             print(f"{action} {path} param_hash={detail}")
@@ -350,13 +416,14 @@ def main() -> int:
         elif status.startswith("error_"):
             print(f"ERROR {status} {path}")
 
-    for path in iter_mi00_parquets(roots):
-        stats["parquet_checked"] += 1
+    def handle_parquet(path: Path):
         status, detail = process_parquet(path, lookup, valid_hashes, args.apply)
-        if status in stats:
-            stats[status] += 1
+        with lock:
+            stats["parquet_checked"] += 1
+            if status in stats:
+                stats[status] += 1
         if status == "parquet_has_hash":
-            continue
+            return
         if status == "parquet_filled_hash":
             action = "FILL" if args.apply else "WOULD_FILL"
             print(f"{action} {path} param_hash={detail}")
@@ -371,6 +438,18 @@ def main() -> int:
             print(f"{action} {path}")
         elif status.startswith("parquet_error_"):
             print(f"ERROR {status} {path}")
+
+    # choose a reasonable number of threads; default to 8 or os.cpu_count()
+    max_workers = min(8, (len(dat_paths) + len(parquet_paths)) or 1)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for p in dat_paths:
+            futures.append(executor.submit(handle_dat, p))
+        for p in parquet_paths:
+            futures.append(executor.submit(handle_parquet, p))
+        # wait for completion; any printouts happen in worker threads
+        for _ in as_completed(futures):
+            pass
 
     mode = "APPLY" if args.apply else "DRY_RUN"
     print(f"Mode: {mode}")

@@ -108,14 +108,6 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 # standalone invocation is already running.
 * * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py --config $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/config_step_final_physics.yaml >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/STEP_FINAL/step_final_cron.log 2>&1
 
-# Reset mesh from final outputs (disabled by request: keep existing param_mesh workflow).
-# 10 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/NOT_ESSENTIAL/MINGO_DIGITAL_TWIN/UNUSED_ANCILLARY/reset_param_mesh_from_final.py --apply --skip-delete >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/reset_param_mesh_from_final.log 2>&1
-
-# Sanitize old/invalid intermediate runs — now integrated into
-# run_main_simulation_cycle.sh (cascade cleanup + sanitize).  The separate
-# cron entry is no longer needed.
-# */15 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py --apply --min-age-seconds 900 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/sanitize_sim_runs.log 2>&1
-
 # Ensure simulation hashes (daily, serialized with main cycle).
 25 6 * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/ensure_sim_hashes.py --apply >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/ensure_sim_hashes.log 2>&1
 

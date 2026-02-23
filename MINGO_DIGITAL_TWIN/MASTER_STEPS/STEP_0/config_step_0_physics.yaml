@@ -7,7 +7,7 @@ flux_cm2_min: [0.8, 1.2]
 # Append strategy:
 # - uniform_random: existing behavior
 # - regular_mesh: build a regular grid around random center values
-mode: regular_mesh
+mode: uniform_random
 
 # Used only when mode=regular_mesh.
 # Example below creates a mesh in flux and identical efficiencies.
@@ -23,6 +23,6 @@ efficiencies: [0.5, 1]
 efficiencies_identical: true
 
 # Optional: generate multiple rows per run, sharing selected columns.
-repeat_samples: 3
+repeat_samples: 1
 shared_columns: [cos_n, flux_cm2_min]  # keep empty to avoid forcing repeated flux/cos across a batch
 expand_z_positions: true  # one sampled geometry per new line
