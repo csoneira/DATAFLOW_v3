@@ -4,11 +4,19 @@ set -euo pipefail
 ROOT_DIR="$HOME/DATAFLOW_v3"
 DT_DIR="${ROOT_DIR}/MINGO_DIGITAL_TWIN"
 
+# locks used by the pipeline.  the main cycle holds SIM_MAIN_PIPELINE_LOCK
+# when running steps 0–10; the final formatter uses a separate lock so that
+# long final-stage invocations don't block the next cycle from starting.  the
+# independent cron job also uses the final lock.
+SIM_MAIN_PIPELINE_LOCK="${ROOT_DIR}/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock"
+SIM_FINAL_LOCK="${ROOT_DIR}/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock"
+
 STEP0_SCRIPT="${DT_DIR}/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py"
 RUN_STEP_SCRIPT="${DT_DIR}/run_step.sh"
 STEP_FINAL_SCRIPT="${DT_DIR}/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py"
 REPAIR_MESH_IDS_SCRIPT="${DT_DIR}/ANCILLARY/repair_param_mesh_step_ids.py"
 PRUNE_MESH_SCRIPT="${DT_DIR}/ANCILLARY/prune_completed_param_mesh_rows.py"
+SANITIZE_SCRIPT="${DT_DIR}/ANCILLARY/sanitize_sim_runs.py"
 FREQUENCY_CONFIG_FILE_DEFAULT="${DT_DIR}/CONFIG_FILES/sim_main_pipeline_frequency.conf"
 DEFAULT_MIN_INTERVAL_SECONDS=180
 DEFAULT_LAST_RUN_STATE_FILE="${ROOT_DIR}/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.last_run_epoch"
@@ -139,6 +147,53 @@ run_stage() {
   return "${rc}"
 }
 
+# ---------------------------------------------------------------------------
+# Cascade cleanup: once step N+1 has produced valid output, step N's
+# intermediate SIM_RUN (which was step N+1's input) is no longer needed.
+# Covers steps 3-9 where each SIM_RUN maps 1:1 to a downstream SIM_RUN
+# (step IDs 4-10 are always 001).  Steps 1-2 fan out and are left to
+# sanitize_sim_runs after done=1.
+# ---------------------------------------------------------------------------
+cleanup_consumed_intermediates() {
+  local n upstream_dir downstream_dir
+  local sim_run sim_name downstream_candidate manifest
+  local cleaned=0 checked=0
+  local intersteps="${DT_DIR}/INTERSTEPS"
+
+  for n in $(seq 3 9); do
+    upstream_dir="${intersteps}/STEP_${n}_TO_$((n + 1))"
+    if (( n == 9 )); then
+      downstream_dir="${intersteps}/STEP_10_TO_FINAL"
+    else
+      downstream_dir="${intersteps}/STEP_$((n + 1))_TO_$((n + 2))"
+    fi
+    [[ -d "$upstream_dir" ]] || continue
+    [[ -d "$downstream_dir" ]] || continue
+
+    for sim_run in "$upstream_dir"/SIM_RUN_*; do
+      [[ -d "$sim_run" ]] || continue
+      sim_name="$(basename "$sim_run")"
+      checked=$((checked + 1))
+
+      # Find a downstream SIM_RUN whose name starts with this one (+ "_").
+      for downstream_candidate in "${downstream_dir}/${sim_name}_"*; do
+        if [[ -d "$downstream_candidate" ]]; then
+          # Verify the downstream step produced a valid output manifest.
+          manifest="$(find "$downstream_candidate" -maxdepth 1 \
+            -name "step_$((n + 1))_chunks.chunks.json" -type f 2>/dev/null | head -1)"
+          if [[ -n "$manifest" && -s "$manifest" ]]; then
+            rm -rf "$sim_run"
+            cleaned=$((cleaned + 1))
+            break
+          fi
+        fi
+      done
+    done
+  done
+
+  log_info "cascade_cleanup status=done checked=${checked} cleaned=${cleaned}"
+}
+
 main() {
   local failed=0
 
@@ -165,14 +220,35 @@ main() {
     failed=1
   fi
 
-  if ! run_stage "step_final" /usr/bin/env python3 "${STEP_FINAL_SCRIPT}"; then
-    failed=1
+  # run final stage under its own lock so that a concurrently-scheduled
+  # standalone job doesn't interfere with the main-cycle lock.  if the
+  # external cron entry is already formatting, skip rather than wait – the
+  # exporter will run again on the next minute.
+  if ! flock -n "${SIM_FINAL_LOCK}" /usr/bin/env python3 "${STEP_FINAL_SCRIPT}"; then
+    log_warn "step_final skipped because ${SIM_FINAL_LOCK} was busy"
+  else
+    if [[ $? -ne 0 ]]; then
+      failed=1
+    fi
   fi
 
   # Housekeeping only: keep param_mesh focused on pending work while serialized
   # inside the same simulation cycle lock. Do not fail the cycle on prune issues.
   if ! run_stage "prune_mesh_done_rows" /usr/bin/env python3 "${PRUNE_MESH_SCRIPT}"; then
     log_warn "stage=prune_mesh_done_rows status=non_fatal_failure"
+  fi
+
+  # Cascade cleanup: delete intermediate SIM_RUN data that has been consumed
+  # by the next step.  This prevents storage exhaustion from accumulated
+  # intermediates.  Non-fatal: do not fail the cycle on cleanup issues.
+  cleanup_consumed_intermediates || log_warn "stage=cascade_cleanup status=non_fatal_failure"
+
+  # Sanitize: delete SIM_RUNs for completed mesh rows and broken runs.
+  # Integrated here so it runs every cycle instead of a separate cron job.
+  if [[ -f "${SANITIZE_SCRIPT}" ]]; then
+    if ! run_stage "sanitize" /usr/bin/env python3 "${SANITIZE_SCRIPT}" --apply --min-age-seconds 900; then
+      log_warn "stage=sanitize status=non_fatal_failure"
+    fi
   fi
 
   if [[ "${failed}" -eq 0 ]]; then

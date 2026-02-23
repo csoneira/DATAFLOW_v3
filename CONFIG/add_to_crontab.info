@@ -52,7 +52,7 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 
 # Clean files every hour (forced)
 # 0 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh --force >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/log_clean_dataflow.log 2>&1
-0 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh --select temps --force >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/log_temps_clean_dataflow.log 2>&1
+0 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh --select temps,plots,completed --force >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/log_temps_clean_dataflow.log 2>&1
 
 # Solve stale locks (force 15 min age and kill matching stale pipelines)
 */5 * * * * /usr/bin/env python3 $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/SOLVE_STALE_LOCKS/solve_stale_locks.py --force-age-minutes 15 --kill-stale-processes >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.cron.log 2>&1
@@ -84,12 +84,6 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 # Remove the UNPROCESSED files if already in the list of processed
 5 * * * * /bin/bash OPERATIONS/DATA_MAINTENANCE/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.log 2>&1
 
-# Every 30 min: move MINGO00 COMPLETED buffers back to UNPROCESSED (COMPLETED-only cleaner)
-*/30 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/move_completed_to_unprocessed_mingo00.lock /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/DATA_MAINTENANCE/COMPLETED_TO_UNPROCESSED/move_completed_to_unprocessed.sh $HOME/DATAFLOW_v3/STATIONS/MINGO00 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/move_completed_to_unprocessed_mingo00.log 2>&1
-
-# Run Stage 0 reprocessing unpacker for station 1 with limited concurrency
-# (Removed duplicate cron entry; the STEP_2 section below covers stations 1-4.)
-
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
@@ -106,12 +100,21 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 # Trigger every minute; actual cadence is gated by:
 # MINGO_DIGITAL_TWIN/CONFIG_FILES/sim_main_pipeline_frequency.conf
 * * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/run_main_simulation_cycle.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log 2>&1
+# additional guard: run the final formatter independently in case the
+# wrapper version ever fails to invoke it (or if someone is driving the
+# pipeline via run_step.sh directly).  this job uses a **separate lock** so
+# it never blocks the main-cycle lock; the wrapper itself will also acquire
+# the same final lock when it reaches the last stage and will skip if the
+# standalone invocation is already running.
+* * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py --config $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/config_step_final_physics.yaml >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/STEP_FINAL/step_final_cron.log 2>&1
 
 # Reset mesh from final outputs (disabled by request: keep existing param_mesh workflow).
 # 10 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/NOT_ESSENTIAL/MINGO_DIGITAL_TWIN/UNUSED_ANCILLARY/reset_param_mesh_from_final.py --apply --skip-delete >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/reset_param_mesh_from_final.log 2>&1
 
-# Sanitize old/invalid intermediate runs (every 15 min, serialized with main cycle).
-*/15 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py --apply --min-age-seconds 900 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/sanitize_sim_runs.log 2>&1
+# Sanitize old/invalid intermediate runs — now integrated into
+# run_main_simulation_cycle.sh (cascade cleanup + sanitize).  The separate
+# cron entry is no longer needed.
+# */15 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/sanitize_sim_runs.py --apply --min-age-seconds 900 >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/sanitize_sim_runs.log 2>&1
 
 # Ensure simulation hashes (daily, serialized with main cycle).
 25 6 * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/ensure_sim_hashes.py --apply >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/ensure_sim_hashes.log 2>&1

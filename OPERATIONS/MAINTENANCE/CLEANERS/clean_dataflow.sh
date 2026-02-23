@@ -6,6 +6,12 @@ shopt -s dotglob nullglob
 
 COMPACT=false
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DATAFLOW_ROOT_DEFAULT="$(cd -- "$SCRIPT_DIR/../../.." && pwd -P)"
+DATAFLOW_ROOT="${DATAFLOW_CLEAN_ROOT:-$DATAFLOW_ROOT_DEFAULT}"
+DATAFLOW_PARENT="$(dirname -- "$DATAFLOW_ROOT")"
+LOCK_FILE="${DATAFLOW_CLEAN_LOCK_FILE:-/tmp/dataflow_clean_dataflow.lock}"
+
 log_ts() {
   date '+%Y-%m-%d %H:%M:%S'
 }
@@ -53,12 +59,13 @@ DEFAULT_SELECTION=(temps plots completed cronlogs)
 FORCE_DEFAULT_SELECTION=(temps plots completed)
 declare -A VALID_TYPES=([temps]=1 [plots]=1 [completed]=1 [cronlogs]=1)
 
-STATIONS_BASE="$HOME/DATAFLOW_v3/STATIONS"
+STATIONS_BASE="${DATAFLOW_CLEAN_STATIONS_BASE:-$DATAFLOW_ROOT/STATIONS}"
 TEMP_ROOTS=(
-  "$HOME/DATAFLOW_v3"
-  "$HOME/SAFE_DATAFLOW_v3"
+  "$DATAFLOW_ROOT"
+  "${DATAFLOW_CLEAN_SAFE_ROOT:-$DATAFLOW_PARENT/SAFE_DATAFLOW_v3}"
 )
-CRON_LOG_DIR="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS"
+CRON_LOG_DIR="${DATAFLOW_CLEAN_CRON_LOG_DIR:-$DATAFLOW_ROOT/OPERATIONS_RUNTIME/CRON_LOGS}"
+SIM_JUNK_BASE="${DATAFLOW_CLEAN_SIM_JUNK_BASE:-$DATAFLOW_PARENT/SIMULATION_DATA_JUNK}"
 
 declare -A TYPE_BEFORE=()
 declare -A TYPE_AFTER=()
@@ -164,7 +171,9 @@ clean_completed() {
   for pattern in "${patterns[@]}"; do
     while IFS= read -r -d '' dir; do
       [[ -d "$dir" ]] || continue
-      if [[ -n ${seen_dirs["$dir"]:-} ]]; then
+      [[ -n ${seen_dirs["$dir"]:-} ]] && continue
+      if is_metadata_path "$dir"; then
+        log_warn "Skipping metadata path during completed cleanup: $dir"
         continue
       fi
       seen_dirs["$dir"]=1
@@ -181,28 +190,18 @@ clean_completed() {
     return 0
   fi
 
-  local total_before=0
-  local total_after=0
+  # Single batched du before any deletion — avoids 2×N separate du calls
+  local total_before
+  total_before=$(du -sb "${dirs[@]}" 2>/dev/null | awk '{sum+=$1} END{print sum+0}')
 
   for dir in "${dirs[@]}"; do
-    if is_metadata_path "$dir"; then
-      log_warn "Skipping metadata path during completed cleanup: $dir"
-      continue
-    fi
-    local before after delta
-    before=$(du -sb "$dir" | awk '{print $1}')
-    total_before=$((total_before + before))
-
     log_detail "--> Cleaning $dir"
-    chmod -R u+w "$dir" >/dev/null 2>&1 || true
-    find "$dir" -mindepth 1 -delete
-
-    after=$(du -sb "$dir" | awk '{print $1}')
-    total_after=$((total_after + after))
-    delta=$((before - after))
-    log_detail "   Freed $(format_bytes "$delta")"
+    chmod -R u+w "$dir" 2>/dev/null || true
+    find "$dir" -mindepth 1 -delete 2>/dev/null || true
   done
 
+  # Directories are empty after deletion; after ≈ 0
+  local total_after=0
   local freed=$((total_before - total_after))
   TYPE_BEFORE["$type"]=$total_before
   TYPE_AFTER["$type"]=$total_after
@@ -273,25 +272,33 @@ clean_plots() {
     return 0
   fi
 
+  # Single find covering both PLOTS dirs and DEBUG_PLOTS fallback in one tree walk.
+  # DEBUG_PLOTS entries whose parent PLOTS is already queued are removed below.
   while IFS= read -r -d '' dir; do
-    if [[ -n ${seen_dirs["$dir"]:-} ]]; then
+    [[ -n ${seen_dirs["$dir"]:-} ]] && continue
+    if is_metadata_path "$dir"; then
+      log_warn "Skipping metadata path during plots cleanup: $dir"
       continue
     fi
     seen_dirs["$dir"]=1
     dirs+=("$dir")
-  done < <(find "$STATIONS_BASE" -maxdepth 8 -type d -name 'PLOTS' -print0 2>/dev/null)
+  done < <(find "$STATIONS_BASE" -maxdepth 10 -type d \
+    \( -name 'PLOTS' -o -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/PLOTS/DEBUG_PLOTS' \) \
+    -print0 2>/dev/null)
 
-  # Explicitly cover STEP_1 TASK debug subfolders used by cron execution.
-  # If parent PLOTS is already queued, skip DEBUG_PLOTS to avoid duplicate work.
-  while IFS= read -r -d '' dir; do
-    local parent_plot_dir
-    parent_plot_dir="${dir%/DEBUG_PLOTS}"
-    if [[ -n ${seen_dirs["$parent_plot_dir"]:-} || -n ${seen_dirs["$dir"]:-} ]]; then
-      continue
+  # Post-filter: drop any DEBUG_PLOTS whose parent PLOTS is also in the list
+  local -a filtered_dirs=()
+  local parent_plot_dir
+  for dir in "${dirs[@]}"; do
+    if [[ "$dir" == */DEBUG_PLOTS ]]; then
+      parent_plot_dir="${dir%/DEBUG_PLOTS}"
+      if [[ -n ${seen_dirs["$parent_plot_dir"]:-} ]]; then
+        continue
+      fi
     fi
-    seen_dirs["$dir"]=1
-    dirs+=("$dir")
-  done < <(find "$STATIONS_BASE" -type d -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/PLOTS/DEBUG_PLOTS' -print0 2>/dev/null)
+    filtered_dirs+=("$dir")
+  done
+  dirs=("${filtered_dirs[@]}")
 
   if (( ${#dirs[@]} == 0 )); then
     log_info "No PLOTS directories found."
@@ -302,34 +309,22 @@ clean_plots() {
     return 0
   fi
 
-  local total_before=0
-  local total_after=0
+  # Single batched du before deletion — avoids 2×N separate du calls
+  local total_before
+  total_before=$(du -sb "${dirs[@]}" 2>/dev/null | awk '{sum+=$1} END{print sum+0}')
 
   for dir in "${dirs[@]}"; do
     if [[ ! -d "$dir" ]]; then
       log_warn "Skipping vanished plots path: $dir"
       continue
     fi
-    if is_metadata_path "$dir"; then
-      log_warn "Skipping metadata path during plots cleanup: $dir"
-      continue
-    fi
-    local before after delta
-    before=$(du -sb "$dir" | awk '{print $1}')
-    total_before=$((total_before + before))
-
     log_detail "--> Cleaning $dir"
-    chmod -R u+w "$dir" >/dev/null 2>&1 || true
-    find "$dir" -mindepth 1 -delete
-
-    after=$(du -sb "$dir" | awk '{print $1}')
-    total_after=$((total_after + after))
-    delta=$((before - after))
-    log_detail "   Size before: $(format_bytes "$before")"
-    log_detail "   Size after:  $(format_bytes "$after")"
-    log_detail "   Freed:       $(format_bytes "$delta")"
+    chmod -R u+w "$dir" 2>/dev/null || true
+    find "$dir" -mindepth 1 -delete 2>/dev/null || true
   done
 
+  # Directories are empty after deletion; after ≈ 0
+  local total_after=0
   local freed=$((total_before - total_after))
   TYPE_BEFORE["$type"]=$total_before
   TYPE_AFTER["$type"]=$total_after
@@ -358,9 +353,10 @@ clean_temps() {
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
 
-    while IFS= read -r -d '' var_dir; do
+    # Single find covering both varData and rawData in one tree walk
+    while IFS= read -r -d '' found_dir; do
       local base
-      base="$(dirname "$var_dir")"
+      base="$(dirname "$found_dir")"
       if [[ -n ${seen_bases["$base"]:-} ]]; then
         continue
       fi
@@ -368,19 +364,7 @@ clean_temps() {
       for rel in "${rel_targets[@]}"; do
         patterns+=("$base/$rel")
       done
-    done < <(find "$root" -type d -name 'varData' -print0 2>/dev/null)
-
-    while IFS= read -r -d '' raw_dir; do
-      local base
-      base="$(dirname "$raw_dir")"
-      if [[ -n ${seen_bases["$base"]:-} ]]; then
-        continue
-      fi
-      seen_bases["$base"]=1
-      for rel in "${rel_targets[@]}"; do
-        patterns+=("$base/$rel")
-      done
-    done < <(find "$root" -type d -path '*/rawData' -print0 2>/dev/null)
+    done < <(find "$root" -type d \( -name 'varData' -o -path '*/rawData' \) -print0 2>/dev/null)
   done
 
   if (( ${#patterns[@]} == 0 )); then
@@ -546,6 +530,14 @@ else
   fi
 fi
 
+# Acquire exclusive lock to prevent concurrent runs (LOCK_FILE was declared above)
+exec {LOCK_FD}>"$LOCK_FILE" 2>/dev/null || { log_warn "Cannot open lock file: $LOCK_FILE"; exit 1; }
+if ! flock -n "$LOCK_FD"; then
+  log_warn "Another clean_dataflow instance is already running (lock: $LOCK_FILE). Exiting."
+  exit 0
+fi
+trap 'flock -u "$LOCK_FD" 2>/dev/null || true; rm -f "$LOCK_FILE" 2>/dev/null || true' EXIT
+
 log_info "Selected cleanups: $(join_by ', ' "${SELECTED_TYPES[@]}")"
 log_info "Disk usage before cleaning: $(disk_usage_summary)"
 
@@ -623,12 +615,12 @@ if [[ -d "$SIM_JUNK_BASE" ]]; then
   while IFS= read -r -d '' dir; do
     if [[ -d "$dir" ]]; then
       size_before=$(du -sb "$dir" 2>/dev/null | awk '{print $1}')
-      rm -rf "$dir"
-      ((count++))
-      ((freed+=size_before))
+      rm -rf "$dir" 2>/dev/null || true
+      count=$((count + 1))
+      freed=$((freed + size_before))
       log_detail "  Removed $dir ($(format_bytes "$size_before"))"
     fi
-  done < <(find "$SIM_JUNK_BASE" -mindepth 3 -maxdepth 3 -type d -path '*/MINGO_DIGITAL_TWIN/INTERSTEPS' -print0)
+  done < <(find "$SIM_JUNK_BASE" -mindepth 3 -maxdepth 3 -type d -path '*/MINGO_DIGITAL_TWIN/INTERSTEPS' -print0 2>/dev/null)
   log_info "  - SIMULATION_DATA_JUNK INTERSTEPS: $(format_bytes "$freed") freed across $count item(s)"
 else
   log_info "SIMULATION_DATA_JUNK base directory not found: $SIM_JUNK_BASE"
@@ -642,12 +634,12 @@ if [[ -d "$SIM_JUNK_BASE" ]]; then
   while IFS= read -r -d '' dir; do
     if [[ -d "$dir" ]]; then
       size_before=$(du -sb "$dir" 2>/dev/null | awk '{print $1}')
-      rm -rf "$dir"
-      ((count++))
-      ((freed+=size_before))
+      rm -rf "$dir" 2>/dev/null || true
+      count=$((count + 1))
+      freed=$((freed + size_before))
       log_detail "  Removed $dir ($(format_bytes "$size_before"))"
     fi
-  done < <(find "$SIM_JUNK_BASE" -mindepth 4 -maxdepth 4 -type d -path '*/MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES' -print0)
+  done < <(find "$SIM_JUNK_BASE" -mindepth 4 -maxdepth 4 -type d -path '*/MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES' -print0 2>/dev/null)
   log_info "  - SIMULATION_DATA_JUNK SIMULATED_DATA/FILES: $(format_bytes "$freed") freed across $count item(s)"
 else
   log_info "SIMULATION_DATA_JUNK base directory not found: $SIM_JUNK_BASE"

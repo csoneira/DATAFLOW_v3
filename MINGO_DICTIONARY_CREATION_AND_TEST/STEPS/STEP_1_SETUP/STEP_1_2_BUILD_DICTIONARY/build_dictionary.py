@@ -7,8 +7,7 @@ Takes the collected_data.csv from STEP 1.1 and:
 3. Splits the remaining table into:
    - **dataset**: the full clean table (all rows).
    - **dictionary**: a carefully chosen subsample satisfying:
-     a) relative error of eff_2 and eff_3 below a threshold,
-     b) relative error of eff_1 and eff_4 to fitted acceptance lines below a threshold,
+     a) relative error of all four planes to their fitted acceptance lines below a threshold,
      c) event count above a minimum,
      d) one entry per unique parameter set (the one with the largest count).
 4. Produces diagnostic plots showing dictionary quality and coverage.
@@ -440,7 +439,7 @@ def _plot_eff_sim_vs_empirical(
         ax.grid(True, alpha=0.3)
     fig.suptitle(
         "Simulated vs Empirical Efficiency per Plane (grey=data, red×=dict)\n"
-        "Planes 1 & 4 use fit-based cuts (empirical = a·simulated + b).",
+        "All planes use fit-based cuts (empirical = a·simulated + b).",
         fontsize=11,
     )
     fig.tight_layout()
@@ -583,12 +582,8 @@ def _plot_relerr_report(
     fig, axes = plt.subplots(len(planes), 3, figsize=(16, 5 * len(planes)))
 
     for row, plane in enumerate(planes):
-        if plane in (1, 4):
-            re_col = f"relerr_eff_{plane}_fit_pct"
-            plane_mode = "fit-based"
-        else:
-            re_col = f"relerr_eff_{plane}_pct"
-            plane_mode = "direct"
+        re_col = f"relerr_eff_{plane}_fit_pct"
+        plane_mode = "fit-based"
         sim_col = f"eff_sim_{plane}"
         ev_col = "n_events"
         relerr_cut = None
@@ -702,7 +697,7 @@ def _plot_relerr_report(
 
     fig.suptitle(
         "Relative Error Report — Efficiency Planes 1, 2, 3 & 4\n"
-        "(planes 1 & 4 computed versus fitted line y = a·x + b)",
+        "(all planes computed versus fitted line y = a·x + b)",
         fontsize=13,
     )
     fig.tight_layout()
@@ -729,8 +724,10 @@ def main() -> int:
 
     eff2_range = cfg_12.get("outlier_eff_2_range", [0.5, 1.0])
     eff3_range = cfg_12.get("outlier_eff_3_range", [0.5, 1.0])
-    dict_relerr_eff2_max = cfg_12.get("dictionary_relerr_eff_2_max_pct", 5.0)
-    dict_relerr_eff3_max = cfg_12.get("dictionary_relerr_eff_3_max_pct", 5.0)
+    dict_relerr_eff2_fit_max = cfg_12.get("dictionary_relerr_eff_2_fit_max_pct",
+                                           cfg_12.get("dictionary_relerr_eff_2_max_pct", 5.0))
+    dict_relerr_eff3_fit_max = cfg_12.get("dictionary_relerr_eff_3_fit_max_pct",
+                                           cfg_12.get("dictionary_relerr_eff_3_max_pct", 5.0))
     dict_relerr_eff1_fit_max = cfg_12.get("dictionary_relerr_eff_1_fit_max_pct", 3.0)
     dict_relerr_eff4_fit_max = cfg_12.get("dictionary_relerr_eff_4_fit_max_pct", 3.0)
     dict_min_events = cfg_12.get("dictionary_min_events", 20000)
@@ -771,19 +768,6 @@ def main() -> int:
         for i in range(1, 5):
             df[f"eff_sim_{i}"] = effs.apply(lambda x, idx=i - 1: x[idx])
 
-    # Compute relative errors for eff 2 and 3
-    for plane in (2, 3):
-        emp_col = f"eff_empirical_{plane}"
-        sim_col = f"eff_sim_{plane}"
-        if sim_col in df.columns:
-            df[f"relerr_eff_{plane}_pct"] = (
-                (df[emp_col] - df[sim_col]) / df[sim_col].replace({0: np.nan}) * 100.0
-            )
-            df[f"abs_relerr_eff_{plane}_pct"] = df[f"relerr_eff_{plane}_pct"].abs()
-        else:
-            df[f"relerr_eff_{plane}_pct"] = np.nan
-            df[f"abs_relerr_eff_{plane}_pct"] = np.nan
-
     # Determine event count column
     event_col = None
     for candidate in ("selected_rows", "requested_rows", "generated_events_count",
@@ -810,10 +794,10 @@ def main() -> int:
     n_outliers = n_before - len(df_clean)
     log.info("  Outlier removal: %d outliers dropped, %d rows remain.", n_outliers, len(df_clean))
 
-    # Fit acceptance-adjusted linear relations for planes 1 and 4:
+    # Fit acceptance-adjusted linear relations for all 4 planes:
     # empirical ≈ a * simulated + b
     fit_line_by_plane: dict[int, tuple[float, float]] = {}
-    for plane in (1, 4):
+    for plane in (1, 2, 3, 4):
         fit = _fit_empirical_vs_simulated(df_clean, plane)
         if fit is None:
             log.warning("  Plane %d fit unavailable; fit-based cut disabled for this plane.", plane)
@@ -836,10 +820,12 @@ def main() -> int:
     # 3. n_events >= minimum
     # 4. One entry per unique parameter set: keep the one with most events
     dict_mask = np.ones(len(df_clean), dtype=bool)
-    dict_mask &= df_clean["abs_relerr_eff_2_pct"] < dict_relerr_eff2_max
-    dict_mask &= df_clean["abs_relerr_eff_3_pct"] < dict_relerr_eff3_max
     if df_clean["abs_relerr_eff_1_fit_pct"].notna().any():
         dict_mask &= df_clean["abs_relerr_eff_1_fit_pct"] < dict_relerr_eff1_fit_max
+    if df_clean["abs_relerr_eff_2_fit_pct"].notna().any():
+        dict_mask &= df_clean["abs_relerr_eff_2_fit_pct"] < dict_relerr_eff2_fit_max
+    if df_clean["abs_relerr_eff_3_fit_pct"].notna().any():
+        dict_mask &= df_clean["abs_relerr_eff_3_fit_pct"] < dict_relerr_eff3_fit_max
     if df_clean["abs_relerr_eff_4_fit_pct"].notna().any():
         dict_mask &= df_clean["abs_relerr_eff_4_fit_pct"] < dict_relerr_eff4_fit_max
     dict_mask &= df_clean["n_events"] >= dict_min_events
@@ -916,10 +902,12 @@ def main() -> int:
         "eff2_range": eff2_range,
         "eff3_range": eff3_range,
         "fit_line_eff_1": list(fit_line_by_plane[1]) if 1 in fit_line_by_plane else None,
+        "fit_line_eff_2": list(fit_line_by_plane[2]) if 2 in fit_line_by_plane else None,
+        "fit_line_eff_3": list(fit_line_by_plane[3]) if 3 in fit_line_by_plane else None,
         "fit_line_eff_4": list(fit_line_by_plane[4]) if 4 in fit_line_by_plane else None,
         "dict_relerr_eff1_fit_max_pct": dict_relerr_eff1_fit_max,
-        "dict_relerr_eff2_max_pct": dict_relerr_eff2_max,
-        "dict_relerr_eff3_max_pct": dict_relerr_eff3_max,
+        "dict_relerr_eff2_fit_max_pct": dict_relerr_eff2_fit_max,
+        "dict_relerr_eff3_fit_max_pct": dict_relerr_eff3_fit_max,
         "dict_relerr_eff4_fit_max_pct": dict_relerr_eff4_fit_max,
         "dict_min_events": dict_min_events,
         "relerr_hist_y_scale": relerr_hist_y_scale,
@@ -934,8 +922,8 @@ def main() -> int:
         param_cols,
         fit_line_by_plane=fit_line_by_plane,
         dict_relerr_eff1_fit_max=dict_relerr_eff1_fit_max,
-        dict_relerr_eff2_max=dict_relerr_eff2_max,
-        dict_relerr_eff3_max=dict_relerr_eff3_max,
+        dict_relerr_eff2_fit_max=dict_relerr_eff2_fit_max,
+        dict_relerr_eff3_fit_max=dict_relerr_eff3_fit_max,
         dict_relerr_eff4_fit_max=dict_relerr_eff4_fit_max,
         dict_min_events=dict_min_events,
         relerr_hist_y_scale=relerr_hist_y_scale,
@@ -952,8 +940,8 @@ def _make_plots(
     param_cols: list[str],
     fit_line_by_plane: dict[int, tuple[float, float]] | None,
     dict_relerr_eff1_fit_max: float,
-    dict_relerr_eff2_max: float,
-    dict_relerr_eff3_max: float,
+    dict_relerr_eff2_fit_max: float,
+    dict_relerr_eff3_fit_max: float,
     dict_relerr_eff4_fit_max: float,
     dict_min_events: float,
     relerr_hist_y_scale: str,
@@ -1085,8 +1073,8 @@ def _make_plots(
         PLOTS_DIR / "relerr_eff_report.png",
         relerr_cut_by_plane={
             1: dict_relerr_eff1_fit_max,
-            2: dict_relerr_eff2_max,
-            3: dict_relerr_eff3_max,
+            2: dict_relerr_eff2_fit_max,
+            3: dict_relerr_eff3_fit_max,
             4: dict_relerr_eff4_fit_max,
         },
         min_events_cut=dict_min_events,

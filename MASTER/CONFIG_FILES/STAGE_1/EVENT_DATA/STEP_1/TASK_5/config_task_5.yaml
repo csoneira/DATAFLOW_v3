@@ -7,5 +7,5 @@ selection:
 self_trigger: false
 complete_reanalysis: false
 # create_plots options: null | debug | usual | all
-create_plots: all
+create_plots: null
 correct_angle: false

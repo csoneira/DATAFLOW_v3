@@ -140,6 +140,8 @@ else
   STEP="${ARGS[0]}"
 fi
 DT="$(cd "$(dirname "$0")" && pwd)"
+# lock used to serialize standalone final-step executions (cron or manual).
+FINAL_LOCK="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock"
 WORK_CACHE_PATH="/tmp/mingo_digital_twin_run_step_work_cache.csv"
 WORK_STATE_PATH="/tmp/mingo_digital_twin_run_step_state.csv"
 WORK_STUCK_LINES_PATH="/tmp/mingo_digital_twin_run_step_stuck_lines.csv"
@@ -271,7 +273,11 @@ run_step() {
     8) cmd=(python3 "$DT/MASTER_STEPS/STEP_8/step_8_uncalibrated_to_threshold.py" --config "$DT/MASTER_STEPS/STEP_8/config_step_8_physics.yaml") ;;
     9) cmd=(python3 "$DT/MASTER_STEPS/STEP_9/step_9_threshold_to_trigger.py" --config "$DT/MASTER_STEPS/STEP_9/config_step_9_physics.yaml") ;;
     10) cmd=(python3 "$DT/MASTER_STEPS/STEP_10/step_10_triggered_to_jitter.py" --config "$DT/MASTER_STEPS/STEP_10/config_step_10_physics.yaml") ;;
-    final) cmd=(python3 "$DT/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py" --config "$DT/MASTER_STEPS/STEP_FINAL/config_step_final_physics.yaml") ;;
+    final)
+      # hold FINAL_LOCK to prevent simultaneous formatting by cron or
+      # another run_step invocation.
+      cmd=(flock -n "$FINAL_LOCK" python3 "$DT/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py" --config "$DT/MASTER_STEPS/STEP_FINAL/config_step_final_physics.yaml")
+      ;;
     *)
       log_error "Unknown step: $step"
       exit 1
@@ -986,6 +992,17 @@ while true; do
       cycle_end_epoch=$(date +%s)
       cycle_elapsed=$((cycle_end_epoch - cycle_start_epoch))
       log_info "all steps completed in ${cycle_elapsed}s"
+      # run the final formatting step as well; the standalone
+      # run_main_simulation_cycle wrapper normally handles this,
+      # but users often call `run_step.sh all --continuous` directly
+      # and expect the final script to fire.  add it here so that
+      # the continuous loop really covers the entire simulation
+      # pipeline.
+      if run_step "final"; then
+        log_info "final step completed"
+      else
+        log_warn "final step failed"
+      fi
       ;;
     from)
       autoclean_conflicting_runs

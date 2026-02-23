@@ -8,11 +8,11 @@ try_to_use_reprocessing_table: false
 complete_reanalysis: false
 article_format: false
 # create_plots options: null | debug | usual | all
-create_plots: all
+create_plots: null
 limit_number: null
 number_of_time_cal_figures: 3
 calibrate_charge_ns_to_fc: true
-validate_charge_pedestal_calibration: true
+validate_charge_pedestal_calibration: false
 charge_front_back: true
 slewing_correction: false
 time_window_filtering: true
