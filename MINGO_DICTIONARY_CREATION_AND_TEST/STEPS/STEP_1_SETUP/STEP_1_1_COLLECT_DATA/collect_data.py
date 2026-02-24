@@ -114,6 +114,29 @@ def _load_config(path: Path) -> dict:
     return {}
 
 
+def _resolve_z_config_rng(config: dict) -> tuple[np.random.Generator, int, bool]:
+    """Return RNG for z-config selection and report whether seed came from config."""
+    cfg_11 = config.get("step_1_1", {})
+    seed_candidates = [
+        cfg_11.get("z_config_random_seed"),
+        cfg_11.get("random_seed"),
+        config.get("z_config_random_seed"),
+    ]
+    for raw_seed in seed_candidates:
+        if raw_seed in (None, "", "null", "None"):
+            continue
+        try:
+            seed = int(raw_seed)
+        except (TypeError, ValueError):
+            log.warning("Invalid z-config random seed value %r; ignoring.", raw_seed)
+            continue
+        return np.random.default_rng(seed), seed, True
+
+    # When not configured, generate and record a one-off seed for reproducibility.
+    seed = int(np.random.default_rng().integers(0, 2**32 - 1))
+    return np.random.default_rng(seed), seed, False
+
+
 def _aggregate_latest(df: pd.DataFrame) -> pd.DataFrame:
     """Keep only the latest execution per filename_base."""
     if "execution_timestamp" in df.columns:
@@ -175,13 +198,31 @@ def main() -> int:
     for i, row in unique_z.iterrows():
         log.info("    [%d] %s", i, list(row.values))
 
+    z_config_selection_seed: int | None = None
+    z_config_seed_from_config = False
+    z_config_selected_index: int | None = None
+
     if z_config is not None:
         z_config = [float(v) for v in z_config]
         log.info("  Selecting z config from config: %s", z_config)
     else:
-        idx = np.random.randint(0, len(unique_z))
-        z_config = unique_z.iloc[idx].tolist()
-        log.info("  No z config specified — randomly selected [%d]: %s", idx, z_config)
+        rng, z_config_selection_seed, z_config_seed_from_config = _resolve_z_config_rng(config)
+        z_config_selected_index = int(rng.integers(0, len(unique_z)))
+        z_config = unique_z.iloc[z_config_selected_index].tolist()
+        if z_config_seed_from_config:
+            log.info(
+                "  No z config specified — selected [%d] using configured seed %d: %s",
+                z_config_selected_index,
+                z_config_selection_seed,
+                z_config,
+            )
+        else:
+            log.info(
+                "  No z config specified — selected [%d] using generated seed %d: %s",
+                z_config_selected_index,
+                z_config_selection_seed,
+                z_config,
+            )
 
     # Apply z-position cut
     z_mask = np.ones(len(params_df), dtype=bool)
@@ -238,6 +279,9 @@ def main() -> int:
     # Save the selected z configuration for downstream steps
     z_info = {
         "z_position_config": z_config,
+        "z_config_selected_index": z_config_selected_index,
+        "z_config_selection_seed": z_config_selection_seed,
+        "z_config_seed_from_config": z_config_seed_from_config,
         "total_rows": len(collected),
         "task_ids_used": task_ids,
         "station_id": station_id,

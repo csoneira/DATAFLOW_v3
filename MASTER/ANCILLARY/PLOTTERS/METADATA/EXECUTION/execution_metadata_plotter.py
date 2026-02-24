@@ -46,6 +46,7 @@ DEFAULT_Y_MAX_MINUTES = 5.0
 DEFAULT_MARKER_SIZE = 14.0
 DEFAULT_LAST_HOURS = 2.0
 DEFAULT_PANEL_WIDTH_RATIOS: Tuple[float, float] = (5.0, 1.0)
+NOW_X_MARGIN_MINUTES = 10.0
 
 BASENAME_TIMESTAMP_DIGITS = 11
 FILENAME_TIMESTAMP_PATTERN = re.compile(r"mi0\d(\d{11})$", re.IGNORECASE)
@@ -176,6 +177,14 @@ def parse_execution_series(series: pd.Series) -> pd.Series:
     if missing.any():
         parsed.loc[missing] = pd.to_datetime(text[missing], errors="coerce")
     return parsed
+
+
+def now_like(reference: pd.Timestamp) -> pd.Timestamp:
+    reference_ts = pd.Timestamp(reference)
+    now_utc = pd.Timestamp.utcnow()
+    if reference_ts.tzinfo is None:
+        return now_utc.tz_localize(None)
+    return now_utc.tz_convert(reference_ts.tzinfo)
 
 
 def _ordered_unique(values: Sequence[str]) -> List[str]:
@@ -381,8 +390,10 @@ def station_execution_last_window(
     if combined.empty:
         return None
 
-    upper = pd.Timestamp(combined.max())
-    lower = upper - timedelta(hours=last_hours)
+    reference_upper = pd.Timestamp(combined.max())
+    now = now_like(reference_upper)
+    upper = now + timedelta(minutes=NOW_X_MARGIN_MINUTES)
+    lower = now - timedelta(hours=last_hours)
     if lower == upper:
         lower = upper - timedelta(minutes=1)
     return lower, upper
@@ -468,6 +479,10 @@ def plot_station_page(
             )
             plotted_local = True
 
+        if x_col == "execution_timestamp" and x_limits is not None:
+            now = now_like(pd.Timestamp(x_limits[1]))
+            ax.axvline(now, color="red", linestyle="--", alpha=0.3, zorder=10)
+
         if not plotted_local:
             ax.text(
                 0.5,
@@ -491,7 +506,7 @@ def plot_station_page(
     right_plotted = _plot_overlay(
         ax=right_ax,
         x_col="execution_timestamp",
-        title=f"Tasks 1-5 - Exec. time (last {last_hours:g}h)",
+        title=f"Tasks 1-5 - Exec. time (last {last_hours:g}h from now UTC)",
         x_limits=right_limits,
         right_window_only=True,
     )

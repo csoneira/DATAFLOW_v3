@@ -13,7 +13,9 @@ import ast
 import argparse
 import hashlib
 import json
+import os
 import sys
+import warnings
 from collections import defaultdict
 from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
@@ -23,6 +25,9 @@ import pandas as pd
 import yaml
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_RUNTIME_DIR = ROOT_DIR.parent / "OPERATIONS_RUNTIME"
+STRUCTURED_LOG_PATH = ROOT_RUNTIME_DIR / "CRON_LOGS" / "SIMULATION" / "STRUCTURED" / "step_final.jsonl"
+STRUCTURED_LOG_ENABLED = os.environ.get("SIM_STRUCTURED_LOGS_ENABLED", "1").strip() != "0"
 sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
@@ -46,16 +51,38 @@ def _log_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _emit_structured_log(level: str, message: str) -> None:
+    if not STRUCTURED_LOG_ENABLED:
+        return
+    payload = {
+        "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "logger": "step_final",
+        "level": level,
+        "pid": os.getpid(),
+        "message": str(message),
+    }
+    try:
+        STRUCTURED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with STRUCTURED_LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except OSError:
+        # Logging must not interrupt data production.
+        pass
+
+
 def _log_info(message: str) -> None:
     print(f"[{_log_ts()}] [STEP_FINAL] {message}", flush=True)
+    _emit_structured_log("INFO", message)
 
 
 def _log_warn(message: str) -> None:
     print(f"[{_log_ts()}] [STEP_FINAL] [WARN] {message}", flush=True)
+    _emit_structured_log("WARN", message)
 
 
 def _log_err(message: str) -> None:
     print(f"[{_log_ts()}] [STEP_FINAL] [ERROR] {message}", flush=True)
+    _emit_structured_log("ERROR", message)
 
 
 def format_value(val: float) -> str:
@@ -459,13 +486,22 @@ def relocate_root_dat_files(output_dir: Path, dat_output_dir: Path) -> int:
 
 
 def normalize_mesh_layout(mesh: pd.DataFrame) -> pd.DataFrame:
+    if mesh.columns.duplicated().any():
+        dupes = [str(col) for col in mesh.columns[mesh.columns.duplicated(keep="first")]]
+        _log_warn(
+            "param_mesh has duplicate columns; keeping first occurrence and dropping duplicates: "
+            + ",".join(dupes)
+        )
+        mesh = mesh.loc[:, ~mesh.columns.duplicated(keep="first")].copy()
     z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
-    head_cols = ["done", "param_set_id", "param_date"]
+    head_cols = ["done", "param_set_id", "param_date", "execution_time"]
+    if "done" not in mesh.columns:
+        mesh["done"] = 0
     ordered_cols = [c for c in head_cols if c in mesh.columns] + [
         c for c in mesh.columns if c not in head_cols and c not in z_cols
     ] + [c for c in z_cols if c in mesh.columns]
     mesh = mesh[ordered_cols]
-    mesh["done"] = mesh["done"].fillna(0).astype(int)
+    mesh["done"] = pd.to_numeric(mesh["done"], errors="coerce").fillna(0).astype(int)
     return normalize_param_mesh_ids(mesh)
 
 
@@ -670,11 +706,25 @@ def reconcile_mesh_done_from_sim_params(
             mesh = pd.read_csv(mesh_path)
         except (OSError, pd.errors.EmptyDataError):
             return 0
+        if mesh.columns.duplicated().any():
+            dupes = [str(col) for col in mesh.columns[mesh.columns.duplicated(keep="first")]]
+            _log_warn(
+                "param_mesh has duplicate columns during done reconciliation; "
+                "keeping first occurrence and dropping duplicates: "
+                + ",".join(dupes)
+            )
+            mesh = mesh.loc[:, ~mesh.columns.duplicated(keep="first")].copy()
         if "done" not in mesh.columns:
             mesh["done"] = 0
         mesh_keys = build_mesh_combo_keys(mesh)
-        done_flags = mesh["done"].fillna(0).astype(int)
+        done_raw = mesh["done"]
+        if isinstance(done_raw, pd.DataFrame):
+            done_raw = done_raw.iloc[:, 0]
+        done_flags = pd.to_numeric(done_raw, errors="coerce").fillna(0).astype(int)
         stale_mask = (done_flags != 1) & mesh_keys.isin(combo_keys)
+        if isinstance(stale_mask, pd.DataFrame):
+            stale_mask = stale_mask.any(axis=1)
+        stale_mask = pd.Series(stale_mask, index=mesh.index).fillna(False).astype(bool)
         updates = int(stale_mask.sum())
         if updates <= 0:
             return 0
@@ -721,11 +771,11 @@ def collect_input_row_counts(
             _log_warn(f"Skipping unreadable input {path}: {exc}")
             continue
         row_counts.append(total)
-        print(f"Input rows: {path} -> {total}", flush=True)
+        _log_info(f"Input rows: {path} -> {total}")
     if not row_counts:
         raise ValueError("No readable input paths available for STEP_FINAL.")
     total_rows = int(sum(row_counts))
-    print(f"Total rows across inputs: {total_rows}", flush=True)
+    _log_info(f"Total rows across inputs: {total_rows}")
     return row_counts, total_rows
 
 
@@ -846,9 +896,8 @@ def sample_payloads_sequential(
             raise RuntimeError("No payload rows were collected for sequential sampling.")
 
         start_idx = int(rng.integers(0, total_rows))
-        print(
-            f"Sequential sampling start index ({target_rows} rows, reuse={allow_reuse_when_short}): {start_idx}",
-            flush=True,
+        _log_info(
+            f"Sequential sampling start index ({target_rows} rows, reuse={allow_reuse_when_short}): {start_idx}"
         )
 
         rotated_payloads = base_payloads[start_idx:] + base_payloads[:start_idx]
@@ -901,7 +950,7 @@ def sample_payloads_sequential(
         return payloads, total_rows, offsets, start_idx
 
     start_idx = int(rng.integers(0, total_rows - target_rows + 1))
-    print(f"Sequential sampling start index ({target_rows} rows): {start_idx}", flush=True)
+    _log_info(f"Sequential sampling start index ({target_rows} rows): {start_idx}")
 
     remaining_skip = start_idx
     remaining_take = target_rows
@@ -1090,9 +1139,21 @@ def main() -> None:
     mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
     if not mesh_dir.is_absolute():
         mesh_dir = Path(__file__).resolve().parent / mesh_dir
-    mesh_mismatch_strategy = str(cfg.get("param_mesh_mismatch_strategy", "skip")).strip().lower()
-    if mesh_mismatch_strategy not in {"skip", "auto_repair"}:
-        raise ValueError("config param_mesh_mismatch_strategy must be 'skip' or 'auto_repair'.")
+    mesh_mismatch_strategy_raw = str(
+        cfg.get("param_mesh_mismatch_strategy", "auto_repair")
+    ).strip().lower()
+    if mesh_mismatch_strategy_raw == "skip":
+        # Never allow mismatch "skip" mode because it can starve STEP_FINAL.
+        _log_warn(
+            "param_mesh_mismatch_strategy=skip is deprecated; "
+            "forcing auto_repair mode to avoid output starvation."
+        )
+    elif mesh_mismatch_strategy_raw not in {"auto_repair", "repair", "never_skip", ""}:
+        # Be permissive so config drift cannot stop file generation.
+        _log_warn(
+            "Unknown param_mesh_mismatch_strategy="
+            f"{mesh_mismatch_strategy_raw!r}; forcing auto_repair mode."
+        )
 
     requested_rows = int(cfg.get("target_rows", 50000))
     if requested_rows <= 0:
@@ -1174,6 +1235,18 @@ def main() -> None:
             sim_run_tokens = str(sim_run).split("_")
             sim_run_step_ids = sim_run_tokens[2:] if str(sim_run).startswith("SIM_RUN_") else []
 
+            def _normalize_step_id_token(value: object) -> str:
+                try:
+                    return f"{int(value):03d}"
+                except (TypeError, ValueError):
+                    text = str(value).strip()
+                    if not text:
+                        return ""
+                    try:
+                        return f"{int(float(text)):03d}"
+                    except (TypeError, ValueError):
+                        return text
+
             def _base_mask(*, include_done: bool, require_pending_param_set: bool) -> pd.Series:
                 out = pd.Series(True, index=mesh.index)
                 if not include_done:
@@ -1205,22 +1278,34 @@ def main() -> None:
                 rel_mask &= np.isclose(mesh["z_p4"].astype(float) - base, float(z_positions[3]))
                 return mesh[rel_mask]
 
-            candidates = _z_filter(_base_mask(include_done=False, require_pending_param_set=True))
+            def _step_id_filter(mask_in: pd.Series) -> pd.DataFrame:
+                if not sim_run_step_ids:
+                    return mesh.iloc[0:0]
+                id_mask = mask_in.copy()
+                for idx, raw_step_id in enumerate(sim_run_step_ids[:10], start=1):
+                    col = f"step_{idx}_id"
+                    if col not in mesh.columns:
+                        return mesh.iloc[0:0]
+                    normalized = _normalize_step_id_token(raw_step_id)
+                    if not normalized:
+                        return mesh.iloc[0:0]
+                    id_mask &= mesh[col].astype("string").str.strip().eq(normalized)
+                return mesh[id_mask]
+
+            # Deterministic priority: match by step-id chain first.
+            candidates = _step_id_filter(_base_mask(include_done=False, require_pending_param_set=True))
+            if candidates.empty:
+                candidates = _step_id_filter(_base_mask(include_done=False, require_pending_param_set=False))
+            if candidates.empty:
+                candidates = _z_filter(_base_mask(include_done=False, require_pending_param_set=True))
             if candidates.empty:
                 candidates = _z_filter(_base_mask(include_done=False, require_pending_param_set=False))
-            if candidates.empty and mesh_mismatch_strategy == "auto_repair":
+            if candidates.empty:
                 candidates = _z_filter(_base_mask(include_done=True, require_pending_param_set=False))
 
-            if candidates.empty and mesh_mismatch_strategy != "auto_repair":
-                _log_warn(
-                    "No exact param_mesh match for incoming STEP_FINAL run; "
-                    f"skipping sim_run={sim_run} because param_mesh_mismatch_strategy=skip."
-                )
-                continue
-
-            # Auto-repair 1 (opt-in): remap one pending row with matching geometry
+            # Auto-repair 1: remap one pending row with matching geometry
             # to the incoming combo.
-            if candidates.empty and mesh_mismatch_strategy == "auto_repair":
+            if candidates.empty:
                 z_only_mask = pd.Series(True, index=mesh.index)
                 z_only_mask &= mesh["done"] != 1
                 z_candidates = _z_filter(z_only_mask)
@@ -1255,8 +1340,8 @@ def main() -> None:
                     )
                     candidates = mesh.loc[[remap_index]]
 
-            # Auto-repair 2 (opt-in): append a new row if nothing usable exists.
-            if candidates.empty and mesh_mismatch_strategy == "auto_repair":
+            # Auto-repair 2: append a new row if nothing usable exists.
+            if candidates.empty:
                 auto_row = {col: pd.NA for col in mesh.columns}
                 auto_row["done"] = 0
                 auto_row["cos_n"] = float(step1_cfg.get("cos_n"))
@@ -1281,8 +1366,10 @@ def main() -> None:
                     auto_row["param_set_id"] = pd.NA
                 if has_param_date:
                     auto_row["param_date"] = pd.NA
-                mesh = pd.concat([mesh, pd.DataFrame([auto_row])], ignore_index=True)
-                append_index = int(len(mesh) - 1)
+                append_index = int(len(mesh))
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", FutureWarning)
+                    mesh.loc[append_index] = auto_row
                 _log_warn(
                     "No matching param_mesh row found; "
                     f"auto-appended row index={append_index} for sim_run={sim_run}."
@@ -1585,6 +1672,7 @@ def main() -> None:
                 "param_hash": param_hash,
                 "param_set_id": int(param_set_id),
                 "param_date": str(param_date),
+                "execution_time": now_iso(),
                 "cos_n": step1_cfg.get("cos_n"),
                 "flux_cm2_min": step1_cfg.get("flux_cm2_min"),
                 "z_plane_1": z_vals[0],

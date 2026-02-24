@@ -26,3 +26,7 @@ efficiencies_identical: true
 repeat_samples: 1
 shared_columns: [cos_n, flux_cm2_min]  # keep empty to avoid forcing repeated flux/cos across a batch
 expand_z_positions: true  # one sampled geometry per new line
+
+# Optional fixed detector geometry override for STEP_0.
+# Use one 4-value list for a single geometry, or a list of 4-value lists for several.
+z_positions_override_mm: [0, 65, 160, 195]

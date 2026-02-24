@@ -4,13 +4,15 @@ input_sim_run: all
 input_collect: matching
 param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
 param_mesh_sim_run: none
-param_mesh_mismatch_strategy: skip
+# Use deterministic repair mode. "skip" is deprecated because it can starve
+# STEP_FINAL forever when mesh rows are pruned/regenerated while SIM_RUNs remain.
+param_mesh_mismatch_strategy: auto_repair
 output_dir: ../../SIMULATED_DATA
 registry_enabled: false
-chunk_rows: 100000
-target_rows: 100000
+chunk_rows: 50000
+target_rows: 50000
 files_per_station_conf: 1
 payload_sampling: sequential_random_start
 allow_reuse_when_short: false
 truncate_at_day_end: false
-subsample_rows: [50000, 100000]
+subsample_rows: [30000, 35000, 40000, 45000, 50000]

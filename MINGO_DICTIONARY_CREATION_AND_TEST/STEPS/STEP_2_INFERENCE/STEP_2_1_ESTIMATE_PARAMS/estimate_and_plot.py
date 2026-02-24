@@ -419,6 +419,9 @@ def _make_plots(
         "axes.grid": True, "grid.alpha": 0.25,
         "axes.spines.top": False, "axes.spines.right": False,
     })
+    metric = str((cfg_21 or {}).get("distance_metric", "unknown"))
+    k_cfg = (cfg_21 or {}).get("interpolation_k", None)
+    k_label = "all" if k_cfg is None else str(k_cfg)
 
     # ── 1. Distance diagnostics (distribution + method relevance) ───
     distances = pd.to_numeric(result_df.get("best_distance"), errors="coerce").dropna()
@@ -684,9 +687,6 @@ def _make_plots(
             ax_oper.set_xlabel("Distance threshold")
             ax_oper.set_ylabel("Coverage retained [%]")
 
-        metric = str((cfg_21 or {}).get("distance_metric", "unknown"))
-        k_cfg = (cfg_21 or {}).get("interpolation_k", None)
-        k_label = "all" if k_cfg is None else str(k_cfg)
         fig.suptitle(
             f"Best-match distance diagnostics (metric={metric}, IDW K={k_label})",
             fontsize=11,

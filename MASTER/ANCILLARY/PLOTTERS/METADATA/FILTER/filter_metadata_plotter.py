@@ -640,6 +640,10 @@ def plot_task_axis(
             framealpha=0.85,
         )
 
+    if x_column == "execution_timestamp":
+        now = pd.Timestamp.utcnow()
+        ax.axvline(now, color="red", linestyle="--", alpha=0.3, zorder=10)
+
     ax.xaxis.set_major_formatter(mdates.DateFormatter(x_tick_format))
     if x_tick_rotation:
         ax.tick_params(axis="x", labelrotation=x_tick_rotation)

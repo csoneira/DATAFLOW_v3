@@ -23,6 +23,71 @@ def pick_tt_column(df: pd.DataFrame) -> str | None:
     return None
 
 
+def plot_qdiff_tdiff_correlation(df: pd.DataFrame, pdf: PdfPages) -> None:
+    """Plane-wise q_diff vs T_diff maps for time-walk style diagnostics."""
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    drew_any = False
+    for plane_idx in range(1, 5):
+        ax = axes[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        q_parts: list[np.ndarray] = []
+        t_parts: list[np.ndarray] = []
+        for strip_idx in range(1, 5):
+            q_col = f"q_diff_{plane_idx}_s{strip_idx}"
+            t_col = f"T_diff_{plane_idx}_s{strip_idx}"
+            if q_col not in df.columns or t_col not in df.columns:
+                continue
+            q_vals = df[q_col].to_numpy(dtype=float)
+            t_vals = df[t_col].to_numpy(dtype=float)
+            mask = np.isfinite(q_vals) & np.isfinite(t_vals) & (q_vals != 0.0)
+            if np.any(mask):
+                q_parts.append(q_vals[mask])
+                t_parts.append(t_vals[mask])
+        if not q_parts:
+            ax.axis("off")
+            continue
+        q_all = np.concatenate(q_parts)
+        t_all = np.concatenate(t_parts)
+        if q_all.size < 50:
+            ax.axis("off")
+            continue
+        q_lo, q_hi = np.quantile(q_all, [0.01, 0.99])
+        t_lo, t_hi = np.quantile(t_all, [0.01, 0.99])
+        if not np.isfinite(q_lo) or not np.isfinite(q_hi) or q_lo >= q_hi:
+            q_lo, q_hi = float(np.min(q_all)), float(np.max(q_all))
+        if not np.isfinite(t_lo) or not np.isfinite(t_hi) or t_lo >= t_hi:
+            t_lo, t_hi = float(np.min(t_all)), float(np.max(t_all))
+        hb = ax.hexbin(
+            q_all,
+            t_all,
+            gridsize=60,
+            bins="log",
+            cmap="viridis",
+            extent=(q_lo, q_hi, t_lo, t_hi),
+            mincnt=1,
+        )
+        corr = float(np.corrcoef(q_all, t_all)[0, 1]) if q_all.size > 1 else float("nan")
+        ax.set_title(f"Plane {plane_idx}: q_diff vs T_diff")
+        ax.set_xlabel("q_diff")
+        ax.set_ylabel("T_diff (ns)")
+        ax.text(
+            0.03,
+            0.95,
+            f"N={q_all.size}\nr={corr:.3f}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+        )
+        fig.colorbar(hb, ax=ax, label="log10(counts)")
+        drew_any = True
+    if drew_any:
+        fig.suptitle("STEP 5 charge-time correlation maps by plane")
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+
 def plot_signal_summary(df: pd.DataFrame, output_path: Path, sample_path: Path | None = None) -> None:
     with PdfPages(output_path) as pdf:
         tt_col = pick_tt_column(df)
@@ -161,6 +226,9 @@ def plot_signal_summary(df: pd.DataFrame, output_path: Path, sample_path: Path |
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
+
+        # Publication-focused time-walk view.
+        plot_qdiff_tdiff_correlation(df, pdf)
 
         # muon differential flux plot intentionally omitted from STEP 5 (use STEP_1/STEP_10 for generator/trigger diagnostics).
 

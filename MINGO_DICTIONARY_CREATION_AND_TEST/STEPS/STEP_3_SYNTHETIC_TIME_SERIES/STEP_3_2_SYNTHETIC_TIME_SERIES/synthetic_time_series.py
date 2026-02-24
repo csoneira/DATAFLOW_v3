@@ -449,13 +449,20 @@ def _compute_inverse_density_scaling(
     y = (be - np.nanmin(be)) / sy
     coords = np.column_stack([x, y])
 
-    diff = coords[:, None, :] - coords[None, :, :]
-    dist = np.sqrt(np.sum(diff * diff, axis=2))
-    np.fill_diagonal(dist, np.inf)
-
     k = max(1, int(k_neighbors))
     k_eff = min(k, n - 1)
-    kth = np.partition(dist, k_eff - 1, axis=1)[:, k_eff - 1]
+    kth = np.empty(n, dtype=float)
+
+    # Chunk pairwise distances to limit peak memory at large n_basis.
+    chunk_size = 512
+    for s in range(0, n, chunk_size):
+        e = min(n, s + chunk_size)
+        diff = coords[s:e, None, :] - coords[None, :, :]
+        d2 = np.sum(diff * diff, axis=2)
+        row_idx = np.arange(e - s)
+        col_idx = np.arange(s, e)
+        d2[row_idx, col_idx] = np.inf
+        kth[s:e] = np.sqrt(np.partition(d2, k_eff - 1, axis=1)[:, k_eff - 1])
 
     exp = max(float(exponent), 0.0)
     scale = np.power(np.clip(kth, 1e-12, None), exp)
@@ -587,14 +594,8 @@ def _rebuild_efficiencies_string(df: pd.DataFrame) -> None:
     if not all(c in df.columns for c in needed):
         return
 
-    def _fmt(row: pd.Series) -> str:
-        vals = []
-        for c in needed:
-            v = pd.to_numeric(row[c], errors="coerce")
-            vals.append(float(v) if pd.notna(v) else np.nan)
-        return str(vals)
-
-    df["efficiencies"] = df[needed].apply(_fmt, axis=1)
+    eff_matrix = df[needed].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    df["efficiencies"] = pd.Series(eff_matrix.tolist(), index=df.index).astype(str)
 
 
 def _make_synthetic_dataset(

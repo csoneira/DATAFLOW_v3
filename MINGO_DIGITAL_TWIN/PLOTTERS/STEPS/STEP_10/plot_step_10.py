@@ -123,6 +123,162 @@ def pick_tt_column(df: pd.DataFrame) -> str | None:
     return None
 
 
+def _collect_frontback_plane_arrays(df: pd.DataFrame, plane_idx: int) -> tuple[np.ndarray, np.ndarray]:
+    tdiff_parts: list[np.ndarray] = []
+    qasym_parts: list[np.ndarray] = []
+    for strip_idx in range(1, 5):
+        tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+        tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+        if tf_col in df.columns and tb_col in df.columns:
+            tf = df[tf_col].to_numpy(dtype=float)
+            tb = df[tb_col].to_numpy(dtype=float)
+            mask_t = np.isfinite(tf) & np.isfinite(tb) & (tf != 0) & (tb != 0)
+            if np.any(mask_t):
+                tdiff_parts.append(tf[mask_t] - tb[mask_t])
+
+        qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+        qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+        if qf_col in df.columns and qb_col in df.columns:
+            qf = df[qf_col].to_numpy(dtype=float)
+            qb = df[qb_col].to_numpy(dtype=float)
+            den = qf + qb
+            mask_q = np.isfinite(qf) & np.isfinite(qb) & (den > 0.0)
+            if np.any(mask_q):
+                qasym_parts.append((qf[mask_q] - qb[mask_q]) / den[mask_q])
+
+    tdiff = np.concatenate(tdiff_parts) if tdiff_parts else np.array([], dtype=float)
+    qasym = np.concatenate(qasym_parts) if qasym_parts else np.array([], dtype=float)
+    return tdiff, qasym
+
+
+def plot_frontback_asymmetry_diagnostics(df: pd.DataFrame, pdf: PdfPages, stage_label: str) -> None:
+    fig_t, axes_t = plt.subplots(2, 2, figsize=(11, 8))
+    fig_q, axes_q = plt.subplots(2, 2, figsize=(11, 8))
+    summary_rows: list[tuple[int, float, float, int, float, float, int]] = []
+
+    for plane_idx in range(1, 5):
+        ax_t = axes_t[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        ax_q = axes_q[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        tdiff, qasym = _collect_frontback_plane_arrays(df, plane_idx)
+
+        if tdiff.size > 0:
+            lo_t, hi_t = np.quantile(tdiff, [0.01, 0.99])
+            if not np.isfinite(lo_t) or not np.isfinite(hi_t) or lo_t >= hi_t:
+                lo_t, hi_t = float(np.min(tdiff)), float(np.max(tdiff))
+            ax_t.hist(tdiff, bins=100, range=(lo_t, hi_t), color="tab:blue", alpha=0.8)
+            mu_t = float(np.mean(tdiff))
+            sig_t = float(np.std(tdiff))
+            ax_t.axvline(mu_t, color="black", linestyle="--", linewidth=1.0)
+            ax_t.set_title(f"Plane {plane_idx}: T_front - T_back")
+            ax_t.set_xlabel("ns")
+            ax_t.set_ylabel("Counts")
+            ax_t.text(
+                0.03,
+                0.95,
+                f"N={tdiff.size}\nμ={mu_t:.3f} ns\nσ={sig_t:.3f} ns",
+                transform=ax_t.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+            )
+        else:
+            mu_t = float("nan")
+            sig_t = float("nan")
+            ax_t.axis("off")
+
+        if qasym.size > 0:
+            ax_q.hist(qasym, bins=80, range=(-1.0, 1.0), color="tab:orange", alpha=0.8)
+            mu_q = float(np.mean(qasym))
+            sig_q = float(np.std(qasym))
+            ax_q.axvline(mu_q, color="black", linestyle="--", linewidth=1.0)
+            ax_q.set_title(f"Plane {plane_idx}: (Qf-Qb)/(Qf+Qb)")
+            ax_q.set_xlabel("Charge asymmetry")
+            ax_q.set_ylabel("Counts")
+            ax_q.text(
+                0.03,
+                0.95,
+                f"N={qasym.size}\nμ={mu_q:.3f}\nσ={sig_q:.3f}",
+                transform=ax_q.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+            )
+        else:
+            mu_q = float("nan")
+            sig_q = float("nan")
+            ax_q.axis("off")
+
+        summary_rows.append((plane_idx, mu_t, sig_t, int(tdiff.size), mu_q, sig_q, int(qasym.size)))
+
+    fig_t.suptitle(f"{stage_label}: front-back timing symmetry by plane")
+    fig_t.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    pdf.savefig(fig_t, dpi=150)
+    plt.close(fig_t)
+
+    fig_q.suptitle(f"{stage_label}: front-back charge asymmetry by plane")
+    fig_q.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    pdf.savefig(fig_q, dpi=150)
+    plt.close(fig_q)
+
+    x = np.array([r[0] for r in summary_rows], dtype=float)
+    mu_t = np.array([r[1] for r in summary_rows], dtype=float)
+    sig_t = np.array([r[2] for r in summary_rows], dtype=float)
+    n_t = np.array([max(r[3], 1) for r in summary_rows], dtype=float)
+    mu_q = np.array([r[4] for r in summary_rows], dtype=float)
+    sig_q = np.array([r[5] for r in summary_rows], dtype=float)
+    n_q = np.array([max(r[6], 1) for r in summary_rows], dtype=float)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    ok_t = np.isfinite(mu_t) & np.isfinite(sig_t)
+    if np.any(ok_t):
+        axes[0].errorbar(
+            x[ok_t],
+            mu_t[ok_t],
+            yerr=sig_t[ok_t] / np.sqrt(n_t[ok_t]),
+            fmt="o-",
+            color="tab:blue",
+            capsize=3,
+            label="Mean ± SEM",
+        )
+        axes[0].axhline(0.0, color="gray", linestyle="--", linewidth=1.0)
+        axes[0].set_ylabel("T_front - T_back (ns)")
+        axes[0].set_title("Timing symmetry summary")
+        axes[0].set_xticks([1, 2, 3, 4])
+        axes[0].set_xlabel("Plane")
+        axes[0].grid(alpha=0.25)
+        axes[0].legend(loc="best", fontsize=9)
+    else:
+        axes[0].axis("off")
+
+    ok_q = np.isfinite(mu_q) & np.isfinite(sig_q)
+    if np.any(ok_q):
+        axes[1].errorbar(
+            x[ok_q],
+            mu_q[ok_q],
+            yerr=sig_q[ok_q] / np.sqrt(n_q[ok_q]),
+            fmt="o-",
+            color="tab:orange",
+            capsize=3,
+            label="Mean ± SEM",
+        )
+        axes[1].axhline(0.0, color="gray", linestyle="--", linewidth=1.0)
+        axes[1].set_ylabel("(Qf-Qb)/(Qf+Qb)")
+        axes[1].set_title("Charge asymmetry summary")
+        axes[1].set_xticks([1, 2, 3, 4])
+        axes[1].set_xlabel("Plane")
+        axes[1].grid(alpha=0.25)
+        axes[1].legend(loc="best", fontsize=9)
+    else:
+        axes[1].axis("off")
+
+    fig.suptitle(f"{stage_label}: front/back summary metrics")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+
 def plot_rate_by_tt(df: pd.DataFrame, pdf: PdfPages) -> bool:
     if "T_thick_s" not in df.columns:
         return False
@@ -191,8 +347,16 @@ def plot_muon_differential_flux_vs_angle(df: pd.DataFrame, pdf: PdfPages, sample
     if not np.isfinite(duration_s) or duration_s <= 0.0:
         return False
 
-    # Use fixed detector area of 900 cm²
+    # Prefer observed spread-based area; fall back to nominal 900 cm^2 if needed.
     area_cm2 = 900.0
+    x_all = df["X_gen"].to_numpy(dtype=float)
+    y_all = df["Y_gen"].to_numpy(dtype=float)
+    x_vals = x_all[np.isfinite(x_all) & inner_mask]
+    y_vals = y_all[np.isfinite(y_all) & inner_mask]
+    if x_vals.size >= 2 and y_vals.size >= 2:
+        area_mm2 = float(np.max(x_vals) - np.min(x_vals)) * float(np.max(y_vals) - np.min(y_vals))
+        if np.isfinite(area_mm2) and area_mm2 > 0.0:
+            area_cm2 = area_mm2 / 100.0
 
     theta_edges = np.linspace(0.0, np.pi / 2.0, 31)
     theta_centers = 0.5 * (theta_edges[1:] + theta_edges[:-1])
@@ -236,6 +400,80 @@ def plot_muon_differential_flux_vs_angle(df: pd.DataFrame, pdf: PdfPages, sample
         ),
     )
 
+    # Weighted log-fit: ln(I) = ln(I0) + n ln(cos(theta))
+    fit_theta = theta_centers[valid]
+    fit_counts = counts_valid
+    fit_flux = dndt_dadomega
+    fit_cos = np.cos(fit_theta)
+    fit_ok = (fit_counts > 0.0) & (fit_flux > 0.0) & (fit_cos > 0.0)
+    n_fit_out: float | None = None
+    i0_fit_out: float | None = None
+    if np.count_nonzero(fit_ok) >= 3:
+        x_fit = np.log(np.clip(fit_cos[fit_ok], 1e-12, 1.0))
+        y_fit = np.log(fit_flux[fit_ok])
+        w_fit = fit_counts[fit_ok]
+        sw = float(np.sum(w_fit))
+        sx = float(np.sum(w_fit * x_fit))
+        sy = float(np.sum(w_fit * y_fit))
+        sxx = float(np.sum(w_fit * x_fit * x_fit))
+        sxy = float(np.sum(w_fit * x_fit * y_fit))
+        den = sw * sxx - sx * sx
+        if np.isfinite(den) and abs(den) > 1e-15 and sw > 0.0:
+            n_fit = (sw * sxy - sx * sy) / den
+            ln_i0 = (sy - n_fit * sx) / sw
+            if np.isfinite(n_fit) and np.isfinite(ln_i0):
+                n_fit_out = float(n_fit)
+                i0_fit_out = float(np.exp(ln_i0))
+                theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
+                fit_curve = i0_fit_out * np.power(np.clip(np.cos(theta_curve), 1e-12, 1.0), n_fit_out)
+                ax_top.plot(
+                    np.degrees(theta_curve),
+                    fit_curve,
+                    color="tab:orange",
+                    linewidth=1.4,
+                    linestyle="--",
+                    label=rf"Fit: $I_0\cos^n(\theta)$, $I_0={i0_fit_out:.3e}$, $n={n_fit_out:.2f}$",
+                )
+
+    # Theory overlay from STEP 0 mesh (same convention as STEP 1/8).
+    try:
+        param_path = Path(__file__).resolve().parents[3] / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"
+        cos_n = 2.0
+        flux_F = float("nan")
+        if param_path.exists():
+            pm = pd.read_csv(param_path)
+            step1_id = None
+            if sample_path is not None:
+                try:
+                    if sample_path.name.endswith(".chunks.json"):
+                        meta = json.loads(sample_path.read_text()).get("metadata", {})
+                    else:
+                        meta_path = sample_path.with_suffix(sample_path.suffix + ".meta.json")
+                        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+                except Exception:
+                    meta = {}
+                cfg = meta.get("config", {}) if isinstance(meta, dict) else {}
+                step1_id = cfg.get("step_1_id") or meta.get("step_1_id")
+            rows = pm[pm["step_1_id"].astype(str) == str(step1_id)] if step1_id is not None else pm
+            if rows.empty:
+                rows = pm
+            row = rows.iloc[0]
+            cos_n = float(row.get("cos_n", 2.0))
+            flux_F = float(row.get("flux_cm2_min", float("nan")))
+        if np.isfinite(flux_F):
+            i0_theory = float(flux_F * (cos_n + 1.0) / (2.0 * math.pi))
+            theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
+            theory_curve = i0_theory * np.power(np.clip(np.cos(theta_curve), 1e-12, 1.0), cos_n)
+            ax_top.plot(
+                np.degrees(theta_curve),
+                theory_curve,
+                color="crimson",
+                linewidth=1.6,
+                label=rf"Theory: $I_0\cos^n(\theta)$, $I_0={i0_theory:.4g}$, $n={cos_n:.2f}$",
+            )
+    except Exception:
+        pass
+
 
 
 
@@ -260,6 +498,24 @@ def plot_muon_differential_flux_vs_angle(df: pd.DataFrame, pdf: PdfPages, sample
         alpha=0.25,
         label="Data 1-sigma band",
     )
+
+    if n_fit_out is not None and i0_fit_out is not None:
+        theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
+        cum_model_fit = (
+            2.0
+            * math.pi
+            * i0_fit_out
+            / (n_fit_out + 1.0)
+            * (1.0 - np.power(np.clip(np.cos(theta_curve), 0.0, 1.0), n_fit_out + 1.0))
+        )
+        ax_bottom.plot(
+            np.degrees(theta_curve),
+            cum_model_fit,
+            color="tab:orange",
+            linewidth=1.2,
+            linestyle="--",
+            label="Fit cumulative",
+        )
     ax_top.set_title("Muon differential flux vs zenith angle (area-normalized)")
     ax_top.set_ylabel("I(theta) [min^-1 cm^-2 sr^-1]")
     ax_top.set_xlim(0.0, 90.0)
@@ -298,29 +554,33 @@ def plot_timing_closure_summary(
     jitter_width = float(cfg10.get("jitter_width_ns", 0.0))
     expected_tdc_rms = np.sqrt(tdc_sigma ** 2 + (jitter_width ** 2) / 12.0)
 
-    def collect_residual(after: pd.DataFrame, before: pd.DataFrame, offsets: list[list[float]] | None) -> np.ndarray:
+    def collect_residual(
+        after: pd.DataFrame,
+        before: pd.DataFrame,
+        side: str,
+        offsets: list[list[float]] | None = None,
+    ) -> np.ndarray:
         residuals = []
         for plane_idx in range(1, 5):
             for strip_idx in range(1, 5):
-                for side, offset_map in (("front", offsets), ("back", offsets)):
-                    col = f"T_{side}_{plane_idx}_s{strip_idx}"
-                    if col not in after.columns or col not in before.columns:
-                        continue
-                    a = after[col].to_numpy(dtype=float)
-                    b = before[col].to_numpy(dtype=float)
-                    n = min(len(a), len(b))
-                    if n == 0:
-                        continue
-                    a = a[:n]
-                    b = b[:n]
-                    mask = np.isfinite(a) & np.isfinite(b) & (a != 0) & (b != 0)
-                    if not mask.any():
-                        continue
-                    res = a[mask] - b[mask]
-                    if offset_map is not None:
-                        expected = float(offset_map[plane_idx - 1][strip_idx - 1])
-                        res = res - expected
-                    residuals.append(res)
+                col = f"T_{side}_{plane_idx}_s{strip_idx}"
+                if col not in after.columns or col not in before.columns:
+                    continue
+                a = after[col].to_numpy(dtype=float)
+                b = before[col].to_numpy(dtype=float)
+                n = min(len(a), len(b))
+                if n == 0:
+                    continue
+                a = a[:n]
+                b = b[:n]
+                mask = np.isfinite(a) & np.isfinite(b) & (a != 0) & (b != 0)
+                if not mask.any():
+                    continue
+                res = a[mask] - b[mask]
+                if offsets is not None:
+                    expected = float(offsets[plane_idx - 1][strip_idx - 1])
+                    res = res - expected
+                residuals.append(res)
         if not residuals:
             return np.array([])
         return np.concatenate(residuals)
@@ -337,6 +597,8 @@ def plot_timing_closure_summary(
         if expected_rms is not None and np.isfinite(expected_rms):
             ax.axvline(expected_rms, color="black", linestyle="--", linewidth=1.0)
             ax.axvline(-expected_rms, color="black", linestyle="--", linewidth=1.0)
+
+    rms_summary: dict[str, dict[str, np.ndarray]] = {}
 
     if df6 is not None:
         residuals = []
@@ -362,32 +624,81 @@ def plot_timing_closure_summary(
         plt.close(fig)
 
     if df7 is not None and df6 is not None:
-        res_front = collect_residual(df7, df6, tfront_offsets)
-        res_back = collect_residual(df7, df6, tback_offsets)
+        res_front = collect_residual(df7, df6, side="front", offsets=tfront_offsets)
+        res_back = collect_residual(df7, df6, side="back", offsets=tback_offsets)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         plot_hist(axes[0], res_front, "STEP 7: T_front delta - offset")
         plot_hist(axes[1], res_back, "STEP 7: T_back delta - offset")
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
+        rms_summary["STEP 7"] = {"front": res_front, "back": res_back}
 
     if df8 is not None and df7 is not None:
-        res_front = collect_residual(df8, df7, None)
-        res_back = collect_residual(df8, df7, None)
+        res_front = collect_residual(df8, df7, side="front", offsets=None)
+        res_back = collect_residual(df8, df7, side="back", offsets=None)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         plot_hist(axes[0], res_front, "STEP 8: T_front delta (FEE noise)")
         plot_hist(axes[1], res_back, "STEP 8: T_back delta (FEE noise)")
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
+        rms_summary["STEP 8"] = {"front": res_front, "back": res_back}
 
     if df9 is not None and df10 is not None:
-        res_front = collect_residual(df10, df9, None)
-        res_back = collect_residual(df10, df9, None)
+        res_front = collect_residual(df10, df9, side="front", offsets=None)
+        res_back = collect_residual(df10, df9, side="back", offsets=None)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         plot_hist(axes[0], res_front, "STEP 10: T_front delta (TDC + jitter)", expected_rms=expected_tdc_rms)
         plot_hist(axes[1], res_back, "STEP 10: T_back delta (TDC + jitter)", expected_rms=expected_tdc_rms)
         fig.tight_layout()
+        pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+        rms_summary["STEP 10"] = {"front": res_front, "back": res_back}
+
+    if rms_summary:
+        stage_order = ["STEP 7", "STEP 8", "STEP 10"]
+        stage_labels = [s for s in stage_order if s in rms_summary]
+        x = np.arange(len(stage_labels), dtype=float)
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), sharex=True)
+        for ax, side in zip(axes, ("front", "back")):
+            rms_vals = []
+            rms_err = []
+            for stage in stage_labels:
+                arr = rms_summary[stage][side]
+                if arr.size == 0:
+                    rms_vals.append(np.nan)
+                    rms_err.append(np.nan)
+                    continue
+                rms = float(np.std(arr))
+                # Approximate uncertainty of sample sigma for near-Gaussian residuals.
+                err = rms / np.sqrt(max(2.0 * (arr.size - 1), 1.0))
+                rms_vals.append(rms)
+                rms_err.append(err)
+            y = np.array(rms_vals, dtype=float)
+            ye = np.array(rms_err, dtype=float)
+            ok = np.isfinite(y) & np.isfinite(ye)
+            if np.any(ok):
+                ax.errorbar(
+                    x[ok],
+                    y[ok],
+                    yerr=ye[ok],
+                    fmt="o-",
+                    capsize=3,
+                    linewidth=1.6,
+                    color="tab:blue" if side == "front" else "tab:orange",
+                    label="RMS ± SE",
+                )
+            if np.isfinite(expected_tdc_rms):
+                ax.axhline(expected_tdc_rms, color="gray", linestyle="--", linewidth=1.0, label="Expected STEP 10 RMS")
+            ax.set_title(f"{side.capitalize()} timing RMS progression")
+            ax.set_ylabel("Residual RMS (ns)")
+            ax.set_xticks(x)
+            ax.set_xticklabels(stage_labels, rotation=0)
+            ax.grid(alpha=0.25)
+            ax.legend(loc="best", fontsize=8)
+        fig.suptitle("Timing broadening across electronics stages")
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
@@ -423,6 +734,8 @@ def plot_jitter_summary(
                 cfg10,
                 pdf,
             )
+
+        plot_frontback_asymmetry_diagnostics(df, pdf, stage_label="STEP 10")
 
         # --- 2D Xgen/Ygen histograms per tt_* ---
         plot_tt_xy_histograms(df, pdf)
@@ -538,20 +851,22 @@ def load_metadata(path: Path) -> dict:
 
 def resolve_upstream_chain(start_path: Path) -> dict:
     chain = {}
-    # start with the step10 path passed in
-    step10_path = start_path
-    meta10 = load_metadata(step10_path)
-    if meta10.get("step") == "STEP_10":
-        src = meta10.get("source_dataset")
-        if src:
-            step10_path = Path(src)
+    # Keep the provided STEP 10 sample path as STEP 10.
+    step10_path = start_path.resolve()
     chain["step10"] = step10_path
 
     # walk upstream via metadata.source_dataset
     def _src(path: Path) -> Path | None:
         m = load_metadata(path)
         src = m.get("source_dataset")
-        return Path(src) if src else None
+        if not src:
+            return None
+        src_path = Path(str(src))
+        if not src_path.is_absolute():
+            src_path = (path.parent / src_path).resolve()
+        else:
+            src_path = src_path.resolve()
+        return src_path if src_path.exists() else None
 
     step9 = _src(step10_path)
     if step9:

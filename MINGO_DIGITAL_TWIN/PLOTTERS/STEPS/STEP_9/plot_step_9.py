@@ -14,6 +14,162 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 
+def _collect_frontback_plane_arrays(df: pd.DataFrame, plane_idx: int) -> tuple[np.ndarray, np.ndarray]:
+    tdiff_parts: list[np.ndarray] = []
+    qasym_parts: list[np.ndarray] = []
+    for strip_idx in range(1, 5):
+        tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+        tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+        if tf_col in df.columns and tb_col in df.columns:
+            tf = df[tf_col].to_numpy(dtype=float)
+            tb = df[tb_col].to_numpy(dtype=float)
+            mask_t = np.isfinite(tf) & np.isfinite(tb) & (tf != 0) & (tb != 0)
+            if np.any(mask_t):
+                tdiff_parts.append(tf[mask_t] - tb[mask_t])
+
+        qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+        qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+        if qf_col in df.columns and qb_col in df.columns:
+            qf = df[qf_col].to_numpy(dtype=float)
+            qb = df[qb_col].to_numpy(dtype=float)
+            den = qf + qb
+            mask_q = np.isfinite(qf) & np.isfinite(qb) & (den > 0.0)
+            if np.any(mask_q):
+                qasym_parts.append((qf[mask_q] - qb[mask_q]) / den[mask_q])
+
+    tdiff = np.concatenate(tdiff_parts) if tdiff_parts else np.array([], dtype=float)
+    qasym = np.concatenate(qasym_parts) if qasym_parts else np.array([], dtype=float)
+    return tdiff, qasym
+
+
+def plot_frontback_asymmetry_diagnostics(df: pd.DataFrame, pdf: PdfPages, stage_label: str) -> None:
+    fig_t, axes_t = plt.subplots(2, 2, figsize=(11, 8))
+    fig_q, axes_q = plt.subplots(2, 2, figsize=(11, 8))
+    summary_rows: list[tuple[int, float, float, int, float, float, int]] = []
+
+    for plane_idx in range(1, 5):
+        ax_t = axes_t[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        ax_q = axes_q[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        tdiff, qasym = _collect_frontback_plane_arrays(df, plane_idx)
+
+        if tdiff.size > 0:
+            lo_t, hi_t = np.quantile(tdiff, [0.01, 0.99])
+            if not np.isfinite(lo_t) or not np.isfinite(hi_t) or lo_t >= hi_t:
+                lo_t, hi_t = float(np.min(tdiff)), float(np.max(tdiff))
+            ax_t.hist(tdiff, bins=100, range=(lo_t, hi_t), color="tab:blue", alpha=0.8)
+            mu_t = float(np.mean(tdiff))
+            sig_t = float(np.std(tdiff))
+            ax_t.axvline(mu_t, color="black", linestyle="--", linewidth=1.0)
+            ax_t.set_title(f"Plane {plane_idx}: T_front - T_back")
+            ax_t.set_xlabel("ns")
+            ax_t.set_ylabel("Counts")
+            ax_t.text(
+                0.03,
+                0.95,
+                f"N={tdiff.size}\nμ={mu_t:.3f} ns\nσ={sig_t:.3f} ns",
+                transform=ax_t.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+            )
+        else:
+            mu_t = float("nan")
+            sig_t = float("nan")
+            ax_t.axis("off")
+
+        if qasym.size > 0:
+            ax_q.hist(qasym, bins=80, range=(-1.0, 1.0), color="tab:orange", alpha=0.8)
+            mu_q = float(np.mean(qasym))
+            sig_q = float(np.std(qasym))
+            ax_q.axvline(mu_q, color="black", linestyle="--", linewidth=1.0)
+            ax_q.set_title(f"Plane {plane_idx}: (Qf-Qb)/(Qf+Qb)")
+            ax_q.set_xlabel("Charge asymmetry")
+            ax_q.set_ylabel("Counts")
+            ax_q.text(
+                0.03,
+                0.95,
+                f"N={qasym.size}\nμ={mu_q:.3f}\nσ={sig_q:.3f}",
+                transform=ax_q.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+            )
+        else:
+            mu_q = float("nan")
+            sig_q = float("nan")
+            ax_q.axis("off")
+
+        summary_rows.append((plane_idx, mu_t, sig_t, int(tdiff.size), mu_q, sig_q, int(qasym.size)))
+
+    fig_t.suptitle(f"{stage_label}: front-back timing symmetry by plane")
+    fig_t.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    pdf.savefig(fig_t, dpi=150)
+    plt.close(fig_t)
+
+    fig_q.suptitle(f"{stage_label}: front-back charge asymmetry by plane")
+    fig_q.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    pdf.savefig(fig_q, dpi=150)
+    plt.close(fig_q)
+
+    x = np.array([r[0] for r in summary_rows], dtype=float)
+    mu_t = np.array([r[1] for r in summary_rows], dtype=float)
+    sig_t = np.array([r[2] for r in summary_rows], dtype=float)
+    n_t = np.array([max(r[3], 1) for r in summary_rows], dtype=float)
+    mu_q = np.array([r[4] for r in summary_rows], dtype=float)
+    sig_q = np.array([r[5] for r in summary_rows], dtype=float)
+    n_q = np.array([max(r[6], 1) for r in summary_rows], dtype=float)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    ok_t = np.isfinite(mu_t) & np.isfinite(sig_t)
+    if np.any(ok_t):
+        axes[0].errorbar(
+            x[ok_t],
+            mu_t[ok_t],
+            yerr=sig_t[ok_t] / np.sqrt(n_t[ok_t]),
+            fmt="o-",
+            color="tab:blue",
+            capsize=3,
+            label="Mean ± SEM",
+        )
+        axes[0].axhline(0.0, color="gray", linestyle="--", linewidth=1.0)
+        axes[0].set_ylabel("T_front - T_back (ns)")
+        axes[0].set_title("Timing symmetry summary")
+        axes[0].set_xticks([1, 2, 3, 4])
+        axes[0].set_xlabel("Plane")
+        axes[0].grid(alpha=0.25)
+        axes[0].legend(loc="best", fontsize=9)
+    else:
+        axes[0].axis("off")
+
+    ok_q = np.isfinite(mu_q) & np.isfinite(sig_q)
+    if np.any(ok_q):
+        axes[1].errorbar(
+            x[ok_q],
+            mu_q[ok_q],
+            yerr=sig_q[ok_q] / np.sqrt(n_q[ok_q]),
+            fmt="o-",
+            color="tab:orange",
+            capsize=3,
+            label="Mean ± SEM",
+        )
+        axes[1].axhline(0.0, color="gray", linestyle="--", linewidth=1.0)
+        axes[1].set_ylabel("(Qf-Qb)/(Qf+Qb)")
+        axes[1].set_title("Charge asymmetry summary")
+        axes[1].set_xticks([1, 2, 3, 4])
+        axes[1].set_xlabel("Plane")
+        axes[1].grid(alpha=0.25)
+        axes[1].legend(loc="best", fontsize=9)
+    else:
+        axes[1].axis("off")
+
+    fig.suptitle(f"{stage_label}: front/back summary metrics")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+
 def plot_trigger_summary(df: pd.DataFrame, output_path: Path) -> None:
     with PdfPages(output_path) as pdf:
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -54,6 +210,8 @@ def plot_trigger_summary(df: pd.DataFrame, output_path: Path) -> None:
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
+
+        plot_frontback_asymmetry_diagnostics(df, pdf, stage_label="STEP 9")
 
         fig, axes = plt.subplots(4, 4, figsize=(12, 10))
         for plane_idx in range(1, 5):

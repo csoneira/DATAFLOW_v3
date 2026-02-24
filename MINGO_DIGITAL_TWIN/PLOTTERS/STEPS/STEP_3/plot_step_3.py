@@ -177,6 +177,174 @@ def plot_theta_efficiency(df: pd.DataFrame, pdf: PdfPages, n_bins: int = 10) -> 
     plt.close(fig)
 
 
+def plot_avalanche_gain_publication(df: pd.DataFrame, pdf: PdfPages) -> None:
+    """Publication-style diagnostics for avalanche gain and per-plane efficiency."""
+    theta_col = _theta_column(df)
+
+    # 1) Gain spectrum: log10(avalanche_size / avalanche_ion)
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 8.5), sharex=True, sharey=True)
+    drew_gain = False
+    for plane_idx, ax in enumerate(axes.flatten(), start=1):
+        size_col = f"avalanche_size_electrons_{plane_idx}"
+        ion_col = f"avalanche_ion_{plane_idx}"
+        if size_col not in df.columns or ion_col not in df.columns:
+            ax.axis("off")
+            continue
+        size_vals = df[size_col].to_numpy(dtype=float)
+        ion_vals = df[ion_col].to_numpy(dtype=float)
+        mask = np.isfinite(size_vals) & np.isfinite(ion_vals) & (size_vals > 0.0) & (ion_vals > 0.0)
+        if not np.any(mask):
+            ax.axis("off")
+            continue
+        gain = size_vals[mask] / ion_vals[mask]
+        gain = gain[gain > 0.0]
+        if gain.size == 0:
+            ax.axis("off")
+            continue
+        lg = np.log10(gain)
+        lo, hi = np.quantile(lg, [0.01, 0.99])
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+            lo, hi = float(np.min(lg)), float(np.max(lg))
+        ax.hist(lg, bins=90, range=(lo, hi), color="tab:purple", alpha=0.8)
+        med = float(np.median(lg))
+        ax.axvline(med, color="black", linestyle="--", linewidth=1.0)
+        ax.set_title(f"Plane {plane_idx}: log10(gain)")
+        ax.set_xlabel(r"$\log_{10}(N_e / N_{ion})$")
+        ax.set_ylabel("Counts")
+        ax.text(
+            0.03,
+            0.95,
+            f"N={lg.size}\nmedian={med:.3f}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.75, "edgecolor": "none"},
+        )
+        drew_gain = True
+    if drew_gain:
+        fig.suptitle("STEP 3 avalanche gain spectra by plane")
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+        pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    # 2) Gain vs theta (median + 16–84% band)
+    if theta_col is not None:
+        theta_vals_all = df[theta_col].to_numpy(dtype=float)
+        theta_edges = np.linspace(0.0, np.pi / 2.0, 13)
+        theta_centers_deg = np.degrees(0.5 * (theta_edges[1:] + theta_edges[:-1]))
+        fig, ax = plt.subplots(figsize=(9.5, 5.5))
+        drew_curve = False
+        cmap = plt.get_cmap("tab10")
+        for plane_idx in range(1, 5):
+            size_col = f"avalanche_size_electrons_{plane_idx}"
+            ion_col = f"avalanche_ion_{plane_idx}"
+            if size_col not in df.columns or ion_col not in df.columns:
+                continue
+            size_vals = df[size_col].to_numpy(dtype=float)
+            ion_vals = df[ion_col].to_numpy(dtype=float)
+            valid = (
+                np.isfinite(theta_vals_all)
+                & np.isfinite(size_vals)
+                & np.isfinite(ion_vals)
+                & (size_vals > 0.0)
+                & (ion_vals > 0.0)
+                & (theta_vals_all >= 0.0)
+                & (theta_vals_all <= np.pi / 2.0)
+            )
+            if not np.any(valid):
+                continue
+            theta = theta_vals_all[valid]
+            gain = size_vals[valid] / ion_vals[valid]
+            lg = np.log10(gain[gain > 0.0])
+            theta = theta[gain > 0.0]
+            if lg.size == 0:
+                continue
+            med = np.full(theta_centers_deg.size, np.nan, dtype=float)
+            lo = np.full(theta_centers_deg.size, np.nan, dtype=float)
+            hi = np.full(theta_centers_deg.size, np.nan, dtype=float)
+            for b in range(theta_centers_deg.size):
+                in_bin = (theta >= theta_edges[b]) & (theta < theta_edges[b + 1])
+                if np.count_nonzero(in_bin) < 20:
+                    continue
+                vals = lg[in_bin]
+                med[b] = float(np.median(vals))
+                lo[b] = float(np.quantile(vals, 0.16))
+                hi[b] = float(np.quantile(vals, 0.84))
+            ok = np.isfinite(med)
+            if not np.any(ok):
+                continue
+            color = cmap((plane_idx - 1) % cmap.N)
+            ax.plot(theta_centers_deg[ok], med[ok], color=color, linewidth=1.8, marker="o", label=f"Plane {plane_idx}")
+            ax.fill_between(theta_centers_deg[ok], lo[ok], hi[ok], color=color, alpha=0.2)
+            drew_curve = True
+        if drew_curve:
+            ax.set_title("STEP 3 avalanche gain vs zenith angle")
+            ax.set_xlabel("Theta (deg)")
+            ax.set_ylabel(r"$\log_{10}(N_e / N_{ion})$")
+            ax.grid(alpha=0.3)
+            ax.legend(loc="best")
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+    # 3) Per-plane avalanche probability vs theta
+    if theta_col is not None:
+        theta_vals_all = df[theta_col].to_numpy(dtype=float)
+        theta_edges = np.linspace(0.0, np.pi / 2.0, 13)
+        theta_centers_deg = np.degrees(0.5 * (theta_edges[1:] + theta_edges[:-1]))
+        fig, ax = plt.subplots(figsize=(9.5, 5.5))
+        drew_eff = False
+        cmap = plt.get_cmap("tab10")
+        for plane_idx in range(1, 5):
+            exists_col = f"avalanche_exists_{plane_idx}"
+            if exists_col not in df.columns:
+                continue
+            exists_vals = df[exists_col].to_numpy(dtype=float)
+            valid = np.isfinite(theta_vals_all) & np.isfinite(exists_vals) & (theta_vals_all >= 0.0) & (theta_vals_all <= np.pi / 2.0)
+            if not np.any(valid):
+                continue
+            theta = theta_vals_all[valid]
+            exists = exists_vals[valid] > 0.0
+            eff = np.full(theta_centers_deg.size, np.nan, dtype=float)
+            eff_err = np.full(theta_centers_deg.size, np.nan, dtype=float)
+            for b in range(theta_centers_deg.size):
+                in_bin = (theta >= theta_edges[b]) & (theta < theta_edges[b + 1])
+                n = int(np.count_nonzero(in_bin))
+                if n < 20:
+                    continue
+                k = int(np.count_nonzero(exists[in_bin]))
+                p = k / n
+                eff[b] = p
+                eff_err[b] = math.sqrt(max(p * (1.0 - p) / n, 0.0))
+            ok = np.isfinite(eff) & np.isfinite(eff_err)
+            if not np.any(ok):
+                continue
+            color = cmap((plane_idx - 1) % cmap.N)
+            ax.errorbar(
+                theta_centers_deg[ok],
+                eff[ok],
+                yerr=eff_err[ok],
+                fmt="o-",
+                color=color,
+                capsize=2,
+                linewidth=1.4,
+                markersize=4,
+                label=f"Plane {plane_idx}",
+            )
+            drew_eff = True
+        if drew_eff:
+            ax.set_title("STEP 3 avalanche probability vs zenith angle")
+            ax.set_xlabel("Theta (deg)")
+            ax.set_ylabel("P(avalanche exists)")
+            ax.set_ylim(0.0, 1.05)
+            ax.grid(alpha=0.3)
+            ax.legend(loc="best")
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+
 def plot_avalanche_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     # tt_avalanche counts
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -272,6 +440,9 @@ def plot_avalanche_summary(df: pd.DataFrame, pdf: PdfPages) -> None:
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
+    # Publication-level avalanche diagnostics.
+    plot_avalanche_gain_publication(df, pdf)
+
     # Angular behavior diagnostic from tt_avalanche multiplicity.
     plot_theta_efficiency(df, pdf, n_bins=10)
 
@@ -328,11 +499,11 @@ def main() -> None:
 
         # combined comparison: STEP 1, 2, 3, 10 (centralized implementation)
         try:
-            from MINGO_DIGITAL_TWIN.PLOTTERS.STEPS.COMMON.angular_flux import plot_muon_flux_steps_comparison
+            from COMMON.ANGULAR_FLUX.angular_flux import plot_muon_flux_tt_comparison
         except Exception:
-            plot_muon_flux_steps_comparison = None
-        if plot_muon_flux_steps_comparison:
-            plot_muon_flux_steps_comparison(pdf, sample_path=sample)
+            plot_muon_flux_tt_comparison = None
+        if plot_muon_flux_tt_comparison:
+            plot_muon_flux_tt_comparison(pdf, sample_path=sample)
 
     print(f"Saved {out_path}")
 

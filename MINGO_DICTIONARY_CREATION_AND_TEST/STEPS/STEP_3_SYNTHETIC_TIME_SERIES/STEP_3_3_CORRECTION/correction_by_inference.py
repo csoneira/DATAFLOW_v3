@@ -117,16 +117,20 @@ def _clear_plots_dir() -> None:
                 log.warning("Could not remove old plot file %s: %s", candidate, exc)
     log.info("Cleared %d plot file(s) from %s", removed, PLOTS_DIR)
 
-# Import estimation function from STEP 2 module.
-INFERENCE_DIR = PIPELINE_DIR / "STEP_2_INFERENCE"
-if str(INFERENCE_DIR) not in sys.path:
-    sys.path.insert(0, str(INFERENCE_DIR))
-from estimate_parameters import estimate_parameters  # noqa: E402
-
 logging.basicConfig(
     format="[%(levelname)s] STEP_3.3 — %(message)s", level=logging.INFO
 )
 log = logging.getLogger("STEP_3.3")
+
+# Import estimation function from STEP 2 module.
+INFERENCE_DIR = PIPELINE_DIR / "STEP_2_INFERENCE"
+if str(INFERENCE_DIR) not in sys.path:
+    sys.path.insert(0, str(INFERENCE_DIR))
+try:
+    from estimate_parameters import estimate_parameters  # noqa: E402
+except Exception as exc:
+    log.error("Failed to import estimate_parameters from %s: %s", INFERENCE_DIR, exc)
+    raise
 
 
 def _load_config(path: Path) -> dict:
@@ -206,8 +210,12 @@ def _lut_param_names(
                 cleaned = [str(p) for p in params if str(p)]
                 if cleaned:
                     return cleaned
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning(
+                "Could not parse LUT metadata at %s (%s). Falling back to LUT column scan.",
+                lut_meta_path,
+                exc,
+            )
 
     params: list[str] = []
     for c in lut_df.columns:

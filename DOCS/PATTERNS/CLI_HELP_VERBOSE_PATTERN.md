@@ -1,36 +1,38 @@
-# CLI Help + Verbose Pattern (Repo Standard)
+---
+title: CLI Help and Verbose Pattern
+description: Standard CLI contract for long-running pipeline scripts.
+last_updated: 2026-02-24
+status: active
+---
 
-Use this pattern for long-running pipeline scripts that currently parse `sys.argv` manually.
+# CLI Help and Verbose Pattern
 
 ## Goal
+Use a consistent CLI contract for scripts that historically parsed `sys.argv` manually.
 
-Add a consistent CLI contract:
-
-- `-h/--help` with clear usage text
+Required behavior:
+- `-h/--help` usage text
 - positional `station` argument
-- optional `input_file` argument
-- named `--input-file` alternative
-- `-v/--verbose` to force detailed logging
+- optional positional `input_file`
+- optional named `--input-file`
+- `-v/--verbose` plus `DATAFLOW_VERBOSE` env support
 
-## Standard Contract
-
-Example usage shape:
+## Standard CLI shape
 
 ```bash
 python3 script_x.py [-h] [--input-file INPUT_FILE] [-v] [{0,1,2,3,4}] [input_file]
 ```
 
 Rules:
-
-- `station` uses `choices=("0", "1", "2", "3", "4")`
-- allow both positional `input_file` and `--input-file`, but reject both at once
-- `VERBOSE` must include CLI flag and env var:
+- `station` choices: `0,1,2,3,4`
+- positional and named input-file forms are mutually exclusive
+- verbose flag should resolve with env var fallback
 
 ```python
 VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or CLI_ARGS.verbose
 ```
 
-## Copy/Paste Template
+## Template
 
 ```python
 import argparse
@@ -73,7 +75,7 @@ if CLI_ARGS.input_file and CLI_ARGS.input_file_flag:
     CLI_PARSER.error("Use either positional input_file or --input-file, not both.")
 ```
 
-Station resolution with Jupyter fallback:
+Station resolution with notebook fallback:
 
 ```python
 run_jupyter_notebook = bool(config.get("run_jupyter_notebook", False))
@@ -90,28 +92,25 @@ if station not in STATION_CHOICES:
     CLI_PARSER.error("Invalid station. Choose one of: 0, 1, 2, 3, 4.")
 ```
 
-Input-file selection:
+Input-file resolution:
 
 ```python
 selected_input_file = CLI_ARGS.input_file_flag or CLI_ARGS.input_file
 if selected_input_file:
     user_file_path = selected_input_file
     user_file_selection = True
-    print("User provided file path:", user_file_path)
 else:
     user_file_selection = False
 ```
 
-## Migration Checklist
+## Migration checklist
+- add `argparse` parser near script entrypoint
+- replace raw `sys.argv` station handling
+- replace raw `sys.argv` input-file handling
+- preserve existing notebook fallback behavior
+- keep log/filter semantics unchanged
 
-- Add `import argparse`
-- Add parser + args + conflict check near top-level setup
-- Replace manual `sys.argv` station handling
-- Replace manual `sys.argv` input-file handling
-- Preserve `run_jupyter_notebook` behavior
-- Keep existing print filtering and logging policy
-
-## Validation Commands
+## Validation commands
 
 ```bash
 python3 -m py_compile path/to/script.py
@@ -120,12 +119,10 @@ python3 path/to/script.py 2 --verbose
 python3 path/to/script.py 2 --input-file /tmp/example.csv
 ```
 
-## Current References
-
+## Current references
 Implemented in:
-
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/script_1_raw_to_clean.py`
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_2/script_2_clean_to_cal.py`
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/script_3_cal_to_list.py`
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_4/script_4_list_to_fit.py`
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py`
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_1/script_1_raw_to_clean.py`
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/script_2_clean_to_cal.py`
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_3/script_3_cal_to_list.py`
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_4/script_4_list_to_fit.py`
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py`

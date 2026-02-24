@@ -263,6 +263,41 @@ def _collect_z_positions(station_files: dict[int, Path]) -> pd.DataFrame:
     return unique_geoms
 
 
+def _z_positions_from_override(raw_override: object) -> pd.DataFrame:
+    if raw_override is None:
+        return pd.DataFrame(columns=["P1", "P2", "P3", "P4"])
+    if not isinstance(raw_override, list) or not raw_override:
+        raise ValueError(
+            "z_positions_override_mm must be a list with 4 values "
+            "or a list of 4-value lists."
+        )
+
+    def _parse_tuple(values: object) -> list[float]:
+        if not isinstance(values, list) or len(values) != 4:
+            raise ValueError(
+                "Each z_positions_override_mm entry must contain exactly 4 values [P1, P2, P3, P4]."
+            )
+        return [float(values[0]), float(values[1]), float(values[2]), float(values[3])]
+
+    rows: list[list[float]] = []
+    first = raw_override[0]
+    if isinstance(first, list):
+        for entry in raw_override:
+            rows.append(_parse_tuple(entry))
+    else:
+        if len(raw_override) != 4:
+            raise ValueError(
+                "z_positions_override_mm must have exactly 4 values when using a single geometry."
+            )
+        rows.append(_parse_tuple(raw_override))
+
+    override_df = pd.DataFrame(rows, columns=["P1", "P2", "P3", "P4"])
+    override_df = override_df.dropna().drop_duplicates().reset_index(drop=True)
+    if override_df.empty:
+        raise ValueError("z_positions_override_mm produced no valid geometry rows.")
+    return override_df
+
+
 def _expected_counts_from_mesh(mesh: pd.DataFrame, include_done: bool) -> dict[str, int]:
     if "done" in mesh.columns and not include_done:
         mesh = mesh[mesh["done"].fillna(0).astype(int) != 1]
@@ -348,6 +383,12 @@ def _append_param_row(
         mesh["param_set_id"] = pd.NA
     if "param_date" not in mesh.columns:
         mesh["param_date"] = pd.NA
+    if "execution_time" not in mesh.columns:
+        mesh["execution_time"] = now_iso()
+    else:
+        missing_et = mesh["execution_time"].isna()
+        if missing_et.any():
+            mesh.loc[missing_et, "execution_time"] = now_iso()
     mesh["done"] = mesh["done"].fillna(0).astype(int)
 
     if z_positions.empty:
@@ -402,6 +443,7 @@ def _append_param_row(
         )
 
     new_rows = []
+    row_creation_ts = now_iso()
     if mode == "regular_mesh":
         # Build one structured grid per invocation; repeat_samples remains for uniform_random mode.
         sample_overrides: list[dict[str, float] | None] = _build_regular_mesh_overrides(
@@ -445,6 +487,7 @@ def _append_param_row(
             new_rows.append(
                 {
                     "done": 0,
+                    "execution_time": row_creation_ts,
                     "cos_n": float(cos_n),
                     "flux_cm2_min": float(flux_cm2_min),
                     "z_p1": float(geom_row["P1"]),
@@ -473,7 +516,7 @@ def _append_param_row(
     if "param_set_id" in mesh.columns:
         mesh = mesh.sort_values("param_set_id").reset_index(drop=True)
     z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
-    head_cols = ["done", "param_set_id", "param_date"]
+    head_cols = ["done", "param_set_id", "param_date", "execution_time"]
     step_id_cols = [f"step_{idx}_id" for idx in range(1, 11)]
     front_cols = ["cos_n", "flux_cm2_min"] + z_cols
     ordered_cols = (
@@ -571,8 +614,20 @@ def main() -> None:
         raise FileNotFoundError(f"No station config CSVs found under {station_root}")
     _log_info(f"Station configs found: {len(station_files)}")
 
-    z_positions = _collect_z_positions(station_files)
-    _log_info(f"Unique z-position rows: {len(z_positions)}")
+    z_override = _z_positions_from_override(physics_cfg.get("z_positions_override_mm"))
+    if z_override.empty:
+        z_positions = _collect_z_positions(station_files)
+        _log_info(f"Unique z-position rows (from station configs): {len(z_positions)}")
+    else:
+        z_positions = z_override
+        z_rows = "; ".join(
+            f"({row.P1:g}, {row.P2:g}, {row.P3:g}, {row.P4:g})"
+            for row in z_positions.itertuples(index=False)
+        )
+        _log_info(
+            "Using z-position override from config_step_0_physics.yaml: "
+            f"rows={len(z_positions)} values={z_rows}"
+        )
 
     rng = np.random.default_rng(cfg.get("seed"))
     mesh_path = output_dir / "param_mesh.csv"

@@ -63,6 +63,23 @@ def _load_event_id_set(art: StepArtifact | None) -> set[int] | None:
     return set(df["event_id"].astype(int).tolist())
 
 
+def _parse_sim_run_ids(sim_run: str | None) -> tuple[str, ...]:
+    if not sim_run or not sim_run.startswith("SIM_RUN_"):
+        return tuple()
+    parts = [token for token in sim_run[len("SIM_RUN_") :].split("_") if token]
+    return tuple(parts)
+
+
+def _lineage_prefix_match(art_a: StepArtifact | None, art_b: StepArtifact | None, prefix_len: int) -> bool:
+    ids_a = _parse_sim_run_ids(art_a.sim_run if art_a else None)
+    ids_b = _parse_sim_run_ids(art_b.sim_run if art_b else None)
+    if prefix_len <= 0:
+        return True
+    if len(ids_a) < prefix_len or len(ids_b) < prefix_len:
+        return False
+    return ids_a[:prefix_len] == ids_b[:prefix_len]
+
+
 def run(
     artifacts: dict[str, StepArtifact],
     run_timestamp: str,
@@ -200,13 +217,36 @@ def run(
                     status="PASS" if match == 1 else "FAIL",
                 )
 
-        # source_dataset path is expected from STEP 3 onward.
-        # STEP 2 may legitimately omit it depending on generation mode.
+        # source_dataset path is expected from STEP 3 onward when the upstream
+        # dataset is still present. Cascade cleanup may remove consumed
+        # upstream folders, in which case source path existence is non-fatal.
         if int(step_key) >= 2:
             src_path = resolve_source_dataset_path(meta, art.run_dir)
             src_exists = int(src_path is not None and src_path.exists())
-            source_required = int(step_key) >= 3
-            source_status = "PASS" if src_exists else ("WARN" if not source_required else "FAIL")
+            upstream_key = str(int(step_key) - 1)
+            upstream_art = artifacts.get(upstream_key)
+            upstream_exists = bool(upstream_art and upstream_art.exists)
+            upstream_matches = _lineage_prefix_match(upstream_art, art, int(step_key) - 1)
+            source_required = int(step_key) >= 3 and upstream_exists and upstream_matches
+            if src_exists:
+                source_status = "PASS"
+            elif int(step_key) < 3:
+                source_status = "WARN"
+            elif not upstream_exists:
+                source_status = "WARN"
+            elif not upstream_matches:
+                source_status = "WARN"
+            else:
+                source_status = "FAIL"
+
+            source_notes = str(src_path) if src_path is not None else "source_dataset missing"
+            if not src_exists and int(step_key) >= 3 and not upstream_exists:
+                source_notes = f"{source_notes}; upstream step {upstream_key} dataset unavailable"
+            elif not src_exists and int(step_key) >= 3 and not upstream_matches:
+                source_notes = (
+                    f"{source_notes}; upstream step {upstream_key} sim_run does not match "
+                    f"STEP {step_key} lineage"
+                )
             rb.add(
                 test_id=f"cross_step{step_key}_source_dataset",
                 test_name=f"STEP {step_key} source_dataset exists",
@@ -216,7 +256,7 @@ def run(
                 threshold_low=1 if source_required else None,
                 threshold_high=1 if source_required else None,
                 status=source_status,
-                notes=str(src_path) if src_path is not None else "source_dataset missing",
+                notes=source_notes,
             )
 
             # If source metadata is readable, compare hash hints.
@@ -243,6 +283,19 @@ def run(
     selection_expected = {("8", "9")}
 
     for a, b in pairs:
+        art_a = artifacts.get(a)
+        art_b = artifacts.get(b)
+        if not _lineage_prefix_match(art_a, art_b, int(a)):
+            rb.add(
+                test_id=f"cross_rows_{a}_{b}",
+                test_name=f"Row delta STEP {a}->{b}",
+                metric_name="delta",
+                metric_value=np.nan,
+                status="SKIP",
+                notes=f"Incompatible SIM_RUN lineage: {art_a.sim_run if art_a else None} vs {art_b.sim_run if art_b else None}",
+            )
+            continue
+
         na = row_counts.get(a)
         nb = row_counts.get(b)
         if na is None or nb is None:
@@ -300,6 +353,19 @@ def run(
     # Exact set equality where expected.
     exact_pairs = [("2", "3"), ("3", "4"), ("4", "5"), ("5", "6"), ("6", "7"), ("7", "8"), ("9", "10")]
     for a, b in exact_pairs:
+        art_a = artifacts.get(a)
+        art_b = artifacts.get(b)
+        if not _lineage_prefix_match(art_a, art_b, int(a)):
+            rb.add(
+                test_id=f"cross_ids_{a}_{b}",
+                test_name=f"event_id conservation STEP {a}->{b}",
+                metric_name="set_diff",
+                metric_value=np.nan,
+                status="SKIP",
+                notes=f"Incompatible SIM_RUN lineage: {art_a.sim_run if art_a else None} vs {art_b.sim_run if art_b else None}",
+            )
+            continue
+
         sa = id_sets.get(a)
         sb = id_sets.get(b)
         if sa is None or sb is None:

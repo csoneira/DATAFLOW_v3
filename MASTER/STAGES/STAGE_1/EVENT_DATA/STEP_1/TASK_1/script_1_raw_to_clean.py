@@ -130,6 +130,75 @@ print = build_step1_filtered_print(
     raw_print=builtins.print,
 )
 
+def safe_move(source_path: str, dest_path: str) -> str:
+    """Move *source_path* to *dest_path* with explicit diagnostics on failure."""
+    try:
+        return shutil.move(source_path, dest_path)
+    except OSError as exc:
+        print(f"Error moving '{source_path}' to '{dest_path}': {exc}")
+        raise
+
+MAX_OPEN_FIGURES = 16
+_OPEN_FIGURE_IDS: list[int] = []
+_ORIGINAL_PLT_FIGURE = plt.figure
+_ORIGINAL_PLT_SUBPLOTS = plt.subplots
+_ORIGINAL_PLT_CLOSE = plt.close
+
+def _track_figure(fig: mpl.figure.Figure) -> mpl.figure.Figure:
+    fig_number = getattr(fig, "number", None)
+    if fig_number is None:
+        return fig
+    if fig_number not in _OPEN_FIGURE_IDS:
+        _OPEN_FIGURE_IDS.append(fig_number)
+    while len(_OPEN_FIGURE_IDS) > MAX_OPEN_FIGURES:
+        stale_fig_number = _OPEN_FIGURE_IDS.pop(0)
+        _ORIGINAL_PLT_CLOSE(stale_fig_number)
+    return fig
+
+def _guarded_figure(*args, **kwargs):
+    return _track_figure(_ORIGINAL_PLT_FIGURE(*args, **kwargs))
+
+def _guarded_subplots(*args, **kwargs):
+    fig, axes = _ORIGINAL_PLT_SUBPLOTS(*args, **kwargs)
+    _track_figure(fig)
+    return fig, axes
+
+def _guarded_close(*args, **kwargs):
+    target = args[0] if args else kwargs.get("fig", None)
+    result = _ORIGINAL_PLT_CLOSE(*args, **kwargs)
+    if target in (None, "all"):
+        _OPEN_FIGURE_IDS.clear()
+    elif isinstance(target, mpl.figure.Figure):
+        fig_number = getattr(target, "number", None)
+        if fig_number in _OPEN_FIGURE_IDS:
+            _OPEN_FIGURE_IDS.remove(fig_number)
+    elif isinstance(target, int) and target in _OPEN_FIGURE_IDS:
+        _OPEN_FIGURE_IDS.remove(target)
+    return result
+
+plt.figure = _guarded_figure
+plt.subplots = _guarded_subplots
+plt.close = _guarded_close
+
+def align_metadata_row_with_existing_schema(metadata_path: str | Path, row: dict[str, object]) -> None:
+    path = Path(metadata_path)
+    if not path.exists() or path.stat().st_size == 0:
+        return
+    try:
+        with path.open("r", newline="") as handle:
+            reader = csv.reader(handle)
+            fieldnames = next(reader, [])
+    except OSError as exc:
+        print(f"Warning: unable to read metadata schema from {path}: {exc}")
+        return
+    for key in fieldnames:
+        if not key or key in row:
+            continue
+        if key == "analysis_mode" or key.endswith("_count") or key.startswith("events_per_second_"):
+            row[key] = 0
+        else:
+            row[key] = ""
+
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
 
@@ -408,7 +477,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
                 os.remove(empty_destination_path)
             
             print("Moving empty file:", file)
-            shutil.move(file_empty, empty_destination_path)
+            safe_move(file_empty, empty_destination_path)
             now = time.time()
             os.utime(empty_destination_path, (now, now))
 
@@ -431,12 +500,22 @@ for file_name in files_to_move:
     src_path = os.path.join(raw_directory, file_name)
     dest_path = os.path.join(unprocessed_directory, file_name)
     try:
-        shutil.move(src_path, dest_path)
+        safe_move(src_path, dest_path)
         now = time.time()
         os.utime(dest_path, (now, now))
         print(f"Move {file_name} to UNPROCESSED directory.")
     except Exception as e:
-        print(f"Failed to move {file_name}: {e}")
+        print(f"Failed to move {file_name} to UNPROCESSED: {e}")
+        error_dest_path = os.path.join(error_directory, file_name)
+        try:
+            safe_move(src_path, error_dest_path)
+            now = time.time()
+            os.utime(error_dest_path, (now, now))
+            print(f"Moved {file_name} to ERROR directory after UNPROCESSED move failure.")
+        except Exception as error_move_exc:
+            raise RuntimeError(
+                f"Unable to move {file_name} to either UNPROCESSED or ERROR directory."
+            ) from error_move_exc
 
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
@@ -783,6 +862,15 @@ global_variables = {
     'analysis_mode': 0,
 }
 
+TT_COUNT_VALUES: tuple[int, ...] = (
+    0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
+)
+
+def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
+    for prefix in prefixes:
+        for tt_value in TT_COUNT_VALUES:
+            global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
+
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "q_front_back_zero_rows_pct",
     "data_purity_percentage",
@@ -892,6 +980,9 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
     # Remove zero values
     T_diff = T_diff[T_diff != 0]
     
+    if T_diff.size == 0:
+        return np.nan
+
     # Calculate histogram
     counts, bin_edges = np.histogram(T_diff, bins='auto')
     
@@ -921,6 +1012,13 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
                 end_index = i
         else:
             current_length = 0
+
+    if max_length == 0:
+        return np.nan
+
+    # Reject edge-only/single-bin plateaus: they are unstable calibration anchors.
+    if max_length < 2 or start_index == 0 or end_index == (len(non_empty_bins) - 1):
+        return np.nan
     
     plateau_left = bin_edges[start_index]
     plateau_right = bin_edges[end_index + 1]
@@ -1047,7 +1145,6 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     # Determine the X value (left edge) of the bin where the threshold is crossed
     offset_cal = bin_edges[offset_bin_index]
     
-    pedestal = offset + offset_cal
     pedestal = offset
     
     if translate_charge_cal:
@@ -1298,6 +1395,9 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
                 if col in quantile_bounds:
                     lower_bound, upper_bound = quantile_bounds[col]
                     filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
+                else:
+                    lower_bound, upper_bound = left, right
+                    filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
 
                 if len(filt_data) < 2:
                     axs[i].text(0.5, 0.5, "Not enough data to fit", transform=axs[i].transAxes, ha='center', va='center', color='gray')
@@ -1357,7 +1457,7 @@ def process_file(source_path, dest_path):
     print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
     print("**********************************************************************")
     
-    shutil.move(source_path, dest_path)
+    safe_move(source_path, dest_path)
     now = time.time()
     os.utime(dest_path, (now, now))
     return True
@@ -1617,7 +1717,7 @@ else:
 
             print(f"Processing the newest file in UNPROCESSED: {unprocessed_file_path}")
             print(f"Moving '{file_name}' to PROCESSING...")
-            shutil.move(unprocessed_file_path, processing_file_path)
+            safe_move(unprocessed_file_path, processing_file_path)
             print(f"File moved to PROCESSING: {processing_file_path}")
 
         else:
@@ -1636,7 +1736,7 @@ else:
                 print(f"Processing the newest file already in PROCESSING:\n    {processing_file_path}")
                 error_file_path = os.path.join(base_directories["error_directory"], file_name)
                 print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
-                shutil.move(processing_file_path, error_file_path)
+                safe_move(processing_file_path, error_file_path)
                 processing_file_path = error_file_path
                 print(f"File moved to ERROR: {processing_file_path}")
 
@@ -1655,7 +1755,7 @@ else:
 
                     print(f"Reprocessing the newest file in COMPLETED: {completed_file_path}")
                     print(f"Moving '{completed_file_path}' to PROCESSING...")
-                    shutil.move(completed_file_path, processing_file_path)
+                    safe_move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
                     sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
@@ -1676,20 +1776,18 @@ else:
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
                 print(f"Moving prioritized '{file_name}' to PROCESSING...")
-                shutil.move(unprocessed_file_path, processing_file_path)
+                safe_move(unprocessed_file_path, processing_file_path)
                 print(f"File moved to PROCESSING: {processing_file_path}")
             else:
-                print("Shuffling the files in UNPROCESSED...")
-                random.shuffle(unprocessed_files)
-                for file_name in unprocessed_files:
-                    unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-                    processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-                    completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                print("Selecting a random file in UNPROCESSED...")
+                file_name = random.choice(unprocessed_files)
+                unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
-                    print(f"Moving '{file_name}' to PROCESSING...")
-                    shutil.move(unprocessed_file_path, processing_file_path)
-                    print(f"File moved to PROCESSING: {processing_file_path}")
-                    break
+                print(f"Moving '{file_name}' to PROCESSING...")
+                safe_move(unprocessed_file_path, processing_file_path)
+                print(f"File moved to PROCESSING: {processing_file_path}")
 
         elif processing_files:
             priority_file = _select_latest_candidate_with_z_priority(
@@ -1707,24 +1805,21 @@ else:
                 print(f"Processing prioritized file in PROCESSING: {processing_file_path}")
                 error_file_path = os.path.join(base_directories["error_directory"], file_name)
                 print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
-                shutil.move(processing_file_path, error_file_path)
+                safe_move(processing_file_path, error_file_path)
                 processing_file_path = error_file_path
                 print(f"File moved to ERROR: {processing_file_path}")
             else:
-                print("Shuffling the files in PROCESSING...")
-                random.shuffle(processing_files)
-                for file_name in processing_files:
-                    # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-                    processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-                    completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                print("Selecting a random file in PROCESSING...")
+                file_name = random.choice(processing_files)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
-                    print(f"Processing file in PROCESSING: {processing_file_path}")
-                    error_file_path = os.path.join(base_directories["error_directory"], file_name)
-                    print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
-                    shutil.move(processing_file_path, error_file_path)
-                    processing_file_path = error_file_path
-                    print(f"File moved to ERROR: {processing_file_path}")
-                    break
+                print(f"Processing file in PROCESSING: {processing_file_path}")
+                error_file_path = os.path.join(base_directories["error_directory"], file_name)
+                print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
+                safe_move(processing_file_path, error_file_path)
+                processing_file_path = error_file_path
+                print(f"File moved to ERROR: {processing_file_path}")
 
         elif completed_files:
             if complete_reanalysis:
@@ -1741,20 +1836,17 @@ else:
                     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
                     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                     print(f"Moving prioritized '{file_name}' to PROCESSING...")
-                    shutil.move(completed_file_path, processing_file_path)
+                    safe_move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
-                    print("Shuffling the files in COMPLETED...")
-                    random.shuffle(completed_files)
-                    for file_name in completed_files:
-                        # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-                        completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-                        processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                    print("Selecting a random file in COMPLETED...")
+                    file_name = random.choice(completed_files)
+                    completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                    processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
 
-                        print(f"Moving '{file_name}' to PROCESSING...")
-                        shutil.move(completed_file_path, processing_file_path)
-                        print(f"File moved to PROCESSING: {processing_file_path}")
-                        break
+                    print(f"Moving '{file_name}' to PROCESSING...")
+                    safe_move(completed_file_path, processing_file_path)
+                    print(f"File moved to PROCESSING: {processing_file_path}")
             else:
                 sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
 
@@ -1964,7 +2056,11 @@ read_df = pd.read_csv(
 # Print the number of rows in input
 print(f"\nOriginal file has {read_lines} lines.")
 print(f"Processed file has {written_lines} lines.")
-valid_lines_in_dat_file = written_lines/read_lines * 100
+if read_lines > 0:
+    valid_lines_in_dat_file = written_lines / read_lines * 100
+else:
+    valid_lines_in_dat_file = 0.0
+    print("Warning: input file has zero lines; setting valid line percentage to 0.0.")
 print(f"--> A {valid_lines_in_dat_file:.2f}% of the lines were valid.\n")
 
 global_variables['valid_lines_in_binary_file_percentage'] =  valid_lines_in_dat_file
@@ -2007,15 +2103,35 @@ if raw_data_len == 0 and not self_trigger:
     sys.exit(1)
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
-datetime_value = selected_df['datetime'].iloc[0]
-end_datetime_value = selected_df['datetime'].iloc[-1]
+if "datetime" in selected_df.columns:
+    datetime_series = pd.to_datetime(selected_df["datetime"], errors="coerce").dropna()
+else:
+    datetime_series = pd.Series(dtype="datetime64[ns]")
+if datetime_series.empty:
+    print(
+        f"Warning: No valid datetime rows found in {file_name}; moving file to ERROR and skipping."
+    )
+    if not user_file_selection:
+        error_file_path = os.path.join(base_directories["error_directory"], file_name)
+        print(f"Moving file '{file_name}' to ERROR directory: {error_file_path}")
+        process_file(file_path, error_file_path)
+    sys.exit(0)
+datetime_value = datetime_series.iloc[0]
+end_datetime_value = datetime_series.iloc[-1]
 
 if self_trigger:
     print(self_trigger_df)
-    datetime_value_st = self_trigger_df['datetime'].iloc[0]
-    end_datetime_value_st = self_trigger_df['datetime'].iloc[-1]
-    datetime_str_st = str(datetime_value_st)
-    save_filename_suffix_st = datetime_str_st.replace(' ', "_").replace(':', ".").replace('-', ".")
+    if "datetime" in self_trigger_df.columns:
+        datetime_series_st = pd.to_datetime(self_trigger_df["datetime"], errors="coerce").dropna()
+    else:
+        datetime_series_st = pd.Series(dtype="datetime64[ns]")
+    if datetime_series_st.empty:
+        print("Warning: Self-trigger dataframe has no valid datetime values; skipping self-trigger timestamp suffix.")
+    else:
+        datetime_value_st = datetime_series_st.iloc[0]
+        end_datetime_value_st = datetime_series_st.iloc[-1]
+        datetime_str_st = str(datetime_value_st)
+        save_filename_suffix_st = datetime_str_st.replace(' ', "_").replace(':', ".").replace('-', ".")
 
 start_time = datetime_value
 end_time = end_datetime_value
@@ -2262,13 +2378,14 @@ for key, idx_range in column_indices.items():
 
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
-    def _derive_tt(row: pd.Series) -> str:
-        planes_with_charge = []
-        for plane in range(1, 5):
-            if columns_map:
-                charge_columns = [col for col in columns_map.get(plane, []) if col in row.index]
-            else:
-                charge_columns = [
+    tt_str = pd.Series("", index=df.index, dtype="object")
+    for plane in range(1, 5):
+        if columns_map:
+            charge_columns = [col for col in columns_map.get(plane, []) if col in df.columns]
+        else:
+            charge_columns = [
+                col
+                for col in [
                     f"Q{plane}_F_1",
                     f"Q{plane}_F_2",
                     f"Q{plane}_F_3",
@@ -2278,12 +2395,12 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
                     f"Q{plane}_B_3",
                     f"Q{plane}_B_4",
                 ]
-            if any(row.get(col, 0) != 0 for col in charge_columns):
-                planes_with_charge.append(str(plane))
-        return "".join(planes_with_charge) if planes_with_charge else "0"
-
-    df[column_name] = df.apply(_derive_tt, axis=1)
-    df[column_name] = df[column_name].apply(builtins.int)
+                if col in df.columns
+            ]
+        if charge_columns:
+            has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
+            tt_str = tt_str.where(~has_charge, tt_str + str(plane))
+    df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
     return df
 
 # Apply the function to the DataFrame
@@ -2923,7 +3040,7 @@ if low_value_cols:
     # Move the file to the error directory
     final_path = os.path.join(base_directories["error_directory"], file_name)
     print(f"Moving {file_path} to the error directory {final_path}...")
-    shutil.move(file_path, final_path)
+    safe_move(file_path, final_path)
     now = time.time()
     os.utime(final_path, (now, now))
     sys.exit(1)
@@ -2970,12 +3087,41 @@ if time_window_filtering:
 
         working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
         
+    def compute_t_sum_spread(df_subset: pd.DataFrame, columns: list[str]) -> pd.Series:
+        if not columns:
+            return pd.Series(np.nan, index=df_subset.index, dtype=float)
+        values = df_subset.loc[:, columns].to_numpy(dtype=float, copy=False)
+        values = np.where(values != 0, values, np.nan)
+        valid_rows = np.any(~np.isnan(values), axis=1)
+        spread = np.full(values.shape[0], np.nan, dtype=float)
+        if np.any(valid_rows):
+            valid_values = values[valid_rows]
+            spread[valid_rows] = np.nanmax(valid_values, axis=1) - np.nanmin(valid_values, axis=1)
+        return pd.Series(spread, index=df_subset.index)
+
+    def zero_outlier_tsum(df_input: pd.DataFrame, threshold: float = coincidence_window_og_ns) -> pd.DataFrame:
+        t_sum_cols = [col for col in df_input.columns if "T" in col]
+        if not t_sum_cols:
+            return df_input
+        t_sum_values = df_input.loc[:, t_sum_cols].to_numpy(dtype=float, copy=True)
+        nonzero_mask = t_sum_values != 0
+        enough_values_mask = nonzero_mask.sum(axis=1) >= 2
+        masked_values = np.where(nonzero_mask, t_sum_values, np.nan)
+        centers = np.full(t_sum_values.shape[0], np.nan, dtype=float)
+        if np.any(enough_values_mask):
+            centers[enough_values_mask] = np.nanmedian(masked_values[enough_values_mask], axis=1)
+        deviations = np.abs(t_sum_values - centers[:, None])
+        outlier_mask = nonzero_mask & (deviations > (threshold / 2.0)) & enough_values_mask[:, None]
+        t_sum_values[outlier_mask] = 0.0
+        df_input.loc[:, t_sum_cols] = t_sum_values
+        return df_input
+
     # Pre removal of outliers
+    t_sum_columns_tt = [col for col in working_df.columns if "_time_OG_sum_" in col]
     spread_results = []
     for raw_tt in sorted(working_df["raw_tt"].unique()):
         filtered_df = working_df[working_df["raw_tt"] == raw_tt].copy()
-        T_sum_columns_tt = filtered_df.filter(regex='_time_OG_sum_').columns
-        t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
+        t_sum_spread_tt = compute_t_sum_spread(filtered_df, t_sum_columns_tt)
         filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
@@ -3011,25 +3157,13 @@ if time_window_filtering:
     # Removal of outliers
     print("Removing outliers based on T_sum values...")
 
-    def zero_outlier_tsum(row, threshold=coincidence_window_og_ns):
-        t_sum_cols = [col for col in row.index if 'T' in col]
-        t_sum_vals = row[t_sum_cols].copy()
-        nonzero_vals = t_sum_vals[t_sum_vals != 0]
-        if len(nonzero_vals) < 2: return row
-        center = np.median(nonzero_vals)
-        deviations = np.abs(nonzero_vals - center)
-        outliers = deviations > threshold / 2
-        for col in outliers.index[outliers]: row[col] = 0.0
-        return row
-    
-    working_df = working_df.apply(zero_outlier_tsum, axis=1)
+    working_df = zero_outlier_tsum(working_df)
 
     # Post removal of outliers
     spread_results = []
     for raw_tt in sorted(working_df["raw_tt"].unique()):
         filtered_df = working_df[working_df["raw_tt"] == raw_tt].copy()
-        T_sum_columns_tt = filtered_df.filter(regex='_time_OG_sum_').columns
-        t_sum_spread_tt = filtered_df[T_sum_columns_tt].apply(lambda row: np.ptp(row[row != 0]) if np.any(row != 0) else np.nan, axis=1)
+        t_sum_spread_tt = compute_t_sum_spread(filtered_df, t_sum_columns_tt)
         filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
         spread_results.append(filtered_df)
     spread_df = pd.concat(spread_results, ignore_index=True)
@@ -3348,6 +3482,7 @@ add_normalized_count_metadata(
 
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp
+ensure_global_count_keys(("raw_tt", "clean_tt", "raw_to_clean_tt"))
 
 print(f"Specific metadata keys to be saved: {len(global_variables)}")
 # if VERBOSE:
@@ -3367,6 +3502,7 @@ print(
     force=True,
 )
 
+align_metadata_row_with_existing_schema(csv_path_specific, global_variables)
 metadata_specific_csv_path = save_metadata(
     csv_path_specific,
     global_variables,
@@ -3393,6 +3529,9 @@ if "datetime" in working_df.columns:
 if "param_hash" not in working_df.columns:
     working_df["param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
 
+# Ensure no figure handles remain open before persistence/final move.
+plt.close("all")
+
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Cleaned dataframe saved to: {OUT_PATH}")
@@ -3401,7 +3540,7 @@ print(f"Cleaned dataframe saved to: {OUT_PATH}")
 print("Moving file to COMPLETED directory...")
 
 if user_file_selection == False:
-    shutil.move(file_path, completed_file_path)
+    safe_move(file_path, completed_file_path)
     now = time.time()
     os.utime(completed_file_path, (now, now))
     print("************************************************************")

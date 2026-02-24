@@ -41,6 +41,12 @@ from STEP_SHARED.sim_utils import (
 )
 
 
+def build_time_rng(seed: Optional[int]) -> np.random.Generator:
+    if seed is None:
+        return np.random.default_rng()
+    return np.random.default_rng(int(seed) + 1)
+
+
 def generate_muon_sample(
     n_tracks: int,
     xlim: float,
@@ -53,7 +59,7 @@ def generate_muon_sample(
     batch_size: int = 200_000,
 ) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    time_rng = np.random.default_rng()
+    time_rng = build_time_rng(seed)
     exponent = 1.0 / (cos_n + 1.0)
 
     if thick_rate_hz and thick_rate_hz > 0:
@@ -106,7 +112,7 @@ def generate_muon_batches(
     batch_size: int,
 ) -> Iterable[pd.DataFrame]:
     rng = np.random.default_rng(seed)
-    time_rng = np.random.default_rng()
+    time_rng = build_time_rng(seed)
     exponent = 1.0 / (cos_n + 1.0)
 
     thick_seq = ThickSecondSequencer(float(thick_rate_hz or 0.0), time_rng)

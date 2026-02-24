@@ -129,6 +129,75 @@ print = build_step1_filtered_print(
     raw_print=builtins.print,
 )
 
+def safe_move(source_path: str, dest_path: str) -> str:
+    """Move *source_path* to *dest_path* with explicit diagnostics on failure."""
+    try:
+        return shutil.move(source_path, dest_path)
+    except OSError as exc:
+        print(f"Error moving '{source_path}' to '{dest_path}': {exc}")
+        raise
+
+MAX_OPEN_FIGURES = 16
+_OPEN_FIGURE_IDS: list[int] = []
+_ORIGINAL_PLT_FIGURE = plt.figure
+_ORIGINAL_PLT_SUBPLOTS = plt.subplots
+_ORIGINAL_PLT_CLOSE = plt.close
+
+def _track_figure(fig: mpl.figure.Figure) -> mpl.figure.Figure:
+    fig_number = getattr(fig, "number", None)
+    if fig_number is None:
+        return fig
+    if fig_number not in _OPEN_FIGURE_IDS:
+        _OPEN_FIGURE_IDS.append(fig_number)
+    while len(_OPEN_FIGURE_IDS) > MAX_OPEN_FIGURES:
+        stale_fig_number = _OPEN_FIGURE_IDS.pop(0)
+        _ORIGINAL_PLT_CLOSE(stale_fig_number)
+    return fig
+
+def _guarded_figure(*args, **kwargs):
+    return _track_figure(_ORIGINAL_PLT_FIGURE(*args, **kwargs))
+
+def _guarded_subplots(*args, **kwargs):
+    fig, axes = _ORIGINAL_PLT_SUBPLOTS(*args, **kwargs)
+    _track_figure(fig)
+    return fig, axes
+
+def _guarded_close(*args, **kwargs):
+    target = args[0] if args else kwargs.get("fig", None)
+    result = _ORIGINAL_PLT_CLOSE(*args, **kwargs)
+    if target in (None, "all"):
+        _OPEN_FIGURE_IDS.clear()
+    elif isinstance(target, mpl.figure.Figure):
+        fig_number = getattr(target, "number", None)
+        if fig_number in _OPEN_FIGURE_IDS:
+            _OPEN_FIGURE_IDS.remove(fig_number)
+    elif isinstance(target, int) and target in _OPEN_FIGURE_IDS:
+        _OPEN_FIGURE_IDS.remove(target)
+    return result
+
+plt.figure = _guarded_figure
+plt.subplots = _guarded_subplots
+plt.close = _guarded_close
+
+def align_metadata_row_with_existing_schema(metadata_path: str | Path, row: dict[str, object]) -> None:
+    path = Path(metadata_path)
+    if not path.exists() or path.stat().st_size == 0:
+        return
+    try:
+        with path.open("r", newline="") as handle:
+            reader = csv.reader(handle)
+            fieldnames = next(reader, [])
+    except OSError as exc:
+        print(f"Warning: unable to read metadata schema from {path}: {exc}")
+        return
+    for key in fieldnames:
+        if not key or key in row:
+            continue
+        if key == "analysis_mode" or key.endswith("_count") or key.startswith("events_per_second_"):
+            row[key] = 0
+        else:
+            row[key] = ""
+
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
 
@@ -263,6 +332,9 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
                 # Use precomputed quantile bounds
                 if col in quantile_bounds:
                     lower_bound, upper_bound = quantile_bounds[col]
+                    filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
+                else:
+                    lower_bound, upper_bound = left, right
                     filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
 
                 if len(filt_data) < 2:
@@ -864,7 +936,7 @@ def process_file(source_path, dest_path):
     print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
     print("**********************************************************************")
     
-    shutil.move(source_path, dest_path)
+    safe_move(source_path, dest_path)
     now = time.time()
     os.utime(dest_path, (now, now))
     return True
@@ -970,7 +1042,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
                 os.remove(empty_destination_path)
             
             print("Moving empty file:", file)
-            shutil.move(file_empty, empty_destination_path)
+            safe_move(file_empty, empty_destination_path)
             now = time.time()
             os.utime(empty_destination_path, (now, now))
 
@@ -987,12 +1059,22 @@ for file_name in files_to_move:
     src_path = os.path.join(raw_directory, file_name)
     dest_path = os.path.join(unprocessed_directory, file_name)
     try:
-        shutil.move(src_path, dest_path)
+        safe_move(src_path, dest_path)
         now = time.time()
         os.utime(dest_path, (now, now))
         print(f"Move {file_name} to UNPROCESSED directory.")
     except Exception as e:
-        print(f"Failed to move {file_name}: {e}")
+        print(f"Failed to move {file_name} to UNPROCESSED: {e}")
+        error_dest_path = os.path.join(error_directory, file_name)
+        try:
+            safe_move(src_path, error_dest_path)
+            now = time.time()
+            os.utime(error_dest_path, (now, now))
+            print(f"Moved {file_name} to ERROR directory after UNPROCESSED move failure.")
+        except Exception as error_move_exc:
+            raise RuntimeError(
+                f"Unable to move {file_name} to either UNPROCESSED or ERROR directory."
+            ) from error_move_exc
 
 # Erase all files in the figure_directory -------------------------------------------------
 figure_directory = base_directories["figure_directory"]
@@ -1080,7 +1162,7 @@ else:
 
             print(f"Processing the newest file in UNPROCESSED: {unprocessed_file_path}")
             print(f"Moving '{file_name}' to PROCESSING...")
-            shutil.move(unprocessed_file_path, processing_file_path)
+            safe_move(unprocessed_file_path, processing_file_path)
             print(f"File moved to PROCESSING: {processing_file_path}")
 
         else:
@@ -1093,7 +1175,7 @@ else:
                 print(f"Processing the newest file already in PROCESSING:\n    {processing_file_path}")
                 error_file_path = os.path.join(base_directories["error_directory"], file_name)
                 print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
-                shutil.move(processing_file_path, error_file_path)
+                safe_move(processing_file_path, error_file_path)
                 processing_file_path = error_file_path
                 print(f"File moved to ERROR: {processing_file_path}")
 
@@ -1106,7 +1188,7 @@ else:
 
                     print(f"Reprocessing the newest file in COMPLETED: {completed_file_path}")
                     print(f"Moving '{completed_file_path}' to PROCESSING...")
-                    shutil.move(completed_file_path, processing_file_path)
+                    safe_move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
                     sys.exit("No files to process in COMPLETED after normalization.")
@@ -1115,47 +1197,39 @@ else:
 
     else:
         if unprocessed_files:
-            print("Shuffling the files in UNPROCESSED...")
-            random.shuffle(unprocessed_files)
-            for file_name in unprocessed_files:
-                unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+            print("Selecting a random file in UNPROCESSED...")
+            file_name = random.choice(unprocessed_files)
+            unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
+            processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
-                print(f"Moving '{file_name}' to PROCESSING...")
-                shutil.move(unprocessed_file_path, processing_file_path)
-                print(f"File moved to PROCESSING: {processing_file_path}")
-                break
+            print(f"Moving '{file_name}' to PROCESSING...")
+            safe_move(unprocessed_file_path, processing_file_path)
+            print(f"File moved to PROCESSING: {processing_file_path}")
 
         elif processing_files:
-            print("Shuffling the files in PROCESSING...")
-            random.shuffle(processing_files)
-            for file_name in processing_files:
-                # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
-                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+            print("Selecting a random file in PROCESSING...")
+            file_name = random.choice(processing_files)
+            processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+            completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
-                print(f"Processing the last file in PROCESSING: {processing_file_path}")
-                error_file_path = os.path.join(base_directories["error_directory"], file_name)
-                print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
-                shutil.move(processing_file_path, error_file_path)
-                processing_file_path = error_file_path
-                print(f"File moved to ERROR: {processing_file_path}")
-                break
+            print(f"Processing the last file in PROCESSING: {processing_file_path}")
+            error_file_path = os.path.join(base_directories["error_directory"], file_name)
+            print(f"File '{processing_file_path}' is already in PROCESSING. Moving it temporarily to ERROR for analysis...")
+            safe_move(processing_file_path, error_file_path)
+            processing_file_path = error_file_path
+            print(f"File moved to ERROR: {processing_file_path}")
 
         elif completed_files:
             if complete_reanalysis:
-                print("Shuffling the files in COMPLETED...")
-                random.shuffle(completed_files)
-                for file_name in completed_files:
-                    # unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
-                    completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
-                    processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
+                print("Selecting a random file in COMPLETED...")
+                file_name = random.choice(completed_files)
+                completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
+                processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
 
-                    print(f"Moving '{file_name}' to PROCESSING...")
-                    shutil.move(completed_file_path, processing_file_path)
-                    print(f"File moved to PROCESSING: {processing_file_path}")
-                    break
+                print(f"Moving '{file_name}' to PROCESSING...")
+                safe_move(completed_file_path, processing_file_path)
+                print(f"File moved to PROCESSING: {processing_file_path}")
             else:
                 sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
 
@@ -1191,6 +1265,15 @@ simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
 global_variables = {}
 if simulated_param_hash:
     global_variables["param_hash"] = simulated_param_hash
+
+TT_COUNT_VALUES: tuple[int, ...] = (
+    0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
+)
+
+def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
+    for prefix in prefixes:
+        for tt_value in TT_COUNT_VALUES:
+            global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
 
 analysis_date = datetime.now().strftime("%Y-%m-%d")
 print(f"Analysis date and time: {analysis_date}")
@@ -1240,8 +1323,8 @@ elif simulated_param_hash:
     _ph_missing = _ph_series.isna()
     try:
         _ph_missing |= _ph_series.astype(str).str.strip().eq("")
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Warning: param_hash validation fallback used due to error: {exc}")
     if _ph_missing.any():
         working_df.loc[_ph_missing, "param_hash"] = str(simulated_param_hash)
 print(f"Listed dataframe reloaded from: {file_path}")
@@ -1282,13 +1365,14 @@ if create_debug_plots:
 
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
-    def _derive_tt(row: pd.Series) -> str:
-        planes_with_charge = []
-        for plane in range(1, 5):
-            if columns_map:
-                charge_columns = [col for col in columns_map.get(plane, []) if col in row.index]
-            else:
-                charge_columns = [
+    tt_str = pd.Series("", index=df.index, dtype="object")
+    for plane in range(1, 5):
+        if columns_map:
+            charge_columns = [col for col in columns_map.get(plane, []) if col in df.columns]
+        else:
+            charge_columns = [
+                col
+                for col in [
                     f"Q{plane}_F_1",
                     f"Q{plane}_F_2",
                     f"Q{plane}_F_3",
@@ -1298,12 +1382,12 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
                     f"Q{plane}_B_3",
                     f"Q{plane}_B_4",
                 ]
-            if any(row.get(col, 0) != 0 for col in charge_columns):
-                planes_with_charge.append(str(plane))
-        return "".join(planes_with_charge) if planes_with_charge else "0"
-
-    df[column_name] = df.apply(_derive_tt, axis=1)
-    df[column_name] = df[column_name].apply(builtins.int)
+                if col in df.columns
+            ]
+        if charge_columns:
+            has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
+            tt_str = tt_str.where(~has_charge, tt_str + str(plane))
+    df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
     return df
 
 list_tt_columns = {
@@ -1355,7 +1439,28 @@ fast_mode = False
 debug_mode = False
 last_file_test = config["last_file_test"]
 
-limit_number = config.get("limit_number", None)
+def load_iteration_settings(cfg):
+    return (
+        cfg["alternative_iteration"],
+        cfg["number_of_det_executions"],
+        cfg["fixed_speed"],
+        cfg["res_ana_removing_planes"],
+        cfg["timtrack_iteration"],
+        cfg["number_of_TT_executions"],
+        cfg.get("complete_reanalysis", False),
+        cfg.get("limit_number", None),
+    )
+
+(
+    alternative_iteration,
+    number_of_det_executions,
+    fixed_speed,
+    res_ana_removing_planes,
+    timtrack_iteration,
+    number_of_TT_executions,
+    complete_reanalysis,
+    limit_number,
+) = load_iteration_settings(config)
 limit = limit_number is not None
 
 # Charge calibration to fC
@@ -1371,25 +1476,6 @@ limit = limit_number is not None
 # Y position
 
 # RPC variables
-
-# Alternative
-alternative_iteration = config["alternative_iteration"]
-number_of_det_executions = config["number_of_det_executions"]
-
-# TimTrack
-fixed_speed = config["fixed_speed"]
-res_ana_removing_planes = config["res_ana_removing_planes"]
-timtrack_iteration = config["timtrack_iteration"]
-number_of_TT_executions = config["number_of_TT_executions"]
-
-# Validation
-
-timtrack_iteration = config["timtrack_iteration"]
-
-complete_reanalysis = config["complete_reanalysis"]
-
-limit_number = config.get("limit_number", None)
-limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
@@ -1769,7 +1855,16 @@ last_file_test = config["last_file_test"]
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
 
-limit_number = config.get("limit_number", None)
+(
+    alternative_iteration,
+    number_of_det_executions,
+    fixed_speed,
+    res_ana_removing_planes,
+    timtrack_iteration,
+    number_of_TT_executions,
+    complete_reanalysis,
+    limit_number,
+) = load_iteration_settings(config)
 limit = limit_number is not None
 
 # Charge calibration to fC
@@ -1785,23 +1880,6 @@ limit = limit_number is not None
 # Y position
 
 # RPC variables
-
-# Alternative
-alternative_iteration = config["alternative_iteration"]
-number_of_det_executions = config["number_of_det_executions"]
-
-# TimTrack
-fixed_speed = config["fixed_speed"]
-res_ana_removing_planes = config["res_ana_removing_planes"]
-timtrack_iteration = config["timtrack_iteration"]
-number_of_TT_executions = config["number_of_TT_executions"]
-
-# Validation
-
-timtrack_iteration = config["timtrack_iteration"]
-
-limit_number = config.get("limit_number", None)
-limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
@@ -2189,7 +2267,16 @@ last_file_test = config["last_file_test"]
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
 
-limit_number = config.get("limit_number", None)
+(
+    alternative_iteration,
+    number_of_det_executions,
+    fixed_speed,
+    res_ana_removing_planes,
+    timtrack_iteration,
+    number_of_TT_executions,
+    complete_reanalysis,
+    limit_number,
+) = load_iteration_settings(config)
 limit = limit_number is not None
 
 # Charge calibration to fC
@@ -2205,23 +2292,6 @@ limit = limit_number is not None
 # Y position
 
 # RPC variables
-
-# Alternative
-alternative_iteration = config["alternative_iteration"]
-number_of_det_executions = config["number_of_det_executions"]
-
-# TimTrack
-fixed_speed = config["fixed_speed"]
-res_ana_removing_planes = config["res_ana_removing_planes"]
-timtrack_iteration = config["timtrack_iteration"]
-number_of_TT_executions = config["number_of_TT_executions"]
-
-# Validation
-
-timtrack_iteration = config["timtrack_iteration"]
-
-limit_number = config.get("limit_number", None)
-limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
@@ -4343,33 +4413,24 @@ if create_debug_plots:
 # print("----------------------------------------------------------------------")
 
 # Derive definitive_tt before any plotting/filters that rely on it.
-def compute_definitive_tt(row):
-    """
-    Build the combination label from the planes that have non-zero reconstructed
-    geometry/time variables. Use det/tim combined variables to reflect the
-    final track state.
-    """
-    name = ""
+def compute_definitive_tt(df_input: pd.DataFrame) -> pd.Series:
+    """Build definitive_tt from planes with all final reconstructed components."""
+    tt_str = pd.Series("", index=df_input.index, dtype="object")
     for plane in range(1, 5):
-        # Use post-fit combined variables; fallback to raw finals if missing
-        y_key = f"P{plane}_Y_final"
-        ts_key = f"P{plane}_T_sum_final"
-        td_key = f"P{plane}_T_dif_final"
-        qsum_key = f"P{plane}_Q_sum_final"
-        qdiff_key = f"P{plane}_Q_dif_final"
+        plane_columns = [
+            f"P{plane}_Y_final",
+            f"P{plane}_T_sum_final",
+            f"P{plane}_T_dif_final",
+            f"P{plane}_Q_sum_final",
+            f"P{plane}_Q_dif_final",
+        ]
+        if not all(col in df_input.columns for col in plane_columns):
+            continue
+        valid_plane = df_input.loc[:, plane_columns].ne(0).all(axis=1)
+        tt_str = tt_str.where(~valid_plane, tt_str + str(plane))
+    return tt_str.replace("", "0").astype(int)
 
-        y_val = row.get(y_key, 0)
-        ts_val = row.get(ts_key, 0)
-        td_val = row.get(td_key, 0)
-        qsum_val = row.get(qsum_key, 0)
-        qdiff_val = row.get(qdiff_key, 0)
-
-        if all(val != 0 for val in (y_val, ts_val, td_val, qsum_val, qdiff_val)):
-            name += str(plane)
-
-    return int(name) if name else 0
-
-working_df["definitive_tt"] = working_df.apply(compute_definitive_tt, axis=1)
+working_df["definitive_tt"] = compute_definitive_tt(working_df)
 
 if create_plots and "processed_tt" in working_df.columns and "datetime" in working_df.columns:
     for combo in TRACK_COMBINATIONS:
@@ -6418,17 +6479,21 @@ print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 # Round to 4 significant digits -----------------------------------------------
-def round_to_4_significant_digits(x):
-    try:
-        return builtins.float(f"{builtins.float(x):.4g}")  # Use builtins.float to avoid any overridden names
-    except (builtins.ValueError, builtins.TypeError):
-        return x
+def round_array_to_significant_digits(values: np.ndarray, significant_digits: int = 4) -> np.ndarray:
+    rounded = values.astype(float, copy=True)
+    finite_nonzero = np.isfinite(rounded) & (rounded != 0)
+    if np.any(finite_nonzero):
+        magnitudes = np.floor(np.log10(np.abs(rounded[finite_nonzero]))).astype(int)
+        scales = np.power(10.0, significant_digits - 1 - magnitudes)
+        rounded[finite_nonzero] = np.round(rounded[finite_nonzero] * scales) / scales
+    return rounded
 
 print("Rounding the dataframe values.") 
 for col in working_df.select_dtypes(include=[np.floating]).columns:
     original_dtype = working_df[col].dtype
-    rounded_series = working_df[col].apply(round_to_4_significant_digits)
-    working_df.loc[:, col] = rounded_series.astype(original_dtype, copy=False)
+    column_values = working_df[col].to_numpy(dtype=float, copy=False)
+    rounded_values = round_array_to_significant_digits(column_values, significant_digits=4)
+    working_df.loc[:, col] = rounded_values.astype(original_dtype, copy=False)
 
 # Save the data ---------------------------------------------------------------
 # if save_full_data: # Save a full version of the data, for different studies and debugging
@@ -6751,7 +6816,7 @@ print("Moving file to COMPLETED directory...")
 
 if user_file_selection == False:
     if os.path.exists(file_path):
-        shutil.move(file_path, completed_file_path)
+        safe_move(file_path, completed_file_path)
         now = time.time()
         os.utime(completed_file_path, (now, now))
         print("************************************************************")
@@ -6985,6 +7050,7 @@ add_normalized_count_metadata(
 
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp
+ensure_global_count_keys(("list_tt", "fit_tt", "list_to_fit_tt", "definitive_tt"))
 
 print(f"Specific metadata keys to be saved: {len(global_variables)}")
 if VERBOSE:
@@ -7004,11 +7070,15 @@ print(
     force=True,
 )
 
+align_metadata_row_with_existing_schema(csv_path_specific, global_variables)
 metadata_specific_csv_path = save_metadata(
     csv_path_specific,
     global_variables,
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
+
+# Ensure no figure handles remain open before persistence/final move.
+plt.close("all")
 
 # Save to HDF5 file
 
@@ -7020,7 +7090,7 @@ print("Moving file to COMPLETED directory...")
 
 if user_file_selection == False:
     if os.path.exists(file_path):
-        shutil.move(file_path, completed_file_path)
+        safe_move(file_path, completed_file_path)
         now = time.time()
         os.utime(completed_file_path, (now, now))
         print("************************************************************")

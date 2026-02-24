@@ -1,5 +1,0 @@
-# Configuration for plot_simulation_time.py
-# Set the number of hours for the 'last X hours' plot and the width ratios for the three plots.
-
-last_hours: 2  # Number of hours to display in the middle plot ("last X hours")
-plot_width_ratios: [2, 1, 1]  # Ratios for [left, middle, right] plots

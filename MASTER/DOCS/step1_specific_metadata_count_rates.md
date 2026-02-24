@@ -1,66 +1,61 @@
-# STEP_1 Specific Metadata: Count Normalization (Hz)
+---
+title: STEP_1 Metadata Count-Rate Normalization
+description: Definition of count-normalization fields added to STEP_1 task metadata.
+last_updated: 2026-02-24
+status: active
+---
+
+# STEP_1 Metadata Count-Rate Normalization (Hz)
+
+## Table of contents
+- [Goal](#goal)
+- [Output location](#output-location)
+- [Implementation coverage](#implementation-coverage)
+- [Columns added](#columns-added)
+- [Reconstruction formulas](#reconstruction-formulas)
+- [Caveats](#caveats)
 
 ## Goal
-Raw `*_count` values in `task_{task}_metadata_specific.csv` scale with file duration and are therefore hard to compare across files/stations/tasks.  
-To make comparisons meaningful, we also store **per-second normalized versions** (Hz) plus the **denominator seconds** used for normalization so counts can be reconstructed if needed.
+Raw `*_count` fields in `task_{task}_metadata_specific.csv` scale with file duration, making cross-file comparisons misleading.
 
-## Where This Is Saved
-For each station and STEP_1 task:
+To make metadata comparable, STEP_1 tasks also write:
+- normalized rate/fraction fields,
+- a denominator column (`count_rate_denominator_seconds`) so original counts can be reconstructed.
 
+## Output location
+Per station and task:
 - `STATIONS/MINGO0{station}/STAGE_1/EVENT_DATA/STEP_1/TASK_{task}/METADATA/task_{task}_metadata_specific.csv`
 
-## Implementation (Tasks 1–5)
-Implemented in all five STEP_1 task scripts:
+## Implementation coverage
+Applied in all STEP_1 task scripts:
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_1/script_1_raw_to_clean.py`
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/script_2_clean_to_cal.py`
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_3/script_3_cal_to_list.py`
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_4/script_4_list_to_fit.py`
+- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py`
 
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_1/script_1_raw_to_clean.py`
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_2/script_2_clean_to_cal.py`
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_3/script_3_cal_to_list.py`
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_4/script_4_list_to_fit.py`
-- `MASTER/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py`
+The denominator is produced from:
+- `build_events_per_second_metadata(working_df)`
 
-Each task already computes time coverage with `build_events_per_second_metadata(working_df)`.  
-Immediately after that call, we now also run:
-
+Normalization is applied via:
 - `add_normalized_count_metadata(global_variables, global_variables["events_per_second_total_seconds"])`
 
-## New Columns Added
-### Denominator (always present)
+## Columns added
+
+### Denominator
 - `count_rate_denominator_seconds`
-  - Integer seconds used for normalization.
-  - Comes from `events_per_second_total_seconds` for the final `working_df` of that task.
+- Integer seconds used as normalization base.
 
-### Normalized versions
-For every metadata key that looks like a count:
+### Normalized fields
+- For `*_count`: add `*_rate_hz = *_count / count_rate_denominator_seconds`.
+- Exception: `events_per_second_{k}_count` becomes `events_per_second_{k}_fraction` (fraction of time, not Hz).
+- For `*_entries`, `*_entries_initial`, `*_entries_final`: add `<field>_rate_hz`.
 
-- For columns ending in `*_count`:
-  - Default: add `*_rate_hz = _count / count_rate_denominator_seconds`
-  - Exception for `events_per_second_{k}_count`:
-    - Add `events_per_second_{k}_fraction = events_per_second_{k}_count / count_rate_denominator_seconds`
-    - (Those `*_count` are "how many seconds had k events", so the normalized quantity is a fraction of time, not Hz.)
+## Reconstruction formulas
+- `X_count ~= X_rate_hz * count_rate_denominator_seconds`
+- `events_per_second_{k}_count ~= events_per_second_{k}_fraction * count_rate_denominator_seconds`
 
-- For columns ending in `*_entries`, `*_entries_final`, `*_entries_initial`:
-  - Add `<original_name>_rate_hz = entries / count_rate_denominator_seconds`
-
-All normalized columns are written into the same `task_{task}_metadata_specific.csv` row.
-
-## How To Reconstruct Counts
-Given:
-
-- `X_rate_hz`
-- `count_rate_denominator_seconds`
-
-You can recover the original count approximately as:
-
-- `X_count ≈ X_rate_hz * count_rate_denominator_seconds`
-
-For the events-per-second histogram fractions:
-
-- `events_per_second_{k}_count ≈ events_per_second_{k}_fraction * count_rate_denominator_seconds`
-
-## Important Notes / Caveats
-- If `count_rate_denominator_seconds` is `0`, normalization is skipped for that row (rates are not generated).
-  - This happens when `build_events_per_second_metadata()` cannot find a usable time column in `working_df`.
-  - The current logic expects a time column named `datetime` or `Time` (or a DatetimeIndex).
-- The denominator is computed **after the task’s filtering**, so it can differ across tasks if early/late events are removed.
-  - This is often what you want (rates reflect what remains after filtering), but it means comparing raw counts across tasks is misleading.
-
+## Caveats
+- If denominator is `0`, normalization is skipped.
+- Denominator depends on post-filter time coverage inside each task, so values can differ between tasks for the same basename.
+- Time-column assumptions (`datetime`, `Time`, or DatetimeIndex) should remain consistent; schema drift here silently changes normalization behavior.

@@ -37,7 +37,13 @@ import pandas as pd
 
 # ── Paths ────────────────────────────────────────────────────────────────
 STEP_DIR = Path(__file__).resolve().parent
-PIPELINE_DIR = STEP_DIR.parents[1]  # INFERENCE_DICTIONARY_VALIDATION
+# Support both layouts:
+#   - <pipeline>/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY
+#   - <pipeline>/STEPS/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY
+if STEP_DIR.parents[1].name == "STEPS":
+    PIPELINE_DIR = STEP_DIR.parents[2]
+else:
+    PIPELINE_DIR = STEP_DIR.parents[1]
 DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
 DEFAULT_INPUT = (
     STEP_DIR.parent / "STEP_1_1_COLLECT_DATA" / "OUTPUTS" / "FILES" / "collected_data.csv"

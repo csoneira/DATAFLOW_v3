@@ -191,16 +191,31 @@ def compute_efficiency(
     raise ValueError(f"Unsupported efficiency method: {method}")
 
 
+def normalize_tt_prefix(prefix: str) -> str:
+    """Normalize trigger prefix so both 'raw' and 'raw_tt_' are accepted."""
+    p = str(prefix).strip()
+    if not p:
+        raise ValueError("Trigger prefix cannot be empty.")
+    if p.endswith("_tt_"):
+        return p
+    if p.endswith("_tt"):
+        return f"{p}_"
+    if p.endswith("_"):
+        return f"{p}tt_"
+    return f"{p}_tt_"
+
+
 def build_empirical_eff(
     df: pd.DataFrame, prefix: str, eff_method: str
 ) -> pd.DataFrame:
     """Compute estimated per-plane efficiencies from topology count columns."""
-    four_col = f"{prefix}_tt_1234_count"
+    tt_prefix = normalize_tt_prefix(prefix)
+    four_col = f"{tt_prefix}1234_count"
     miss_cols = {
-        1: f"{prefix}_tt_234_count",
-        2: f"{prefix}_tt_134_count",
-        3: f"{prefix}_tt_124_count",
-        4: f"{prefix}_tt_123_count",
+        1: f"{tt_prefix}234_count",
+        2: f"{tt_prefix}134_count",
+        3: f"{tt_prefix}124_count",
+        4: f"{tt_prefix}123_count",
     }
     needed = [four_col, *miss_cols.values()]
     missing = [col for col in needed if col not in df.columns]
@@ -660,7 +675,7 @@ def build_validation_table(
         Dictionary CSV loaded as a DataFrame (must contain trigger counts,
         ``flux_cm2_min``, ``cos_n``, ``efficiencies``).
     prefix : str
-        Trigger-column prefix (e.g. ``"raw"``).
+        Trigger-column prefix (e.g. ``"raw"`` or ``"raw_tt_"``).
     eff_method : str
         Efficiency estimator name (``"four_over_three_plus_four"`` or
         ``"one_minus_three_over_four"``).
@@ -670,16 +685,17 @@ def build_validation_table(
     DataFrame with estimated/simulated efficiencies, residuals and
     relative errors for each plane.
     """
-    four_col = f"{prefix}_tt_1234_count"
+    tt_prefix = normalize_tt_prefix(prefix)
+    four_col = f"{tt_prefix}1234_count"
     miss_cols = {
-        1: f"{prefix}_tt_234_count",
-        2: f"{prefix}_tt_134_count",
-        3: f"{prefix}_tt_124_count",
-        4: f"{prefix}_tt_123_count",
+        1: f"{tt_prefix}234_count",
+        2: f"{tt_prefix}134_count",
+        3: f"{tt_prefix}124_count",
+        4: f"{tt_prefix}123_count",
     }
     rate_cols = [
         col for col in df.columns
-        if col.startswith(f"{prefix}_tt_") and col.endswith("_rate_hz")
+        if col.startswith(tt_prefix) and col.endswith("_rate_hz")
     ]
 
     needed = [four_col, *miss_cols.values(), "flux_cm2_min", "cos_n",

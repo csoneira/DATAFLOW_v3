@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import math
 
 import numpy as np
 import pandas as pd
@@ -167,6 +168,9 @@ def plot_threshold_summary(
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
+        # Publication-oriented diagnostics: front/back timing and charge asymmetry by plane.
+        plot_frontback_asymmetry_diagnostics(df, pdf, stage_label="STEP 8")
+
         # --- Add muon differential flux vs zenith-angle (compute locally like STEP_1) ---
         try:
             added = _plot_muon_differential_flux_vs_angle_local(df, pdf, sample_path=sample_path)
@@ -176,8 +180,356 @@ def plot_threshold_summary(
             print('Step 8 plots: muon differential flux page failed to generate (exception).')
 
 
+def _collect_frontback_plane_arrays(df: pd.DataFrame, plane_idx: int) -> tuple[np.ndarray, np.ndarray]:
+    tdiff_parts: list[np.ndarray] = []
+    qasym_parts: list[np.ndarray] = []
+    for strip_idx in range(1, 5):
+        tf_col = f"T_front_{plane_idx}_s{strip_idx}"
+        tb_col = f"T_back_{plane_idx}_s{strip_idx}"
+        if tf_col in df.columns and tb_col in df.columns:
+            tf = df[tf_col].to_numpy(dtype=float)
+            tb = df[tb_col].to_numpy(dtype=float)
+            mask_t = np.isfinite(tf) & np.isfinite(tb) & (tf != 0) & (tb != 0)
+            if np.any(mask_t):
+                tdiff_parts.append(tf[mask_t] - tb[mask_t])
+
+        qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+        qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+        if qf_col in df.columns and qb_col in df.columns:
+            qf = df[qf_col].to_numpy(dtype=float)
+            qb = df[qb_col].to_numpy(dtype=float)
+            den = qf + qb
+            mask_q = np.isfinite(qf) & np.isfinite(qb) & (den > 0.0)
+            if np.any(mask_q):
+                qasym_parts.append((qf[mask_q] - qb[mask_q]) / den[mask_q])
+
+    tdiff = np.concatenate(tdiff_parts) if tdiff_parts else np.array([], dtype=float)
+    qasym = np.concatenate(qasym_parts) if qasym_parts else np.array([], dtype=float)
+    return tdiff, qasym
+
+
+def plot_frontback_asymmetry_diagnostics(df: pd.DataFrame, pdf: PdfPages, stage_label: str) -> None:
+    fig_t, axes_t = plt.subplots(2, 2, figsize=(11, 8))
+    fig_q, axes_q = plt.subplots(2, 2, figsize=(11, 8))
+    summary_rows: list[tuple[int, float, float, int, float, float, int]] = []
+
+    for plane_idx in range(1, 5):
+        ax_t = axes_t[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        ax_q = axes_q[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        tdiff, qasym = _collect_frontback_plane_arrays(df, plane_idx)
+
+        if tdiff.size > 0:
+            lo_t, hi_t = np.quantile(tdiff, [0.01, 0.99])
+            if not np.isfinite(lo_t) or not np.isfinite(hi_t) or lo_t >= hi_t:
+                lo_t, hi_t = float(np.min(tdiff)), float(np.max(tdiff))
+            ax_t.hist(tdiff, bins=100, range=(lo_t, hi_t), color="tab:blue", alpha=0.8)
+            mu_t = float(np.mean(tdiff))
+            sig_t = float(np.std(tdiff))
+            ax_t.axvline(mu_t, color="black", linestyle="--", linewidth=1.0)
+            ax_t.set_title(f"Plane {plane_idx}: T_front - T_back")
+            ax_t.set_xlabel("ns")
+            ax_t.set_ylabel("Counts")
+            ax_t.text(
+                0.03,
+                0.95,
+                f"N={tdiff.size}\nμ={mu_t:.3f} ns\nσ={sig_t:.3f} ns",
+                transform=ax_t.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+            )
+        else:
+            mu_t = float("nan")
+            sig_t = float("nan")
+            ax_t.axis("off")
+
+        if qasym.size > 0:
+            ax_q.hist(qasym, bins=80, range=(-1.0, 1.0), color="tab:orange", alpha=0.8)
+            mu_q = float(np.mean(qasym))
+            sig_q = float(np.std(qasym))
+            ax_q.axvline(mu_q, color="black", linestyle="--", linewidth=1.0)
+            ax_q.set_title(f"Plane {plane_idx}: (Qf-Qb)/(Qf+Qb)")
+            ax_q.set_xlabel("Charge asymmetry")
+            ax_q.set_ylabel("Counts")
+            ax_q.text(
+                0.03,
+                0.95,
+                f"N={qasym.size}\nμ={mu_q:.3f}\nσ={sig_q:.3f}",
+                transform=ax_q.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+            )
+        else:
+            mu_q = float("nan")
+            sig_q = float("nan")
+            ax_q.axis("off")
+
+        summary_rows.append((plane_idx, mu_t, sig_t, int(tdiff.size), mu_q, sig_q, int(qasym.size)))
+
+    fig_t.suptitle(f"{stage_label}: front-back timing symmetry by plane")
+    fig_t.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    pdf.savefig(fig_t, dpi=150)
+    plt.close(fig_t)
+
+    fig_q.suptitle(f"{stage_label}: front-back charge asymmetry by plane")
+    fig_q.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    pdf.savefig(fig_q, dpi=150)
+    plt.close(fig_q)
+
+    x = np.array([r[0] for r in summary_rows], dtype=float)
+    mu_t = np.array([r[1] for r in summary_rows], dtype=float)
+    sig_t = np.array([r[2] for r in summary_rows], dtype=float)
+    n_t = np.array([max(r[3], 1) for r in summary_rows], dtype=float)
+    mu_q = np.array([r[4] for r in summary_rows], dtype=float)
+    sig_q = np.array([r[5] for r in summary_rows], dtype=float)
+    n_q = np.array([max(r[6], 1) for r in summary_rows], dtype=float)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    ok_t = np.isfinite(mu_t) & np.isfinite(sig_t)
+    if np.any(ok_t):
+        axes[0].errorbar(
+            x[ok_t],
+            mu_t[ok_t],
+            yerr=sig_t[ok_t] / np.sqrt(n_t[ok_t]),
+            fmt="o-",
+            color="tab:blue",
+            capsize=3,
+            label="Mean ± SEM",
+        )
+        axes[0].axhline(0.0, color="gray", linestyle="--", linewidth=1.0)
+        axes[0].set_ylabel("T_front - T_back (ns)")
+        axes[0].set_title("Timing symmetry summary")
+        axes[0].set_xticks([1, 2, 3, 4])
+        axes[0].set_xlabel("Plane")
+        axes[0].grid(alpha=0.25)
+        axes[0].legend(loc="best", fontsize=9)
+    else:
+        axes[0].axis("off")
+
+    ok_q = np.isfinite(mu_q) & np.isfinite(sig_q)
+    if np.any(ok_q):
+        axes[1].errorbar(
+            x[ok_q],
+            mu_q[ok_q],
+            yerr=sig_q[ok_q] / np.sqrt(n_q[ok_q]),
+            fmt="o-",
+            color="tab:orange",
+            capsize=3,
+            label="Mean ± SEM",
+        )
+        axes[1].axhline(0.0, color="gray", linestyle="--", linewidth=1.0)
+        axes[1].set_ylabel("(Qf-Qb)/(Qf+Qb)")
+        axes[1].set_title("Charge asymmetry summary")
+        axes[1].set_xticks([1, 2, 3, 4])
+        axes[1].set_xlabel("Plane")
+        axes[1].grid(alpha=0.25)
+        axes[1].legend(loc="best", fontsize=9)
+    else:
+        axes[1].axis("off")
+
+    fig.suptitle(f"{stage_label}: front/back summary metrics")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+
 def _plot_muon_differential_flux_vs_angle_local(df: pd.DataFrame, pdf: PdfPages, sample_path: Path | None = None) -> bool:
-    pass
+    """Self-contained muon differential flux plot (same logic as STEP_1)."""
+    if "Theta_gen" not in df.columns or "T_thick_s" not in df.columns:
+        return False
+    if "X_gen" not in df.columns or "Y_gen" not in df.columns:
+        return False
+
+    t0_all = df["T_thick_s"].to_numpy(dtype=float)
+    if not np.isfinite(t0_all).any():
+        return False
+    sec_min = int(np.floor(np.nanmin(t0_all)))
+    sec_max = int(np.floor(np.nanmax(t0_all)))
+    if sec_max <= sec_min + 1:
+        return False
+    inner_mask = (np.floor(t0_all).astype(int) > sec_min) & (np.floor(t0_all).astype(int) < sec_max) & np.isfinite(t0_all)
+
+    theta_all = df["Theta_gen"].to_numpy(dtype=float)
+    theta = theta_all[np.isfinite(theta_all) & (theta_all >= 0.0) & (theta_all <= np.pi / 2.0) & inner_mask]
+    if theta.size < 20:
+        return False
+
+    sec_min_inner = sec_min + 1
+    sec_max_inner = sec_max - 1
+    duration_s = float(sec_max_inner - sec_min_inner + 1)
+    if not np.isfinite(duration_s) or duration_s <= 0.0:
+        return False
+    duration_min = duration_s / 60.0
+
+    x_all = df["X_gen"].to_numpy(dtype=float)
+    y_all = df["Y_gen"].to_numpy(dtype=float)
+    x_vals = x_all[np.isfinite(x_all) & inner_mask]
+    y_vals = y_all[np.isfinite(y_all) & inner_mask]
+    if x_vals.size < 2 or y_vals.size < 2:
+        return False
+    x_spread_mm = float(np.max(x_vals) - np.min(x_vals))
+    y_spread_mm = float(np.max(y_vals) - np.min(y_vals))
+    area_cm2 = (x_spread_mm * y_spread_mm) / 100.0
+    if not np.isfinite(area_cm2) or area_cm2 <= 0.0:
+        return False
+
+    theta_edges = np.linspace(0.0, np.pi / 2.0, 31)
+    theta_centers = 0.5 * (theta_edges[1:] + theta_edges[:-1])
+    counts, _ = np.histogram(theta, bins=theta_edges)
+    delta_omega = 2.0 * np.pi * (np.cos(theta_edges[:-1]) - np.cos(theta_edges[1:]))
+    valid = (counts > 0) & np.isfinite(delta_omega) & (delta_omega > 0.0)
+    if not np.any(valid):
+        return False
+
+    theta_deg = np.degrees(theta_centers[valid])
+    delta_omega_valid = delta_omega[valid]
+    counts_valid = counts[valid].astype(float)
+    flux = counts_valid / (duration_min * area_cm2 * delta_omega_valid)
+    flux_err = np.sqrt(counts_valid) / (duration_min * area_cm2 * delta_omega_valid)
+
+    fig, (ax_top, ax_bottom) = plt.subplots(
+        2,
+        1,
+        figsize=(8.5, 8.8),
+        sharex=True,
+        gridspec_kw={"height_ratios": [2.0, 1.1]},
+    )
+    ax_top.errorbar(
+        theta_deg,
+        flux,
+        yerr=flux_err,
+        fmt="o",
+        markersize=4,
+        linewidth=1.0,
+        color="black",
+        ecolor="gray",
+        capsize=2,
+        label=(f"Sample (N={theta.size}, T={duration_min:.3f} min, Axy={area_cm2:.2f} cm^2)"),
+    )
+
+    n_fit_out: float | None = None
+    i0_fit_out: float | None = None
+    fit_theta = theta_centers[valid]
+    fit_cos = np.cos(fit_theta)
+    fit_ok = (counts_valid > 0.0) & (flux > 0.0) & (fit_cos > 0.0)
+    if np.count_nonzero(fit_ok) >= 3:
+        x_fit = np.log(np.clip(fit_cos[fit_ok], 1e-12, 1.0))
+        y_fit = np.log(flux[fit_ok])
+        w_fit = counts_valid[fit_ok]
+        sw = float(np.sum(w_fit))
+        sx = float(np.sum(w_fit * x_fit))
+        sy = float(np.sum(w_fit * y_fit))
+        sxx = float(np.sum(w_fit * x_fit * x_fit))
+        sxy = float(np.sum(w_fit * x_fit * y_fit))
+        den = sw * sxx - sx * sx
+        if np.isfinite(den) and abs(den) > 1e-15 and sw > 0.0:
+            n_fit = (sw * sxy - sx * sy) / den
+            ln_i0 = (sy - n_fit * sx) / sw
+            if np.isfinite(n_fit) and np.isfinite(ln_i0):
+                n_fit_out = float(n_fit)
+                i0_fit_out = float(np.exp(ln_i0))
+                theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
+                curve = i0_fit_out * np.power(np.clip(np.cos(theta_curve), 1e-12, 1.0), n_fit_out)
+                ax_top.plot(
+                    np.degrees(theta_curve),
+                    curve,
+                    color="tab:orange",
+                    linewidth=1.4,
+                    linestyle="--",
+                    label=rf"Fit: $I_0\cos^n(\theta)$, $I_0={i0_fit_out:.3e}$, $n={n_fit_out:.2f}$",
+                )
+
+    try:
+        param_path = Path(__file__).resolve().parents[3] / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"
+        cos_n = 2.0
+        flux_F = float("nan")
+        if param_path.exists():
+            pm = pd.read_csv(param_path)
+            step1_id = None
+            if sample_path is not None:
+                try:
+                    if sample_path.name.endswith(".chunks.json"):
+                        meta = json.loads(sample_path.read_text()).get("metadata", {})
+                    else:
+                        meta_path = sample_path.with_suffix(sample_path.suffix + ".meta.json")
+                        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+                except Exception:
+                    meta = {}
+                cfg = meta.get("config", {}) if isinstance(meta, dict) else {}
+                step1_id = cfg.get("step_1_id") or meta.get("step_1_id")
+            rows = pm[pm["step_1_id"].astype(str) == str(step1_id)] if step1_id is not None else pm
+            if rows.empty:
+                rows = pm
+            row = rows.iloc[0]
+            cos_n = float(row.get("cos_n", 2.0))
+            flux_F = float(row.get("flux_cm2_min", float("nan")))
+        if np.isfinite(flux_F):
+            i0_theory = float(flux_F * (cos_n + 1.0) / (2.0 * math.pi))
+            theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
+            model_curve = i0_theory * np.power(np.clip(np.cos(theta_curve), 1e-12, 1.0), cos_n)
+            ax_top.plot(
+                np.degrees(theta_curve),
+                model_curve,
+                color="crimson",
+                linewidth=1.6,
+                label=rf"Theory: $I_0\cos^n(\theta)$, $I_0={i0_theory:.4g}$, $n={cos_n:.2f}$",
+            )
+    except Exception:
+        pass
+
+    cumulative_flux = np.cumsum(flux * delta_omega_valid)
+    cumulative_flux_err = np.sqrt(np.cumsum((flux_err * delta_omega_valid) ** 2))
+    theta_upper_deg = np.degrees(theta_edges[1:])[valid]
+    ax_bottom.step(
+        theta_upper_deg,
+        cumulative_flux,
+        where="post",
+        color="navy",
+        linewidth=1.4,
+        label=r"Data cumulative: $\int_0^\theta I(\theta')\,d\Omega$",
+    )
+    ax_bottom.fill_between(
+        theta_upper_deg,
+        np.maximum(0.0, cumulative_flux - cumulative_flux_err),
+        cumulative_flux + cumulative_flux_err,
+        step="post",
+        color="steelblue",
+        alpha=0.25,
+        label="Data 1-sigma band",
+    )
+
+    if n_fit_out is not None and i0_fit_out is not None:
+        theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
+        cum_fit = (
+            2.0
+            * math.pi
+            * i0_fit_out
+            / (n_fit_out + 1.0)
+            * (1.0 - np.power(np.clip(np.cos(theta_curve), 0.0, 1.0), n_fit_out + 1.0))
+        )
+        ax_bottom.plot(np.degrees(theta_curve), cum_fit, color="tab:orange", linestyle="--", linewidth=1.2, label="Fit cumulative")
+
+    ax_top.set_title("Muon differential flux vs zenith angle (area-normalized)")
+    ax_top.set_ylabel("I(theta) [min^-1 cm^-2 sr^-1]")
+    ax_top.set_xlim(0.0, 90.0)
+    ax_top.set_ylim(bottom=0.0)
+    ax_top.grid(alpha=0.3)
+    ax_top.legend(loc="upper right")
+
+    ax_bottom.set_xlabel("Zenith angle (deg)")
+    ax_bottom.set_ylabel("Accumulated flux\n[min^-1 cm^-2]")
+    ax_bottom.set_xlim(0.0, 90.0)
+    ax_bottom.set_ylim(bottom=0.0)
+    ax_bottom.grid(alpha=0.3)
+    ax_bottom.legend(loc="upper left")
+
+    fig.tight_layout()
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+    return True
 
 
 def plot_tt_xy_histograms(df: pd.DataFrame, pdf: PdfPages) -> None:
@@ -230,155 +582,6 @@ def plot_tt_xy_histograms(df: pd.DataFrame, pdf: PdfPages) -> None:
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
-    """Self-contained muon differential flux plot (same logic as STEP_1).
-
-    - uses inner-second trimming
-    - computes area from X_gen/Y_gen when available
-    - divides by per-bin solid angle (ΔΩ)
-    - overlays theoretical model using `param_mesh.csv` and `sample_path`
-    """
-    if "Theta_gen" not in df.columns or "T_thick_s" not in df.columns:
-        return False
-    if "X_gen" not in df.columns or "Y_gen" not in df.columns:
-        return False
-
-    # inner-second trimming
-    t0_all = df["T_thick_s"].to_numpy(dtype=float)
-    if not np.isfinite(t0_all).any():
-        return False
-    sec_min = int(np.floor(np.nanmin(t0_all)))
-    sec_max = int(np.floor(np.nanmax(t0_all)))
-    if sec_max <= sec_min + 1:
-        return False
-    inner_mask = (np.floor(t0_all).astype(int) > sec_min) & (np.floor(t0_all).astype(int) < sec_max) & np.isfinite(t0_all)
-
-    theta_all = df["Theta_gen"].to_numpy(dtype=float)
-    theta = theta_all[np.isfinite(theta_all) & (theta_all >= 0.0) & (theta_all <= np.pi / 2.0) & inner_mask]
-    if theta.size < 20:
-        return False
-
-    # duration
-    sec_min_inner = sec_min + 1
-    sec_max_inner = sec_max - 1
-    duration_s = float(sec_max_inner - sec_min_inner + 1)
-    if not np.isfinite(duration_s) or duration_s <= 0.0:
-        return False
-    duration_min = duration_s / 60.0
-
-    # compute area from X_gen/Y_gen spread (mm -> cm^2)
-    x_all = df["X_gen"].to_numpy(dtype=float)
-    y_all = df["Y_gen"].to_numpy(dtype=float)
-    x_vals = x_all[np.isfinite(x_all) & inner_mask]
-    y_vals = y_all[np.isfinite(y_all) & inner_mask]
-    if x_vals.size < 2 or y_vals.size < 2:
-        return False
-    x_spread_mm = float(np.max(x_vals) - np.min(x_vals))
-    y_spread_mm = float(np.max(y_vals) - np.min(y_vals))
-    area_mm2 = x_spread_mm * y_spread_mm
-    area_cm2 = area_mm2 / 100.0
-    if not np.isfinite(area_cm2) or area_cm2 <= 0.0:
-        return False
-
-    # histogram + solid-angle per bin
-    theta_edges = np.linspace(0.0, np.pi / 2.0, 31)
-    theta_centers = 0.5 * (theta_edges[1:] + theta_edges[:-1])
-    counts, _ = np.histogram(theta, bins=theta_edges)
-    delta_omega = 2.0 * np.pi * (np.cos(theta_edges[:-1]) - np.cos(theta_edges[1:]))
-    valid = (counts > 0) & np.isfinite(delta_omega) & (delta_omega > 0.0)
-    if not np.any(valid):
-        return False
-
-    theta_deg = np.degrees(theta_centers[valid])
-    delta_omega_valid = delta_omega[valid]
-    counts_valid = counts[valid].astype(float)
-    dndt_dadomega = counts_valid / (duration_min * area_cm2 * delta_omega_valid)
-    dndt_dadomega_err = np.sqrt(counts_valid) / (duration_min * area_cm2 * delta_omega_valid)
-
-    # plot (same layout as STEP_1/STEP_10)
-    fig, (ax_top, ax_bottom) = plt.subplots(2, 1, figsize=(8.5, 8.8), sharex=True, gridspec_kw={"height_ratios": [2.0, 1.1]})
-    ax_top.errorbar(theta_deg, dndt_dadomega, yerr=dndt_dadomega_err, fmt="o", markersize=4, linewidth=1.0, color="black", ecolor="gray", capsize=2,
-                    label=(f"Sample (N={theta.size}, T={duration_min:.3f} min, Axy={area_cm2:.2f} cm^2)"))
-
-    # overlay theory from param_mesh.csv (use sample_path to select row)
-    try:
-        param_path = Path(__file__).resolve().parents[3] / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"
-        cos_n = 2.0
-        flux_F = None
-        if param_path.exists():
-            pm = pd.read_csv(param_path)
-            step1_id = None
-            if sample_path is not None:
-                try:
-                    if sample_path.name.endswith('.chunks.json'):
-                        meta = json.loads(sample_path.read_text()).get('metadata', {})
-                    else:
-                        meta_path = sample_path.with_suffix(sample_path.suffix + '.meta.json')
-                        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-                except Exception:
-                    meta = {}
-                cfg = meta.get('config', {}) if isinstance(meta, dict) else {}
-                step1_id = cfg.get('step_1_id') or meta.get('step_1_id')
-            rows = pm[pm['step_1_id'].astype(str) == str(step1_id)] if step1_id is not None else pm
-            if rows.empty:
-                rows = pm
-            row = rows.iloc[0]
-            cos_n = float(row.get('cos_n', 2.0))
-            flux_F = float(row.get('flux_cm2_min', float('nan')))
-        if flux_F is None or not np.isfinite(flux_F):
-            flux_F = None
-        if flux_F is not None:
-            n_fixed = float(cos_n)
-            i0_fixed = float(flux_F * (n_fixed + 1.0) / (2.0 * math.pi))
-            theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
-            cos_curve = np.clip(np.cos(theta_curve), 1e-12, 1.0)
-            model_curve = i0_fixed * np.power(cos_curve, n_fixed)
-            fit_label = (r"Theory: $I(\\theta)=I_0\\cdot\\cos^{n}(\\theta)$" + "\\n" + rf"$I_0={i0_fixed:.4g}$ min$^{{-1}}$ cm$^{{-2}}$ sr$^{{-1}}$, $n={n_fixed:.2f}$")
-            ax_top.plot(np.degrees(theta_curve), model_curve, color="crimson", linewidth=1.6, label=fit_label)
-    except Exception:
-        pass
-
-    cumulative_flux = np.cumsum(dndt_dadomega * delta_omega_valid)
-    cumulative_flux_err = np.sqrt(np.cumsum((dndt_dadomega_err * delta_omega_valid) ** 2))
-    theta_upper_deg = np.degrees(theta_edges[1:])[valid]
-    ax_bottom.step(theta_upper_deg, cumulative_flux, where="post", color="navy", linewidth=1.4, label=r"Data cumulative: $\int_0^\theta I(\theta')\,d\Omega$")
-    ax_bottom.fill_between(theta_upper_deg, np.maximum(0.0, cumulative_flux - cumulative_flux_err), cumulative_flux + cumulative_flux_err, step="post", color="steelblue", alpha=0.25, label="Data 1-sigma band")
-
-    # dashed horizontal y-line for flux parameter (if available)
-    if 'flux_F' in locals() and flux_F is not None:
-        try:
-            flux_param = float(flux_F)
-        except Exception:
-            flux_param = None
-        if flux_param is not None and np.isfinite(flux_param):
-            ax_bottom.axhline(flux_param, color="crimson", linestyle="--", linewidth=1.2, label=f"F (flux_cm2_min) = {flux_param:.4g} min^-1 cm^-2")
-
-    # plot theory cumulative if theory known
-    try:
-        if 'i0_fixed' in locals() and 'n_fixed' in locals():
-            theta_curve = np.linspace(0.0, np.pi / 2.0 - 1e-4, 400)
-            cum_model = (2.0 * np.pi * i0_fixed / (n_fixed + 1.0) * (1.0 - np.power(np.clip(np.cos(theta_curve), 0.0, 1.0), n_fixed + 1.0)))
-            ax_bottom.plot(np.degrees(theta_curve), cum_model, color="crimson", linewidth=1.5, label="Theory cumulative from I0*cos^n(theta)")
-    except Exception:
-        pass
-
-    ax_top.set_title("Muon differential flux vs zenith angle (area-normalized)")
-    ax_top.set_ylabel("I(theta) [min^-1 cm^-2 sr^-1]")
-    ax_top.set_xlim(0.0, 90.0)
-    ax_top.set_ylim(bottom=0.0)
-    ax_top.grid(alpha=0.3)
-    ax_top.legend(loc="upper right")
-
-    ax_bottom.set_xlabel("Zenith angle (deg)")
-    ax_bottom.set_ylabel("Accumulated flux\n[min^-1 cm^-2]")
-    ax_bottom.set_xlim(0.0, 90.0)
-    ax_bottom.set_ylim(bottom=0.0)
-    ax_bottom.grid(alpha=0.3)
-    ax_bottom.legend(loc="upper left")
-
-    fig.tight_layout()
-    pdf.savefig(fig, dpi=150)
-    plt.close(fig)
-    return True
 
 
 def find_step_manifest_for_sample(sample_path: Path, step: int) -> Path | None:

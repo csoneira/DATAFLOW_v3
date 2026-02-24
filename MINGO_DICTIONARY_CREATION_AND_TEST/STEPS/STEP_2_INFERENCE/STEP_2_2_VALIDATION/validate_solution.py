@@ -30,6 +30,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.tri as mtri
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 import numpy as np
 import pandas as pd
 
@@ -515,9 +516,10 @@ def _make_plots(
             ax.set_ylim(relerr_plot_min, relerr_plot_max)
             # Set x-axis to linear and force integer ticks
             ax.set_xscale("linear")
-            from matplotlib.ticker import MaxNLocator
             ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune=None))
-            ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, pos: f"{int(x):,}" if x >= 1 else f"{x:g}"))
+            ax.xaxis.set_major_formatter(
+                FuncFormatter(lambda x, pos: f"{int(x):,}" if x >= 1 else f"{x:g}")
+            )
             fig.tight_layout()
             _save_figure(fig, PLOTS_DIR / f"error_vs_events_{pname}.png")
             plt.close(fig)

@@ -61,7 +61,7 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 */5 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.cron.log 2>&1
 
 # Emergency saturation guard: if too many duplicate/pending DATAFLOW jobs pile up, stop them
-*/2 * * * * PROC_THRESHOLD=25 DUP_THRESHOLD=5 LOAD_FACTOR=2.0 GRACE_SECONDS=6 /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/stop_execution.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/stop_execution.log 2>&1
+*/2 * * * * PROC_THRESHOLD=25 DUP_THRESHOLD=5 LOAD_FACTOR=2.0 GRACE_SECONDS=6 /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/stop_execution.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/stop_execution.log 2>&1
 
 # Truncate cron logs nightly at 23:00 (keep recent lines only)
 */15 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/ERASE_ALL_CRON_LOGS/erase_cron_logs.log 2>&1
@@ -95,21 +95,26 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
 
-# Single serialized simulation cycle.
-# Order is fixed inside the script: STEP_0 -> run_step(all, strict 10->1 closure) -> STEP_FINAL.
-# Trigger every minute; actual cadence is gated by:
-# MINGO_DIGITAL_TWIN/CONFIG_FILES/sim_main_pipeline_frequency.conf
-* * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/run_main_simulation_cycle.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log 2>&1
-# additional guard: run the final formatter independently in case the
-# wrapper version ever fails to invoke it (or if someone is driving the
-# pipeline via run_step.sh directly).  this job uses a **separate lock** so
-# it never blocks the main-cycle lock; the wrapper itself will also acquire
-# the same final lock when it reaches the last stage and will skip if the
-# standalone invocation is already running.
+# Main simulation controller (internal lock model).
+# The script now uses separate internal locks:
+#   - sim_enqueue.lock    (fast STEP_0 enqueue phase)
+#   - sim_processing.lock (run_step + housekeeping)
+#   - sim_final.lock      (STEP_FINAL owner lock)
+# Do not wrap this cron entry in an external flock; that would re-introduce
+# enqueue starvation whenever processing is long.
+#
+# STEP_FINAL ownership policy:
+#   - run_main is configured below with SIM_PROCESSING_RUN_STEP_FINAL=0
+#   - standalone STEP_FINAL cron is the sole owner (next line)
+# This avoids duplicate STEP_FINAL attempts and repetitive lock-busy noise.
+# Optional alert wiring (for run_step persistent stuck/broken alerts):
+#   - set SIM_ALERT_TELEGRAM_CHAT_IDS="id1,id2" inline below, or
+#   - populate OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/ALERT_CHAT_IDS.txt
+* * * * * SIM_PROCESSING_RUN_STEP_FINAL=0 /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ORCHESTRATOR/core/run_main_simulation_cycle.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log 2>&1
 * * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py --config $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/config_step_final_physics.yaml >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/STEP_FINAL/step_final_cron.log 2>&1
 
-# Ensure simulation hashes (daily, serialized with main cycle).
-25 6 * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_main_pipeline.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ANCILLARY/ensure_sim_hashes.py --apply >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/ensure_sim_hashes.log 2>&1
+# Ensure simulation hashes (daily, serialized with processing phase).
+25 6 * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_processing.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/ensure_sim_hashes.py --apply --run-validate-quick >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/ensure_sim_hashes.log 2>&1
 
 
 # --------------------------------------------------------------------------------
@@ -282,7 +287,7 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 */10 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/create_metadata_plots.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/create_metadata_plots.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/create_metadata_plots.log 2>&1
 
 # SIMULATION PLOTTERS
-*/30 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/run_simulation_plots.lock /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/PLOTTERS/run_simulation_plots.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/run_simulation_plots.log 2>&1
+*/30 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/run_simulation_plots.lock /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/PLOTTERS/EXECUTION/run_simulation_plots.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/run_simulation_plots.log 2>&1
 
 
 # --------------------------------------------------------------------------------

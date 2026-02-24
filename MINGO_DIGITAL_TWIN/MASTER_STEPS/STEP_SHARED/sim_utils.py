@@ -1,860 +1,130 @@
-"""Shared helpers for sim-run bookkeeping, metadata, chunked I/O, and geometry utilities.
-from __future__ import annotations
+"""Backward-compatible facade for STEP_SHARED simulation utilities.
+
+Implementation has been split into focused modules:
+- sim_utils_config.py
+- sim_utils_geometry.py
+- sim_utils_io.py
+- sim_utils_metadata.py
+- sim_utils_mesh.py
+- sim_utils_registry.py
 """
 
-from dataclasses import dataclass
-from contextlib import contextmanager
-import fcntl
-import hashlib
-import os
-import random
-import shutil
-import tempfile
-from pathlib import Path
-from typing import Dict, Iterable, List, Tuple, Optional
-
-import numpy as np
-import pandas as pd
-import yaml
-import json
-import time
-from datetime import datetime, timezone
-
-
-@dataclass(frozen=True)
-class DetectorBounds:
-    x_min: float
-    x_max: float
-    y_min: float
-    y_max: float
-
-
-DEFAULT_BOUNDS = DetectorBounds(x_min=-150.0, x_max=150.0, y_min=-143.5, y_max=143.5)
-
-Y_WIDTHS = [np.array([63, 63, 63, 98]), np.array([98, 63, 63, 63])]
-
-
-def load_global_home_path() -> str:
-    """Load home_path from the repository-wide CONFIG/config_paths.yaml."""
-    config_file = (
-        Path(__file__).resolve().parents[3]
-        / "CONFIG"
-        / "config_paths.yaml"
-    )
-    if not config_file.exists():
-        return str(Path.home())
-    with config_file.open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle) or {}
-    home_path = config.get("home_path")
-    if not home_path:
-        return str(Path.home())
-    return str(Path(home_path).expanduser())
-
-
-def load_step_configs(
-    physics_path: Path,
-    runtime_path: Optional[Path] = None,
-) -> Tuple[Dict, Dict, Dict, Path]:
-    if not physics_path.exists():
-        raise FileNotFoundError(f"Physics config not found: {physics_path}")
-    if runtime_path is None:
-        if physics_path.name.endswith("_physics.yaml"):
-            runtime_path = physics_path.with_name(physics_path.name.replace("_physics.yaml", "_runtime.yaml"))
-        else:
-            raise ValueError("Runtime config path not provided and cannot infer from physics config name.")
-    if not runtime_path.exists():
-        raise FileNotFoundError(f"Runtime config not found: {runtime_path}")
-
-    with physics_path.open("r") as handle:
-        physics_cfg = yaml.safe_load(handle) or {}
-    with runtime_path.open("r") as handle:
-        runtime_cfg = yaml.safe_load(handle) or {}
-
-    if not isinstance(physics_cfg, dict) or not isinstance(runtime_cfg, dict):
-        raise ValueError("Both physics and runtime configs must be YAML mappings.")
-
-    overlap = set(physics_cfg.keys()) & set(runtime_cfg.keys())
-    if overlap:
-        overlap_list = ", ".join(sorted(overlap))
-        raise ValueError(f"Config keys overlap between physics and runtime configs: {overlap_list}")
-
-    merged_cfg = dict(runtime_cfg)
-    merged_cfg.update(physics_cfg)
-    return physics_cfg, runtime_cfg, merged_cfg, runtime_path
-
-
-def list_station_config_files(root_dir: Path) -> Dict[int, Path]:
-    station_files: Dict[int, Path] = {}
-    for station_dir in sorted(root_dir.glob("STATION_*")):
-        if not station_dir.is_dir():
-            continue
-        station_id = int(station_dir.name.split("_")[-1])
-        csv_files = list(station_dir.glob("input_file_mingo*.csv"))
-        if not csv_files:
-            continue
-        station_files[station_id] = csv_files[0]
-    return station_files
-
-
-def read_station_config(csv_path: Path) -> pd.DataFrame:
-    # Be tolerant of transient empty/truncated files (caused by concurrent updates).
-    attempts = 3
-    for attempt in range(attempts):
-        try:
-            df = pd.read_csv(csv_path, header=1, decimal=",", dtype=str)
-            break
-        except pd.errors.EmptyDataError:
-            if attempt < attempts - 1:
-                time.sleep(0.25)
-                continue
-            raise
-    df.columns = [col.strip() for col in df.columns]
-    for col in ["station", "conf", "P1", "P2", "P3", "P4"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
-
-
-def build_geometry_map(station_df: pd.DataFrame) -> pd.DataFrame:
-    geom_cols = ["P1", "P2", "P3", "P4"]
-    extra_cols = [col for col in ("start", "end") if col in station_df.columns]
-    unique_geoms = (
-        station_df[geom_cols + extra_cols]
-        .dropna()
-        .drop_duplicates()
-        .reset_index(drop=True)
-    )
-    unique_geoms["geometry_id"] = np.arange(len(unique_geoms), dtype=int)
-    merged = station_df.merge(unique_geoms, on=geom_cols, how="left")
-    cols = ["station", "conf", "geometry_id", "P1", "P2", "P3", "P4"] + extra_cols
-    return merged[cols]
-
-
-def build_global_geometry_registry(station_dfs: List[pd.DataFrame]) -> pd.DataFrame:
-    geom_cols = ["P1", "P2", "P3", "P4"]
-    all_geoms = pd.concat([df[geom_cols] for df in station_dfs], ignore_index=True)
-    unique_geoms = all_geoms.dropna().drop_duplicates().reset_index(drop=True)
-    unique_geoms["geometry_id"] = np.arange(len(unique_geoms), dtype=int)
-    return unique_geoms[["geometry_id", "P1", "P2", "P3", "P4"]]
-
-
-def map_station_to_geometry(station_df: pd.DataFrame, registry: pd.DataFrame) -> pd.DataFrame:
-    geom_cols = ["P1", "P2", "P3", "P4"]
-    extra_cols = [col for col in ("start", "end") if col in station_df.columns]
-    merged = station_df.merge(registry, on=geom_cols, how="left")
-    cols = ["station", "conf", "geometry_id", "P1", "P2", "P3", "P4"] + extra_cols
-    return merged[cols]
-
-
-def resolve_sim_run_name(base_dir: Path, sim_run: str, seed: Optional[int] = None) -> str:
-    if sim_run == "latest":
-        return latest_sim_run(base_dir)
-    if sim_run == "random":
-        return random_sim_run(base_dir, seed)
-    return str(sim_run)
-
-
-def load_parameter_mesh(
-    base_dir: Path,
-    sim_run: str,
-    seed: Optional[int] = None,
-) -> Tuple[pd.DataFrame, Path, str]:
-    resolved_sim_run = resolve_sim_run_name(base_dir, sim_run, seed)
-    mesh_dir = base_dir / resolved_sim_run
-    mesh_path = mesh_dir / "param_mesh.csv"
-    if not mesh_path.exists():
-        alt_path = mesh_dir / "parameter_mesh.csv"
-        if alt_path.exists():
-            mesh_path = alt_path
-        else:
-            raise FileNotFoundError(f"param_mesh.csv not found in {mesh_dir}")
-    mesh_df = pd.read_csv(mesh_path)
-    return mesh_df, mesh_dir, resolved_sim_run
-
-
-def find_param_set_id(meta: Optional[Dict]) -> Optional[int]:
-    if not meta or not isinstance(meta, dict):
-        return None
-    if "param_set_id" in meta:
-        try:
-            return int(meta["param_set_id"])
-        except (TypeError, ValueError):
-            return None
-    upstream = meta.get("upstream")
-    if isinstance(upstream, dict):
-        return find_param_set_id(upstream)
-    return None
-
-
-def iter_geometries(geom_map: pd.DataFrame) -> Iterable[Tuple[int, Tuple[float, float, float, float]]]:
-    geom_cols = ["P1", "P2", "P3", "P4"]
-    for geometry_id, group in geom_map.dropna(subset=["geometry_id"]).groupby("geometry_id"):
-        values = group.iloc[0][geom_cols].to_numpy(dtype=float)
-        yield int(geometry_id), (values[0], values[1], values[2], values[3])
-
-
-def get_strip_geometry(plane_idx: int):
-    y_width = Y_WIDTHS[0] if plane_idx in (1, 3) else Y_WIDTHS[1]
-    total_width = np.sum(y_width)
-    offsets = np.cumsum(np.concatenate(([0], y_width[:-1])))
-    lower_edges = -total_width / 2 + offsets
-    upper_edges = lower_edges + y_width
-    centres = (lower_edges + upper_edges) / 2
-    return y_width, centres, lower_edges, upper_edges
-
-
-def num_strips_for_plane(plane_idx: int) -> int:
-    y_width, _, _, _ = get_strip_geometry(plane_idx)
-    return len(y_width)
-
-
-def ensure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def param_mesh_lock_path(mesh_path: Path) -> Path:
-    return mesh_path.with_name(".param_mesh.lock")
-
-
-@contextmanager
-def param_mesh_lock(mesh_path: Path):
-    lock_path = param_mesh_lock_path(mesh_path)
-    ensure_dir(lock_path.parent)
-    with lock_path.open("a+", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
-def write_csv_atomic(df: pd.DataFrame, path: Path, *, index: bool = False) -> None:
-    ensure_dir(path.parent)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=str(path.parent),
-    )
-    os.close(fd)
-    tmp_path = Path(tmp_name)
-    try:
-        df.to_csv(tmp_path, index=index)
-        os.replace(tmp_path, path)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
-
-
-def write_text_atomic(path: Path, text: str, *, encoding: str = "utf-8") -> None:
-    ensure_dir(path.parent)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=str(path.parent),
-    )
-    os.close(fd)
-    tmp_path = Path(tmp_name)
-    try:
-        tmp_path.write_text(text, encoding=encoding)
-        os.replace(tmp_path, path)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
-
-
-def load_with_metadata(path: Path) -> Tuple[pd.DataFrame, Dict]:
-    if path.suffix == ".pkl":
-        df = pd.read_pickle(path)
-        meta = df.attrs.get("metadata", {})
-        meta_path = path.with_suffix(path.suffix + ".meta.json")
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text())
-        return df, meta
-    if path.suffix == ".csv":
-        df = pd.read_csv(path)
-        meta_path = path.with_suffix(path.suffix + ".meta.json")
-        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-        return df, meta
-    raise ValueError(f"Unsupported input format: {path.suffix}")
-
-
-def iter_input_frames(path: Path, chunk_rows: Optional[int]) -> Tuple[Iterable[pd.DataFrame], Dict, bool]:
-    if path.name.endswith(".chunks.json"):
-        manifest_path = path
-    else:
-        manifest_path = path.with_suffix(".chunks.json")
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
-        meta = manifest.get("metadata", {})
-        chunk_paths = manifest.get("chunks", [])
-
-        def _iter() -> Iterable[pd.DataFrame]:
-            for chunk_path in chunk_paths:
-                chunk_file = Path(chunk_path)
-                try:
-                    if chunk_file.suffix == ".csv":
-                        yield pd.read_csv(chunk_file)
-                    elif chunk_file.suffix == ".pkl":
-                        yield pd.read_pickle(chunk_file)
-                    else:
-                        raise ValueError(f"Unsupported chunk format: {chunk_file.suffix}")
-                except (FileNotFoundError, OSError) as exc:
-                    # Transient cleanup/race conditions can remove chunks between
-                    # manifest read and chunk open; skip and continue processing.
-                    print(f"[WARN] Skipping missing/unreadable chunk {chunk_file}: {exc}")
-                    continue
-
-        return _iter(), meta, True
-
-    if chunk_rows and path.suffix == ".csv":
-        meta_path = path.with_suffix(path.suffix + ".meta.json")
-        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-        return pd.read_csv(path, chunksize=int(chunk_rows)), meta, True
-
-    df, meta = load_with_metadata(path)
-    return [df], meta, False
-
-
-def resolve_param_mesh(
-    mesh_dir: Path,
-    mesh_sim_run: Optional[str],
-    seed: Optional[int],
-) -> Tuple[pd.DataFrame, Path]:
-    direct_tokens = {None, "", "none", "direct"}
-    if mesh_sim_run in direct_tokens:
-        mesh_path = mesh_dir / "param_mesh.csv"
-    else:
-        if mesh_sim_run == "latest":
-            mesh_sim_run = latest_sim_run(mesh_dir)
-        elif mesh_sim_run == "random":
-            mesh_sim_run = random_sim_run(mesh_dir, seed)
-        mesh_path = mesh_dir / str(mesh_sim_run) / "param_mesh.csv"
-        if not mesh_path.exists():
-            fallback = mesh_dir / "param_mesh.csv"
-            if fallback.exists():
-                mesh_path = fallback
-    if not mesh_path.exists():
-        raise FileNotFoundError(f"param_mesh.csv not found in {mesh_path.parent}")
-    with param_mesh_lock(mesh_path):
-        mesh = pd.read_csv(mesh_path)
-        mesh = normalize_param_mesh_ids(mesh)
-        if _mesh_ids_changed(mesh, mesh_path):
-            write_csv_atomic(mesh, mesh_path, index=False)
-    return mesh, mesh_path
-
-
-def check_param_mesh_upstream(
-    mesh_dir: Path,
-    mesh_sim_run: Optional[str],
-    intersteps_dir: Path,
-    target_step: int = 3,
-    seed: Optional[int] = None,
-) -> list[dict]:
-    """Return missing upstream SIM_RUNs required by pending rows in param_mesh.csv.
-
-    - mesh_dir: directory that contains `param_mesh.csv`.
-    - mesh_sim_run: pass-through to `resolve_param_mesh` (e.g. 'none', 'latest', 'random').
-    - intersteps_dir: path to INTERSTEPS root (used to locate upstream STEP_* directories).
-    - target_step: the consumer step that expects upstream outputs (e.g. 3 -> check STEP_2_TO_3).
-
-    Returns list[dict] with keys: param_row_index, prefix_ids, expected_sim_run, expected_path
-    """
-    if target_step <= 1:
-        return []
-    mesh, _ = resolve_param_mesh(mesh_dir, mesh_sim_run, seed)
-    if "done" not in mesh.columns:
-        mesh = mesh.copy()
-        mesh["done"] = 0
-    pending = mesh[mesh["done"] != 1].copy()
-
-    upstream_step = target_step - 1
-    upstream_dir = intersteps_dir / f"STEP_{upstream_step}_TO_{upstream_step + 1}"
-
-    missing: list[dict] = []
-    for idx, row in pending.iterrows():
-        prefix_ids: list[str] = []
-        skip = False
-        for i in range(1, upstream_step + 1):
-            col = f"step_{i}_id"
-            val = row.get(col, "")
-            if pd.isna(val) or str(val).strip() == "":
-                skip = True
-                break
-            prefix_ids.append(str(val))
-        if skip:
-            continue
-        sim_run_name = build_sim_run_name(prefix_ids)
-        expected_path = upstream_dir / sim_run_name
-        if not expected_path.exists():
-            missing.append(
-                {
-                    "param_row_index": int(idx),
-                    "prefix_ids": tuple(prefix_ids),
-                    "expected_sim_run": sim_run_name,
-                    "expected_path": str(expected_path),
-                }
-            )
-    return missing
-
-
-def normalize_param_mesh_ids(mesh: pd.DataFrame, width: int = 3) -> pd.DataFrame:
-    normalized = mesh.copy()
-    for idx in range(1, 11):
-        col = f"step_{idx}_id"
-        if col not in normalized.columns:
-            continue
-
-        def _fmt(value: object) -> object:
-            if value is None or (isinstance(value, float) and pd.isna(value)):
-                return pd.NA
-            try:
-                num = int(float(value))
-                return f"{num:0{width}d}"
-            except (TypeError, ValueError):
-                return str(value)
-
-        normalized[col] = normalized[col].apply(_fmt).astype("string")
-    return normalized
-
-
-def _mesh_ids_changed(mesh: pd.DataFrame, mesh_path: Path) -> bool:
-    try:
-        original = pd.read_csv(mesh_path)
-    except OSError:
-        return True
-    for idx in range(1, 11):
-        col = f"step_{idx}_id"
-        if col not in mesh.columns and col not in original.columns:
-            continue
-        left = mesh.get(col, pd.Series(dtype="object")).fillna("").astype(str)
-        right = original.get(col, pd.Series(dtype="object")).fillna("").astype(str)
-        if not left.equals(right):
-            return True
-    return False
-
-
-def select_param_row(
-    mesh: pd.DataFrame,
-    rng: np.random.Generator,
-    param_set_id: Optional[int],
-    param_row_id: Optional[int] = None,
-) -> pd.Series:
-    if "done" not in mesh.columns:
-        mesh = mesh.copy()
-        mesh["done"] = 0
-    if param_row_id is not None:
-        try:
-            row = mesh.loc[int(param_row_id)]
-        except (KeyError, ValueError, TypeError):
-            raise ValueError(f"param_row_id {param_row_id} not found in param_mesh.csv")
-        return row
-    if param_set_id is not None:
-        if "param_set_id" not in mesh.columns:
-            raise ValueError("param_set_id is not available in param_mesh.csv")
-        match = mesh[mesh["param_set_id"] == int(param_set_id)]
-        if match.empty:
-            raise ValueError(f"param_set_id {param_set_id} not found in param_mesh.csv")
-        if int(match.iloc[0].get("done", 0)) == 1:
-            raise ValueError(f"param_set_id {param_set_id} is marked done in param_mesh.csv")
-        return match.iloc[0]
-    available = mesh[mesh["done"] != 1]
-    if "param_set_id" in available.columns:
-        available = available[available["param_set_id"].isna()]
-    if available.empty:
-        raise ValueError("No available param_set rows; all are marked done or already assigned.")
-    idx = int(rng.integers(0, len(available)))
-    return available.iloc[idx]
-
-
-def compute_step_param_id(values: Iterable[float], prefix: str) -> str:
-    rounded = [round(float(val), 6) for val in values]
-    payload = json.dumps({"values": rounded}, sort_keys=True, default=str, ensure_ascii=True)
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    return f"{prefix}:{digest}"
-
-
-def build_sim_run_name(step_ids: Iterable[str]) -> str:
-    parts = []
-    for val in step_ids:
-        if val is None or val == "":
-            continue
-        try:
-            num = int(float(val))
-            parts.append(f"{num:03d}")
-            continue
-        except (ValueError, TypeError):
-            parts.append(str(val))
-    return "SIM_RUN_" + "_".join(parts)
-
-
-def select_next_step_id(
-    output_dir: Path,
-    mesh_dir: Path,
-    mesh_sim_run: Optional[str],
-    step_col: str,
-    prefix_ids: Iterable[str],
-    seed: Optional[int],
-    override_id: Optional[str] = None,
-) -> Optional[str]:
-    def _normalize_step_id(value: object) -> str:
-        if value is None or value == "":
-            return ""
-        try:
-            return f"{int(float(value)):03d}"
-        except (TypeError, ValueError):
-            return str(value)
-
-    if override_id not in (None, "", "auto"):
-        candidates = [str(override_id)]
-    else:
-        try:
-            mesh, _ = resolve_param_mesh(mesh_dir, mesh_sim_run, seed)
-        except FileNotFoundError:
-            mesh = pd.DataFrame()
-        if step_col in mesh.columns:
-            filtered = mesh
-            prefix_list = list(prefix_ids)
-            for idx, prefix_val in enumerate(prefix_list):
-                col = f"step_{idx + 1}_id"
-                if col not in filtered.columns:
-                    break
-                prefix_norm = _normalize_step_id(prefix_val)
-                if not prefix_norm:
-                    continue
-                filtered = filtered[filtered[col].astype(str) == prefix_norm]
-            candidates = sorted(filtered[step_col].dropna().astype(str).unique().tolist())
-        else:
-            candidates = ["001"]
-    if not candidates:
-        return None
-    rng = np.random.default_rng(seed)
-    start_idx = int(rng.integers(0, len(candidates)))
-    order = list(range(start_idx, len(candidates))) + list(range(0, start_idx))
-    for idx in order:
-        step_id = candidates[idx]
-        sim_run = build_sim_run_name(list(prefix_ids) + [step_id])
-        if not (output_dir / sim_run).exists():
-            return step_id
-    return None
-
-
-def register_sim_run(
-    output_dir: Path,
-    step: str,
-    config_path: Path,
-    cfg: Dict,
-    upstream_meta: Optional[Dict],
-    sim_run: str,
-) -> Tuple[str, Path, str, Optional[str], Dict]:
-    config_hash = _json_fingerprint(cfg)
-    upstream_hash = _upstream_fingerprint(upstream_meta)
-    registry = load_sim_run_registry(output_dir)
-    for entry in registry.get("runs", []):
-        if entry.get("sim_run") == sim_run:
-            return sim_run, output_dir / sim_run, config_hash, upstream_hash, registry
-    registry.setdefault("runs", []).append(
-        {
-            "sim_run": sim_run,
-            "created_at": now_iso(),
-            "step": step,
-            "config_path": str(config_path),
-            "config_hash": config_hash,
-            "upstream_hash": upstream_hash,
-            "config": cfg,
-        }
-    )
-    save_sim_run_registry(output_dir, registry)
-    return sim_run, output_dir / sim_run, config_hash, upstream_hash, registry
-
-
-def mark_param_set_done(mesh_path: Path, param_set_id: int) -> None:
-    if not mesh_path.exists():
-        raise FileNotFoundError(f"param_mesh.csv not found at {mesh_path}")
-    with param_mesh_lock(mesh_path):
-        mesh = pd.read_csv(mesh_path)
-        if "done" not in mesh.columns:
-            mesh["done"] = 0
-        match = mesh["param_set_id"] == int(param_set_id)
-        if not match.any():
-            raise ValueError(f"param_set_id {param_set_id} not found in param_mesh.csv")
-        mesh.loc[match, "done"] = 1
-        z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
-        head_cols = ["done", "param_set_id", "param_date"]
-        ordered_cols = [c for c in head_cols if c in mesh.columns] + [
-            c for c in mesh.columns if c not in head_cols and c not in z_cols
-        ] + [c for c in z_cols if c in mesh.columns]
-        mesh = mesh[ordered_cols]
-        write_csv_atomic(mesh, mesh_path, index=False)
-
-
-def extract_param_set(meta: Optional[Dict]) -> Tuple[Optional[int], Optional[str]]:
-    if not isinstance(meta, dict):
-        return None, None
-    if "param_set_id" in meta:
-        return meta.get("param_set_id"), meta.get("param_date")
-    upstream = meta.get("upstream")
-    if isinstance(upstream, dict):
-        return upstream.get("param_set_id"), upstream.get("param_date")
-    return None, None
-
-
-def extract_param_row_id(meta: Optional[Dict]) -> Optional[int]:
-    if not isinstance(meta, dict):
-        return None
-    if "param_row_id" in meta:
-        try:
-            return int(meta.get("param_row_id"))
-        except (TypeError, ValueError):
-            return None
-    upstream = meta.get("upstream")
-    if isinstance(upstream, dict):
-        try:
-            return int(upstream.get("param_row_id"))
-        except (TypeError, ValueError):
-            return None
-    return None
-
-
-def extract_step_param_ids(meta: Optional[Dict]) -> Dict[str, str]:
-    ids: Dict[str, str] = {}
-    current = meta
-    while isinstance(current, dict):
-        for key in ("step_1_param_id", "step_2_param_id", "step_3_param_id"):
-            if key in current and key not in ids:
-                ids[key] = str(current.get(key))
-        current = current.get("upstream")
-    return ids
-
-
-def extract_step_id_chain(meta: Optional[Dict]) -> list[str]:
-    chain: dict[str, str] = {}
-    current = meta
-    while isinstance(current, dict):
-        for idx in range(1, 11):
-            key = f"step_{idx}_id"
-            if key in current and key not in chain:
-                chain[key] = str(current.get(key))
-        current = current.get("upstream")
-    ordered = []
-    for idx in range(1, 11):
-        key = f"step_{idx}_id"
-        if key in chain:
-            ordered.append(chain[key])
-    return ordered
-
-
-def find_latest_data_path(root_dir: Path) -> Optional[Path]:
-    """Return the most recently modified data file under root_dir."""
-    candidates = list(root_dir.rglob("*.pkl"))
-    if candidates:
-        return max(candidates, key=lambda p: p.stat().st_mtime)
-    candidates = list(root_dir.rglob("*.csv"))
-    if candidates:
-        return max(candidates, key=lambda p: p.stat().st_mtime)
-    return None
-
-
-def find_sim_run_dir(path: Path) -> Optional[Path]:
-    """Return the nearest SIM_RUN_* parent directory for a given path."""
-    for parent in path.parents:
-        if parent.name.startswith("SIM_RUN_"):
-            return parent
-    return None
-
-
-def write_chunked_output(
-    df_iter: Iterable[pd.DataFrame],
-    output_dir: Path,
-    out_stem: str,
-    output_format: str,
-    chunk_rows: int,
-    metadata: Dict,
-) -> Tuple[Path, Optional[pd.DataFrame], int]:
-    chunks_dir_name = out_stem if out_stem.endswith("_chunks") else f"{out_stem}_chunks"
-    chunks_dir = output_dir / chunks_dir_name
-    ensure_dir(chunks_dir)
-
-    chunk_paths: List[str] = []
-    buffer: List[pd.DataFrame] = []
-    buffered_rows = 0
-    full_chunks = 0
-    last_chunk: Optional[pd.DataFrame] = None
-
-    def flush_chunk(chunk_df: pd.DataFrame) -> None:
-        nonlocal full_chunks, last_chunk
-        chunk_path = chunks_dir / f"part_{full_chunks:04d}.{output_format}"
-        if output_format == "csv":
-            chunk_df.to_csv(chunk_path, index=False)
-        elif output_format == "pkl":
-            chunk_df.to_pickle(chunk_path)
-        else:
-            raise ValueError(f"Unsupported output_format: {output_format}")
-        chunk_paths.append(str(chunk_path))
-        full_chunks += 1
-        last_chunk = chunk_df
-
-    def maybe_flush_buffer() -> None:
-        nonlocal buffer, buffered_rows
-        while buffered_rows >= chunk_rows:
-            chunk_df = pd.concat(buffer, ignore_index=True)
-            out_df = chunk_df.iloc[:chunk_rows].copy()
-            remainder = chunk_df.iloc[chunk_rows:].copy()
-            flush_chunk(out_df)
-            buffer = [remainder] if not remainder.empty else []
-            buffered_rows = len(remainder)
-
-    total_rows = 0
-    for df in df_iter:
-        if df.empty:
-            continue
-        total_rows += len(df)
-        buffer.append(df)
-        buffered_rows += len(df)
-        maybe_flush_buffer()
-
-    if buffered_rows > 0:
-        flush_chunk(pd.concat(buffer, ignore_index=True))
-        buffered_rows = 0
-        buffer = []
-
-    row_count = total_rows
-    manifest = {
-        "version": 1,
-        "chunks": chunk_paths,
-        "row_count": row_count,
-        "metadata": metadata,
-    }
-    manifest_path = output_dir / f"{out_stem}.chunks.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2))
-    return manifest_path, last_chunk, row_count
-
-
-def save_with_metadata(df: pd.DataFrame, path: Path, metadata: Dict, output_format: str) -> None:
-    meta_path = path.with_suffix(path.suffix + ".meta.json")
-    meta_path.write_text(json.dumps(metadata, indent=2))
-    if output_format == "pkl":
-        df.attrs["metadata"] = metadata
-        df.to_pickle(path)
-    elif output_format == "csv":
-        df.to_csv(path, index=False)
-    else:
-        raise ValueError(f"Unsupported output_format: {output_format}")
-
-
-def _json_fingerprint(payload: Dict) -> str:
-    payload_json = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=True)
-    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
-
-
-def _upstream_fingerprint(upstream_meta: Optional[Dict]) -> Optional[str]:
-    if upstream_meta is None:
-        return None
-    if isinstance(upstream_meta, dict):
-        return _json_fingerprint(
-            {
-                "step": upstream_meta.get("step"),
-                "config_hash": upstream_meta.get("config_hash"),
-                "upstream_hash": upstream_meta.get("upstream_hash"),
-            }
-        )
-    return _json_fingerprint({"upstream_meta": upstream_meta})
-
-
-def load_sim_run_registry(output_dir: Path) -> Dict:
-    registry_path = output_dir / "sim_run_registry.json"
-    if registry_path.exists():
-        return json.loads(registry_path.read_text())
-    return {"version": 1, "runs": []}
-
-
-def save_sim_run_registry(output_dir: Path, registry: Dict) -> None:
-    registry_path = output_dir / "sim_run_registry.json"
-    registry_path.write_text(json.dumps(registry, indent=2))
-
-
-def resolve_sim_run(
-    output_dir: Path,
-    step: str,
-    config_path: Path,
-    cfg: Dict,
-    upstream_meta: Optional[Dict],
-) -> Tuple[str, Path, str, Optional[str], Dict]:
-    config_hash = _json_fingerprint(cfg)
-    upstream_hash = _upstream_fingerprint(upstream_meta)
-    registry = load_sim_run_registry(output_dir)
-
-    for entry in registry.get("runs", []):
-        if entry.get("config_hash") == config_hash and entry.get("upstream_hash") == upstream_hash:
-            sim_run = entry["sim_run"]
-            return sim_run, output_dir / sim_run, config_hash, upstream_hash, registry
-
-    existing = [entry.get("sim_run", "") for entry in registry.get("runs", [])]
-    max_id = 0
-    for run_id in existing:
-        if run_id.startswith("SIM_RUN_"):
-            try:
-                max_id = max(max_id, int(run_id.split("_")[-1]))
-            except ValueError:
-                continue
-    next_id = max_id + 1
-    sim_run = f"SIM_RUN_{next_id:04d}"
-    registry.setdefault("runs", []).append(
-        {
-            "sim_run": sim_run,
-            "created_at": now_iso(),
-            "step": step,
-            "config_path": str(config_path),
-            "config_hash": config_hash,
-            "upstream_hash": upstream_hash,
-            "config": cfg,
-        }
-    )
-    save_sim_run_registry(output_dir, registry)
-    return sim_run, output_dir / sim_run, config_hash, upstream_hash, registry
-
-
-def find_sim_run(output_dir: Path, cfg: Dict, upstream_meta: Optional[Dict]) -> Optional[str]:
-    config_hash = _json_fingerprint(cfg)
-    upstream_hash = _upstream_fingerprint(upstream_meta)
-    registry = load_sim_run_registry(output_dir)
-    for entry in registry.get("runs", []):
-        if entry.get("config_hash") == config_hash and entry.get("upstream_hash") == upstream_hash:
-            sim_run = entry.get("sim_run")
-            if sim_run and (output_dir / sim_run).exists():
-                return sim_run
-    return None
-
-
-def latest_sim_run(output_dir: Path) -> str:
-    registry_path = output_dir / "sim_run_registry.json"
-    if not registry_path.exists():
-        raise FileNotFoundError("sim_run_registry.json not found in input_dir.")
-    registry = json.loads(registry_path.read_text())
-    runs = registry.get("runs", [])
-    if not runs:
-        raise FileNotFoundError("No SIM_RUN entries found in input_dir registry.")
-    runs_sorted = sorted(runs, key=lambda r: r.get("created_at", ""))
-    return runs_sorted[-1]["sim_run"]
-
-
-def random_sim_run(output_dir: Path, seed: Optional[int] = None) -> str:
-    registry_path = output_dir / "sim_run_registry.json"
-    if not registry_path.exists():
-        raise FileNotFoundError("sim_run_registry.json not found in input_dir.")
-    registry = json.loads(registry_path.read_text())
-    runs = [entry.get("sim_run") for entry in registry.get("runs", []) if entry.get("sim_run")]
-    if not runs:
-        raise FileNotFoundError("No SIM_RUN entries found in input_dir registry.")
-    runs_sorted = sorted(runs)
-    rng = random.Random(seed)
-    return rng.choice(runs_sorted)
-
-
-def reset_dir(path: Path) -> None:
-    if path.exists():
-        shutil.rmtree(path)
-    ensure_dir(path)
+from __future__ import annotations
+
+from .sim_utils_config import (
+    list_station_config_files,
+    load_global_home_path,
+    load_step_configs,
+    read_station_config,
+)
+from .sim_utils_geometry import (
+    DEFAULT_BOUNDS,
+    Y_WIDTHS,
+    DetectorBounds,
+    build_geometry_map,
+    build_global_geometry_registry,
+    get_strip_geometry,
+    iter_geometries,
+    map_station_to_geometry,
+    num_strips_for_plane,
+)
+from .sim_utils_io import (
+    ensure_dir,
+    find_latest_data_path,
+    find_sim_run_dir,
+    iter_input_frames,
+    load_with_metadata,
+    now_iso,
+    param_mesh_lock,
+    param_mesh_lock_path,
+    reset_dir,
+    save_with_metadata,
+    write_chunked_output,
+    write_csv_atomic,
+    write_text_atomic,
+)
+from .sim_utils_metadata import (
+    build_sim_run_name,
+    compute_step_param_id,
+    extract_param_row_id,
+    extract_param_set,
+    extract_step_id_chain,
+    extract_step_param_ids,
+    find_param_set_id,
+)
+from .sim_utils_mesh import (
+    _mesh_ids_changed,
+    check_param_mesh_upstream,
+    mark_param_set_done,
+    normalize_param_mesh_ids,
+    resolve_param_mesh,
+    select_next_step_id,
+    select_param_row,
+)
+from .sim_utils_registry import (
+    _json_fingerprint,
+    _upstream_fingerprint,
+    find_sim_run,
+    latest_sim_run,
+    load_parameter_mesh,
+    load_sim_run_registry,
+    random_sim_run,
+    register_sim_run,
+    resolve_sim_run,
+    resolve_sim_run_name,
+    save_sim_run_registry,
+)
+
+__all__ = [
+    "DetectorBounds",
+    "DEFAULT_BOUNDS",
+    "Y_WIDTHS",
+    "load_global_home_path",
+    "load_step_configs",
+    "list_station_config_files",
+    "read_station_config",
+    "build_geometry_map",
+    "build_global_geometry_registry",
+    "map_station_to_geometry",
+    "resolve_sim_run_name",
+    "load_parameter_mesh",
+    "find_param_set_id",
+    "iter_geometries",
+    "get_strip_geometry",
+    "num_strips_for_plane",
+    "ensure_dir",
+    "now_iso",
+    "param_mesh_lock_path",
+    "param_mesh_lock",
+    "write_csv_atomic",
+    "write_text_atomic",
+    "load_with_metadata",
+    "iter_input_frames",
+    "resolve_param_mesh",
+    "check_param_mesh_upstream",
+    "normalize_param_mesh_ids",
+    "select_param_row",
+    "compute_step_param_id",
+    "build_sim_run_name",
+    "select_next_step_id",
+    "register_sim_run",
+    "mark_param_set_done",
+    "extract_param_set",
+    "extract_param_row_id",
+    "extract_step_param_ids",
+    "extract_step_id_chain",
+    "find_latest_data_path",
+    "find_sim_run_dir",
+    "write_chunked_output",
+    "save_with_metadata",
+    "_json_fingerprint",
+    "_upstream_fingerprint",
+    "load_sim_run_registry",
+    "save_sim_run_registry",
+    "resolve_sim_run",
+    "find_sim_run",
+    "latest_sim_run",
+    "random_sim_run",
+    "reset_dir",
+    "_mesh_ids_changed",
+]

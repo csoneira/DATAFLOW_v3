@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 
-"""Compare angular flux (Theta) across STEP 1, 2, 3 and 10 for the same sim-run.
+"""Compare angular flux (Theta/Phi) across STEP 1, 2, 9 and 10 for the same sim-run.
 
-This module re-uses the plotting conventions from STEP_1/STEP_3/STEP_10 and
-produces a differential + cumulative comparison figure for the four stages of
-processing.
+This module re-uses the plotting conventions from STEP_1/STEP_2/STEP_10 and
+produces a differential + cumulative comparison figure for the four key stages
+of crossing/efficiency/trigger acceptance.
 
 Behavior:
 - Prefer a STEP_10 chunk and walk upstream via metadata.source_dataset to locate
-  the matching STEP_3/STEP_2/STEP_1 chunks (ensures "same line" of simulation).
+  the matching STEP_9/STEP_2/STEP_1 chunks (ensures "same line" of simulation).
 - If STEP_10 not available, will attempt to compare whichever subset is
   available (but prefers matching-chain files when possible).
 - Plot layout and units match existing STEP_10/STEP_1 plots.
 
 Usage:
-- Import `plot_muon_flux_steps_comparison(pdf, sample_path=None)` from other
+- Import `plot_muon_flux_tt_comparison(pdf, sample_path=None)` from other
   plotters, or run as a script to write a PDF into PLOTTERS/STEPS/COMMON/PLOTS.
 """
 from __future__ import annotations
@@ -434,6 +434,11 @@ def plot_muon_flux_tt_comparison(pdf: PdfPages, sample_path: Path | None = None)
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
     return True
+
+
+def plot_muon_flux_steps_comparison(pdf: PdfPages, sample_path: Path | None = None) -> bool:
+    """Backward-compatible alias retained for older callers."""
+    return plot_muon_flux_tt_comparison(pdf, sample_path=sample_path)
 
 def _compute_flux_step1(df: pd.DataFrame):
     """

@@ -1,0 +1,6 @@
+params:
+- cos_n
+- flux_cm2_min
+- eff_1
+- selected_rows
+- execution_time

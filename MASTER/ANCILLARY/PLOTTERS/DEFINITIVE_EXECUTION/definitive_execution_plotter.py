@@ -50,6 +50,7 @@ DEFAULT_SHARED_X_STATIONS: Tuple[str, ...] = ("MINGO01", "MINGO02", "MINGO03", "
 DEFAULT_FREE_X_STATIONS: Tuple[str, ...] = ("MINGO01",)
 DEFAULT_PANEL_HEIGHT_RATIOS: Tuple[float, float, float] = (1.0, 4.0, 1.0)
 DEFAULT_MIDDLE_LOG_SCALE_SECONDS = 600.0
+NOW_Y_MARGIN_MINUTES = 10.0
 
 TASK_IDS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 BASENAME_TIMESTAMP_DIGITS = 11
@@ -1052,7 +1053,7 @@ def plot_station_page(
     ax_full_comp.tick_params(axis="y", labelleft=False)
     ax_full_comp.set_xlabel("Completeness (%)")
 
-    ax_zoom.set_title(f"Last {last_hours:g} hours of execution")
+    ax_zoom.set_title(f"Last {last_hours:g} hours from now (UTC)")
     ax_full.set_title("Full execution history (soft log-scaled by recency)")
     ax_presence.set_title("Presence vs data time (execution-time independent)")
     ax_presence.set_xlabel("Data time (from basename)")
@@ -1064,6 +1065,10 @@ def plot_station_page(
     x_max = data["file_timestamp"].max()
     y_min = data["execution_timestamp"].min()
     y_max = data["execution_timestamp"].max()
+    if y_min.tzinfo is None:
+        now = pd.Timestamp.utcnow().tz_localize(None)
+    else:
+        now = pd.Timestamp.utcnow().tz_convert(y_min.tzinfo)
 
     if x_limits_override is None:
         if x_min == x_max:
@@ -1076,17 +1081,19 @@ def plot_station_page(
 
     full_y_margin = timedelta(minutes=3)
     zoom_y_margin = timedelta(minutes=1)
-    zoom_lower = max(y_min, y_max - timedelta(hours=last_hours))
-    if zoom_lower >= y_max:
-        zoom_lower = y_max - timedelta(minutes=5)
+    zoom_lower = now - timedelta(hours=last_hours)
 
     for ax in (ax_zoom, ax_full, ax_presence):
         ax.set_xlim(*x_limits)
 
-    full_y_lower = y_min - full_y_margin
-    full_y_upper = y_max + timedelta(seconds=1)
+    full_y_lower = min(y_min, now) - full_y_margin
+    now_visible_upper = now + timedelta(minutes=NOW_Y_MARGIN_MINUTES)
+    full_y_upper = max(y_max + timedelta(seconds=1), now_visible_upper)
     ax_full.set_ylim(full_y_lower, full_y_upper)
-    ax_zoom.set_ylim(zoom_lower - zoom_y_margin, y_max + zoom_y_margin)
+    zoom_upper = max(y_max + zoom_y_margin, now_visible_upper)
+    if zoom_lower >= zoom_upper:
+        zoom_lower = zoom_upper - timedelta(minutes=5)
+    ax_zoom.set_ylim(zoom_lower, zoom_upper)
 
     # Middle panel: log-scale by recency (age) so recent executions get more visual space.
     middle_ref_num = mdates.date2num(full_y_upper)
@@ -1105,6 +1112,8 @@ def plot_station_page(
     ax_full.set_yscale("function", functions=(_middle_y_forward, _middle_y_inverse))
 
     format_datetime_axes(ax_zoom, ax_full, ax_presence)
+    for ax in (ax_zoom, ax_full, ax_zoom_comp, ax_full_comp):
+        ax.axhline(now, color="red", linestyle="--", alpha=0.3, zorder=10)
 
     # Re-apply after axis transforms so layout is preserved.
     ax_zoom_comp.set_box_aspect(1)

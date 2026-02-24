@@ -66,6 +66,7 @@ PDF_TARGETS = {
         "path": BASE_DIR
         / "MINGO_DIGITAL_TWIN"
         / "PLOTTERS"
+        / "EXECUTION"
         / "MESH"
         / "param_mesh_summary.pdf",
         "description": "Param mesh summary PDF",
@@ -74,6 +75,7 @@ PDF_TARGETS = {
         "path": BASE_DIR
         / "MINGO_DIGITAL_TWIN"
         / "PLOTTERS"
+        / "EXECUTION"
         / "SIMULATION_TIME"
         / "simulation_execution_time_hist.pdf",
         "description": "Simulation execution time histogram",

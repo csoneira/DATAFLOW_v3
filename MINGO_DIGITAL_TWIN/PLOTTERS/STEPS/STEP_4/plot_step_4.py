@@ -61,6 +61,14 @@ def strip_edges_mm_for_plane(plane_idx: int) -> np.ndarray:
     return np.unique(np.concatenate([lower_edges, upper_edges]))
 
 
+def strip_centers_mm_for_plane(plane_idx: int) -> np.ndarray:
+    widths = Y_WIDTHS[0] if plane_idx in (1, 3) else Y_WIDTHS[1]
+    total_width = float(np.sum(widths))
+    lower_edges = -total_width / 2.0 + np.cumsum(np.concatenate(([0.0], widths[:-1])))
+    centers = lower_edges + 0.5 * widths
+    return centers.astype(float)
+
+
 def plot_multi_event_thrown_clouds(
     step4_df: pd.DataFrame,
     avalanche_source_df: pd.DataFrame,
@@ -158,6 +166,190 @@ def plot_multi_event_thrown_clouds(
 
     fig.suptitle(f"Thrown-point clouds: {n_pick} full-hit events overlaid per plane (tt_hit=1234)")
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.965))
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+
+def plot_position_resolution_vs_avalanche(
+    step4_df: pd.DataFrame,
+    avalanche_df: pd.DataFrame | None,
+    pdf: PdfPages,
+) -> None:
+    """Compare reconstructed charge-weighted positions to STEP 3 avalanche centers."""
+    if avalanche_df is None or avalanche_df.empty:
+        return
+
+    n_common = min(len(step4_df), len(avalanche_df))
+    if n_common <= 0:
+        return
+
+    fig_x, axes_x = plt.subplots(2, 2, figsize=(10.5, 8.5), sharex=True, sharey=True)
+    fig_y, axes_y = plt.subplots(2, 2, figsize=(10.5, 8.5), sharex=True, sharey=True)
+    summary: list[tuple[int, float, float, int, float, float, int]] = []
+
+    for plane_idx in range(1, 5):
+        ax_x = axes_x[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        ax_y = axes_y[(plane_idx - 1) // 2, (plane_idx - 1) % 2]
+        x_cols = [f"X_mea_{plane_idx}_s{s}" for s in range(1, 5)]
+        q_cols = [f"Y_mea_{plane_idx}_s{s}" for s in range(1, 5)]
+        aval_x_col = f"avalanche_x_{plane_idx}"
+        aval_y_col = f"avalanche_y_{plane_idx}"
+        if not all(c in step4_df.columns for c in x_cols + q_cols):
+            ax_x.axis("off")
+            ax_y.axis("off")
+            summary.append((plane_idx, float("nan"), float("nan"), 0, float("nan"), float("nan"), 0))
+            continue
+        if aval_x_col not in avalanche_df.columns or aval_y_col not in avalanche_df.columns:
+            ax_x.axis("off")
+            ax_y.axis("off")
+            summary.append((plane_idx, float("nan"), float("nan"), 0, float("nan"), float("nan"), 0))
+            continue
+
+        x_mat = step4_df[x_cols].to_numpy(dtype=float)[:n_common]
+        q_mat = step4_df[q_cols].to_numpy(dtype=float)[:n_common]
+        aval_x = avalanche_df[aval_x_col].to_numpy(dtype=float)[:n_common]
+        aval_y = avalanche_df[aval_y_col].to_numpy(dtype=float)[:n_common]
+
+        valid_x = np.isfinite(x_mat) & np.isfinite(q_mat) & (q_mat > 0.0)
+        q_eff_x = np.where(valid_x, q_mat, 0.0)
+        qsum_x = q_eff_x.sum(axis=1)
+        reco_x = np.full(n_common, np.nan, dtype=float)
+        ok_x = qsum_x > 0.0
+        if np.any(ok_x):
+            reco_x[ok_x] = (np.where(valid_x, x_mat, 0.0) * q_eff_x).sum(axis=1)[ok_x] / qsum_x[ok_x]
+
+        centers = strip_centers_mm_for_plane(plane_idx)
+        center_mat = np.tile(centers, (n_common, 1))
+        valid_y = np.isfinite(q_mat) & (q_mat > 0.0)
+        q_eff_y = np.where(valid_y, q_mat, 0.0)
+        qsum_y = q_eff_y.sum(axis=1)
+        reco_y = np.full(n_common, np.nan, dtype=float)
+        ok_y = qsum_y > 0.0
+        if np.any(ok_y):
+            reco_y[ok_y] = (center_mat * q_eff_y).sum(axis=1)[ok_y] / qsum_y[ok_y]
+
+        mask_dx = np.isfinite(reco_x) & np.isfinite(aval_x)
+        dx = reco_x[mask_dx] - aval_x[mask_dx]
+        mask_dy = np.isfinite(reco_y) & np.isfinite(aval_y)
+        dy = reco_y[mask_dy] - aval_y[mask_dy]
+
+        if dx.size > 0:
+            lo_x, hi_x = np.quantile(dx, [0.01, 0.99])
+            if not np.isfinite(lo_x) or not np.isfinite(hi_x) or lo_x >= hi_x:
+                lo_x, hi_x = float(np.min(dx)), float(np.max(dx))
+            ax_x.hist(dx, bins=100, range=(lo_x, hi_x), color="tab:blue", alpha=0.8)
+            mu_x = float(np.mean(dx))
+            sig_x = float(np.std(dx))
+            ax_x.axvline(mu_x, color="black", linestyle="--", linewidth=1.0)
+            ax_x.set_title(f"Plane {plane_idx}: X_reco - X_avalanche")
+            ax_x.set_xlabel("Residual (mm)")
+            ax_x.set_ylabel("Counts")
+            ax_x.text(
+                0.03,
+                0.95,
+                f"N={dx.size}\nμ={mu_x:.2f} mm\nσ={sig_x:.2f} mm",
+                transform=ax_x.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+            )
+        else:
+            mu_x = float("nan")
+            sig_x = float("nan")
+            ax_x.axis("off")
+
+        if dy.size > 0:
+            lo_y, hi_y = np.quantile(dy, [0.01, 0.99])
+            if not np.isfinite(lo_y) or not np.isfinite(hi_y) or lo_y >= hi_y:
+                lo_y, hi_y = float(np.min(dy)), float(np.max(dy))
+            ax_y.hist(dy, bins=100, range=(lo_y, hi_y), color="tab:orange", alpha=0.8)
+            mu_y = float(np.mean(dy))
+            sig_y = float(np.std(dy))
+            ax_y.axvline(mu_y, color="black", linestyle="--", linewidth=1.0)
+            ax_y.set_title(f"Plane {plane_idx}: Y_reco - Y_avalanche")
+            ax_y.set_xlabel("Residual (mm)")
+            ax_y.set_ylabel("Counts")
+            ax_y.text(
+                0.03,
+                0.95,
+                f"N={dy.size}\nμ={mu_y:.2f} mm\nσ={sig_y:.2f} mm",
+                transform=ax_y.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+            )
+        else:
+            mu_y = float("nan")
+            sig_y = float("nan")
+            ax_y.axis("off")
+
+        summary.append((plane_idx, mu_x, sig_x, int(dx.size), mu_y, sig_y, int(dy.size)))
+
+    fig_x.suptitle("STEP 4 spatial residuals: reconstructed X vs avalanche truth")
+    fig_x.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    pdf.savefig(fig_x, dpi=150)
+    plt.close(fig_x)
+
+    fig_y.suptitle("STEP 4 spatial residuals: reconstructed Y vs avalanche truth")
+    fig_y.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    pdf.savefig(fig_y, dpi=150)
+    plt.close(fig_y)
+
+    x = np.array([row[0] for row in summary], dtype=float)
+    mu_x = np.array([row[1] for row in summary], dtype=float)
+    sig_x = np.array([row[2] for row in summary], dtype=float)
+    n_x = np.array([max(row[3], 1) for row in summary], dtype=float)
+    mu_y = np.array([row[4] for row in summary], dtype=float)
+    sig_y = np.array([row[5] for row in summary], dtype=float)
+    n_y = np.array([max(row[6], 1) for row in summary], dtype=float)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    ok_x = np.isfinite(mu_x) & np.isfinite(sig_x)
+    if np.any(ok_x):
+        axes[0].errorbar(
+            x[ok_x],
+            mu_x[ok_x],
+            yerr=sig_x[ok_x] / np.sqrt(n_x[ok_x]),
+            fmt="o-",
+            color="tab:blue",
+            capsize=3,
+            label="Mean ± SEM",
+        )
+        axes[0].axhline(0.0, color="gray", linestyle="--", linewidth=1.0)
+        axes[0].set_title("X residual mean by plane")
+        axes[0].set_xlabel("Plane")
+        axes[0].set_ylabel("mm")
+        axes[0].set_xticks([1, 2, 3, 4])
+        axes[0].grid(alpha=0.3)
+        axes[0].legend(loc="best", fontsize=9)
+    else:
+        axes[0].axis("off")
+
+    ok_y = np.isfinite(mu_y) & np.isfinite(sig_y)
+    if np.any(ok_y):
+        axes[1].errorbar(
+            x[ok_y],
+            mu_y[ok_y],
+            yerr=sig_y[ok_y] / np.sqrt(n_y[ok_y]),
+            fmt="o-",
+            color="tab:orange",
+            capsize=3,
+            label="Mean ± SEM",
+        )
+        axes[1].axhline(0.0, color="gray", linestyle="--", linewidth=1.0)
+        axes[1].set_title("Y residual mean by plane")
+        axes[1].set_xlabel("Plane")
+        axes[1].set_ylabel("mm")
+        axes[1].set_xticks([1, 2, 3, 4])
+        axes[1].grid(alpha=0.3)
+        axes[1].legend(loc="best", fontsize=9)
+    else:
+        axes[1].axis("off")
+
+    fig.suptitle("STEP 4 reconstructed-position bias summary")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
@@ -297,6 +489,7 @@ def plot_step4_summary(
         width_scale_exponent=width_scale_exponent,
         width_scale_max=width_scale_max,
     )
+    plot_position_resolution_vs_avalanche(df, avalanche_source, pdf)
 
     fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
     drew_ratio = False

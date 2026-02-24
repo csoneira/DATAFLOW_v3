@@ -86,12 +86,58 @@ def _poisson(a: np.ndarray, b: np.ndarray) -> float:
     return float(2.0 * np.sum(term))
 
 
+def _l2_many(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Vectorized L2 distance from one sample vector to many candidate vectors."""
+    mask = np.isfinite(a)[None, :] & np.isfinite(b)
+    valid_counts = np.sum(mask, axis=1)
+    diff = np.where(mask, b - a[None, :], 0.0)
+    out = np.sqrt(np.sum(diff * diff, axis=1))
+    out = out.astype(float, copy=False)
+    out[valid_counts < 2] = np.nan
+    return out
+
+
+def _chi2_many(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Vectorized chi2-like distance from one sample to many candidates."""
+    mask = np.isfinite(a)[None, :] & np.isfinite(b)
+    valid_counts = np.sum(mask, axis=1)
+    y_t = np.where(mask, a[None, :], 0.0)
+    y_p = np.where(mask, b, 0.0)
+    sigma2 = np.maximum(np.abs(y_t), 1.0)
+    out = np.sum((y_t - y_p) ** 2 / sigma2, axis=1).astype(float, copy=False)
+    out[valid_counts < 2] = np.nan
+    return out
+
+
+def _poisson_many(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Vectorized Poisson deviance-like distance from one sample to many candidates."""
+    mask = np.isfinite(a)[None, :] & np.isfinite(b)
+    valid_counts = np.sum(mask, axis=1)
+    y_t = np.where(mask, np.maximum(a[None, :], 0.0), 0.0)
+    y_p = np.where(mask, np.maximum(b, 1e-12), 1.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(y_t > 0.0, y_t / y_p, 1.0)
+        term = np.where(y_t > 0.0, y_t * np.log(ratio) - (y_t - y_p), y_p)
+    out = 2.0 * np.sum(np.where(mask, term, 0.0), axis=1)
+    out = out.astype(float, copy=False)
+    out[valid_counts < 2] = np.nan
+    return out
+
+
 DISTANCE_FNS = {
     "l2": _l2,
     "l2_zscore": _l2,
     "l2_raw": _l2,
     "chi2": _chi2,
     "poisson": _poisson,
+}
+
+DISTANCE_FNS_MANY = {
+    "l2": _l2_many,
+    "l2_zscore": _l2_many,
+    "l2_raw": _l2_many,
+    "chi2": _chi2_many,
+    "poisson": _poisson_many,
 }
 
 
@@ -265,6 +311,7 @@ def estimate_from_dataframes(
             break
     dict_ids = dict_df[join_col].astype(str).tolist() if join_col else None
     data_ids = data_df[join_col].astype(str).tolist() if join_col else None
+    dict_ids_arr = np.asarray(dict_ids, dtype=object) if dict_ids else None
 
     # ── Dict parameter values as arrays ──────────────────────────────
     dict_param_arrays = {}
@@ -291,8 +338,8 @@ def estimate_from_dataframes(
             z_mask = np.ones(len(dict_df), dtype=bool)
 
         # Exclude same file
-        if exclude_same_file and join_col and dict_ids and data_ids:
-            same_file = np.array([did == data_ids[i] for did in dict_ids])
+        if exclude_same_file and join_col and dict_ids_arr is not None and data_ids:
+            same_file = dict_ids_arr == data_ids[i]
             z_mask &= ~same_file
 
         cand_indices = np.where(z_mask)[0]
@@ -308,9 +355,13 @@ def estimate_from_dataframes(
 
         # Compute distances
         sample_vec = data_scaled[i]
-        distances = np.array([
-            dist_fn(sample_vec, dict_scaled[j]) for j in cand_indices
-        ])
+        dist_many_fn = DISTANCE_FNS_MANY.get(distance_metric)
+        if dist_many_fn is not None:
+            distances = dist_many_fn(sample_vec, dict_scaled[cand_indices])
+        else:
+            distances = np.array([
+                dist_fn(sample_vec, dict_scaled[j]) for j in cand_indices
+            ])
 
         # Handle NaN distances
         valid = np.isfinite(distances)
