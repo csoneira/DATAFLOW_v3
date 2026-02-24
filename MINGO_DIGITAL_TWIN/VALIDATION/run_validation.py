@@ -35,9 +35,9 @@ from validators import (
 )
 
 
-def parse_steps(raw: str) -> list[str]:
+def parse_steps(raw: str, *, valid_keys: set[str], default_order: list[str]) -> list[str]:
     if not raw or raw.strip().lower() == "all":
-        return ["cross", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "final"]
+        return default_order.copy()
 
     out: list[str] = []
     aliases = {
@@ -48,7 +48,7 @@ def parse_steps(raw: str) -> list[str]:
         if not key:
             continue
         key = aliases.get(key, key)
-        if key in {str(i) for i in range(0, 11)} | {"cross", "final"}:
+        if key in valid_keys:
             out.append(key)
         else:
             raise ValueError(f"Unknown step selector: {token}")
@@ -104,7 +104,6 @@ def main() -> None:
     run_dir = output_root / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    selected_steps = parse_steps(args.steps)
     artifacts = discover_step_artifacts(intersteps_dir, sim_run_filter=args.sim_run)
 
     validators: dict[str, tuple[str, Callable[..., pd.DataFrame]]] = {
@@ -122,6 +121,11 @@ def main() -> None:
         "10": ("validate_step10_tdc", validate_step10_tdc.run),
         "final": ("validate_final_dat", validate_final_dat.run),
     }
+    selected_steps = parse_steps(
+        args.steps,
+        valid_keys=set(validators.keys()),
+        default_order=list(validators.keys()),
+    )
 
     all_results: list[pd.DataFrame] = []
     executed: list[str] = []
@@ -230,8 +234,8 @@ def main() -> None:
         try:
             old = pd.read_csv(history_path)
             history_df = pd.concat([old, history_df], ignore_index=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"WARNING: failed to append validation history from {history_path}: {exc}")
     history_df.to_csv(history_path, index=False)
 
     # Console summary for quick checks.

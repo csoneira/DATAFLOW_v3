@@ -204,7 +204,10 @@ def run(
             sampled_payload_all.append(scan.sampled_payload_values)
 
         base_id = f"final_{scan.file_name}"
-        row = params_df[params_df.get("file_name", pd.Series(dtype=str)) == scan.file_name] if not params_df.empty else pd.DataFrame()
+        if not params_df.empty and "file_name" in params_df.columns:
+            row = params_df[params_df["file_name"] == scan.file_name]
+        else:
+            row = pd.DataFrame()
 
         rb.add(
             test_id=f"{base_id}_field_count",

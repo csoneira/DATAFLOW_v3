@@ -10,16 +10,7 @@ import numpy as np
 import pandas as pd
 
 from .common_io import StepArtifact, load_frame
-from .common_report import RESULT_COLUMNS, ResultBuilder
-
-
-def _norm_tt(value: object) -> str:
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return ""
-    text = str(value).strip().replace(".0", "")
-    if text in {"", "nan", "None", "<NA>"}:
-        return ""
-    return "".join(ch for ch in text if ch in "1234")
+from .common_report import RESULT_COLUMNS, ResultBuilder, normalize_tt_series
 
 
 def _eff_status(delta: float, sigma: float) -> tuple[str, float]:
@@ -32,6 +23,22 @@ def _eff_status(delta: float, sigma: float) -> tuple[str, float]:
     if abs(delta) <= 0.02 or zscore <= 5:
         return "WARN", float(zscore)
     return "FAIL", float(zscore)
+
+
+def _as_plane_values(value: object, *, cast: type = float) -> np.ndarray | None:
+    """Normalize scalar or 4-vector config values to per-plane arrays."""
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        try:
+            parsed = cast(value)
+        except (TypeError, ValueError):
+            return None
+        return np.full(4, parsed, dtype=float)
+    if isinstance(value, list) and len(value) == 4:
+        try:
+            return np.asarray([cast(v) for v in value], dtype=float)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _plot(df: pd.DataFrame, cfg_eff: list[float], plot_dir: Path) -> None:
@@ -147,26 +154,39 @@ def run(
     # Consistency of per-plane flags and sizes.
     exists_mismatch = 0
     neg_size = 0
-    tt_mismatch = 0
-    for _, row in df.iterrows():
-        tt_expected = ""
-        for i in range(1, 5):
-            ion = row.get(f"avalanche_ion_{i}")
-            exists = bool(row.get(f"avalanche_exists_{i}")) if pd.notna(row.get(f"avalanche_exists_{i}")) else False
-            size = row.get(f"avalanche_size_electrons_{i}")
-            if pd.notna(size) and float(size) < 0:
-                neg_size += 1
-            ion_positive = pd.notna(ion) and float(ion) > 0
-            size_positive = pd.notna(size) and float(size) > 0
-            if exists != ion_positive:
-                exists_mismatch += 1
-            if exists:
-                tt_expected += str(i)
-            if exists and not size_positive:
-                exists_mismatch += 1
+    tt_expected = np.full(len(df), "", dtype=object)
+    for i in range(1, 5):
+        ion_col = f"avalanche_ion_{i}"
+        exists_col = f"avalanche_exists_{i}"
+        size_col = f"avalanche_size_electrons_{i}"
 
-        if tt_expected != _norm_tt(row.get("tt_avalanche")):
-            tt_mismatch += 1
+        ion_vals = (
+            pd.to_numeric(df[ion_col], errors="coerce").to_numpy(dtype=float)
+            if ion_col in df.columns
+            else np.full(len(df), np.nan, dtype=float)
+        )
+        size_vals = (
+            pd.to_numeric(df[size_col], errors="coerce").to_numpy(dtype=float)
+            if size_col in df.columns
+            else np.full(len(df), np.nan, dtype=float)
+        )
+        if exists_col in df.columns:
+            exists_vals = df[exists_col].where(df[exists_col].notna(), False).astype(bool).to_numpy(dtype=bool)
+        else:
+            exists_vals = np.zeros(len(df), dtype=bool)
+
+        neg_size += int(np.count_nonzero(np.isfinite(size_vals) & (size_vals < 0)))
+        ion_positive = np.isfinite(ion_vals) & (ion_vals > 0)
+        size_positive = np.isfinite(size_vals) & (size_vals > 0)
+        exists_mismatch += int(np.count_nonzero(exists_vals != ion_positive))
+        exists_mismatch += int(np.count_nonzero(exists_vals & ~size_positive))
+        tt_expected = np.where(exists_vals, tt_expected + str(i), tt_expected)
+
+    if "tt_avalanche" in df.columns:
+        tt_actual = normalize_tt_series(df["tt_avalanche"]).to_numpy(dtype=str)
+    else:
+        tt_actual = np.full(len(df), "", dtype=str)
+    tt_mismatch = int(np.count_nonzero(tt_expected != tt_actual))
 
     rb.add(
         test_id="step3_exists_consistency",
@@ -201,7 +221,45 @@ def run(
         status="PASS" if neg_size == 0 else "FAIL",
     )
 
+    # Avalanche XY bounds from strip geometry hints when available.
+    n_strips = _as_plane_values(cfg.get("n_strips"), cast=int)
+    strip_width_mm = _as_plane_values(cfg.get("strip_width_mm"), cast=float)
+    if n_strips is not None and strip_width_mm is not None and np.all(n_strips > 0) and np.all(strip_width_mm > 0):
+        out_of_bounds = 0
+        for i in range(1, 5):
+            x_col = f"avalanche_x_{i}"
+            y_col = f"avalanche_y_{i}"
+            if x_col not in df.columns or y_col not in df.columns:
+                continue
+            half_span = 0.5 * float(n_strips[i - 1] * strip_width_mm[i - 1])
+            xv = pd.to_numeric(df[x_col], errors="coerce").to_numpy(dtype=float)
+            yv = pd.to_numeric(df[y_col], errors="coerce").to_numpy(dtype=float)
+            out_of_bounds += int(np.count_nonzero(np.isfinite(xv) & (np.abs(xv) > half_span)))
+            out_of_bounds += int(np.count_nonzero(np.isfinite(yv) & (np.abs(yv) > half_span)))
+
+        rb.add(
+            test_id="step3_avalanche_xy_bounds",
+            test_name="avalanche_x/y within configured active area",
+            metric_name="out_of_bounds_values",
+            metric_value=out_of_bounds,
+            expected_value=0,
+            threshold_low=0,
+            threshold_high=0,
+            status="PASS" if out_of_bounds == 0 else "FAIL",
+            notes="bounds=abs(coord) <= 0.5 * n_strips * strip_width_mm",
+        )
+    else:
+        rb.add(
+            test_id="step3_avalanche_xy_bounds",
+            test_name="avalanche_x/y within configured active area",
+            metric_name="status",
+            metric_value=np.nan,
+            status="SKIP",
+            notes="n_strips and strip_width_mm not available in STEP 3 config",
+        )
+
     # Efficiency closure per plane.
+    has_zenith_eff_model = "efficiencies_linear_fit" in cfg
     for i in range(1, 5):
         t_col = f"T_sum_{i}_ns"
         e_col = f"avalanche_exists_{i}"
@@ -213,6 +271,17 @@ def run(
                 metric_value=np.nan,
                 status="SKIP",
                 notes="Missing required columns",
+            )
+            continue
+
+        if has_zenith_eff_model:
+            rb.add(
+                test_id=f"step3_eff_plane{i}",
+                test_name=f"Plane {i} efficiency closure",
+                metric_name="status",
+                metric_value=np.nan,
+                status="SKIP",
+                notes="efficiencies_linear_fit configured; flat closure is not applicable",
             )
             continue
 
@@ -254,7 +323,7 @@ def run(
             threshold_low=-3 * sigma,
             threshold_high=3 * sigma,
             status=status,
-            notes=f"obs={obs:.5f}, exp={exp:.5f}, N={n}, z={zscore:.2f}",
+            notes=f"obs={obs:.5f}, exp={exp:.5f}, N={n}, z={zscore:.2f}; flat closure ignores zenith-angle dependence",
         )
 
     # Outlier sanity.

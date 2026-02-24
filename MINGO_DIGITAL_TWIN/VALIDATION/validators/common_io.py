@@ -336,7 +336,9 @@ def compute_exact_manifest_count(
         if chunk_path.suffix == ".pkl":
             total += len(pd.read_pickle(chunk_path))
         elif chunk_path.suffix == ".csv":
-            total += len(pd.read_csv(chunk_path))
+            with chunk_path.open("r", encoding="utf-8", errors="replace") as fh:
+                line_count = sum(1 for _ in fh)
+            total += max(line_count - 1, 0)
         else:
             return None, f"unsupported_chunk:{chunk_path.suffix}"
 

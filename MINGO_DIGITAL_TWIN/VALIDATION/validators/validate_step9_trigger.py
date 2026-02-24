@@ -5,28 +5,20 @@ from __future__ import annotations
 
 import itertools
 from pathlib import Path
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from .common_io import StepArtifact, load_frame
-from .common_report import RESULT_COLUMNS, ResultBuilder
-
-
-def _normalize_tt(value: object) -> str:
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return ""
-    text = str(value).strip().replace(".0", "")
-    if text in {"", "nan", "None", "<NA>"}:
-        return ""
-    return "".join(ch for ch in text if ch in "1234")
+from .common_report import RESULT_COLUMNS, ResultBuilder, normalize_tt_series
 
 
 def _build_plane_activity(df: pd.DataFrame, suffix: str = "") -> tuple[dict[int, np.ndarray], list[str]]:
     n = len(df)
     plane_active: dict[int, np.ndarray] = {}
-    tt_rows = ["" for _ in range(n)]
+    tt_rows = np.full(n, "", dtype=object)
 
     for i in range(1, 5):
         act = np.zeros(n, dtype=bool)
@@ -41,9 +33,9 @@ def _build_plane_activity(df: pd.DataFrame, suffix: str = "") -> tuple[dict[int,
 
     for i in range(1, 5):
         act = plane_active[i]
-        tt_rows = [tt + str(i) if active else tt for tt, active in zip(tt_rows, act)]
+        tt_rows = np.where(act, tt_rows + str(i), tt_rows)
 
-    return plane_active, tt_rows
+    return plane_active, tt_rows.tolist()
 
 
 def _passes_triggers(tt: str, triggers: list[str]) -> bool:
@@ -51,6 +43,18 @@ def _passes_triggers(tt: str, triggers: list[str]) -> bool:
         if all(ch in tt for ch in trig):
             return True
     return False
+
+
+def _build_trigger_regex(triggers: list[str]) -> str:
+    branches: list[str] = []
+    for trig in triggers:
+        token = str(trig)
+        if token == "":
+            branches.append("^.*$")
+            continue
+        lookaheads = "".join(f"(?=.*{re.escape(ch)})" for ch in token)
+        branches.append(f"^{lookaheads}.*$")
+    return "|".join(branches) if branches else r"^$"
 
 
 def _independence_expected_acceptance(p: dict[int, float], triggers: list[str]) -> float:
@@ -166,7 +170,9 @@ def run(
 
     _, tt8 = _build_plane_activity(df8)
     _, tt9_recomputed = _build_plane_activity(df9)
-    expected_pass_mask = np.array([_passes_triggers(tt, triggers) for tt in tt8], dtype=bool)
+    tt8_series = pd.Series(tt8, dtype="string").fillna("")
+    trigger_pattern = _build_trigger_regex(triggers)
+    expected_pass_mask = tt8_series.str.contains(trigger_pattern, regex=True, na=False).to_numpy(dtype=bool)
     expected_event_ids = set(df8.loc[expected_pass_mask, "event_id"].astype(int).tolist())
     observed_event_ids = set(df9["event_id"].astype(int).tolist())
 
@@ -186,7 +192,7 @@ def run(
 
     # Stored tt_trigger consistency.
     if "tt_trigger" in df9.columns:
-        stored = df9["tt_trigger"].apply(_normalize_tt).tolist()
+        stored = normalize_tt_series(df9["tt_trigger"]).tolist()
         mismatch = int(sum(a != b for a, b in zip(stored, tt9_recomputed)))
         rb.add(
             test_id="step9_tt_trigger_consistency",

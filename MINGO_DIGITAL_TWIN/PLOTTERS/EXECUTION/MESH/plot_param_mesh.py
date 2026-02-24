@@ -17,7 +17,8 @@ plt.style.use('seaborn-v0_8-whitegrid')
 from matplotlib.patches import Patch
 from matplotlib.backends.backend_pdf import PdfPages
 
-DT_ROOT = Path(__file__).resolve().parents[2]
+THIS_FILE = Path(__file__).resolve()
+DT_ROOT = next((parent for parent in THIS_FILE.parents if parent.name == "MINGO_DIGITAL_TWIN"), THIS_FILE.parents[3])
 PLOTTER_DIR = Path(__file__).resolve().parent
 
 
@@ -306,17 +307,27 @@ def main() -> None:
         raw_params = config.get("params", [])
         # Expand tokens using the *base* DataFrame (completed dataset)
         param_list = expand_params(raw_params, merged_df)
-        # if execution_time column exists make sure it is included and at front
+        # if execution_time column exists, add a last-2-hours view and place
+        # both datetime columns at the front in fixed order.
+        exec_time_cols: list[str] = []
         if "execution_time" in merged_df.columns:
-            if "execution_time" in param_list:
-                param_list.remove("execution_time")
+            recent_col = "execution_time_last_2h"
+            cutoff_utc = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=2)
+            exec_time_utc = pd.to_datetime(merged_df["execution_time"], errors="coerce", utc=True)
+            # Matplotlib cannot scatter tz-aware datetime series containing NaT.
+            # Normalize both execution-time views to naive UTC before plotting.
+            merged_df["execution_time"] = exec_time_utc.dt.tz_convert(None)
+            merged_df[recent_col] = exec_time_utc.where(exec_time_utc >= cutoff_utc, pd.NaT).dt.tz_convert(None)
+            for col in ("execution_time", recent_col):
+                if col in param_list:
+                    param_list.remove(col)
             param_list.insert(0, "execution_time")
+            param_list.insert(1, recent_col)
+            exec_time_cols = ["execution_time", recent_col]
         n = len(param_list)
-        # determine index of exec time (may be 0 after above adjustment)
-        et_idx = param_list.index("execution_time") if "execution_time" in param_list else -1
         if n > 0:
-            # make first column (execution_time) twice as wide as others
-            width_ratios = [3.0 if i == 0 else 1.0 for i in range(n)]
+            # keep datetime columns wider for readable tick labels
+            width_ratios = [3.0 if param_list[i] in exec_time_cols else 1.0 for i in range(n)]
             fig, axes = plt.subplots(
                 n, n, figsize=(2.8 * n, 2.8 * n), dpi=110,
                 gridspec_kw={"width_ratios": width_ratios},
@@ -379,10 +390,10 @@ def main() -> None:
                         ax.autoscale_view(scalex=False, scaley=True)
                     elif i > j:
                         ax.scatter(x, y, s=7, alpha=0.4, color="#2ca02c")
-                        # if this column is execution_time, connect the points to form a
+                        # if this column is execution_time-like, connect points to form a
                         # time series line.  sorting ensures the line follows increasing
                         # time even if the DataFrame index isn't ordered.
-                        if param_list[j] == "execution_time":
+                        if param_list[j] in exec_time_cols:
                             try:
                                 order = np.argsort(x.values)
                                 ax.plot(x.values[order], y.values[order],
@@ -405,14 +416,14 @@ def main() -> None:
                     ax.tick_params(axis='both', which='major', labelsize=9, width=1, length=3)
             fig.suptitle("Parameter Matrix", fontsize=14, y=1.01)
             fig.subplots_adjust(left=0.07, right=0.93, top=0.93, bottom=0.07, wspace=0.03, hspace=0.03)
-            # Execution_time formatting (if present)
-            if "execution_time" in param_list:
-                et_idx = param_list.index("execution_time")
-                date_fmt = mdates.DateFormatter("%Y-%m-%d")
+            # Datetime axis formatting for execution time columns
+            if exec_time_cols:
+                et_indices = [param_list.index(col) for col in exec_time_cols if col in param_list]
+                date_fmt = mdates.DateFormatter("%Y-%m-%d %H:%M")
                 for _i in range(n):
                     for _j in range(n):
                         _ax = axes[_i, _j] if n > 1 else axes
-                        if _j == et_idx:
+                        if _j in et_indices:
                             _ax.xaxis.set_major_formatter(date_fmt)
                             _ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=4))
                             # only label the lowest row
@@ -420,19 +431,19 @@ def main() -> None:
                                 plt.setp(_ax.xaxis.get_majorticklabels(), rotation=15, ha="right", fontsize=8)
                             else:
                                 _ax.set_xticklabels([])
-                        if _i == et_idx and _i != _j:
+                        if _i in et_indices and _i != _j:
                             _ax.yaxis.set_major_formatter(date_fmt)
                             _ax.yaxis.set_major_locator(mdates.AutoDateLocator(maxticks=4))
                             plt.setp(_ax.yaxis.get_majorticklabels(), fontsize=8)
-                now = pd.Timestamp.utcnow()
+                now = pd.Timestamp.now(tz="UTC").tz_convert(None)
                 for i in range(n):
                     for j in range(n):
                         ax = axes[i, j] if n > 1 else axes
                         if i < j or not ax.axison:
                             continue
-                        if param_list[j] == "execution_time":
+                        if param_list[j] in exec_time_cols:
                             ax.axvline(now, color="red", linestyle="--", alpha=0.3, zorder=10)
-                        if i > j and param_list[i] == "execution_time":
+                        if i > j and param_list[i] in exec_time_cols:
                             ax.axhline(now, color="red", linestyle="--", alpha=0.3, zorder=10)
             pdf.savefig(fig)
             plt.close(fig)

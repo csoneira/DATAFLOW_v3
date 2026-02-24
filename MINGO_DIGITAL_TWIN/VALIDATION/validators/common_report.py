@@ -64,9 +64,30 @@ def sanitize_scalar(value: Any) -> Any:
     return str(value)
 
 
+def normalize_tt_value(value: object) -> str:
+    """Normalize truth-table-like values to a compact '1234' string."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return ""
+    text = str(value).strip().replace(".0", "")
+    if text in {"", "nan", "None", "<NA>"}:
+        return ""
+    return "".join(ch for ch in text if ch in "1234")
+
+
+def normalize_tt_series(series: pd.Series) -> pd.Series:
+    """Vectorized normalization for truth-table-like columns."""
+    tt = series.astype("string").fillna("")
+    tt = tt.str.strip().str.replace(".0", "", regex=False)
+    tt = tt.replace({"nan": "", "None": "", "<NA>": ""})
+    tt = tt.str.replace(r"[^1234]", "", regex=True)
+    return tt
+
+
 def overall_status_from_counts(counts: dict[str, int]) -> str:
-    if counts.get("FAIL", 0) > 0 or counts.get("ERROR", 0) > 0:
+    if counts.get("FAIL", 0) > 0:
         return "FAIL"
+    if counts.get("ERROR", 0) > 0:
+        return "ERROR"
     if counts.get("WARN", 0) > 0:
         return "WARN"
     if counts.get("PASS", 0) > 0:

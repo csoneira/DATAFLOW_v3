@@ -10,16 +10,7 @@ import numpy as np
 import pandas as pd
 
 from .common_io import StepArtifact, load_frame
-from .common_report import RESULT_COLUMNS, ResultBuilder
-
-
-def _norm_tt(value: object) -> str:
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return ""
-    text = str(value).strip().replace(".0", "")
-    if text in {"", "nan", "None", "<NA>"}:
-        return ""
-    return "".join(ch for ch in text if ch in "1234")
+from .common_report import RESULT_COLUMNS, ResultBuilder, normalize_tt_series
 
 
 def _plot(df4: pd.DataFrame, ratio_map: dict[int, np.ndarray], plot_dir: Path) -> None:
@@ -37,7 +28,27 @@ def _plot(df4: pd.DataFrame, ratio_map: dict[int, np.ndarray], plot_dir: Path) -
     axes[0, 1].set_title("log10(Y_mea)")
 
     for p, ax in zip(range(1, 5), [axes[1, 0], axes[1, 1], axes[1, 0], axes[1, 1]]):
-        pass
+        plane_cols = [f"Y_mea_{p}_s{j}" for j in range(1, 5) if f"Y_mea_{p}_s{j}" in df4.columns]
+        if not plane_cols:
+            continue
+        arr = df4[plane_cols].to_numpy(dtype=float)
+        mult = np.count_nonzero(arr > 0, axis=1)
+        ax.hist(
+            mult[mult > 0],
+            bins=np.arange(0.5, 5.5, 1.0),
+            histtype="step",
+            linewidth=1.5,
+            label=f"Plane {p}",
+        )
+
+    axes[1, 0].set_title("Strip multiplicity (planes 1,3)")
+    axes[1, 1].set_title("Strip multiplicity (planes 2,4)")
+    for ax in (axes[1, 0], axes[1, 1]):
+        ax.set_xlabel("n strips with Y_mea > 0")
+        ax.set_ylabel("events")
+        ax.set_xticks([1, 2, 3, 4])
+        if ax.has_data():
+            ax.legend()
 
     fig.tight_layout()
     fig.savefig(plot_dir / "step4_hit_overview.png", dpi=140)
@@ -123,33 +134,48 @@ def run(
     non_nan_x_when_zero = 0
     non_nan_t_when_zero = 0
     nan_x_when_positive = 0
-    tt_mismatch = 0
+    plane_hit = np.zeros((len(df4), 4), dtype=bool)
+    for i in range(1, 5):
+        strip_positive = []
+        for j in range(1, 5):
+            y_col = f"Y_mea_{i}_s{j}"
+            x_col = f"X_mea_{i}_s{j}"
+            t_col = f"T_sum_meas_{i}_s{j}"
 
-    for _, row in df4.iterrows():
-        tt_expected = ""
-        for i in range(1, 5):
-            plane_hit = False
-            for j in range(1, 5):
-                y = row.get(f"Y_mea_{i}_s{j}")
-                x = row.get(f"X_mea_{i}_s{j}")
-                t = row.get(f"T_sum_meas_{i}_s{j}")
-                yv = float(y) if pd.notna(y) else 0.0
-                if yv < 0:
-                    neg_q += 1
-                if yv <= 0:
-                    if pd.notna(x):
-                        non_nan_x_when_zero += 1
-                    if pd.notna(t):
-                        non_nan_t_when_zero += 1
-                else:
-                    plane_hit = True
-                    if pd.isna(x):
-                        nan_x_when_positive += 1
-            if plane_hit:
-                tt_expected += str(i)
+            if y_col in df4.columns:
+                yv = pd.to_numeric(df4[y_col], errors="coerce").to_numpy(dtype=float)
+            else:
+                yv = np.full(len(df4), np.nan, dtype=float)
+            y_safe = np.nan_to_num(yv, nan=0.0)
 
-        if tt_expected != _norm_tt(row.get("tt_hit")):
-            tt_mismatch += 1
+            neg_q += int(np.count_nonzero(y_safe < 0))
+            zero_or_less = y_safe <= 0
+            positive = y_safe > 0
+            strip_positive.append(positive)
+
+            if x_col in df4.columns:
+                x_notna = df4[x_col].notna().to_numpy(dtype=bool)
+                non_nan_x_when_zero += int(np.count_nonzero(zero_or_less & x_notna))
+                nan_x_when_positive += int(np.count_nonzero(positive & ~x_notna))
+            else:
+                nan_x_when_positive += int(np.count_nonzero(positive))
+
+            if t_col in df4.columns:
+                t_notna = df4[t_col].notna().to_numpy(dtype=bool)
+                non_nan_t_when_zero += int(np.count_nonzero(zero_or_less & t_notna))
+
+        if strip_positive:
+            plane_hit[:, i - 1] = np.column_stack(strip_positive).any(axis=1)
+
+    tt_expected = np.full(len(df4), "", dtype=object)
+    for i in range(1, 5):
+        tt_expected = np.where(plane_hit[:, i - 1], tt_expected + str(i), tt_expected)
+
+    if "tt_hit" in df4.columns:
+        tt_actual = normalize_tt_series(df4["tt_hit"]).to_numpy(dtype=str)
+    else:
+        tt_actual = np.full(len(df4), "", dtype=str)
+    tt_mismatch = int(np.count_nonzero(tt_expected != tt_actual))
 
     rb.add(
         test_id="step4_q_nonnegative",

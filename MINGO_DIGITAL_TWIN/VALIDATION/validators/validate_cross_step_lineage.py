@@ -406,6 +406,103 @@ def run(
             status="PASS" if missing == 0 else "FAIL",
         )
 
+    # STEP 0 mesh -> STEP 1 metadata consistency for cos_n.
+    art0 = artifacts.get("0")
+    art1 = artifacts.get("1")
+    if (
+        art0 is None
+        or art0.data_path is None
+        or not art0.data_path.exists()
+        or art1 is None
+        or art1.data_path is None
+        or not art1.data_path.exists()
+    ):
+        rb.add(
+            test_id="cross_step1_cosn_mesh_match",
+            test_name="STEP 1 config.cos_n matches STEP 0 mesh row",
+            metric_name="status",
+            metric_value=np.nan,
+            status="SKIP",
+            notes="STEP 0 or STEP 1 artifact missing",
+        )
+    else:
+        meta1 = art1.metadata if isinstance(art1.metadata, dict) else {}
+        cfg1 = meta1.get("config") if isinstance(meta1.get("config"), dict) else {}
+        cos_raw = cfg1.get("cos_n")
+        step1_id_raw = meta1.get("step_1_id", cfg1.get("step_1_id"))
+        try:
+            cos_meta = float(cos_raw)
+            step1_id = int(float(step1_id_raw))
+        except (TypeError, ValueError):
+            rb.add(
+                test_id="cross_step1_cosn_mesh_match",
+                test_name="STEP 1 config.cos_n matches STEP 0 mesh row",
+                metric_name="status",
+                metric_value=np.nan,
+                status="SKIP",
+                notes="Missing or invalid STEP 1 config.cos_n / step_1_id in metadata",
+            )
+        else:
+            try:
+                mesh_df = pd.read_csv(art0.data_path, usecols=["step_1_id", "cos_n"])
+            except Exception as exc:
+                rb.add_exception(
+                    test_id="cross_step1_cosn_mesh_match_read",
+                    test_name="Read STEP 0 mesh for cos_n cross-check",
+                    exc=exc,
+                )
+            else:
+                mesh_step1 = pd.to_numeric(mesh_df["step_1_id"], errors="coerce")
+                mesh_rows = mesh_df.loc[mesh_step1 == step1_id]
+                if mesh_rows.empty:
+                    rb.add(
+                        test_id="cross_step1_cosn_mesh_match",
+                        test_name="STEP 1 config.cos_n matches STEP 0 mesh row",
+                        metric_name="status",
+                        metric_value=np.nan,
+                        status="FAIL",
+                        notes=f"No param_mesh row with step_1_id={step1_id:03d}",
+                    )
+                else:
+                    mesh_cos_vals = pd.to_numeric(mesh_rows["cos_n"], errors="coerce").dropna().unique()
+                    if mesh_cos_vals.size == 0:
+                        rb.add(
+                            test_id="cross_step1_cosn_mesh_match",
+                            test_name="STEP 1 config.cos_n matches STEP 0 mesh row",
+                            metric_name="status",
+                            metric_value=np.nan,
+                            status="FAIL",
+                            notes=f"param_mesh rows for step_1_id={step1_id:03d} have invalid cos_n",
+                        )
+                    elif mesh_cos_vals.size > 1:
+                        rb.add(
+                            test_id="cross_step1_cosn_mesh_match",
+                            test_name="STEP 1 config.cos_n matches STEP 0 mesh row",
+                            metric_name="status",
+                            metric_value=np.nan,
+                            status="FAIL",
+                            notes=(
+                                f"param_mesh has multiple cos_n values for step_1_id={step1_id:03d}: "
+                                f"{mesh_cos_vals.tolist()}"
+                            ),
+                        )
+                    else:
+                        mesh_cos = float(mesh_cos_vals[0])
+                        diff = abs(cos_meta - mesh_cos)
+                        rb.add(
+                            test_id="cross_step1_cosn_mesh_match",
+                            test_name="STEP 1 config.cos_n matches STEP 0 mesh row",
+                            metric_name="abs_difference",
+                            metric_value=diff,
+                            expected_value=0.0,
+                            threshold_low=0.0,
+                            threshold_high=1e-12,
+                            status="PASS" if diff <= 1e-12 else "FAIL",
+                            notes=(
+                                f"step_1_id={step1_id:03d}, meta={cos_meta:.12g}, mesh={mesh_cos:.12g}"
+                            ),
+                        )
+
     if make_plots:
         _plot_row_counts(row_counts, output_dir / "plots" / "validate_cross_step_lineage")
 

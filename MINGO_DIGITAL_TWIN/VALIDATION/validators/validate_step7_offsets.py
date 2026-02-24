@@ -139,7 +139,7 @@ def run(
             if tf7 in merged.columns and tf6 in merged.columns:
                 v7 = merged[tf7].to_numpy(dtype=float)
                 v6 = merged[tf6].to_numpy(dtype=float)
-                mask = np.isfinite(v7) & np.isfinite(v6) & (v6 != 0)
+                mask = np.isfinite(v7) & np.isfinite(v6)
                 if mask.any():
                     delta = v7[mask] - v6[mask]
                     exp = float(tfront_offsets[i - 1, j - 1]) if tfront_offsets.shape == (4, 4) else 0.0
@@ -150,7 +150,7 @@ def run(
             if tb7 in merged.columns and tb6 in merged.columns:
                 v7 = merged[tb7].to_numpy(dtype=float)
                 v6 = merged[tb6].to_numpy(dtype=float)
-                mask = np.isfinite(v7) & np.isfinite(v6) & (v6 != 0)
+                mask = np.isfinite(v7) & np.isfinite(v6)
                 if mask.any():
                     delta = v7[mask] - v6[mask]
                     exp = float(tback_offsets[i - 1, j - 1]) if tback_offsets.shape == (4, 4) else 0.0

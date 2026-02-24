@@ -146,6 +146,45 @@ def run(
         status="PASS" if non_numeric_id == 0 else "WARN",
     )
 
+    if "done" in df.columns:
+        done_numeric = pd.to_numeric(df["done"], errors="coerce")
+        done_mask = done_numeric == 1
+        if not done_mask.any():
+            rb.add(
+                test_id="step0_done_rows_have_step_ids",
+                test_name="Rows with done=1 have all step IDs populated",
+                metric_name="status",
+                metric_value=np.nan,
+                status="SKIP",
+                notes="No rows with done=1",
+            )
+        else:
+            invalid_done_ids = 0
+            missing_id_cols = []
+            for idx in range(1, 11):
+                col = f"step_{idx}_id"
+                if col not in df.columns:
+                    missing_id_cols.append(col)
+                    invalid_done_ids += int(done_mask.sum())
+                    continue
+                vals = pd.to_numeric(df.loc[done_mask, col], errors="coerce")
+                invalid_done_ids += int(vals.isna().sum())
+            rb.add(
+                test_id="step0_done_rows_have_step_ids",
+                test_name="Rows with done=1 have all step IDs populated",
+                metric_name="invalid_done_rows",
+                metric_value=invalid_done_ids,
+                expected_value=0,
+                threshold_low=0,
+                threshold_high=0,
+                status="PASS" if invalid_done_ids == 0 else "FAIL",
+                notes=(
+                    f"checked_rows={int(done_mask.sum())}; missing_columns={','.join(missing_id_cols)}"
+                    if missing_id_cols
+                    else f"checked_rows={int(done_mask.sum())}"
+                ),
+            )
+
     if id_cols:
         dup_count = int(df.duplicated(subset=id_cols, keep=False).sum())
         repeat_samples = int((art.metadata.get("config") or {}).get("repeat_samples", 1))

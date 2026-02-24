@@ -192,7 +192,7 @@ def run(
         expected_value=0,
         threshold_low=0,
         threshold_high=0,
-        status="PASS" if above_thr_mismatch == 0 else "WARN",
+        status="PASS" if above_thr_mismatch == 0 else "FAIL",
     )
 
     rb.add(
