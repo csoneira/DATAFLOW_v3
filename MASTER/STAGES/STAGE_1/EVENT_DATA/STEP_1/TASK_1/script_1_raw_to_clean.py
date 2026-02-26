@@ -118,6 +118,8 @@ task_number = 1
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
+_prof_t0 = time.perf_counter()
+_prof = {}
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 
@@ -418,6 +420,7 @@ csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execut
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
+csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 status_filename_base = ""
 status_execution_date = None
 
@@ -1457,6 +1460,7 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         plt.show()
     plt.close()
 
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------- Data reading and preprocessing ---------------------")
@@ -2106,6 +2110,8 @@ if 'column_6' in read_df.columns:
 if value_columns:
     read_df[value_columns] = read_df[value_columns].astype(np.float32, copy=False)
 
+_prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("-------------------------- Filter 1: by date -------------------------")
 print("----------------------------------------------------------------------")
@@ -2723,6 +2729,8 @@ if create_plots:
 
 # -----------------------------------------------------------------------------
 
+_prof["s_filter_date_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("------------------ Filter 1.1.1: uncalibrated data -------------------")
 print("----------------------------------------------------------------------")
@@ -3095,8 +3103,10 @@ for plane in range(1, 5):
             print(f"[P{plane}s{strip}] Set to zero {changes_made} values, {percentage:.2f}% of total rows.")
             global_variables[f"zeroed_percentage_P{plane}s{strip}"] = percentage
 
+_prof["s_filter_uncal_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 if time_window_filtering:
-    
+
     print("----------------------------------------------------------------------")
     print("-------------------- Time window filtering (1/1) ---------------------")
     print("----------------------------------------------------------------------")
@@ -3441,6 +3451,7 @@ for key, idx_range in column_indices.items():
 data_purity = final_number_of_events / original_number_of_events * 100
 
 # End of the execution time
+_prof["s_time_window_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
@@ -3500,6 +3511,11 @@ metadata_execution_csv_path = save_metadata(
     },
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
+
+_prof["filename_base"] = filename_base
+_prof["execution_timestamp"] = execution_timestamp
+_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
+save_metadata(csv_path_profiling, _prof)
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------

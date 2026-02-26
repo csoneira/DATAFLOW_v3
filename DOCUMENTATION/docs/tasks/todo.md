@@ -1,0 +1,61 @@
+------- Old to do list -------
+
+## To do list:
+- See the hole in the gasless mingo-like RPC: it does not measure in an important region.
+- Find the voltage plateau: study the behaviour of the efficiency with the high voltage (HV). We are around 5.5 kV.
+- See how temperature, humidity, pressure affect the detector.
+- Study the gas flow: if it is equal, if it decreases with time, which is the optimal value of flux (to save gas if possible).
+- Document all data and software.
+- See if an autocalibration software exists; else, write it. It should use three layers to calibrate the fourth for every layer.
+- Write a visual interface for controlling the voltage, seeing the temperature, etc.
+- See if it is interesting that some strips are wider than others in terms of resolution.
+- See if it is interesting that the strips are crossed every layer, and even if it is interesting that they are of different shapes (just like the Coimbra RPC).
+- Avoid if possible the relé for the future.
+- Check the Alberto's power supply. If it works we will not need to change dramatically the architexture for future mingos.
+- Calibrate mingo offset on time difference to obtain a realistic position of the event.
+- Try to guess some physics we could learn from mingo.
+- Recalculate the velocity of propagation of the signal on the strip
+- Calculate the real active area, which is the area of the paint, to see what is the nominal large of the strips.
+- Asignar nombres a las capas y ver dónde están los canales.
+- Sometimes there are streamers: descargas bastante grandes que no llegan a ser chispas pero que se ven en los diagramas de carga sobre la superficie. Appear as a second peak in the charge spectrum histogram.
+- En última instancia la forma de conocer a qué canal se corresponde cada strip es desconectar uno de los canales y ver después cuál deja de aparecer en el pdf.
+- Create a code to reject in the efficiecy calculations those muons that do not pass through the forth layer (the first or the forth) because it passes throught the other three and we know that given that angle it goes outside of the detector.
+- Change the pdf generation to include absolutely all the plots, specially the control plots. **We can use the excel from which the pdf is generated: there we can indicate what new plots we want (the variables must exist, of course)**.
+- Add to the correlation plots a calculation on regression or directly in correlation to see when we are operating in normality.
+- Update the code to measure once in a while automatically (*self-trigger*) to adquire all the events that the detector is measuring, not only muon coincidences, to characterize noise and health of the detector, etc. The thing is that a lot of events are occuring in the detector: streams coming from the electric system itself, gammas, electrons, etc.
+- Correct the efficiency to be able to remeasure the voltage plateau.
+- The efficiency in several planes: 4: 0.6, 3: 0.8, 2: 0.8, 1: 0.4. All should have the same value, but for
+- Calculate the geometrical acceptance to check the differences in number in counts between layers.
+- We can use planes 2 and 3 to estimate the voltage plateau because it is the best efficiency estimation.
+- Modify to not use password to access the mingo PC.
+- TDCs have to be calibrated. Apparently temperature plays a role when we want resolutions of 10 ps because it can change the size of some hardware component in the TDC, but since we need 100 ps or so temperature will not be important. Probably all this problem in the correlations can be solved just by calibrating correctly the TDC, since Alberto noticed there are numbers that do not have appropriate values (but until now we just did not pay attention to it).
+- Remember: the width of the front-back correlation in time gives the total width of the strip.
+- My way (Caye) to calibrate the offset of the strip: fit a y = a + b*x line to the correlation cloud in times, then the a must be the center offset for every strip.
+- Calculate the zero of the charge is a actually difficult algorithm, but very interesting one to create.
+- Create a tmux window for the HV.
+- What is the criteria to choose one of the charge values between the front and back?
+- Heatmap in the celestial sphere
+- If the luminosity is high then the charge can be prop to the energy, but maybe at that range the mingo is blind (it saturates).
+- Add to the web-based CTS information about the logs.
+- Do some geometric study.
+- My time offset calibration method.
+- Hans: eventually we should trigger with two planes.
+- It is not a bad idea to simulate the building.
+- Set milestones and distribute them.
+- Set a timetable (daily, each two days, weekly, etc.) to do several important control processes: calibrate efficiency (with three layers), calibrate self trigger, and finally, maybe, measure with two layers: how often and for how long each process needs to be developed is something that we need to see.
+- Decide the number of cells we are going to consider in the miniTRASGO to set a resolution value, but also to define some statistical stuff. If we determine, for exmaple, that the uncertainty in time is $\Delta t$, then the unertainty in positon is velocity of the signal in the strip*$\Delta t$ = position uncertainty: this means that we could effectively define 300 mm / position uncertainty cells in each strip, so the total number of pixels will be: 4 * 300 mm / (pos. uncertainty in each strip). So we could define how much is good statistics, i.e. how many count we need in the detector to have a minimum number of counts per pixel, which would define what are good statistics.
+- Maybe the efficiency should be posed not in terms of layer efficiency but in terms of strip or even pixel efficiency, since **each strip is as different as the others not only between**
+- Change layers to see if a certain behaviour is due to the geometry or to the layer itself.
+- **The layers are situated at different distances to each other, BUT THE EFFICIENCY ANALYSIS DOES NOT TAKE THIS INTO ACCOUNT. Therefore, the efficienty numbers are wrong.**
+- Calibrate the AU (Arbitrary Units) to get from it the position information, the time information, the charge information,etc. check specially if the charge behaviour is linear with the time difference.
+- THE EFFICIENCY IN THE EFF.MAT FILES IS MADE AS THIS: ONE POINT PER .HLD FILE. SO IT COULD BE POSSIBLE THAT THERE ARE SOME .HLDs THAT HAVE TWO DIFFERENT HVs, IF THE DAQ WAS NOT STOPPED WHEN CHANGING THE HV. We are not going to avoid some .hld's being smaller because of some mistakes or because we stop the run before it is full, but we do can ensure that each .hld is only calculating with each one of the values of the HV.
+- 1h approx could be enough when measuring the efficiency.
+- The difference in timeStamps in Qmean, Str, Eff.mat, etc can give a clue on the mean time it takes to fill a .hld, since each mean .mat is created from an individual .hld.
+- To check the window in time of the trigger we can go to the TDC, write c001 in the search and then, once the page is loaded, see the c801 row. It says how wide the window is before and after the trigger: we could even shorten the window before, since we know that usually all the events are in -150 ns (we can see that in the Q1_F, etc files).
+- ![image](https://github.com/cayesoneira/miniTRASGO-documentation/assets/93153458/04e027f9-11ed-45c9-aaa5-54365ed7d67b)
+- Everyday (July 18th, 2023 for the first time) the ST is running 300 s.
+- Change the matlab pdf legends and titles to be more clear about the layers.
+
+
+
+

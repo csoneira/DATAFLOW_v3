@@ -116,6 +116,8 @@ task_number = 3
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
+_prof_t0 = time.perf_counter()
+_prof = {}
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 
@@ -745,6 +747,7 @@ csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execut
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
+csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 status_filename_base = ""
 status_execution_date = None
 
@@ -1274,6 +1277,7 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------- Data reading and preprocessing ---------------------")
@@ -1915,6 +1919,8 @@ for plane_index, z_value in enumerate(z_positions, start=1):
     working_df[z_col] = z_float
     global_variables[z_col] = z_float
 
+_prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("---------------- Binary topology of active strips --------------------")
 print("----------------------------------------------------------------------")
@@ -1996,6 +2002,8 @@ if create_plots:
         plt.show()
     plt.close()
 
+_prof["s_topology_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------- Some more tests (multi-strip data) -----------------")
 print("----------------------------------------------------------------------")
@@ -2937,6 +2945,8 @@ if calculate_sigmas_adjacent:
             plt.show()
         plt.close()
 
+_prof["s_multi_strip_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------- Y position calculation -----------------------")
 print("----------------------------------------------------------------------")
@@ -3052,6 +3062,8 @@ if create_plots:
 
 print("Y position calculated.")
 
+_prof["s_y_pos_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("------------ Last comprobation to the per-strip variables ------------")
 print("----------------------------------------------------------------------")
@@ -3171,6 +3183,8 @@ if self_trigger:
             if show_plots: plt.show()
             plt.close()
 
+_prof["s_last_comprobation_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------- Setting the variables of each RPC ------------------")
 print("----------------------------------------------------------------------")
@@ -3339,6 +3353,8 @@ if create_plots:
     if show_plots: plt.show()
     plt.close()
 
+_prof["s_rpc_vars_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("------ Put Tsum in reference to the first strip that is not zero -----")
 print("----------------------------------------------------------------------")
@@ -3463,6 +3479,8 @@ if create_debug_plots and filter6_cols:
 
 record_filter6_counts(working_df, "before_filter6")
 
+_prof["s_tsum_ref_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("--------------------- Filter 6: calibrated data ----------------------")
 for col in working_df.columns:
     if 'T_sum_final' in col:
@@ -3833,6 +3851,7 @@ if VERBOSE:
 data_purity = final_number_of_events / original_number_of_events * 100
 
 # End of the execution time
+_prof["s_filter6_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
@@ -3890,6 +3909,11 @@ metadata_execution_csv_path = save_metadata(
     },
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
+
+_prof["filename_base"] = filename_base
+_prof["execution_timestamp"] = execution_timestamp
+_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
+save_metadata(csv_path_profiling, _prof)
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------

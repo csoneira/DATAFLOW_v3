@@ -117,6 +117,8 @@ task_number = 4
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
+_prof_t0 = time.perf_counter()
+_prof = {}
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 
@@ -910,6 +912,7 @@ csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execut
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
+csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 status_filename_base = ""
 status_execution_date = None
 
@@ -936,6 +939,7 @@ completed_files = set(os.listdir(completed_directory))
 
 last_file_test = bool(config.get("last_file_test", False))
 
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------- Data reading and preprocessing ---------------------")
@@ -3273,6 +3277,8 @@ if raw_data_len == 0 and not self_trigger:
 
 #%%
 
+_prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("-------------- Detached angle and slowness fitting ----------------")
@@ -3762,6 +3768,8 @@ if create_plots:
 
 #%%
 
+_prof["s_detached_fitting_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("------------------------- TimTrack fitting ---------------------------")
@@ -4910,6 +4918,8 @@ if timeseries_and_fits:
 # working_df['chi_timtrack'] = working_df['th_chi']
 # working_df['chi_alternative'] = working_df['det_th_chi']
 
+_prof["s_timtrack_fitting_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("-------------------- Real tracking trigger type ----------------------")
 print("----------------------------------------------------------------------")
@@ -4974,8 +4984,10 @@ for _tt in definitive_tt_values:
     global_variables.setdefault(f"sigmoid_center_{_tt}", np.nan)
     global_variables.setdefault(f"fit_normalization_{_tt}", np.nan)
 
+_prof["s_trigger_type_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 if time_window_fitting:
-    
+
     print("---------------------------- Fitting loop ----------------------------")
     time_window_fitting_start = time.perf_counter()
     
@@ -6532,6 +6544,8 @@ if create_plots:
         plt.show()
     plt.close()
 
+_prof["s_fitting_loop_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("-------------------------- Save and finish ---------------------------")
@@ -7041,6 +7055,7 @@ if VERBOSE:
 data_purity = final_number_of_events / original_number_of_events * 100
 
 # End of the execution time
+_prof["s_save_finish_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
@@ -7100,6 +7115,11 @@ metadata_execution_csv_path = save_metadata(
     },
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
+
+_prof["filename_base"] = filename_base
+_prof["execution_timestamp"] = execution_timestamp
+_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
+save_metadata(csv_path_profiling, _prof)
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------

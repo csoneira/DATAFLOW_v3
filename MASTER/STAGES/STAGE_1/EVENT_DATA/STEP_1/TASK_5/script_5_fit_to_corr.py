@@ -121,6 +121,8 @@ task_number = 5
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
+_prof_t0 = time.perf_counter()
+_prof = {}
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 
@@ -426,6 +428,7 @@ csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execut
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
+csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 status_filename_base = ""
 status_execution_date = None
 
@@ -450,6 +453,7 @@ unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
 completed_files = set(os.listdir(completed_directory))
 
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------- Data reading and preprocessing ---------------------")
@@ -1544,6 +1548,8 @@ end_time = end_datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
 
+_prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print(f"------------- Starting date is {save_filename_suffix} -------------------") # This is longer so it displays nicely
@@ -2090,6 +2096,8 @@ if not os.path.isfile(hdf_path):
     print(f"HDF5 file not found: {hdf_path}")
     correct_angle = bool(config.get("correct_angle", False))
 
+_prof["s_post_read_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 if correct_angle:
     print("----------------------------------------------------------------------")
     print("-------- 1. Correction of the fitted angle --> predicted angle -------")
@@ -2373,6 +2381,8 @@ if create_plots or create_essential_plots:
         plt.show()
     plt.close()
 
+_prof["s_angle_correction_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 if create_plots or create_essential_plots:
     print("--------------- Simple efficiency vs theta (3v4 planes) -------------")
 
@@ -2768,6 +2778,7 @@ else:
     print("Column 'datetime' not found in DataFrame!")
 
 # End of the execution time
+_prof["s_efficiency_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
@@ -2825,6 +2836,11 @@ metadata_execution_csv_path = save_metadata(
     },
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
+
+_prof["filename_base"] = filename_base
+_prof["execution_timestamp"] = execution_timestamp
+_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
+save_metadata(csv_path_profiling, _prof)
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------

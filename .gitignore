@@ -105,8 +105,16 @@ venv/
 # ----------------------------------------------------------------------
 build/
 dist/
+DOCUMENTATION/site/
 *.egg-info/
 node_modules/
+
+# ----------------------------------------------------------------------
+# Documentation source exceptions
+# ----------------------------------------------------------------------
+!DOCUMENTATION/requirements.txt
+!DOCUMENTATION/docs/assets/
+!DOCUMENTATION/docs/assets/**
 
 # ----------------------------------------------------------------------
 # OS-specific noise

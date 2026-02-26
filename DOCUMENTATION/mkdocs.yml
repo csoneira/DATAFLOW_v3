@@ -1,0 +1,64 @@
+site_name: miniTRASGO documentation
+site_url: https://csoneira.github.io/miniTRASGO-documentation/  # Your GitHub Pages URL
+repo_name: csoneira/miniTRASGO-documentation
+repo_url: https://github.com/csoneira/miniTRASGO-documentation
+
+nav:
+    - Home:
+        - index.md
+        - Motivation: home/motivation.md
+        - About: home/about.md
+        - Publications: home/publications.md
+        - Contact: home/contact.md
+    - Detector design:
+        - design/index.md
+        - Hardware: design/hardware.md
+        - Software Environment: design/environment.md
+    - Operation:
+        - operation/index.md
+        - Starting the mingo: operation/configuration.md
+        - Calibration: operation/calibration.md
+        - Getting the measure: operation/measuring.md
+        - Monitoring: operation/monitoring.md
+    - Data and Analysis:
+        - data/index.md
+        - Datashape: data/shape.md
+        - Dataflow: data/dataflow.md
+    - Tasks, objectives and notes:
+        - tasks/index.md
+#        - Tasks: tasks/todo.md
+        - Objectives: tasks/objectives.md
+        - To understand: tasks/to-understand.md
+        - Documentation backlog: tasks/documentation-backlog.md
+        - Notebook: tasks/notes.md
+    - Troubleshooting:
+        - help/index.md
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+  logo: assets/trasgo_logo.png
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7 
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+
+extra_javascript:
+  - https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML
+
+markdown_extensions:
+#  - pymdownx.arithmatex
+  - pymdownx.superfences
+  - pymdownx.highlight

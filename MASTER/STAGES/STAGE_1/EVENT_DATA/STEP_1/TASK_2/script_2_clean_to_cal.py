@@ -31,6 +31,7 @@ import time
 import warnings
 from collections import defaultdict
 from functools import reduce
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import combinations
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -118,6 +119,8 @@ task_number = 2
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
+_prof_t0 = time.perf_counter()
+_prof = {}
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 
@@ -475,6 +478,7 @@ csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execut
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
+csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 status_filename_base = ""
 status_execution_date = None
 
@@ -1210,6 +1214,7 @@ def _format_dict_for_print(data: dict) -> dict:
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
 
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 print("----------------- Data reading and preprocessing ---------------------")
@@ -2903,6 +2908,8 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
 calculate_Q_sum_calibration = True
 print("Calculating Q sum calibration:")
 
+_prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 if calculate_Q_sum_calibration:
     print("--------------------------------------------------------------------------")
     print("-------------------- Charge pedestal calibration -------------------------")
@@ -3385,6 +3392,8 @@ else:
     QB_pedestal = Q_sum_calibration
     print("Skipping Charge Pedestal Calibration as per configuration.")
 
+_prof["s_charge_pedestal_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 if calculate_T_dif_calibration:
     print("----------------------------------------------------------------------")
     print("------------------- Position offset calibration ----------------------")
@@ -3672,8 +3681,10 @@ if create_plots:
     plt.close()
     del plot_df
 
+_prof["s_pos_offset_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 if time_window_filtering:
-    
+
     print("----------------------------------------------------------------------")
     print("-------------------- Time window filtering (1/2) ---------------------")
     print("----------------------------------------------------------------------")
@@ -4022,52 +4033,160 @@ if create_plots:
     plt.close()
     del plot_df
 
+_prof["s_time_window_1_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("------------------- Charge front-back correction ---------------------")
 print("----------------------------------------------------------------------")
 
+def _fit_qfb_coeffs(xdat, ydat):
+    """Pure-compute Q front-back polynomial fit (thread-safe, no matplotlib).
+
+    Replicates the two-pass curve_fit logic of scatter_2d_and_fit_new without
+    any plotting side-effects, so it can safely run in a ThreadPoolExecutor worker.
+    Returns the fitted coefficient array, or None if fitting fails / insufficient data.
+    """
+    mask1 = (
+        (xdat < distance_sum_charges_right_fit) &
+        (xdat > distance_sum_charges_left_fit) &
+        (ydat < distance_dif_charges_up_fit) &
+        (ydat > distance_dif_charges_low_fit)
+    )
+    xdat_pre_fit = xdat[mask1]
+    ydat_pre_fit = ydat[mask1]
+    if len(xdat_pre_fit) < degree_of_polynomial + 2:
+        return None
+    initial_guess = [1] * (degree_of_polynomial + 1)
+    try:
+        coeffs, _ = curve_fit(polynomial, xdat_pre_fit, ydat_pre_fit, p0=initial_guess)
+        residues   = np.abs(ydat_pre_fit - polynomial(xdat_pre_fit, *coeffs))
+        xdat_fit   = xdat_pre_fit[residues < front_back_fit_threshold]
+        ydat_fit   = ydat_pre_fit[residues < front_back_fit_threshold]
+        if len(xdat_fit) < degree_of_polynomial + 2:
+            return None
+        coeffs, _ = curve_fit(polynomial, xdat_fit, ydat_fit, p0=initial_guess)
+        return coeffs
+    except (RuntimeError, ValueError):
+        return None
+
+
+# helper for slewing correction parallelization
+
+def _compute_slew_pair(pair, data_arrays, y_lookup, z_positions, tdiff_to_x, c_mm_ns):
+    """Compute one entry of the slewing correction 'results' DataFrame.
+
+    ``pair`` is a tuple (p1, s1, p2, s2). ``data_arrays`` is a dict mapping
+    column names to NumPy arrays (pre-extracted from the DataFrame).  The
+    function returns a DataFrame with the same columns that the sequential
+    loop produced, or None if there are no valid entries after masking.
+
+    This worker is safe to call from a ThreadPoolExecutor because it only
+    operates on NumPy arrays and simple scalars.
+    """
+    p1, s1, p2, s2 = pair
+    Q1 = data_arrays.get(f"Q{p1}_Q_sum_{s1}")
+    Q2 = data_arrays.get(f"Q{p2}_Q_sum_{s2}")
+    T1 = data_arrays.get(f"T{p1}_T_sum_{s1}")
+    T2 = data_arrays.get(f"T{p2}_T_sum_{s2}")
+    TD1 = data_arrays.get(f"T{p1}_T_dif_{s1}")
+    TD2 = data_arrays.get(f"T{p2}_T_dif_{s2}")
+    if Q1 is None or Q2 is None or T1 is None or T2 is None or TD1 is None or TD2 is None:
+        return None
+
+    valid_mask = (
+        (Q1 != 0) & (Q2 != 0) &
+        (T1 != 0) & (T2 != 0) &
+        (TD1 != 0) & (TD2 != 0)
+    )
+    if not np.any(valid_mask):
+        return None
+
+    Q1 = Q1[valid_mask]
+    Q2 = Q2[valid_mask]
+    T1 = T1[valid_mask]
+    T2 = T2[valid_mask]
+    TD1 = TD1[valid_mask]
+    TD2 = TD2[valid_mask]
+
+    x1 = TD1 * tdiff_to_x  # mm
+    x2 = TD2 * tdiff_to_x
+    y1 = y_lookup[p1][s1 - 1]
+    y2 = y_lookup[p2][s2 - 1]
+    z1 = z_positions[p1 - 1]
+    z2 = z_positions[p2 - 1]
+
+    dx = x1 - x2
+    dy = y1 - y2
+    dz = z1 - z2
+
+    travel_time = np.sqrt(dx**2 + dy**2 + dz**2) / c_mm_ns
+    tsum_diff = (T1 - T2)
+    corrected_tsum_diff = tsum_diff + travel_time
+
+    return pd.DataFrame({
+        'plane1': p1, 'strip1': s1,
+        'plane2': p2, 'strip2': s2,
+        'Q_sum_semidiff': 0.5 * (Q1 - Q2),
+        'Q_sum_semisum':  0.5 * (Q1 + Q2),
+        'T_sum_corrected_diff': corrected_tsum_diff,
+        'T_sum_diff': tsum_diff,
+        'x_diff': dx,
+        'travel_time': travel_time
+    })
+
+
 if charge_front_back:
 
+    # ── Phase 1: pre-extract arrays and run 16 fits in parallel ──────────────
+    _qfb_tasks = []
     for key in [1, 2, 3, 4]:
         for i in range(4):
-            # Extract data from the DataFrame
-            Q_sum = working_df[f'Q{key}_Q_sum_{i+1}'].values
+            Q_sum  = working_df[f'Q{key}_Q_sum_{i+1}'].values
             Q_diff = working_df[f'Q{key}_Q_dif_{i+1}'].values
+            cond   = (Q_sum != 0) & (Q_diff != 0)
+            _qfb_tasks.append((key, i, Q_sum[cond], Q_diff[cond], cond))
 
-            # Apply condition to filter non-zero Q_sum and Q_diff
-            cond = (Q_sum != 0) & (Q_diff != 0)
-            Q_sum_adjusted = Q_sum[cond]
-            Q_dif_adjusted = Q_diff[cond]
-            
-            # Skip correction if no data is left after filtering
-            if np.sum(Q_sum_adjusted) == 0:
-                continue
+    _qfb_coeffs_map = {}
+    with ThreadPoolExecutor(max_workers=4) as _qfb_pool:
+        _qfb_futures = {
+            _qfb_pool.submit(_fit_qfb_coeffs, Q_sum_adj, Q_dif_adj): (key, i)
+            for key, i, Q_sum_adj, Q_dif_adj, cond in _qfb_tasks
+            if np.sum(Q_sum_adj) != 0
+        }
+        for fut in as_completed(_qfb_futures):
+            _key, _i = _qfb_futures[fut]
+            _qfb_coeffs_map[(_key, _i)] = fut.result()
 
-            # Perform scatter plot and fit
-            title = f"Q{key}_{i+1}. Charge diff. vs. charge sum."
-            x_label = "Charge sum"
-            y_label = "Charge diff"
+    # ── Phase 2: sequential apply corrections (+ optional plots) ─────────────
+    for key, i, Q_sum_adj, Q_dif_adj, cond in _qfb_tasks:
+        if np.sum(Q_sum_adj) == 0:
+            continue
+        coeffs = _qfb_coeffs_map.get((key, i))
+        if coeffs is None:
+            continue
+        print([f"{coeff:.3g}" for coeff in coeffs])
+        global_variables[f'P{key}_s{i+1}_Q_FB_coeffs'] = coeffs.tolist()
+
+        # if global_variables["analysis_mode"] == 1:
+        #     for index in [0, 1, 2, 3, 4, 5, 6]:
+        #         coeff_key = f"P{key}_s{i+1}_Q_FB_coeffs[{index}]_smoothed"
+        #         coeff_value = get_reprocessing_value(reprocessing_parameters, coeff_key)
+        #         if coeff_value is not None:
+        #             print("Using smoothed Q_FB_coeffs for P",key,"s",i+1,"index",index)
+        #             coeffs[index] = coeff_value
+
+        column_name  = f'Q{key}_Q_dif_{i+1}'
+        target_dtype = working_df[column_name].dtype
+        corrected_diff = Q_dif_adj - polynomial(Q_sum_adj, *coeffs)
+        working_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
+
+        if create_plots:
+            title        = f"Q{key}_{i+1}. Charge diff. vs. charge sum."
+            x_label      = "Charge sum"
+            y_label      = "Charge diff"
             name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_dif_vs_sum"
-            coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_dif_adjusted, title, x_label, y_label, name_of_file)
-            print([f"{coeff:.3g}" for coeff in coeffs])
-            
-            global_variables[f'P{key}_s{i+1}_Q_FB_coeffs'] = coeffs.tolist()
-            
-            column_name = f'Q{key}_Q_dif_{i+1}'
-            target_dtype = working_df[column_name].dtype
-            
-            # if global_variables["analysis_mode"] == 1:
-            #     for index in [0, 1, 2, 3, 4, 5, 6]:
-            #         coeff_key = f"P{key}_s{i+1}_Q_FB_coeffs[{index}]_smoothed"
-            #         coeff_value = get_reprocessing_value(reprocessing_parameters, coeff_key)
-            #         if coeff_value is not None:
-            #             print("Using smoothed Q_FB_coeffs for P",key,"s",i+1,"index",index)
-            #             coeffs[index] = coeff_value
+            scatter_2d_and_fit_new(Q_sum_adj, Q_dif_adj, title, x_label, y_label, name_of_file)
 
-            
-            corrected_diff = Q_dif_adjusted - polynomial(Q_sum_adjusted, *coeffs)
-            working_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
-    
     if self_trigger:
         print("SELF TRIGGER Charge front-back correction...")
         for key in [1, 2, 3, 4]:
@@ -4109,6 +4228,8 @@ else:
     print('Charge front-back correction was selected to not be performed.')
     Q_dif_cal_threshold_FB = Q_dif_cal_threshold_FB_wide
 
+_prof["s_charge_fb_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("------------- Filter 5: charge difference FB filtering ---------------")
 _debug_plot_filter_group(
@@ -4311,8 +4432,10 @@ if self_trigger:
         plt.close()
         del plot_df
 
+_prof["s_filter_fb_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 if slewing_correction:
-    
+
     print("----------------------------------------------------------------------")
     print("---------------------- Slewing correction 1/2 ------------------------")
     print("----------------------------------------------------------------------")
@@ -4341,59 +4464,47 @@ if slewing_correction:
         4: y_pos_T[1],
     }
     
-    results = []
-    
-    # Loop through all combinations of planes and strips
-    for (p1, s1), (p2, s2) in combinations([(p, s) for p in range(1, 5) for s in range(1, 5)], 2):
-        Q1 = data_slew[f"Q{p1}_Q_sum_{s1}"]
-        Q2 = data_slew[f"Q{p2}_Q_sum_{s2}"]
-        T1 = data_slew[f"T{p1}_T_sum_{s1}"]
-        T2 = data_slew[f"T{p2}_T_sum_{s2}"]
-        TD1 = data_slew[f"T{p1}_T_dif_{s1}"]
-        TD2 = data_slew[f"T{p2}_T_dif_{s2}"]
-        
-        valid_mask = (
-            (Q1 != 0) & (Q2 != 0) &
-            (T1 != 0) & (T2 != 0) &
-            (TD1 != 0) & (TD2 != 0)
-        )
+    # prepare arrays for thread workers to avoid DataFrame indexing inside threads
+    data_arrays: dict[str, np.ndarray] = {}
+    for col in t_sum_cols + q_sum_cols + t_dif_cols:
+        data_arrays[col] = working_df[col].values
 
-        # Apply mask to compute only valid values
-        Q1 = Q1[valid_mask]
-        Q2 = Q2[valid_mask]
-        T1 = T1[valid_mask]
-        T2 = T2[valid_mask]
-        TD1 = TD1[valid_mask]
-        TD2 = TD2[valid_mask]
-        
-        x1 = TD1 * tdiff_to_x  # mm
-        x2 = TD2 * tdiff_to_x
-        y1 = y_lookup[p1][s1 - 1]
-        y2 = y_lookup[p2][s2 - 1]
-        z1 = z_positions[p1 - 1]
-        z2 = z_positions[p2 - 1]
+    pairs = [
+        (p1, s1, p2, s2)
+        for p1 in range(1, 5)
+        for s1 in range(1, 5)
+        for p2 in range(p1 + 1, 5)
+        for s2 in range(1, 5)
+    ]
 
-        dx = x1 - x2
-        dy = y1 - y2
-        dz = z1 - z2
-
-        travel_time = np.sqrt(dx**2 + dy**2 + dz**2) / c_mm_ns
-        tsum_diff = (T1 - T2)
-        corrected_tsum_diff = tsum_diff + travel_time
-
-        results.append(pd.DataFrame({
-            'plane1': p1, 'strip1': s1,
-            'plane2': p2, 'strip2': s2,
-            'Q_sum_semidiff': 0.5 * (Q1 - Q2),
-            'Q_sum_semisum':  0.5 * (Q1 + Q2),
-            'T_sum_corrected_diff': corrected_tsum_diff,
-            'T_sum_diff': tsum_diff,
-            'x_diff': dx,
-            'travel_time': travel_time
-        }))
+    results: list[pd.DataFrame] = []
+    # run pair computation in parallel; worker defined above
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(
+            _compute_slew_pair,
+            pair,
+            data_arrays,
+            y_lookup,
+            z_positions,
+            tdiff_to_x,
+            c_mm_ns,
+        ): pair for pair in pairs}
+        for fut in as_completed(futures):
+            df_pair = fut.result()
+            if df_pair is not None and not df_pair.empty:
+                results.append(df_pair)
 
     # Concatenate all results
-    slew_df = pd.concat(results, ignore_index=True)
+    if results:
+        slew_df = pd.concat(results, ignore_index=True)
+    else:
+        # no valid data at all
+        slew_df = pd.DataFrame(columns=[
+            'plane1', 'strip1', 'plane2', 'strip2',
+            'Q_sum_semidiff', 'Q_sum_semisum',
+            'T_sum_corrected_diff', 'T_sum_diff',
+            'x_diff', 'travel_time'
+        ])
     
     
     # -------------------------------------------------------------------
@@ -5044,6 +5155,8 @@ if slewing_correction:
                 plt.show()
             plt.close()
 
+_prof["s_slewing_1_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------- Time sum calibration -------------------------")
 print("----------------------------------------------------------------------")
@@ -5422,6 +5535,8 @@ iteration_tt_check += 1
 unique_tt_types = working_df['clean_tt'].unique()
 print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
+_prof["s_time_sum_cal_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("--------------- Cross-talk filtering, will be set to 0 ---------------")
 print("----------------------------------------------------------------------")
@@ -5475,54 +5590,61 @@ if crosstalk_removal_and_recalibration:
     # Gaussian + linear function
     def gaussian_linear(x, a, mu, sigma, m, b):
         return a * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2)) + m * x + b
-    
-    for i, key in enumerate(['1', '2', '3', '4']):
-        for j in range(4):
-            col = f'Q{key}_Q_sum_{j+1}'
-            y = working_df[col]
-            
-            Q_clip_min = pedestal_left
-            Q_clip_max = pedestal_right
-            
-            num_bins = 80
-            data = y[(y != 0) & (y > Q_clip_min) & (y < Q_clip_max)]
-            
-            hist_vals, bin_edges = np.histogram(data, bins=num_bins)
-            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
-            try:
-                a_min = 0
-                a_max = 2*max(hist_vals) + 1
-                
-                mu_min = pedestal_left # -1
-                mu_max = crosstalk_fit_mu_max
-                
-                sigma_min = crosstalk_fit_sigma_min
-                sigma_max = crosstalk_fit_sigma_max
-                
-                # print(f"P{key}s{j+1}")
-                
-                popt, _ = curve_fit(
-                    gaussian_linear, 
-                    bin_centers, 
-                    hist_vals, 
-                    p0=[max(hist_vals), 1, 0.75, 0, 0], 
-                    bounds=([a_min, mu_min, sigma_min, -np.inf, -np.inf], [a_max, mu_max, sigma_max, np.inf, np.inf])
-                )
-                
-                a, mu, sigma, m, b = popt
-                
-                crosstalk_ampl[f'crstlk_ampl_P{key}s{j+1}'] = a
-                crosstalk_mean[f'crstlk_mu_P{key}s{j+1}'] = mu
-                crosstalk_std[f'crstlk_sigma_P{key}s{j+1}'] = sigma
-                crosstalk_linear[f'crstlk_mx_b_P{key}s{j+1}'] = [m, b]
-                
-                crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}'] = mu - 2 * sigma
-                # crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = min([mu + 3 * sigma, 1.2])
-                crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = mu + 3 * sigma
-                
-            except RuntimeError:
-                continue
+    def _fit_crosstalk_one(hist_vals, bin_centers, a_max, mu_min, mu_max, sigma_min, sigma_max):
+        """Thread-safe worker: fit gaussian+linear to one crosstalk histogram."""
+        try:
+            popt, _ = curve_fit(
+                gaussian_linear,
+                bin_centers, hist_vals,
+                p0=[max(hist_vals), 1, 0.75, 0, 0],
+                bounds=([0, mu_min, sigma_min, -np.inf, -np.inf],
+                        [a_max, mu_max, sigma_max, np.inf, np.inf])
+            )
+            a, mu, sigma, m, b = popt
+            return {'a': a, 'mu': mu, 'sigma': sigma, 'm': m, 'b': b}
+        except RuntimeError:
+            return None
+
+    # ── Phase 1: pre-extract histograms and run 16 fits in parallel ───────────
+    _ctalk_tasks = []
+    for key in ['1', '2', '3', '4']:
+        for j in range(4):
+            col  = f'Q{key}_Q_sum_{j+1}'
+            y    = working_df[col]
+            data = y[(y != 0) & (y > pedestal_left) & (y < pedestal_right)]
+            hist_vals, bin_edges = np.histogram(data, bins=80)
+            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+            a_max = 2 * max(hist_vals) + 1
+            _ctalk_tasks.append((key, j, hist_vals, bin_centers, a_max))
+
+    _ctalk_results = {}
+    with ThreadPoolExecutor(max_workers=4) as _ctalk_pool:
+        _ctalk_futures = {
+            _ctalk_pool.submit(
+                _fit_crosstalk_one, hv, bc, a_max,
+                pedestal_left, crosstalk_fit_mu_max,
+                crosstalk_fit_sigma_min, crosstalk_fit_sigma_max
+            ): (key, j)
+            for key, j, hv, bc, a_max in _ctalk_tasks
+        }
+        for fut in as_completed(_ctalk_futures):
+            _ckey, _j = _ctalk_futures[fut]
+            _ctalk_results[(_ckey, _j)] = fut.result()
+
+    # ── Phase 2: sequential apply results ────────────────────────────────────
+    for key, j, _, _, _ in _ctalk_tasks:
+        result = _ctalk_results.get((key, j))
+        if result is None:
+            continue
+        a, mu, sigma, m, b = result['a'], result['mu'], result['sigma'], result['m'], result['b']
+        crosstalk_ampl[f'crstlk_ampl_P{key}s{j+1}']         = a
+        crosstalk_mean[f'crstlk_mu_P{key}s{j+1}']           = mu
+        crosstalk_std[f'crstlk_sigma_P{key}s{j+1}']         = sigma
+        crosstalk_linear[f'crstlk_mx_b_P{key}s{j+1}']      = [m, b]
+        crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}'] = mu - 2 * sigma
+        # crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = min([mu + 3 * sigma, 1.2])
+        crosstalk_limits[f'crstlk_limit_P{key}s{j+1}']      = mu + 3 * sigma
     
     
     # Change the values for the ones in 
@@ -5786,6 +5908,8 @@ if create_plots:
         if show_plots: plt.show()
         plt.close(fig_Q)
 
+_prof["s_crosstalk_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("---------- Filter if any variable in the strip is 0 (2/3) ------------")
 print("----------------------------------------------------------------------")
@@ -5823,9 +5947,11 @@ iteration_tt_check += 1
 unique_tt_types = working_df['clean_tt'].unique()
 print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after processing:", unique_tt_types)
 
+_prof["s_filter_2_3_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 slewing_correction = False
 if slewing_correction:
-    
+
     print("----------------------------------------------------------------------")
     print("----------------------- Slewing correction 2/2 -----------------------")
     print("----------------------------------------------------------------------")
@@ -6441,6 +6567,8 @@ print("----------------------------------------------------------------------")
 print("--------------------- Using clean_tt as trigger ----------------------")
 print("----------------------------------------------------------------------")
 
+_prof["s_slewing_2_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 if time_window_filtering:
     print("----------------------------------------------------------------------")
     print("-------------------- Time window filtering (2/2) ---------------------")
@@ -6864,6 +6992,7 @@ record_strip_entries(working_df, "final")
 data_purity = final_number_of_events / original_number_of_events * 100
 
 # End of the execution time
+_prof["s_time_window_2_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
@@ -6923,6 +7052,11 @@ metadata_execution_csv_path = save_metadata(
     },
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
+
+_prof["filename_base"] = filename_base
+_prof["execution_timestamp"] = execution_timestamp
+_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
+save_metadata(csv_path_profiling, _prof)
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------
