@@ -29,26 +29,32 @@ fi
 declare -A STEP_SCRIPTS
 STEP_SCRIPTS["1.1"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/collect_data.py"
 STEP_SCRIPTS["1.2"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/build_dictionary.py"
+STEP_SCRIPTS["1.3"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_3_ENLARGE_DATASET/enlarge_dataset.py"
 STEP_SCRIPTS["2.1"]="${STEP_ROOT}/STEP_2_INFERENCE/STEP_2_1_ESTIMATE_PARAMS/estimate_and_plot.py"
 STEP_SCRIPTS["2.2"]="${STEP_ROOT}/STEP_2_INFERENCE/STEP_2_2_VALIDATION/validate_solution.py"
 STEP_SCRIPTS["2.3"]="${STEP_ROOT}/STEP_2_INFERENCE/STEP_2_3_UNCERTAINTY/build_uncertainty_lut.py"
 STEP_SCRIPTS["3.1"]="${STEP_ROOT}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION/create_time_series.py"
 STEP_SCRIPTS["3.2"]="${STEP_ROOT}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_2_SYNTHETIC_TIME_SERIES/synthetic_time_series.py"
 STEP_SCRIPTS["3.3"]="${STEP_ROOT}/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_3_CORRECTION/correction_by_inference.py"
+STEP_SCRIPTS["4.1"]="${STEP_ROOT}/STEP_4_REAL_DATA/STEP_4_1_COLLECT_REAL_DATA/collect_real_data.py"
+STEP_SCRIPTS["4.2"]="${STEP_ROOT}/STEP_4_REAL_DATA/STEP_4_2_ANALYZE/analyze.py"
 
 # Ordered list
-STEP_ORDER=("1.1" "1.2" "2.1" "2.2" "2.3" "3.1" "3.2" "3.3")
+STEP_ORDER=("1.1" "1.2" "1.3" "2.1" "2.2" "2.3" "3.1" "3.2" "3.3" "4.1" "4.2")
 
 # Step descriptions
 declare -A STEP_DESC
 STEP_DESC["1.1"]="Collect simulated data & match with simulation parameters"
 STEP_DESC["1.2"]="Build dictionary and dataset (filter outliers, select entries)"
+STEP_DESC["1.3"]="Optionally enlarge STEP 1.2 dataset using STEP 3-style synthetic generation"
 STEP_DESC["2.1"]="Estimate parameters (inverse problem via dictionary matching)"
 STEP_DESC["2.2"]="Validate solution (estimated vs simulated, error analysis)"
 STEP_DESC["2.3"]="Uncertainty assessment (build LUT from error distributions)"
 STEP_DESC["3.1"]="Create synthetic (flux, efficiency) time series"
 STEP_DESC["3.2"]="Build synthetic dataset from time series and dictionary"
 STEP_DESC["3.3"]="Apply inference correction and uncertainty to synthetic dataset"
+STEP_DESC["4.1"]="Collect real-data metadata (station/task/date filtered)"
+STEP_DESC["4.2"]="Infer real-data parameters and attach LUT uncertainties"
 
 # ── Helpers ────────────────────────────────────────────────────────────
 

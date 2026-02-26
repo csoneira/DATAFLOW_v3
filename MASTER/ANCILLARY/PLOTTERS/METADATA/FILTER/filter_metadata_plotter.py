@@ -276,7 +276,9 @@ def load_allowed_basenames(station: str) -> Set[str]:
     root = STATIONS_ROOT / station
 
     if station == "MINGO00":
-        stage0_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
+        stage0_history_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames_history.csv"
+        stage0_live_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
+        stage0_csv = stage0_history_csv if stage0_history_csv.exists() else stage0_live_csv
     else:
         metadata_dir = root / "STAGE_0" / "REPROCESSING" / "STEP_0" / "OUTPUT_FILES"
         stage0_csv = _resolve_station_metadata_file(

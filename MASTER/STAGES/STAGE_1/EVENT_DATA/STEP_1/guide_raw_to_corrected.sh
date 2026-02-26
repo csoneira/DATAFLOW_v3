@@ -948,9 +948,13 @@ while true; do
       sleep "$STEP1_RESOURCE_BACKOFF_S"
       continue
     fi
-    log_info "Running station $station task${task_id} (${task_label}) ..."
+    selection_order="${STEP1_SELECTION_ORDER_DEFAULT:-latest}"
+    if [[ "$station" == "0" ]]; then
+      selection_order="${STEP1_SELECTION_ORDER_MINGO00:-oldest}"
+    fi
+    log_info "Running station $station task${task_id} (${task_label}) [selection_order=${selection_order}] ..."
 
-    if ! python3 -u "$task_script" "$station" "${TASK_VERBOSE_ARGS[@]}"; then
+    if ! DATAFLOW_STEP1_SELECTION_ORDER="${selection_order}" python3 -u "$task_script" "$station" "${TASK_VERBOSE_ARGS[@]}"; then
       log_warn "Task $(basename "$task_script") failed for station $station; continuing to next pair."
       continue
     fi

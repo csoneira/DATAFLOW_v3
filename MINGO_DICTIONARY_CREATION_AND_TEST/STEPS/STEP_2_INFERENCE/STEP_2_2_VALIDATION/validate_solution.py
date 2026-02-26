@@ -37,8 +37,9 @@ import pandas as pd
 # ── Paths ────────────────────────────────────────────────────────────────
 STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent
-PIPELINE_DIR = INFERENCE_DIR.parent
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+PIPELINE_DIR = INFERENCE_DIR.parent               # .../STEPS
+PROJECT_DIR = PIPELINE_DIR.parent                 # .../MINGO_DICTIONARY_CREATION_AND_TEST
+DEFAULT_CONFIG = PROJECT_DIR / "config.json"
 
 DEFAULT_ESTIMATED = (
     INFERENCE_DIR / "STEP_2_1_ESTIMATE_PARAMS"
@@ -51,6 +52,10 @@ DEFAULT_DICTIONARY = (
 DEFAULT_DATASET = (
     PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
     / "OUTPUTS" / "FILES" / "dataset.csv"
+)
+DEFAULT_DATASET_ENLARGED = (
+    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_3_ENLARGE_DATASET"
+    / "OUTPUTS" / "FILES" / "enlarged_dataset.csv"
 )
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
@@ -105,9 +110,69 @@ log = logging.getLogger("STEP_2.2")
 
 
 def _load_config(path: Path) -> dict:
+    def _merge_dicts(base: dict, override: dict) -> dict:
+        out = dict(base)
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = _merge_dicts(out[k], v)
+            else:
+                out[k] = v
+        return out
+
+    cfg: dict = {}
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    runtime_path = path.with_name("config_runtime.json")
+    if runtime_path.exists():
+        runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, runtime_cfg)
+        log.info("Loaded runtime overrides: %s", runtime_path)
+    return cfg
+
+
+def _as_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _resolve_input_path(path_like: str | Path) -> Path:
+    p = Path(path_like).expanduser()
+    if p.is_absolute():
+        return p
+    candidate_project = PROJECT_DIR / p
+    if candidate_project.exists():
+        return candidate_project
+    candidate_pipeline = PIPELINE_DIR / p
+    if candidate_pipeline.exists():
+        return candidate_pipeline
+    candidate_step = STEP_DIR / p
+    if candidate_step.exists():
+        return candidate_step
+    return candidate_project
+
+
+def _select_default_dataset_path(config: dict) -> Path:
+    cfg_13 = config.get("step_1_3", {})
+    enabled_13 = _as_bool(cfg_13.get("enabled", False), False)
+    if not enabled_13:
+        return DEFAULT_DATASET
+
+    enlarged_cfg = cfg_13.get("enlarged_dataset_csv", None)
+    enlarged_path = _resolve_input_path(enlarged_cfg) if enlarged_cfg else DEFAULT_DATASET_ENLARGED
+    if enlarged_path.exists():
+        log.info("STEP 1.3 selection: using enlarged dataset for STEP 2 (%s).", enlarged_path)
+        return enlarged_path
+
+    log.warning(
+        "STEP 1.3 is enabled but enlarged dataset file is missing: %s. Falling back to STEP 1.2 dataset.",
+        enlarged_path,
+    )
+    return DEFAULT_DATASET
 
 
 def main() -> int:
@@ -124,9 +189,19 @@ def main() -> int:
     _clear_plots_dir()
     cfg_22 = config.get("step_2_2", {})
 
-    est_path = Path(args.estimated_csv) if args.estimated_csv else DEFAULT_ESTIMATED
-    dict_path = Path(args.dictionary_csv) if args.dictionary_csv else DEFAULT_DICTIONARY
-    data_path = Path(args.dataset_csv) if args.dataset_csv else DEFAULT_DATASET
+    est_path = _resolve_input_path(args.estimated_csv) if args.estimated_csv else DEFAULT_ESTIMATED
+    dict_path = _resolve_input_path(args.dictionary_csv) if args.dictionary_csv else DEFAULT_DICTIONARY
+    data_path = _resolve_input_path(args.dataset_csv) if args.dataset_csv else _select_default_dataset_path(config)
+    cfg_13 = config.get("step_1_3", {})
+    if args.dataset_csv:
+        dataset_mode = "cli_dataset_override"
+    elif (
+        _as_bool(cfg_13.get("enabled", False), False)
+        and data_path.resolve() != DEFAULT_DATASET.resolve()
+    ):
+        dataset_mode = "step_1_3_enlarged"
+    else:
+        dataset_mode = "step_1_2_original"
 
     relerr_clip = float(cfg_22.get("relerr_threshold_pct", 50.0))
 
@@ -150,6 +225,7 @@ def main() -> int:
                 "Invalid step_2_2.relerr_plot_limits_pct=%r; using default [-5, 5].",
                 relerr_plot_limits_cfg,
             )
+    signed_relerr_cmap_name = str(cfg_22.get("signed_relerr_cmap", "PiYG")).strip() or "PiYG"
 
     for label, path in [("Estimated", est_path), ("Dictionary", dict_path), ("Dataset", data_path)]:
         if not path.exists():
@@ -210,6 +286,10 @@ def main() -> int:
 
     # Summary
     summary: dict = {
+        "estimated_csv": str(est_path),
+        "dictionary_csv": str(dict_path),
+        "dataset_csv": str(data_path),
+        "dataset_source_mode": dataset_mode,
         "total_points": len(val),
         "parameters_validated": param_names,
     }
@@ -234,6 +314,7 @@ def main() -> int:
         relerr_clip,
         plot_params,
         relerr_plot_limits,
+        signed_relerr_cmap_name,
     )
 
     log.info("Done.")
@@ -248,6 +329,7 @@ def _make_plots(
     relerr_clip: float,
     plot_params: list[str] | None = None,
     relerr_plot_limits: tuple[float, float] = (-5.0, 5.0),
+    signed_relerr_cmap_name: str = "PiYG",
 ) -> None:
     """Generate validation plots."""
     plt.rcParams.update({
@@ -256,11 +338,24 @@ def _make_plots(
         "axes.grid": True, "grid.alpha": 0.25,
         "axes.spines.top": False, "axes.spines.right": False,
     })
-    signed_relerr_cmap = mcolors.LinearSegmentedColormap.from_list(
-        "signed_relerr_contrast",
-        ["#2166AC", "#67A9CF", "#222222", "#EF8A62", "#B2182B"],
-        N=256,
-    )
+    signed_relerr_cmap = None
+    cmap_candidates = [
+        str(signed_relerr_cmap_name).strip(),
+        f"cmc.{str(signed_relerr_cmap_name).strip()}",
+        "PiYG",
+        "PiYG_r",
+        "RdYlBu_r",
+    ]
+    for cmap_name in cmap_candidates:
+        if not cmap_name:
+            continue
+        try:
+            signed_relerr_cmap = plt.get_cmap(cmap_name)
+            break
+        except ValueError:
+            continue
+    if signed_relerr_cmap is None:
+        signed_relerr_cmap = plt.get_cmap("RdYlBu_r")
 
     selected_params = param_names
     if plot_params:
@@ -348,6 +443,26 @@ def _make_plots(
             except OSError as exc:
                 log.warning("Could not remove old plot %s: %s", old_plot, exc)
 
+    # Precompute dictionary/off-dictionary split once for combined validation plots.
+    dict_compare_available = False
+    in_df = pd.DataFrame()
+    out_df = pd.DataFrame()
+    if "true_is_dictionary_entry" in val.columns:
+        is_dict = val["true_is_dictionary_entry"].astype(str).str.lower().isin(
+            ("true", "1", "yes")
+        )
+        same_paramset_as_dict = _rows_with_dictionary_parameter_set()
+        overlap_rows = (~is_dict) & same_paramset_as_dict
+        strict_offdict = (~is_dict) & (~same_paramset_as_dict)
+        if overlap_rows.any():
+            log.info(
+                "Excluding %d off-dict rows with dictionary-equivalent parameter set from dict-vs-offdict overlays.",
+                int(overlap_rows.sum()),
+            )
+        in_df = val.loc[is_dict]
+        out_df = val.loc[strict_offdict]
+        dict_compare_available = True
+
     # ── 1. Estimated vs Simulated with signed relative error ─────────
     for pname in selected_params:
         true_col = f"true_{pname}"
@@ -362,7 +477,12 @@ def _make_plots(
         if m.sum() < 3:
             continue
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5.5))
+        fig, (ax1, ax2) = plt.subplots(
+            1,
+            2,
+            figsize=(13.5, 5.5),
+            gridspec_kw={"width_ratios": [1.2, 1.0]},
+        )
 
         # Left: scatter true vs estimated, coloured by signed relative error
         tv, ev, rv = t[m].values, e[m].values, r[m].values
@@ -372,8 +492,17 @@ def _make_plots(
             )
         else:
             norm = mcolors.Normalize(vmin=relerr_plot_min, vmax=relerr_plot_max)
-        sc = ax1.scatter(tv, ev, c=rv, cmap=signed_relerr_cmap, s=14, alpha=0.9,
-                         norm=norm)
+        sc = ax1.scatter(
+            tv,
+            ev,
+            c=rv,
+            cmap=signed_relerr_cmap,
+            s=28,
+            alpha=0.92,
+            norm=norm,
+            edgecolors="#1A1A1A",
+            linewidths=0.42,
+        )
         lo = min(tv.min(), ev.min())
         hi = max(tv.max(), ev.max())
         pad = 0.02 * (hi - lo) if hi > lo else 0.01
@@ -384,28 +513,74 @@ def _make_plots(
         ax1.set_aspect("equal", adjustable="box")
         fig.colorbar(sc, ax=ax1, label="Rel. error [%] (clipped)", shrink=0.85)
 
-        # Right: histogram of signed relative error (configured plotting window)
-        rv_finite = rv[np.isfinite(rv)]
-        rv_filtered = rv_finite[
-            (rv_finite >= relerr_plot_min) & (rv_finite <= relerr_plot_max)
-        ]
-        n_outside = len(rv_finite) - len(rv_filtered)
-        if len(rv_filtered) > 0:
-            ax2.hist(rv_filtered, bins=50, color="#4C78A8", alpha=0.8, edgecolor="white")
-            ax2.axvline(0, color="black", linewidth=0.8)
-            ax2.axvline(np.median(rv_filtered), color="#E45756", linestyle="--",
-                        label=f"median = {np.median(rv_filtered):.2f}%")
-            title2 = f"Relative error distribution: {pname}"
-            if n_outside > 0:
-                title2 += (
-                    f"  ({n_outside} outside [{relerr_plot_min:.1f}, "
-                    f"{relerr_plot_max:.1f}]% omitted)"
+        # Right: in-dictionary vs strict off-dictionary relative-error overlay.
+        if dict_compare_available:
+            in_raw = pd.to_numeric(in_df.get(relerr_col), errors="coerce").dropna()
+            out_raw = pd.to_numeric(out_df.get(relerr_col), errors="coerce").dropna()
+            in_raw = in_raw[in_raw.abs() <= relerr_clip]
+            out_raw = out_raw[out_raw.abs() <= relerr_clip]
+            in_vals = in_raw[(in_raw >= relerr_plot_min) & (in_raw <= relerr_plot_max)]
+            out_vals = out_raw[(out_raw >= relerr_plot_min) & (out_raw <= relerr_plot_max)]
+
+            density_flag = False if pname in ("eff_sim_1", "flux_cm2_min") else True
+            y_label = "Count" if not density_flag else "Density"
+            overlay_plotted = False
+            if not in_vals.empty:
+                ax2.hist(
+                    in_vals,
+                    bins=40,
+                    histtype="step",
+                    linewidth=1.8,
+                    color="#2ca02c",
+                    label=f"In-dict (n={len(in_vals)})",
+                    density=density_flag,
                 )
+                overlay_plotted = True
+            if not out_vals.empty:
+                ax2.hist(
+                    out_vals,
+                    bins=40,
+                    histtype="step",
+                    linewidth=1.8,
+                    color="#d62728",
+                    label=f"Off-dict strict (n={len(out_vals)})",
+                    density=density_flag,
+                )
+                overlay_plotted = True
+            ax2.set_xlabel(f"Rel. error {pname} [%]")
+            ax2.set_ylabel(y_label)
+            ax2.set_title("In-dict vs off-dict strict")
+            ax2.set_xlim(relerr_plot_min, relerr_plot_max)
+            if pname in ("eff_sim_1", "flux_cm2_min"):
+                ax2.set_yscale("log")
+            if overlay_plotted:
+                ax2.legend(fontsize=8)
+            else:
+                ax2.text(
+                    0.5,
+                    0.5,
+                    "No in-dict/off-dict\npoints in window",
+                    ha="center",
+                    va="center",
+                    transform=ax2.transAxes,
+                    fontsize=8,
+                    color="#555555",
+                )
+        else:
+            ax2.set_title("In-dict vs off-dict strict")
+            ax2.text(
+                0.5,
+                0.5,
+                "true_is_dictionary_entry\nnot available",
+                ha="center",
+                va="center",
+                transform=ax2.transAxes,
+                fontsize=8,
+                color="#555555",
+            )
             ax2.set_xlabel(f"Rel. error {pname} [%]")
             ax2.set_ylabel("Count")
-            ax2.set_title(title2)
             ax2.set_xlim(relerr_plot_min, relerr_plot_max)
-            ax2.legend(fontsize=8)
 
         fig.suptitle(f"Validation: {pname}", fontsize=11)
         fig.tight_layout()
@@ -455,7 +630,7 @@ def _make_plots(
                 alpha=0.25, zorder=1, label="Dictionary entries",
             )
 
-        # Data points ON TOP, signed relative error, RdYlBu_r
+        # Data points ON TOP, signed relative error
         er_vals = er[m].values
         if relerr_plot_min < 0 < relerr_plot_max:
             norm = mcolors.TwoSlopeNorm(
@@ -465,7 +640,13 @@ def _make_plots(
             norm = mcolors.Normalize(vmin=relerr_plot_min, vmax=relerr_plot_max)
         sc = ax.scatter(
             fx[m], ey[m], c=er_vals,
-            cmap=signed_relerr_cmap, s=18, alpha=0.95, norm=norm, zorder=3,
+            cmap=signed_relerr_cmap,
+            s=28,
+            alpha=0.95,
+            norm=norm,
+            zorder=3,
+            edgecolors="#1A1A1A",
+            linewidths=0.38,
         )
         fig.colorbar(sc, ax=ax, label=f"Rel. error {pname} [%] (clipped)", shrink=0.85)
 
@@ -524,61 +705,8 @@ def _make_plots(
             _save_figure(fig, PLOTS_DIR / f"error_vs_events_{pname}.png")
             plt.close(fig)
 
-    # ── 4. In-dictionary vs out-of-dictionary comparison ─────────────
-    if "true_is_dictionary_entry" in val.columns:
-        is_dict = val["true_is_dictionary_entry"].astype(str).str.lower().isin(
-            ("true", "1", "yes")
-        )
-        same_paramset_as_dict = _rows_with_dictionary_parameter_set()
-        overlap_rows = (~is_dict) & same_paramset_as_dict
-        strict_offdict = (~is_dict) & (~same_paramset_as_dict)
-        if overlap_rows.any():
-            log.info(
-                "Excluding %d off-dict rows with dictionary-equivalent parameter set from dict-vs-offdict plots.",
-                int(overlap_rows.sum()),
-            )
-
-        in_df = val.loc[is_dict]
-        out_df = val.loc[strict_offdict]
-
-        dict_plot_params = selected_params
-        for pname in dict_plot_params:
-            relerr_col = f"relerr_{pname}_pct"
-            if relerr_col not in val.columns:
-                continue
-            fig, ax = plt.subplots(figsize=(7, 5))
-            in_raw = pd.to_numeric(in_df[relerr_col], errors="coerce").dropna()
-            out_raw = pd.to_numeric(out_df[relerr_col], errors="coerce").dropna()
-            in_raw = in_raw[in_raw.abs() <= relerr_clip]
-            out_raw = out_raw[out_raw.abs() <= relerr_clip]
-            in_vals = in_raw[
-                (in_raw >= relerr_plot_min) & (in_raw <= relerr_plot_max)
-            ]
-            out_vals = out_raw[
-                (out_raw >= relerr_plot_min) & (out_raw <= relerr_plot_max)
-            ]
-            # Use counts (not density) for specific parameters requested by user
-            density_flag = False if pname in ("eff_sim_1", "flux_cm2_min") else True
-            if not in_vals.empty:
-                ax.hist(in_vals, bins=40, alpha=0.6, color="#2ca02c",
-                        label=f"In-dict (n={len(in_vals)})", density=density_flag)
-            if not out_vals.empty:
-                ax.hist(out_vals, bins=40, alpha=0.6, color="#d62728",
-                        label=f"Off-dict strict (n={len(out_vals)})", density=density_flag)
-            ax.set_xlabel(f"Rel. error {pname} [%]")
-            ax.set_ylabel("Count" if not density_flag else "Density")
-            ax.set_title(
-                f"In-dict vs off-dict strict: rel. error {pname} "
-                f"([{relerr_plot_min:.1f}, {relerr_plot_max:.1f}]%)"
-            )
-            ax.set_xlim(relerr_plot_min, relerr_plot_max)
-            ax.legend(fontsize=8)
-            # Put Y axis in log scale only for the two requested parameters
-            if pname in ("eff_sim_1", "flux_cm2_min"):
-                ax.set_yscale("log")
-            fig.tight_layout()
-            _save_figure(fig, PLOTS_DIR / f"dict_vs_offdict_relerr_{pname}.png")
-            plt.close(fig)
+    # Note: dict-vs-offdict histogram overlays are now embedded in validation_*.png
+    # to keep one validation figure per parameter.
 
 
 if __name__ == "__main__":

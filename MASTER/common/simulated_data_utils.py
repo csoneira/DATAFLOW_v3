@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Tuple, List
 
@@ -14,6 +15,20 @@ SIM_PARAMS_DEFAULT = DATAFLOW_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "
 
 SIM_DATA_DIR = DATAFLOW_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA"
 SIM_DATA_FILES_DIR = SIM_DATA_DIR / "FILES"
+
+
+@lru_cache(maxsize=16)
+def _read_sim_params_csv_cached(path_text: str, mtime_ns: int, size: int) -> pd.DataFrame:
+    """Read simulation parameters CSV and cache by path + file identity."""
+    return pd.read_csv(path_text)
+
+
+def _load_sim_params_df(sim_params_path: Path) -> Optional[pd.DataFrame]:
+    path = Path(sim_params_path)
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return _read_sim_params_csv_cached(str(path), stat.st_mtime_ns, stat.st_size)
 
 
 def _normalize_param_hash(value: object) -> Optional[str]:
@@ -90,9 +105,9 @@ def load_simulated_z_positions(
     param_hash: str,
     sim_params_path: Path = SIM_PARAMS_DEFAULT,
 ) -> Optional[List[float]]:
-    if not sim_params_path.exists():
+    sim_params = _load_sim_params_df(sim_params_path)
+    if sim_params is None:
         return None
-    sim_params = pd.read_csv(sim_params_path)
     if "param_hash" not in sim_params.columns:
         return None
     matches = sim_params[sim_params["param_hash"] == param_hash]
@@ -114,9 +129,9 @@ def load_simulated_z_positions_for_file(
     basename_no_ext: str,
     sim_params_path: Path = SIM_PARAMS_DEFAULT,
 ) -> Tuple[Optional[List[float]], Optional[str]]:
-    if not sim_params_path.exists():
+    sim_params = _load_sim_params_df(sim_params_path)
+    if sim_params is None:
         return None, None
-    sim_params = pd.read_csv(sim_params_path)
     if "file_name" not in sim_params.columns:
         return None, None
     file_name = basename_no_ext if basename_no_ext.endswith(".dat") else f"{basename_no_ext}.dat"

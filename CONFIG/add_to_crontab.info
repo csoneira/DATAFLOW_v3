@@ -287,7 +287,7 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 */10 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/create_metadata_plots.lock /bin/bash $HOME/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/create_metadata_plots.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/create_metadata_plots.log 2>&1
 
 # SIMULATION PLOTTERS
-*/30 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/run_simulation_plots.lock /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/PLOTTERS/EXECUTION/run_simulation_plots.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/run_simulation_plots.log 2>&1
+*/10 * * * * /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/run_simulation_plots.lock /bin/bash $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/PLOTTERS/EXECUTION/run_simulation_plots.sh >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/PLOTTERS/run_simulation_plots.log 2>&1
 
 
 # --------------------------------------------------------------------------------

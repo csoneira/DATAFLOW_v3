@@ -80,6 +80,15 @@ PDF_TARGETS = {
         / "simulation_execution_time_hist.pdf",
         "description": "Simulation execution time histogram",
     },
+    "backpressure_monitor": {
+        "path": BASE_DIR
+        / "MINGO_DIGITAL_TWIN"
+        / "PLOTTERS"
+        / "EXECUTION"
+        / "BACKPRESSURE"
+        / "backpressure_monitor.pdf",
+        "description": "STEP_0 backpressure monitor PDF",
+    },
 }
 
 CLEANER_SCRIPT = (
@@ -96,7 +105,8 @@ HELP_TEXT = (
     "  /start or /help - Display this guide.\n\n"
     "SIMULATION PDF Reports:\n"
     "  /param_mesh_summary - Param mesh summary PDF.\n"
-    "  /simulation_execution_time_hist - Simulation execution time histogram PDF.\n\n"
+    "  /simulation_execution_time_hist - Simulation execution time histogram PDF.\n"
+    "  /backpressure_monitor - Send latest STEP_0 backpressure monitor PDF.\n\n"
     "ANALYSIS PDF Reports:\n"
     "  /definitive_execution_report - Definitive execution map PDF.\n"
     "  /filter_metadata_report - Filter metadata PDF.\n"
@@ -104,9 +114,11 @@ HELP_TEXT = (
     "  /execution_metadata_report - Execution metadata PDF.\n\n"
     "Maintenance Tools:\n"
     "  /clean_dataflow_status - Run clean_dataflow.sh --compact to show disk usage.\n"
-    "  /clean_dataflow_force - Run clean_dataflow.sh --force --compact (temps, plots, completed; never metadata).\n"
+    "  /clean_dataflow_force - Run clean_dataflow.sh --force --compact (temps, plots, completed; never metadata).\n\n"
+    "Terminal:\n"
     "  /terminal <password> - Enable terminal mode for this chat.\n"
-    "  /exit - Disable terminal mode.\n"
+    "  /exit - Disable terminal mode.\n\n"
+    "Operation Tools:\n"
     "  /restart_bot - Restart this Telegram bot.\n"
     "==========================================="
 )

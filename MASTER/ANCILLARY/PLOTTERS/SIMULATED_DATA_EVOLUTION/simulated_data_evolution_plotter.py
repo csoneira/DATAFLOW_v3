@@ -1,0 +1,991 @@
+#!/usr/bin/env python3
+"""Plot simulated parameter evolution with MASTER-stage color coding."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+import re
+import sys
+import warnings
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import ast
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from matplotlib import colormaps
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.lines import Line2D
+from matplotlib.colors import to_hex
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+
+
+def detect_repo_root() -> Path:
+    for parent in SCRIPT_PATH.parents:
+        if (parent / "MASTER").is_dir() and (parent / "STATIONS").is_dir():
+            return parent
+    return Path.home() / "DATAFLOW_v3"
+
+
+REPO_ROOT = detect_repo_root()
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from MASTER.common.plot_utils import pdf_save_rasterized_page  # noqa: E402
+
+
+PLOTTER_DIR = SCRIPT_PATH.parent
+PLOTS_DIR = PLOTTER_DIR / "PLOTS"
+STATIONS_ROOT = REPO_ROOT / "STATIONS"
+DEFAULT_SIM_PARAMS = REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
+DEFAULT_OUTPUT = PLOTS_DIR / "simulated_data_evolution_report.pdf"
+DEFAULT_STATION = "MINGO00"
+DEFAULT_PARAMS: Tuple[str, ...] = ("execution_time", "cos_n", "flux_cm2_min", "eff_1", "selected_rows")
+DEFAULT_POINT_SIZE = 8.0
+DEFAULT_ALPHA = 0.55
+DEFAULT_EXECUTION_LOG_SCALE_SECONDS = 3600.0
+UNTRACKED_STAGE_INDEX = -1
+UNTRACKED_STAGE_LABEL = "UNTRACKED (not in STEP 0 history)"
+UNTRACKED_STAGE_COLOR = "#bdbdbd"
+
+
+@dataclass(frozen=True)
+class StageSpec:
+    index: int
+    label: str
+    color: str
+    csv_path: Path
+    basename_columns: Tuple[str, ...]
+
+
+def configure_matplotlib_style() -> None:
+    plt.style.use("seaborn-v0_8-whitegrid")
+
+
+def normalize_station_token(token: str) -> str:
+    clean = token.strip().upper()
+    if clean.startswith("MINGO"):
+        clean = clean[5:]
+    digits = "".join(ch for ch in clean if ch.isdigit())
+    if not digits:
+        return DEFAULT_STATION
+    return f"MINGO{int(digits):02d}"
+
+
+def normalize_basename(value: object) -> str:
+    text = str(value).strip()
+    if not text:
+        return ""
+    return Path(text).stem.strip()
+
+
+def build_discrete_stage_colors() -> Tuple[str, ...]:
+    # STEP 0 remains white/hollow; TASK 1..5 use discretized turbo.
+    turbo_steps = 5
+    turbo = colormaps["turbo"].resampled(turbo_steps)
+    colors: List[str] = ["#ffffff"]
+    colors.extend(to_hex(turbo(i)) for i in range(turbo_steps))
+    return tuple(colors)
+
+
+STAGE_COLORS = build_discrete_stage_colors()
+
+
+def stage_specs_for_station(station: str) -> List[StageSpec]:
+    root = STATIONS_ROOT / station
+    stage0_history_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames_history.csv"
+    stage0_live_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
+    if stage0_history_csv.exists():
+        stage0_csv = stage0_history_csv
+        stage0_label = "STEP 0 - imported_basenames_history"
+    else:
+        stage0_csv = stage0_live_csv
+        stage0_label = "STEP 0 - imported_basenames"
+    specs: List[StageSpec] = [
+        StageSpec(
+            index=0,
+            label=stage0_label,
+            color=STAGE_COLORS[0],
+            csv_path=stage0_csv,
+            basename_columns=("basename", "filename_base", "hld_name", "dat_name"),
+        )
+    ]
+    for task_id in range(1, 6):
+        specs.append(
+            StageSpec(
+                index=task_id,
+                label=f"TASK {task_id} - metadata_execution",
+                color=STAGE_COLORS[task_id],
+                csv_path=root
+                / "STAGE_1"
+                / "EVENT_DATA"
+                / "STEP_1"
+                / f"TASK_{task_id}"
+                / "METADATA"
+                / f"task_{task_id}_metadata_execution.csv",
+                basename_columns=("filename_base", "basename", "dat_name", "hld_name"),
+            )
+        )
+    return specs
+
+
+def load_stage_basenames(stage: StageSpec) -> set[str]:
+    if not stage.csv_path.exists():
+        return set()
+    try:
+        raw = pd.read_csv(stage.csv_path, low_memory=False)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(
+            f"[simulated_data_evolution_plotter] Failed to read {stage.csv_path}: {exc}",
+            file=sys.stderr,
+        )
+        return set()
+    column = next((col for col in stage.basename_columns if col in raw.columns), None)
+    if column is None:
+        return set()
+    return {
+        normalize_basename(value)
+        for value in raw[column].astype(str)
+        if normalize_basename(value)
+    }
+
+
+def build_chained_stage_sets(stages: Sequence[StageSpec]) -> Dict[int, set[str]]:
+    stage_sets: Dict[int, set[str]] = {}
+    ordered = sorted(stages, key=lambda stage: stage.index)
+    eligible: Optional[set[str]] = None
+    for stage in ordered:
+        current = load_stage_basenames(stage)
+        if eligible is not None:
+            current = current.intersection(eligible)
+        stage_sets[stage.index] = current
+        eligible = current
+    return stage_sets
+
+
+def build_raw_stage_sets(stages: Sequence[StageSpec]) -> Dict[int, set[str]]:
+    return {stage.index: load_stage_basenames(stage) for stage in stages}
+
+
+def build_latest_stage_map(
+    stages: Sequence[StageSpec],
+    stage_sets: Dict[int, set[str]],
+) -> Dict[str, int]:
+    ordered = sorted(stages, key=lambda stage: stage.index)
+    if not ordered:
+        return {}
+
+    baseline = stage_sets.get(ordered[0].index, set())
+    latest: Dict[str, int] = {basename: ordered[0].index for basename in baseline}
+    for stage in ordered[1:]:
+        for basename in stage_sets.get(stage.index, set()):
+            latest[basename] = stage.index
+    return latest
+
+
+def parse_efficiencies_column(df: pd.DataFrame) -> pd.DataFrame:
+    if {"eff_p1", "eff_p2", "eff_p3", "eff_p4"}.issubset(df.columns):
+        return df
+    if "efficiencies" not in df.columns:
+        return df
+
+    eff_series = df["efficiencies"]
+    if eff_series.apply(lambda value: isinstance(value, (list, tuple))).any():
+        eff_frame = pd.DataFrame(
+            eff_series.tolist(),
+            columns=["eff_p1", "eff_p2", "eff_p3", "eff_p4"],
+        )
+    else:
+        parsed_rows = []
+        for value in eff_series:
+            if value is None or (isinstance(value, float) and np.isnan(value)):
+                parsed_rows.append([np.nan, np.nan, np.nan, np.nan])
+                continue
+            if isinstance(value, (list, tuple)):
+                parsed_rows.append(list(value[:4]))
+                continue
+            text = str(value).strip()
+            if not text:
+                parsed_rows.append([np.nan, np.nan, np.nan, np.nan])
+                continue
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = None
+            if isinstance(parsed, (list, tuple)) and len(parsed) >= 4:
+                parsed_rows.append(list(parsed[:4]))
+            else:
+                parts = [part.strip() for part in text.strip("[]").split(",")]
+                if len(parts) >= 4:
+                    parsed_rows.append(parts[:4])
+                else:
+                    parsed_rows.append([np.nan, np.nan, np.nan, np.nan])
+        eff_frame = pd.DataFrame(parsed_rows, columns=["eff_p1", "eff_p2", "eff_p3", "eff_p4"])
+
+    for col in ("eff_p1", "eff_p2", "eff_p3", "eff_p4"):
+        df[col] = pd.to_numeric(eff_frame[col], errors="coerce")
+    return df
+
+
+def normalize_sim_params(df: pd.DataFrame) -> pd.DataFrame:
+    rename_map = {
+        "z_plane_1": "z_p1",
+        "z_plane_2": "z_p2",
+        "z_plane_3": "z_p3",
+        "z_plane_4": "z_p4",
+    }
+    df = df.rename(columns={old: new for old, new in rename_map.items() if old in df.columns})
+    df = parse_efficiencies_column(df)
+
+    if "selected_rows" not in df.columns and "requested_rows" in df.columns:
+        df["selected_rows"] = df["requested_rows"]
+    for numeric_col in ("selected_rows", "requested_rows", "sample_start_index", "param_set_id"):
+        if numeric_col in df.columns:
+            df[numeric_col] = pd.to_numeric(df[numeric_col], errors="coerce")
+
+    if "execution_time" in df.columns:
+        df["execution_time"] = pd.to_datetime(df["execution_time"], errors="coerce")
+
+    if "file_name" in df.columns:
+        df["basename"] = df["file_name"].astype(str).map(normalize_basename)
+    elif "basename" in df.columns:
+        df["basename"] = df["basename"].astype(str).map(normalize_basename)
+    else:
+        raise ValueError("Simulation params file must contain 'file_name' or 'basename'.")
+    return df
+
+
+def expand_params(raw_params: Sequence[str], df: pd.DataFrame) -> List[str]:
+    expanded: List[str] = []
+    for token in raw_params:
+        text = str(token).strip()
+        if not text:
+            continue
+        lowered = text.lower()
+
+        if lowered == "efficiencies":
+            expanded.extend(["eff_p1", "eff_p2", "eff_p3", "eff_p4"])
+            continue
+        if lowered in {"z_positions", "z_planes"}:
+            expanded.extend(["z_p1", "z_p2", "z_p3", "z_p4"])
+            continue
+
+        eff_match = re.match(r"^eff[_\-]?([1-4])$", lowered)
+        if eff_match:
+            expanded.append(f"eff_p{int(eff_match.group(1))}")
+            continue
+
+        z_match = re.match(r"^z[_\-]?p?([1-4])$", lowered)
+        if z_match:
+            expanded.append(f"z_p{int(z_match.group(1))}")
+            continue
+
+        expanded.append(text)
+
+    resolved: List[str] = []
+    for col in expanded:
+        if col not in df.columns:
+            continue
+        series = df[col]
+        is_numeric = pd.api.types.is_numeric_dtype(series)
+        is_datetime = pd.api.types.is_datetime64_any_dtype(series)
+        if not (is_numeric or is_datetime):
+            continue
+        if col not in resolved:
+            resolved.append(col)
+    return resolved
+
+
+def _compute_axis_limits(series: pd.Series) -> Optional[Tuple[object, object]]:
+    valid = series.dropna()
+    if valid.empty:
+        return None
+
+    if pd.api.types.is_datetime64_any_dtype(valid):
+        low = valid.min()
+        high = valid.max()
+        if low == high:
+            pad = pd.Timedelta(minutes=5)
+        else:
+            pad = (high - low) / 20
+        return low - pad, high + pad
+
+    numeric = pd.to_numeric(valid, errors="coerce").dropna()
+    if numeric.empty:
+        return None
+    low = float(numeric.min())
+    high = float(numeric.max())
+    if np.isclose(low, high):
+        low -= 1.0
+        high += 1.0
+    else:
+        span = high - low
+        pad = span * 0.05
+        low -= pad
+        high += pad
+    return low, high
+
+
+def add_stage_columns(
+    df: pd.DataFrame,
+    latest_stage_by_basename: Dict[str, int],
+    stage_labels: Dict[int, str],
+    stage_colors: Dict[int, str],
+) -> pd.DataFrame:
+    result = df.copy()
+    stage_index = (
+        result["basename"]
+        .map(latest_stage_by_basename)
+        .fillna(UNTRACKED_STAGE_INDEX)
+        .astype(int)
+    )
+    result["_stage_index"] = stage_index
+    result["_stage_label"] = result["_stage_index"].map(stage_labels).fillna(UNTRACKED_STAGE_LABEL)
+    result["_stage_color"] = result["_stage_index"].map(stage_colors).fillna(UNTRACKED_STAGE_COLOR)
+    return result
+
+
+def _stems_from_glob(directory: Path, pattern: str) -> set[str]:
+    if not directory.exists():
+        return set()
+    return {file.stem for file in directory.glob(pattern) if file.is_file()}
+
+
+def _age_seconds_to_log_recency(age_seconds: np.ndarray, scale_seconds: float) -> np.ndarray:
+    age = np.maximum(np.asarray(age_seconds, dtype=float), 0.0)
+    return -np.log10((age / float(scale_seconds)) + 1.0)
+
+
+def _format_age_seconds_label(seconds: float) -> str:
+    if seconds <= 1.0:
+        return "now"
+    if seconds < 3600:
+        minutes = int(round(seconds / 60.0))
+        return f"-{minutes}m"
+    if seconds < 86400:
+        hours = int(round(seconds / 3600.0))
+        return f"-{hours}h"
+    days = int(round(seconds / 86400.0))
+    return f"-{days}d"
+
+
+def prepare_execution_time_recency_view(
+    frame: pd.DataFrame,
+    param_list: Sequence[str],
+    scale_seconds: float,
+) -> Tuple[pd.DataFrame, List[str], Dict[str, str], Optional[str], pd.Timestamp]:
+    result = frame.copy()
+    now_utc = pd.Timestamp.now(tz="UTC")
+    recency_col: Optional[str] = None
+    plot_params: List[str] = []
+    display_labels: Dict[str, str] = {}
+
+    for param in param_list:
+        if param == "execution_time":
+            recency_col = "__execution_time_log_recency_now"
+            execution_utc = pd.to_datetime(result["execution_time"], errors="coerce", utc=True)
+            age_seconds = (now_utc - execution_utc).dt.total_seconds().to_numpy(dtype=float)
+            result[recency_col] = _age_seconds_to_log_recency(age_seconds, scale_seconds)
+            plot_params.append(recency_col)
+            display_labels[recency_col] = "execution_time (log recency vs now UTC)"
+        else:
+            plot_params.append(param)
+            display_labels[param] = param
+
+    return result, plot_params, display_labels, recency_col, now_utc
+
+
+def _plot_diagonal_hist(
+    ax: plt.Axes,
+    series: pd.Series,
+    frame: pd.DataFrame,
+    stage_order: Sequence[int],
+    stage_colors: Dict[int, str],
+) -> None:
+    is_datetime = pd.api.types.is_datetime64_any_dtype(series)
+    bins = 16
+    for stage_index in stage_order:
+        mask = frame["_stage_index"] == stage_index
+        if not mask.any():
+            continue
+        values = series.loc[mask].dropna()
+        if values.empty:
+            continue
+        if is_datetime:
+            x = mdates.date2num(pd.to_datetime(values).to_numpy(dtype="datetime64[ns]"))
+            ax.hist(
+                x,
+                bins=bins,
+                color=stage_colors.get(stage_index, UNTRACKED_STAGE_COLOR),
+                alpha=0.28,
+                edgecolor="black",
+                linewidth=0.3,
+            )
+            ax.xaxis_date()
+        else:
+            ax.hist(
+                values.to_numpy(),
+                bins=bins,
+                color=stage_colors.get(stage_index, UNTRACKED_STAGE_COLOR),
+                alpha=0.28,
+                edgecolor="black",
+                linewidth=0.3,
+            )
+
+
+def _apply_recency_ticks(
+    ax: plt.Axes,
+    axis: str,
+    scale_seconds: float,
+    label_visible: bool,
+) -> None:
+    candidate_ages = np.array(
+        [
+            0,
+            60,
+            5 * 60,
+            15 * 60,
+            30 * 60,
+            60 * 60,
+            2 * 3600,
+            6 * 3600,
+            12 * 3600,
+            24 * 3600,
+            2 * 86400,
+            4 * 86400,
+            7 * 86400,
+            14 * 86400,
+            30 * 86400,
+        ],
+        dtype=float,
+    )
+    tick_positions = _age_seconds_to_log_recency(candidate_ages, scale_seconds)
+    lo, hi = (ax.get_xlim() if axis == "x" else ax.get_ylim())
+    low, high = min(lo, hi), max(lo, hi)
+    mask = (tick_positions >= low - 1e-9) & (tick_positions <= high + 1e-9)
+
+    if not mask.any():
+        return
+
+    shown_positions = tick_positions[mask]
+    shown_labels = [_format_age_seconds_label(value) for value in candidate_ages[mask]]
+    order = np.argsort(shown_positions)
+    shown_positions = shown_positions[order]
+    shown_labels = [shown_labels[idx] for idx in order]
+
+    if axis == "x":
+        ax.set_xticks(shown_positions)
+        if label_visible:
+            ax.set_xticklabels(shown_labels, rotation=20, ha="right", fontsize=7)
+        else:
+            ax.tick_params(axis="x", labelbottom=False)
+    else:
+        ax.set_yticks(shown_positions)
+        if label_visible:
+            ax.set_yticklabels(shown_labels, fontsize=7)
+        else:
+            ax.tick_params(axis="y", labelleft=False)
+
+
+def _scatter_stage_points(
+    ax: plt.Axes,
+    frame: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    stage_order: Sequence[int],
+    stage_colors: Dict[int, str],
+    point_size: float,
+    alpha: float,
+) -> None:
+    for stage_index in stage_order:
+        mask = frame["_stage_index"] == stage_index
+        if not mask.any():
+            continue
+        points = frame.loc[mask]
+        if stage_index == 0:
+            ax.scatter(
+                points[x_col],
+                points[y_col],
+                s=point_size,
+                facecolors="none",
+                edgecolors="black",
+                linewidths=0.45,
+                alpha=0.95,
+                zorder=3,
+            )
+            continue
+        ax.scatter(
+            points[x_col],
+            points[y_col],
+            s=point_size,
+            facecolors=stage_colors.get(stage_index, UNTRACKED_STAGE_COLOR),
+            edgecolors="black",
+            linewidths=0.2,
+            alpha=alpha,
+            zorder=3,
+        )
+
+
+def _datetime_locator_and_formatter(series: pd.Series) -> Tuple[mdates.DateLocator, mdates.DateFormatter]:
+    valid = pd.to_datetime(series, errors="coerce").dropna()
+    if valid.empty:
+        return mdates.AutoDateLocator(maxticks=4), mdates.DateFormatter("%Y-%m-%d\n%H:%M")
+
+    span = valid.max() - valid.min()
+    span_days = max(float(span.total_seconds()) / 86400.0, 0.0)
+    if span_days > 3650:  # >10 years
+        return mdates.YearLocator(base=2), mdates.DateFormatter("%Y")
+    if span_days > 730:  # >2 years
+        return mdates.YearLocator(base=1), mdates.DateFormatter("%Y")
+    if span_days > 120:  # >4 months
+        return mdates.MonthLocator(interval=2), mdates.DateFormatter("%Y-%m")
+    if span_days > 20:  # >3 weeks
+        return mdates.DayLocator(interval=7), mdates.DateFormatter("%Y-%m-%d")
+    return mdates.AutoDateLocator(maxticks=4), mdates.DateFormatter("%Y-%m-%d\n%H:%M")
+
+
+def _format_datetime_axes(
+    axes: np.ndarray,
+    param_list: Sequence[str],
+    datetime_indices: Sequence[int],
+    datetime_styles: Dict[str, Tuple[mdates.DateLocator, mdates.DateFormatter]],
+) -> None:
+    if len(datetime_indices) == 0:
+        return
+    n = len(param_list)
+    for i in range(n):
+        for j in range(n):
+            ax = axes[i, j] if n > 1 else axes
+            if j in datetime_indices:
+                locator, formatter = datetime_styles.get(
+                    param_list[j],
+                    (mdates.AutoDateLocator(maxticks=4), mdates.DateFormatter("%Y-%m-%d\n%H:%M")),
+                )
+                ax.xaxis.set_major_locator(locator)
+                ax.xaxis.set_major_formatter(formatter)
+                if i == n - 1:
+                    ax.tick_params(axis="x", labelrotation=20, labelsize=7)
+                elif ax.axison:
+                    ax.tick_params(axis="x", labelbottom=False)
+            if i in datetime_indices and i != j and ax.axison:
+                locator, formatter = datetime_styles.get(
+                    param_list[i],
+                    (mdates.AutoDateLocator(maxticks=4), mdates.DateFormatter("%Y-%m-%d\n%H:%M")),
+                )
+                ax.yaxis.set_major_locator(locator)
+                ax.yaxis.set_major_formatter(formatter)
+                ax.tick_params(axis="y", labelsize=7)
+
+
+def _add_stage_legend(
+    fig: plt.Figure,
+    frame: pd.DataFrame,
+    stage_order: Sequence[int],
+    stage_labels: Dict[int, str],
+    stage_colors: Dict[int, str],
+) -> None:
+    counts = frame["_stage_index"].value_counts().to_dict()
+    total = max(len(frame), 1)
+    handles: List[Line2D] = []
+    labels: List[str] = []
+    for stage_index in stage_order:
+        count = int(counts.get(stage_index, 0))
+        fraction = (count / total) * 100.0
+        label = stage_labels.get(stage_index, f"Stage {stage_index}")
+        labels.append(f"{label}: {count} ({fraction:.1f}%)")
+        if stage_index == 0:
+            handle = Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                markerfacecolor="none",
+                markeredgecolor="black",
+                markeredgewidth=0.8,
+                markersize=5.5,
+            )
+        else:
+            handle = Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                markerfacecolor=stage_colors.get(stage_index, UNTRACKED_STAGE_COLOR),
+                markeredgecolor="black",
+                markeredgewidth=0.3,
+                markersize=5.5,
+            )
+        handles.append(handle)
+    fig.legend(
+        handles,
+        labels,
+        loc="upper right",
+        bbox_to_anchor=(0.995, 0.995),
+        frameon=True,
+        fontsize=7,
+        title="Latest pipeline stage",
+        title_fontsize=8,
+    )
+
+
+def plot_stage_colored_parameter_matrix(
+    frame: pd.DataFrame,
+    param_list: Sequence[str],
+    stage_order: Sequence[int],
+    stage_labels: Dict[int, str],
+    stage_colors: Dict[int, str],
+    display_labels: Dict[str, str],
+    output_path: Path,
+    point_size: float,
+    alpha: float,
+    execution_recency_col: Optional[str],
+    execution_log_scale_seconds: float,
+) -> None:
+    n = len(param_list)
+    if n == 0:
+        raise ValueError("No plottable parameters were resolved.")
+
+    datetime_indices = [
+        idx
+        for idx, col in enumerate(param_list)
+        if pd.api.types.is_datetime64_any_dtype(frame[col])
+    ]
+    datetime_styles = {
+        param_list[idx]: _datetime_locator_and_formatter(frame[param_list[idx]])
+        for idx in datetime_indices
+    }
+    width_ratios = [2.7 if idx in datetime_indices else 1.0 for idx in range(n)]
+    fig, axes = plt.subplots(
+        n,
+        n,
+        figsize=(2.7 * n + 3.4, 2.7 * n),
+        dpi=120,
+        gridspec_kw={"width_ratios": width_ratios},
+    )
+    axes_arr = np.asarray(axes).reshape(n, n)
+
+    axis_limits = {col: _compute_axis_limits(frame[col]) for col in param_list}
+    for i in range(n):
+        for j in range(n):
+            ax = axes_arr[i, j]
+            x_col = param_list[j]
+            y_col = param_list[i]
+
+            if axis_limits.get(x_col) is not None:
+                ax.set_xlim(axis_limits[x_col])
+            if i != j and axis_limits.get(y_col) is not None:
+                ax.set_ylim(axis_limits[y_col])
+
+            ax.grid(True, linestyle=":", linewidth=0.35, alpha=0.35)
+            for spine in ax.spines.values():
+                spine.set_visible(True)
+                spine.set_linewidth(0.65)
+                spine.set_color("black")
+
+            if i == j:
+                _plot_diagonal_hist(ax, frame[y_col], frame, stage_order, stage_colors)
+                ax.set_title(display_labels.get(y_col, y_col), fontsize=9, pad=4)
+                ax.autoscale_view(scalex=False, scaley=True)
+            elif i > j:
+                _scatter_stage_points(
+                    ax=ax,
+                    frame=frame,
+                    x_col=x_col,
+                    y_col=y_col,
+                    stage_order=stage_order,
+                    stage_colors=stage_colors,
+                    point_size=point_size,
+                    alpha=alpha,
+                )
+            else:
+                ax.axis("off")
+
+            if i < n - 1:
+                ax.tick_params(axis="x", labelbottom=False)
+            else:
+                ax.set_xlabel(display_labels.get(x_col, x_col), fontsize=9)
+            if j > 0:
+                ax.tick_params(axis="y", labelleft=False)
+            else:
+                ax.set_ylabel(display_labels.get(y_col, y_col), fontsize=9)
+            ax.tick_params(axis="both", which="major", labelsize=8, width=0.8, length=2.8)
+
+    _format_datetime_axes(axes_arr, param_list, datetime_indices, datetime_styles)
+
+    if execution_recency_col is not None:
+        for i in range(n):
+            for j in range(n):
+                ax = axes_arr[i, j]
+                if not ax.axison:
+                    continue
+                if param_list[j] == execution_recency_col:
+                    _apply_recency_ticks(
+                        ax=ax,
+                        axis="x",
+                        scale_seconds=execution_log_scale_seconds,
+                        label_visible=(i == n - 1),
+                    )
+                    ax.axvline(0.0, color="red", linestyle="--", alpha=0.25, linewidth=0.8, zorder=10)
+                if i > j and param_list[i] == execution_recency_col:
+                    _apply_recency_ticks(
+                        ax=ax,
+                        axis="y",
+                        scale_seconds=execution_log_scale_seconds,
+                        label_visible=(j == 0),
+                    )
+                    ax.axhline(0.0, color="red", linestyle="--", alpha=0.25, linewidth=0.8, zorder=10)
+
+    tracked = int((frame["_stage_index"] != UNTRACKED_STAGE_INDEX).sum())
+    total = len(frame)
+    subtitle = (
+        f"Simulated Data Evolution ({total} files) | Tracked in MASTER pipeline: "
+        f"{tracked}/{total} ({(tracked / max(total, 1)) * 100.0:.1f}%)"
+    )
+    title = "Stage-Colored Simulation Parameter Matrix"
+    if execution_recency_col is not None:
+        title += f"\nExecution-time axes use log recency vs now (scale={execution_log_scale_seconds:.0f}s)"
+    fig.suptitle(title + "\n" + subtitle, fontsize=12, y=0.995)
+    _add_stage_legend(fig, frame, stage_order, stage_labels, stage_colors)
+    fig.subplots_adjust(left=0.06, right=0.84, bottom=0.08, top=0.94, wspace=0.05, hspace=0.05)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with PdfPages(output_path) as pdf:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="AutoDateLocator was unable to pick an appropriate interval.*",
+                category=UserWarning,
+            )
+            pdf_save_rasterized_page(pdf, fig, dpi=170)
+    plt.close(fig)
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Create a simulation parameter matrix (mesh-style) where points are "
+            "colored by latest MASTER stage (MINGO00 simulation chain)."
+        )
+    )
+    parser.add_argument(
+        "--sim-params",
+        type=str,
+        default=str(DEFAULT_SIM_PARAMS),
+        help=f"Path to step_final simulation params CSV (default: {DEFAULT_SIM_PARAMS}).",
+    )
+    parser.add_argument(
+        "--station",
+        type=str,
+        default=DEFAULT_STATION,
+        help=f"Station token used for stage lookup (default: {DEFAULT_STATION}).",
+    )
+    parser.add_argument(
+        "--params",
+        nargs="+",
+        default=list(DEFAULT_PARAMS),
+        help=(
+            "Parameter columns/tokens to include in the matrix. Supports aliases like "
+            "'eff_1..eff_4', 'efficiencies', 'z_positions'."
+        ),
+    )
+    parser.add_argument(
+        "--point-size",
+        type=float,
+        default=DEFAULT_POINT_SIZE,
+        help=f"Scatter marker size for off-diagonal plots (default: {DEFAULT_POINT_SIZE}).",
+    )
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=DEFAULT_ALPHA,
+        help=f"Scatter alpha for filled stage markers (default: {DEFAULT_ALPHA}).",
+    )
+    parser.add_argument(
+        "--execution-log-scale-seconds",
+        type=float,
+        default=DEFAULT_EXECUTION_LOG_SCALE_SECONDS,
+        help=(
+            "Soft-log recency scale (seconds) used when plotting execution_time "
+            f"(default: {DEFAULT_EXECUTION_LOG_SCALE_SECONDS})."
+        ),
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        default=str(DEFAULT_OUTPUT),
+        help=f"Output PDF path (default: {DEFAULT_OUTPUT}).",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
+    configure_matplotlib_style()
+
+    if args.point_size <= 0:
+        print("[simulated_data_evolution_plotter] --point-size must be > 0.", file=sys.stderr)
+        return 1
+    if not (0 < args.alpha <= 1):
+        print("[simulated_data_evolution_plotter] --alpha must be in (0, 1].", file=sys.stderr)
+        return 1
+    if args.execution_log_scale_seconds <= 0:
+        print(
+            "[simulated_data_evolution_plotter] --execution-log-scale-seconds must be > 0.",
+            file=sys.stderr,
+        )
+        return 1
+
+    sim_params_path = Path(args.sim_params).expanduser().resolve()
+    output_path = Path(args.output).expanduser()
+    if not output_path.is_absolute():
+        output_path = (PLOTTER_DIR / output_path).resolve()
+
+    if not sim_params_path.exists():
+        print(
+            f"[simulated_data_evolution_plotter] Simulation params CSV not found: {sim_params_path}",
+            file=sys.stderr,
+        )
+        return 1
+
+    station = normalize_station_token(args.station)
+    stages = stage_specs_for_station(station)
+    stage_sets = build_chained_stage_sets(stages)
+    raw_stage_sets = build_raw_stage_sets(stages)
+    latest_stage_by_basename = build_latest_stage_map(stages, stage_sets)
+
+    stage_labels: Dict[int, str] = {UNTRACKED_STAGE_INDEX: UNTRACKED_STAGE_LABEL}
+    stage_colors: Dict[int, str] = {UNTRACKED_STAGE_INDEX: UNTRACKED_STAGE_COLOR}
+    for stage in stages:
+        stage_labels[stage.index] = stage.label
+        stage_colors[stage.index] = stage.color
+    stage_order = [UNTRACKED_STAGE_INDEX] + [stage.index for stage in sorted(stages, key=lambda s: s.index)]
+
+    try:
+        sim_df = pd.read_csv(sim_params_path, low_memory=False)
+    except Exception as exc:
+        print(
+            f"[simulated_data_evolution_plotter] Failed to read {sim_params_path}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if sim_df.empty:
+        print("[simulated_data_evolution_plotter] Simulation params CSV is empty.", file=sys.stderr)
+        return 1
+
+    sim_df = normalize_sim_params(sim_df)
+    sim_df = add_stage_columns(sim_df, latest_stage_by_basename, stage_labels, stage_colors)
+
+    param_list = expand_params(args.params, sim_df)
+    if not param_list:
+        print(
+            "[simulated_data_evolution_plotter] No valid numeric/datetime params after expansion.",
+            file=sys.stderr,
+        )
+        return 1
+
+    (
+        sim_df,
+        plot_param_list,
+        display_labels,
+        execution_recency_col,
+        now_utc,
+    ) = prepare_execution_time_recency_view(
+        frame=sim_df,
+        param_list=param_list,
+        scale_seconds=float(args.execution_log_scale_seconds),
+    )
+
+    try:
+        plot_stage_colored_parameter_matrix(
+            frame=sim_df,
+            param_list=plot_param_list,
+            stage_order=stage_order,
+            stage_labels=stage_labels,
+            stage_colors=stage_colors,
+            display_labels=display_labels,
+            output_path=output_path,
+            point_size=float(args.point_size),
+            alpha=float(args.alpha),
+            execution_recency_col=execution_recency_col,
+            execution_log_scale_seconds=float(args.execution_log_scale_seconds),
+        )
+    except Exception as exc:
+        print(f"[simulated_data_evolution_plotter] Plot failed: {exc}", file=sys.stderr)
+        return 1
+
+    stage_counts = sim_df["_stage_index"].value_counts().to_dict()
+    ordered_count_summary = ", ".join(
+        f"{stage_labels[idx]}={int(stage_counts.get(idx, 0))}"
+        for idx in stage_order
+    )
+    print(f"[simulated_data_evolution_plotter] Saved PDF to {output_path}")
+    print(f"[simulated_data_evolution_plotter] Stage counts: {ordered_count_summary}")
+
+    sim_basenames = set(sim_df["basename"].astype(str))
+    live_stage0_set = set(stage_sets.get(0, set()))
+    untracked = sim_basenames - live_stage0_set
+    raw_task_union: set[str] = set()
+    for stage in stages:
+        if stage.index <= 0:
+            continue
+        raw_task_union.update(raw_stage_sets.get(stage.index, set()))
+
+    dt_twin_files = REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "FILES"
+    station_root = STATIONS_ROOT / station
+    stage0_to_1_dir = station_root / "STAGE_0_to_1"
+    task1_input_root = station_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "INPUT_FILES"
+    task1_completed = task1_input_root / "COMPLETED_DIRECTORY"
+    task1_processing = task1_input_root / "PROCESSING_DIRECTORY"
+    task1_unprocessed = task1_input_root / "UNPROCESSED_DIRECTORY"
+
+    twin_file_names = _stems_from_glob(dt_twin_files, "mi*.dat")
+    live_input_names = (
+        _stems_from_glob(stage0_to_1_dir, "mi*.dat")
+        | _stems_from_glob(task1_completed, "mi*.dat")
+        | _stems_from_glob(task1_processing, "mi*.dat")
+        | _stems_from_glob(task1_unprocessed, "mi*.dat")
+    )
+
+    untracked_in_raw_tasks = untracked.intersection(raw_task_union)
+    untracked_in_live_inputs = untracked.intersection(live_input_names)
+    untracked_in_twin_files = untracked.intersection(twin_file_names)
+    known_untracked = untracked_in_raw_tasks | untracked_in_live_inputs | untracked_in_twin_files
+    untracked_unknown = untracked - known_untracked
+
+    print(
+        "[simulated_data_evolution_plotter] Untracked audit "
+        f"(station={station}, now_utc={now_utc.strftime('%Y-%m-%d %H:%M:%S %Z')}):"
+    )
+    print(
+        "[simulated_data_evolution_plotter]  - total_untracked_live="
+        f"{len(untracked)}"
+    )
+    print(
+        "[simulated_data_evolution_plotter]  - seen_in_task_metadata_history="
+        f"{len(untracked_in_raw_tasks)}"
+    )
+    print(
+        "[simulated_data_evolution_plotter]  - currently_in_station_live_inputs="
+        f"{len(untracked_in_live_inputs)}"
+    )
+    print(
+        "[simulated_data_evolution_plotter]  - currently_waiting_in_twin_FILES="
+        f"{len(untracked_in_twin_files)}"
+    )
+    print(
+        "[simulated_data_evolution_plotter]  - not_found_in_key_live_or_history_sets="
+        f"{len(untracked_unknown)}"
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

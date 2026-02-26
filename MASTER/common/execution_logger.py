@@ -46,6 +46,7 @@ _timer_start_value: Optional[float] = None
 _script_identifier: Optional[str] = None
 _station_value: Optional[str] = None
 _atexit_registered = False
+_LOGGING_ENABLED = False
 
 
 def _normalise_script_name(script: Union[str, os.PathLike[str]]) -> str:
@@ -101,6 +102,8 @@ def _normalise_script_name(script: Union[str, os.PathLike[str]]) -> str:
 
 def start_timer(script: Union[str, os.PathLike[str]]) -> None:
     """Begin tracking execution time for the current process."""
+    if not _LOGGING_ENABLED:
+        return
     global _timer_started, _timer_start_value, _script_identifier, _atexit_registered
     _script_identifier = _normalise_script_name(script)
     _timer_start_value = time.perf_counter()
@@ -114,6 +117,8 @@ def start_timer(script: Union[str, os.PathLike[str]]) -> None:
 
 def set_station(station: Optional[Union[str, int]]) -> None:
     """Store the station identifier for the pending log entry."""
+    if not _LOGGING_ENABLED:
+        return
     global _station_value
     _station_value = None if station is None else str(station)
 

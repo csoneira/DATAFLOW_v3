@@ -45,7 +45,8 @@ DEFAULT_Y_MIN_MINUTES = 0.0
 DEFAULT_Y_MAX_MINUTES = 5.0
 DEFAULT_MARKER_SIZE = 14.0
 DEFAULT_LAST_HOURS = 2.0
-DEFAULT_PANEL_WIDTH_RATIOS: Tuple[float, float] = (5.0, 1.0)
+DEFAULT_PANEL_WIDTH_RATIOS: Tuple[float, float, float] = (4.0, 1.0, 1.2)
+VELOCITY_WINDOW_HOURS = 1.0
 NOW_X_MARGIN_MINUTES = 10.0
 
 BASENAME_TIMESTAMP_DIGITS = 11
@@ -240,7 +241,9 @@ def load_allowed_basenames(station: str) -> Set[str]:
     root = STATIONS_ROOT / station
 
     if station == "MINGO00":
-        stage0_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
+        stage0_history_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames_history.csv"
+        stage0_live_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
+        stage0_csv = stage0_history_csv if stage0_history_csv.exists() else stage0_live_csv
     else:
         metadata_dir = root / "STAGE_0" / "REPROCESSING" / "STEP_0" / "OUTPUT_FILES"
         stage0_csv = _resolve_station_metadata_file(
@@ -399,6 +402,30 @@ def station_execution_last_window(
     return lower, upper
 
 
+def build_velocity_series(task_data: Dict[int, pd.DataFrame]) -> pd.DataFrame:
+    chunks: List[pd.Series] = []
+    for df in task_data.values():
+        if df.empty or "execution_timestamp" not in df.columns:
+            continue
+        chunks.append(pd.to_datetime(df["execution_timestamp"], errors="coerce"))
+
+    if not chunks:
+        return pd.DataFrame(columns=["execution_timestamp", "files_per_hour"])
+
+    combined = pd.concat(chunks, ignore_index=True).dropna()
+    if combined.empty:
+        return pd.DataFrame(columns=["execution_timestamp", "files_per_hour"])
+
+    events = pd.DataFrame({"execution_timestamp": pd.to_datetime(combined)})
+    events["count"] = 1
+    grouped = events.groupby("execution_timestamp", as_index=False, sort=True)["count"].sum()
+    grouped = grouped.sort_values("execution_timestamp")
+    indexed = grouped.set_index("execution_timestamp")
+    rolling_counts = indexed["count"].rolling(pd.Timedelta(hours=VELOCITY_WINDOW_HOURS)).sum()
+
+    return rolling_counts.rename("files_per_hour").reset_index()
+
+
 def plot_station_page(
     station: str,
     task_data: Dict[int, pd.DataFrame],
@@ -407,24 +434,28 @@ def plot_station_page(
     y_max_minutes: float,
     marker_size: float,
     last_hours: float,
-    panel_width_ratios: Tuple[float, float],
+    panel_width_ratios: Tuple[float, float, float],
     allowed_count: int,
 ) -> None:
     fig, axes = plt.subplots(
         1,
-        2,
+        3,
         figsize=(18, 6),
         constrained_layout=True,
         gridspec_kw={"width_ratios": panel_width_ratios},
     )
-    left_ax, right_ax = axes
+    left_ax, middle_ax, right_ax = axes
     fig.suptitle(
-        f"{station} - Execution time (Tasks 1-5, clean_remote/imported basenames: {allowed_count})",
+        (
+            f"{station} - Execution time + velocity "
+            f"(Tasks 1-5, clean_remote/imported basenames: {allowed_count})"
+        ),
         fontsize=13,
     )
 
     left_limits = station_time_bounds(task_data)
-    right_limits = station_execution_last_window(task_data, last_hours)
+    middle_and_right_limits = station_execution_last_window(task_data, last_hours)
+    velocity_series = build_velocity_series(task_data)
 
     cmap = plt.get_cmap("tab10")
 
@@ -503,24 +534,82 @@ def plot_station_page(
         x_limits=left_limits,
         right_window_only=False,
     )
-    right_plotted = _plot_overlay(
-        ax=right_ax,
+    middle_plotted = _plot_overlay(
+        ax=middle_ax,
         x_col="execution_timestamp",
         title=f"Tasks 1-5 - Exec. time (last {last_hours:g}h from now UTC)",
-        x_limits=right_limits,
+        x_limits=middle_and_right_limits,
         right_window_only=True,
     )
 
+    right_ax.set_title(
+        f"Velocity (files/hour, trailing {VELOCITY_WINDOW_HOURS:g}h)",
+        fontsize=10,
+    )
+    right_ax.set_ylabel("Files / hour")
+    right_ax.grid(True, axis="y", alpha=0.3, linestyle="--", linewidth=0.5)
+    if middle_and_right_limits is not None:
+        right_ax.set_xlim(middle_and_right_limits[0], middle_and_right_limits[1])
+
+    velocity_plotted = False
+    if not velocity_series.empty:
+        velocity_df = velocity_series.copy()
+        if middle_and_right_limits is not None:
+            low, high = middle_and_right_limits
+            velocity_df = velocity_df[
+                (velocity_df["execution_timestamp"] >= low)
+                & (velocity_df["execution_timestamp"] <= high)
+            ]
+        if not velocity_df.empty:
+            right_ax.plot(
+                velocity_df["execution_timestamp"],
+                velocity_df["files_per_hour"],
+                linewidth=1.6,
+                color="#1f77b4",
+            )
+            right_ax.scatter(
+                velocity_df["execution_timestamp"],
+                velocity_df["files_per_hour"],
+                s=max(marker_size * 0.8, 10.0),
+                color="#1f77b4",
+                alpha=0.85,
+            )
+            max_velocity = float(velocity_df["files_per_hour"].max())
+            right_ax.set_ylim(0.0, max(1.0, max_velocity * 1.15))
+            velocity_plotted = True
+
+    if middle_and_right_limits is not None:
+        now = now_like(pd.Timestamp(middle_and_right_limits[1]))
+        right_ax.axvline(now, color="red", linestyle="--", alpha=0.3, zorder=10)
+
+    if not velocity_plotted:
+        right_ax.set_ylim(0.0, 1.0)
+        right_ax.text(
+            0.5,
+            0.5,
+            "No eligible rows",
+            transform=right_ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=10,
+            color="dimgray",
+        )
+
     if left_plotted:
         left_ax.legend(loc="upper left", ncols=3, fontsize=8)
-    elif right_plotted:
-        right_ax.legend(loc="upper left", ncols=2, fontsize=8)
+    elif middle_plotted:
+        middle_ax.legend(loc="upper left", ncols=2, fontsize=8)
 
     left_ax.set_xlabel("Basename timestamp")
+    middle_ax.set_xlabel("Execution timestamp")
     right_ax.set_xlabel("Execution timestamp")
     left_ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
+    middle_ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
     right_ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    middle_ax.tick_params(axis="x", labelrotation=45)
     right_ax.tick_params(axis="x", labelrotation=45)
+    for tick in middle_ax.get_xticklabels():
+        tick.set_horizontalalignment("right")
     for tick in right_ax.get_xticklabels():
         tick.set_horizontalalignment("right")
 
@@ -559,7 +648,7 @@ def resolve_output_path(raw_output: Optional[str], config_path: Path) -> Path:
 
 def resolve_runtime_options(
     args: argparse.Namespace,
-) -> Tuple[List[str], float, float, float, float, Tuple[float, float], Path]:
+) -> Tuple[List[str], float, float, float, float, Tuple[float, float, float], Path]:
     config_path = Path(args.config).expanduser()
     config = load_config(config_path)
 
@@ -595,14 +684,25 @@ def resolve_runtime_options(
         raise ValueError("'last_hours' must be > 0")
 
     panel_width_raw = config.get("panel_width_ratios", list(DEFAULT_PANEL_WIDTH_RATIOS))
-    if not isinstance(panel_width_raw, list) or len(panel_width_raw) != 2:
-        raise ValueError("'panel_width_ratios' in config must be a list of 2 numeric values")
+    if not isinstance(panel_width_raw, list) or len(panel_width_raw) not in (2, 3):
+        raise ValueError(
+            "'panel_width_ratios' in config must be a list of 2 or 3 numeric values"
+        )
     try:
-        panel_width_ratios = (float(panel_width_raw[0]), float(panel_width_raw[1]))
+        panel_values = [float(value) for value in panel_width_raw]
     except (TypeError, ValueError):
         raise ValueError("'panel_width_ratios' in config must contain numeric values")
-    if panel_width_ratios[0] <= 0 or panel_width_ratios[1] <= 0:
+    if any(value <= 0 for value in panel_values):
         raise ValueError("'panel_width_ratios' values must be > 0")
+
+    if len(panel_values) == 2:
+        panel_width_ratios = (
+            panel_values[0],
+            panel_values[1],
+            max(panel_values[1], 1.0),
+        )
+    else:
+        panel_width_ratios = (panel_values[0], panel_values[1], panel_values[2])
 
     output_raw = args.output
     if output_raw is None:

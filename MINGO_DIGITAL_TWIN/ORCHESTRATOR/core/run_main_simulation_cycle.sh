@@ -214,9 +214,105 @@ count_pending_files() {
   printf '%s %s %s %s %s\n' "${n_sim_root}" "${n_sim_files}" "${n_unprocessed}" "${n_processing}" "${total}"
 }
 
+count_pending_unique_mi() {
+  local result
+  result="$(
+    SIMULATED_DATA_DIR="${SIMULATED_DATA_DIR}" \
+    SIMULATED_DATA_FILES_DIR="${SIMULATED_DATA_FILES_DIR}" \
+    STATIONS_STEP1_DIR="${STATIONS_STEP1_DIR}" \
+      /usr/bin/env python3 - <<'PY'
+import os
+import re
+from itertools import combinations
+from pathlib import Path
+
+rx = re.compile(r"(mi\d{13})")
+
+
+def extract_ids(paths):
+    ids = set()
+    for path in paths:
+        match = rx.search(path.name)
+        if match:
+            ids.add(match.group(1))
+    return ids
+
+
+def list_files(path: str, pattern: str, recursive: bool = False):
+    root = Path(path)
+    if not root.is_dir():
+        return []
+    if recursive:
+        return [p for p in root.rglob(pattern) if p.is_file()]
+    return [p for p in root.glob(pattern) if p.is_file()]
+
+
+sim_root_files = list_files(os.environ.get("SIMULATED_DATA_DIR", ""), "mi*.dat", recursive=False)
+sim_files_files = list_files(os.environ.get("SIMULATED_DATA_FILES_DIR", ""), "mi*.dat", recursive=False)
+step1_dir = Path(os.environ.get("STATIONS_STEP1_DIR", ""))
+if step1_dir.is_dir():
+    unprocessed_files = [
+        p
+        for p in step1_dir.rglob("*")
+        if p.is_file() and "INPUT_FILES/UNPROCESSED_DIRECTORY/" in str(p)
+    ]
+    processing_files = [
+        p
+        for p in step1_dir.rglob("*")
+        if p.is_file() and "INPUT_FILES/PROCESSING_DIRECTORY/" in str(p)
+    ]
+else:
+    unprocessed_files = []
+    processing_files = []
+
+sets = {
+    "sim_root": extract_ids(sim_root_files),
+    "sim_files": extract_ids(sim_files_files),
+    "unprocessed": extract_ids(unprocessed_files),
+    "processing": extract_ids(processing_files),
+}
+unique_total = len(set().union(*sets.values()))
+raw_total = sum(len(v) for v in sets.values())
+duplicate_entries = max(raw_total - unique_total, 0)
+
+pairs = {
+    ("sim_root", "sim_files"): 0,
+    ("sim_root", "unprocessed"): 0,
+    ("sim_root", "processing"): 0,
+    ("sim_files", "unprocessed"): 0,
+    ("sim_files", "processing"): 0,
+    ("unprocessed", "processing"): 0,
+}
+for a, b in combinations(sets.keys(), 2):
+    pairs[(a, b)] = len(sets[a] & sets[b])
+
+print(
+    unique_total,
+    duplicate_entries,
+    len(sets["sim_root"]),
+    len(sets["sim_files"]),
+    len(sets["unprocessed"]),
+    len(sets["processing"]),
+    pairs[("sim_root", "sim_files")],
+    pairs[("sim_root", "unprocessed")],
+    pairs[("sim_root", "processing")],
+    pairs[("sim_files", "unprocessed")],
+    pairs[("sim_files", "processing")],
+    pairs[("unprocessed", "processing")],
+)
+PY
+  )" || {
+    printf '0 0 0 0 0 0 0 0 0 0 0 0\n'
+    return 0
+  }
+  printf '%s\n' "${result}"
+}
+
 backpressure_gate_allows_step0() {
   local threshold="${SIM_MAX_UNPROCESSED_FILES:-0}"
   local n_sim_root=0 n_sim_files=0 n_unprocessed=0 n_processing=0 total=0
+  local unique_total=0 duplicate_entries=0 unique_sim_root=0 unique_sim_files=0 unique_unprocessed=0 unique_processing=0
+  local overlap_sr_sf=0 overlap_sr_u=0 overlap_sr_p=0 overlap_sf_u=0 overlap_sf_p=0 overlap_u_p=0
 
   if ! is_nonneg_int "${threshold}"; then
     log_warn "backpressure_gate status=invalid_threshold value='${threshold}' fallback=0"
@@ -225,18 +321,20 @@ backpressure_gate_allows_step0() {
 
   # shellcheck disable=SC2086
   read -r n_sim_root n_sim_files n_unprocessed n_processing total <<< "$(count_pending_files)"
+  # shellcheck disable=SC2086
+  read -r unique_total duplicate_entries unique_sim_root unique_sim_files unique_unprocessed unique_processing overlap_sr_sf overlap_sr_u overlap_sr_p overlap_sf_u overlap_sf_p overlap_u_p <<< "$(count_pending_unique_mi)"
 
   if (( threshold <= 0 )); then
-    log_info "backpressure_gate status=disabled pending_total=${total} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing}"
+    log_info "backpressure_gate status=disabled pending_total=${total} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p}"
     return 0
   fi
 
   if (( total >= threshold )); then
-    log_info "backpressure_gate status=blocked pending_total=${total} threshold=${threshold} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing}"
+    log_info "backpressure_gate status=blocked pending_total=${total} threshold=${threshold} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p}"
     return 1
   fi
 
-  log_info "backpressure_gate status=ok pending_total=${total} threshold=${threshold} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing}"
+  log_info "backpressure_gate status=ok pending_total=${total} threshold=${threshold} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p}"
   return 0
 }
 

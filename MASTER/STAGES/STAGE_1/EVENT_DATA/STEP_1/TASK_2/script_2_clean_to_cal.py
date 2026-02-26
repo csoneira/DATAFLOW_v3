@@ -51,6 +51,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
 # Plotting
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
@@ -179,6 +181,31 @@ def _guarded_close(*args, **kwargs):
 plt.figure = _guarded_figure
 plt.subplots = _guarded_subplots
 plt.close = _guarded_close
+
+_direct_pdf_pages: PdfPages | None = None
+_direct_pdf_page_count = 0
+
+def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
+    """Save a figure to PNG or directly append it to the task PDF."""
+    global _direct_pdf_pages, _direct_pdf_page_count
+    target_fig = fig if fig is not None else plt.gcf()
+    direct_pdf_path = globals().get("save_pdf_path")
+    if globals().get("create_pdf", False) and direct_pdf_path:
+        if _direct_pdf_pages is None:
+            _direct_pdf_pages = PdfPages(direct_pdf_path)
+        pdf_kwargs = dict(savefig_kwargs)
+        dpi = int(pdf_kwargs.pop("dpi", 150))
+        pdf_kwargs.pop("format", None)
+        pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
+        _direct_pdf_page_count += 1
+        return
+    target_fig.savefig(save_path, **savefig_kwargs)
+
+def close_direct_pdf_writer() -> None:
+    global _direct_pdf_pages
+    if _direct_pdf_pages is not None:
+        _direct_pdf_pages.close()
+        _direct_pdf_pages = None
 
 def align_metadata_row_with_existing_schema(metadata_path: str | Path, row: dict[str, object]) -> None:
     path = Path(metadata_path)
@@ -581,33 +608,6 @@ if files:  # Check if the directory contains any files
     for file in files:
         os.remove(os.path.join(figure_directory, file))
 
-# Define input file path ------------------------------------------------------------------
-input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
-
-if os.path.exists(input_file_config_path):
-    print("Searching input configuration file:", input_file_config_path)
-    
-    # It is a csv
-    input_file = pd.read_csv(input_file_config_path, skiprows=1)
-    
-    if not input_file.empty:
-        print("Input configuration file found and is not empty.")
-        exists_input_file = True
-    else:
-        print("Input configuration file is empty.")
-        exists_input_file = False
-    
-    # Print the head
-    # print(input_file.head())
-    
-else:
-    exists_input_file = False
-    print("Input configuration file does not exist.")
-    z_1 = 0
-    z_2 = 150
-    z_3 = 300
-    z_4 = 450
-
 # Charge calibration to fC
 calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
 
@@ -635,14 +635,7 @@ old_timing_method = config["old_timing_method"]
 # Validation
 validate_charge_pedestal_calibration = config["validate_charge_pedestal_calibration"]
 
-time_calibration = config["time_calibration"]
-
-charge_front_back = config["charge_front_back"]
-
 complete_reanalysis = config["complete_reanalysis"]
-
-limit_number = config.get("limit_number", None)
-limit = limit_number is not None
 
 # Pre-cal Front & Back
 T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
@@ -854,22 +847,6 @@ charge_dif_reference = np.array([
     [-2.29505, 0.012, 2.49045, -2.14565]
 ])
 
-# Time sum calibration (time_sum_reference)
-time_sum_distance = 30
-# time_sum_reference = np.array([
-#     [0.0, -0.3886308, -0.53020947, 0.33711737],
-#     [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
-#     [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
-#     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
-# ])
-
-time_sum_reference = np.array([
-    [0., 0.34735892,0.45303939,-0.36284147],
-    [0.8596194, 0.82903959,1.95702226,1.23050699],
-    [0.34898167, 0.72719093,-0.2700321 ,0.01139674],
-    [0.08731539,-0.61900897,-0.39471968,-0.07661417]
-])
-
 if False:
     print('Working in fast mode.')
 
@@ -1069,6 +1046,72 @@ def zero_outlier_tsum_columns(df_input: pd.DataFrame, columns: list[str], thresh
     values[outlier_mask] = 0.0
     df_input.loc[:, t_sum_cols] = values
     return df_input
+
+def zero_strip_component_blocks(df: pd.DataFrame, self_trigger_mode: bool = False) -> None:
+    """Zero per-strip Q/T components together when any component in the block is zero."""
+    strip_labels: list[tuple[int, int]] = []
+    q_sum_cols: list[str] = []
+    q_diff_cols: list[str] = []
+    t_sum_cols: list[str] = []
+    t_diff_cols: list[str] = []
+
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            q_sum = f"Q{plane}_Q_sum_{strip}"
+            q_diff = f"Q{plane}_Q_dif_{strip}"
+            t_sum = f"T{plane}_T_sum_{strip}"
+            t_diff = f"T{plane}_T_dif_{strip}"
+            if all(col in df.columns for col in (q_sum, q_diff, t_sum, t_diff)):
+                strip_labels.append((plane, strip))
+                q_sum_cols.append(q_sum)
+                q_diff_cols.append(q_diff)
+                t_sum_cols.append(t_sum)
+                t_diff_cols.append(t_diff)
+
+    if not strip_labels:
+        return
+
+    q_sum_values = df.loc[:, q_sum_cols].to_numpy(copy=True)
+    q_diff_values = df.loc[:, q_diff_cols].to_numpy(copy=True)
+    t_sum_values = df.loc[:, t_sum_cols].to_numpy(copy=True)
+    t_diff_values = df.loc[:, t_diff_cols].to_numpy(copy=True)
+
+    any_zero = (
+        (q_sum_values == 0)
+        | (q_diff_values == 0)
+        | (t_sum_values == 0)
+        | (t_diff_values == 0)
+    )
+    all_zero = (
+        (q_sum_values == 0)
+        & (q_diff_values == 0)
+        & (t_sum_values == 0)
+        & (t_diff_values == 0)
+    )
+
+    total_events = len(df)
+    for idx, (plane, strip) in enumerate(strip_labels):
+        num_affected_events = int(np.count_nonzero(any_zero[:, idx]))
+        if self_trigger_mode:
+            print(
+                f"SELF TRIGGER. Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)"
+            )
+        else:
+            zeroes_before = int(np.count_nonzero(all_zero[:, idx]))
+            set_to_zero = num_affected_events - zeroes_before
+            print(
+                f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)"
+            )
+
+    q_sum_values[any_zero] = 0
+    q_diff_values[any_zero] = 0
+    t_sum_values[any_zero] = 0
+    t_diff_values[any_zero] = 0
+
+    df.loc[:, q_sum_cols] = q_sum_values
+    df.loc[:, q_diff_cols] = q_diff_values
+    df.loc[:, t_sum_cols] = t_sum_values
+    df.loc[:, t_diff_cols] = t_diff_values
 
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
@@ -1697,13 +1740,26 @@ if try_to_use_reprocessing_table:
         # 512    10      1      1         T_sum  0.000000e+00
         # 513    10      1      2         T_sum  3.707547e-01
         
+        reprocessing_plane = (
+            reprocessing_parameters["plane"].to_numpy(dtype=np.int64, copy=False) - 1
+        )
+        reprocessing_strip = (
+            reprocessing_parameters["strip"].to_numpy(dtype=np.int64, copy=False) - 1
+        )
+        reprocessing_variable = reprocessing_parameters["variable"].to_numpy(copy=False)
+        reprocessing_value = reprocessing_parameters["parameter"].to_numpy(
+            dtype=float,
+            copy=False,
+        )
+
         def create_calibration_matrix(param_name: str) -> np.ndarray:
             matrix = np.full((4, 4), np.nan)
-            for _, row in reprocessing_parameters.iterrows():
-                plane = int(row["plane"]) - 1  # Convert to 0-based index
-                strip = int(row["strip"]) - 1  # Convert to 0-based index
-                if param_name == row["variable"]:
-                    matrix[plane, strip] = row["parameter"]
+            variable_mask = reprocessing_variable == param_name
+            if np.any(variable_mask):
+                matrix[
+                    reprocessing_plane[variable_mask],
+                    reprocessing_strip[variable_mask],
+                ] = reprocessing_value[variable_mask]
             return matrix
         
         T_sum_calibration = create_calibration_matrix("T_sum")
@@ -1741,325 +1797,6 @@ else:
 ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
-
-# Charge calibration to fC
-calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
-
-# Charge front-back
-charge_front_back = config["charge_front_back"]
-
-# Slewing correction
-slewing_correction = config["slewing_correction"]
-
-# Time filtering
-time_window_filtering = config["time_window_filtering"]
-
-# Time calibration
-time_calibration = config["time_calibration"]
-old_timing_method = config["old_timing_method"]
-
-# Y position
-
-# RPC variables
-
-# Alternative
-
-# TimTrack
-
-# Validation
-validate_charge_pedestal_calibration = config["validate_charge_pedestal_calibration"]
-
-time_calibration = config["time_calibration"]
-
-charge_front_back = config["charge_front_back"]
-
-limit_number = config.get("limit_number", None)
-limit = limit_number is not None
-
-# Pre-cal Front & Back
-T_side_left_pre_cal_debug = config["T_side_left_pre_cal_debug"]
-T_side_right_pre_cal_debug = config["T_side_right_pre_cal_debug"]
-
-T_side_left_pre_cal_default = config["T_side_left_pre_cal_default"]
-T_side_right_pre_cal_default = config["T_side_right_pre_cal_default"]
-
-T_side_left_pre_cal_ST = config["T_side_left_pre_cal_ST"]
-T_side_right_pre_cal_ST = config["T_side_right_pre_cal_ST"]
-
-# Pre-cal Sum & Diff
-Q_left_pre_cal = config["Q_left_pre_cal"]
-Q_right_pre_cal = config["Q_right_pre_cal"]
-Q_dif_pre_cal_threshold = config["Q_dif_pre_cal_threshold"]
-T_sum_left_pre_cal = config["T_sum_left_pre_cal"]
-T_sum_right_pre_cal = config["T_sum_right_pre_cal"]
-T_dif_pre_cal_threshold = config["T_dif_pre_cal_threshold"]
-
-# Post-calibration
-Q_sum_left_cal = config["Q_sum_left_cal"]
-Q_sum_right_cal = config["Q_sum_right_cal"]
-Q_dif_cal_threshold = config["Q_dif_cal_threshold"]
-Q_dif_cal_threshold_FB = config["Q_dif_cal_threshold_FB"]
-Q_dif_cal_threshold_FB_wide = config["Q_dif_cal_threshold_FB_wide"]
-T_dif_cal_threshold = config["T_dif_cal_threshold"]
-
-# Once calculated the RPC variables
-T_sum_RPC_left = config.get("T_sum_RPC_left", -7)
-T_sum_RPC_right = config.get("T_sum_RPC_right", 7)
-
-# Alternative fitter filter
-det_pos_filter = config.get("det_pos_filter", 800)
-det_theta_left_filter = config.get("det_theta_left_filter", 0)
-det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
-det_phi_right_filter = det_phi_filter_abs
-det_phi_left_filter = -det_phi_filter_abs
-det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
-det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
-
-# TimTrack filter
-res_ystr_filter = config.get("res_ystr_filter", 500)
-res_tsum_filter = config.get("res_tsum_filter", 3.5)
-res_tdif_filter = config.get("res_tdif_filter", 1.0)
-
-# Fitting comparison
-
-# Calibrations
-CRT_gaussian_fit_quantile = config["CRT_gaussian_fit_quantile"]
-coincidence_window_precal_ns = config["coincidence_window_precal_ns"]
-coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
-coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_of_points"]
-
-# Pedestal charge calibration
-pedestal_left = config["pedestal_left"]
-pedestal_right = config["pedestal_right"]
-
-# Front-back charge
-distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
-distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
-distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
-distance_sum_charges_plot = config["distance_sum_charges_plot"]
-front_back_fit_threshold = config["front_back_fit_threshold"]
-
-# Variables to modify
-beta = config["beta"]
-strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-validate_pos_cal = config["validate_pos_cal"]
-
-degree_of_polynomial = config["degree_of_polynomial"]
-
-# X
-strip_length = config["strip_length"]
-narrow_strip = config["narrow_strip"]
-wide_strip = config["wide_strip"]
-
-# Timtrack parameters
-anc_std = config.get("anc_std", 0.075)
-
-n_planes_timtrack = config.get("n_planes_timtrack", 4)
-
-# Plotting options
-T_clip_min_debug = config.get("T_clip_min_debug", -500)
-T_clip_max_debug = config.get("T_clip_max_debug", 500)
-Q_clip_min_debug = config["Q_clip_min_debug"]
-Q_clip_max_debug = config["Q_clip_max_debug"]
-num_bins_debug = config["num_bins_debug"]
-
-T_clip_min_default = config.get("T_clip_min_default", -300)
-T_clip_max_default = config.get("T_clip_max_default", 100)
-Q_clip_min_default = config["Q_clip_min_default"]
-Q_clip_max_default = config["Q_clip_max_default"]
-num_bins_default = config["num_bins_default"]
-
-T_clip_min_ST = config.get("T_clip_min_ST", -300)
-T_clip_max_ST = config.get("T_clip_max_ST", 100)
-Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
-Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
-
-log_scale = config["log_scale"]
-
-calibrate_strip_Q_pedestal_translate_charge_cal = config.get("calibrate_strip_Q_pedestal_translate_charge_cal", 0.25)
-
-calibrate_strip_Q_pedestal_percentile = config.get("calibrate_strip_Q_pedestal_percentile", 10)
-calibrate_strip_Q_pedestal_rel_th = config.get("calibrate_strip_Q_pedestal_rel_th", 0.015)
-calibrate_strip_Q_pedestal_rel_th_cal = config.get("calibrate_strip_Q_pedestal_rel_th_cal", 0.4)
-calibrate_strip_Q_pedestal_abs_th = config["calibrate_strip_Q_pedestal_abs_th"]
-calibrate_strip_Q_pedestal_q_quantile = config.get("calibrate_strip_Q_pedestal_q_quantile", 0.4)
-
-scatter_2d_and_fit_new_xlim_left = config["scatter_2d_and_fit_new_xlim_left"]
-scatter_2d_and_fit_new_xlim_right = config["scatter_2d_and_fit_new_xlim_right"]
-scatter_2d_and_fit_new_ylim_abs = abs(float(config.get("scatter_2d_and_fit_new_ylim_abs", config.get("scatter_2d_and_fit_new_ylim_top", 11))))
-scatter_2d_and_fit_new_ylim_top = scatter_2d_and_fit_new_ylim_abs
-scatter_2d_and_fit_new_ylim_bottom = -scatter_2d_and_fit_new_ylim_abs
-
-calibrate_strip_T_dif_T_rel_th = config["calibrate_strip_T_dif_T_rel_th"]
-calibrate_strip_T_dif_T_abs_th = config["calibrate_strip_T_dif_T_abs_th"]
-
-interpolate_fast_charge_Q_clip_min = config["interpolate_fast_charge_Q_clip_min"]
-interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"]
-interpolate_fast_charge_num_bins = config["interpolate_fast_charge_num_bins"]
-interpolate_fast_charge_log_scale = config["interpolate_fast_charge_log_scale"]
-
-crosstalk_fitting = config["crosstalk_fitting"]
-delta_t_left = config["delta_t_left"]
-delta_t_right = config["delta_t_right"]
-q_sum_left = config["q_sum_left"]
-q_sum_right = config["q_sum_right"]
-q_dif_abs = abs(float(config.get("q_dif_abs", config.get("q_dif_right", 40))))
-q_dif_right = q_dif_abs
-q_dif_left = -q_dif_abs
-
-Q_sum_semidiff_abs = abs(float(config.get("Q_sum_semidiff_abs", config.get("Q_sum_semidiff_right", 10))))
-Q_sum_semidiff_right = Q_sum_semidiff_abs
-Q_sum_semidiff_left = -Q_sum_semidiff_abs
-Q_sum_semisum_left = config["Q_sum_semisum_left"]
-Q_sum_semisum_right = config["Q_sum_semisum_right"]
-T_sum_corrected_dif_abs = abs(float(config.get("T_sum_corrected_dif_abs", config.get("T_sum_corrected_dif_right", 5))))
-T_sum_corrected_dif_right = T_sum_corrected_dif_abs
-T_sum_corrected_dif_left = -T_sum_corrected_dif_abs
-slewing_residual_range = config["slewing_residual_range"]
-
-t_comparison_lim = config["t_comparison_lim"]
-t0_time_cal_lim = config["t0_time_cal_lim"]
-
-crosstalk_fit_mu_max = config["crosstalk_fit_mu_max"]
-crosstalk_fit_sigma_min = config["crosstalk_fit_sigma_min"]
-crosstalk_fit_sigma_max = config["crosstalk_fit_sigma_max"]
-
-slewing_correction_r2_threshold = config["slewing_correction_r2_threshold"]
-
-# -----------------------------------------------------------------------------
-# Some variables that define the analysis, define a dictionary with the variables:
-# 'purity_of_data', etc.
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Variables to not touch unless necessary -------------------------------------
-# -----------------------------------------------------------------------------
-Q_sum_color = 'orange'
-Q_dif_color = 'red'
-T_sum_color = 'blue'
-T_dif_color = 'green'
-
-pos_filter = det_pos_filter
-t0_left_filter = T_sum_RPC_left
-t0_right_filter = T_sum_RPC_right
-slowness_filter_left = det_slowness_filter_left
-slowness_filter_right = det_slowness_filter_right
-
-theta_left_filter = det_theta_left_filter
-theta_right_filter = det_theta_right_filter
-phi_left_filter = det_phi_left_filter
-phi_right_filter = det_phi_right_filter
-
-fig_idx = 1
-plot_list = []
-
-# Time dif calibration (time_dif_reference)
-time_dif_distance = 30
-time_dif_reference = np.array([
-    [-0.0573, 0.031275, 1.033875, 0.761475],
-    [-0.914, -0.873975, -0.19815, 0.452025],
-    [0.8769, 1.2008, 1.014, 2.43915],
-    [1.508825, 2.086375, 1.6876, 3.023575]
-])
-
-# Charge sum pedestal (charge_sum_reference)
-charge_sum_distance = 30
-charge_sum_reference = np.array([
-    [89.4319, 98.19605, 95.99055, 91.83875],
-    [96.55775, 94.50385, 94.9254, 91.0775],
-    [92.12985, 92.23395, 90.60545, 95.5214],
-    [93.75635, 93.57425, 93.07055, 89.27305]
-])
-
-# Charge dif calibration (charge_dif_reference)
-charge_dif_distance = 30
-charge_dif_reference = np.array([
-    [4.512, 0.58715, 1.3204, -1.3918],
-    [-4.50885, 0.918, -3.39445, -0.12325],
-    [-3.8931, -3.28515, 3.27295, 1.0554],
-    [-2.29505, 0.012, 2.49045, -2.14565]
-])
-
-# Time sum calibration (time_sum_reference)
-time_sum_distance = 30
-time_sum_reference = np.array([
-    [0.0, -0.3886308, -0.53020947, 0.33711737],
-    [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
-    [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
-    [0.33586385, 1.08329847, 0.91410244, 0.58815813]
-])
-
-if False:
-    print('Working in fast mode.')
-
-if False:
-    print('Working in debug mode.')
-
-if False:
-    T_F_left_pre_cal = T_side_left_pre_cal_debug
-    T_F_right_pre_cal = T_side_right_pre_cal_debug
-
-    T_B_left_pre_cal = T_side_left_pre_cal_debug
-    T_B_right_pre_cal = T_side_right_pre_cal_debug
-
-else:
-    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
-    T_F_right_pre_cal = T_side_right_pre_cal_default
-
-    T_B_left_pre_cal = T_side_left_pre_cal_default
-    T_B_right_pre_cal = T_side_right_pre_cal_default
-
-T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
-T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
-T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
-T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-
-# Y ---------------------------------------------------------------------------
-y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
-            np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
-y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
-y_width_P1_and_P3 = y_widths[0]
-y_width_P2_and_P4 = y_widths[1]
-y_pos_P1_and_P3 = y_pos(y_width_P1_and_P3)
-y_pos_P2_and_P4 = y_pos(y_width_P2_and_P4)
-total_width = np.sum(y_width_P1_and_P3)
-
-c_mm_ns = c/1000000
-print(c_mm_ns)
-
-# Miscelanous ----------------------------
-muon_speed = beta * c_mm_ns
-strip_speed = strip_speed_factor_of_c * c_mm_ns # 200 mm/ns
-tdiff_to_x = strip_speed # Factor to transform t_diff to X
-
-# Not-Hardcoded
-vc    = beta * c_mm_ns # mm/ns
-sc    = 1/vc
-ss    = 1/strip_speed # slowness of the signal in the strip
-nplan = n_planes_timtrack
-lenx  = strip_length
-anc_sx = tdiff_to_x * anc_std # 2 cm
-
-if False:
-    T_clip_min = T_clip_min_debug
-    T_clip_max = T_clip_max_debug
-    Q_clip_min = Q_clip_min_debug
-    Q_clip_max = Q_clip_max_debug
-    num_bins = num_bins_debug
-else:
-    T_clip_min = T_clip_min_default
-    T_clip_max = T_clip_max_default
-    Q_clip_min = Q_clip_min_default
-    Q_clip_max = Q_clip_max_default
-    num_bins = num_bins_default
-
-T_clip_min_ST = T_clip_min_ST
-T_clip_max_ST = T_clip_max_ST
-Q_clip_min_ST = Q_clip_min_ST
-Q_clip_max_ST = Q_clip_max_ST
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -2498,7 +2235,7 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
 
         plt.close()
 
@@ -2555,7 +2292,7 @@ def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = Fals
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         plt.close()
     
 
@@ -2658,7 +2395,7 @@ def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = Fals
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
 
         plt.close()
 
@@ -2721,7 +2458,7 @@ def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = Fals
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         plt.close()
 
     use_max = False
@@ -2764,7 +2501,7 @@ def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = Fals
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         plt.close()
 
     offset = offset_hist_method
@@ -2844,7 +2581,7 @@ def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = Fals
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         plt.close()
 
         # Now the scatter
@@ -2864,7 +2601,7 @@ def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = Fals
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         plt.close()
 
     pedestal = offset
@@ -2939,7 +2676,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close()
     return coeffs
@@ -3011,7 +2748,7 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots: plt.show()
     plt.close()
 
@@ -3144,7 +2881,7 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots:
         plt.show()
     plt.close()
@@ -3275,7 +3012,7 @@ if calculate_Q_sum_calibration:
                 
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
             
             if show_plots: plt.show()
             plt.close(fig_Q)
@@ -3321,7 +3058,7 @@ if calculate_Q_sum_calibration:
                 
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
             
             if show_plots: plt.show()
             plt.close(fig_Q)
@@ -3368,7 +3105,7 @@ if calculate_Q_sum_calibration:
                 
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
             
             if show_plots: plt.show()
             plt.close(fig_Q)
@@ -3449,7 +3186,7 @@ if calculate_Q_sum_calibration:
                 fig_idx += 1
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
 
             if show_plots:
                 plt.show()
@@ -3544,7 +3281,7 @@ if calculate_Q_sum_calibration:
                 
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                     plot_list.append(save_fig_path)
-                    plt.savefig(save_fig_path, format='png')
+                    save_plot_figure(save_fig_path, format='png')
             
                 if show_plots: plt.show()
                 plt.close(fig_Q)
@@ -3590,7 +3327,7 @@ if calculate_Q_sum_calibration:
                 
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                     plot_list.append(save_fig_path)
-                    plt.savefig(save_fig_path, format='png')
+                    save_plot_figure(save_fig_path, format='png')
             
                 if show_plots: plt.show()
                 plt.close(fig_Q)
@@ -3636,10 +3373,13 @@ if calculate_Q_sum_calibration:
                 
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                     plot_list.append(save_fig_path)
-                    plt.savefig(save_fig_path, format='png')
+                    save_plot_figure(save_fig_path, format='png')
             
                 if show_plots: plt.show()
                 plt.close(fig_Q)
+    if "charge_test" in locals():
+        del charge_test
+        gc.collect()
 else:
     QF_pedestal = Q_sum_calibration
     QB_pedestal = Q_sum_calibration
@@ -3725,7 +3465,7 @@ if calculate_T_dif_calibration:
                 fig_idx += 1
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
             if show_plots: plt.show()
             plt.close(fig_Q)
 
@@ -3811,9 +3551,14 @@ if calculate_T_dif_calibration:
                     fig_idx += 1
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                     plot_list.append(save_fig_path)
-                    plt.savefig(save_fig_path, format='png')
+                    save_plot_figure(save_fig_path, format='png')
                 if show_plots: plt.show()
                 plt.close(fig_Q)
+    if "pos_test" in locals():
+        del pos_test
+    if "pos_test_copy" in locals():
+        del pos_test_copy
+    gc.collect()
 else:
     print("Skipping T_dif Calibration as per configuration.")
     Tdiff_cal = T_dif_calibration
@@ -3882,8 +3627,7 @@ if self_trigger:
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
-    plot_df = working_df.copy()
-    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    plot_df = working_df.loc[:, [col for col in working_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
     
     num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
@@ -3922,10 +3666,11 @@ if create_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots: 
         plt.show()
     plt.close()
+    del plot_df
 
 if time_window_filtering:
     
@@ -3935,15 +3680,11 @@ if time_window_filtering:
     
     # Pre removal of outliers
     t_sum_columns_tt = [col for col in working_df.columns if "_T_sum_" in col]
-    spread_results = []
     for clean_tt in sorted(working_df["clean_tt"].unique()):
         print(f"Processing clean_tt = {clean_tt}")
-        filtered_df = working_df[working_df["clean_tt"] == clean_tt].copy()
-        t_sum_spread_tt = compute_t_sum_spread(filtered_df, t_sum_columns_tt)
-        filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
-        spread_results.append(filtered_df)
-    spread_df = pd.concat(spread_results, ignore_index=True)
-    spread_df_OG = spread_df.copy()
+    spread_df = working_df.loc[:, ["clean_tt"]].copy()
+    spread_df["T_sum_spread_OG"] = compute_t_sum_spread(working_df, t_sum_columns_tt)
+    spread_df_OG = spread_df
 
     if create_debug_plots and "T_sum_spread_OG" in spread_df.columns:
         _debug_plot_filter_group(
@@ -3982,7 +3723,7 @@ if time_window_filtering:
                 fig_idx += 1
                 hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
                 plot_list.append(hist_path)
-                fig.savefig(hist_path, format='png')
+                save_plot_figure(hist_path, fig=fig, format='png')
             if show_plots: plt.show()
             plt.close(fig)
 
@@ -3995,13 +3736,8 @@ if time_window_filtering:
     )
 
     # Post removal of outliers
-    spread_results = []
-    for clean_tt in sorted(working_df["clean_tt"].unique()):
-        filtered_df = working_df[working_df["clean_tt"] == clean_tt].copy()
-        t_sum_spread_tt = compute_t_sum_spread(filtered_df, t_sum_columns_tt)
-        filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
-        spread_results.append(filtered_df)
-    spread_df = pd.concat(spread_results, ignore_index=True)
+    spread_df = working_df.loc[:, ["clean_tt"]].copy()
+    spread_df["T_sum_spread_OG"] = compute_t_sum_spread(working_df, t_sum_columns_tt)
     
     if create_plots:
         clean_tts = sorted(spread_df["clean_tt"].unique())
@@ -4031,10 +3767,13 @@ if time_window_filtering:
                 hist_filename = f'{fig_idx}_tsum_spread_histograms_filtered_OG.png'
                 hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
                 plot_list.append(hist_path)
-                fig.savefig(hist_path, format='png')
+                save_plot_figure(hist_path, fig=fig, format='png')
             fig_idx += 1
         if show_plots: plt.show()
         plt.close(fig)
+    del spread_df
+    del spread_df_OG
+    gc.collect()
 
 # Print the unique types in clean_tt column
 iteration_tt_check += 1
@@ -4089,8 +3828,7 @@ for col in working_df.columns:
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
-    plot_df = working_df.copy()
-    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    plot_df = working_df.loc[:, [col for col in working_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
     
     num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
@@ -4130,11 +3868,12 @@ if create_plots:
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     
     if show_plots: 
         plt.show()
     plt.close()
+    del plot_df
 
 print("----------------------------------------------------------------------")
 print("----------- Charge sum pedestal, calibration and filtering -----------")
@@ -4236,8 +3975,7 @@ print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after p
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
-    plot_df = working_df.copy()
-    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    plot_df = working_df.loc[:, [col for col in working_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
     
     num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
@@ -4277,11 +4015,12 @@ if create_plots:
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     
     if show_plots: 
         plt.show()
     plt.close()
+    del plot_df
 
 print("----------------------------------------------------------------------")
 print("------------------- Charge front-back correction ---------------------")
@@ -4395,8 +4134,7 @@ print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after p
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
-    plot_df = working_df.copy()
-    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    plot_df = working_df.loc[:, [col for col in working_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
     
     num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
@@ -4436,11 +4174,12 @@ if create_plots:
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     
     if show_plots: 
         plt.show()
     plt.close()
+    del plot_df
 
 print("----------------------------------------------------------------------")
 print("---------- Filter if any variable in the strip is 0 (1/3) ------------")
@@ -4453,38 +4192,7 @@ strip_stage1_cols, strip_stage1_before = snapshot_nonzero_mask(
     working_df,
     collect_strip_component_columns(working_df.columns),
 )
-total_events = len(working_df)
-
-for plane in range(1, 5):
-    for strip in range(1, 5):
-        q_sum  = f'Q{plane}_Q_sum_{strip}'
-        q_diff = f'Q{plane}_Q_dif_{strip}'
-        t_sum  = f'T{plane}_T_sum_{strip}'
-        t_diff = f'T{plane}_T_dif_{strip}'
-        
-        # Build mask
-        mask = (
-            (working_df[q_sum]  == 0) |
-            (working_df[q_diff] == 0) |
-            (working_df[t_sum]  == 0) |
-            (working_df[t_diff] == 0)
-        )
-
-        mask_and = (
-            (working_df[q_sum]  == 0) &
-            (working_df[q_diff] == 0) &
-            (working_df[t_sum]  == 0) &
-            (working_df[t_diff] == 0)
-        )
-        
-        # Count affected events
-        num_affected_events = mask.sum()
-        zeroes_before = mask_and.sum()
-        set_to_zero = num_affected_events - zeroes_before
-        print(f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)")
-
-        # Zero the affected values
-        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+zero_strip_component_blocks(working_df)
 
 record_zeroing_step_metrics(
     "strip_zeroing_stage1",
@@ -4494,30 +4202,7 @@ record_zeroing_step_metrics(
 )
 
 if self_trigger:
-    
-    total_events = len(working_st_df)
-
-    for plane in range(1, 5):
-        for strip in range(1, 5):
-            q_sum  = f'Q{plane}_Q_sum_{strip}'
-            q_diff = f'Q{plane}_Q_dif_{strip}'
-            t_sum  = f'T{plane}_T_sum_{strip}'
-            t_diff = f'T{plane}_T_dif_{strip}'
-        
-            # Build mask
-            mask = (
-                (working_st_df[q_sum]  == 0) |
-                (working_st_df[q_diff] == 0) |
-                (working_st_df[t_sum]  == 0) |
-                (working_st_df[t_diff] == 0)
-            )
-        
-            # Count affected events
-            num_affected_events = mask.sum()
-            print(f"SELF TRIGGER. Plane {plane}, Strip {strip}: {num_affected_events} out of {total_events} events affected ({(num_affected_events / total_events) * 100:.2f}%)")
-
-            # Zero the affected values
-            working_st_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+    zero_strip_component_blocks(working_st_df, self_trigger_mode=True)
 
 # Print the unique types in clean_tt column
 iteration_tt_check += 1
@@ -4527,8 +4212,7 @@ print(f"[{iteration_tt_check}] Unique trigger types in 'clean_tt' column after p
 if create_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
-    plot_df = working_df.copy()
-    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    plot_df = working_df.loc[:, [col for col in working_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
     
     num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
@@ -4568,19 +4252,19 @@ if create_plots:
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     
     if show_plots: 
         plt.show()
     plt.close()
+    del plot_df
 
 if self_trigger:
     if create_plots:
     
 
         # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
-        plot_df = working_st_df.copy()
-        plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+        plot_df = working_st_df.loc[:, [col for col in working_st_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
     
         num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
         num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
@@ -4620,11 +4304,12 @@ if self_trigger:
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
     
         if show_plots: 
             plt.show()
         plt.close()
+        del plot_df
 
 if slewing_correction:
     
@@ -4785,7 +4470,7 @@ if slewing_correction:
 
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
 
             if show_plots:
                 plt.show()
@@ -4858,7 +4543,7 @@ if slewing_correction:
 
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
 
             if show_plots:
                 plt.show()
@@ -4935,7 +4620,7 @@ if slewing_correction:
 
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
         
             if show_plots: 
                 plt.show()
@@ -5029,7 +4714,7 @@ if slewing_correction:
 
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
 
             if show_plots:
                 plt.show()
@@ -5237,7 +4922,7 @@ if slewing_correction:
 
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
 
             if show_plots:
                 plt.show()
@@ -5353,7 +5038,7 @@ if slewing_correction:
 
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
 
             if show_plots:
                 plt.show()
@@ -5383,49 +5068,44 @@ if time_calibration:
                     stacklevel=2,
                 )
                 print(
-                    "Warning: old_timing_method=True enables a deprecated iterrows() timing calibration path."
+                    "Warning: old_timing_method=True enables a deprecated compatibility timing-calibration path."
                 )
             
-            # Initialize an empty list to store the resulting matrices for each event
-            event_matrices = []
-            skipped_time_calibration = 0
+            old_timing_prep_start = time.perf_counter()
+            valid_clean_tt = {123, 324, 124, 134, 1234}
+            timing_mask = working_df["clean_tt"].isin(valid_clean_tt).to_numpy()
+            skipped_time_calibration = int((~timing_mask).sum())
+            timing_df = working_df.loc[timing_mask]
+            n_timing_events = len(timing_df)
+            event_matrices = np.zeros((n_timing_events, 4, 3), dtype=float)
 
-            # Iterate over each event (row) in the DataFrame
-            for _, row in working_df.iterrows():
+            if n_timing_events > 0:
+                row_idx = np.arange(n_timing_events)
+                for module_idx in range(4):
+                    module = f"T{module_idx + 1}"
+                    q_sum_cols = [f"Q{module_idx + 1}_Q_sum_{strip}" for strip in range(1, 5)]
+                    t_sum_cols = [f"{module}_T_sum_{strip}" for strip in range(1, 5)]
+                    t_dif_cols = [f"{module}_T_dif_{strip}" for strip in range(1, 5)]
 
-                # Use only if clean_tt is 123, 324, 124, 134, 1234
-                if row['clean_tt'] not in [123, 324, 124, 134, 1234]:
-                    skipped_time_calibration += 1
-                    continue
+                    q_sum_values = timing_df[q_sum_cols].to_numpy()
+                    best_strip_idx = np.argmax(q_sum_values, axis=1)
+                    has_signal = np.sum(q_sum_values, axis=1) != 0
 
-                event_matrix = []
-                for module in ['T1', 'T2', 'T3', 'T4']:
-                    # Find the index of the strip with the maximum Q_sum for this module
-                    Q_sum_cols = [f'{module.replace("T", "Q")}_Q_sum_{i+1}' for i in range(4)]
-                    Q_sum_values = row[Q_sum_cols].values
-                    
-                    if sum(Q_sum_values) == 0:
-                        event_matrix.append([0, 0, 0])
-                        continue
-                    
-                    max_index = np.argmax(Q_sum_values) + 1
-                        
-                    # Get the corresponding T_sum and T_diff for the module and strip
-                    T_sum_col = f'{module}_T_sum_{max_index}'
-                    T_dif_col = f'{module}_T_dif_{max_index}'
-                    T_sum_value = row[T_sum_col]
-                    T_dif_value = row[T_dif_col]
-                    
-                    # Append the row to the event matrix
-                    event_matrix.append([max_index, T_sum_value, T_dif_value])
-                
-                # Convert the event matrix to a numpy array and append it to the list of event matrices
-                event_matrices.append(np.array(event_matrix))
-            
+                    selected_strip = np.where(has_signal, best_strip_idx + 1, 0)
+                    t_sum_values = timing_df[t_sum_cols].to_numpy()[row_idx, best_strip_idx]
+                    t_dif_values = timing_df[t_dif_cols].to_numpy()[row_idx, best_strip_idx]
+                    selected_t_sum = np.where(has_signal, t_sum_values, 0.0)
+                    selected_t_dif = np.where(has_signal, t_dif_values, 0.0)
+
+                    event_matrices[:, module_idx, 0] = selected_strip
+                    event_matrices[:, module_idx, 1] = selected_t_sum
+                    event_matrices[:, module_idx, 2] = selected_t_dif
+
             print(f"Skipped {skipped_time_calibration} 2-fold events for time calibration (acc. to clean_tt).")
-            
-            # Convert the list of event matrices to a 3D numpy array (events x modules x features)
-            event_matrices = np.array(event_matrices)
+            print(
+                f"[PROFILE][TASK_2] old_timing_method event-matrix build: {time.perf_counter() - old_timing_prep_start:.2f}s",
+                force=True,
+            )
             
             # The old code to do this -----------------------------
             
@@ -5462,296 +5142,61 @@ if time_calibration:
                 # diff = ps[P_b-1, 2] - ps[P_a-1, 2]
                 return diff
             
-            # Three layers spaced
-            P1s1_P4s1 = []; P1s1_P4s2 = []; P1s2_P4s1 = []; P1s2_P4s2 = []; P1s2_P4s3 = []; P1s3_P4s2 = []; P1s3_P4s3 = []; P1s3_P4s4 = []; P1s4_P4s3 = []; P1s4_P4s4 = []; P1s1_P4s3 = []; P1s3_P4s1 = []; P1s2_P4s4 = []; P1s4_P4s2 = []; P1s1_P4s4 = [];
+            strip_pair_patterns = [
+                (1, 1), (2, 2), (3, 3), (4, 4),
+                (1, 2), (2, 1), (2, 3), (3, 2), (3, 4), (4, 3),
+                (1, 3), (3, 1), (2, 4), (4, 2), (1, 4),
+            ]
+            plane_pair_order = [(1, 3), (1, 4), (2, 4), (3, 4), (1, 2), (2, 3)]
+            vector_names = [
+                f"P{plane_a}s{strip_a}_P{plane_b}s{strip_b}"
+                for plane_a, plane_b in plane_pair_order
+                for strip_a, strip_b in strip_pair_patterns
+            ]
+            vector_lookup = {
+                (plane_a, strip_a, plane_b, strip_b): f"P{plane_a}s{strip_a}_P{plane_b}s{strip_b}"
+                for plane_a, plane_b in plane_pair_order
+                for strip_a, strip_b in strip_pair_patterns
+            }
+            vector_data = {name: [] for name in vector_names}
 
-            # Two layers spaced
-            P1s1_P3s1 = []; P1s1_P3s2 = []; P1s2_P3s1 = []; P1s2_P3s2 = []; P1s2_P3s3 = []; P1s3_P3s2 = []; P1s3_P3s3 = []; P1s3_P3s4 = []; P1s4_P3s3 = []; P1s4_P3s4 = []; P1s1_P3s3 = []; P1s3_P3s1 = []; P1s2_P3s4 = []; P1s4_P3s2 = []; P1s1_P3s4 = [];
-            P2s1_P4s1 = []; P2s1_P4s2 = []; P2s2_P4s1 = []; P2s2_P4s2 = []; P2s2_P4s3 = []; P2s3_P4s2 = []; P2s3_P4s3 = []; P2s3_P4s4 = []; P2s4_P4s3 = []; P2s4_P4s4 = []; P2s1_P4s3 = []; P2s3_P4s1 = []; P2s2_P4s4 = []; P2s4_P4s2 = []; P2s1_P4s4 = [];
-
-            # One layer spaced
-            P1s1_P2s1 = []; P1s1_P2s2 = []; P1s2_P2s1 = []; P1s2_P2s2 = []; P1s2_P2s3 = []; P1s3_P2s2 = []; P1s3_P2s3 = []; P1s3_P2s4 = []; P1s4_P2s3 = []; P1s4_P2s4 = []; P1s1_P2s3 = []; P1s3_P2s1 = []; P1s2_P2s4 = []; P1s4_P2s2 = []; P1s1_P2s4 = [];
-            P2s1_P3s1 = []; P2s1_P3s2 = []; P2s2_P3s1 = []; P2s2_P3s2 = []; P2s2_P3s3 = []; P2s3_P3s2 = []; P2s3_P3s3 = []; P2s3_P3s4 = []; P2s4_P3s3 = []; P2s4_P3s4 = []; P2s1_P3s3 = []; P2s3_P3s1 = []; P2s2_P3s4 = []; P2s4_P3s2 = []; P2s1_P3s4 = [];
-            P3s1_P4s1 = []; P3s1_P4s2 = []; P3s2_P4s1 = []; P3s2_P4s2 = []; P3s2_P4s3 = []; P3s3_P4s2 = []; P3s3_P4s3 = []; P3s3_P4s4 = []; P3s4_P4s3 = []; P3s4_P4s4 = []; P3s1_P4s3 = []; P3s3_P4s1 = []; P3s2_P4s4 = []; P3s4_P4s2 = []; P3s1_P4s4 = [];
-            
             pos_x = []
             v_travel_time = []
             t_0 = []
-            
-            # -----------------------------------------------------------------------------
-            # Perform the calculation of a strip vs. the any other one --------------------
-            # -----------------------------------------------------------------------------
-            
+
+            old_timing_accum_start = time.perf_counter()
             i = 0
             for event in event_matrices:
                 if limit and i >= limit_number:
                     break
-                if np.all(event[:,0] == 0):
+                if np.all(event[:, 0] == 0):
                     continue
-                
+
                 istrip = event[:, 0]
-                t0 = event[:,1] - strip_length / 2 / strip_speed
-                x = event[:,2] * strip_speed
-                
-                ps = np.column_stack(( istrip, x,  t0 ))
-                ps[:,2] = ps[:,2] - ps[0,2]
-                
-                # ---------------------------------------------------------------------
-                # Fill the time differences vectors -----------------------------------
-                # ---------------------------------------------------------------------
-                
-                # Three layers spacing ------------------------------------------------
-                # P1-P4 ---------------------------------------------------------------
-                P_a = 1; P_b = 4
-                # Same strips
-                s_a = 1; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Adjacent strips
-                s_a = 1; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Two separated strips
-                s_a = 1; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Three separated strips
-                s_a = 1; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                
-                # Two layers spacing --------------------------------------------------
-                # P1-P3 ---------------------------------------------------------------
-                P_a = 1; P_b = 3
-                # Same strips
-                s_a = 1; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Adjacent strips
-                s_a = 1; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Two separated strips
-                s_a = 1; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Three separated strips
-                s_a = 1; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                
-                # P2-P4 ---------------------------------------------------------------
-                P_a = 2; P_b = 4
-                # Same strips
-                s_a = 1; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Adjacent strips
-                s_a = 1; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Two separated strips
-                s_a = 1; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Three separated strips
-                s_a = 1; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                
-                # One layer spacing ---------------------------------------------------
-                # P3-P4 ---------------------------------------------------------------
-                P_a = 3; P_b = 4
-                # Same strips
-                s_a = 1; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Adjacent strips
-                s_a = 1; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Two separated strips
-                s_a = 1; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s3_P4s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s2_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s4_P4s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Three separated strips
-                s_a = 1; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P3s1_P4s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                
-                # P1-P2 ---------------------------------------------------------------
-                P_a = 1; P_b = 2
-                # Same strips
-                s_a = 1; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Adjacent strips
-                s_a = 1; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Two separated strips
-                s_a = 1; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s3_P2s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s2_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s4_P2s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Three separated strips
-                s_a = 1; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P1s1_P2s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                
-                # P2-P3 ---------------------------------------------------------------
-                P_a = 2; P_b = 3
-                # Same strips
-                s_a = 1; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Adjacent strips
-                s_a = 1; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Two separated strips
-                s_a = 1; s_b = 3
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s3.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 3; s_b = 1
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s3_P3s1.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 2; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s2_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                s_a = 4; s_b = 2
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s4_P3s2.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                # Three separated strips
-                s_a = 1; s_b = 4
-                if ps[P_a-1, 0] == s_a and ps[P_b-1, 0] == s_b: P2s1_P3s4.append(calculate_diff(P_a, s_a, P_b, s_b, ps))
-                    
+                t0 = event[:, 1] - strip_length / 2 / strip_speed
+                x = event[:, 2] * strip_speed
+                ps = np.column_stack((istrip, x, t0))
+                ps[:, 2] = ps[:, 2] - ps[0, 2]
+
+                for plane_a, plane_b in plane_pair_order:
+                    strip_a = int(ps[plane_a - 1, 0])
+                    strip_b = int(ps[plane_b - 1, 0])
+                    if strip_a == 0 or strip_b == 0:
+                        continue
+                    vector_name = vector_lookup.get((plane_a, strip_a, plane_b, strip_b))
+                    if vector_name is None:
+                        continue
+                    vector_data[vector_name].append(
+                        calculate_diff(plane_a, strip_a, plane_b, strip_b, ps)
+                    )
+
                 i += 1
-            
-            vectors = [
-                P1s1_P3s1, P1s1_P3s2, P1s2_P3s1, P1s2_P3s2, P1s2_P3s3,
-                P1s3_P3s2, P1s3_P3s3, P1s3_P3s4, P1s4_P3s3, P1s4_P3s4,
-                P1s1_P3s3, P1s3_P3s1, P1s2_P3s4, P1s4_P3s2, P1s1_P3s4,\
-                    
-                P1s1_P4s1, P1s1_P4s2, P1s2_P4s1, P1s2_P4s2, P1s2_P4s3,
-                P1s3_P4s2, P1s3_P4s3, P1s3_P4s4, P1s4_P4s3, P1s4_P4s4,
-                P1s1_P4s3, P1s3_P4s1, P1s2_P4s4, P1s4_P4s2, P1s1_P4s4,\
-                    
-                P2s1_P4s1, P2s1_P4s2, P2s2_P4s1, P2s2_P4s2, P2s2_P4s3,
-                P2s3_P4s2, P2s3_P4s3, P2s3_P4s4, P2s4_P4s3, P2s4_P4s4,
-                P2s1_P4s3, P2s3_P4s1, P2s2_P4s4, P2s4_P4s2, P2s1_P4s4,\
-                    
-                P3s1_P4s1, P3s1_P4s2, P3s2_P4s1, P3s2_P4s2, P3s2_P4s3,
-                P3s3_P4s2, P3s3_P4s3, P3s3_P4s4, P3s4_P4s3, P3s4_P4s4,
-                P3s1_P4s3, P3s3_P4s1, P3s2_P4s4, P3s4_P4s2, P3s1_P4s4,\
-                    
-                P1s1_P2s1, P1s1_P2s2, P1s2_P2s1, P1s2_P2s2, P1s2_P2s3,
-                P1s3_P2s2, P1s3_P2s3, P1s3_P2s4, P1s4_P2s3, P1s4_P2s4,
-                P1s1_P2s3, P1s3_P2s1, P1s2_P2s4, P1s4_P2s2, P1s1_P2s4,\
-                    
-                P2s1_P3s1, P2s1_P3s2, P2s2_P3s1, P2s2_P3s2, P2s2_P3s3,
-                P2s3_P3s2, P2s3_P3s3, P2s3_P3s4, P2s4_P3s3, P2s4_P3s4,
-                P2s1_P3s3, P2s3_P3s1, P2s2_P3s4, P2s4_P3s2, P2s1_P3s4
-            ]
+
+            vectors = [vector_data[name] for name in vector_names]
+            print(
+                f"[PROFILE][TASK_2] old_timing_method strip-pair accumulation: {time.perf_counter() - old_timing_accum_start:.2f}s",
+                force=True,
+            )
 
             if create_plots:
             
@@ -5796,12 +5241,11 @@ if time_calibration:
                     fig_idx += 1
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                     plot_list.append(save_fig_path)
-                    plt.savefig(save_fig_path, format='png')
+                    save_plot_figure(save_fig_path, format='png')
                 if show_plots: plt.show()
                 plt.close()
             
-                for i, vector in enumerate(vectors):
-                    var_name = [name for name, val in globals().items() if val is vector][0]
+                for i, (var_name, vector) in enumerate(zip(vector_names, vectors)):
                     if i >= number_of_time_cal_figures: break
                     hist_1d(vector, 100, var_name, "T / ns", var_name)
             
@@ -5812,8 +5256,7 @@ if time_calibration:
 
             # Dictionary to store CRT values
             crt_values = {}
-            for i, vector in enumerate(vectors):
-                var_name = [name for name, val in globals().items() if val is vector][0]
+            for var_name, vector in zip(vector_names, vectors):
                 vdat = np.array(vector)
                 if len(vdat) > 1:
                     try:
@@ -5847,10 +5290,7 @@ if time_calibration:
             columns = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
             
             df = pd.DataFrame(index=rows, columns=columns)
-            for vector in vectors:
-                var_name = [name for name, val in globals().items() if val is vector][0]
-                if var_name == "vector":
-                    continue
+            for var_name, vector in zip(vector_names, vectors):
                 current_prefix = str(var_name.split('_')[0])
                 current_suffix = str(var_name.split('_')[1])
                 # Key part: create the antisymmetric matrix
@@ -5942,22 +5382,20 @@ if time_calibration:
         print("------------------------")
         print("Calculated calibration in times is:\n", calibration_times)
         
-        diff = np.abs(calibration_times - time_sum_reference) > time_sum_distance
         nan_mask = np.isnan(calibration_times)
-        values_replaced_t_sum = np.any(diff | nan_mask)
-        calibration_times[diff | nan_mask] = time_sum_reference[diff | nan_mask]
-        if values_replaced_t_sum:
-            print("Some values were replaced in the calibration in times.")
+        if np.any(nan_mask):
+            calibration_times[nan_mask] = T_sum_calibration[nan_mask]
+            print("Some NaN values were replaced in the calibration in times.")
     
     else:
         calibration_times = T_sum_calibration
         working_df['CRT_avg'] = 1000 # An extreme time to not crush the program
-        print("Calibration in times was set to the reference! (calibration was not performed)\n", calibration_times)
+        print("Calibration in times was set to configured T_sum_calibration (calibration was not performed)\n", calibration_times)
 
 else:
     calibration_times = T_sum_calibration
     working_df['CRT_avg'] = 1000 # An extreme time to not crush the program
-    print("Calibration in times was set to the reference! (calibration was not performed)\n", calibration_times)
+    print("Calibration in times was set to configured T_sum_calibration (calibration was not performed)\n", calibration_times)
 
 # Turn the matrix into a list of lists for easier access
 Tsum_cal = [list(calibration_times[i]) for i in range(len(calibration_times))]
@@ -6158,7 +5596,7 @@ if crosstalk_removal_and_recalibration:
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close(fig_Q)
     
@@ -6182,8 +5620,6 @@ if crosstalk_removal_and_recalibration:
 
     if new_columns:
         working_df = pd.concat([working_df, pd.DataFrame(new_columns)], axis=1)
-
-    working_df = working_df.copy()
     
     if self_trigger:
         new_columns = {}
@@ -6200,8 +5636,6 @@ if crosstalk_removal_and_recalibration:
 
         if new_columns:
             working_st_df = pd.concat([working_st_df, pd.DataFrame(new_columns)], axis=1)
-
-        working_st_df = working_st_df.copy()
     
     
     if create_plots or create_essential_plots:
@@ -6239,7 +5673,7 @@ if crosstalk_removal_and_recalibration:
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close(fig_Q)
         
@@ -6297,7 +5731,7 @@ if create_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots: plt.show()
     plt.close(fig_Q)
 
@@ -6348,7 +5782,7 @@ if create_plots:
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close(fig_Q)
 
@@ -6363,38 +5797,7 @@ strip_stage2_cols, strip_stage2_before = snapshot_nonzero_mask(
     working_df,
     collect_strip_component_columns(working_df.columns),
 )
-total_events = len(working_df)
-
-for plane in range(1, 5):
-    for strip in range(1, 5):
-        q_sum  = f'Q{plane}_Q_sum_{strip}'
-        q_diff = f'Q{plane}_Q_dif_{strip}'
-        t_sum  = f'T{plane}_T_sum_{strip}'
-        t_diff = f'T{plane}_T_dif_{strip}'
-        
-        # Build mask
-        mask = (
-            (working_df[q_sum]  == 0) |
-            (working_df[q_diff] == 0) |
-            (working_df[t_sum]  == 0) |
-            (working_df[t_diff] == 0)
-        )
-        
-        mask_and = (
-            (working_df[q_sum]  == 0) &
-            (working_df[q_diff] == 0) &
-            (working_df[t_sum]  == 0) &
-            (working_df[t_diff] == 0)
-        )
-        
-        # Count affected events
-        num_affected_events = mask.sum()
-        zeroes_before = mask_and.sum()
-        set_to_zero = num_affected_events - zeroes_before
-        print(f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)")
-
-        # Zero the affected values
-        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+zero_strip_component_blocks(working_df)
 
 record_zeroing_step_metrics(
     "strip_zeroing_stage2",
@@ -6444,7 +5847,7 @@ if slewing_correction:
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
 
         if show_plots: plt.show()
         plt.close()
@@ -6460,8 +5863,6 @@ if slewing_correction:
     ps_labels = [(int(col[1]), int(col[-1])) for col in tsum_cols]
 
     # Backup original data for plotting comparison later
-    working_df_uncorrected = working_df[tsum_cols].copy()
-
     # Vectorized correction accumulation by (plane, strip)
     ps_to_t_col = {(int(col[1]), int(col[-1])): col for col in tsum_cols}
     ps_to_q_col = {(int(col[1]), int(col[-1])): col for col in qsum_cols}
@@ -6536,8 +5937,7 @@ if slewing_correction:
 if create_plots or create_essential_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
-    plot_df = working_df.copy()
-    plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
+    plot_df = working_df.loc[:, [col for col in working_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
     # Remove columns with _crstlk in their names
     plot_df = plot_df[[col for col in plot_df.columns if '_crstlk' not in col]]
     
@@ -6579,81 +5979,12 @@ if create_plots or create_essential_plots:
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     
     if show_plots: 
         plt.show()
     plt.close()
-
-# print("----------------------------------------------------------------------")
-# print("----- Time sum setting reference to the upper-most non-zero strip -----")
-# print("----------------------------------------------------------------------")
-
-# # Take the max non-zero value of tsum and substract it from all the tsum values in row
-# for idx, row in working_df.iterrows():
-#     tsum_values = []
-#     for plane in range(1, 5):
-#         for strip in range(1, 5):
-#             t_sum_col = f'T{plane}_T_sum_{strip}'
-#             value = row[t_sum_col]
-#             if value != 0:
-#                 tsum_values.append(value)
-    
-#     if tsum_values:
-#         max_tsum = tsum_values[0]
-#         for plane in range(1, 5):
-#             for strip in range(1, 5):
-#                 t_sum_col = f'T{plane}_T_sum_{strip}'
-#                 if row[t_sum_col] != 0:
-#                     working_df.at[idx, t_sum_col] = row[t_sum_col] - max_tsum
-
-#     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
-#     plot_df = working_df.copy()
-#     plot_df = plot_df[[col for col in plot_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
-    
-#     num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
-#     num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
-#     fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
-#     axes = axes.flatten()
-
-#     for i, col in enumerate([col for col in plot_df.columns if col != 'datetime']):
-#         y = plot_df[col]
-        
-#         if 'Q_sum' in col:
-#             color = Q_sum_color
-#         elif 'Q_diff' in col:
-#             color = Q_dif_color
-#         elif 'T_sum' in col:
-#             color = T_sum_color
-#         elif 'T_diff' in col:
-#             color = T_dif_color
-#         else:
-#             print(col)
-#             continue
-#         axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
-#         axes[i].set_title(col)
-#         # axes[i].legend()
-#         if 'Q_sum' in col:
-#             axes[i].set_yscale('log')
-    
-#     # Remove any unused axes
-#     for j in range(i + 1, len(axes)):
-#         fig.delaxes(axes[j])
-    
-#     fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
-#     fig.suptitle("Calibrated filtered data including time calibration and referencing removing zeroes in any variable", fontsize=20)  # increase font size
-#     if save_plots:
-#         name_of_file = 'time_calibrated_filtered_removed_zeroes'
-#         final_filename = f'{fig_idx}_{name_of_file}.png'
-#         fig_idx += 1
-
-#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
-    
-#     if show_plots: 
-#         plt.show()
-#     plt.close()
+    del plot_df
 
 # print("----------------------------------------------------------------------")
 # print("------------------------- Time sum filtering -------------------------")
@@ -6912,7 +6243,7 @@ if time_study_tsum:
                             fig_idx += 1
                             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                             plot_list.append(save_fig_path)
-                            plt.savefig(save_fig_path, format='png')
+                            save_plot_figure(save_fig_path, format='png')
                         if show_plots:
                             plt.show()
                         plt.close(fig)
@@ -7081,7 +6412,7 @@ if time_study_tsum:
     #         fig_idx += 1
     #         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
     #         plot_list.append(save_fig_path)
-    #         plt.savefig(save_fig_path, format='png')
+    #         save_plot_figure(save_fig_path, format='png')
     #     if show_plots:
     #         plt.show()
     #     plt.close()
@@ -7097,38 +6428,7 @@ strip_stage3_cols, strip_stage3_before = snapshot_nonzero_mask(
     working_df,
     collect_strip_component_columns(working_df.columns),
 )
-total_events = len(working_df)
-
-for plane in range(1, 5):
-    for strip in range(1, 5):
-        q_sum  = f'Q{plane}_Q_sum_{strip}'
-        q_diff = f'Q{plane}_Q_dif_{strip}'
-        t_sum  = f'T{plane}_T_sum_{strip}'
-        t_diff = f'T{plane}_T_dif_{strip}'
-        
-        # Build mask
-        mask = (
-            (working_df[q_sum]  == 0) |
-            (working_df[q_diff] == 0) |
-            (working_df[t_sum]  == 0) |
-            (working_df[t_diff] == 0)
-        )
-        
-        mask_and = (
-            (working_df[q_sum]  == 0) &
-            (working_df[q_diff] == 0) &
-            (working_df[t_sum]  == 0) &
-            (working_df[t_diff] == 0)
-        )
-        
-        # Count affected events
-        num_affected_events = mask.sum()
-        zeroes_before = mask_and.sum()
-        set_to_zero = num_affected_events - zeroes_before
-        print(f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)")
-
-        # Zero the affected values
-        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+zero_strip_component_blocks(working_df)
 
 record_zeroing_step_metrics(
     "strip_zeroing_stage3",
@@ -7148,15 +6448,11 @@ if time_window_filtering:
     
     # Pre removal of outliers
     t_sum_columns_tt = [col for col in working_df.columns if "_T_sum_" in col]
-    spread_results = []
     for clean_tt in sorted(working_df["clean_tt"].unique()):
         print(f"Processing clean_tt = {clean_tt}")
-        filtered_df = working_df[working_df["clean_tt"] == clean_tt].copy()
-        t_sum_spread_tt = compute_t_sum_spread(filtered_df, t_sum_columns_tt)
-        filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
-        spread_results.append(filtered_df)
-    spread_df = pd.concat(spread_results, ignore_index=True)
-    spread_df_OG = spread_df.copy()
+    spread_df = working_df.loc[:, ["clean_tt"]].copy()
+    spread_df["T_sum_spread_OG"] = compute_t_sum_spread(working_df, t_sum_columns_tt)
+    spread_df_OG = spread_df
 
     if create_debug_plots and "T_sum_spread_OG" in spread_df.columns:
         _debug_plot_filter_group(
@@ -7195,7 +6491,7 @@ if time_window_filtering:
                 fig_idx += 1
                 hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
                 plot_list.append(hist_path)
-                fig.savefig(hist_path, format='png')
+                save_plot_figure(hist_path, fig=fig, format='png')
             if show_plots: plt.show()
             plt.close(fig)
 
@@ -7217,13 +6513,8 @@ if time_window_filtering:
     )
 
     # Post removal of outliers
-    spread_results = []
-    for clean_tt in sorted(working_df["clean_tt"].unique()):
-        filtered_df = working_df[working_df["clean_tt"] == clean_tt].copy()
-        t_sum_spread_tt = compute_t_sum_spread(filtered_df, t_sum_columns_tt)
-        filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
-        spread_results.append(filtered_df)
-    spread_df = pd.concat(spread_results, ignore_index=True)
+    spread_df = working_df.loc[:, ["clean_tt"]].copy()
+    spread_df["T_sum_spread_OG"] = compute_t_sum_spread(working_df, t_sum_columns_tt)
     
     if create_plots:
         clean_tts = sorted(spread_df["clean_tt"].unique())
@@ -7254,75 +6545,90 @@ if time_window_filtering:
                 fig_idx += 1
                 hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
                 plot_list.append(hist_path)
-                fig.savefig(hist_path, format='png')
+                save_plot_figure(hist_path, fig=fig, format='png')
             if show_plots: plt.show()
             plt.close(fig)
+    del spread_df
+    del spread_df_OG
+    gc.collect()
 
-    if create_plots:
-        # Identify all _T_sum_ columns
-        T_sum_columns = working_df.filter(regex='_T_sum_').columns
-        replaced_count = 0  # Global counter
+if create_plots:
+    # Identify all _T_sum_ columns
+    T_sum_columns = working_df.filter(regex='_T_sum_').columns
+    replaced_count = 0  # Global counter
+    window_accumulation_start = time.perf_counter()
 
-        for clean_tt_value in [12, 23, 34, 1234, 123, 234, 124, 13, 14, 24, 134]:
-            mask = working_df["clean_tt"] == clean_tt_value
-            filtered_df = working_df[mask].copy()  # Work on a copy for fitting
+    for clean_tt_value in [12, 23, 34, 1234, 123, 234, 124, 13, 14, 24, 134]:
+        mask = working_df["clean_tt"] == clean_tt_value
+        t_sum_data = working_df.loc[mask, T_sum_columns].to_numpy()
+        if t_sum_data.size == 0:
+            continue
 
-            if len(filtered_df) == 0:
-                continue
+        if not np.any(t_sum_data != 0):
+            print(f"[Warning] Skipping clean_tt {clean_tt_value}: all T_sum values filtered out.")
+            continue
 
-            # Extract filtered T_sum data
-            t_sum_data = filtered_df[T_sum_columns].values
-            if not np.any(t_sum_data != 0):
-                print(f"[Warning] Skipping clean_tt {clean_tt_value}: all T_sum values filtered out.")
-                continue
+        widths = np.linspace(0, coincidence_window_cal_ns, coincidence_window_cal_number_of_points)
+        counts_per_width = []
+        counts_per_width_dev = []
+        nonzero_mask = t_sum_data != 0
+        nonzero_counts = nonzero_mask.sum(axis=1)
+        sorted_t_sum = np.sort(np.where(nonzero_mask, t_sum_data, np.inf), axis=1)
+        row_indices = np.arange(t_sum_data.shape[0])
+        lower_mid_idx = (nonzero_counts - 1) // 2
+        upper_mid_idx = nonzero_counts // 2
+        row_stat = np.where(
+            nonzero_counts > 0,
+            (sorted_t_sum[row_indices, lower_mid_idx] + sorted_t_sum[row_indices, upper_mid_idx]) / 2.0,
+            0.0,
+        ).reshape(-1, 1)
 
-            widths = np.linspace(0, coincidence_window_cal_ns, coincidence_window_cal_number_of_points)
-            counts_per_width = []
-            counts_per_width_dev = []
+        for w in widths:
+            half_window = w / 2.0
+            lower = row_stat - half_window
+            upper = row_stat + half_window
+            in_window = (
+                nonzero_mask
+                & (t_sum_data >= lower)
+                & (t_sum_data <= upper)
+            )
+            count_in_window = in_window.sum(axis=1)
+            counts_per_width.append(float(np.mean(count_in_window)))
+            counts_per_width_dev.append(float(np.std(count_in_window)))
 
-            for w in widths:
-                count_in_window = []
-                for row in t_sum_data:
-                    row_no_zeros = row[row != 0]
-                    if len(row_no_zeros) == 0:
-                        count_in_window.append(0)
-                        continue
-                    stat = np.median(row_no_zeros)  # Or mean
-                    lower = stat - w / 2
-                    upper = stat + w / 2
-                    n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
-                    count_in_window.append(n_in_window)
-                counts_per_width.append(np.mean(count_in_window))
-                counts_per_width_dev.append(np.std(count_in_window))
+        counts_per_width = np.array(counts_per_width)
+        counts_per_width_dev = np.array(counts_per_width_dev)
+        valid_mask = np.isfinite(counts_per_width) & (counts_per_width > 0)
+        if not np.any(valid_mask):
+            print(f"[Warning] Skipping clean_tt {clean_tt_value}: no valid window accumulation.")
+            continue
+        counts_per_width_norm = counts_per_width / np.max(counts_per_width)
+        # counts_per_width_norm = counts_per_width
 
-            counts_per_width = np.array(counts_per_width)
-            counts_per_width_dev = np.array(counts_per_width_dev)
-            valid_mask = np.isfinite(counts_per_width) & (counts_per_width > 0)
-            if not np.any(valid_mask):
-                print(f"[Warning] Skipping clean_tt {clean_tt_value}: no valid window accumulation.")
-                continue
-            counts_per_width_norm = counts_per_width / np.max(counts_per_width)
-            # counts_per_width_norm = counts_per_width
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window', color='blue', s=30)
+        ax.axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
+        ax.set_xlabel("Window width (ns)")
+        ax.set_ylabel("Normalized average # of T_sum values in window")
+        ax.set_title(f"Fraction of hits within stat-centered window vs width (TT = {clean_tt_value})")
+        ax.grid(True)
+        ax.legend()
 
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.scatter(widths, counts_per_width_norm, label='Normalized average count in window', color='blue', s=30)
-            ax.axvline(x=coincidence_window_cal_ns, color='red', linestyle='--', label='Time coincidence window')
-            ax.set_xlabel("Window width (ns)")
-            ax.set_ylabel("Normalized average # of T_sum values in window")
-            ax.set_title(f"Fraction of hits within stat-centered window vs width (TT = {clean_tt_value})")
-            ax.grid(True)
-            ax.legend()
+        if save_plots:
+            name_of_file = f"stat_window_accumulation_{clean_tt_value}"
+            final_filename = f"{fig_idx}_{name_of_file}.png"
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(save_fig_path, format="png")
+        if show_plots:
+            plt.show()
+        plt.close()
 
-            if save_plots:
-                name_of_file = f"stat_window_accumulation_{clean_tt_value}"
-                final_filename = f"{fig_idx}_{name_of_file}.png"
-                fig_idx += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format="png")
-            if show_plots:
-                plt.show()
-            plt.close()
+    print(
+        f"[PROFILE][TASK_2] stat-window accumulation section: {time.perf_counter() - window_accumulation_start:.2f}s",
+        force=True,
+    )
 
 print("----------------------------------------------------------------------")
 print("---------- Filter if any variable in the strip is 0 (5/3) ------------")
@@ -7335,38 +6641,7 @@ strip_stage4_cols, strip_stage4_before = snapshot_nonzero_mask(
     working_df,
     collect_strip_component_columns(working_df.columns),
 )
-total_events = len(working_df)
-
-for plane in range(1, 5):
-    for strip in range(1, 5):
-        q_sum  = f'Q{plane}_Q_sum_{strip}'
-        q_diff = f'Q{plane}_Q_dif_{strip}'
-        t_sum  = f'T{plane}_T_sum_{strip}'
-        t_diff = f'T{plane}_T_dif_{strip}'
-        
-        # Build mask
-        mask = (
-            (working_df[q_sum]  == 0) |
-            (working_df[q_diff] == 0) |
-            (working_df[t_sum]  == 0) |
-            (working_df[t_diff] == 0)
-        )
-        
-        mask_and = (
-            (working_df[q_sum]  == 0) &
-            (working_df[q_diff] == 0) &
-            (working_df[t_sum]  == 0) &
-            (working_df[t_diff] == 0)
-        )
-        
-        # Count affected events
-        num_affected_events = mask.sum()
-        zeroes_before = mask_and.sum()
-        set_to_zero = num_affected_events - zeroes_before
-        print(f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)")
-
-        # Zero the affected values
-        working_df.loc[mask, [q_sum, q_diff, t_sum, t_diff]] = 0
+zero_strip_component_blocks(working_df)
 
 record_zeroing_step_metrics(
     "strip_zeroing_stage4",
@@ -7374,8 +6649,6 @@ record_zeroing_step_metrics(
     strip_stage4_cols,
     working_df,
 )
-
-working_df = working_df.copy()
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -7438,37 +6711,41 @@ for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
 
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
-    if len(plot_list) > 0:
-        with PdfPages(save_pdf_path) as pdf:
-            if plot_list:
-                for png in plot_list:
-                    if os.path.exists(png) == False:
-                        print(f"Error: {png} does not exist.")
-                        continue
-                    
-                    # Open the PNG file directly using PIL to get its dimensions
-                    img = Image.open(png)
-                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)  # Set figsize and dpi
-                    ax.imshow(img)
-                    ax.axis('off')  # Hide the axes
-                    pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')  # Save figure tightly fitting the image
-                    plt.close(fig)  # Close the figure after adding it to the PDF
+    existing_pngs = [png for png in plot_list if os.path.exists(png)]
 
-        # Remove PNG files after creating the PDF
-        for png in plot_list:
-            try:
-                os.remove(png)
-                # print(f"Deleted {png}")
-            except OSError as e:
-                print(f"Error: {e.filename} - {e.strerror}.")
-        
-        # Remove run-specific figure directory if all PNGs were deleted
-        figure_directory = base_directories["figure_directory"]
-        if os.path.exists(figure_directory):
-            if not os.listdir(figure_directory):
-                os.rmdir(figure_directory)
-            else:
-                print(f"Figure directory not empty, skipping removal: {figure_directory}")
+    if _direct_pdf_pages is not None:
+        for png in existing_pngs:
+            img = Image.open(png)
+            fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+            ax.imshow(img)
+            ax.axis('off')
+            pdf_save_rasterized_page(_direct_pdf_pages, fig, bbox_inches='tight')
+            plt.close(fig)
+        close_direct_pdf_writer()
+    elif existing_pngs:
+        with PdfPages(save_pdf_path) as pdf:
+            for png in existing_pngs:
+                img = Image.open(png)
+                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+                ax.imshow(img)
+                ax.axis('off')
+                pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+                plt.close(fig)
+
+    # Remove PNG files after creating the PDF (or after direct PDF append path).
+    for png in existing_pngs:
+        try:
+            os.remove(png)
+        except OSError as e:
+            print(f"Error: {e.filename} - {e.strerror}.")
+    
+    # Remove run-specific figure directory if all PNGs were deleted.
+    figure_directory = base_directories["figure_directory"]
+    if os.path.exists(figure_directory):
+        if not os.listdir(figure_directory):
+            os.rmdir(figure_directory)
+        else:
+            print(f"Figure directory not empty, skipping removal: {figure_directory}")
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.

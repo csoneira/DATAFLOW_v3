@@ -9,12 +9,13 @@ Usage: run_simulation_plots.sh [--parallel] [--help] [ARGS...]
 Runs:
   - MESH: MESH/plot_param_mesh.py
   - TIME: SIMULATION_TIME/plot_simulation_time.py
+  - BACKPRESSURE: BACKPRESSURE/plot_backpressure_monitor.py
 
 Options:
-  -p, --parallel    run both scripts in parallel
+  -p, --parallel    run all scripts in parallel
   -h, --help        show this help
 
-Any extra ARGS are forwarded to both Python scripts.
+Any extra ARGS are forwarded to MESH and TIME scripts.
 USAGE
 }
 
@@ -32,6 +33,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MESH_SCRIPT="$SCRIPT_DIR/MESH/plot_param_mesh.py"
 TIME_SCRIPT="$SCRIPT_DIR/SIMULATION_TIME/plot_simulation_time.py"
+BACKPRESSURE_SCRIPT="$SCRIPT_DIR/BACKPRESSURE/plot_backpressure_monitor.py"
 PYTHON="$(command -v python3 || command -v python || true)"
 
 if [[ -z "$PYTHON" ]]; then
@@ -39,7 +41,7 @@ if [[ -z "$PYTHON" ]]; then
   exit 1
 fi
 
-for f in "$MESH_SCRIPT" "$TIME_SCRIPT"; do
+for f in "$MESH_SCRIPT" "$TIME_SCRIPT" "$BACKPRESSURE_SCRIPT"; do
   if [[ ! -f "$f" ]]; then
     echo "Error: required script not found: $f" >&2
     exit 2
@@ -74,15 +76,19 @@ if [[ "$PARALLEL" == true ]]; then
   PID_MESH=$!
   run_one "time" "$TIME_SCRIPT" "${EXTRA_ARGS[@]}" &
   PID_TIME=$!
+  run_one "backpressure" "$BACKPRESSURE_SCRIPT" &
+  PID_BACKPRESSURE=$!
   set +e
   wait $PID_MESH; STATUS_MESH=$?
   wait $PID_TIME; STATUS_TIME=$?
+  wait $PID_BACKPRESSURE; STATUS_BACKPRESSURE=$?
   set -e
-  echo "mesh:$STATUS_MESH time:$STATUS_TIME"
-  exit $(( STATUS_MESH || STATUS_TIME ))
+  echo "mesh:$STATUS_MESH time:$STATUS_TIME backpressure:$STATUS_BACKPRESSURE"
+  exit $(( STATUS_MESH || STATUS_TIME || STATUS_BACKPRESSURE ))
 else
   run_one "mesh" "$MESH_SCRIPT" "${EXTRA_ARGS[@]}"
   run_one "time" "$TIME_SCRIPT" "${EXTRA_ARGS[@]}"
+  run_one "backpressure" "$BACKPRESSURE_SCRIPT"
 fi
 
 echo "Finished: $(date)"

@@ -48,7 +48,8 @@ import pandas as pd
 STEP_DIR = Path(__file__).resolve().parent
 SYNTHETIC_DIR = STEP_DIR.parent
 PIPELINE_DIR = SYNTHETIC_DIR.parent
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+PROJECT_DIR = PIPELINE_DIR.parent
+DEFAULT_CONFIG = PROJECT_DIR / "config.json"
 
 DEFAULT_SYNTHETIC_DATASET = (
     SYNTHETIC_DIR / "STEP_3_2_SYNTHETIC_TIME_SERIES" / "OUTPUTS" / "FILES" / "synthetic_dataset.csv"
@@ -135,9 +136,24 @@ except Exception as exc:
 
 def _load_config(path: Path) -> dict:
     """Load JSON config if it exists."""
+    def _merge_dicts(base: dict, override: dict) -> dict:
+        out = dict(base)
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = _merge_dicts(out[k], v)
+            else:
+                out[k] = v
+        return out
+
+    cfg: dict = {}
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    runtime_path = path.with_name("config_runtime.json")
+    if runtime_path.exists():
+        runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, runtime_cfg)
+        log.info("Loaded runtime overrides: %s", runtime_path)
+    return cfg
 
 
 def _safe_float(value: object, default: float) -> float:
@@ -658,7 +674,13 @@ def _plot_step32_style_overlay(
     path: Path,
 ) -> None:
     """Plot complete+discretized+density-center+estimated without global rate."""
-    fig, axes = plt.subplots(2, 1, figsize=(11, 7.2), sharex=True)
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(11.2, 9.1),
+        sharex=True,
+        gridspec_kw={"height_ratios": [0.9, 1.0, 1.0]},
+    )
 
     # Discretized STEP 3.1 trajectory
     x_disc, x_label = _time_axis(time_df)
@@ -677,16 +699,36 @@ def _plot_step32_style_overlay(
         m0c = np.isfinite(x_comp) & np.isfinite(y_flux_comp)
         m1c = np.isfinite(x_comp) & np.isfinite(y_eff_comp)
         if np.any(m0c):
-            axes[0].scatter(x_comp[m0c], y_flux_comp[m0c], s=7, color="#1F77B4", alpha=0.55, linewidths=0.0, label="Complete")
+            axes[1].scatter(
+                x_comp[m0c], y_flux_comp[m0c], s=7, color="#1F77B4", alpha=0.55, linewidths=0.0, label="Complete"
+            )
         if np.any(m1c):
-            axes[1].scatter(x_comp[m1c], y_eff_comp[m1c], s=7, color="#FF7F0E", alpha=0.55, linewidths=0.0, label="Complete")
+            axes[2].scatter(
+                x_comp[m1c], y_eff_comp[m1c], s=7, color="#FF7F0E", alpha=0.55, linewidths=0.0, label="Complete"
+            )
 
     m0d = np.isfinite(x_disc) & np.isfinite(y_flux_disc)
     m1d = np.isfinite(x_disc) & np.isfinite(y_eff_disc)
     if np.any(m0d):
-        axes[0].scatter(x_disc[m0d], y_flux_disc[m0d], s=18, facecolors="white", edgecolors="#1F77B4", linewidths=0.8, label="Discretized")
+        axes[1].scatter(
+            x_disc[m0d],
+            y_flux_disc[m0d],
+            s=18,
+            facecolors="white",
+            edgecolors="#1F77B4",
+            linewidths=0.8,
+            label="Discretized",
+        )
     if np.any(m1d):
-        axes[1].scatter(x_disc[m1d], y_eff_disc[m1d], s=18, facecolors="white", edgecolors="#FF7F0E", linewidths=0.8, label="Discretized")
+        axes[2].scatter(
+            x_disc[m1d],
+            y_eff_disc[m1d],
+            s=18,
+            facecolors="white",
+            edgecolors="#FF7F0E",
+            linewidths=0.8,
+            label="Discretized",
+        )
 
     # Density-modulated weighted center (diagnostic from STEP 3.2 logic)
     if center_flux is not None and len(center_flux) == len(x_disc):
@@ -694,7 +736,7 @@ def _plot_step32_style_overlay(
         flux_stripe_vals.append(c_flux)
         mc = np.isfinite(x_disc) & np.isfinite(c_flux)
         if np.any(mc):
-            axes[0].plot(
+            axes[1].plot(
                 x_disc[mc], c_flux[mc],
                 color="#17BECF", linewidth=1.0, linestyle="-.", marker="s", markersize=2.8,
                 markerfacecolor="#17BECF", markeredgewidth=0.0, alpha=0.9,
@@ -705,7 +747,7 @@ def _plot_step32_style_overlay(
         eff_stripe_vals.append(c_eff)
         mc = np.isfinite(x_disc) & np.isfinite(c_eff)
         if np.any(mc):
-            axes[1].plot(
+            axes[2].plot(
                 x_disc[mc], c_eff[mc],
                 color="#BCBD22", linewidth=1.0, linestyle="-.", marker="s", markersize=2.8,
                 markerfacecolor="#BCBD22", markeredgewidth=0.0, alpha=0.9,
@@ -734,7 +776,7 @@ def _plot_step32_style_overlay(
         order = np.argsort(x_est[m0e])
         xe = x_est[m0e][order]
         ye = y_flux_est[m0e][order]
-        axes[0].plot(
+        axes[1].plot(
             xe, ye,
             color="#D62728", linewidth=1.0, linestyle="-", marker="o", markersize=3.0,
             markerfacecolor="#D62728", markeredgewidth=0.0, alpha=0.9,
@@ -744,7 +786,7 @@ def _plot_step32_style_overlay(
             ue = np.abs(u_flux[m0e][order])
             valid_u = np.isfinite(ue)
             if np.any(valid_u):
-                axes[0].fill_between(
+                axes[1].fill_between(
                     xe[valid_u], ye[valid_u] - ue[valid_u], ye[valid_u] + ue[valid_u],
                     color="#D62728", alpha=0.16, linewidth=0.0, label="Estimated ± uncertainty",
                 )
@@ -754,7 +796,7 @@ def _plot_step32_style_overlay(
         order = np.argsort(x_est[m1e])
         xe = x_est[m1e][order]
         ye = y_eff_est[m1e][order]
-        axes[1].plot(
+        axes[2].plot(
             xe, ye,
             color="#8C564B", linewidth=1.0, linestyle="-", marker="o", markersize=3.0,
             markerfacecolor="#8C564B", markeredgewidth=0.0, alpha=0.9,
@@ -764,23 +806,55 @@ def _plot_step32_style_overlay(
             ue = np.abs(u_eff[m1e][order])
             valid_u = np.isfinite(ue)
             if np.any(valid_u):
-                axes[1].fill_between(
+                axes[2].fill_between(
                     xe[valid_u], ye[valid_u] - ue[valid_u], ye[valid_u] + ue[valid_u],
                     color="#8C564B", alpha=0.16, linewidth=0.0, label="Estimated ± uncertainty",
                 )
 
-    axes[0].set_ylabel("flux_cm2_min")
-    axes[0].set_title("Flux: complete + discretized + density center + estimated")
-    _apply_mean_striped_background(axes[0], np.concatenate(flux_stripe_vals))
+    # Best dictionary distance (same concept as STEP 4.2 distance-vs-time).
+    y_dist = (
+        pd.to_numeric(merged_df.get("best_distance"), errors="coerce").to_numpy(dtype=float)
+        if "best_distance" in merged_df.columns
+        else np.full(len(x_est), np.nan, dtype=float)
+    )
+    m_dist = np.isfinite(x_est) & np.isfinite(y_dist)
+    if np.any(m_dist):
+        order = np.argsort(x_est[m_dist])
+        xd = x_est[m_dist][order]
+        yd = y_dist[m_dist][order]
+        axes[0].plot(
+            xd,
+            yd,
+            color="#9467BD",
+            linewidth=1.05,
+            linestyle="-",
+            marker="o",
+            markersize=2.6,
+            markerfacecolor="#9467BD",
+            markeredgewidth=0.0,
+            alpha=0.9,
+            label="Best dictionary distance (best_distance)",
+        )
+        _apply_mean_striped_background(axes[0], yd)
+        axes[0].legend(loc="best", fontsize=8)
+    else:
+        axes[0].text(0.5, 0.5, "No finite best_distance values", ha="center", va="center")
+    axes[0].set_ylabel("best_distance")
+    axes[0].set_title("Best dictionary distance vs time")
     axes[0].grid(True, alpha=0.25)
-    axes[0].legend(loc="best", fontsize=8)
 
-    axes[1].set_ylabel("eff")
-    axes[1].set_xlabel(x_label)
-    axes[1].set_title("Efficiency: complete + discretized + density center + estimated")
-    _apply_mean_striped_background(axes[1], np.concatenate(eff_stripe_vals))
+    axes[1].set_ylabel("flux_cm2_min")
+    axes[1].set_title("Flux: complete + discretized + density center + estimated")
+    _apply_mean_striped_background(axes[1], np.concatenate(flux_stripe_vals))
     axes[1].grid(True, alpha=0.25)
     axes[1].legend(loc="best", fontsize=8)
+
+    axes[2].set_ylabel("eff")
+    axes[2].set_xlabel(x_label)
+    axes[2].set_title("Efficiency: complete + discretized + density center + estimated")
+    _apply_mean_striped_background(axes[2], np.concatenate(eff_stripe_vals))
+    axes[2].grid(True, alpha=0.25)
+    axes[2].legend(loc="best", fontsize=8)
 
     fig.tight_layout()
     _save_figure(fig, path, dpi=160)
@@ -1279,11 +1353,9 @@ def main() -> int:
         unc_pct_col = f"unc_{pname}_pct"
         unc_abs_col = f"unc_{pname}_abs"
         if est_col in merged.columns and unc_pct_col in merged.columns:
-            # The LUT `sigma_*_pXX` values are percentiles of the *relative error*
-            # distribution computed as |est - true| / |true| * 100.0. Therefore the
-            # percent uncertainty should be converted to an absolute uncertainty
-            # using the *true* value when available. Fall back to the estimate
-            # if the true value is missing or numerically (near-)zero.
+            # Convert percent uncertainty from LUT into absolute units.
+            # Use |unc_pct| to keep uncertainty non-negative even if the LUT
+            # was generated from a signed-error mode.
             est_v = pd.to_numeric(merged[est_col], errors="coerce").to_numpy(dtype=float)
             true_col = f"true_{pname}"
             true_v = (

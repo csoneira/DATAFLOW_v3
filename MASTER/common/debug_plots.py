@@ -5,7 +5,10 @@ import os
 import re
 from typing import Iterable, Mapping, Sequence
 
+import matplotlib
 import numpy as np
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 

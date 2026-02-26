@@ -237,7 +237,31 @@ def parse_station_id(station: int | str) -> Optional[int]:
     try:
         return int(str(station))
     except Exception:
+        pass
+
+    text = str(station).strip().lower()
+    if not text:
         return None
+
+    # Common tokens used across the pipeline:
+    # - "MINGO00"
+    # - "mi00", and even full basenames like "mi00YYDDDHHMMSS"
+    if text.startswith("mingo"):
+        tail = text[5:]
+        digits = "".join(ch for ch in tail if ch.isdigit())
+        if digits:
+            try:
+                return int(digits)
+            except Exception:
+                return None
+
+    if text.startswith("mi") and len(text) >= 4 and text[2:4].isdigit():
+        try:
+            return int(text[2:4])
+        except Exception:
+            return None
+
+    return None
 
 
 def date_filter_allowed_for_station(station: int | str) -> bool:

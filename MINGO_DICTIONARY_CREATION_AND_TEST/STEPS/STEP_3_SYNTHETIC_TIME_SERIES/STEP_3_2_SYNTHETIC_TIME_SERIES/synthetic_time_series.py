@@ -112,11 +112,126 @@ logging.basicConfig(
 log = logging.getLogger("STEP_3.2")
 
 
+STEP32_WEIGHTING_KEYS = {
+    "basis_source",
+    "basis_n_events_column",
+    "basis_parameter_set_column",
+    "basis_n_events_tolerance_pct",
+    "basis_n_events_tolerance",
+    "basis_min_rows",
+    "flux_column",
+    "eff_column",
+    "time_n_events_column",
+    "time_rate_column",
+    "time_duration_column",
+    "weighting_method",
+    "distance_sigma_flux_fraction",
+    "distance_sigma_eff_fraction",
+    "distance_sigma_flux_abs",
+    "distance_sigma_eff_abs",
+    "distance_hardness",
+    "density_correction_enabled",
+    "density_correction_k_neighbors",
+    "density_correction_exponent",
+    "density_correction_clip_min",
+    "density_correction_clip_max",
+    "top_k",
+    "random_seed",
+    "highlight_point_index",
+}
+
+STEP32_WEIGHTING_DEFAULTS = {
+    "basis_source": "dataset",
+    "basis_n_events_column": "n_events",
+    "basis_parameter_set_column": "param_hash_x",
+    "basis_n_events_tolerance_pct": 25,
+    "basis_min_rows": 1,
+    "flux_column": "flux_cm2_min",
+    "eff_column": "eff_sim_1",
+    "time_n_events_column": "n_events",
+    "time_rate_column": "global_rate_hz_mean",
+    "time_duration_column": "duration_seconds",
+    "weighting_method": "gaussian",
+    "distance_sigma_flux_fraction": 0.15,
+    "distance_sigma_eff_fraction": 0.15,
+    "distance_sigma_flux_abs": None,
+    "distance_sigma_eff_abs": None,
+    "distance_hardness": 1.0,
+    "density_correction_enabled": True,
+    "density_correction_k_neighbors": None,
+    "density_correction_exponent": 1.0,
+    "density_correction_clip_min": None,
+    "density_correction_clip_max": None,
+    "top_k": None,
+    "random_seed": None,
+    "highlight_point_index": None,
+}
+
+
 def _load_config(path: Path) -> dict:
     """Load JSON config if it exists."""
+    def _merge_dicts(base: dict, override: dict) -> dict:
+        out = dict(base)
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = _merge_dicts(out[k], v)
+            else:
+                out[k] = v
+        return out
+
+    cfg: dict = {}
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    runtime_path = path.with_name("config_runtime.json")
+    if runtime_path.exists():
+        runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, runtime_cfg)
+        log.info("Loaded runtime overrides: %s", runtime_path)
+    return cfg
+
+
+def _merge_weighting_cfg_from_step13(cfg_32: dict, cfg_13: dict) -> tuple[dict, list[str]]:
+    """Build STEP 3.2 config with weighting sourced only from STEP 1.3 block.
+
+    - Keep non-weighting keys from `step_3_2` (mainly path overrides).
+    - Fill weighting keys from internal defaults.
+    - Apply centralized weighting keys from `step_1_3.step_3_2_weighting`.
+    - Apply optional backward-compatibility overrides from `step_1_3.weighting_overrides`.
+    """
+    raw_cfg_32 = dict(cfg_32)
+    ignored_step32_weighting_keys = sorted(
+        key for key in raw_cfg_32.keys() if key in STEP32_WEIGHTING_KEYS
+    )
+    if ignored_step32_weighting_keys:
+        log.info(
+            "Ignoring %d weighting key(s) from step_3_2; using step_1_3.step_3_2_weighting + internal defaults.",
+            len(ignored_step32_weighting_keys),
+        )
+
+    merged = {
+        key: value
+        for key, value in raw_cfg_32.items()
+        if key not in STEP32_WEIGHTING_KEYS
+    }
+    merged.update(STEP32_WEIGHTING_DEFAULTS)
+    applied_keys: set[str] = set()
+
+    central_weighting = cfg_13.get("step_3_2_weighting", {})
+    if isinstance(central_weighting, dict):
+        for key in STEP32_WEIGHTING_KEYS:
+            if key in central_weighting and central_weighting.get(key) is not None:
+                merged[key] = central_weighting[key]
+                applied_keys.add(key)
+
+    # Backward-compatible alias already used by STEP 1.3 itself.
+    legacy_overrides = cfg_13.get("weighting_overrides", {})
+    if isinstance(legacy_overrides, dict):
+        for key in STEP32_WEIGHTING_KEYS:
+            if key in legacy_overrides and legacy_overrides.get(key) is not None:
+                merged[key] = legacy_overrides[key]
+                applied_keys.add(key)
+
+    return merged, sorted(applied_keys)
 
 
 def _safe_float(value: object, default: float) -> float:
@@ -1144,6 +1259,14 @@ def main() -> int:
     config = _load_config(Path(args.config))
     _clear_plots_dir()
     cfg_32 = config.get("step_3_2", {})
+    cfg_13 = config.get("step_1_3", {})
+    cfg_32, cfg13_weighting_keys = _merge_weighting_cfg_from_step13(cfg_32, cfg_13)
+    if cfg13_weighting_keys:
+        log.info(
+            "Applied %d STEP 3.2 weighting key(s) from step_1_3: %s",
+            len(cfg13_weighting_keys),
+            ", ".join(cfg13_weighting_keys),
+        )
     basis_source_cfg = str(cfg_32.get("basis_source", "dataset")).strip().lower()
 
     # Input paths

@@ -112,9 +112,24 @@ log = logging.getLogger("STEP_3.1")
 
 def _load_config(path: Path) -> dict:
     """Load pipeline configuration from JSON path."""
+    def _merge_dicts(base: dict, override: dict) -> dict:
+        out = dict(base)
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = _merge_dicts(out[k], v)
+            else:
+                out[k] = v
+        return out
+
+    cfg: dict = {}
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    runtime_path = path.with_name("config_runtime.json")
+    if runtime_path.exists():
+        runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, runtime_cfg)
+        log.info("Loaded runtime overrides: %s", runtime_path)
+    return cfg
 
 
 def _safe_float(value: object, default: float) -> float:

@@ -50,6 +50,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
 # Plotting
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
@@ -178,6 +180,31 @@ def _guarded_close(*args, **kwargs):
 plt.figure = _guarded_figure
 plt.subplots = _guarded_subplots
 plt.close = _guarded_close
+
+_direct_pdf_pages: PdfPages | None = None
+_direct_pdf_page_count = 0
+
+def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
+    """Save a figure to PNG or directly append it to the task PDF."""
+    global _direct_pdf_pages, _direct_pdf_page_count
+    target_fig = fig if fig is not None else plt.gcf()
+    direct_pdf_path = globals().get("save_pdf_path")
+    if globals().get("create_pdf", False) and direct_pdf_path:
+        if _direct_pdf_pages is None:
+            _direct_pdf_pages = PdfPages(direct_pdf_path)
+        pdf_kwargs = dict(savefig_kwargs)
+        dpi = int(pdf_kwargs.pop("dpi", 150))
+        pdf_kwargs.pop("format", None)
+        pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
+        _direct_pdf_page_count += 1
+        return
+    target_fig.savefig(save_path, **savefig_kwargs)
+
+def close_direct_pdf_writer() -> None:
+    global _direct_pdf_pages
+    if _direct_pdf_pages is not None:
+        _direct_pdf_pages.close()
+        _direct_pdf_pages = None
 
 def align_metadata_row_with_existing_schema(metadata_path: str | Path, row: dict[str, object]) -> None:
     path = Path(metadata_path)
@@ -364,7 +391,7 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots:
         plt.show()
     plt.close()
@@ -439,7 +466,7 @@ def plot_ts_with_side_hist(df, columns, time_col, title, width_ratios=(3, 1)):
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format="png")
+        save_plot_figure(save_fig_path, format="png")
     if show_plots:
         plt.show()
     plt.close()
@@ -509,7 +536,7 @@ def plot_histograms_grid(df, columns, title_prefix, max_bins=60, cols_per_fig=16
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format="png")
+            save_plot_figure(save_fig_path, format="png")
         if show_plots:
             plt.show()
         plt.close()
@@ -550,7 +577,7 @@ def plot_scatter_simple(df, x_col, y_col, title, max_points=200000):
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format="png")
+        save_plot_figure(save_fig_path, format="png")
     if show_plots:
         plt.show()
     plt.close()
@@ -675,7 +702,7 @@ def plot_residuals_ts_hist(df, prefixes, time_col, title):
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format="png")
+        save_plot_figure(save_fig_path, format="png")
     if show_plots:
         plt.show()
     plt.close()
@@ -725,7 +752,7 @@ def plot_err_only_ts_hist(df, base_cols, time_col, title):
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format="png")
+        save_plot_figure(save_fig_path, format="png")
     if show_plots:
         plt.show()
     plt.close()
@@ -3317,6 +3344,13 @@ fit_cols = (
 # Slowness definitions
 slow_cols = ['det_s', 'det_s_ordinate' , 'chi2_tsum_fit'] + [f'det_res_tsum_{p}' for p in range(1, 5)]
 
+# Pre-extract per-plane columns as contiguous numpy arrays (avoids per-event
+# getattr overhead in the detached fitting loop below).
+_det_Q    = np.column_stack([working_df[f'P{p}_Q_sum_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_det_Tdif = np.column_stack([working_df[f'P{p}_T_dif_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_det_Y    = np.column_stack([working_df[f'P{p}_Y_final'].to_numpy(dtype=float)     for p in range(1, nplan + 1)])
+_det_Tsum = np.column_stack([working_df[f'P{p}_T_sum_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+
 # Alternative analysis starts -----------------------------------------------
 repeat = number_of_det_executions - 1 if alternative_iteration else 0
 for det_iteration in range(repeat + 1):
@@ -3331,15 +3365,15 @@ for det_iteration in range(repeat + 1):
     det_ext_res_tdif_arr = np.zeros((n, 4), dtype=float)
     det_processed_tt_arr = working_df.get("list_tt", pd.Series([0]*n)).astype(int).to_numpy()
     
-    for i, trk in enumerate(working_df.itertuples(index=False)):
-        planes = [p for p in range(1, nplan + 1)
-                if getattr(trk, f'P{p}_Q_sum_final') > 0]
+    for i in range(n):
+        planes = [p for p in range(1, nplan + 1) if _det_Q[i, p - 1] > 0]
         if len(planes) < 2:
             continue
         # Angular part -----------------------------------------------------------------
-        x = np.array([tdiff_to_x * getattr(trk, f'P{p}_T_dif_final') for p in planes])
-        y = np.array([getattr(trk, f'P{p}_Y_final') for p in planes])
-        z = z_positions[np.array(planes) - 1]
+        _pidx = np.array(planes) - 1
+        x = tdiff_to_x * _det_Tdif[i, _pidx]
+        y = _det_Y[i, _pidx]
+        z = z_positions[_pidx]
 
         (fit_res['det_x'][i], fit_res['det_y'][i], fit_res['det_theta'][i], fit_res['det_phi'][i], fit_res['det_chi2'][i], res_td, res_y) = fit_3d_line(x, y, z, anc_sx, anc_sy, anc_sz, planes, tdiff_to_x)
 
@@ -3348,7 +3382,7 @@ for det_iteration in range(repeat + 1):
             fit_res[f'det_res_ystr_{p}'][i] = res_y .get(p, 0.0)
 
         # Slowness part ----------------------------------------------------------------
-        tsum = np.array([getattr(trk, f'P{p}_T_sum_final') for p in planes])
+        tsum = _det_Tsum[i, _pidx]
 
         # Reconstruct fitted points using the fitted direction and z-positions
         θ, φ = fit_res['det_theta'][i], fit_res['det_phi'][i]
@@ -3386,10 +3420,11 @@ for det_iteration in range(repeat + 1):
                 if len(lo_planes) < 2:
                     continue
 
-                x_lo = np.array([tdiff_to_x * getattr(trk, f'P{pl}_T_dif_final') for pl in lo_planes])
-                y_lo = np.array([getattr(trk, f'P{pl}_Y_final') for pl in lo_planes])
-                z_lo = z_positions[np.array(lo_planes) - 1]
-                tsum_lo = np.array([getattr(trk, f'P{pl}_T_sum_final') for pl in lo_planes])
+                _lo_idx = np.array(lo_planes) - 1
+                x_lo = tdiff_to_x * _det_Tdif[i, _lo_idx]
+                y_lo = _det_Y[i, _lo_idx]
+                z_lo = z_positions[_lo_idx]
+                tsum_lo = _det_Tsum[i, _lo_idx]
 
                 (x0_lo, y0_lo, theta_lo, phi_lo, _, _, _) = fit_3d_line(
                     x_lo, y_lo, z_lo, anc_sx, anc_sy, anc_sz, lo_planes, tdiff_to_x
@@ -3402,8 +3437,8 @@ for det_iteration in range(repeat + 1):
                 z_p = z_positions[p - 1]
                 x_pred_p = x0_lo + v_lo[0] * z_p / v_lo[2]
                 y_pred_p = y0_lo + v_lo[1] * z_p / v_lo[2]
-                x_obs_p = tdiff_to_x * getattr(trk, f'P{p}_T_dif_final')
-                y_obs_p = getattr(trk, f'P{p}_Y_final')
+                x_obs_p = tdiff_to_x * _det_Tdif[i, p - 1]
+                y_obs_p = _det_Y[i, p - 1]
 
                 det_ext_res_tdif_arr[i, p - 1] = (x_obs_p - x_pred_p) / tdiff_to_x
                 det_ext_res_ystr_arr[i, p - 1] = (y_obs_p - y_pred_p)
@@ -3421,7 +3456,7 @@ for det_iteration in range(repeat + 1):
                     y_fit_p = y_pred_p
                     pos_p = np.array([x_fit_p, y_fit_p, z_p])
                     s_rel_p = pos_p @ v_lo - real_dist_lo[0]
-                    t_rel_p = getattr(trk, f'P{p}_T_sum_final') - tsum_lo[0]
+                    t_rel_p = _det_Tsum[i, p - 1] - tsum_lo[0]
                     det_ext_res_tsum_arr[i, p - 1] = t_rel_p - (k_lo * s_rel_p + b_lo)
 
     # 4.  Assemble all results and join once
@@ -3518,7 +3553,7 @@ if create_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots:
         plt.show()
     plt.close()
@@ -3599,7 +3634,7 @@ def plot_ts_err_with_hist(df, base_cols, time_col, title):
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format="png")
+        save_plot_figure(save_fig_path, format="png")
     if show_plots:
         plt.show()
     plt.close()
@@ -3848,12 +3883,12 @@ def fres(vs, vdat, lenx, ss, zi):  # Residuals array
     vres = [yr, tsr, tdr]
     return vres
 
-def extract_plane_data(track, iplane):
+def extract_plane_data(pos, iplane):
     zi  = z_positions[iplane - 1]
-    yst = getattr(track, f'P{iplane}_Y_final')
-    ts  = getattr(track, f'P{iplane}_T_sum_final')
-    td  = getattr(track, f'P{iplane}_T_dif_final')
-    return [yst, ts, td], [anc_sy, anc_sts, anc_std], zi
+    yst = _tt_Y[pos, iplane - 1]
+    ts  = _tt_Tsum[pos, iplane - 1]
+    td  = _tt_Tdif[pos, iplane - 1]
+    return [yst, ts, td], _tt_vsig, zi
 
 nvar = 3
 i = 0
@@ -3878,6 +3913,14 @@ timtrack_results = [
 missing_tim_cols = {col: 0.0 for col in timtrack_results if col not in working_df.columns}
 if missing_tim_cols:
     working_df = pd.concat([working_df, pd.DataFrame(missing_tim_cols, index=working_df.index)], axis=1)
+
+# Pre-extract per-plane columns for TimTrack (avoids per-event getattr overhead).
+# _tt_vsig is constant for every plane/event so it is allocated once here.
+_tt_Q    = np.column_stack([working_df[f'P{p}_Q_sum_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_tt_Tsum = np.column_stack([working_df[f'P{p}_T_sum_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_tt_Tdif = np.column_stack([working_df[f'P{p}_T_dif_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_tt_Y    = np.column_stack([working_df[f'P{p}_Y_final'].to_numpy(dtype=float)     for p in range(1, nplan + 1)])
+_tt_vsig = [anc_sy, anc_sts, anc_std]
 
 # TimTrack starts ------------------------------------------------------
 repeat = number_of_TT_executions - 1 if timtrack_iteration else 0
@@ -3911,20 +3954,24 @@ for iteration in range(repeat + 1):
 
     th_chi_ndf_arrays = {}
 
-    iterator = working_df.itertuples(index=False, name='Track')
+    iterator = range(n_rows)
     if not crontab_execution:
-        iterator = tqdm(iterator, total=working_df.shape[0], desc="Processing events")
-    
-    for pos, track in enumerate(iterator):
+        iterator = tqdm(iterator, total=n_rows, desc="Processing events")
+
+    for pos in iterator:
         # INTRODUCTION ------------------------------------------------------------------
         planes_to_iterate = []
         charge_event = 0.0
+        _q_row  = _tt_Q[pos]
+        _ts_row = _tt_Tsum[pos]
+        _td_row = _tt_Tdif[pos]
+        _y_row  = _tt_Y[pos]
         for i_plane in range(nplan):
             plane_id = i_plane + 1
-            charge_plane = getattr(track, f'P{plane_id}_Q_sum_final', 0)
-            ts_plane = getattr(track, f'P{plane_id}_T_sum_final', 0)
-            td_plane = getattr(track, f'P{plane_id}_T_dif_final', 0)
-            y_plane = getattr(track, f'P{plane_id}_Y_final', 0)
+            charge_plane = _q_row[i_plane]
+            ts_plane     = _ts_row[i_plane]
+            td_plane     = _td_row[i_plane]
+            y_plane      = _y_row[i_plane]
             plane_values = np.array([charge_plane, ts_plane, td_plane, y_plane], dtype=float)
             if np.all(np.isfinite(plane_values)) and np.all(plane_values != 0):
                 planes_to_iterate.append(plane_id)
@@ -3961,9 +4008,9 @@ for iteration in range(repeat + 1):
             for iplane in planes_to_iterate:
                 
                 # Data --------------------------------------------------------
-                vdat, vsig, zi = extract_plane_data(track, iplane)
+                vdat, vsig, zi = extract_plane_data(pos, iplane)
                 # -------------------------------------------------------------
-                
+
                 mk += fmkx(nvar, npar, vs, vsig, ss, zi)
                 va += fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
             istp = istp + 1
@@ -3992,7 +4039,7 @@ for iteration in range(repeat + 1):
                 ndat = ndat + nvar
                 
                 # Data --------------------------------------------------------------------------------
-                vdat, vsig, zi = extract_plane_data(track, iplane)
+                vdat, vsig, zi = extract_plane_data(pos, iplane)
                 # -------------------------------------------------------------------------------------
                 
                 vres = fres(vsf, vdat, lenx, ss, zi)
@@ -4033,7 +4080,7 @@ for iteration in range(repeat + 1):
             for iplane_ref in planes_to_iterate:
                 
                 # Data ------------------------------------------------------------
-                vdat_ref, _, z_ref = extract_plane_data(track, iplane_ref)
+                vdat_ref, _, z_ref = extract_plane_data(pos, iplane_ref)
                 # -----------------------------------------------------------------
                 
                 planes_to_iterate_short = [p for p in planes_to_iterate if p != iplane_ref]
@@ -4049,8 +4096,8 @@ for iteration in range(repeat + 1):
                     for iplane in planes_to_iterate_short:
                     
                         # Data --------------------------------------------------------
-                        vdat, vsig, zi = extract_plane_data(track, iplane)
-                        zi  = zi - z_ref    
+                        vdat, vsig, zi = extract_plane_data(pos, iplane)
+                        zi  = zi - z_ref
                         # -------------------------------------------------------------
                         
                         mk += fmkx(nvar, npar, vs, vsig, ss, zi)
@@ -4259,9 +4306,6 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
 # Combine detached and TimTrack estimates ------------------------------------
 combined_core_vars = ["x", "y", "theta", "phi", "s", "t0"]
 for base in combined_core_vars:
-    
-    working_df = working_df.copy()
-    
     det_col = f"det_{base}"
     tim_col = f"tim_{base}"
     det_vals = working_df[det_col].to_numpy(copy=False) if det_col in working_df else np.zeros(len(working_df))
@@ -4276,6 +4320,9 @@ for base in combined_core_vars:
     else:
         working_df[base] = 0.5 * (det_vals + tim_vals)
         working_df[f"{base}_err"] = 0.5 * (det_vals - tim_vals)
+
+# Defrag once after all combined-core-variable columns have been written
+working_df = working_df.copy()
 
 residual_sets = [
     ("res_ystr", "det_res_ystr_", "tim_res_ystr_"),
@@ -4484,6 +4531,7 @@ if timeseries_and_fits:
             if subset.empty:
                 continue
             combo_subsets.append((combo, subset))
+        del ts_core  # free the sorted full-copy; subsets in combo_subsets are independent
 
         if combo_subsets:
             # Compute global quantile bounds per variable across all combos
@@ -4602,7 +4650,7 @@ if timeseries_and_fits:
                     fig_idx += 1
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                     plot_list.append(save_fig_path)
-                    plt.savefig(save_fig_path, format='png')
+                    save_plot_figure(save_fig_path, format='png')
                 if show_plots:
                     plt.show()
                 plt.close()
@@ -4652,7 +4700,7 @@ if timeseries_and_fits:
                     fig_idx += 1
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                     plot_list.append(save_fig_path)
-                    plt.savefig(save_fig_path, format='png')
+                    save_plot_figure(save_fig_path, format='png')
                 if show_plots:
                     plt.show()
                 plt.close()
@@ -4735,7 +4783,7 @@ if timeseries_and_fits:
 #         fig_idx += 1
 #         save_fig_path = os.path.join(base_directories["figure_directory"], filename)
 #         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
+#         save_plot_figure(save_fig_path, format='png')
 #     if show_plots:
 #         plt.show()
 #     plt.close()
@@ -4808,7 +4856,7 @@ if timeseries_and_fits:
 #         fig_idx += 1
 #         save_fig_path = os.path.join(base_directories["figure_directory"], filename)
 #         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
+#         save_plot_figure(save_fig_path, format='png')
 #     if show_plots:
 #         plt.show()
 #     plt.close()
@@ -4929,6 +4977,7 @@ for _tt in definitive_tt_values:
 if time_window_fitting:
     
     print("---------------------------- Fitting loop ----------------------------")
+    time_window_fitting_start = time.perf_counter()
     
     for definitive_tt in definitive_tt_values:
         # Create a mask for the current definitive_tt
@@ -4944,8 +4993,8 @@ if time_window_fitting:
 
         t_sum_data = T_sum_columns.values  # shape: (n_events, n_detectors)
         
-        nonzero_rows = [np.any(row != 0) for row in t_sum_data]
-        if not any(nonzero_rows):
+        nonzero_rows = np.any(t_sum_data != 0, axis=1)
+        if not np.any(nonzero_rows):
             print(f"\n[Warning] Skipping definitive_tt {definitive_tt}: no non-zero T_sum data.")
             continue
         
@@ -4953,23 +5002,28 @@ if time_window_fitting:
         
         counts_per_width = []
         counts_per_width_dev = []
+        nonzero_mask = t_sum_data != 0
+        nonzero_counts = nonzero_mask.sum(axis=1, keepdims=True)
+        nonzero_sums = np.where(nonzero_mask, t_sum_data, 0.0).sum(axis=1, keepdims=True)
+        row_stat = np.divide(
+            nonzero_sums,
+            nonzero_counts,
+            out=np.zeros_like(nonzero_sums, dtype=float),
+            where=nonzero_counts > 0,
+        )
 
         for w in widths:
-            count_in_window = []
-            for row in t_sum_data:
-                row_no_zeros = row[row != 0]
-                if len(row_no_zeros) == 0:
-                    count_in_window.append(0)
-                    continue
-
-                stat = np.mean(row_no_zeros)  # or np.median(row_no_zeros)
-                lower = stat - w / 2
-                upper = stat + w / 2
-                n_in_window = np.sum((row_no_zeros >= lower) & (row_no_zeros <= upper))
-                count_in_window.append(n_in_window)
-
-            counts_per_width.append(np.mean(count_in_window))
-            counts_per_width_dev.append(np.std(count_in_window))
+            half_window = w / 2.0
+            lower = row_stat - half_window
+            upper = row_stat + half_window
+            in_window = (
+                nonzero_mask
+                & (t_sum_data >= lower)
+                & (t_sum_data <= upper)
+            )
+            count_in_window = in_window.sum(axis=1)
+            counts_per_width.append(float(np.mean(count_in_window)))
+            counts_per_width_dev.append(float(np.std(count_in_window)))
 
         counts_per_width = np.array(counts_per_width)
         counts_per_width_dev = np.array(counts_per_width_dev)
@@ -5087,10 +5141,15 @@ if time_window_fitting:
                 fig_idx += 1
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                plt.savefig(save_fig_path, format='png')
+                save_plot_figure(save_fig_path, format='png')
             if show_plots:
                 plt.show()
             plt.close()
+
+    print(
+        f"[PROFILE][TASK_4] time-window fitting section: {time.perf_counter() - time_window_fitting_start:.2f}s",
+        force=True,
+    )
 
 # -----------------------------------------------------------------------------
 # Last filterings -------------------------------------------------------------
@@ -5180,7 +5239,7 @@ def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_id
         save_fig_path = os.path.join(base_dir, final_filename)
         if plot_list is not None:
             plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots:
         plt.show()
     plt.close()
@@ -5566,10 +5625,9 @@ if create_plots:
 # -----------------------------------------------------------------------------------------------------------------------------
 
 if create_plots or create_essential_plots:
-    
-    df_filtered = df_plot_ancillary.copy()
+    df_filtered = df_plot_ancillary
     # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
-    
+
     tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
     
     n_tt = len(tt_values)
@@ -5644,16 +5702,15 @@ if create_plots or create_essential_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots:
         plt.show()
     plt.close()
 
 if create_plots:
-    
-    df_filtered = df_plot_ancillary.copy()
+    df_filtered = df_plot_ancillary
     # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
-    
+
     tt_values = [12, 23, 34, 123, 234, 1234]
     
     n_tt = len(tt_values)
@@ -5726,7 +5783,7 @@ if create_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots:
         plt.show()
     plt.close()
@@ -5862,7 +5919,7 @@ if create_plots:
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         # Show plot if enabled
         if show_plots:
             plt.show()
@@ -6262,13 +6319,13 @@ if create_plots:
 #         fig_idx += 1
 #         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
 #         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
+#         save_plot_figure(save_fig_path, format='png')
 #     if show_plots:
 #         plt.show()
 #     plt.close()
 
 if create_plots:
-    df_filtered = df_plot_ancillary.copy()
+    df_filtered = df_plot_ancillary
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
     colors = plt.cm.tab10.colors
     bins = np.linspace(theta_left_filter, theta_right_filter, 150)
@@ -6299,10 +6356,13 @@ if create_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots:
         plt.show()
     plt.close()
+
+del df_plot_ancillary
+gc.collect()
 
 # if create_plots:
 
@@ -6370,7 +6430,7 @@ if create_plots:
 #         fig_idx += 1
 #         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
 #         plot_list.append(save_fig_path)
-#         plt.savefig(save_fig_path, format='png')
+#         save_plot_figure(save_fig_path, format='png')
 #     if show_plots:
 #         plt.show()
 #     plt.close()
@@ -6466,7 +6526,7 @@ if create_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
 
     if show_plots:
         plt.show()
@@ -6587,7 +6647,7 @@ if self_trigger:
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close()
 
@@ -6595,15 +6655,14 @@ if self_trigger:
     if create_plots:
    
         fig, axs = plt.subplots(4, 4, figsize=(18, 12))
+        # Filter once outside the loop; read-only inside so no copy needed.
+        plot_def_df = working_df.loc[working_df["definitive_tt"] == "1234"]
         for i in range(1, 5):
             for j in range(1, 5):
                 # Get the column name
                 col_name = f"Q_P{i}s{j}"
                 col_name_2 = f"Q_P{i}s{j}_with_crstlk"
-                
-                plot_def_df = working_df.copy()
-                plot_def_df = plot_def_df [ plot_def_df["definitive_tt"] == "1234" ]
-                
+
                 # Plot the histogram
                 v = plot_def_df[col_name]
                 v = v[v != 0]
@@ -6644,7 +6703,7 @@ if self_trigger:
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close()
 # ------------------------------------------------------------------------------------------------------------------------
@@ -6773,27 +6832,31 @@ if create_plots:
 
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
-    if len(plot_list) > 0:
+    existing_pngs = [png for png in plot_list if os.path.exists(png)]
+
+    if _direct_pdf_pages is not None:
+        for png in existing_pngs:
+            img = Image.open(png)
+            fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+            ax.imshow(img)
+            ax.axis('off')
+            pdf_save_rasterized_page(_direct_pdf_pages, fig, bbox_inches='tight')
+            plt.close(fig)
+        close_direct_pdf_writer()
+    elif existing_pngs:
         with PdfPages(save_pdf_path) as pdf:
-            if plot_list:
-                for png in plot_list:
-                    if os.path.exists(png) == False:
-                        print(f"Error: {png} does not exist.")
-                        continue
-                    
-                    # Open the PNG file directly using PIL to get its dimensions
-                    img = Image.open(png)
-                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)  # Set figsize and dpi
-                    ax.imshow(img)
-                    ax.axis('off')  # Hide the axes
-                    pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')  # Save figure tightly fitting the image
-                    plt.close(fig)  # Close the figure after adding it to the PDF
+            for png in existing_pngs:
+                img = Image.open(png)
+                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+                ax.imshow(img)
+                ax.axis('off')
+                pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+                plt.close(fig)
 
         # Remove PNG files after creating the PDF
-        for png in plot_list:
+        for png in existing_pngs:
             try:
                 os.remove(png)
-                # print(f"Deleted {png}")
             except OSError as e:
                 print(f"Error: {e.filename} - {e.strerror}.")
 

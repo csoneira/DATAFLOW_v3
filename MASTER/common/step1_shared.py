@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import builtins
 import csv
+import fcntl
 import math
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Sequence, Tuple
@@ -28,6 +29,7 @@ EVENTS_PER_SECOND_COLUMNS = [
     "events_per_second_total_seconds",
     "events_per_second_global_rate",
 ]
+EVENTS_PER_SECOND_COLUMN_SET = frozenset(EVENTS_PER_SECOND_COLUMNS)
 
 
 def build_step1_cli_parser(
@@ -235,29 +237,66 @@ def repair_metadata_file(metadata_path: Path) -> int:
     return fixed
 
 
-def save_metadata(
-    metadata_path: str | Path,
+def _normalize_metadata_row(raw: Dict[str, object]) -> Dict[str, object]:
+    return {key: value for key, value in raw.items() if key is not None}
+
+
+def _load_existing_rows(metadata_path: Path) -> Tuple[List[str], List[Dict[str, object]]]:
+    with metadata_path.open("r", newline="") as csvfile:
+        reader = csv.DictReader(csvfile)
+        existing_fields = list(reader.fieldnames or [])
+        existing_rows = [_normalize_metadata_row(dict(existing)) for existing in reader]
+    return existing_fields, existing_rows
+
+
+def _apply_preferred_field_order(
+    fieldnames: List[str],
+    preferred_fieldnames: Iterable[str] | None,
+) -> List[str]:
+    if preferred_fieldnames:
+        seen = set(fieldnames)
+        preferred = [name for name in preferred_fieldnames if name in seen]
+        remainder = [name for name in fieldnames if name not in preferred]
+        fieldnames = preferred + remainder
+    if "data_purity_percentage" in fieldnames:
+        fieldnames = [name for name in fieldnames if name != "data_purity_percentage"] + [
+            "data_purity_percentage"
+        ]
+    return fieldnames
+
+
+def _format_metadata_row(item: Dict[str, object], fieldnames: List[str]) -> Dict[str, object]:
+    formatted: Dict[str, object] = {}
+    for key in fieldnames:
+        if key in EVENTS_PER_SECOND_COLUMN_SET:
+            value = item.get(key, 0)
+            if value in ("", None) or (isinstance(value, float) and math.isnan(value)):
+                formatted[key] = 0
+            else:
+                formatted[key] = value
+            continue
+        value = item.get(key, "")
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            formatted[key] = ""
+        elif isinstance(value, (list, dict, np.ndarray)):
+            formatted[key] = str(value)
+        else:
+            formatted[key] = value
+    return formatted
+
+
+def _save_metadata_rewrite(
+    metadata_path: Path,
     row: Dict[str, object],
-    preferred_fieldnames: Iterable[str] | None = None,
-    log_fn: Callable[..., None] = builtins.print,
-) -> Path:
-    metadata_path = Path(metadata_path)
+    preferred_fieldnames: Iterable[str] | None,
+    log_fn: Callable[..., None],
+) -> None:
     rows: List[Dict[str, object]] = []
     fieldnames: List[str] = []
 
-    def normalize_row(raw: Dict[str, object]) -> Dict[str, object]:
-        return {key: value for key, value in raw.items() if key is not None}
-
-    def load_existing_rows() -> Tuple[List[str], List[Dict[str, object]]]:
-        with metadata_path.open("r", newline="") as csvfile:
-            reader = csv.DictReader(csvfile)
-            existing_fields = list(reader.fieldnames or [])
-            existing_rows = [normalize_row(existing) for existing in reader]
-            return existing_fields, existing_rows
-
     if metadata_path.exists() and metadata_path.stat().st_size > 0:
         try:
-            fieldnames, existing_rows = load_existing_rows()
+            fieldnames, existing_rows = _load_existing_rows(metadata_path)
         except csv.Error as exc:
             if "field larger than field limit" in str(exc).lower():
                 fixed = repair_metadata_file(metadata_path)
@@ -265,7 +304,7 @@ def save_metadata(
                     f"Detected oversized analysis_mode entries in {metadata_path}; normalized {fixed} row(s)."
                 )
                 try:
-                    fieldnames, existing_rows = load_existing_rows()
+                    fieldnames, existing_rows = _load_existing_rows(metadata_path)
                 except csv.Error as err:
                     raise RuntimeError(
                         f"Failed to repair metadata file {metadata_path} after detecting oversized fields."
@@ -274,11 +313,10 @@ def save_metadata(
                 raise
         rows.extend(existing_rows)
 
-    rows.append(normalize_row(dict(row)))
-
-    fixed_during_append = sanitize_analysis_mode_rows(rows)
-    if fixed_during_append:
-        log_fn(f"Clamped analysis_mode to 0/1 in {fixed_during_append} metadata row(s).")
+    rows.append(row)
+    fixed_during_rewrite = sanitize_analysis_mode_rows(rows)
+    if fixed_during_rewrite:
+        log_fn(f"Clamped analysis_mode to 0/1 in {fixed_during_rewrite} metadata row(s).")
 
     seen = set(fieldnames)
     for item in rows:
@@ -286,38 +324,160 @@ def save_metadata(
             if key not in seen:
                 fieldnames.append(key)
                 seen.add(key)
-
-    if preferred_fieldnames:
-        preferred = [name for name in preferred_fieldnames if name in seen]
-        remainder = [name for name in fieldnames if name not in preferred]
-        fieldnames = preferred + remainder
-        if "data_purity_percentage" in fieldnames:
-            fieldnames = [name for name in fieldnames if name != "data_purity_percentage"] + [
-                "data_purity_percentage"
-            ]
+    fieldnames = _apply_preferred_field_order(fieldnames, preferred_fieldnames)
 
     with metadata_path.open("w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
-
         for item in rows:
-            formatted = {}
-            for key in fieldnames:
-                if key in EVENTS_PER_SECOND_COLUMNS:
-                    value = item.get(key, 0)
-                    if value in ("", None) or (isinstance(value, float) and math.isnan(value)):
-                        formatted[key] = 0
-                    else:
-                        formatted[key] = value
-                    continue
-                value = item.get(key, "")
-                if value is None or (isinstance(value, float) and math.isnan(value)):
-                    formatted[key] = ""
-                elif isinstance(value, (list, dict, np.ndarray)):
-                    formatted[key] = str(value)
-                else:
-                    formatted[key] = value
-            writer.writerow(formatted)
+            writer.writerow(_format_metadata_row(item, fieldnames))
+
+
+def _filename_base_index_path(metadata_path: Path) -> Path:
+    return metadata_path.with_suffix(metadata_path.suffix + ".filename_base.index")
+
+
+def _load_filename_base_index(index_path: Path) -> set[str]:
+    if not index_path.exists():
+        return set()
+    values: set[str] = set()
+    with index_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            value = line.strip()
+            if value:
+                values.add(value)
+    return values
+
+
+def _write_filename_base_index(index_path: Path, values: Iterable[str]) -> None:
+    unique_values = sorted({value.strip() for value in values if str(value).strip()})
+    with index_path.open("w", encoding="utf-8", newline="") as handle:
+        for value in unique_values:
+            handle.write(f"{value}\n")
+
+
+def _sync_filename_base_index_from_csv(
+    metadata_path: Path,
+    log_fn: Callable[..., None],
+) -> set[str]:
+    index_path = _filename_base_index_path(metadata_path)
+    if not metadata_path.exists() or metadata_path.stat().st_size == 0:
+        if index_path.exists():
+            index_path.unlink()
+        return set()
+
+    try:
+        with metadata_path.open("r", newline="") as csvfile:
+            reader = csv.DictReader(csvfile)
+            fieldnames = list(reader.fieldnames or [])
+            if "filename_base" not in fieldnames:
+                if index_path.exists():
+                    index_path.unlink()
+                return set()
+            values = {
+                str(raw).strip()
+                for raw in (row.get("filename_base") for row in reader)
+                if str(raw).strip()
+            }
+    except csv.Error as exc:
+        if "field larger than field limit" in str(exc).lower():
+            fixed = repair_metadata_file(metadata_path)
+            log_fn(
+                f"Detected oversized analysis_mode entries in {metadata_path}; normalized {fixed} row(s)."
+            )
+            return _sync_filename_base_index_from_csv(metadata_path, log_fn)
+        raise
+
+    _write_filename_base_index(index_path, values)
+    return values
+
+
+def _load_or_build_filename_base_index(
+    metadata_path: Path,
+    log_fn: Callable[..., None],
+) -> Tuple[Path, set[str]]:
+    index_path = _filename_base_index_path(metadata_path)
+    if index_path.exists():
+        try:
+            return index_path, _load_filename_base_index(index_path)
+        except OSError:
+            # Fall back to rebuilding from the CSV below.
+            pass
+    return index_path, _sync_filename_base_index_from_csv(metadata_path, log_fn)
+
+
+def save_metadata(
+    metadata_path: str | Path,
+    row: Dict[str, object],
+    preferred_fieldnames: Iterable[str] | None = None,
+    log_fn: Callable[..., None] = builtins.print,
+) -> Path:
+    metadata_path = Path(metadata_path)
+    row_data = _normalize_metadata_row(dict(row))
+    fixed_new_row = sanitize_analysis_mode_rows([row_data])
+    if fixed_new_row:
+        log_fn(f"Clamped analysis_mode to 0/1 in {fixed_new_row} metadata row(s).")
+
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = metadata_path.with_suffix(metadata_path.suffix + ".lock")
+
+    with lock_path.open("a", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+
+        if not metadata_path.exists() or metadata_path.stat().st_size == 0:
+            initial_fields = _apply_preferred_field_order(list(row_data.keys()), preferred_fieldnames)
+            with metadata_path.open("w", newline="") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=initial_fields)
+                writer.writeheader()
+                writer.writerow(_format_metadata_row(row_data, initial_fields))
+            _sync_filename_base_index_from_csv(metadata_path, log_fn)
+            return metadata_path
+
+        try:
+            with metadata_path.open("r", newline="") as csvfile:
+                reader = csv.DictReader(csvfile)
+                existing_fields = list(reader.fieldnames or [])
+        except csv.Error as exc:
+            if "field larger than field limit" in str(exc).lower():
+                fixed = repair_metadata_file(metadata_path)
+                log_fn(
+                    f"Detected oversized analysis_mode entries in {metadata_path}; normalized {fixed} row(s)."
+                )
+                _save_metadata_rewrite(metadata_path, row_data, preferred_fieldnames, log_fn)
+                _sync_filename_base_index_from_csv(metadata_path, log_fn)
+                return metadata_path
+            raise
+
+        if not existing_fields:
+            _save_metadata_rewrite(metadata_path, row_data, preferred_fieldnames, log_fn)
+            _sync_filename_base_index_from_csv(metadata_path, log_fn)
+            return metadata_path
+
+        existing_field_set = set(existing_fields)
+        if any(key not in existing_field_set for key in row_data.keys()):
+            _save_metadata_rewrite(metadata_path, row_data, preferred_fieldnames, log_fn)
+            _sync_filename_base_index_from_csv(metadata_path, log_fn)
+            return metadata_path
+
+        basename = str(row_data.get("filename_base", "")).strip()
+        index_path: Path | None = None
+        index_values: set[str] = set()
+        duplicate_basename = False
+        if basename:
+            index_path, index_values = _load_or_build_filename_base_index(metadata_path, log_fn)
+            duplicate_basename = basename in index_values
+            if duplicate_basename:
+                log_fn(
+                    f"[metadata] filename_base={basename} already present in {metadata_path.name}; appending new row."
+                )
+
+        with metadata_path.open("a", newline="") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=existing_fields)
+            writer.writerow(_format_metadata_row(row_data, existing_fields))
+
+        if basename and index_path is not None and not duplicate_basename:
+            with index_path.open("a", encoding="utf-8", newline="") as handle:
+                handle.write(f"{basename}\n")
 
     return metadata_path
 

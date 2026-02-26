@@ -109,9 +109,24 @@ def _task_metadata_path(station_id: int, task_id: int) -> Path:
 
 
 def _load_config(path: Path) -> dict:
+    def _merge_dicts(base: dict, override: dict) -> dict:
+        out = dict(base)
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = _merge_dicts(out[k], v)
+            else:
+                out[k] = v
+        return out
+
+    cfg: dict = {}
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    runtime_path = path.with_name("config_runtime.json")
+    if runtime_path.exists():
+        runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, runtime_cfg)
+        log.info("Loaded runtime overrides: %s", runtime_path)
+    return cfg
 
 
 def _resolve_z_config_rng(config: dict) -> tuple[np.random.Generator, int, bool]:
@@ -168,12 +183,14 @@ def main() -> int:
 
     station_id = int(config.get("station_id", 0))
     task_ids = config.get("task_ids", [1])
-    sim_params_path = Path(
-        config.get(
-            "simulation_params_csv",
-            str(REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"),
-        )
+    default_sim_params_path = (
+        REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
     )
+    sim_params_cfg = config.get("simulation_params_csv", None)
+    if sim_params_cfg in (None, "", "null", "None"):
+        sim_params_path = default_sim_params_path
+    else:
+        sim_params_path = Path(str(sim_params_cfg)).expanduser()
     z_config = config.get("z_position_config", None)
     metadata_agg = config.get("metadata_agg", "latest")
 

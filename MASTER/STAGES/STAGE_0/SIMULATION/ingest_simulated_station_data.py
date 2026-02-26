@@ -3,16 +3,55 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
+import os
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
 DEFAULT_SIM_SOURCE_DIR = "~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES"
 REGISTRY_FIELDS = ["basename", "execution_timestamp"]
+LIVE_REGISTRY_FILENAME = "imported_basenames.csv"
+HISTORY_REGISTRY_FILENAME = "imported_basenames_history.csv"
+LOCK_FILENAME = ".ingest_simulated_station_data.lock"
 
 
 def now_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def write_registry_rows_atomic(registry_path: Path, rows: list[dict[str, str]]) -> None:
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{registry_path.name}.",
+        suffix=".tmp",
+        dir=str(registry_path.parent),
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=REGISTRY_FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
+        tmp_path.replace(registry_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def acquire_lock_or_exit(lock_path: Path):
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("w", encoding="ascii")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        print(f"Another ingest run is active (lock: {lock_path}); skipping this run.")
+        raise SystemExit(0)
+    return handle
 
 
 def load_imported_basenames(registry_path: Path) -> set[str]:
@@ -62,12 +101,7 @@ def normalize_registry_schema(registry_path: Path) -> int:
     if not needs_rewrite:
         return 0
 
-    tmp_path = registry_path.with_suffix(registry_path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="ascii", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=REGISTRY_FIELDS)
-        writer.writeheader()
-        writer.writerows(normalized_rows)
-    tmp_path.replace(registry_path)
+    write_registry_rows_atomic(registry_path, normalized_rows)
     return len(normalized_rows)
 
 
@@ -107,6 +141,38 @@ def append_registry_basenames(registry_path: Path, basenames: list[str]) -> None
             }
             for basename in basenames
         )
+
+
+def load_task_metadata_basenames(station_root: Path) -> set[str]:
+    basenames: set[str] = set()
+    step1_root = station_root / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+    for task_id in range(1, 6):
+        metadata_csv = (
+            step1_root
+            / f"TASK_{task_id}"
+            / "METADATA"
+            / f"task_{task_id}_metadata_execution.csv"
+        )
+        if not metadata_csv.exists():
+            continue
+        with metadata_csv.open("r", encoding="ascii", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = reader.fieldnames or []
+            base_col = None
+            for candidate in ("filename_base", "basename", "dat_name", "hld_name"):
+                if candidate in fieldnames:
+                    base_col = candidate
+                    break
+            if base_col is None:
+                continue
+            for row in reader:
+                raw = (row.get(base_col) or "").strip()
+                if not raw:
+                    continue
+                basename = Path(raw).stem
+                if basename.startswith("mi00"):
+                    basenames.add(basename)
+    return basenames
 
 
 def find_ground_truth_basenames(station_root: Path) -> set[str]:
@@ -176,12 +242,7 @@ def sync_registry_with_ground_truth(registry_path: Path, station_root: Path) -> 
                     "execution_timestamp": existing.get(b, timestamp_now),
                 }
             )
-        tmp_path = registry_path.with_suffix(registry_path.suffix + ".tmp")
-        with tmp_path.open("w", encoding="ascii", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=REGISTRY_FIELDS)
-            writer.writeheader()
-            writer.writerows(new_rows)
-        tmp_path.replace(registry_path)
+        write_registry_rows_atomic(registry_path, new_rows)
 
     return len(to_add), len(to_remove)
 
@@ -223,53 +284,91 @@ def main() -> None:
     source_dir.mkdir(parents=True, exist_ok=True)
     if not source_dir.is_dir():
         raise NotADirectoryError(f"Source path is not a directory: {source_dir}")
-    relocated = relocate_legacy_root_dat_files(source_dir)
 
     station_root = repo_root / "STATIONS" / "MINGO00"
     stage0_sim_dir = station_root / "STAGE_0" / "SIMULATION"
     stage01_dir = station_root / "STAGE_0_to_1"
     stage0_sim_dir.mkdir(parents=True, exist_ok=True)
     stage01_dir.mkdir(parents=True, exist_ok=True)
+    lock_handle = acquire_lock_or_exit(stage0_sim_dir / LOCK_FILENAME)
+    try:
+        relocated = relocate_legacy_root_dat_files(source_dir)
 
-    registry_path = stage0_sim_dir / "imported_basenames.csv"
-    sim_params_path = repo_root / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
-    normalized_registry_rows = normalize_registry_schema(registry_path)
-    imported = load_imported_basenames(registry_path)
+        live_registry_path = stage0_sim_dir / LIVE_REGISTRY_FILENAME
+        history_registry_path = stage0_sim_dir / HISTORY_REGISTRY_FILENAME
+        sim_params_path = repo_root / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
 
-    moved = 0
-    new_registry_basenames = []
-    for dat_file in sorted(source_dir.glob("*.dat")):
-        name = dat_file.name
-        if not name.startswith("mi00"):
-            continue
-        basename = dat_file.stem
-        if basename in imported:
-            continue
-        dest_path = stage01_dir / dat_file.name
-        shutil.move(dat_file, dest_path)
-        imported.add(basename)
-        new_registry_basenames.append(basename)
-        moved += 1
+        normalized_live_rows = normalize_registry_schema(live_registry_path)
+        normalized_history_rows = normalize_registry_schema(history_registry_path)
 
-    # Keep station registry aligned with the simulation params catalogue.
-    sim_param_basenames = load_simulation_param_basenames(sim_params_path)
-    missing_from_registry = sorted(sim_param_basenames - imported)
-    imported.update(missing_from_registry)
-    new_registry_basenames.extend(missing_from_registry)
+        imported_history = load_imported_basenames(history_registry_path)
+        imported_live = load_imported_basenames(live_registry_path)
 
-    append_registry_basenames(registry_path, new_registry_basenames)
+        # Bootstrap history from any existing live registry entries.
+        history_bootstrap_from_live = sorted(imported_live - imported_history)
+        append_registry_basenames(history_registry_path, history_bootstrap_from_live)
+        if history_bootstrap_from_live:
+            imported_history.update(history_bootstrap_from_live)
 
-    # final sync against the downstream filesystem; this will remove any
-    # stale basenames and add any that slipped through the other mechanisms.
-    added_count, removed_count = sync_registry_with_ground_truth(registry_path, station_root)
+        # Recover prior continuity from TASK metadata (historical evidence that
+        # files passed through Stage 1).
+        metadata_basenames = load_task_metadata_basenames(station_root)
+        history_recovered_from_tasks = sorted(metadata_basenames - imported_history)
+        append_registry_basenames(history_registry_path, history_recovered_from_tasks)
+        if history_recovered_from_tasks:
+            imported_history.update(history_recovered_from_tasks)
 
-    print(
-        f"Moved {moved} .dat files from {source_dir} into {stage01_dir}; "
-        f"relocated {relocated} legacy root .dat files into {source_dir}; "
-        f"normalized {normalized_registry_rows} existing registry rows with execution_timestamp; "
-        f"backfilled {len(missing_from_registry)} basenames into {registry_path}; "
-        f"sync added {added_count}, removed {removed_count}, final count={len(find_ground_truth_basenames(station_root))}"
-    )
+        moved = 0
+        history_new_from_ingest: list[str] = []
+        for dat_file in sorted(source_dir.glob("*.dat")):
+            name = dat_file.name
+            if not name.startswith("mi00"):
+                continue
+            basename = dat_file.stem
+            if basename in imported_history:
+                continue
+            dest_path = stage01_dir / dat_file.name
+            shutil.move(dat_file, dest_path)
+            imported_history.add(basename)
+            history_new_from_ingest.append(basename)
+            moved += 1
+
+        append_registry_basenames(history_registry_path, history_new_from_ingest)
+
+        # Keep the live registry aligned with files currently in Stage 0/Task 1
+        # input locations. This is operational state, not historical continuity.
+        added_count, removed_count = sync_registry_with_ground_truth(live_registry_path, station_root)
+        live_truth = find_ground_truth_basenames(station_root)
+        imported_live_after = load_imported_basenames(live_registry_path)
+
+        # Defensive: ensure live entries also exist in history.
+        history_recovered_from_live = sorted(imported_live_after - imported_history)
+        append_registry_basenames(history_registry_path, history_recovered_from_live)
+        if history_recovered_from_live:
+            imported_history.update(history_recovered_from_live)
+
+        sim_param_basenames = load_simulation_param_basenames(sim_params_path)
+        sim_params_missing_from_history = len(sim_param_basenames - imported_history)
+        source_remaining = len(
+            [entry for entry in source_dir.glob("mi00*.dat") if entry.is_file()]
+        )
+
+        print(
+            f"Moved {moved} .dat files from {source_dir} into {stage01_dir}; "
+            f"relocated {relocated} legacy root .dat files into {source_dir}; "
+            f"normalized live/history rows={normalized_live_rows}/{normalized_history_rows}; "
+            f"history bootstrap_from_live={len(history_bootstrap_from_live)}; "
+            f"history recovered_from_tasks={len(history_recovered_from_tasks)}; "
+            f"history new_from_ingest={len(history_new_from_ingest)}; "
+            f"history recovered_from_live={len(history_recovered_from_live)}; "
+            f"live sync added {added_count}, removed {removed_count}, live count={len(live_truth)}; "
+            f"history count={len(imported_history)}; "
+            f"sim_params_total={len(sim_param_basenames)}, sim_params_missing_from_history={sim_params_missing_from_history}; "
+            f"source_remaining={source_remaining}"
+        )
+    finally:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        lock_handle.close()
 
 
 if __name__ == "__main__":

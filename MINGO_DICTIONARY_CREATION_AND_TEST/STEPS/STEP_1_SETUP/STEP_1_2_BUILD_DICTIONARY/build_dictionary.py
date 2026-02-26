@@ -103,9 +103,24 @@ log = logging.getLogger("STEP_1.2")
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 def _load_config(path: Path) -> dict:
+    def _merge_dicts(base: dict, override: dict) -> dict:
+        out = dict(base)
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = _merge_dicts(out[k], v)
+            else:
+                out[k] = v
+        return out
+
+    cfg: dict = {}
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    runtime_path = path.with_name("config_runtime.json")
+    if runtime_path.exists():
+        runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, runtime_cfg)
+        log.info("Loaded runtime overrides: %s", runtime_path)
+    return cfg
 
 
 def _parse_efficiencies(value: object) -> list[float]:
@@ -529,35 +544,99 @@ def _plot_iso_rate(dictionary: pd.DataFrame, path) -> None:
         return
     xm, ym, zm = xm[mask], ym[mask], zm[mask]
 
-    levels = np.arange(np.floor(zm.min()), np.ceil(zm.max()) + 1, 1.0)
-    if len(levels) < 2:
-        levels = np.linspace(zm.min(), zm.max(), 8)
+    flux_lo = float(np.min(xm))
+    flux_hi = float(np.max(xm))
+    eff_lo = float(np.min(ym))
+    eff_hi = float(np.max(ym))
+    x_span = max(flux_hi - flux_lo, 1e-6)
+    y_span = max(eff_hi - eff_lo, 1e-6)
+    flux_lo -= 0.03 * x_span
+    flux_hi += 0.03 * x_span
+    eff_lo -= 0.03 * y_span
+    eff_hi += 0.03 * y_span
+
+    g = 220
+    xi = np.linspace(flux_lo, flux_hi, g)
+    yi = np.linspace(eff_lo, eff_hi, g)
+    Xi, Yi = np.meshgrid(xi, yi)
 
     cmap = plt.cm.viridis
-    fig, ax = plt.subplots(figsize=(10, 7.5), layout="constrained")
-    sc = ax.scatter(xm, ym, c=zm, cmap=cmap, s=22, alpha=0.75,
-                    edgecolors="0.3", linewidths=0.3, zorder=3,
-                    vmin=levels.min(), vmax=levels.max())
+    fig, ax = plt.subplots(figsize=(9.5, 7.0))
     try:
         tri = Triangulation(xm, ym)
         interp = LinearTriInterpolator(tri, zm)
-        xi = np.linspace(xm.min(), xm.max(), 300)
-        yi = np.linspace(ym.min(), ym.max(), 300)
-        Xi, Yi = np.meshgrid(xi, yi)
         Zi = interp(Xi, Yi)
-        cs = ax.contour(Xi, Yi, Zi, levels=levels, cmap=cmap,
-                        linewidths=1.4, alpha=0.9, zorder=2,
-                        vmin=levels.min(), vmax=levels.max())
-        ax.clabel(cs, inline=True, fontsize=9, fmt="%.0f Hz")
+        Zi = np.asarray(np.ma.filled(Zi, np.nan), dtype=float)
+        finite_z = Zi[np.isfinite(Zi)]
+        if finite_z.size >= 2:
+            levels = np.linspace(float(np.min(finite_z)), float(np.max(finite_z)), 16)
+            cf = ax.contourf(Xi, Yi, Zi, levels=levels, cmap=cmap, alpha=0.35, zorder=0)
+            cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.048)
+            cbar.set_label("Global rate [Hz]")
+            ax.contour(
+                Xi,
+                Yi,
+                Zi,
+                levels=levels[::2],
+                colors="k",
+                linewidths=0.35,
+                alpha=0.25,
+                zorder=1,
+            )
+        else:
+            levels = np.linspace(float(np.min(zm)), float(np.max(zm)), 8)
+            sc = ax.scatter(
+                xm,
+                ym,
+                c=zm,
+                cmap=cmap,
+                s=20,
+                alpha=0.7,
+                edgecolors="0.35",
+                linewidths=0.3,
+                zorder=2,
+                vmin=levels.min(),
+                vmax=levels.max(),
+            )
+            cbar = fig.colorbar(sc, ax=ax, pad=0.02, fraction=0.048)
+            cbar.set_label("Global rate [Hz]")
     except Exception as exc:
         log.warning("Contour interpolation failed: %s", exc)
+        levels = np.linspace(float(np.min(zm)), float(np.max(zm)), 8)
+        sc = ax.scatter(
+            xm,
+            ym,
+            c=zm,
+            cmap=cmap,
+            s=20,
+            alpha=0.7,
+            edgecolors="0.35",
+            linewidths=0.3,
+            zorder=2,
+            vmin=levels.min(),
+            vmax=levels.max(),
+        )
+        cbar = fig.colorbar(sc, ax=ax, pad=0.02, fraction=0.048)
+        cbar.set_label("Global rate [Hz]")
 
-    cbar = fig.colorbar(sc, ax=ax, pad=0.02, fraction=0.046)
-    cbar.set_label("Global rate [Hz]", fontsize=10)
-    ax.set_xlabel("Flux [cm⁻² min⁻¹]", fontsize=11)
+    ax.scatter(
+        xm,
+        ym,
+        s=26,
+        facecolor="white",
+        edgecolor="black",
+        linewidth=0.6,
+        zorder=3,
+        label="Dictionary points",
+    )
+    ax.set_xlim(flux_lo, flux_hi)
+    ax.set_ylim(eff_lo, eff_hi)
+    ax.set_xlabel("Flux [cm^-2 min^-1]", fontsize=11)
     ax.set_ylabel("Efficiency (plane 1)", fontsize=11)
-    ax.set_title(f"Iso-global-rate contours ({mask.sum()} dictionary entries)", fontsize=12)
-    ax.grid(True, alpha=0.15)
+    ax.set_title(f"Iso-global-rate map ({mask.sum()} dictionary entries)", fontsize=12)
+    ax.grid(True, alpha=0.2)
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
     _save_figure(fig, path, dpi=150)
     plt.close(fig)
 

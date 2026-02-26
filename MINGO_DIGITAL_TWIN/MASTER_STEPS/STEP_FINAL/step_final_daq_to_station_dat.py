@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import warnings
 from collections import defaultdict
@@ -28,6 +29,10 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 ROOT_RUNTIME_DIR = ROOT_DIR.parent / "OPERATIONS_RUNTIME"
 STRUCTURED_LOG_PATH = ROOT_RUNTIME_DIR / "CRON_LOGS" / "SIMULATION" / "STRUCTURED" / "step_final.jsonl"
 STRUCTURED_LOG_ENABLED = os.environ.get("SIM_STRUCTURED_LOGS_ENABLED", "1").strip() != "0"
+BACKPRESSURE_CONFIG_DEFAULT = ROOT_DIR / "CONFIG_FILES" / "sim_main_pipeline_frequency.conf"
+SIMULATED_DATA_DIR_DEFAULT = ROOT_DIR / "SIMULATED_DATA"
+SIMULATED_DATA_FILES_DIR_DEFAULT = SIMULATED_DATA_DIR_DEFAULT / "FILES"
+STATIONS_STEP1_DIR_DEFAULT = ROOT_DIR.parent / "STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
 sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
@@ -464,6 +469,127 @@ def parse_bool(value: object, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+def _parse_nonneg_int(value: object) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if not re.fullmatch(r"\d+", text):
+        return None
+    return int(text)
+
+
+def _read_backpressure_threshold_from_config(config_path: Path) -> int | None:
+    if not config_path.exists():
+        return None
+    try:
+        lines = config_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None
+
+    for line in lines:
+        stripped = line.split("#", 1)[0].strip()
+        if not stripped or "=" not in stripped:
+            continue
+        key, raw_value = stripped.split("=", 1)
+        if key.strip() != "SIM_MAX_UNPROCESSED_FILES":
+            continue
+        value_text = raw_value.strip().strip('"').strip("'")
+        parsed = _parse_nonneg_int(value_text)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def resolve_backpressure_threshold(
+    cli_threshold: int | None,
+    config_path: Path,
+) -> tuple[int, str]:
+    if cli_threshold is not None:
+        return max(int(cli_threshold), 0), "cli"
+
+    env_threshold = _parse_nonneg_int(os.environ.get("SIM_MAX_UNPROCESSED_FILES"))
+    if env_threshold is not None:
+        return env_threshold, "env"
+
+    cfg_threshold = _read_backpressure_threshold_from_config(config_path)
+    if cfg_threshold is not None:
+        return cfg_threshold, "config"
+
+    return 0, "default"
+
+
+def _extract_mi_id(name: str) -> str | None:
+    match = re.search(r"(mi\d{13})", name)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _mi_id_set(paths: list[Path]) -> set[str]:
+    out: set[str] = set()
+    for path in paths:
+        mi_id = _extract_mi_id(path.name)
+        if mi_id:
+            out.add(mi_id)
+    return out
+
+
+def build_pending_backpressure_snapshot(
+    simulated_data_dir: Path,
+    simulated_data_files_dir: Path,
+    stations_step1_dir: Path,
+) -> dict[str, int]:
+    sim_root_files = [p for p in simulated_data_dir.glob("mi*.dat") if p.is_file()] if simulated_data_dir.exists() else []
+    sim_files_files = [p for p in simulated_data_files_dir.glob("mi*.dat") if p.is_file()] if simulated_data_files_dir.exists() else []
+    unprocessed_files = (
+        [p for p in stations_step1_dir.glob("TASK_*/INPUT_FILES/UNPROCESSED_DIRECTORY/*") if p.is_file()]
+        if stations_step1_dir.exists()
+        else []
+    )
+    processing_files = (
+        [p for p in stations_step1_dir.glob("TASK_*/INPUT_FILES/PROCESSING_DIRECTORY/*") if p.is_file()]
+        if stations_step1_dir.exists()
+        else []
+    )
+
+    n_sim_root = len(sim_root_files)
+    n_sim_files = len(sim_files_files)
+    n_unprocessed = len(unprocessed_files)
+    n_processing = len(processing_files)
+    pending_total = n_sim_root + n_sim_files + n_unprocessed + n_processing
+
+    sets = {
+        "sim_root": _mi_id_set(sim_root_files),
+        "sim_files": _mi_id_set(sim_files_files),
+        "unprocessed": _mi_id_set(unprocessed_files),
+        "processing": _mi_id_set(processing_files),
+    }
+    unique_mi_total = len(set().union(*sets.values()))
+    duplicate_entries = max(pending_total - unique_mi_total, 0)
+
+    return {
+        "simulated_root": n_sim_root,
+        "simulated_files": n_sim_files,
+        "unprocessed": n_unprocessed,
+        "processing": n_processing,
+        "pending_total": pending_total,
+        "unique_mi_total": unique_mi_total,
+        "duplicate_entries": duplicate_entries,
+        "unique_simulated_root": len(sets["sim_root"]),
+        "unique_simulated_files": len(sets["sim_files"]),
+        "unique_unprocessed": len(sets["unprocessed"]),
+        "unique_processing": len(sets["processing"]),
+        "overlap_sr_sf": len(sets["sim_root"] & sets["sim_files"]),
+        "overlap_sr_u": len(sets["sim_root"] & sets["unprocessed"]),
+        "overlap_sr_p": len(sets["sim_root"] & sets["processing"]),
+        "overlap_sf_u": len(sets["sim_files"] & sets["unprocessed"]),
+        "overlap_sf_p": len(sets["sim_files"] & sets["processing"]),
+        "overlap_u_p": len(sets["unprocessed"] & sets["processing"]),
+    }
 
 
 def relocate_root_dat_files(output_dir: Path, dat_output_dir: Path) -> int:
@@ -1074,6 +1200,29 @@ def main() -> None:
     )
     parser.add_argument("--no-plots", action="store_true", help="No-op for consistency")
     parser.add_argument("--plot-only", action="store_true", help="No-op for consistency")
+    parser.add_argument(
+        "--backpressure-threshold",
+        type=int,
+        default=None,
+        help=(
+            "Pending-file threshold for STEP_FINAL gating. "
+            "When pending_total >= threshold, STEP_FINAL exits without producing new files. "
+            "If omitted, uses SIM_MAX_UNPROCESSED_FILES from env or sim_main_pipeline_frequency.conf."
+        ),
+    )
+    parser.add_argument(
+        "--backpressure-config",
+        default=str(BACKPRESSURE_CONFIG_DEFAULT),
+        help=(
+            "Config file that may define SIM_MAX_UNPROCESSED_FILES "
+            f"(default: {BACKPRESSURE_CONFIG_DEFAULT})."
+        ),
+    )
+    parser.add_argument(
+        "--ignore-backpressure",
+        action="store_true",
+        help="Bypass STEP_FINAL backpressure gate.",
+    )
     args = parser.parse_args()
 
     _log_info("STEP_FINAL started")
@@ -1081,6 +1230,75 @@ def main() -> None:
     if args.plot_only:
         _log_warn("Plot-only requested; STEP_FINAL does not generate plots. Skipping.")
         return
+
+    backpressure_config_path = Path(args.backpressure_config).expanduser()
+    if not backpressure_config_path.is_absolute():
+        backpressure_config_path = (Path(__file__).resolve().parent / backpressure_config_path).resolve()
+    threshold, threshold_source = resolve_backpressure_threshold(
+        args.backpressure_threshold,
+        backpressure_config_path,
+    )
+    backpressure_snapshot = build_pending_backpressure_snapshot(
+        SIMULATED_DATA_DIR_DEFAULT,
+        SIMULATED_DATA_FILES_DIR_DEFAULT,
+        STATIONS_STEP1_DIR_DEFAULT,
+    )
+
+    if args.ignore_backpressure:
+        _log_info(
+            "backpressure_gate status=bypassed "
+            f"threshold={threshold} source={threshold_source} "
+            f"pending_total={backpressure_snapshot['pending_total']}"
+        )
+    elif threshold <= 0:
+        _log_info(
+            "backpressure_gate status=disabled "
+            f"threshold={threshold} source={threshold_source} "
+            f"pending_total={backpressure_snapshot['pending_total']} "
+            f"simulated_root={backpressure_snapshot['simulated_root']} "
+            f"simulated_files={backpressure_snapshot['simulated_files']} "
+            f"unprocessed={backpressure_snapshot['unprocessed']} "
+            f"processing={backpressure_snapshot['processing']} "
+            f"unique_mi_total={backpressure_snapshot['unique_mi_total']} "
+            f"duplicate_entries={backpressure_snapshot['duplicate_entries']}"
+        )
+    elif backpressure_snapshot["pending_total"] >= threshold:
+        _log_warn(
+            "backpressure_gate status=blocked "
+            f"threshold={threshold} source={threshold_source} "
+            f"pending_total={backpressure_snapshot['pending_total']} "
+            f"simulated_root={backpressure_snapshot['simulated_root']} "
+            f"simulated_files={backpressure_snapshot['simulated_files']} "
+            f"unprocessed={backpressure_snapshot['unprocessed']} "
+            f"processing={backpressure_snapshot['processing']} "
+            f"unique_mi_total={backpressure_snapshot['unique_mi_total']} "
+            f"duplicate_entries={backpressure_snapshot['duplicate_entries']} "
+            f"overlap_sr_sf={backpressure_snapshot['overlap_sr_sf']} "
+            f"overlap_sr_u={backpressure_snapshot['overlap_sr_u']} "
+            f"overlap_sr_p={backpressure_snapshot['overlap_sr_p']} "
+            f"overlap_sf_u={backpressure_snapshot['overlap_sf_u']} "
+            f"overlap_sf_p={backpressure_snapshot['overlap_sf_p']} "
+            f"overlap_u_p={backpressure_snapshot['overlap_u_p']}"
+        )
+        return
+    else:
+        _log_info(
+            "backpressure_gate status=ok "
+            f"threshold={threshold} source={threshold_source} "
+            f"pending_total={backpressure_snapshot['pending_total']} "
+            f"simulated_root={backpressure_snapshot['simulated_root']} "
+            f"simulated_files={backpressure_snapshot['simulated_files']} "
+            f"unprocessed={backpressure_snapshot['unprocessed']} "
+            f"processing={backpressure_snapshot['processing']} "
+            f"unique_mi_total={backpressure_snapshot['unique_mi_total']} "
+            f"duplicate_entries={backpressure_snapshot['duplicate_entries']} "
+            f"overlap_sr_sf={backpressure_snapshot['overlap_sr_sf']} "
+            f"overlap_sr_u={backpressure_snapshot['overlap_sr_u']} "
+            f"overlap_sr_p={backpressure_snapshot['overlap_sr_p']} "
+            f"overlap_sf_u={backpressure_snapshot['overlap_sf_u']} "
+            f"overlap_sf_p={backpressure_snapshot['overlap_sf_p']} "
+            f"overlap_u_p={backpressure_snapshot['overlap_u_p']}"
+        )
 
     config_path = Path(args.config)
     if not config_path.is_absolute():

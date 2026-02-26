@@ -50,6 +50,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
 # Plotting
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
@@ -179,6 +181,31 @@ def _guarded_close(*args, **kwargs):
 plt.figure = _guarded_figure
 plt.subplots = _guarded_subplots
 plt.close = _guarded_close
+
+_direct_pdf_pages: PdfPages | None = None
+_direct_pdf_page_count = 0
+
+def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
+    """Save a figure to PNG or directly append it to the task PDF."""
+    global _direct_pdf_pages, _direct_pdf_page_count
+    target_fig = fig if fig is not None else plt.gcf()
+    direct_pdf_path = globals().get("save_pdf_path")
+    if globals().get("create_pdf", False) and direct_pdf_path:
+        if _direct_pdf_pages is None:
+            _direct_pdf_pages = PdfPages(direct_pdf_path)
+        pdf_kwargs = dict(savefig_kwargs)
+        dpi = int(pdf_kwargs.pop("dpi", 150))
+        pdf_kwargs.pop("format", None)
+        pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
+        _direct_pdf_page_count += 1
+        return
+    target_fig.savefig(save_path, **savefig_kwargs)
+
+def close_direct_pdf_writer() -> None:
+    global _direct_pdf_pages
+    if _direct_pdf_pages is not None:
+        _direct_pdf_pages.close()
+        _direct_pdf_pages = None
 
 def align_metadata_row_with_existing_schema(metadata_path: str | Path, row: dict[str, object]) -> None:
     path = Path(metadata_path)
@@ -1220,7 +1247,7 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close()
     return coeffs
@@ -1292,7 +1319,7 @@ def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots: plt.show()
     plt.close()
 
@@ -1425,7 +1452,7 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
     if show_plots:
         plt.show()
     plt.close()
@@ -2445,7 +2472,7 @@ if create_plots :
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
 
     if show_plots: plt.show()
     plt.close()
@@ -2469,7 +2496,7 @@ if self_trigger:
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
 
         if show_plots: plt.show()
         plt.close()
@@ -2513,7 +2540,7 @@ if create_plots:
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
 
     if show_plots: plt.show()
     plt.close(fig_T)
@@ -2552,7 +2579,7 @@ if create_plots:
         
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
 
     if show_plots: plt.show()
     plt.close(fig_Q)
@@ -2594,7 +2621,7 @@ if self_trigger:
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
 
         if show_plots: plt.show()
         plt.close(fig_T)
@@ -2631,7 +2658,7 @@ if self_trigger:
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         if show_plots: plt.show()
         plt.close(fig_Q)
 
@@ -2685,7 +2712,7 @@ if create_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
 
     # Show the plot if requested
     if show_plots:
@@ -2789,7 +2816,7 @@ if create_plots:
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
 
     if show_plots: plt.show()
     plt.close(fig_T)
@@ -2826,7 +2853,7 @@ if create_plots:
         
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
 
     if show_plots: plt.show()
     plt.close(fig_Q)
@@ -2871,7 +2898,7 @@ if create_plots or create_super_essential_plots:
 
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
 
         if show_plots: plt.show()
         plt.close(fig_T)
@@ -2909,7 +2936,7 @@ if create_plots or create_super_essential_plots:
             
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
 
         if show_plots: plt.show()
         plt.close(fig_Q)
@@ -2962,7 +2989,7 @@ if create_plots or create_essential_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
 
     # Show the plot if requested
     if show_plots:
@@ -3017,7 +3044,7 @@ if self_trigger:
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
-            plt.savefig(save_fig_path, format='png')
+            save_plot_figure(save_fig_path, format='png')
         if show_plots:
             plt.show()
         plt.close(fig_TQ)
@@ -3149,7 +3176,7 @@ if time_window_filtering:
             fig_idx += 1
             hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
             plot_list.append(hist_path)
-            fig.savefig(hist_path, format='png')
+            save_plot_figure(hist_path, fig=fig, format='png')
         if show_plots:
             plt.show()
         plt.close(fig)
@@ -3195,7 +3222,7 @@ if time_window_filtering:
             fig_idx += 1
             hist_path = os.path.join(base_directories["figure_directory"], hist_filename)
             plot_list.append(hist_path)
-            fig.savefig(hist_path, format='png')
+            save_plot_figure(hist_path, fig=fig, format='png')
         if show_plots: plt.show()
         plt.close(fig)
 
@@ -3251,7 +3278,7 @@ if create_plots or create_essential_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        plt.savefig(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png')
 
     # Show the plot if requested
     if show_plots:
@@ -3266,37 +3293,41 @@ if create_plots or create_essential_plots:
 
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
-    if len(plot_list) > 0:
-        with PdfPages(save_pdf_path) as pdf:
-            if plot_list:
-                for png in plot_list:
-                    if os.path.exists(png) == False:
-                        print(f"Error: {png} does not exist.")
-                        continue
-                    
-                    # Open the PNG file directly using PIL to get its dimensions
-                    img = Image.open(png)
-                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)  # Set figsize and dpi
-                    ax.imshow(img)
-                    ax.axis('off')  # Hide the axes
-                    pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')  # Save figure tightly fitting the image
-                    plt.close(fig)  # Close the figure after adding it to the PDF
+    existing_pngs = [png for png in plot_list if os.path.exists(png)]
 
-        # Remove PNG files after creating the PDF
-        for png in plot_list:
-            try:
-                os.remove(png)
-                # print(f"Deleted {png}")
-            except OSError as e:
-                print(f"Error: {e.filename} - {e.strerror}.")
-        
-        # Remove run-specific figure directory if all PNGs were deleted
-        figure_directory = base_directories["figure_directory"]
-        if os.path.exists(figure_directory):
-            if not os.listdir(figure_directory):
-                os.rmdir(figure_directory)
-            else:
-                print(f"Figure directory not empty, skipping removal: {figure_directory}")
+    if _direct_pdf_pages is not None:
+        for png in existing_pngs:
+            img = Image.open(png)
+            fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+            ax.imshow(img)
+            ax.axis('off')
+            pdf_save_rasterized_page(_direct_pdf_pages, fig, bbox_inches='tight')
+            plt.close(fig)
+        close_direct_pdf_writer()
+    elif existing_pngs:
+        with PdfPages(save_pdf_path) as pdf:
+            for png in existing_pngs:
+                img = Image.open(png)
+                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+                ax.imshow(img)
+                ax.axis('off')
+                pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+                plt.close(fig)
+
+    # Remove PNG files after creating the PDF (or after direct PDF append path).
+    for png in existing_pngs:
+        try:
+            os.remove(png)
+        except OSError as e:
+            print(f"Error: {e.filename} - {e.strerror}.")
+    
+    # Remove run-specific figure directory if all PNGs were deleted.
+    figure_directory = base_directories["figure_directory"]
+    if os.path.exists(figure_directory):
+        if not os.listdir(figure_directory):
+            os.rmdir(figure_directory)
+        else:
+            print(f"Figure directory not empty, skipping removal: {figure_directory}")
                 
 
 # Path to save the cleaned dataframe

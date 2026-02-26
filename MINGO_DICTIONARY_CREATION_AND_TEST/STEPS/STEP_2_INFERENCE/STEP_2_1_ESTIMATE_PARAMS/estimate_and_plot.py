@@ -32,8 +32,9 @@ import pandas as pd
 # ── Paths ────────────────────────────────────────────────────────────────
 STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent           # STEP_2_INFERENCE
-PIPELINE_DIR = INFERENCE_DIR.parent       # INFERENCE_DICTIONARY_VALIDATION
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+PIPELINE_DIR = INFERENCE_DIR.parent       # .../STEPS
+PROJECT_DIR = PIPELINE_DIR.parent         # .../MINGO_DICTIONARY_CREATION_AND_TEST
+DEFAULT_CONFIG = PROJECT_DIR / "config.json"
 
 DEFAULT_DICTIONARY = (
     PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
@@ -42,6 +43,10 @@ DEFAULT_DICTIONARY = (
 DEFAULT_DATASET = (
     PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
     / "OUTPUTS" / "FILES" / "dataset.csv"
+)
+DEFAULT_DATASET_ENLARGED = (
+    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_3_ENLARGE_DATASET"
+    / "OUTPUTS" / "FILES" / "enlarged_dataset.csv"
 )
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
@@ -100,9 +105,70 @@ log = logging.getLogger("STEP_2.1")
 
 
 def _load_config(path: Path) -> dict:
+    def _merge_dicts(base: dict, override: dict) -> dict:
+        out = dict(base)
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = _merge_dicts(out[k], v)
+            else:
+                out[k] = v
+        return out
+
+    cfg: dict = {}
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    runtime_path = path.with_name("config_runtime.json")
+    if runtime_path.exists():
+        runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, runtime_cfg)
+        log.info("Loaded runtime overrides: %s", runtime_path)
+    return cfg
+
+
+def _as_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _resolve_input_path(path_like: str | Path) -> Path:
+    p = Path(path_like).expanduser()
+    if p.is_absolute():
+        return p
+    candidate_project = PROJECT_DIR / p
+    if candidate_project.exists():
+        return candidate_project
+    candidate_pipeline = PIPELINE_DIR / p
+    if candidate_pipeline.exists():
+        return candidate_pipeline
+    candidate_step = STEP_DIR / p
+    if candidate_step.exists():
+        return candidate_step
+    return candidate_project
+
+
+def _select_default_dataset_path(config: dict) -> Path:
+    """Choose STEP 2 dataset source from STEP 1.3 enable state."""
+    cfg_13 = config.get("step_1_3", {})
+    enabled_13 = _as_bool(cfg_13.get("enabled", False), False)
+    if not enabled_13:
+        return DEFAULT_DATASET
+
+    enlarged_cfg = cfg_13.get("enlarged_dataset_csv", None)
+    enlarged_path = _resolve_input_path(enlarged_cfg) if enlarged_cfg else DEFAULT_DATASET_ENLARGED
+    if enlarged_path.exists():
+        log.info("STEP 1.3 selection: using enlarged dataset for STEP 2 (%s).", enlarged_path)
+        return enlarged_path
+
+    log.warning(
+        "STEP 1.3 is enabled but enlarged dataset file is missing: %s. Falling back to STEP 1.2 dataset.",
+        enlarged_path,
+    )
+    return DEFAULT_DATASET
 
 
 def main() -> int:
@@ -118,8 +184,18 @@ def main() -> int:
     _clear_plots_dir()
     cfg_21 = config.get("step_2_1", {})
 
-    dict_path = Path(args.dictionary_csv) if args.dictionary_csv else DEFAULT_DICTIONARY
-    data_path = Path(args.dataset_csv) if args.dataset_csv else DEFAULT_DATASET
+    dict_path = _resolve_input_path(args.dictionary_csv) if args.dictionary_csv else DEFAULT_DICTIONARY
+    data_path = _resolve_input_path(args.dataset_csv) if args.dataset_csv else _select_default_dataset_path(config)
+    cfg_13 = config.get("step_1_3", {})
+    if args.dataset_csv:
+        dataset_mode = "cli_dataset_override"
+    elif (
+        _as_bool(cfg_13.get("enabled", False), False)
+        and data_path.resolve() != DEFAULT_DATASET.resolve()
+    ):
+        dataset_mode = "step_1_3_enlarged"
+    else:
+        dataset_mode = "step_1_2_original"
 
     feature_columns = cfg_21.get("feature_columns", "auto")
     distance_metric = cfg_21.get("distance_metric", "l2_zscore")
@@ -178,6 +254,7 @@ def main() -> int:
     summary = {
         "dictionary": str(dict_path),
         "dataset": str(data_path),
+        "dataset_source_mode": dataset_mode,
         "distance_metric": distance_metric,
         "interpolation_k": interpolation_k,
         "feature_columns": feature_columns if isinstance(feature_columns, list) else "auto",

@@ -45,7 +45,8 @@ import pandas as pd
 STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent
 PIPELINE_DIR = INFERENCE_DIR.parent
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+PROJECT_DIR = PIPELINE_DIR.parent
+DEFAULT_CONFIG = PROJECT_DIR / "config.json"
 
 DEFAULT_VALIDATION = (
     INFERENCE_DIR / "STEP_2_2_VALIDATION"
@@ -108,9 +109,24 @@ log = logging.getLogger("STEP_2.3")
 
 
 def _load_config(path: Path) -> dict:
+    def _merge_dicts(base: dict, override: dict) -> dict:
+        out = dict(base)
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = _merge_dicts(out[k], v)
+            else:
+                out[k] = v
+        return out
+
+    cfg: dict = {}
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    runtime_path = path.with_name("config_runtime.json")
+    if runtime_path.exists():
+        runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, runtime_cfg)
+        log.info("Loaded runtime overrides: %s", runtime_path)
+    return cfg
 
 
 # =====================================================================
@@ -144,6 +160,21 @@ def _parse_relerr_filter(cfg_value: object) -> tuple[float, float]:
         lo -= 1.0
         hi += 1.0
     return (lo, hi)
+
+
+def _parse_uncertainty_mode(cfg_value: object) -> str:
+    """Parse uncertainty mode used to extract sigma quantiles from errors.
+
+    Returns
+    -------
+    str
+        "abs_relerr" (recommended): quantiles from |signed_relerr|.
+        "signed_relerr": legacy behavior, quantiles from signed relerr.
+    """
+    raw = str(cfg_value).strip().lower()
+    if raw in {"signed", "signed_relerr", "signed_rel_error", "legacy_signed"}:
+        return "signed_relerr"
+    return "abs_relerr"
 
 
 def _parse_bins_per_param(
@@ -363,6 +394,7 @@ def build_uncertainty_lut(
     quantiles: list[float] | None = None,
     iqr_factor: float = 2.5,
     relerr_filter_pct: tuple[float, float] = (-5.0, 5.0),
+    uncertainty_mode: str = "abs_relerr",
     all_edges: dict[str, np.ndarray] | None = None,
 ) -> pd.DataFrame:
     """Build a multi-dimensional uncertainty LUT.
@@ -390,6 +422,10 @@ def build_uncertainty_lut(
     relerr_filter_pct : tuple(float, float)
         Signed relative-error filter window [min, max] applied before
         outlier rejection and quantile/statistics extraction.
+    uncertainty_mode : str
+        How sigma quantiles are extracted from filtered errors:
+        - "abs_relerr" (default): quantiles of |relerr| (non-negative).
+        - "signed_relerr": quantiles of signed relerr (legacy behavior).
     all_edges : dict, optional
         Precomputed edges per dimension. If omitted they are built here.
 
@@ -406,6 +442,7 @@ def build_uncertainty_lut(
     if relerr_min > relerr_max:
         relerr_min, relerr_max = relerr_max, relerr_min
 
+    uncertainty_mode = _parse_uncertainty_mode(uncertainty_mode)
     param_bin_map = _parse_bins_per_param(n_bins_param, param_names, default_bins=5)
     if all_edges is None:
         all_edges = _build_dimension_edges(
@@ -475,12 +512,19 @@ def build_uncertainty_lut(
             if len(clean) < min_bin_count:
                 continue
 
+            # Sigma should represent a magnitude-like uncertainty by default.
+            # Keep a signed option for explicit legacy compatibility.
+            if uncertainty_mode == "signed_relerr":
+                sigma_source = clean
+            else:
+                sigma_source = np.abs(clean)
+
             row[f"sigma_{pname}_std"] = (
-                float(np.std(clean, ddof=1)) if len(clean) > 1 else np.nan
+                float(np.std(sigma_source, ddof=1)) if len(sigma_source) > 1 else np.nan
             )
             for q in quantiles:
                 q_label = str(int(q * 100))
-                row[f"sigma_{pname}_p{q_label}"] = _safe_percentile(clean, q * 100)
+                row[f"sigma_{pname}_p{q_label}"] = _safe_percentile(sigma_source, q * 100)
 
         rows.append(row)
 
@@ -590,6 +634,7 @@ def main() -> int:
     quantiles = q_clean if q_clean else [0.50, 0.68, 0.90, 0.95]
     iqr_factor = float(cfg_31.get("outlier_iqr_factor", 2.5))
     relerr_filter_pct = _parse_relerr_filter(cfg_31.get("relerr_filter_pct", [-5.0, 5.0]))
+    uncertainty_mode = _parse_uncertainty_mode(cfg_31.get("uncertainty_mode", "abs_relerr"))
     exclude_dictionary_entries = _as_bool(cfg_31.get("exclude_dictionary_entries", True))
 
     # Plot-relevant parameters from config:
@@ -615,6 +660,7 @@ def main() -> int:
     log.info("Loading validation results: %s", val_path)
     val_df = pd.read_csv(val_path, low_memory=False)
     log.info("  Rows: %d", len(val_df))
+    log.info("Uncertainty mode: %s", uncertainty_mode)
 
     # Detect which parameters we can assess
     param_names = []
@@ -677,6 +723,7 @@ def main() -> int:
         quantiles=quantiles,
         iqr_factor=iqr_factor,
         relerr_filter_pct=relerr_filter_pct,
+        uncertainty_mode=uncertainty_mode,
         all_edges=all_edges,
     )
 
@@ -700,6 +747,7 @@ def main() -> int:
         f"# Quantiles: {quantiles}\n"
         f"# Bins per param: {param_bin_map}, events bins: {n_bins_events}\n"
         f"# relerr filter [%]: [{relerr_filter_pct[0]}, {relerr_filter_pct[1]}]\n"
+        f"# uncertainty mode: {uncertainty_mode}\n"
         f"# Exclude dictionary entries: {exclude_dictionary_entries}\n"
         f"# Min bin count: {min_bin_count}, IQR factor: {iqr_factor}\n"
     )
@@ -719,6 +767,7 @@ def main() -> int:
         "min_bin_count": min_bin_count,
         "iqr_factor": iqr_factor,
         "relerr_filter_pct": [relerr_filter_pct[0], relerr_filter_pct[1]],
+        "uncertainty_mode": uncertainty_mode,
         "exclude_dictionary_entries": bool(exclude_dictionary_entries),
         "excluded_dictionary_rows": int(excluded_dict_entries),
         "dimension_bins": {dim: int(len(edges) - 1) for dim, edges in all_edges.items()},
@@ -734,6 +783,7 @@ def main() -> int:
         "lut_cells": len(lut_df),
         "param_names": param_names,
         "relerr_filter_pct": [relerr_filter_pct[0], relerr_filter_pct[1]],
+        "uncertainty_mode": uncertainty_mode,
     }
     for pname in param_names:
         s68_col = f"sigma_{pname}_p68"
@@ -756,6 +806,7 @@ def main() -> int:
         param_bin_map,
         n_bins_events,
         relerr_filter_pct,
+        uncertainty_mode,
         all_edges,
         plot_params,
         dict_df,
@@ -775,6 +826,7 @@ def _make_plots(
     n_bins_param: int | dict[str, int],
     n_bins_events: int,
     relerr_filter_pct: tuple[float, float],
+    uncertainty_mode: str,
     all_edges: dict[str, np.ndarray],
     plot_params: list[str] | None = None,
     dict_df: pd.DataFrame | None = None,
@@ -805,6 +857,7 @@ def _make_plots(
         log.warning("No valid plot parameters selected; plotting all parameters.")
 
     relerr_min, relerr_max = relerr_filter_pct
+    uncertainty_mode = _parse_uncertainty_mode(uncertainty_mode)
 
     plt.rcParams.update({
         "figure.dpi": 140, "savefig.dpi": 140, "font.size": 9,
@@ -953,8 +1006,16 @@ def _make_plots(
                         )
 
                     for q in quantiles:
-                        qv = _safe_percentile(filtered, q * 100.0)
-                        if np.isfinite(qv):
+                        if uncertainty_mode == "signed_relerr":
+                            qv = _safe_percentile(filtered, q * 100.0)
+                            q_lines = [qv] if np.isfinite(qv) else []
+                        else:
+                            qmag = _safe_percentile(np.abs(filtered), q * 100.0)
+                            if np.isfinite(qmag):
+                                q_lines = [qmag] if float(qmag) == 0.0 else [-qmag, qmag]
+                            else:
+                                q_lines = []
+                        for qv in q_lines:
                             ax.axvline(
                                 qv,
                                 linestyle="--",

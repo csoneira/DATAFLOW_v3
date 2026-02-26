@@ -25,7 +25,7 @@ df = pd.read_csv(CSV_FILE, parse_dates=["time"])
 df["VHVp"] = pd.to_numeric(df["VHVp"], errors="coerce")
 
 # apply date range filter
-start_date = pd.to_datetime("2024-09-16")
+start_date = pd.to_datetime("2024-09-27")
 end_date = pd.to_datetime("2024-10-01")
 mask_date = (df["time"] >= start_date) & (df["time"] <= end_date)
 

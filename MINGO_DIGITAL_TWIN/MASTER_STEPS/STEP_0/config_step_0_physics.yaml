@@ -7,12 +7,12 @@ flux_cm2_min: [0.8, 1.2]
 # Append strategy:
 # - uniform_random: existing behavior
 # - regular_mesh: build a regular grid around random center values
-mode: uniform_random
+mode: regular_mesh
 
 # Used only when mode=regular_mesh.
 # Example below creates a mesh in flux and identical efficiencies.
 regular_mesh_parameters: [flux_cm2_min, efficiencies]
-regular_mesh_points: 9
+regular_mesh_points: 5
 # Half-width of the grid as a fraction of each parameter range (capped internally
 # to keep exactly regular_mesh_points values per parameter).
 regular_mesh_relative_span: 0.5

@@ -69,11 +69,20 @@ def newest_order_key(file_name: str, station: str) -> str:
 
 
 def select_latest_candidate(files: Iterable[str], station: str) -> Optional[str]:
-    """Return the lexicographically-last artifact after normalizing its prefix."""
+    """Return candidate by configured order after normalizing its prefix.
+
+    Order is controlled by env var ``DATAFLOW_STEP1_SELECTION_ORDER``:
+    - ``latest`` (default): newest/lexicographically-last
+    - ``oldest``: oldest/lexicographically-first
+    """
     candidates = [name for name in files if name]
     if not candidates:
         return None
-    return max(candidates, key=lambda name: newest_order_key(name, station))
+    order = os.environ.get("DATAFLOW_STEP1_SELECTION_ORDER", "latest").strip().lower()
+    key_fn = lambda name: newest_order_key(name, station)
+    if order in {"oldest", "fifo", "first"}:
+        return min(candidates, key=key_fn)
+    return max(candidates, key=key_fn)
 
 
 def load_date_ranges_from_config(
@@ -161,6 +170,13 @@ def file_name_in_any_date_range(
     """Return True when file timestamp is inside any configured date range."""
     ranges = list(date_ranges)
     if not ranges:
+        return True
+
+    # Simulated MINGO00 artifacts must never be blocked by station date filters.
+    # This covers both raw names ("mi00*.dat") and task-prefixed intermediates
+    # such as "cleaned_mi00*.parquet".
+    normalized = _normalize_prefix(_strip_order_suffixes(file_name))
+    if re.search(r"(?:^|[_-])mi00\d{11}$", normalized):
         return True
 
     file_datetime = extract_run_datetime_from_name(file_name)

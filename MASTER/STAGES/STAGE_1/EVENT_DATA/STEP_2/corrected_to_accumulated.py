@@ -657,7 +657,7 @@ else:
 
             else:
                 latest_completed = select_latest_candidate(completed_files, station)
-                if latest_completed:
+                if latest_completed and complete_reanalysis:
                     file_name = latest_completed
                     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
@@ -666,6 +666,9 @@ else:
                     print(f"Moving '{completed_file_path}' to PROCESSING...")
                     shutil.move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
+                elif latest_completed:
+                    print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                    sys.exit(0)
                 else:
                     print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
                     sys.exit(0)
