@@ -9,7 +9,7 @@ DATAFLOW_v3 is a coupled scientific software system with two production-grade pi
 
 The system is designed so simulated outputs can move through the same `MASTER` downstream assumptions as real outputs, with outputs materialized in `STATIONS/`.
 
-![Dual-pipeline architecture](/assets/figure_dual_pipeline_architecture.svg)
+![Dual-pipeline architecture](/assets/figures/architecture/figure_dual_pipeline_architecture.svg)
 
 *Figure 1. DATAFLOW_v3 dual-pipeline architecture with convergence through simulation ingestion into `MASTER/STAGE_0`, then output materialization in `STATIONS/`.*
 

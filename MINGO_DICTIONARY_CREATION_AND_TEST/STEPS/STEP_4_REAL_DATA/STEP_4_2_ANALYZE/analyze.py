@@ -876,13 +876,13 @@ def _ordered_row_indices(df: pd.DataFrame, valid_mask: pd.Series) -> np.ndarray:
     if "file_timestamp_utc" in df.columns:
         ts = pd.to_datetime(df.loc[valid_mask, "file_timestamp_utc"], errors="coerce", utc=True)
         if ts.notna().any():
-            ts_ns = ts.astype("int64", copy=False).to_numpy(dtype=np.int64, copy=False)
+            ts_ns = ts.astype("int64").to_numpy(dtype=np.int64, copy=False)
             ts_ns = np.where(ts.notna().to_numpy(), ts_ns, np.iinfo(np.int64).max)
             return valid_idx[np.argsort(ts_ns)]
     if "execution_timestamp_utc" in df.columns:
         ts = pd.to_datetime(df.loc[valid_mask, "execution_timestamp_utc"], errors="coerce", utc=True)
         if ts.notna().any():
-            ts_ns = ts.astype("int64", copy=False).to_numpy(dtype=np.int64, copy=False)
+            ts_ns = ts.astype("int64").to_numpy(dtype=np.int64, copy=False)
             ts_ns = np.where(ts.notna().to_numpy(), ts_ns, np.iinfo(np.int64).max)
             return valid_idx[np.argsort(ts_ns)]
     return valid_idx

@@ -70,8 +70,8 @@ theme:
     - navigation.expand
     - navigation.top
     - navigation.indexes
-  logo: assets/logo_mingo_network.png
-  favicon: assets/logo_mingo_network.png
+  logo: assets/logos/logo_mingo_network.png
+  favicon: assets/logos/logo_mingo_network.png
   palette:
     - scheme: default
       primary: orange

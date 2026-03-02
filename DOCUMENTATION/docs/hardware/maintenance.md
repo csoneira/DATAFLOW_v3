@@ -35,6 +35,10 @@ Use daily/periodic diagnostics to detect drift:
 Detailed diagnostics:
 - [Monitoring and QA](../operation/monitoring.md)
 
+![RPC module integration during maintenance](../assets/photos/minitrasgo/IMG_1692.JPG)
+
+*Open RPC module during strip and gas-line integration checks.*
+
 ## Safety and handling notes
 
 - Never ignore persistent gas-flow anomalies.
@@ -50,3 +54,6 @@ Escalate to hardware/software leads when:
 - DAQ output becomes empty or malformed.
 - Sensor logs stop updating without planned maintenance.
 
+![Detector transport example](../assets/photos/minitrasgo/IMG_5495.JPG)
+
+*Transport configuration example for station logistics and handling.*

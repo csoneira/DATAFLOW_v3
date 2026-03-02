@@ -7,7 +7,7 @@ DATAFLOW_v3 combines two upstream sources that converge into analysis workflows:
 1. **Real station data** from hardware DAQ and slow-control logs
 2. **Simulated station-like data** from the digital twin
 
-![Dataflow convergence](/assets/figure_dataflow_convergence.svg)
+![Dataflow convergence](/assets/figures/architecture/figure_dataflow_convergence.svg)
 
 *Figure 2. Real and simulated upstreams converge in STAGE_0 and share downstream operational stages.*
 

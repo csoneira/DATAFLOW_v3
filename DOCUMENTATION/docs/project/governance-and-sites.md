@@ -4,18 +4,12 @@
 
 | Responsibility | Lead | Scope |
 | --- | --- | --- |
-| Concept responsible | Juan A. Garzon | Scientific and project concept framing |
-| Detector construction and maintenance | Alberto Blanco | Detector build, maintenance, and hardware readiness |
-| Main analysis software writer and Madrid station responsible | C. Soneira-Landin | `MASTER` analysis software and Madrid station software responsibility |
-| Warsaw station responsible (collaborator) | Georgy Kornakov | Warsaw station technical coordination |
+| Concept responsible | Juan A. Garzon | Scientific/project concept |
+| Detector construction and maintenance | Alberto Blanco | Detector build and maintenance |
+| Main analysis software writer and Madrid station responsible | C. Soneira-Landin | `MASTER` analysis software + Madrid station software responsibility |
+| Warsaw station responsible (collaborator) | Georgy Kornakov | Warsaw station coordination |
 | Monterrey station responsible | Humberto | Monterrey station coordination |
 | Puebla station responsible | Oliver | Puebla station coordination |
-
-## Collaboration model
-
-- Distributed station responsibilities with shared software standards.
-- Centralized reproducibility rules and contract documentation.
-- Runbook-based operations and incident handling.
 
 ## Institutions
 
@@ -29,6 +23,7 @@
 
 ## Station deployment maps
 
-![European station network map](../assets/europe_network.png)
+![European station network map](../assets/figures/maps/europe_network.png)
 
-![Mexico station network map](../assets/mexico_network.png)
+![Mexico station network map](../assets/figures/maps/mexico_network.png)
+

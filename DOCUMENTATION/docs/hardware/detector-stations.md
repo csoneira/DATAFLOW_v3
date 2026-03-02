@@ -28,8 +28,17 @@ Stations are deployed across collaborating institutions to support multi-site mo
 
 See [Collaborators](../collaborators/index.md) for the institutional map.
 
+## Representative station views
+
+![miniTRASGO station stack](../assets/photos/minitrasgo/IMG_8093.JPG)
+
+*Commissioned four-plane miniTRASGO station with readout and gas interfaces.*
+
+![Dual-station commissioning bench](../assets/photos/minitrasgo/IMG_1636.JPG)
+
+*Side-by-side station setup used during commissioning and validation.*
+
 ## Reference material
 
 - Legacy hardware narrative: [Detector Hardware Notes](../design/hardware.md)
 - Methods and conventions in simulation: <https://github.com/csoneira/DATAFLOW_v3/blob/main/MINGO_DIGITAL_TWIN/DOCS/METHODS_AND_DATA_MODEL.md>
-

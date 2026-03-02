@@ -1,6 +1,6 @@
 # Milestones, Deliverables, and Risk
 
-## Milestone structure
+## Milestone framework
 
 ```mermaid
 gantt
@@ -17,26 +17,21 @@ gantt
     Reliability and runbook hardening    :o1, 2026-03-01, 180d
 ```
 
-## Deliverables (technical)
+## Deliverables
 
 | ID | Deliverable | Acceptance signal |
 | --- | --- | --- |
-| D1 | Stable analysis path for real + simulated ingestion | Reproducible stage outputs and no unresolved interface drift |
-| D2 | Digital-twin provenance integrity | Hash/registry checks pass and runbook checks remain green |
-| D3 | Dictionary-based reconstruction package | Validation diagnostics and deployable inference artifact |
-| D4 | Operations reliability baseline | Scheduling/lock behavior documented and incident recovery reproducible |
+| D1 | Stable real/sim analysis path | Reproducible stage outputs and no unresolved interface drift |
+| D2 | Simulation provenance integrity | Hash/registry checks pass |
+| D3 | Reconstruction package | Validated dictionary artifact in production use |
+| D4 | Operations reliability baseline | Scheduling/lock behavior and recovery checks reproducible |
 
-## Risk register (software-centric)
+## Key risks and mitigation
 
-| Risk | Impact | Mitigation |
-| --- | --- | --- |
-| Interface drift between simulation output and analysis ingest | Loss of comparability across data domains | Contract checks + trace docs + targeted ingest validation |
-| Hidden non-determinism in pipeline steps | Reproducibility degradation | Explicit seed policy + metadata lineage + validation checks |
-| Scheduler/lock regressions | Stalls or process overlap | Lock/gate audits + runbook enforcement + observability checks |
-| Inference artifact/version mismatch | Reconstruction bias risk | Versioned dictionary artifacts + validation-gated updates |
-
-## Review cadence
-
-- Continuous: behavior-impacting changes update docs/contracts in same PR.
-- Periodic: operational and reproducibility audits aligned with runbook practice.
+| Risk | Mitigation |
+| --- | --- |
+| Simulation-analysis interface drift | Contract checks + ingest validation + trace docs |
+| Hidden non-determinism | Seed policy + lineage metadata + validation checks |
+| Scheduler/lock regressions | Lock/gate audits + runbook enforcement |
+| Inference version mismatch | Versioned artifacts + validation-gated updates |
 

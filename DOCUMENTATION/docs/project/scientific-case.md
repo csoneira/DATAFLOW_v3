@@ -1,37 +1,33 @@
 # Scientific Case
 
-## Scientific motivation
+## Objective
 
-The project targets robust, long-term cosmic-ray monitoring using distributed RPC stations, with software designed to preserve comparability across sites and across time.
+Build a robust software framework for distributed RPC cosmic-ray stations with reproducible analysis, traceable simulation, and deployable reconstruction.
 
-## Core physics-computing challenge
+## Computing-science requirement
 
-Reliable interpretation requires three tightly coupled capabilities:
+Reliable physics interpretation needs all three layers coupled:
 
-1. Stable and reproducible analysis of real station data.
-2. Controlled synthetic data generation to test assumptions and biases.
-3. Reconstruction methods that explicitly connect measured observables to simulated physical states.
+- Analysis of real detector data.
+- Controlled synthetic data generation.
+- Reconstruction methods validated against simulation provenance.
 
-## DATAFLOW_v3 response
-
-- **Analysis layer**: `MASTER` + `STATIONS` provide consistent operational processing.
-- **Simulation layer**: `MINGO_DIGITAL_TWIN` provides deterministic stepwise detector/electronics modeling.
-- **Inference layer**: dictionary workflows connect simulation knowledge to real-data interpretation.
+## Software response
 
 ```mermaid
 flowchart LR
-    R[Real station data] --> A[Analysis mother code MASTER]
+    R[Real station data] --> A[MASTER analysis]
     S[Digital twin outputs] --> A
-    S --> D[Dictionary build/validation]
+    S --> D1[Dictionary build and validation]
     A --> D2[Dictionary-assisted reconstruction]
-    D --> D2
+    D1 --> D2
     D2 --> O[Physics-ready outputs]
 ```
 
-## Evidence of technical maturity
+## Maturity signals
 
-- Explicit step contracts and lineage metadata.
-- Hash validation and maintenance scripts.
-- Operational runbooks and scheduling discipline.
-- Collaboration-owned responsibilities by subsystem and station.
+- Step/interface contracts.
+- Hash and lineage checks.
+- Scheduler/lock operational controls.
+- Defined subsystem and station responsibilities.
 

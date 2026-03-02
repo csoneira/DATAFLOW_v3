@@ -45,7 +45,7 @@ flowchart LR
 
 ## Example repository diagnostic figure
 
-![STEP_3 diagnostic (eff2, eff3, theta)](/assets/repository_figures/step3_eff2_eff3_theta_2026-02-18.png)
+![STEP_3 diagnostic (eff2, eff3, theta)](/assets/figures/diagnostics/step3_eff2_eff3_theta_2026-02-18.png)
 
 Source path:
 - `DOCS/NOTEBOOKS/2026/02_FEBRUARY/FIGURES/2026_02_18_step3_eff2_eff3_theta.png`

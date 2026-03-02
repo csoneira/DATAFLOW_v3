@@ -38,9 +38,9 @@ flowchart LR
 
 ## Repository diagnostic figures
 
-![Decorrelated dictionary timeseries diagnostic](/assets/repository_figures/decorrelation_original_timeseries.png)
+![Decorrelated dictionary timeseries diagnostic](/assets/figures/diagnostics/decorrelation_original_timeseries.png)
 
-![Decorrelated dictionary scatter diagnostic](/assets/repository_figures/decorrelation_original_scatters.png)
+![Decorrelated dictionary scatter diagnostic](/assets/figures/diagnostics/decorrelation_original_scatters.png)
 
 Source paths:
 - `MINGO_DICTIONARY_CREATION_AND_TEST/A_SMALL_SIDE_QUEST/TRYING_DECORRELATION/PLOTS/01_original_timeseries.png`

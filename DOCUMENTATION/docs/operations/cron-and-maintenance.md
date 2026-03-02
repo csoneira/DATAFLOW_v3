@@ -10,7 +10,7 @@ Key behaviors:
 - Resource gates may skip jobs under pressure conditions.
 - Main simulation cycle applies frequency and backpressure controls.
 
-![Runtime scheduling model](/assets/figure_runtime_scheduling.svg)
+![Runtime scheduling model](/assets/figures/architecture/figure_runtime_scheduling.svg)
 
 *Figure 3. Cron-triggered workers coordinated by locks, gates, and maintenance jobs with shared observability outputs.*
 

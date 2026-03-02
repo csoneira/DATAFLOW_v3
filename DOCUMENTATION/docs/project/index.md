@@ -1,40 +1,28 @@
 # Project Dossier (Grant-Oriented)
 
-DATAFLOW_v3 is the software backbone of a distributed cosmic-ray detector effort combining detector operations, simulation, and reconstruction in a single auditable platform.
+## Project statement
 
-## Project objective
+DATAFLOW_v3 delivers a single collaboration-grade software stack for:
 
-Deliver a collaboration-grade analysis framework that:
+1. Reproducible analysis of real station data.
+2. Traceable simulation from detector physics/electronics models.
+3. Dictionary-based reconstruction connecting simulation and measurement.
 
-1. Processes real station data with reproducible, operations-safe pipelines.
-2. Produces simulation data with explicit physics/electronics lineage.
-3. Reconstructs physical observables through dictionary-based inference where real and simulated domains meet.
+## Architecture snapshot
 
-## Why this project is technically strong
+![Dual-pipeline architecture](../assets/figures/architecture/figure_dual_pipeline_architecture.svg)
 
-- Unified architecture: one analysis mother code (`MASTER`) for real and simulated data.
-- Traceable simulation chain (`STEP_0` to `STEP_FINAL`) with metadata and hashing.
-- Explicit bridge from simulation to reconstruction (dictionary-based inference).
-- Operational discipline: scheduling, locking, observability, and runbook-driven recovery.
+## Instrument snapshot
 
-## High-level system view
+![miniTRASGO station hardware snapshot](../assets/photos/minitrasgo/IMG_3076.JPG)
 
-![Dual-pipeline architecture](/assets/figure_dual_pipeline_architecture.svg)
+## Collaboration snapshot
 
-## Collaboration footprint
+![Collaboration network map](../assets/figures/maps/network_map_attic.png)
 
-![Collaboration network map](/assets/repository_figures/network_map_attic.png)
-
-## Dossier contents
+## Dossier pages
 
 - [Scientific Case](scientific-case.md)
 - [Work Packages](work-packages.md)
 - [Governance and Sites](governance-and-sites.md)
 - [Milestones, Deliverables, and Risk](milestones-deliverables-risk.md)
-
-## Technical anchors
-
-- [5-Minute System Model](../software/system-model.md)
-- [Software Invariants](../software/invariants.md)
-- [Change Impact Matrix](../software/change-impact-matrix.md)
-
