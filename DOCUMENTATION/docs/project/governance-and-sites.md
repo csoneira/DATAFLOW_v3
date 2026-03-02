@@ -29,12 +29,6 @@
 
 ## Station deployment maps
 
-![European station network map](/assets/europe_network.png)
+![European station network map](../assets/europe_network.png)
 
-Source path:
-- `DOCUMENTATION/docs/assets/europe_network.png`
-
-![Mexico station network map](/assets/mexico_network.png)
-
-Source path:
-- `DOCUMENTATION/docs/assets/mexico_network.png`
+![Mexico station network map](../assets/mexico_network.png)

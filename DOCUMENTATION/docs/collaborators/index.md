@@ -18,25 +18,13 @@ The project combines hardware deployment, station operations, and software devel
 
 ### Station location maps
 
-![European station network map](/assets/europe_network.png)
+![European station network map](../assets/europe_network.png)
 
-Source path:
-- `DOCUMENTATION/docs/assets/europe_network.png`
+![Mexico station network map](../assets/mexico_network.png)
 
-![Mexico station network map](/assets/mexico_network.png)
+![Collaboration network map](../assets/repository_figures/network_map_attic.png)
 
-Source path:
-- `DOCUMENTATION/docs/assets/mexico_network.png`
-
-![Collaboration network map (repository figure)](/assets/repository_figures/network_map_attic.png)
-
-Source path:
-- `.ATTIC/network_map.png`
-
-![3rd TRASGO Workshop collaboration photo](/assets/3rd-trasgo-workshop.jpg)
-
-Source path:
-- `DOCUMENTATION/docs/assets/3rd-trasgo-workshop.jpg`
+![3rd TRASGO Workshop collaboration photo](../assets/3rd-trasgo-workshop.jpg)
 
 ## Collaboration leadership and responsibilities
 
