@@ -1,4 +1,4 @@
-# Operational Pipeline
+# Analysis Software (MASTER + STATIONS)
 
 `MASTER` is the analysis mother code: it processes raw miniTRASGO station data and also processes simulated station-format inputs. Resulting station-scoped artifacts are materialized under `STATIONS/`.
 

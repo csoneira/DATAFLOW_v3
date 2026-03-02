@@ -9,10 +9,12 @@ This documentation is organized by subsystem and role so collaborators can move 
 
 ## Documentation map
 
+- [Project Dossier](project/index.md): grant-oriented technical summary of scientific case, work packages, governance, milestones, and risk.
 - [Getting Started](getting-started/index.md): environment, dependencies, and common commands.
 - [Reader Guide](getting-started/reader-guide.md): role-based reading paths and navigation strategy.
 - [Collaborators](collaborators/index.md): team roles, institutions, and contact points.
 - [Software](software/index.md): architecture, workflows, and code structure for analysis, simulation, and inference.
+  The software section is organized as: analysis (`MASTER`+`STATIONS`), simulation (`MINGO_DIGITAL_TWIN`), and dictionary-based inference (reconstruction bridge).
 - [Hardware](hardware/index.md): detector stations, DAQ, infrastructure, and maintenance practices.
 - [Operational Notes](operations/index.md): cron behavior, dataflow, maintenance scripts, and runtime checks.
 - [Troubleshooting and FAQs](troubleshooting/index.md): recurring failure patterns and operator Q&A.
@@ -24,7 +26,9 @@ This documentation is organized by subsystem and role so collaborators can move 
 
 ## Quick orientation
 
+- Funding/scientific review path: [Project Dossier](project/index.md) -> [Scientific Case](project/scientific-case.md) -> [Work Packages](project/work-packages.md) -> [Milestones, Deliverables, and Risk](project/milestones-deliverables-risk.md).
 - New developer: start at [Getting Started](getting-started/index.md), then [Software](software/index.md).
+- New developer (core path): [5-Minute System Model](software/system-model.md) -> [Software Invariants](software/invariants.md) -> [Change Impact Matrix](software/change-impact-matrix.md).
 - Operator: start at [Hardware](hardware/index.md), then [Operational Notes](operations/index.md).
 - Analyst: start at [Software](software/index.md), [Appendices](appendices/data-dictionaries.md), and [References](references/publications-and-reports.md).
 - Documentation maintainer: start at [Conventions and Standards](standards/index.md) and [Documentation Lifecycle](standards/documentation-lifecycle.md).

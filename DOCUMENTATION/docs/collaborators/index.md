@@ -21,14 +21,18 @@ The project combines hardware deployment, station operations, and software devel
 Source path:
 - `.ATTIC/network_map.png`
 
-## Roles and contact points
+## Collaboration leadership and responsibilities
 
-| Area | Role | Contact |
+| Responsibility | Person | Scope |
 | --- | --- | --- |
-| Detector concept and assembly | Coordination | Juan Antonio Garzon (USC), Alberto Blanco (LIP), Luis Lopes (LIP) |
-| UCM scientific leadership | Physics and analysis | Jose Manuel Udias, Luis Mario Fraile, Cayetano Soneira, Victor M. Nouvilas |
-| Software operations | Pipeline and cron operations | See [Appendix Contact List](../appendices/contact-list.md) |
-| Documentation maintenance | MkDocs and repository docs | Contributors in this repository (PR-based updates) |
+| Concept lead | Juan A. Garzon | Project concept and scientific framing |
+| Detector construction and maintenance lead | Alberto Blanco | Detector build, hardware maintenance, and detector operations readiness |
+| Analysis software lead and Madrid station responsible | C. Soneira-Landin | Analysis mother code (`MASTER`), software governance, and Madrid station software responsibility |
+| Warsaw station responsible (collaborator) | Georgy Kornakov | Warsaw station technical collaboration and station-specific coordination |
+| Monterrey station responsible | Humberto | Monterrey station coordination |
+| Puebla station responsible | Oliver | Puebla station coordination |
+
+For direct contact details, see [Appendix Contact List](../appendices/contact-list.md).
 
 ## Documentation ownership model
 

@@ -8,14 +8,25 @@ nav:
       - Home: index.md
       - Getting Started: getting-started/index.md
       - Reader Guide: getting-started/reader-guide.md
+  - Project Dossier:
+      - project/index.md
+      - Scientific Case: project/scientific-case.md
+      - Work Packages: project/work-packages.md
+      - Governance and Sites: project/governance-and-sites.md
+      - Milestones, Deliverables, and Risk: project/milestones-deliverables-risk.md
   - Collaborators:
       - collaborators/index.md
   - Software:
       - software/index.md
+      - 5-Minute System Model: software/system-model.md
+      - Software Invariants: software/invariants.md
+      - Analysis (Software): software/operational-pipeline.md
+      - Simulation (Digital Twin): software/simulation-pipeline.md
+      - Dictionary-Based Inference: software/inference-and-dictionary.md
+      - Real Data Trace: software/trace-real-data.md
+      - Simulated Data Trace: software/trace-simulated-data.md
+      - Change Impact Matrix: software/change-impact-matrix.md
       - Architecture Overview: software/architecture.md
-      - Operational Pipeline: software/operational-pipeline.md
-      - Simulation Pipeline: software/simulation-pipeline.md
-      - Inference and Dictionary: software/inference-and-dictionary.md
       - Code Structure Reference: software/code-structure.md
   - Hardware:
       - hardware/index.md

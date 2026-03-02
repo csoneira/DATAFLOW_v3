@@ -1,4 +1,4 @@
-# Simulation Pipeline (Digital Twin)
+# Simulation (Digital Twin)
 
 The MINGO digital twin models detector and electronics behavior from generated muons to station-style `.dat` outputs.
 

@@ -1,21 +1,34 @@
 # Software
 
-DATAFLOW_v3 software is organized around three domains:
+This section is intentionally structured as a collaboration-grade technical map, not a knowledge dump.
 
-1. **Analysis mother code and station outputs**: `MASTER/` provides the analysis logic for both real and simulated inputs; `STATIONS/` stores station-scoped runtime/output trees.
-2. **Digital twin simulation** (synthetic detector data): `MINGO_DIGITAL_TWIN/`
-3. **Dictionary and inference tooling** (flux/efficiency estimation): `MINGO_DICTIONARY_CREATION_AND_TEST/` plus `MASTER/common`
+## The three software pillars
 
-## Read this section in order
+1. **Analysis (software)**
+`MASTER` is the mother analysis code for both real and simulated inputs. `STATIONS` is where outputs and runtime state are materialized.
+
+2. **Simulation (digital twin)**
+`MINGO_DIGITAL_TWIN` generates synthetic station-compatible data with explicit step contracts and lineage.
+
+3. **Dictionary-based inference (reconstruction)**
+`MINGO_DICTIONARY_CREATION_AND_TEST` + `MASTER/common` form the reconstruction layer where real data and simulated knowledge meet.
+
+## Start here (in order)
+
+- [5-Minute System Model](system-model.md)
+- [Software Invariants](invariants.md)
+- [Analysis Software](operational-pipeline.md)
+- [Simulation Digital Twin](simulation-pipeline.md)
+- [Dictionary-Based Inference](inference-and-dictionary.md)
+
+## Operationally critical traces
+
+- [Real Data Trace](trace-real-data.md)
+- [Simulated Data Trace](trace-simulated-data.md)
+- [Change Impact Matrix](change-impact-matrix.md)
+
+## Reference pages
 
 - [Architecture Overview](architecture.md)
-- [Operational Pipeline](operational-pipeline.md)
-- [Simulation Pipeline (Digital Twin)](simulation-pipeline.md)
-- [Inference and Dictionary Workflow](inference-and-dictionary.md)
 - [Code Structure Reference](code-structure.md)
 
-The architecture and dataflow figures used across this section are designed for quick onboarding before diving into step-level contracts.
-
-## Cross-system principle
-
-The `MASTER` analysis code and the digital twin intentionally share geometry, timing conventions, and data-format assumptions so synthetic outputs can be injected and processed through the same analysis logic as real station data.

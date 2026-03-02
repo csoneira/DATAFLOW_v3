@@ -1,4 +1,4 @@
-# Inference and Dictionary Workflow
+# Dictionary-Based Inference (Reconstruction)
 
 Dictionary-based inference links detector observables to physical parameters such as flux and efficiency.
 

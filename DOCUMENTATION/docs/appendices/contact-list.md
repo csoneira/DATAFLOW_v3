@@ -4,17 +4,17 @@
 
 | Role | Name | Email |
 | --- | --- | --- |
-| Idea, organization and assembly | Juan Antonio Garzon (USC, Santiago) | juanantonio.garzon@usc.es |
-| Idea, organization and assembly | Alberto Blanco (LIP, Coimbra) | alberto@coimbra.lip.pt |
-| Idea, organization and assembly | Luis Lopes (LIP, Coimbra) | luisalberto@coimbra.lip.pt |
-| Madrid (UCM) team | Jose Manuel Udias | jose@nuc2.fis.ucm.es |
-| Madrid (UCM) team | Luis Mario Fraile | lmfraile@ucm.es |
-| Madrid (UCM) team | Cayetano Soneira | csoneira@ucm.es |
-| Madrid (UCM) team | Victor M. Nouvilas | vmnouvilas@ucm.es |
+| Concept responsible | Juan A. Garzon (USC, Santiago) | juanantonio.garzon@usc.es |
+| Main responsible for detector maintenance and construction | Alberto Blanco (LIP, Coimbra) | alberto@coimbra.lip.pt |
+| Main analysis software writer and Madrid station responsible | C. Soneira-Landin (UCM, Madrid) | csoneira@ucm.es |
+| Warsaw station collaborator and responsible | Georgy Kornakov | internal |
+| Monterrey station responsible | Humberto | internal |
+| Puebla station responsible | Oliver | internal |
+
+`internal` means contact details are managed within collaboration channels and are not published in this repository.
 
 ## Collaboration channels
 
 - Operational incidents and runbooks: repository issues/PRs and operations logs.
 - Documentation updates: pull requests against `DOCUMENTATION/docs/`.
 - Cross-team technical decisions: include references to relevant runbooks/contracts.
-
