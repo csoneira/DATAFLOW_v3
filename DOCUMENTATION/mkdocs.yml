@@ -12,6 +12,7 @@ nav:
       - project/index.md
       - Scientific Case: project/scientific-case.md
       - Work Packages: project/work-packages.md
+      - Quality Assurance Plan: project/quality-assurance.md
       - Governance and Sites: project/governance-and-sites.md
       - Milestones, Deliverables, and Risk: project/milestones-deliverables-risk.md
   - Collaborators:

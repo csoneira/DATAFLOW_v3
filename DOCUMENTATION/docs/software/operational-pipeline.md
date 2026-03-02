@@ -2,6 +2,15 @@
 
 `MASTER` is the analysis mother code: it processes raw miniTRASGO station data and also processes simulated station-format inputs. Resulting station-scoped artifacts are materialized under `STATIONS/`.
 
+## At a glance
+
+| Item | Value |
+| --- | --- |
+| Upstream inputs | Real station DAQ/log streams + simulated `.dat` |
+| Core engine | `MASTER/STAGES/STAGE_0..3` |
+| Materialized outputs | `STATIONS/MINGO0X/...` |
+| Promotion gate | Stage progression and QA checks |
+
 ## Stage model
 
 | Stage | Purpose | Main location |
@@ -25,18 +34,26 @@ flowchart LR
     S3 --> O[STATIONS materialized outputs]
 ```
 
-## Typical workflow
+## Stage responsibilities
 
-1. STAGE 0 ingests new files into station queues.
-2. STAGE 1 transforms raw inputs to cleaned event lists and aligned logs.
-3. STAGE 2 applies corrections (pressure/temperature and related merges).
-4. STAGE 3 finalizes integrated tables for monitoring and external reporting.
+1. STAGE 0: ingest and queue.
+2. STAGE 1: clean events and align lab logs.
+3. STAGE 2: apply environmental corrections and merges.
+4. STAGE 3: produce enriched station outputs.
 
 ## Operational characteristics
 
 - Cron-managed jobs with lock files and runtime logs in `OPERATIONS_RUNTIME/`.
 - Per-station workflows with explicit queue/reprocessing metadata.
 - Analysis jobs and ancillary jobs coordinated by resource-gate wrappers.
+
+## Common failure boundaries
+
+| Boundary | Typical symptom |
+| --- | --- |
+| STAGE_0 -> STAGE_1 | New files present but no transform progression |
+| STAGE_1 -> STAGE_2 | Cleaned events exist but corrections do not update |
+| STAGE_2 -> STAGE_3 | Corrected data exists but enriched outputs stale |
 
 ## Key scripts and helpers
 

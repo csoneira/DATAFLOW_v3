@@ -1,23 +1,16 @@
 # Operational Notes
 
-This section covers runtime behavior of DATAFLOW_v3 in production-like operation.
+This section is for running and recovering DATAFLOW_v3 in production-like conditions.
 
-## Section contents
+## Read by need
 
-- [Pipelines and Dataflow](pipelines-and-dataflow.md)
-- [Cron, Locks, and Maintenance Scripts](cron-and-maintenance.md)
+| If you need to... | Page |
+| --- | --- |
+| Understand where data moves and what artifacts are produced | [Pipelines and Dataflow](pipelines-and-dataflow.md) |
+| Check scheduler health, locks, or maintenance tasks | [Cron, Locks, and Maintenance Scripts](cron-and-maintenance.md) |
+| Apply quality acceptance criteria | [Project QA Plan](../project/quality-assurance.md) |
 
-## Scope
-
-Operational notes focus on:
-
-- How data moves from station and simulation inputs to downstream products
-- How cron jobs, locks, and gates coordinate execution
-- How to run fast health checks and incident triage
-
-Use the embedded figures in this section for a fast mental model of convergence and scheduling behavior before applying command-level runbooks.
-
-Canonical operations references:
+## Canonical operations references
 
 - <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/BEHAVIOUR/CRON_AND_SCHEDULING.md>
 - <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/REPO_DOCS/TROUBLESHOOTING/OPERATIONS_RUNBOOK.md>

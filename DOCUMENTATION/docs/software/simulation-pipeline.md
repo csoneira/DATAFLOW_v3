@@ -2,6 +2,15 @@
 
 The MINGO digital twin models detector and electronics behavior from generated muons to station-style `.dat` outputs.
 
+## At a glance
+
+| Item | Value |
+| --- | --- |
+| Core scope | `STEP_0` to `STEP_FINAL` |
+| Main output for analysis | Station-style `.dat` in `SIMULATED_DATA/FILES/` |
+| Internal state | `INTERSTEPS/STEP_N_TO_N+1/SIM_RUN_*` |
+| Safety constraints | Immutable SIM_RUN naming; overwrite only with `--force` |
+
 ## Step domains
 
 | Steps | Domain |
@@ -77,3 +86,11 @@ cd $HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN
 ./run_step.sh final
 ./ORCHESTRATOR/core/run_main_simulation_cycle.sh
 ```
+
+## Fast failure triage
+
+| Symptom | First check |
+| --- | --- |
+| STEP does not advance | Lock files and orchestration logs |
+| STEP_FINAL missing `.dat` | Step registry and upstream step completion |
+| Ingest mismatch in MASTER | `.dat` schema/provenance and STAGE_0 ingest logs |

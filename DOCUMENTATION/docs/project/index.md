@@ -1,12 +1,12 @@
-# Project Dossier (Grant-Oriented)
+# Project Dossier
 
 ## Project statement
 
-DATAFLOW_v3 delivers a single collaboration-grade software stack for:
+DATAFLOW_v3 is the software backbone of a distributed miniTRASGO/RPC collaboration. It couples:
 
-1. Reproducible analysis of real station data.
-2. Traceable simulation from detector physics/electronics models.
-3. Dictionary-based reconstruction connecting simulation and measurement.
+1. Operational analysis of station data.
+2. Deterministic detector/electronics simulation.
+3. Dictionary-based reconstruction linking simulation and measurement.
 
 ## Architecture snapshot
 
@@ -20,9 +20,12 @@ DATAFLOW_v3 delivers a single collaboration-grade software stack for:
 
 ![Collaboration network map](../assets/figures/maps/network_map_attic.png)
 
-## Dossier pages
+## Reviewer quick map
 
-- [Scientific Case](scientific-case.md)
-- [Work Packages](work-packages.md)
-- [Governance and Sites](governance-and-sites.md)
-- [Milestones, Deliverables, and Risk](milestones-deliverables-risk.md)
+| Typical review question | Page |
+| --- | --- |
+| What scientific/technical problem is solved? | [Scientific Case](scientific-case.md) |
+| How is work partitioned and connected? | [Work Packages](work-packages.md) |
+| How is quality controlled (calibration, purity, validity)? | [Quality Assurance Plan](quality-assurance.md) |
+| Who is responsible and where are stations? | [Governance and Sites](governance-and-sites.md) |
+| What are targets, deliverables, and risks? | [Milestones, Deliverables, and Risk](milestones-deliverables-risk.md) |

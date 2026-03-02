@@ -1,35 +1,31 @@
 # DATAFLOW_v3 Documentation
 
-## One-line summary
+`MASTER` is the analysis mother code for real and simulated station-format data. `STATIONS` is where station outputs are materialized. `MINGO_DIGITAL_TWIN` provides traceable simulation used for validation and dictionary-based reconstruction.
 
-`MASTER` is the analysis mother code (real + simulated inputs), `STATIONS` materializes station outputs, and `MINGO_DIGITAL_TWIN` provides simulation for validation and reconstruction.
+## Start here by task
 
-## Fast routes
-
-| Use case | Read first | Then |
+| If you need to... | Read first | Then |
 | --- | --- | --- |
-| Grant / project review | [Project Dossier](project/index.md) | [Work Packages](project/work-packages.md), [Milestones & Risk](project/milestones-deliverables-risk.md) |
-| Software contributor | [Software](software/index.md) | [Invariants](software/invariants.md), [Change Impact Matrix](software/change-impact-matrix.md) |
-| Operations / station support | [Hardware](hardware/index.md) | [Operational Notes](operations/index.md), [Troubleshooting](troubleshooting/common-issues.md) |
-| Standards / governance | [Conventions and Standards](standards/index.md) | [Documentation Lifecycle](standards/documentation-lifecycle.md) |
+| Review the project for funding/collaboration | [Project Dossier](project/index.md) | [Work Packages](project/work-packages.md), [Quality Assurance Plan](project/quality-assurance.md) |
+| Modify analysis/simulation/inference code | [Software](software/index.md) | [Software Invariants](software/invariants.md), [Change Impact Matrix](software/change-impact-matrix.md) |
+| Run or recover production jobs | [Operational Notes](operations/index.md) | [Cron, Locks, and Maintenance](operations/cron-and-maintenance.md), [Common Issues](troubleshooting/common-issues.md) |
+| Understand detector context | [Hardware](hardware/index.md) | [Detector Stations](hardware/detector-stations.md) |
 
-## Main sections
+## System in one diagram
 
-- [Project Dossier](project/index.md)
-- [Collaborators](collaborators/index.md)
-- [Software](software/index.md)
-- [Hardware](hardware/index.md)
-- [Operational Notes](operations/index.md)
-- [Troubleshooting and FAQs](troubleshooting/index.md)
-- [Conventions and Standards](standards/index.md)
-- [Publications and References](references/index.md)
-- [Appendices](appendices/index.md)
+```mermaid
+flowchart LR
+    R[Real station data] --> M[MASTER STAGE_0..3]
+    S[MINGO_DIGITAL_TWIN STEP_FINAL .dat] --> M
+    M --> O[STATIONS outputs]
+    S --> D[Dictionary build and validation]
+    O --> D
+```
 
-## Canonical technical sources
+## Canonical repository references
 
 - `DOCS/REPO_DOCS/REPOSITORY_GOVERNANCE.md`
 - `DOCS/BEHAVIOUR/CRON_AND_SCHEDULING.md`
 - `DOCS/REPO_DOCS/TROUBLESHOOTING/OPERATIONS_RUNBOOK.md`
 - `MINGO_DIGITAL_TWIN/DOCS/README.md`
 - `MINGO_DIGITAL_TWIN/DOCS/contracts/STEP_CONTRACTS.md`
-

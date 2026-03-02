@@ -2,16 +2,13 @@
 
 This page is the fastest accurate mental model of DATAFLOW_v3 software.
 
-## Three pillars
+## Three pillars in one table
 
-1. **Analysis software** (`MASTER` + `STATIONS`)
-`MASTER` is the mother analysis code. `STATIONS` is where station-scoped runtime state and outputs are materialized.
-
-2. **Simulation digital twin** (`MINGO_DIGITAL_TWIN`)
-Deterministic multi-step RPC simulation producing station-style `.dat` files.
-
-3. **Dictionary-based inference** (`MINGO_DICTIONARY_CREATION_AND_TEST` + `MASTER/common`)
-Reconstruction layer where synthetic knowledge and measured data meet.
+| Pillar | Question answered | Main path |
+| --- | --- | --- |
+| Analysis software | What happened in real (or simulated) station data? | `MASTER/` -> `STATIONS/` |
+| Simulation digital twin | What should the detector produce under controlled assumptions? | `MINGO_DIGITAL_TWIN/` |
+| Dictionary-based inference | How do measured observables map to physics quantities? | `MINGO_DICTIONARY_CREATION_AND_TEST/`, `MASTER/common/` |
 
 ## System relationship
 
@@ -47,10 +44,10 @@ flowchart LR
 - Real and simulated inputs are both processed through the same analysis mother code.
 - Inference is versioned and traceable to simulation assumptions.
 - Outputs are auditable at station scope under `STATIONS`.
+- Quality gates decide promotion ([Project QA Plan](../project/quality-assurance.md)).
 
 ## If you only read three pages next
 
 - [Software Invariants](invariants.md)
 - [Real Data Trace](trace-real-data.md)
 - [Simulated Data Trace](trace-simulated-data.md)
-
