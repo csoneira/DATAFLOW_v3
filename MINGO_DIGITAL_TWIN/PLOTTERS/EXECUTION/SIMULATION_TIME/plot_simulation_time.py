@@ -121,8 +121,22 @@ def load_filtered_times(args: argparse.Namespace) -> pd.DataFrame:
     # (skip malformed rows without creating a legacy/backup file).
     if not cleaned_rows or len(cleaned_rows) == 1:
         raise ValueError(f"Input CSV is empty or all rows malformed: {args.input}")
-    # First row is header; build DataFrame from remaining (clean) rows.
-    df = pd.DataFrame(cleaned_rows[1:], columns=cleaned_rows[0])
+    # Support both headered CSVs and headerless legacy/runtime CSVs.
+    first_row = [str(cell).strip() for cell in cleaned_rows[0]]
+    expected = {"exec_time_s", "step", "timestamp_utc"}
+    has_header = expected.issubset(set(first_row))
+
+    if has_header:
+        # First row is header; build DataFrame from remaining (clean) rows.
+        df = pd.DataFrame(cleaned_rows[1:], columns=cleaned_rows[0])
+    else:
+        # Headerless format: exec_time_s,step,timestamp_utc
+        if len(first_row) < 3:
+            raise ValueError(
+                "Headerless CSV must contain at least 3 columns: exec_time_s, step, timestamp_utc"
+            )
+        columns = ["exec_time_s", "step", "timestamp_utc"] + [f"extra_{i}" for i in range(3, len(first_row))]
+        df = pd.DataFrame(cleaned_rows, columns=columns)
     if df.empty:
         raise ValueError(f"Input CSV contains no usable data after filtering malformed rows: {args.input}")
 

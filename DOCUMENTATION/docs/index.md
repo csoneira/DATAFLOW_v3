@@ -1,90 +1,38 @@
-# miniTRASGO Documentation
+# DATAFLOW_v3 Documentation
 
-*Last updated: March 2026*
+DATAFLOW_v3 contains two coordinated systems:
 
-The miniTRASGO (miniature TRASGO) programme delivers a transportable cosmic-ray
-tracking station that combines multi-gap Resistive Plate Chambers (RPCs) with a
-compact, low-power electronics stack. The telescope has been optimised for
-long-term monitoring of the secondary muon flux and its correlation with solar
-events and atmospheric dynamics, following the design described in
-Soneira-Landín *et al.* (2025a, 2025b) and the broader TRASGO family roadmap
-outlined by García-Castro *et al.* (2021). The documentation collected here
-supports every stage of the detector lifecycle—from fabrication and assembly to
-operation, data quality assurance, and collaborative analysis.
+1. The **operational pipeline** (`MASTER/`, `STATIONS/`) for real station data ingestion, correction, and analytics.
+2. The **MINGO digital twin** (`MINGO_DIGITAL_TWIN/`) for synthetic RPC event generation from STEP_0 to STEP_FINAL.
 
-## System overview
+This documentation is organized by subsystem and role so collaborators can move from onboarding to operations and troubleshooting without hunting across folders.
 
-- **Detector concept.** Four 30×30 cm² RPC planes arranged in a tracking stack
-  provide sub-centimetre spatial resolution and sub-nanosecond timing. The dual
-  gas-gap geometry maintains >90% detection efficiency while limiting charge
-  build-up, enabling stable operation in a wide range of environments.
-- **Electronics.** HADES-derived front-end boards feed TRB3sc digitiser modules
-  that stream time-over-threshold observables to the on-board single-board
-  computer. The control chain supports remote firmware updates, watchdog
-  recovery, and environmental monitoring for temperature, pressure, and gas
-  flow.
-- **Network deployment.** Stations in Madrid, Warsaw, and Puebla are providing
-  continuous coverage, with additional nodes in commissioning for Monterrey and
-  other CASTRO collaboration partners.  ![stations logo](/assets/logo_mingo_stations.png){height="24"}
-  Cross-site analysis leverages common data formats and calibration workflows
-  developed within the miniTRASGO analysis software suite. ![analysis logo](/assets/logo_mingo_analysis.png){height="24"}
-- **Digital twin & dictionary.** A parameterized simulation of the RPC detector
-  (the "digital twin") lives in the repository alongside the operational code.
-  Synthetic outputs are used to build a lookup dictionary that maps measured
-  rates and efficiencies to physical flux; this dictionary underpins the rapid
-  reconstruction algorithms described on the [Digital twin](simulation/index.md)
-  and [Dictionary correction](dictionary/index.md) pages.
-- **Software analysis suite.** The heart of the data processing stack is a
-  four‑stage pipeline that ingests raw station data, applies environmental
-  corrections, and produces analytics tables.  The [Analysis software]
-  page summarises the directory layout, cron orchestration, and how to run the
-  pipeline locally.
+## Documentation map
 
-## Project resources
+- [Getting Started](getting-started/index.md): environment, dependencies, and common commands.
+- [Collaborators](collaborators/index.md): team roles, institutions, and contact points.
+- [Software](software/index.md): architecture, workflows, and code structure for analysis, simulation, and inference.
+- [Hardware](hardware/index.md): detector stations, DAQ, infrastructure, and maintenance practices.
+- [Operational Notes](operations/index.md): cron behavior, dataflow, maintenance scripts, and runtime checks.
+- [Troubleshooting and FAQs](troubleshooting/index.md): recurring failure patterns and operator Q&A.
+- [Conventions and Standards](standards/index.md): governance rules, reproducibility, determinism, and naming/config policies.
+- [Publications and References](references/index.md): papers, reports, and source documentation pointers.
+- [Appendices](appendices/index.md): dictionaries, contracts, glossary, and full contact list.
 
-- **Logbook.** Track fabrication, operation, and maintenance tasks in the
-  [miniTRASGO logbook](https://docs.google.com/spreadsheets/d/1ato36QkIXCxFkDT_LtAaLjPP7pvLcor-xZAP4fy00l0/edit?gid=816573551#gid=816573551).
-- **Publications & reports.** See the [Publications](home/publications.md) page
-  for a curated list of papers, theses and technical reports citing TRASGO
-  detectors.
-- **Task tracker.** The [Tasks](tasks/index.md) page embeds our Trello board for
-  ongoing development priorities.
-- **Notebook.** Consult the detailed calculation record in the
-  [miniTRASGO notebook](https://docs.google.com/document/d/e/2PACX-1vQD_Zr4IW3ZZl0sX4jf7jcD_9tdXbD-kIDpydO0k9HWhewk7yDDWJEF4PC4ARUu1nk-mdEexsyPXXY-/pub).
-- **Documentation repository.** This site is built from the
-  [miniTRASGO documentation repository](https://github.com/cayesoneira/miniTRASGO).
-- **Software toolkit.** Detector control, calibration, and analysis tools live in
-  the [miniTRASGO-analysis repository](https://github.com/cayesoneira/miniTRASGO-analysis/tree/main).
+## Quick orientation
 
-## Accessing a detector
+- New developer: start at [Getting Started](getting-started/index.md), then [Software](software/index.md).
+- Operator: start at [Hardware](hardware/index.md), then [Operational Notes](operations/index.md).
+- Analyst: start at [Software](software/index.md), [Appendices](appendices/data-dictionaries.md), and [References](references/publications-and-reports.md).
 
-### Secure shell (SSH)
+## Canonical source documents in this repository
 
-Use the dedicated RPC user to reach the control computer:
+The pages in this MkDocs site summarize and cross-link these maintained sources:
 
-```bash
-ssh rpcuser@minitrasgo.fis.ucm.es
-```
-
-### Web-based DAQ control
-
-When connected to the local laboratory network, open the data acquisition web
-panel in your browser:
-
-```
-http://minitrasgo.fis.ucm.es:1234
-```
-
-Additional networking, tunnelling, and monitoring workflows are documented in
-the [Operation](operation/index.md) section of this site.
-
-## References
-
-- C. Soneira-Landín *et al.*, "miniTRASGO: A compact RPC tracker for cosmic ray
-  studies," *Nucl. Instrum. Methods Phys. Res. A* (2025).
-- C. Soneira-Landín *et al.*, "miniTRASGO: Design and initial results of a
-  compact Resistive Plate Chamber telescope for worldwide cosmic ray
-  monitoring," *Adv. Space Res.* (2025).
-- D. García-Castro *et al.*, "The TRASGO Project. Present status and results,"
-  *Phys. Atom. Nucl.* 84, 1070–1079 (2021).
+- `README.md` (repository overview)
+- `DOCS/REPO_DOCS/REPOSITORY_GOVERNANCE.md`
+- `DOCS/BEHAVIOUR/CRON_AND_SCHEDULING.md`
+- `DOCS/REPO_DOCS/TROUBLESHOOTING/OPERATIONS_RUNBOOK.md`
+- `MINGO_DIGITAL_TWIN/DOCS/README.md`
+- `MINGO_DIGITAL_TWIN/DOCS/contracts/STEP_CONTRACTS.md`
 

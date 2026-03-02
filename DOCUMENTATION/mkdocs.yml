@@ -1,42 +1,72 @@
-site_name: miniTRASGO documentation
-site_url: https://csoneira.github.io/miniTRASGO-documentation/  # Your GitHub Pages URL
-repo_name: csoneira/miniTRASGO-documentation
-repo_url: https://github.com/csoneira/miniTRASGO-documentation
+site_name: DATAFLOW_v3 Documentation
+site_url: https://csoneira.github.io/DATAFLOW_v3/
+repo_name: csoneira/DATAFLOW_v3
+repo_url: https://github.com/csoneira/DATAFLOW_v3
 
 nav:
-    - Home:
-        - index.md
-        - Motivation: home/motivation.md
-        - About: home/about.md
-        - Publications: home/publications.md
-        - Contact: home/contact.md
-    - Detector design:
-        - design/index.md
-        - Hardware: design/hardware.md
-        - Software Environment: design/environment.md
-    - Operation:
-        - operation/index.md
-        - Starting the mingo: operation/configuration.md
-        - Calibration: operation/calibration.md
-        - Getting the measure: operation/measuring.md
-        - Monitoring: operation/monitoring.md
-    - Data and Analysis:
-        - data/index.md
-        - Datashape: data/shape.md
-        - Dataflow: data/dataflow.md
-        - Digital twin: simulation/index.md
-        - Dictionary correction: dictionary/index.md
-    - Software & tools:
-        - Analysis software: analysis/index.md
-    - Tasks, objectives and notes:
-        - tasks/index.md
-#        - Tasks: tasks/todo.md
-        - Objectives: tasks/objectives.md
-        - To understand: tasks/to-understand.md
-        - Documentation backlog: tasks/documentation-backlog.md
-        - Notebook: tasks/notes.md
-    - Troubleshooting:
-        - help/index.md
+  - Overview:
+      - Home: index.md
+      - Getting Started: getting-started/index.md
+  - Collaborators:
+      - collaborators/index.md
+  - Software:
+      - software/index.md
+      - Architecture Overview: software/architecture.md
+      - Operational Pipeline: software/operational-pipeline.md
+      - Simulation Pipeline: software/simulation-pipeline.md
+      - Inference and Dictionary: software/inference-and-dictionary.md
+      - Code Structure Reference: software/code-structure.md
+  - Hardware:
+      - hardware/index.md
+      - Detector Stations: hardware/detector-stations.md
+      - DAQ and Infrastructure: hardware/daq-and-infrastructure.md
+      - Maintenance and Calibration: hardware/maintenance.md
+  - Operational Notes:
+      - operations/index.md
+      - Pipelines and Dataflow: operations/pipelines-and-dataflow.md
+      - Cron, Locks, and Maintenance: operations/cron-and-maintenance.md
+  - Troubleshooting and FAQs:
+      - troubleshooting/index.md
+      - Common Issues: troubleshooting/common-issues.md
+      - FAQ: troubleshooting/faq.md
+  - Conventions and Standards:
+      - standards/index.md
+      - Conventions and Governance: standards/conventions-and-governance.md
+      - Determinism and Provenance: standards/determinism-and-provenance.md
+  - Publications and References:
+      - references/index.md
+      - Publications and Reports: references/publications-and-reports.md
+      - Repository Source Documents: references/source-documents.md
+  - Appendices:
+      - appendices/index.md
+      - Data Dictionaries: appendices/data-dictionaries.md
+      - Contracts and Interfaces: appendices/contracts-and-interfaces.md
+      - Glossary: appendices/glossary.md
+      - Contact List: appendices/contact-list.md
+  - Legacy miniTRASGO Pages:
+      - Legacy Home: home/about.md
+      - Legacy Motivation: home/motivation.md
+      - Legacy Contact: home/contact.md
+      - Legacy Publications: home/publications.md
+      - Legacy Detector Design: design/index.md
+      - Legacy Hardware: design/hardware.md
+      - Legacy Environment: design/environment.md
+      - Legacy Operation: operation/index.md
+      - Legacy Configuration: operation/configuration.md
+      - Legacy Calibration: operation/calibration.md
+      - Legacy Measuring: operation/measuring.md
+      - Legacy Monitoring: operation/monitoring.md
+      - Legacy Data: data/index.md
+      - Legacy Data Shape: data/shape.md
+      - Legacy Dataflow: data/dataflow.md
+      - Legacy Analysis Software: analysis/index.md
+      - Legacy Dictionary Notes: dictionary/index.md
+      - Legacy Troubleshooting: help/index.md
+      - Legacy Tasks: tasks/index.md
+      - Legacy Objectives: tasks/objectives.md
+      - Legacy Documentation Backlog: tasks/documentation-backlog.md
+      - Legacy Notes: tasks/notes.md
+
 theme:
   name: material
   features:
@@ -50,7 +80,7 @@ theme:
   palette:
     - scheme: default
       toggle:
-        icon: material/brightness-7 
+        icon: material/brightness-7
         name: Switch to dark mode
     - scheme: slate
       toggle:
@@ -64,6 +94,5 @@ extra_javascript:
   - https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML
 
 markdown_extensions:
-#  - pymdownx.arithmatex
   - pymdownx.superfences
   - pymdownx.highlight

@@ -84,7 +84,7 @@ obtained by interpolating the dictionary.  A 1:1 line (black) demonstrates good
 agreement across the mesh; deviations highlight parameter combinations where
 the dictionary may require refinement.
 
-![Simulated vs estimated efficiency](/assets/dictionary_scatter.png)
+![Simulated vs estimated efficiency](/assets/1_2_7_scatter_eff_sim_vs_estimated.png)
 
 _The original plot comes from the file
 `MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/OUTPUTS/PLOTS/1_2_7_scatter_eff_sim_vs_estimated.png`.

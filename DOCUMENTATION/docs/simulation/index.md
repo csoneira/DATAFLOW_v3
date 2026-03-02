@@ -109,7 +109,7 @@ backpressure.  Steps 1–3 fan out to cover a mesh of physical parameters;
 upstream intermediates are pruned once downstream stages have consumed them.
 
 The simulation is configured via YAML files in `CONFIG_FILES/`.  See
-[Digital twin configuration and parameter mesh](../MINGO_DIGITAL_TWIN/DOCS/CONFIGURATION_AND_PARAM_MESH.md)
+[Digital twin configuration and parameter mesh](https://github.com/csoneira/DATAFLOW_v3/blob/main/MINGO_DIGITAL_TWIN/DOCS/CONFIGURATION_AND_PARAM_MESH.md)
 for further details.
 
 ## Running the twin
@@ -205,7 +205,7 @@ python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/size_and_expected_report.py
 These are useful to run before and after large mesh changes to ensure no
 parameter combinations are lost or duplicated.
 
-See [Digital twin configuration and parameter mesh](../MINGO_DIGITAL_TWIN/DOCS/CONFIGURATION_AND_PARAM_MESH.md)
+See [Digital twin configuration and parameter mesh](https://github.com/csoneira/DATAFLOW_v3/blob/main/MINGO_DIGITAL_TWIN/DOCS/CONFIGURATION_AND_PARAM_MESH.md)
 for full descriptions and supported fields.
 
 ### Output format
@@ -242,7 +242,7 @@ or via cron to verify that outputs match their expected configuration hashes.
 
 For common problems consult:
 
-- [Digital twin troubleshooting runbook](../MINGO_DIGITAL_TWIN/DOCS/TROUBLESHOOTING/RUNBOOK.md)
+- [Digital twin troubleshooting runbook](https://github.com/csoneira/DATAFLOW_v3/blob/main/MINGO_DIGITAL_TWIN/DOCS/TROUBLESHOOTING/RUNBOOK.md)
 - `MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/` scripts (e.g.
   `sanitize_sim_runs.py`, `ensure_sim_hashes.py`)
 - `MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/prune_step_final_params.py` for
