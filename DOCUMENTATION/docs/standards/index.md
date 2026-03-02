@@ -6,8 +6,8 @@ This section defines development and operations standards that preserve scientif
 
 - [Conventions and Governance](conventions-and-governance.md)
 - [Determinism and Provenance](determinism-and-provenance.md)
+- [Documentation Lifecycle](documentation-lifecycle.md)
 
 Canonical source:
 
 - <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/REPO_DOCS/REPOSITORY_GOVERNANCE.md>
-

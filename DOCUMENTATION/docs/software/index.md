@@ -14,7 +14,8 @@ DATAFLOW_v3 software is organized around three domains:
 - [Inference and Dictionary Workflow](inference-and-dictionary.md)
 - [Code Structure Reference](code-structure.md)
 
+The architecture and dataflow figures used across this section are designed for quick onboarding before diving into step-level contracts.
+
 ## Cross-system principle
 
 The operational pipeline and the digital twin intentionally share geometry, timing conventions, and data-format assumptions so synthetic outputs can be injected into analysis and compared with real station behavior.
-

@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="540" viewBox="0 0 1200 540" role="img" aria-labelledby="title desc">
+  <title id="title">Runtime scheduling and lock model</title>
+  <desc id="desc">Cron triggers jobs; locks and gates coordinate execution and maintenance.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e293b"/>
+    </marker>
+    <style>
+      .title { font: 700 28px Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 16px Arial, sans-serif; fill: #0f172a; }
+      .small { font: 14px Arial, sans-serif; fill: #334155; }
+      .box { stroke: #1e293b; stroke-width: 2; rx: 10; ry: 10; }
+      .ops { fill: #e0f2fe; }
+      .sim { fill: #dcfce7; }
+      .gate { fill: #fef3c7; }
+      .maint { fill: #fae8ff; }
+      .flow { stroke: #1e293b; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="540" fill="#fff"/>
+  <text x="40" y="48" class="title">Cron, Locks, and Maintenance Model</text>
+
+  <rect x="50" y="100" width="170" height="72" class="box gate"/>
+  <text x="70" y="130" class="label">System cron</text>
+  <text x="70" y="152" class="small">minute/hour jobs</text>
+
+  <rect x="300" y="80" width="280" height="90" class="box ops"/>
+  <text x="320" y="116" class="label">MASTER operational workers</text>
+  <text x="320" y="140" class="small">STAGE_0..STAGE_3 tasks</text>
+
+  <rect x="300" y="220" width="280" height="90" class="box sim"/>
+  <text x="320" y="256" class="label">Simulation main cycle</text>
+  <text x="320" y="280" class="small">run_main_simulation_cycle.sh</text>
+
+  <rect x="680" y="80" width="240" height="90" class="box gate"/>
+  <text x="700" y="116" class="label">Lock + resource gates</text>
+  <text x="700" y="140" class="small">flock + resource_gate.sh</text>
+
+  <rect x="680" y="220" width="240" height="90" class="box gate"/>
+  <text x="700" y="256" class="label">Simulation gates</text>
+  <text x="700" y="280" class="small">frequency + backpressure</text>
+
+  <rect x="980" y="150" width="170" height="88" class="box maint"/>
+  <text x="998" y="186" class="label">Maintenance</text>
+  <text x="998" y="210" class="small">sanitize/hash/prune</text>
+
+  <rect x="300" y="380" width="850" height="92" class="box gate"/>
+  <text x="320" y="418" class="label">Runtime observability</text>
+  <text x="320" y="442" class="small">OPERATIONS_RUNTIME/CRON_LOGS, lock files, status CSVs, audit scripts</text>
+
+  <line x1="220" y1="136" x2="300" y2="126" class="flow"/>
+  <line x1="220" y1="136" x2="300" y2="266" class="flow"/>
+  <line x1="580" y1="126" x2="680" y2="126" class="flow"/>
+  <line x1="580" y1="266" x2="680" y2="266" class="flow"/>
+  <line x1="920" y1="126" x2="980" y2="190" class="flow"/>
+  <line x1="920" y1="266" x2="980" y2="190" class="flow"/>
+
+  <line x1="440" y1="170" x2="440" y2="380" class="flow"/>
+  <line x1="840" y1="310" x2="840" y2="380" class="flow"/>
+  <line x1="1060" y1="238" x2="1060" y2="380" class="flow"/>
+</svg>

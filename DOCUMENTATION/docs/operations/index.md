@@ -15,8 +15,9 @@ Operational notes focus on:
 - How cron jobs, locks, and gates coordinate execution
 - How to run fast health checks and incident triage
 
+Use the embedded figures in this section for a fast mental model of convergence and scheduling behavior before applying command-level runbooks.
+
 Canonical operations references:
 
 - <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/BEHAVIOUR/CRON_AND_SCHEDULING.md>
 - <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/REPO_DOCS/TROUBLESHOOTING/OPERATIONS_RUNBOOK.md>
-

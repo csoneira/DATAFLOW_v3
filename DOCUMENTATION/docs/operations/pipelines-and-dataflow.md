@@ -7,25 +7,14 @@ DATAFLOW_v3 combines two upstream sources that converge into analysis workflows:
 1. **Real station data** from hardware DAQ and slow-control logs
 2. **Simulated station-like data** from the digital twin
 
-## Real-data path
+![Dataflow convergence](/assets/figure_dataflow_convergence.svg)
 
-```text
-Station DAQ (.hld/.dat, logs)
-  -> MASTER/STAGE_0 ingestion/buffering
-  -> STAGE_1 cleaning + alignment
-  -> STAGE_2 corrections + merges
-  -> STAGE_3 enriched analytics outputs
-```
+*Figure 2. Real and simulated upstreams converge in STAGE_0 and share downstream operational stages.*
 
-## Simulated-data path
+## Path summary
 
-```text
-STEP_0 param mesh
-  -> STEP_1..STEP_10 simulation chain
-  -> STEP_FINAL .dat emission
-  -> STAGE_0 simulation ingestion
-  -> same downstream operational stages
-```
+- Real data: station DAQ/log sources -> STAGE_0 -> STAGE_1 -> STAGE_2 -> STAGE_3
+- Simulated data: STEP_0 -> STEP_1..STEP_10 -> STEP_FINAL `.dat` -> STAGE_0 -> STAGE_1..STAGE_3
 
 ## Data products and directories
 
@@ -50,4 +39,3 @@ STEP_0 param mesh
 - Confirm logs advance at expected cadence.
 - Confirm simulation hash/lineage integrity for generated `.dat`.
 - Confirm no silent fallback behavior in correction/inference paths.
-

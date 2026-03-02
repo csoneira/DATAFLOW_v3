@@ -9,15 +9,9 @@ DATAFLOW_v3 is a coupled scientific software system with two production-grade pi
 
 The system is designed so simulated outputs can move through the same downstream assumptions as real outputs.
 
-## High-level flow
+![Dual-pipeline architecture](/assets/figure_dual_pipeline_architecture.svg)
 
-```text
-Station DAQ (.hld/.dat) --> MASTER/STAGES (0..3) --> analytics outputs
-
-Param mesh + configs --> MINGO_DIGITAL_TWIN STEP_0..STEP_FINAL --> simulated .dat
-                                                       |
-                                                       +--> MASTER/STAGE_0 simulation ingest
-```
+*Figure 1. DATAFLOW_v3 dual-pipeline architecture with convergence through simulation ingestion into STAGE_0.*
 
 ## Domain boundaries
 
@@ -53,4 +47,3 @@ Canonical scheduling reference:
 2. Deterministic replay where required.
 3. Explicit provenance and lineage for generated artifacts.
 4. Operational safety (non-overlapping cron jobs, lock discipline, non-destructive data handling).
-

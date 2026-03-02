@@ -33,6 +33,7 @@ nav:
       - standards/index.md
       - Conventions and Governance: standards/conventions-and-governance.md
       - Determinism and Provenance: standards/determinism-and-provenance.md
+      - Documentation Lifecycle: standards/documentation-lifecycle.md
   - Publications and References:
       - references/index.md
       - Publications and Reports: references/publications-and-reports.md
@@ -44,28 +45,7 @@ nav:
       - Glossary: appendices/glossary.md
       - Contact List: appendices/contact-list.md
   - Legacy miniTRASGO Pages:
-      - Legacy Home: home/about.md
-      - Legacy Motivation: home/motivation.md
-      - Legacy Contact: home/contact.md
-      - Legacy Publications: home/publications.md
-      - Legacy Detector Design: design/index.md
-      - Legacy Hardware: design/hardware.md
-      - Legacy Environment: design/environment.md
-      - Legacy Operation: operation/index.md
-      - Legacy Configuration: operation/configuration.md
-      - Legacy Calibration: operation/calibration.md
-      - Legacy Measuring: operation/measuring.md
-      - Legacy Monitoring: operation/monitoring.md
-      - Legacy Data: data/index.md
-      - Legacy Data Shape: data/shape.md
-      - Legacy Dataflow: data/dataflow.md
-      - Legacy Analysis Software: analysis/index.md
-      - Legacy Dictionary Notes: dictionary/index.md
-      - Legacy Troubleshooting: help/index.md
-      - Legacy Tasks: tasks/index.md
-      - Legacy Objectives: tasks/objectives.md
-      - Legacy Documentation Backlog: tasks/documentation-backlog.md
-      - Legacy Notes: tasks/notes.md
+      - legacy/index.md
 
 theme:
   name: material

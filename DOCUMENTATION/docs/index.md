@@ -18,12 +18,14 @@ This documentation is organized by subsystem and role so collaborators can move 
 - [Conventions and Standards](standards/index.md): governance rules, reproducibility, determinism, and naming/config policies.
 - [Publications and References](references/index.md): papers, reports, and source documentation pointers.
 - [Appendices](appendices/index.md): dictionaries, contracts, glossary, and full contact list.
+- [Legacy miniTRASGO Pages](legacy/index.md): archived context pages retained for continuity.
 
 ## Quick orientation
 
 - New developer: start at [Getting Started](getting-started/index.md), then [Software](software/index.md).
 - Operator: start at [Hardware](hardware/index.md), then [Operational Notes](operations/index.md).
 - Analyst: start at [Software](software/index.md), [Appendices](appendices/data-dictionaries.md), and [References](references/publications-and-reports.md).
+- Documentation maintainer: start at [Conventions and Standards](standards/index.md) and [Documentation Lifecycle](standards/documentation-lifecycle.md).
 
 ## Canonical source documents in this repository
 
@@ -35,4 +37,3 @@ The pages in this MkDocs site summarize and cross-link these maintained sources:
 - `DOCS/REPO_DOCS/TROUBLESHOOTING/OPERATIONS_RUNBOOK.md`
 - `MINGO_DIGITAL_TWIN/DOCS/README.md`
 - `MINGO_DIGITAL_TWIN/DOCS/contracts/STEP_CONTRACTS.md`
-

@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="title desc">
+  <title id="title">DATAFLOW_v3 dual-pipeline architecture</title>
+  <desc id="desc">Operational and simulation pipelines with convergence through station-format dat ingestion.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .title { font: 700 30px Arial, sans-serif; fill: #111827; }
+      .subtitle { font: 600 20px Arial, sans-serif; fill: #1f2937; }
+      .label { font: 600 16px Arial, sans-serif; fill: #111827; }
+      .small { font: 14px Arial, sans-serif; fill: #374151; }
+      .box { stroke: #1f2937; stroke-width: 2; rx: 12; ry: 12; }
+      .laneA { fill: #e0f2fe; }
+      .laneB { fill: #dcfce7; }
+      .common { fill: #fef3c7; }
+      .flow { stroke: #1f2937; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 8 6; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="640" fill="#ffffff"/>
+  <text x="40" y="52" class="title">DATAFLOW_v3 System Architecture</text>
+  <text x="40" y="84" class="small">Two coordinated pipelines share geometry/timing assumptions and converge into common analysis behavior.</text>
+
+  <text x="56" y="140" class="subtitle">Operational pipeline (real detector data)</text>
+  <rect x="50" y="160" width="220" height="90" class="box laneA"/>
+  <text x="68" y="196" class="label">Station DAQ input</text>
+  <text x="68" y="220" class="small">.hld / .dat / logs</text>
+
+  <rect x="330" y="160" width="280" height="90" class="box laneA"/>
+  <text x="348" y="196" class="label">MASTER/STAGES 0..3</text>
+  <text x="348" y="220" class="small">ingest -> clean -> correct -> enrich</text>
+
+  <rect x="680" y="160" width="250" height="90" class="box common"/>
+  <text x="698" y="196" class="label">Analysis outputs</text>
+  <text x="698" y="220" class="small">station analytics tables</text>
+
+  <line x1="270" y1="205" x2="330" y2="205" class="flow"/>
+  <line x1="610" y1="205" x2="680" y2="205" class="flow"/>
+
+  <text x="56" y="340" class="subtitle">Digital twin simulation pipeline (synthetic data)</text>
+  <rect x="50" y="360" width="220" height="95" class="box laneB"/>
+  <text x="68" y="398" class="label">STEP_0 param mesh</text>
+  <text x="68" y="422" class="small">scan definitions</text>
+
+  <rect x="330" y="360" width="280" height="95" class="box laneB"/>
+  <text x="348" y="398" class="label">STEP_1 .. STEP_10</text>
+  <text x="348" y="422" class="small">physics + electronics model</text>
+
+  <rect x="680" y="360" width="250" height="95" class="box laneB"/>
+  <text x="698" y="398" class="label">STEP_FINAL</text>
+  <text x="698" y="422" class="small">station-style .dat output</text>
+
+  <line x1="270" y1="408" x2="330" y2="408" class="flow"/>
+  <line x1="610" y1="408" x2="680" y2="408" class="flow"/>
+
+  <path d="M 930 408 C 1010 408, 1010 250, 610 250" class="flow dash"/>
+  <text x="955" y="336" class="small">simulation ingestion</text>
+  <text x="955" y="356" class="small">into STAGE_0</text>
+
+  <rect x="50" y="510" width="880" height="92" class="box common"/>
+  <text x="68" y="545" class="label">Shared contracts and operations</text>
+  <text x="68" y="570" class="small">detector conventions, lineage hashes, cron + lock discipline, reproducibility requirements</text>
+</svg>

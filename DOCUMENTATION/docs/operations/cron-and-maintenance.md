@@ -10,6 +10,10 @@ Key behaviors:
 - Resource gates may skip jobs under pressure conditions.
 - Main simulation cycle applies frequency and backpressure controls.
 
+![Runtime scheduling model](/assets/figure_runtime_scheduling.svg)
+
+*Figure 3. Cron-triggered workers coordinated by locks, gates, and maintenance jobs with shared observability outputs.*
+
 ## Critical runtime logs
 
 - `OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/...`
@@ -54,4 +58,3 @@ tail -n 80 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_mai
 - Scheduling baseline: <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/BEHAVIOUR/CRON_AND_SCHEDULING.md>
 - Incident history and recovery: <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/REPO_DOCS/TROUBLESHOOTING/OPERATIONS_RUNBOOK.md>
 - Simulation troubleshooting: <https://github.com/csoneira/DATAFLOW_v3/blob/main/MINGO_DIGITAL_TWIN/DOCS/TROUBLESHOOTING/RUNBOOK.md>
-
