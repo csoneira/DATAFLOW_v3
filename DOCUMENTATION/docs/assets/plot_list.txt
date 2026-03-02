@@ -1,0 +1,16 @@
+# List of plot files (relative to workspace root) to copy into assets.
+# Supports shell globs.  Lines beginning with '#' are comments.
+#
+# Only figures that are referenced by pages in the documentation should go
+# here; others will be ignored by the synchronisation script.
+#
+# Current documentation pages requiring embedded images:
+#   - dictionary/index.md (efficiency scatter plot)
+#   - future pages may add simulation diagrams, analysis pipeline plots, etc.
+
+# efficiency scatter (dictionary diagnostics)
+MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/OUTPUTS/PLOTS/1_2_7_scatter_eff_sim_vs_estimated.png
+
+# example wildcard for all STEP_1_2_BUILD_DICTIONARY plots (uncomment if
+# you later embed more of them)
+# MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/OUTPUTS/PLOTS/*.png

@@ -170,6 +170,56 @@ def _safe_bool(value: object, default: bool) -> bool:
     return bool(default)
 
 
+def _safe_task_ids(raw: object) -> list[int]:
+    if raw is None:
+        return [1]
+    if isinstance(raw, (int, float)):
+        return [int(raw)]
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return [1]
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            parsed = [x.strip() for x in stripped.split(",") if x.strip()]
+        raw = parsed
+    out: list[int] = []
+    if isinstance(raw, (list, tuple)):
+        for value in raw:
+            try:
+                out.append(int(value))
+            except (TypeError, ValueError):
+                continue
+    return sorted(set(out)) or [1]
+
+
+def _preferred_tt_prefixes_for_task_ids(task_ids: list[int]) -> list[str]:
+    """Preferred TT-rate prefixes for efficiency extraction by most advanced task."""
+    max_task_id = max(task_ids) if task_ids else 1
+    if max_task_id <= 1:
+        return ["raw"]
+    if max_task_id == 2:
+        return ["clean", "raw_to_clean", "raw"]
+    if max_task_id == 3:
+        return ["cal", "clean", "raw_to_clean", "raw"]
+    if max_task_id == 4:
+        return ["list", "list_to_fit", "cal", "clean", "raw_to_clean", "raw"]
+    return [
+        "corr",
+        "task5_to_corr",
+        "fit_to_corr",
+        "definitive",
+        "fit",
+        "list_to_fit",
+        "list",
+        "cal",
+        "clean",
+        "raw_to_clean",
+        "raw",
+    ]
+
+
 def _coalesce(primary: object, fallback: object) -> object:
     if primary in (None, "", "null", "None"):
         return fallback
@@ -396,15 +446,27 @@ def _pick_global_rate_column(df: pd.DataFrame, preferred: str = "events_per_seco
     return None
 
 
-def _find_tt_rate_column(df: pd.DataFrame, tt_code: str) -> str | None:
+def _find_tt_rate_column(
+    df: pd.DataFrame,
+    tt_code: str,
+    preferred_prefixes: list[str] | None = None,
+) -> str | None:
     pattern = re.compile(rf"_tt_{re.escape(tt_code)}(?:\.0)?_rate_hz$")
     candidates = [c for c in df.columns if pattern.search(c)]
     if not candidates:
         return None
-    candidates = sorted(
-        candidates,
-        key=lambda c: (_prefix_rank(_extract_tt_parts(c)[0]) if _extract_tt_parts(c) else 999, c),
-    )
+    preferred_order: dict[str, int] = {}
+    if preferred_prefixes:
+        preferred_order = {str(p): i for i, p in enumerate(preferred_prefixes)}
+
+    def _sort_key(col: str) -> tuple[int, int, str]:
+        parts = _extract_tt_parts(col)
+        prefix = parts[0] if parts is not None else ""
+        pref_rank = preferred_order.get(prefix, len(preferred_order) + 100)
+        base_rank = _prefix_rank(prefix) if parts is not None else 999
+        return (pref_rank, base_rank, col)
+
+    candidates = sorted(candidates, key=_sort_key)
     for c in candidates:
         vals = pd.to_numeric(df[c], errors="coerce")
         if vals.notna().any():
@@ -431,16 +493,25 @@ def _compute_eff_from_rates(
 
 def _compute_empirical_efficiencies_from_rates(
     df: pd.DataFrame,
-) -> tuple[dict[int, pd.Series], dict[int, str], dict[int, dict[str, str | None]]]:
+) -> tuple[dict[int, pd.Series], dict[int, str], dict[int, dict[str, str | None]], str | None]:
     """Compute plane efficiencies from 1 - (three-plane / four-plane) using TT rates."""
-    four_col = _find_tt_rate_column(df, "1234")
+    preferred_prefixes: list[str] | None = None
+    if isinstance(df.attrs.get("preferred_tt_prefixes"), list):
+        preferred_prefixes = [str(v) for v in df.attrs.get("preferred_tt_prefixes", [])]
+
+    four_col = _find_tt_rate_column(df, "1234", preferred_prefixes=preferred_prefixes)
     miss_by_plane = {1: "234", 2: "134", 3: "124", 4: "123"}
+
+    selected_prefix: str | None = None
+    four_parts = _extract_tt_parts(four_col) if four_col is not None else None
+    if four_parts is not None:
+        selected_prefix = four_parts[0]
 
     eff_by_plane: dict[int, pd.Series] = {}
     formula_by_plane: dict[int, str] = {}
     cols_by_plane: dict[int, dict[str, str | None]] = {}
     for plane, miss_code in miss_by_plane.items():
-        miss_col = _find_tt_rate_column(df, miss_code)
+        miss_col = _find_tt_rate_column(df, miss_code, preferred_prefixes=preferred_prefixes)
         eff, formula = _compute_eff_from_rates(
             df,
             col_missing_rate=miss_col,
@@ -452,11 +523,96 @@ def _compute_empirical_efficiencies_from_rates(
             "three_plane_col": miss_col,
             "four_plane_col": four_col,
         }
-    return (eff_by_plane, formula_by_plane, cols_by_plane)
+    return (eff_by_plane, formula_by_plane, cols_by_plane, selected_prefix)
 
 
-def _load_eff_fit_lines(summary_path: Path) -> tuple[dict[int, tuple[float, float]], str]:
-    """Load fit coefficients from STEP 1.2 build_summary.json (fit_line_eff_i = [a, b])."""
+def _format_polynomial_expr(
+    coeffs: np.ndarray | list[float] | tuple[float, ...],
+    *,
+    variable: str = "x",
+    precision: int = 6,
+) -> str:
+    """Return compact polynomial expression from highest to lowest degree."""
+    arr = np.asarray(coeffs, dtype=float)
+    if arr.size == 0 or not np.isfinite(arr).all():
+        return "invalid"
+    degree = arr.size - 1
+    parts: list[tuple[str, str]] = []
+    for idx, coef in enumerate(arr):
+        if abs(float(coef)) < 1e-14:
+            continue
+        power = degree - idx
+        mag = f"{abs(float(coef)):.{precision}g}"
+        if power == 0:
+            term = mag
+        elif power == 1:
+            term = variable if np.isclose(abs(float(coef)), 1.0) else f"{mag}{variable}"
+        else:
+            term = f"{variable}^{power}" if np.isclose(abs(float(coef)), 1.0) else f"{mag}{variable}^{power}"
+        sign = "-" if coef < 0 else "+"
+        parts.append((sign, term))
+    if not parts:
+        return "0"
+    first_sign, first_term = parts[0]
+    expr = f"-{first_term}" if first_sign == "-" else first_term
+    for sign, term in parts[1:]:
+        expr += f" {sign} {term}"
+    return expr
+
+
+def _invert_polynomial_values(
+    y_values: pd.Series,
+    coeffs: np.ndarray,
+) -> pd.Series:
+    """Solve P(x)=y row-wise and select a physically meaningful real root.
+
+    Primary selection uses real roots within [0, 1] (efficiency domain), choosing
+    the one closest to y as a stable tie-break. If no in-range root exists,
+    fallback to all real roots and pick the closest-to-y root.
+    """
+    y = pd.to_numeric(y_values, errors="coerce").to_numpy(dtype=float)
+    out = np.full(y.shape, np.nan, dtype=float)
+    degree = int(len(coeffs) - 1)
+
+    x_grid = np.linspace(0.0, 1.0, 4001, dtype=float)
+    y_grid = np.polyval(coeffs, x_grid)
+
+    if degree == 1:
+        a, b = float(coeffs[0]), float(coeffs[1])
+        if np.isfinite(a) and abs(a) >= 1e-12:
+            out = (y - b) / a
+            out[~np.isfinite(out)] = np.nan
+            out = np.clip(out, 0.0, 1.0)
+        return pd.Series(out, index=y_values.index)
+
+    for idx, target in enumerate(y):
+        if not np.isfinite(target):
+            continue
+        coeff_eq = coeffs.copy()
+        coeff_eq[-1] -= float(target)
+        try:
+            roots = np.roots(coeff_eq)
+        except Exception:
+            continue
+        if roots.size == 0:
+            continue
+        real_mask = np.isfinite(roots.real) & np.isfinite(roots.imag) & (np.abs(roots.imag) < 1e-8)
+        real_roots = roots.real[real_mask]
+        if real_roots.size == 0:
+            idx_best = int(np.argmin(np.abs(y_grid - target)))
+            out[idx] = float(x_grid[idx_best])
+            continue
+        physical_roots = real_roots[(real_roots >= 0.0) & (real_roots <= 1.0)]
+        if physical_roots.size > 0:
+            out[idx] = float(physical_roots[np.argmin(np.abs(physical_roots - target))])
+            continue
+        idx_best = int(np.argmin(np.abs(y_grid - target)))
+        out[idx] = float(x_grid[idx_best])
+    return pd.Series(out, index=y_values.index)
+
+
+def _load_eff_fit_lines(summary_path: Path) -> tuple[dict[int, list[float]], str]:
+    """Load fit coefficients from STEP 1.2 build_summary.json (fit_line_eff_i = coeff list)."""
     if not summary_path.exists():
         return ({}, f"missing:{summary_path}")
     try:
@@ -464,29 +620,68 @@ def _load_eff_fit_lines(summary_path: Path) -> tuple[dict[int, tuple[float, floa
     except Exception as exc:
         return ({}, f"invalid_json:{exc}")
 
-    out: dict[int, tuple[float, float]] = {}
+    out: dict[int, list[float]] = {}
     for plane in (1, 2, 3, 4):
         raw = payload.get(f"fit_line_eff_{plane}")
+        if raw is None:
+            raw = payload.get(f"fit_poly_eff_{plane}")
+        if isinstance(raw, dict):
+            if "coefficients" in raw:
+                raw = raw.get("coefficients")
+            elif "a" in raw and "b" in raw:
+                raw = [raw.get("a"), raw.get("b")]
         if not isinstance(raw, (list, tuple)) or len(raw) < 2:
             continue
-        a = _safe_float(raw[0], np.nan)
-        b = _safe_float(raw[1], np.nan)
-        if np.isfinite(a) and np.isfinite(b):
-            out[plane] = (float(a), float(b))
+        coeffs: list[float] = []
+        valid = True
+        for value in raw:
+            c = _safe_float(value, np.nan)
+            if not np.isfinite(c):
+                valid = False
+                break
+            coeffs.append(float(c))
+        if valid and len(coeffs) >= 2:
+            out[plane] = coeffs
     return (out, "ok")
+
+
+def _read_fit_order_info(summary_path: Path) -> tuple[int | None, dict[str, int]]:
+    if not summary_path.exists():
+        return (None, {})
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        return (None, {})
+    requested_raw = payload.get("fit_polynomial_order_requested")
+    requested: int | None = None
+    try:
+        if requested_raw is not None:
+            requested = int(requested_raw)
+    except (TypeError, ValueError):
+        requested = None
+
+    used_by_plane: dict[str, int] = {}
+    raw_used = payload.get("fit_polynomial_order_by_plane", {})
+    if isinstance(raw_used, dict):
+        for k, v in raw_used.items():
+            try:
+                used_by_plane[str(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
+    return (requested, used_by_plane)
 
 
 def _transform_efficiencies_with_fits(
     eff_by_plane: dict[int, pd.Series],
-    fit_by_plane: dict[int, tuple[float, float]],
+    fit_by_plane: dict[int, list[float]],
     *,
     mode: str = "inverse",
 ) -> tuple[dict[int, pd.Series], dict[int, str]]:
-    """Apply fit-line transform per plane.
+    """Apply polynomial fit transform per plane.
 
-    Fits are from STEP 1.2: empirical = a * simulated + b.
-    mode='inverse' gives simulated_equivalent = (empirical - b) / a.
-    mode='forward' gives corrected = a * empirical + b.
+    Fits are from STEP 1.2: empirical = P(simulated).
+    mode='inverse' solves P(simulated_equivalent)=empirical.
+    mode='forward' applies corrected = P(empirical).
     """
     transformed: dict[int, pd.Series] = {}
     formula: dict[int, str] = {}
@@ -495,22 +690,35 @@ def _transform_efficiencies_with_fits(
         raw = pd.to_numeric(eff_by_plane.get(plane), errors="coerce")
         if plane not in fit_by_plane:
             transformed[plane] = pd.Series(np.nan, index=raw.index)
-            formula[plane] = "missing_fit_line"
+            formula[plane] = "missing_fit_polynomial"
             continue
-        a, b = fit_by_plane[plane]
-        if not np.isfinite(a) or abs(float(a)) < 1e-12:
+        coeffs = np.asarray(fit_by_plane[plane], dtype=float)
+        if coeffs.ndim != 1 or coeffs.size < 2 or not np.isfinite(coeffs).all():
             transformed[plane] = pd.Series(np.nan, index=raw.index)
-            formula[plane] = "invalid_fit_line"
+            formula[plane] = "invalid_fit_polynomial"
             continue
+        degree = int(coeffs.size - 1)
+        poly_expr = _format_polynomial_expr(coeffs, variable="x", precision=8)
         if use_inverse:
-            corr = (raw - float(b)) / float(a)
-            formula[plane] = f"(eff_raw - {b:.12g}) / {a:.12g}"
+            corr = _invert_polynomial_values(raw, coeffs)
+            formula[plane] = f"inverse_root(P(x)=eff_raw), deg={degree}, P(x)={poly_expr}"
         else:
-            corr = float(a) * raw + float(b)
-            formula[plane] = f"{a:.12g} * eff_raw + {b:.12g}"
-        corr = corr.where(np.isfinite(corr), np.nan).clip(0.0, 1.0)
+            corr = pd.Series(np.polyval(coeffs, raw.to_numpy(dtype=float)), index=raw.index)
+            formula[plane] = f"P(eff_raw), deg={degree}, P(x)={poly_expr}"
+        # Keep transformed efficiencies fully unconstrained (no clipping).
+        corr = corr.where(np.isfinite(corr), np.nan)
         transformed[plane] = corr
     return (transformed, formula)
+
+
+def _fraction_in_closed_interval(series: pd.Series, lo: float, hi: float) -> float:
+    """Fraction of finite values inside [lo, hi]. Returns 0 when no finite values."""
+    s = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+    m = np.isfinite(s)
+    if not np.any(m):
+        return 0.0
+    vals = s[m]
+    return float(np.mean((vals >= float(lo)) & (vals <= float(hi))))
 
 
 def _build_rate_model(
@@ -888,6 +1096,7 @@ def _plot_pre_estimation_efficiencies(
     global_rate: pd.Series | None,
     global_rate_label: str,
     raw_eff_by_plane: dict[int, pd.Series],
+    raw_eff_source_prefix: str | None,
     transformed_eff_by_plane: dict[int, pd.Series],
     transform_mode: str,
     out_path: Path,
@@ -895,7 +1104,7 @@ def _plot_pre_estimation_efficiencies(
     """Three-panel diagnostic:
     top: global-rate only,
     middle: raw eff(1..4) from 1 - three/four,
-    bottom: transformed efficiencies using STEP 1.2 fit lines.
+    bottom: transformed efficiencies using STEP 1.2 fit polynomials.
     """
     raw_valid = any(pd.to_numeric(raw_eff_by_plane.get(p), errors="coerce").notna().any() for p in (1, 2, 3, 4))
     tr_valid = any(
@@ -911,9 +1120,25 @@ def _plot_pre_estimation_efficiencies(
         _plot_placeholder(
             out_path,
             "Pre-estimation efficiency diagnostics",
-            "No finite global-rate or raw/transformed efficiency values available.",
+            "No finite global-rate or source/transformed efficiency values available.",
         )
         return
+
+    source_prefix_label = (
+        f"{str(raw_eff_source_prefix)}_tt"
+        if raw_eff_source_prefix not in (None, "", "None")
+        else "selected_tt"
+    )
+
+    def _eff_ylim(vmin: float, vmax: float) -> tuple[float, float]:
+        if not (np.isfinite(vmin) and np.isfinite(vmax)):
+            return (-0.02, 1.02)
+        lo = min(-0.02, float(vmin))
+        hi = max(1.02, float(vmax))
+        if hi <= lo:
+            hi = lo + 0.05
+        pad = 0.03 * (hi - lo)
+        return (lo - pad, hi + pad)
 
     xv = x.to_numpy()
     fig, axes = plt.subplots(3, 1, figsize=(12.2, 11.2), sharex=True)
@@ -922,13 +1147,11 @@ def _plot_pre_estimation_efficiencies(
     ax_rate = axes[0]
     color_by_plane = {1: "#1F77B4", 2: "#FF7F0E", 3: "#2CA02C", 4: "#9467BD"}
     if gr_valid:
-        ax_rate.plot(
+        ax_rate.scatter(
             xv,
             gr.to_numpy(dtype=float),
             color="#111111",
-            linewidth=1.2,
-            marker="o",
-            markersize=2.1,
+            s=9,
             alpha=0.85,
             label=f"{global_rate_label} [Hz]",
         )
@@ -939,42 +1162,54 @@ def _plot_pre_estimation_efficiencies(
     ax_rate.set_title("Before dictionary estimation: global_rate_hz")
     ax_rate.grid(True, alpha=0.22)
 
-    # Middle panel: raw efficiencies
+    # Middle panel: efficiencies from selected TT prefix
     ax_raw = axes[1]
     n_raw = 0
+    raw_y_min = np.inf
+    raw_y_max = -np.inf
     for plane in (1, 2, 3, 4):
         eff = pd.to_numeric(raw_eff_by_plane.get(plane), errors="coerce")
         valid = eff.notna()
         if valid.any():
-            ax_raw.plot(
+            yvals = eff[valid].to_numpy(dtype=float)
+            if yvals.size:
+                raw_y_min = min(raw_y_min, float(np.nanmin(yvals)))
+                raw_y_max = max(raw_y_max, float(np.nanmax(yvals)))
+            ax_raw.scatter(
                 xv[valid.to_numpy()],
-                eff[valid].to_numpy(dtype=float),
-                linewidth=1.1,
+                yvals,
+                s=10,
                 alpha=0.88,
                 color=color_by_plane[plane],
-                label=f"raw_eff_{plane} = 1 - three/four",
+                label=f"eff_{plane} ({source_prefix_label}) = 1 - three/four",
             )
             n_raw += 1
     if n_raw == 0:
         ax_raw.text(0.5, 0.5, "No raw efficiency values available", ha="center", va="center")
     else:
         ax_raw.legend(loc="best", fontsize=8, frameon=True, ncol=2)
-    ax_raw.set_ylim(-0.02, 1.02)
-    ax_raw.set_ylabel("Raw efficiencies")
-    ax_raw.set_title("Original efficiencies (1 - threeplane/fourplane)")
+    ax_raw.set_ylim(*_eff_ylim(raw_y_min, raw_y_max))
+    ax_raw.set_ylabel("Source efficiencies")
+    ax_raw.set_title(f"Efficiencies from {source_prefix_label} rates (1 - threeplane/fourplane)")
     ax_raw.grid(True, alpha=0.22)
 
     # Bottom panel: transformed efficiencies
     ax_bot = axes[2]
     n_drawn = 0
+    tr_y_min = np.inf
+    tr_y_max = -np.inf
     for plane in (1, 2, 3, 4):
         eff_t = pd.to_numeric(transformed_eff_by_plane.get(plane), errors="coerce")
         valid = eff_t.notna()
         if valid.any():
-            ax_bot.plot(
+            yvals_t = eff_t[valid].to_numpy(dtype=float)
+            if yvals_t.size:
+                tr_y_min = min(tr_y_min, float(np.nanmin(yvals_t)))
+                tr_y_max = max(tr_y_max, float(np.nanmax(yvals_t)))
+            ax_bot.scatter(
                 xv[valid.to_numpy()],
-                eff_t[valid].to_numpy(dtype=float),
-                linewidth=1.2,
+                yvals_t,
+                s=10,
                 alpha=0.9,
                 color=color_by_plane[plane],
                 label=f"transformed_eff_{plane}",
@@ -983,11 +1218,11 @@ def _plot_pre_estimation_efficiencies(
     if n_drawn == 0:
         ax_bot.text(0.5, 0.5, "No transformed efficiency values available", ha="center", va="center")
 
-    ax_bot.set_ylim(-0.02, 1.02)
+    ax_bot.set_ylim(*_eff_ylim(tr_y_min, tr_y_max))
     ax_bot.set_ylabel("Transformed efficiencies")
     ax_bot.set_xlabel(xlabel)
     ax_bot.set_title(
-        "Transformed efficiency (using STEP 1.2 fit lines; "
+        "Transformed efficiency (using STEP 1.2 fit polynomials; "
         f"mode={transform_mode})"
     )
     ax_bot.grid(True, alpha=0.22)
@@ -1425,8 +1660,11 @@ def _plot_eff2_vs_global_rate(
     ax.set_xlim(x_lo, x_hi)
     ax.set_ylim(y_lo, y_hi)
     ax.set_xlabel("Flux [cm^-2 min^-1]")
-    ax.set_ylabel(f"Efficiency ({real_eff2_col})")
-    ax.set_title("Contour-derived real-data curve in flux-eff plane with global-rate contours")
+    ax.set_ylabel("Efficiency (eff2)")
+    ax.set_title(
+        "Contour-derived real-data curve in flux-eff plane with global-rate contours\n"
+        f"real_y={real_eff2_col} | dict_y={dict_eff2_col}"
+    )
     ax.grid(True, alpha=0.2)
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
@@ -1596,6 +1834,7 @@ def main() -> int:
 
     config = _load_config(Path(args.config))
     cfg_21 = config.get("step_2_1", {})
+    cfg_41 = config.get("step_4_1", {})
     cfg_42 = config.get("step_4_2", {})
     _clear_plots_dir()
 
@@ -1645,6 +1884,9 @@ def main() -> int:
     uncertainty_quantile = _safe_float(cfg_42.get("uncertainty_quantile", 0.68), 0.68)
     uncertainty_quantile = float(np.clip(uncertainty_quantile, 0.0, 1.0))
     n_events_column_cfg = cfg_42.get("n_events_column", "auto")
+    task_ids_cfg = cfg_41.get("task_ids", config.get("task_ids", [1]))
+    selected_task_ids = _safe_task_ids(task_ids_cfg)
+    preferred_tt_prefixes = _preferred_tt_prefixes_for_task_ids(selected_task_ids)
     eff_transform_mode = str(cfg_42.get("eff_transform_mode", "inverse")).strip().lower()
     if eff_transform_mode not in {"inverse", "forward"}:
         eff_transform_mode = "inverse"
@@ -1653,6 +1895,8 @@ def main() -> int:
     log.info("Dictionary:     %s", dict_path)
     log.info("LUT:            %s", lut_path)
     log.info("Fit summary:    %s", build_summary_path)
+    log.info("Task IDs used for efficiency source: %s", selected_task_ids)
+    log.info("Preferred TT prefix order for efficiencies: %s", preferred_tt_prefixes)
     log.info("Metric=%s, k=%s, uncertainty_quantile=%.3f", distance_metric, interpolation_k, uncertainty_quantile)
 
     real_df = pd.read_csv(real_path, low_memory=False)
@@ -1719,7 +1963,8 @@ def main() -> int:
         merged["n_events"] = np.nan
 
     # Real-data efficiencies from rates: eff_i = 1 - threeplane_i / fourplane.
-    raw_eff_by_plane, raw_eff_formula_by_plane, raw_eff_cols_by_plane = _compute_empirical_efficiencies_from_rates(merged)
+    merged.attrs["preferred_tt_prefixes"] = preferred_tt_prefixes
+    raw_eff_by_plane, raw_eff_formula_by_plane, raw_eff_cols_by_plane, raw_eff_selected_prefix = _compute_empirical_efficiencies_from_rates(merged)
     for plane in (1, 2, 3, 4):
         merged[f"eff{plane}_raw_from_data"] = raw_eff_by_plane[plane]
     merged["eff2_from_data"] = merged["eff2_raw_from_data"]
@@ -1727,7 +1972,8 @@ def main() -> int:
 
     # Dictionary-side efficiencies from rates with the same definition.
     dict_df_plot = dict_df.copy()
-    dict_eff_by_plane, _, dict_eff_cols_by_plane = _compute_empirical_efficiencies_from_rates(dict_df_plot)
+    dict_df_plot.attrs["preferred_tt_prefixes"] = preferred_tt_prefixes
+    dict_eff_by_plane, _, dict_eff_cols_by_plane, dict_eff_selected_prefix = _compute_empirical_efficiencies_from_rates(dict_df_plot)
     for plane in (1, 2, 3, 4):
         dict_df_plot[f"dict_eff{plane}_raw_from_rates"] = dict_eff_by_plane[plane]
     dict_eff2_col = "dict_eff2_raw_from_rates"
@@ -1736,11 +1982,12 @@ def main() -> int:
     real_global_rate_col = _pick_global_rate_column(merged, preferred=global_rate_col)
     dict_global_rate_col = _pick_global_rate_column(dict_df_plot, preferred=global_rate_col)
 
-    # Fit-line transform of raw efficiencies using STEP 1.2 summary.
-    fit_lines_by_plane, fit_status = _load_eff_fit_lines(build_summary_path)
+    # Fit-polynomial transform of raw efficiencies using STEP 1.2 summary.
+    fit_models_by_plane, fit_status = _load_eff_fit_lines(build_summary_path)
+    fit_order_requested, fit_order_by_plane_from_summary = _read_fit_order_info(build_summary_path)
     transformed_eff_by_plane, transformed_eff_formula_by_plane = _transform_efficiencies_with_fits(
         raw_eff_by_plane,
-        fit_lines_by_plane,
+        fit_models_by_plane,
         mode=eff_transform_mode,
     )
     for plane in (1, 2, 3, 4):
@@ -1748,7 +1995,7 @@ def main() -> int:
 
     dict_transformed_eff_by_plane, dict_transformed_eff_formula_by_plane = _transform_efficiencies_with_fits(
         dict_eff_by_plane,
-        fit_lines_by_plane,
+        fit_models_by_plane,
         mode=eff_transform_mode,
     )
     for plane in (1, 2, 3, 4):
@@ -1828,6 +2075,7 @@ def main() -> int:
         global_rate=merged[real_global_rate_col] if real_global_rate_col is not None else None,
         global_rate_label=real_global_rate_col if real_global_rate_col is not None else "global_rate_hz",
         raw_eff_by_plane=raw_eff_by_plane,
+        raw_eff_source_prefix=raw_eff_selected_prefix,
         transformed_eff_by_plane=transformed_eff_by_plane,
         transform_mode=eff_transform_mode,
         out_path=PLOT_EFF,
@@ -1836,17 +2084,59 @@ def main() -> int:
     n_eff2_real = 0
     n_eff2_dict = 0
     flux_from_contour_col = "flux_from_eff2_global_rate_hz"
-    eff2_real_col_for_plane_plot = (
-        "eff2_transformed"
-        if "eff2_transformed" in merged.columns
+    eff2_plot_source_cfg = str(cfg_42.get("eff2_global_rate_eff_source", "auto")).strip().lower()
+    if eff2_plot_source_cfg not in {"auto", "transformed", "raw"}:
+        log.warning(
+            "Invalid step_4_2.eff2_global_rate_eff_source=%r; using 'auto'.",
+            eff2_plot_source_cfg,
+        )
+        eff2_plot_source_cfg = "auto"
+
+    has_real_eff2_trans = (
+        "eff2_transformed" in merged.columns
         and pd.to_numeric(merged["eff2_transformed"], errors="coerce").notna().any()
-        else "eff2_from_data"
+    )
+    has_dict_eff2_trans = (
+        "dict_eff2_transformed_from_rates" in dict_df_plot.columns
+        and pd.to_numeric(dict_df_plot["dict_eff2_transformed_from_rates"], errors="coerce").notna().any()
+    )
+    transformed_available = has_real_eff2_trans and has_dict_eff2_trans
+    real_eff2_trans_frac_physical = (
+        _fraction_in_closed_interval(merged["eff2_transformed"], 0.0, 1.0)
+        if has_real_eff2_trans
+        else 0.0
+    )
+    dict_eff2_trans_frac_physical = (
+        _fraction_in_closed_interval(dict_df_plot["dict_eff2_transformed_from_rates"], 0.0, 1.0)
+        if has_dict_eff2_trans
+        else 0.0
+    )
+
+    if eff2_plot_source_cfg == "raw":
+        use_transformed_eff2_for_plane_plot = False
+    elif eff2_plot_source_cfg == "transformed":
+        use_transformed_eff2_for_plane_plot = transformed_available
+    else:
+        # Auto: only trust transformed eff2 when both real and dictionary are
+        # predominantly within physical bounds.
+        use_transformed_eff2_for_plane_plot = (
+            transformed_available
+            and real_eff2_trans_frac_physical >= 0.95
+            and dict_eff2_trans_frac_physical >= 0.95
+        )
+        if transformed_available and not use_transformed_eff2_for_plane_plot:
+            log.warning(
+                "STEP_4.2.5 fallback to raw eff2: transformed physical fractions "
+                "(real=%.3f, dict=%.3f) below threshold 0.95.",
+                real_eff2_trans_frac_physical,
+                dict_eff2_trans_frac_physical,
+            )
+
+    eff2_real_col_for_plane_plot = (
+        "eff2_transformed" if use_transformed_eff2_for_plane_plot else "eff2_from_data"
     )
     dict_eff2_col_for_plane_plot = (
-        "dict_eff2_transformed_from_rates"
-        if "dict_eff2_transformed_from_rates" in dict_df_plot.columns
-        and pd.to_numeric(dict_df_plot["dict_eff2_transformed_from_rates"], errors="coerce").notna().any()
-        else dict_eff2_col
+        "dict_eff2_transformed_from_rates" if use_transformed_eff2_for_plane_plot else dict_eff2_col
     )
     if real_global_rate_col is not None and dict_global_rate_col is not None:
         n_eff2_real, n_eff2_dict, flux_from_contour_col = _plot_eff2_vs_global_rate(
@@ -1969,9 +2259,19 @@ def main() -> int:
         "dictionary_global_rate_column_used": dict_global_rate_col,
         "build_summary_json_used": str(build_summary_path),
         "fit_lines_load_status": fit_status,
+        "fit_polynomial_order_requested": fit_order_requested,
+        "fit_polynomial_order_by_plane": fit_order_by_plane_from_summary,
         "fit_lines_by_plane": {
             str(k): {"a": float(v[0]), "b": float(v[1])}
-            for k, v in fit_lines_by_plane.items()
+            for k, v in fit_models_by_plane.items()
+            if len(v) == 2
+        },
+        "fit_polynomials_by_plane": {
+            str(k): {
+                "order": int(len(v) - 1),
+                "coefficients": [float(c) for c in v],
+            }
+            for k, v in fit_models_by_plane.items()
         },
         "eff_transform_mode": eff_transform_mode,
         "raw_efficiency_columns": {
@@ -1980,6 +2280,11 @@ def main() -> int:
             "eff3": "eff3_raw_from_data",
             "eff4": "eff4_raw_from_data",
         },
+        "efficiency_source_task_ids": selected_task_ids,
+        "efficiency_source_most_advanced_task_id": int(max(selected_task_ids)) if selected_task_ids else 1,
+        "efficiency_source_preferred_prefix_order": preferred_tt_prefixes,
+        "efficiency_source_prefix_used_real": raw_eff_selected_prefix,
+        "efficiency_source_prefix_used_dictionary": dict_eff_selected_prefix,
         "raw_efficiency_formulas": {f"eff{p}": raw_eff_formula_by_plane.get(p) for p in (1, 2, 3, 4)},
         "raw_efficiency_rate_columns": {
             f"eff{p}": raw_eff_cols_by_plane.get(p, {})
@@ -1996,6 +2301,14 @@ def main() -> int:
             for p in (1, 2, 3, 4)
         },
         "eff2_real_column": eff2_real_col_for_plane_plot,
+        "eff2_global_rate_eff_source_requested": eff2_plot_source_cfg,
+        "eff2_global_rate_eff_source_used": (
+            "transformed" if use_transformed_eff2_for_plane_plot else "raw"
+        ),
+        "eff2_global_rate_transformed_fraction_in_0_1": {
+            "real": float(real_eff2_trans_frac_physical),
+            "dictionary": float(dict_eff2_trans_frac_physical),
+        },
         "eff2_formula": (
             transformed_eff_formula_by_plane.get(2)
             if eff2_real_col_for_plane_plot == "eff2_transformed"

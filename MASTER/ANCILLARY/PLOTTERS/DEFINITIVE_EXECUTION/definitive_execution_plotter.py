@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
+import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib.dates as mdates
@@ -46,6 +49,8 @@ DEFAULT_OUTPUT_FILENAME = "definitive_execution_map_report.pdf"
 DEFAULT_CONFIG_PATH = PLOTTER_DIR / "definitive_execution_config.json"
 DEFAULT_LAST_HOURS = 2.0
 DEFAULT_POINT_SIZE = 16.0
+DEFAULT_MINGO00_STAGE0_SOURCE = "live"
+MINGO00_STAGE0_SOURCE_CHOICES: Tuple[str, ...] = ("live", "history", "auto")
 DEFAULT_SHARED_X_STATIONS: Tuple[str, ...] = ("MINGO01", "MINGO02", "MINGO03", "MINGO04")
 DEFAULT_FREE_X_STATIONS: Tuple[str, ...] = ("MINGO01",)
 DEFAULT_PANEL_HEIGHT_RATIOS: Tuple[float, float, float] = (1.0, 4.0, 1.0)
@@ -84,6 +89,96 @@ STAGE_COLORS = build_discrete_turbo_stage_colors()
 
 def configure_matplotlib_style() -> None:
     plt.style.use("default")
+
+
+def now_timestamp_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _write_registry_rows_atomic(registry_path: Path, rows: List[Dict[str, str]]) -> None:
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{registry_path.name}.",
+        suffix=".tmp",
+        dir=str(registry_path.parent),
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=("basename", "execution_timestamp"))
+            writer.writeheader()
+            writer.writerows(rows)
+        tmp_path.replace(registry_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _load_registry_map(registry_path: Path) -> Dict[str, str]:
+    if not registry_path.exists():
+        return {}
+
+    rows: Dict[str, str] = {}
+    with registry_path.open("r", encoding="ascii", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            basename = (row.get("basename") or "").strip()
+            if not basename:
+                continue
+            execution_timestamp = (row.get("execution_timestamp") or "").strip()
+            rows[basename] = execution_timestamp or now_timestamp_text()
+    return rows
+
+
+def _find_ground_truth_basenames(station_root: Path) -> set[str]:
+    basenames: set[str] = set()
+
+    stage01 = station_root / "STAGE_0_to_1"
+    for path in stage01.rglob("*"):
+        if path.is_file():
+            stem = path.stem
+            if stem.startswith("mi00"):
+                basenames.add(stem)
+
+    step1 = station_root / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+    for task_dir in step1.glob("TASK_*"):
+        input_root = task_dir / "INPUT_FILES"
+        for subdir in input_root.glob("*"):
+            if not subdir.is_dir():
+                continue
+            for path in subdir.glob("*"):
+                if path.is_file():
+                    stem = path.stem
+                    if stem.startswith("mi00"):
+                        basenames.add(stem)
+
+    return basenames
+
+
+def sync_live_registry_with_ground_truth(registry_path: Path, station_root: Path) -> Tuple[int, int]:
+    truth = _find_ground_truth_basenames(station_root)
+    existing = _load_registry_map(registry_path)
+
+    truth_set = set(truth)
+    existing_set = set(existing.keys())
+    to_add = sorted(truth_set - existing_set)
+    to_remove = sorted(existing_set - truth_set)
+
+    if to_add or to_remove:
+        timestamp_now = now_timestamp_text()
+        new_rows: List[Dict[str, str]] = []
+        for basename in sorted(truth_set):
+            new_rows.append(
+                {
+                    "basename": basename,
+                    "execution_timestamp": existing.get(basename, timestamp_now),
+                }
+            )
+        _write_registry_rows_atomic(registry_path, new_rows)
+
+    return len(to_add), len(to_remove)
 
 
 def normalize_station_token(token: str) -> Optional[str]:
@@ -292,13 +387,23 @@ def load_stage_dataframe(stage: StageSpec) -> pd.DataFrame:
     return grouped
 
 
-def stage_specs_for_station(station: str) -> List[StageSpec]:
+def stage_specs_for_station(
+    station: str,
+    mingo00_stage0_source: str = DEFAULT_MINGO00_STAGE0_SOURCE,
+) -> List[StageSpec]:
     station_num = int(station[-2:])
     root = STATIONS_ROOT / station
     if station == "MINGO00":
         stage0_history_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames_history.csv"
         stage0_live_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
-        if stage0_history_csv.exists():
+        source_choice = (mingo00_stage0_source or DEFAULT_MINGO00_STAGE0_SOURCE).strip().lower()
+        if source_choice not in MINGO00_STAGE0_SOURCE_CHOICES:
+            source_choice = DEFAULT_MINGO00_STAGE0_SOURCE
+
+        if source_choice == "history" and stage0_history_csv.exists():
+            stage0_csv = stage0_history_csv
+            stage0_label = "STEP 0 - imported_basenames_history"
+        elif source_choice == "auto" and stage0_history_csv.exists():
             stage0_csv = stage0_history_csv
             stage0_label = "STEP 0 - imported_basenames_history"
         else:
@@ -842,6 +947,7 @@ def resolve_runtime_options(
     float,
     float,
     Path,
+    str,
     List[str],
     Tuple[float, float, float],
     float,
@@ -870,6 +976,17 @@ def resolve_runtime_options(
         config_output = config.get("output")
         output_raw = str(config_output) if config_output is not None else None
     output_path = resolve_output_path(output_raw, config_path)
+
+    if args.mingo00_stage0_source is not None:
+        mingo00_stage0_source = str(args.mingo00_stage0_source).strip().lower()
+    else:
+        raw_source = config.get("mingo00_stage0_source", DEFAULT_MINGO00_STAGE0_SOURCE)
+        mingo00_stage0_source = str(raw_source).strip().lower()
+    if mingo00_stage0_source not in MINGO00_STAGE0_SOURCE_CHOICES:
+        allowed = ", ".join(MINGO00_STAGE0_SOURCE_CHOICES)
+        raise ValueError(
+            f"'mingo00_stage0_source' must be one of: {allowed}"
+        )
 
     shared_x_raw = config.get("shared_x_stations", list(DEFAULT_SHARED_X_STATIONS))
     free_x_raw = config.get("free_x_stations", list(DEFAULT_FREE_X_STATIONS))
@@ -927,6 +1044,7 @@ def resolve_runtime_options(
         last_hours,
         point_size,
         output_path,
+        mingo00_stage0_source,
         shared_effective,
         panel_height_ratios,
         middle_log_scale_seconds,
@@ -1188,6 +1306,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Scatter marker size (overrides config).",
     )
     parser.add_argument(
+        "--mingo00-stage0-source",
+        choices=MINGO00_STAGE0_SOURCE_CHOICES,
+        default=None,
+        help=(
+            "MINGO00 stage-0 source: 'live' uses imported_basenames.csv, "
+            "'history' uses imported_basenames_history.csv, "
+            "'auto' prefers history when present."
+        ),
+    )
+    parser.add_argument(
         "-o",
         "--output",
         type=str,
@@ -1206,6 +1334,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             last_hours,
             point_size,
             output_path,
+            mingo00_stage0_source,
             shared_x_stations,
             panel_height_ratios,
             middle_log_scale_seconds,
@@ -1231,7 +1360,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     station_data: Dict[str, pd.DataFrame] = {}
     station_completeness: Dict[str, pd.DataFrame] = {}
     for station in stations:
-        stages = stage_specs_for_station(station)
+        if station == "MINGO00" and mingo00_stage0_source in ("live", "auto"):
+            live_registry_path = (
+                STATIONS_ROOT / "MINGO00" / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
+            )
+            try:
+                added_count, removed_count = sync_live_registry_with_ground_truth(
+                    live_registry_path,
+                    STATIONS_ROOT / "MINGO00",
+                )
+                if added_count or removed_count:
+                    print(
+                        "[definitive_execution_plotter] "
+                        f"MINGO00 live registry sync: added={added_count}, removed={removed_count}",
+                        file=sys.stderr,
+                    )
+            except Exception as exc:  # pragma: no cover - defensive
+                print(
+                    "[definitive_execution_plotter] "
+                    f"MINGO00 live registry sync failed: {exc}",
+                    file=sys.stderr,
+                )
+
+        stages = stage_specs_for_station(station, mingo00_stage0_source=mingo00_stage0_source)
         station_stages[station] = stages
         stage_tables = build_station_stage_tables(stages)
         station_data[station] = build_station_dataframe(stages, stage_tables=stage_tables)

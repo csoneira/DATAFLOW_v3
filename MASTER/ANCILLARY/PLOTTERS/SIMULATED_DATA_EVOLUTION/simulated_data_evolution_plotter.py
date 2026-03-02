@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import dataclass
+import json
+import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 import warnings
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -44,7 +48,10 @@ PLOTS_DIR = PLOTTER_DIR / "PLOTS"
 STATIONS_ROOT = REPO_ROOT / "STATIONS"
 DEFAULT_SIM_PARAMS = REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
 DEFAULT_OUTPUT = PLOTS_DIR / "simulated_data_evolution_report.pdf"
+DEFAULT_CONFIG_PATH = PLOTTER_DIR / "simulated_data_evolution_config.json"
 DEFAULT_STATION = "MINGO00"
+DEFAULT_MINGO00_STAGE0_SOURCE = "live"
+MINGO00_STAGE0_SOURCE_CHOICES: Tuple[str, ...] = ("live", "history", "auto")
 DEFAULT_PARAMS: Tuple[str, ...] = ("execution_time", "cos_n", "flux_cm2_min", "eff_1", "selected_rows")
 DEFAULT_POINT_SIZE = 8.0
 DEFAULT_ALPHA = 0.55
@@ -65,6 +72,185 @@ class StageSpec:
 
 def configure_matplotlib_style() -> None:
     plt.style.use("seaborn-v0_8-whitegrid")
+
+
+def now_timestamp_text() -> str:
+    return pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _write_registry_rows_atomic(registry_path: Path, rows: List[Dict[str, str]]) -> None:
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{registry_path.name}.",
+        suffix=".tmp",
+        dir=str(registry_path.parent),
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=("basename", "execution_timestamp"))
+            writer.writeheader()
+            writer.writerows(rows)
+        tmp_path.replace(registry_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _load_registry_map(registry_path: Path) -> Dict[str, str]:
+    if not registry_path.exists():
+        return {}
+    rows: Dict[str, str] = {}
+    with registry_path.open("r", encoding="ascii", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            basename = (row.get("basename") or "").strip()
+            if not basename:
+                continue
+            execution_timestamp = (row.get("execution_timestamp") or "").strip()
+            rows[basename] = execution_timestamp or now_timestamp_text()
+    return rows
+
+
+def _find_ground_truth_basenames(station_root: Path) -> set[str]:
+    basenames: set[str] = set()
+
+    stage01 = station_root / "STAGE_0_to_1"
+    for path in stage01.rglob("*"):
+        if path.is_file():
+            stem = path.stem
+            if stem.startswith("mi00"):
+                basenames.add(stem)
+
+    step1 = station_root / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+    for task_dir in step1.glob("TASK_*"):
+        input_root = task_dir / "INPUT_FILES"
+        for subdir in input_root.glob("*"):
+            if not subdir.is_dir():
+                continue
+            for path in subdir.glob("*"):
+                if path.is_file():
+                    stem = path.stem
+                    if stem.startswith("mi00"):
+                        basenames.add(stem)
+
+    return basenames
+
+
+def sync_live_registry_with_ground_truth(registry_path: Path, station_root: Path) -> Tuple[int, int]:
+    truth = _find_ground_truth_basenames(station_root)
+    existing = _load_registry_map(registry_path)
+
+    truth_set = set(truth)
+    existing_set = set(existing.keys())
+    to_add = sorted(truth_set - existing_set)
+    to_remove = sorted(existing_set - truth_set)
+
+    if to_add or to_remove:
+        timestamp_now = now_timestamp_text()
+        new_rows: List[Dict[str, str]] = []
+        for basename in sorted(truth_set):
+            new_rows.append(
+                {
+                    "basename": basename,
+                    "execution_timestamp": existing.get(basename, timestamp_now),
+                }
+            )
+        _write_registry_rows_atomic(registry_path, new_rows)
+
+    return len(to_add), len(to_remove)
+
+
+def load_config(config_path: Path) -> Dict[str, object]:
+    if not config_path.exists():
+        return {}
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise ValueError(f"Failed to parse config JSON {config_path}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Config file must contain a JSON object: {config_path}")
+    return loaded
+
+
+def _resolve_path(raw_value: str, config_path: Path) -> Path:
+    candidate = Path(raw_value).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (config_path.parent / candidate).resolve()
+
+
+def resolve_runtime_options(
+    args: argparse.Namespace,
+) -> Tuple[Path, str, str, List[str], float, float, float, Path]:
+    config_path = Path(args.config).expanduser().resolve()
+    config = load_config(config_path)
+
+    sim_params_raw = args.sim_params if args.sim_params is not None else config.get("sim_params")
+    station_raw = args.station if args.station is not None else config.get("station")
+    output_raw = args.output if args.output is not None else config.get("output")
+    params_raw = args.params if args.params is not None else config.get("params")
+    stage0_source_raw = (
+        args.mingo00_stage0_source
+        if args.mingo00_stage0_source is not None
+        else config.get("mingo00_stage0_source", DEFAULT_MINGO00_STAGE0_SOURCE)
+    )
+
+    if sim_params_raw is None:
+        sim_params_path = DEFAULT_SIM_PARAMS
+    else:
+        sim_params_path = _resolve_path(str(sim_params_raw), config_path)
+
+    station = str(station_raw).strip() if station_raw is not None else DEFAULT_STATION
+    mingo00_stage0_source = str(stage0_source_raw).strip().lower()
+    if mingo00_stage0_source not in MINGO00_STAGE0_SOURCE_CHOICES:
+        allowed = ", ".join(MINGO00_STAGE0_SOURCE_CHOICES)
+        raise ValueError(f"'mingo00_stage0_source' must be one of: {allowed}")
+
+    if output_raw is None:
+        output_path = DEFAULT_OUTPUT
+    else:
+        output_path = _resolve_path(str(output_raw), config_path)
+
+    if params_raw is None:
+        params = list(DEFAULT_PARAMS)
+    elif isinstance(params_raw, list):
+        params = [str(value).strip() for value in params_raw if str(value).strip()]
+    else:
+        raise ValueError("'params' in config must be a list of column names.")
+    if not params:
+        raise ValueError("At least one plotting parameter must be provided.")
+
+    if args.point_size is not None:
+        point_size = float(args.point_size)
+    else:
+        point_size = float(config.get("point_size", DEFAULT_POINT_SIZE))
+
+    if args.alpha is not None:
+        alpha = float(args.alpha)
+    else:
+        alpha = float(config.get("alpha", DEFAULT_ALPHA))
+
+    if args.execution_log_scale_seconds is not None:
+        execution_log_scale_seconds = float(args.execution_log_scale_seconds)
+    else:
+        execution_log_scale_seconds = float(
+            config.get("execution_log_scale_seconds", DEFAULT_EXECUTION_LOG_SCALE_SECONDS)
+        )
+
+    return (
+        sim_params_path,
+        station,
+        mingo00_stage0_source,
+        params,
+        point_size,
+        alpha,
+        execution_log_scale_seconds,
+        output_path,
+    )
 
 
 def normalize_station_token(token: str) -> str:
@@ -96,11 +282,21 @@ def build_discrete_stage_colors() -> Tuple[str, ...]:
 STAGE_COLORS = build_discrete_stage_colors()
 
 
-def stage_specs_for_station(station: str) -> List[StageSpec]:
+def stage_specs_for_station(
+    station: str,
+    mingo00_stage0_source: str = DEFAULT_MINGO00_STAGE0_SOURCE,
+) -> List[StageSpec]:
     root = STATIONS_ROOT / station
     stage0_history_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames_history.csv"
     stage0_live_csv = root / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
-    if stage0_history_csv.exists():
+    source_choice = (mingo00_stage0_source or DEFAULT_MINGO00_STAGE0_SOURCE).strip().lower()
+    if source_choice not in MINGO00_STAGE0_SOURCE_CHOICES:
+        source_choice = DEFAULT_MINGO00_STAGE0_SOURCE
+
+    if source_choice == "history" and stage0_history_csv.exists():
+        stage0_csv = stage0_history_csv
+        stage0_label = "STEP 0 - imported_basenames_history"
+    elif source_choice == "auto" and stage0_history_csv.exists():
         stage0_csv = stage0_history_csv
         stage0_label = "STEP 0 - imported_basenames_history"
     else:
@@ -283,6 +479,10 @@ def expand_params(raw_params: Sequence[str], df: pd.DataFrame) -> List[str]:
         z_match = re.match(r"^z[_\-]?p?([1-4])$", lowered)
         if z_match:
             expanded.append(f"z_p{int(z_match.group(1))}")
+            continue
+
+        if lowered in {"flux_cm_min", "flux_cm_minute", "flux_cm"}:
+            expanded.append("flux_cm2_min")
             continue
 
         expanded.append(text)
@@ -749,9 +949,14 @@ def plot_stage_colored_parameter_matrix(
     title = "Stage-Colored Simulation Parameter Matrix"
     if execution_recency_col is not None:
         title += f"\nExecution-time axes use log recency vs now (scale={execution_log_scale_seconds:.0f}s)"
-    fig.suptitle(title + "\n" + subtitle, fontsize=12, y=0.995)
+    full_title = title + "\n" + subtitle
+    title_line_count = full_title.count("\n") + 1
+    reserved_top = 0.90 - 0.04 * max(title_line_count - 2, 0)
+    top_margin = max(0.78, min(0.90, reserved_top))
+
+    fig.suptitle(full_title, fontsize=11, y=0.99)
     _add_stage_legend(fig, frame, stage_order, stage_labels, stage_colors)
-    fig.subplots_adjust(left=0.06, right=0.84, bottom=0.08, top=0.94, wspace=0.05, hspace=0.05)
+    fig.subplots_adjust(left=0.06, right=0.84, bottom=0.08, top=top_margin, wspace=0.05, hspace=0.05)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(output_path) as pdf:
@@ -773,53 +978,71 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         )
     )
     parser.add_argument(
+        "-c",
+        "--config",
+        type=str,
+        default=str(DEFAULT_CONFIG_PATH),
+        help=f"JSON config path (default: {DEFAULT_CONFIG_PATH}).",
+    )
+    parser.add_argument(
         "--sim-params",
         type=str,
-        default=str(DEFAULT_SIM_PARAMS),
-        help=f"Path to step_final simulation params CSV (default: {DEFAULT_SIM_PARAMS}).",
+        default=None,
+        help="Path to step_final simulation params CSV (overrides config/default).",
     )
     parser.add_argument(
         "--station",
         type=str,
-        default=DEFAULT_STATION,
-        help=f"Station token used for stage lookup (default: {DEFAULT_STATION}).",
+        default=None,
+        help="Station token used for stage lookup (overrides config/default).",
+    )
+    parser.add_argument(
+        "--mingo00-stage0-source",
+        choices=MINGO00_STAGE0_SOURCE_CHOICES,
+        default=None,
+        help=(
+            "MINGO00 stage-0 source: 'live' uses imported_basenames.csv, "
+            "'history' uses imported_basenames_history.csv, "
+            "'auto' prefers history when present."
+        ),
     )
     parser.add_argument(
         "--params",
         nargs="+",
-        default=list(DEFAULT_PARAMS),
+        default=None,
         help=(
             "Parameter columns/tokens to include in the matrix. Supports aliases like "
-            "'eff_1..eff_4', 'efficiencies', 'z_positions'."
+            "'eff_1..eff_4', 'efficiencies', 'z_positions', 'flux_cm_min'. "
+            "Overrides config/default."
         ),
     )
     parser.add_argument(
         "--point-size",
         type=float,
-        default=DEFAULT_POINT_SIZE,
-        help=f"Scatter marker size for off-diagonal plots (default: {DEFAULT_POINT_SIZE}).",
+        default=None,
+        help="Scatter marker size for off-diagonal plots (overrides config/default).",
     )
     parser.add_argument(
         "--alpha",
         type=float,
-        default=DEFAULT_ALPHA,
-        help=f"Scatter alpha for filled stage markers (default: {DEFAULT_ALPHA}).",
+        default=None,
+        help="Scatter alpha for filled stage markers (overrides config/default).",
     )
     parser.add_argument(
         "--execution-log-scale-seconds",
         type=float,
-        default=DEFAULT_EXECUTION_LOG_SCALE_SECONDS,
+        default=None,
         help=(
             "Soft-log recency scale (seconds) used when plotting execution_time "
-            f"(default: {DEFAULT_EXECUTION_LOG_SCALE_SECONDS})."
+            "(overrides config/default)."
         ),
     )
     parser.add_argument(
         "-o",
         "--output",
         type=str,
-        default=str(DEFAULT_OUTPUT),
-        help=f"Output PDF path (default: {DEFAULT_OUTPUT}).",
+        default=None,
+        help="Output PDF path (overrides config/default).",
     )
     return parser.parse_args(argv)
 
@@ -828,23 +1051,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     configure_matplotlib_style()
 
-    if args.point_size <= 0:
+    try:
+        (
+            sim_params_path,
+            station_token,
+            mingo00_stage0_source,
+            params,
+            point_size,
+            alpha,
+            execution_log_scale_seconds,
+            output_path,
+        ) = resolve_runtime_options(args)
+    except ValueError as exc:
+        print(f"[simulated_data_evolution_plotter] {exc}", file=sys.stderr)
+        return 1
+
+    if point_size <= 0:
         print("[simulated_data_evolution_plotter] --point-size must be > 0.", file=sys.stderr)
         return 1
-    if not (0 < args.alpha <= 1):
+    if not (0 < alpha <= 1):
         print("[simulated_data_evolution_plotter] --alpha must be in (0, 1].", file=sys.stderr)
         return 1
-    if args.execution_log_scale_seconds <= 0:
+    if execution_log_scale_seconds <= 0:
         print(
             "[simulated_data_evolution_plotter] --execution-log-scale-seconds must be > 0.",
             file=sys.stderr,
         )
         return 1
-
-    sim_params_path = Path(args.sim_params).expanduser().resolve()
-    output_path = Path(args.output).expanduser()
-    if not output_path.is_absolute():
-        output_path = (PLOTTER_DIR / output_path).resolve()
 
     if not sim_params_path.exists():
         print(
@@ -853,8 +1086,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 1
 
-    station = normalize_station_token(args.station)
-    stages = stage_specs_for_station(station)
+    station = normalize_station_token(station_token)
+    if station == "MINGO00" and mingo00_stage0_source in ("live", "auto"):
+        live_registry_path = (
+            STATIONS_ROOT / "MINGO00" / "STAGE_0" / "SIMULATION" / "imported_basenames.csv"
+        )
+        try:
+            added_count, removed_count = sync_live_registry_with_ground_truth(
+                live_registry_path,
+                STATIONS_ROOT / "MINGO00",
+            )
+            if added_count or removed_count:
+                print(
+                    "[simulated_data_evolution_plotter] "
+                    f"MINGO00 live registry sync: added={added_count}, removed={removed_count}",
+                    file=sys.stderr,
+                )
+        except Exception as exc:  # pragma: no cover - defensive
+            print(
+                "[simulated_data_evolution_plotter] "
+                f"MINGO00 live registry sync failed: {exc}",
+                file=sys.stderr,
+            )
+
+    stages = stage_specs_for_station(station, mingo00_stage0_source=mingo00_stage0_source)
     stage_sets = build_chained_stage_sets(stages)
     raw_stage_sets = build_raw_stage_sets(stages)
     latest_stage_by_basename = build_latest_stage_map(stages, stage_sets)
@@ -882,7 +1137,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sim_df = normalize_sim_params(sim_df)
     sim_df = add_stage_columns(sim_df, latest_stage_by_basename, stage_labels, stage_colors)
 
-    param_list = expand_params(args.params, sim_df)
+    param_list = expand_params(params, sim_df)
     if not param_list:
         print(
             "[simulated_data_evolution_plotter] No valid numeric/datetime params after expansion.",
@@ -899,7 +1154,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ) = prepare_execution_time_recency_view(
         frame=sim_df,
         param_list=param_list,
-        scale_seconds=float(args.execution_log_scale_seconds),
+        scale_seconds=float(execution_log_scale_seconds),
     )
 
     try:
@@ -911,10 +1166,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             stage_colors=stage_colors,
             display_labels=display_labels,
             output_path=output_path,
-            point_size=float(args.point_size),
-            alpha=float(args.alpha),
+            point_size=float(point_size),
+            alpha=float(alpha),
             execution_recency_col=execution_recency_col,
-            execution_log_scale_seconds=float(args.execution_log_scale_seconds),
+            execution_log_scale_seconds=float(execution_log_scale_seconds),
         )
     except Exception as exc:
         print(f"[simulated_data_evolution_plotter] Plot failed: {exc}", file=sys.stderr)

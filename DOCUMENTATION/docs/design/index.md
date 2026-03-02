@@ -1,5 +1,7 @@
 # Detector design
 
+*Last updated: March 2026*
+
 The detector design notes collect reference information needed to reproduce a
 miniTRASGO station or audit an existing build. Hardware, firmware, and software
 components are documented with the conventions used in assembly drawings, data
@@ -18,4 +20,6 @@ Key topics covered in this section include:
   dependencies required to run the monitoring and reconstruction pipelines.
 
 For detailed schematics and configuration examples, refer to the dedicated
-subpages linked in the navigation sidebar.
+subpages linked in the navigation sidebar.  The same geometry and
+coordinate conventions are implemented in the [Digital twin](../simulation/index.md),
+ensuring that hardware manuals and simulation code remain in sync.

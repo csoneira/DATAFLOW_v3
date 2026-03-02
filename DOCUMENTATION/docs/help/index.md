@@ -1,5 +1,12 @@
 # Troubleshooting
 
+*Last updated: March 2026*
+
+Below are solutions to common problems encountered during station
+operation.  If your issue is not listed here, consult the relevant
+subsection of the [Operation](../operation/index.md) or file an issue in the
+project repository.
+
 ## Strips appear wider than expected
 When viewing the XY diagram some strips may look wider. This is usually due to incorrect TDC calibration values. Recalibrating the TDC resolves the issue.
 

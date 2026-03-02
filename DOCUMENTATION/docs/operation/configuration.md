@@ -1,42 +1,121 @@
-# Preparing the minGO
+# Preparing and configuring miniTRASGO
 
-The `crontab` is configured to automatically execute the needed software when rebooting the system. It is possible, though, that some execution needs to be stopped and then relaunched, so it is interesting to know what are the especific required programs to work with minGO.
+*Last updated: March 2026*
 
-Currently the miniTRASGO is operating in a room with controlled 21ºC.
+This page describes the procedures and scripts required to bring a
+miniTRASGO station online after power‑up or transport.  It is intended for
+station operators and newcomers who need to understand the software
+components that must be running.
 
-## The DCS (Data Control System)
-The connection through the I2C protocol from the mingo PC to the hub containing the environment, HV and gas flow sensors is established thanks to the script with path: 
+## Overview
 
-    media/externalDisk/gate/bin/dcs_om.sh
+1. Verify network/SSH access to the RPC control computer (`rpcuser@minitrasgo…`).
+2. Ensure the Data Control System (DCS) daemon and cron jobs are running.
+3. Start the TRB3sc data acquisition software (DAQ).
+4. Configure the High Voltage (HV) system and environment sensors.
+5. Confirm trigger settings via the CTS web interface.
 
-## Starting the DAQ (Data Acquisition)
-In the directory `home/rpcuser/userscripts/trb399sc/` there are some essential scripts for the mingo operation. The first step is to start the data acquisition. The program to get the data from the TRB is found in `./startup_TRB399.sh`, which has a shorcut, `./startDAQ`.
+Most of these tasks are automated by the crontab at boot, but manual control
+is sometimes required during commissioning or after a crash.
 
-This starts the data adquisition system, but does not save any time and width information of the event into files but the rate, which does not need the acquisition of the whole event, only the register of the incoming rates to the TRB (this creates the only `.log` that does not come from the I2C hub). Once this is started we can set the triggers we want in the Central Trigger System (CTS), the subpage of the web-based DAQ control found in
+## Data Control System (DCS)
 
-    minitrasgo.fis.ucm.es:1234/cts/cts.htm
-There we can select the standard trigger we want to use, that will be saved as Trigger Type (TT) 1. The other triggers, that can be automatically selected from a script, are in the directory `home/rpcuser/trbsoft/userscripts/trb399sc/trigger`: those are called when automatically performing through the `crontab` the self trigger (which is considering a hit in any layer a trigger and it is stored with the category TT 2).
+The DCS manages the I2C‑connected hub that reads environmental sensors,
+gas‑flow meters and the HV module.  The primary control script is
+
+```
+/media/externalDisk/gate/bin/dcs_om.sh
+```
+
+This script is invoked by cron every minute; you can also run it interactively
+for debugging.  Configuration files and Look‑Up Tables reside under
+`~/gate/system/lookUpTables/`.
+
+### Log files
+
+Sensor data are written to daily `.log` files in `~/logs/` (see
+[Data section](../data/index.md) for formats).  A post‑run script moves
+the previous day’s files into `~/logs/done/`.
+
+## Starting the DAQ
+
+DAQ software lives in `~/gate/trb399sc/` (a symlink from
+`/home/rpcuser/userscripts/trb399sc/`).
+
+```bash
+cd ~/gate/trb399sc/
+./startDAQ        # starts the TRB acquisition system and sets thresholds
+                  # also registers a rate‑only logger (Rate.mat)
+```
+
+For normal operation you do not need to run `startDAQ` again after reboot;
+cron handles that.  To begin recording full events, use
+
+```bash
+./startRun.sh    # begins writing .hld files to /media/externalDisk/hlds/
+```
+
+Stop a run with `CTRL+C` or by killing the `daq` process.  The `daq_anal`
+utility can inspect `.hld` files (see [Measuring](measuring.md) page).
 
 ## High Voltage control
-To calculate the necessary HV one needs to know the temperature of the room. From it, the density of the gas can be calculated and these RPC detectors must work in a certain regime of the Townsend ratio: E/rho (electric field applied/gas density), in particular around 240 Towsends for miniTRASGO. This means that the HV is chosen accordingly with the density of the gas, and hence with the temperature. We have several options, anyway, we could also (and it is the option we are choosing) set the voltage constant around the plateau and later correcting the rates by the efficiency, which is a better option than changing everytime the potential: an error could be devastating for the detector and also we are changing constantly the regime of the electric field, which needs to stabilize inside the RPC.
 
-At any window, execute `home/rpcuser/bin/HV/hv` with the following arguments:
+HV is adjusted via the command‑line utility at `~/bin/HV/hv`:
 
-- `-b <bus>` : Bus number
-- `-I <Ilim>` : Current limiter (μA)
-- `-V <Vset>`: High voltage value (kV)
-- `-on` : Turn HV ON
-- `-off` : Turn HV OFF
+```
+./hv -b <bus> -I <Ilim> -V <Vset> -on   # turn on with limit and set value
+./hv -b <bus> -off                      # turn off
+```
 
-Examples:
+Values are in kV for voltage and µA for current.  For real‑time status:
 
-    ./hv -b 0 -I 1 -V 5.5 -on 
-<!-- tsk -->
-    ./hv -b 0 -off
+```bash
+watch -n 1 ./hv -b 0
+```
 
-To see the information on HV and intensity in real time just type:
+The recommended operational strategy is to leave the voltage fixed near the
+plateau and correct for efficiency changes in software rather than adjusting
+HV for every ambient pressure/temperature variation.
 
-    watch -n 1 ./hv -b 0
+## Trigger configuration
 
-## TRB
-To check the window in time of the trigger we can go to the TDC, write c001 in the search and then, once the page is loaded, see the c801 row. It says how wide the window is before and after the trigger: we could even shorten the window before, since we know that usually all the events are in -150 ns (we can see that in the Q1_F, etc files).
+Open the CTS web panel at
+`http://minitrasgo.fis.ucm.es:1234/cts/cts.htm` and select the desired
+trigger type (standard TT1 or script‑driven TT2).  Trigger scripts live in
+`~/trbsoft/userscripts/trb399sc/trigger/` and are executed automatically by
+cron during self‑trigger tests.
+
+## Crontab overview
+
+The station’s crontab (`crontab -l` as rpcuser) contains entries for:
+
+- DCS polling
+- HV/gas-flow checks
+- DAQ startup (`startDAQ` and `startRun` wrappers)
+- Report generation and email notification
+- Remote log archival and backup
+
+Refer to `CONFIG/add_to_crontab.info` in the main repository for the
+cluster‑wide schedule; the station crontab mirrors the relevant lines.
+
+## Troubleshooting
+
+*If the DAQ fails to start*:
+
+- Verify `trbnetd` is running (`pgrep -f trbnetd`).
+- Check that the Ethernet cable between the RPC control PC and the TRB is
+  connected and that the TRB has power.
+
+*If the DCS logs stop updating*:
+
+- Run `dcs_om.sh` manually to see error messages.
+- Check I2C bus connectivity with `i2cdetect`.
+
+*HV control errors* usually manifest as `ERROR` messages from `hv`; verify the
+bus number and hardware connections.
+
+---
+
+_Local preview: run `mkdocs serve` in the `DOCUMENTATION/` root to see this
+page rendered._
+

@@ -62,6 +62,16 @@ PDF_TARGETS = {
         / "execution_metadata_report.pdf",
         "description": "Execution metadata report",
     },
+    "simulated_data_evolution_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "SIMULATED_DATA_EVOLUTION"
+        / "PLOTS"
+        / "simulated_data_evolution_report.pdf",
+        "description": "Simulated data evolution report",
+    },
     "param_mesh_summary": {
         "path": BASE_DIR
         / "MINGO_DIGITAL_TWIN"
@@ -111,7 +121,8 @@ HELP_TEXT = (
     "  /definitive_execution_report - Definitive execution map PDF.\n"
     "  /filter_metadata_report - Filter metadata PDF.\n"
     "  /rates_metadata_report - Rates metadata PDF.\n"
-    "  /execution_metadata_report - Execution metadata PDF.\n\n"
+    "  /execution_metadata_report - Execution metadata PDF.\n"
+    "  /simulated_data_evolution_report - Simulated data evolution report PDF.\n\n"
     "Maintenance Tools:\n"
     "  /clean_dataflow_status - Run clean_dataflow.sh --compact to show disk usage.\n"
     "  /clean_dataflow_force - Run clean_dataflow.sh --force --compact (temps, plots, completed; never metadata).\n\n"

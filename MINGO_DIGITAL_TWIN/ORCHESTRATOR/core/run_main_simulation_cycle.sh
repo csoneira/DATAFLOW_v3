@@ -313,6 +313,7 @@ backpressure_gate_allows_step0() {
   local n_sim_root=0 n_sim_files=0 n_unprocessed=0 n_processing=0 total=0
   local unique_total=0 duplicate_entries=0 unique_sim_root=0 unique_sim_files=0 unique_unprocessed=0 unique_processing=0
   local overlap_sr_sf=0 overlap_sr_u=0 overlap_sr_p=0 overlap_sf_u=0 overlap_sf_p=0 overlap_u_p=0
+  local mesh_undone_rows=0 expected_files_per_sim_run=1 expected_from_mesh=0
 
   if ! is_nonneg_int "${threshold}"; then
     log_warn "backpressure_gate status=invalid_threshold value='${threshold}' fallback=0"
@@ -323,18 +324,32 @@ backpressure_gate_allows_step0() {
   read -r n_sim_root n_sim_files n_unprocessed n_processing total <<< "$(count_pending_files)"
   # shellcheck disable=SC2086
   read -r unique_total duplicate_entries unique_sim_root unique_sim_files unique_unprocessed unique_processing overlap_sr_sf overlap_sr_u overlap_sr_p overlap_sf_u overlap_sf_p overlap_u_p <<< "$(count_pending_unique_mi)"
+  mesh_undone_rows="$(count_mesh_undone_rows "${PARAM_MESH_PATH}")"
+  if ! is_nonneg_int "${mesh_undone_rows}"; then
+    mesh_undone_rows=0
+  fi
+  expected_files_per_sim_run="$(resolve_step_final_expected_files_per_sim_run)"
+  if ! is_nonneg_int "${expected_files_per_sim_run}" || (( expected_files_per_sim_run <= 0 )); then
+    expected_files_per_sim_run=1
+  fi
+  expected_from_mesh=$(( mesh_undone_rows * expected_files_per_sim_run ))
 
   if (( threshold <= 0 )); then
-    log_info "backpressure_gate status=disabled pending_total=${total} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p}"
+    log_info "backpressure_gate status=disabled pending_total=${total} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p} mesh_undone=${mesh_undone_rows} expected_files_per_sim_run=${expected_files_per_sim_run} expected_from_mesh=${expected_from_mesh}"
     return 0
   fi
 
   if (( total >= threshold )); then
-    log_info "backpressure_gate status=blocked pending_total=${total} threshold=${threshold} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p}"
+    log_info "backpressure_gate status=blocked pending_total=${total} threshold=${threshold} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p} mesh_undone=${mesh_undone_rows} expected_files_per_sim_run=${expected_files_per_sim_run} expected_from_mesh=${expected_from_mesh}"
     return 1
   fi
 
-  log_info "backpressure_gate status=ok pending_total=${total} threshold=${threshold} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p}"
+  if (( expected_from_mesh >= threshold )); then
+    log_info "backpressure_gate status=blocked_mesh pending_total=${total} threshold=${threshold} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p} mesh_undone=${mesh_undone_rows} expected_files_per_sim_run=${expected_files_per_sim_run} expected_from_mesh=${expected_from_mesh}"
+    return 1
+  fi
+
+  log_info "backpressure_gate status=ok pending_total=${total} threshold=${threshold} simulated_root=${n_sim_root} simulated_files=${n_sim_files} unprocessed=${n_unprocessed} processing=${n_processing} unique_mi_total=${unique_total} duplicate_entries=${duplicate_entries} unique_simulated_root=${unique_sim_root} unique_simulated_files=${unique_sim_files} unique_unprocessed=${unique_unprocessed} unique_processing=${unique_processing} overlap_sr_sf=${overlap_sr_sf} overlap_sr_u=${overlap_sr_u} overlap_sr_p=${overlap_sr_p} overlap_sf_u=${overlap_sf_u} overlap_sf_p=${overlap_sf_p} overlap_u_p=${overlap_u_p} mesh_undone=${mesh_undone_rows} expected_files_per_sim_run=${expected_files_per_sim_run} expected_from_mesh=${expected_from_mesh}"
   return 0
 }
 
@@ -345,6 +360,120 @@ count_mesh_rows() {
     return 0
   fi
   awk 'NR>1 {count++} END {print count+0}' "${mesh_path}" 2>/dev/null || echo "0"
+}
+
+count_mesh_undone_rows() {
+  local mesh_path="${1:-${PARAM_MESH_PATH}}"
+  if [[ ! -f "${mesh_path}" ]]; then
+    echo "0"
+    return 0
+  fi
+
+  awk -F, '
+    NR==1 {
+      for (i=1; i<=NF; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+        if ($i == "done") {
+          done_col = i
+        }
+      }
+      next
+    }
+    {
+      if (done_col == 0) {
+        count++
+        next
+      }
+      value = $done_col
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if (value != "1") {
+        count++
+      }
+    }
+    END { print count+0 }
+  ' "${mesh_path}" 2>/dev/null || echo "0"
+}
+
+resolve_step_final_expected_files_per_sim_run() {
+  local physics_path="${STEP_FINAL_CONFIG}"
+  local runtime_path=""
+  if [[ "${physics_path}" == *_physics.yaml ]]; then
+    runtime_path="${physics_path%_physics.yaml}_runtime.yaml"
+  fi
+
+  local resolved
+  resolved="$(
+    /usr/bin/env python3 - "${physics_path}" "${runtime_path}" <<'PY'
+import sys
+from pathlib import Path
+import yaml
+
+
+def load_yaml_mapping(path):
+    if path is None or not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def parse_positive_subsample_rows(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.lower() in {"none", "null", "[]"}:
+            return []
+        raw_rows = [part.strip() for part in text.split(",") if part.strip()]
+    elif isinstance(value, (list, tuple)):
+        raw_rows = list(value)
+    else:
+        return []
+
+    rows = []
+    for row in raw_rows:
+        try:
+            row_i = int(row)
+        except Exception:
+            return []
+        if row_i <= 0:
+            return []
+        rows.append(row_i)
+    return rows
+
+
+physics_path = Path(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else None
+runtime_path = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
+
+runtime_cfg = load_yaml_mapping(runtime_path)
+physics_cfg = load_yaml_mapping(physics_path)
+cfg = dict(runtime_cfg)
+cfg.update(physics_cfg)
+
+try:
+    files_per_station_conf = int(cfg.get("files_per_station_conf", 1))
+except Exception:
+    files_per_station_conf = 1
+if files_per_station_conf <= 0:
+    files_per_station_conf = 1
+
+subsample_rows = parse_positive_subsample_rows(cfg.get("subsample_rows", []))
+expected = files_per_station_conf + len(subsample_rows)
+print(max(expected, 1))
+PY
+  )" || {
+    echo "1"
+    return 0
+  }
+
+  if ! is_nonneg_int "${resolved}" || (( resolved <= 0 )); then
+    echo "1"
+    return 0
+  fi
+  echo "${resolved}"
 }
 
 run_stage() {

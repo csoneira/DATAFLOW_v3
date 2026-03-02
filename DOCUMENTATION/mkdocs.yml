@@ -24,6 +24,10 @@ nav:
         - data/index.md
         - Datashape: data/shape.md
         - Dataflow: data/dataflow.md
+        - Digital twin: simulation/index.md
+        - Dictionary correction: dictionary/index.md
+    - Software & tools:
+        - Analysis software: analysis/index.md
     - Tasks, objectives and notes:
         - tasks/index.md
 #        - Tasks: tasks/todo.md
@@ -41,7 +45,8 @@ theme:
     - navigation.expand
     - navigation.top
     - navigation.indexes
-  logo: assets/trasgo_logo.png
+  logo: assets/logo_mingo_network.png
+  favicon: assets/logo_mingo_network.png
   palette:
     - scheme: default
       toggle:

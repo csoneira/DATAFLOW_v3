@@ -137,15 +137,78 @@ def _parse_efficiencies(value: object) -> list[float]:
     return [np.nan] * 4
 
 
+def _safe_task_ids(raw: object) -> list[int]:
+    if raw is None:
+        return [1]
+    if isinstance(raw, (int, float)):
+        return [int(raw)]
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return [1]
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            parsed = [x.strip() for x in stripped.split(",") if x.strip()]
+        raw = parsed
+    out: list[int] = []
+    if isinstance(raw, (list, tuple)):
+        for value in raw:
+            try:
+                out.append(int(value))
+            except (TypeError, ValueError):
+                continue
+    return sorted(set(out)) or [1]
+
+
+def _preferred_count_prefixes_for_task_ids(task_ids: list[int]) -> list[str]:
+    max_task_id = max(task_ids) if task_ids else 1
+    if max_task_id <= 1:
+        return ["raw_tt_"]
+    if max_task_id == 2:
+        return ["clean_tt_", "raw_to_clean_tt_", "raw_tt_"]
+    if max_task_id == 3:
+        return ["cal_tt_", "clean_tt_", "raw_to_clean_tt_", "raw_tt_"]
+    if max_task_id == 4:
+        return ["list_tt_", "list_to_fit_tt_", "cal_tt_", "clean_tt_", "raw_to_clean_tt_", "raw_tt_"]
+    return [
+        "corr_tt_",
+        "task5_to_corr_tt_",
+        "fit_to_corr_tt_",
+        "definitive_tt_",
+        "fit_tt_",
+        "list_to_fit_tt_",
+        "list_tt_",
+        "cal_tt_",
+        "clean_tt_",
+        "raw_to_clean_tt_",
+        "raw_tt_",
+    ]
+
+
 def _compute_eff(n_four: pd.Series, n_three_missing: pd.Series) -> pd.Series:
     """Efficiency = N_four / (N_four + N_three_missing)."""
     denom = n_four + n_three_missing
     return n_four / denom.replace({0: np.nan})
 
 
-def _find_count_prefix(df: pd.DataFrame) -> str:
+def _find_count_prefix(df: pd.DataFrame, preferred_prefixes: list[str] | None = None) -> str:
     """Detect which trigger-topology prefix is available (raw_tt_, clean_tt_, etc.)."""
-    for prefix in ("raw_tt_", "clean_tt_", "cal_tt_", "list_tt_", "fit_tt_"):
+    default_prefixes = [
+        "raw_tt_",
+        "clean_tt_",
+        "cal_tt_",
+        "list_tt_",
+        "fit_tt_",
+        "corr_tt_",
+        "definitive_tt_",
+        "task5_to_corr_tt_",
+        "fit_to_corr_tt_",
+        "list_to_fit_tt_",
+        "raw_to_clean_tt_",
+    ]
+    ordered_prefixes = preferred_prefixes if preferred_prefixes else default_prefixes
+    for prefix in ordered_prefixes:
         if f"{prefix}1234_count" in df.columns:
             return prefix
     raise KeyError("No trigger-topology count columns found (e.g. raw_tt_1234_count).")
@@ -154,8 +217,9 @@ def _find_count_prefix(df: pd.DataFrame) -> str:
 def _fit_empirical_vs_simulated(
     df: pd.DataFrame,
     plane: int,
-) -> tuple[float, float] | None:
-    """Fit empirical = a * simulated + b for one plane."""
+    poly_order: int = 3,
+) -> np.ndarray | None:
+    """Fit empirical = P(simulated) for one plane using polynomial order *poly_order*."""
     sim_col = f"eff_sim_{plane}"
     emp_col = f"eff_empirical_{plane}"
     sim = pd.to_numeric(df.get(sim_col), errors="coerce")
@@ -165,15 +229,52 @@ def _fit_empirical_vs_simulated(
         return None
     x = sim[m].to_numpy(dtype=float)
     y = emp[m].to_numpy(dtype=float)
-    a, b = np.polyfit(x, y, 1)
-    return float(a), float(b)
+    requested_order = max(1, int(poly_order))
+    used_order = min(requested_order, int(len(x) - 1))
+    if used_order < 1:
+        return None
+    coeffs = np.polyfit(x, y, used_order)
+    return np.asarray(coeffs, dtype=float)
+
+
+def _format_polynomial(
+    coeffs: np.ndarray | list[float] | tuple[float, ...],
+    *,
+    variable: str = "x",
+    precision: int = 4,
+) -> str:
+    """Return compact human-readable polynomial expression."""
+    arr = np.asarray(coeffs, dtype=float)
+    if arr.size == 0 or not np.isfinite(arr).any():
+        return "invalid"
+    degree = arr.size - 1
+    parts: list[tuple[str, str]] = []
+    for idx, coef in enumerate(arr):
+        if not np.isfinite(coef) or abs(float(coef)) < 1e-14:
+            continue
+        power = degree - idx
+        mag = f"{abs(float(coef)):.{precision}g}"
+        if power == 0:
+            term = mag
+        elif power == 1:
+            term = variable if np.isclose(abs(float(coef)), 1.0) else f"{mag}{variable}"
+        else:
+            term = f"{variable}^{power}" if np.isclose(abs(float(coef)), 1.0) else f"{mag}{variable}^{power}"
+        sign = "-" if coef < 0 else "+"
+        parts.append((sign, term))
+    if not parts:
+        return "0"
+    first_sign, first_term = parts[0]
+    expr = f"-{first_term}" if first_sign == "-" else first_term
+    for sign, term in parts[1:]:
+        expr += f" {sign} {term}"
+    return expr
 
 
 def _compute_fit_relerr_columns(
     df: pd.DataFrame,
     plane: int,
-    a: float,
-    b: float,
+    coeffs: np.ndarray | list[float] | tuple[float, ...],
 ) -> None:
     """Add fit-prediction and fit-relative-error columns for one plane."""
     sim_col = f"eff_sim_{plane}"
@@ -184,7 +285,7 @@ def _compute_fit_relerr_columns(
 
     sim = pd.to_numeric(df.get(sim_col), errors="coerce")
     emp = pd.to_numeric(df.get(emp_col), errors="coerce")
-    fit = a * sim + b
+    fit = pd.Series(np.polyval(np.asarray(coeffs, dtype=float), sim.to_numpy(dtype=float)), index=sim.index)
     df[fit_col] = fit
     df[re_col] = (emp - fit) / fit.replace({0: np.nan}) * 100.0
     df[abs_re_col] = df[re_col].abs()
@@ -399,7 +500,7 @@ def _plot_eff_sim_vs_empirical(
     dataset: pd.DataFrame,
     dictionary: pd.DataFrame,
     path,
-    fit_line_by_plane: dict[int, tuple[float, float]] | None = None,
+    fit_poly_by_plane: dict[int, np.ndarray | list[float] | tuple[float, ...]] | None = None,
 ) -> None:
     """2×2 scatter of simulated vs empirical efficiency for all 4 planes."""
     fig, axes = plt.subplots(2, 2, figsize=(10, 10), sharex=True, sharey=True)
@@ -435,10 +536,12 @@ def _plot_eff_sim_vs_empirical(
                 ax.scatter(ds[dm], de[dm], s=25, alpha=0.8, marker="x",
                            color="#E45756", linewidths=1.0, zorder=3, label="Dictionary")
         ax.plot([xmin - pad, xmax + pad], [xmin - pad, xmax + pad], "k--", linewidth=1)
-        if fit_line_by_plane and plane in fit_line_by_plane:
-            a, b = fit_line_by_plane[plane]
-            xline = np.array([xmin - pad, xmax + pad], dtype=float)
-            yline = a * xline + b
+        if fit_poly_by_plane and plane in fit_poly_by_plane:
+            coeffs = np.asarray(fit_poly_by_plane[plane], dtype=float)
+            degree = max(int(coeffs.size) - 1, 0)
+            xline = np.linspace(xmin - pad, xmax + pad, 200, dtype=float)
+            yline = np.polyval(coeffs, xline)
+            formula = _format_polynomial(coeffs, variable="x", precision=3)
             ax.plot(
                 xline,
                 yline,
@@ -446,9 +549,9 @@ def _plot_eff_sim_vs_empirical(
                 linewidth=1.5,
                 color="#2A9D8F",
                 zorder=4,
-                label=f"fit y={a:.4f}x {b:+.4f}",
+                label=f"fit deg {degree}: y={formula}",
             )
-            ax.set_title(f"Plane {plane} (fit-based dict cut)")
+            ax.set_title(f"Plane {plane} (poly-fit dict cut)")
             ax.legend(fontsize=8, loc="lower right")
         else:
             ax.set_title(f"Plane {plane} (direct dict cut)")
@@ -460,7 +563,7 @@ def _plot_eff_sim_vs_empirical(
         ax.grid(True, alpha=0.3)
     fig.suptitle(
         "Simulated vs Empirical Efficiency per Plane (grey=data, red×=dict)\n"
-        "All planes use fit-based cuts (empirical = a·simulated + b).",
+        "All planes use polynomial-fit cuts (empirical = P(simulated)).",
         fontsize=11,
     )
     fig.tight_layout()
@@ -648,6 +751,7 @@ def _plot_relerr_report(
     relerr_cut_by_plane: dict[int, float] | None = None,
     min_events_cut: float | None = None,
     hist_y_scale: str = "log",
+    fit_order_by_plane: dict[int, int] | None = None,
 ) -> None:
     """Comprehensive 4×3 report of relative errors for eff planes 1..4.
 
@@ -668,7 +772,10 @@ def _plot_relerr_report(
 
     for row, plane in enumerate(planes):
         re_col = f"relerr_eff_{plane}_fit_pct"
-        plane_mode = "fit-based"
+        if fit_order_by_plane and plane in fit_order_by_plane:
+            plane_mode = f"poly-fit (deg {fit_order_by_plane[plane]})"
+        else:
+            plane_mode = "fit-based"
         sim_col = f"eff_sim_{plane}"
         ev_col = "n_events"
         relerr_cut = None
@@ -782,7 +889,7 @@ def _plot_relerr_report(
 
     fig.suptitle(
         "Relative Error Report — Efficiency Planes 1, 2, 3 & 4\n"
-        "(all planes computed versus fitted line y = a·x + b)",
+        "(all planes computed versus fitted polynomial y = P(x))",
         fontsize=13,
     )
     fig.tight_layout()
@@ -818,6 +925,20 @@ def main() -> int:
     dict_min_events = cfg_12.get("dictionary_min_events", 20000)
     relerr_hist_y_scale = cfg_12.get("relerr_hist_y_scale", "log")
     plot_params = cfg_12.get("plot_parameters", None)  # None = use all param_cols
+    fit_polynomial_order_cfg = cfg_12.get(
+        "eff_fit_polynomial_order",
+        cfg_12.get("fit_polynomial_order", 3),
+    )
+    task_ids_used = _safe_task_ids(config.get("task_ids", [1]))
+    preferred_count_prefixes = _preferred_count_prefixes_for_task_ids(task_ids_used)
+    try:
+        fit_polynomial_order = max(1, int(fit_polynomial_order_cfg))
+    except (TypeError, ValueError):
+        log.warning(
+            "Invalid eff_fit_polynomial_order=%r; falling back to 3.",
+            fit_polynomial_order_cfg,
+        )
+        fit_polynomial_order = 3
 
     # ── Load ─────────────────────────────────────────────────────────
     if not input_path.exists():
@@ -829,7 +950,7 @@ def main() -> int:
     log.info("  Rows loaded: %d", len(df))
 
     # ── Compute empirical efficiencies ───────────────────────────────
-    prefix = _find_count_prefix(df)
+    prefix = _find_count_prefix(df, preferred_prefixes=preferred_count_prefixes)
     log.info("  Using count prefix: %s", prefix)
 
     four_col = f"{prefix}1234_count"
@@ -879,21 +1000,39 @@ def main() -> int:
     n_outliers = n_before - len(df_clean)
     log.info("  Outlier removal: %d outliers dropped, %d rows remain.", n_outliers, len(df_clean))
 
-    # Fit acceptance-adjusted linear relations for all 4 planes:
-    # empirical ≈ a * simulated + b
-    fit_line_by_plane: dict[int, tuple[float, float]] = {}
+    # Fit acceptance-adjusted polynomial relations for all 4 planes:
+    # empirical ≈ P(simulated)
+    fit_poly_by_plane: dict[int, list[float]] = {}
+    fit_order_by_plane: dict[int, int] = {}
     for plane in (1, 2, 3, 4):
-        fit = _fit_empirical_vs_simulated(df_clean, plane)
-        if fit is None:
+        fit_coeffs = _fit_empirical_vs_simulated(
+            df_clean,
+            plane,
+            poly_order=fit_polynomial_order,
+        )
+        if fit_coeffs is None:
             log.warning("  Plane %d fit unavailable; fit-based cut disabled for this plane.", plane)
             df_clean[f"eff_fitline_{plane}"] = np.nan
             df_clean[f"relerr_eff_{plane}_fit_pct"] = np.nan
             df_clean[f"abs_relerr_eff_{plane}_fit_pct"] = np.nan
             continue
-        a, b = fit
-        fit_line_by_plane[plane] = (a, b)
-        _compute_fit_relerr_columns(df_clean, plane, a, b)
-        log.info("  Plane %d fit: empirical = %.6f * simulated %+.6f", plane, a, b)
+        coeff_list = [float(c) for c in np.asarray(fit_coeffs, dtype=float)]
+        fit_poly_by_plane[plane] = coeff_list
+        fit_order_by_plane[plane] = len(coeff_list) - 1
+        _compute_fit_relerr_columns(df_clean, plane, coeff_list)
+        if fit_order_by_plane[plane] < fit_polynomial_order:
+            log.warning(
+                "  Plane %d requested poly order %d, using %d (insufficient points).",
+                plane,
+                fit_polynomial_order,
+                fit_order_by_plane[plane],
+            )
+        log.info(
+            "  Plane %d polynomial fit (deg %d): empirical = %s",
+            plane,
+            fit_order_by_plane[plane],
+            _format_polynomial(coeff_list, variable="simulated", precision=6),
+        )
 
     # ── Dataset = the full clean table ───────────────────────────────
     dataset = df_clean.copy()
@@ -984,12 +1123,23 @@ def main() -> int:
         "dictionary_rows": len(dictionary),
         "z_positions_used_mm": z_positions_used,
         "z_plane_map_mm": z_plane_map,
+        "task_ids_used": task_ids_used,
+        "count_prefix_preferred_order": preferred_count_prefixes,
+        "count_prefix_used": prefix,
         "eff2_range": eff2_range,
         "eff3_range": eff3_range,
-        "fit_line_eff_1": list(fit_line_by_plane[1]) if 1 in fit_line_by_plane else None,
-        "fit_line_eff_2": list(fit_line_by_plane[2]) if 2 in fit_line_by_plane else None,
-        "fit_line_eff_3": list(fit_line_by_plane[3]) if 3 in fit_line_by_plane else None,
-        "fit_line_eff_4": list(fit_line_by_plane[4]) if 4 in fit_line_by_plane else None,
+        "fit_polynomial_order_requested": int(fit_polynomial_order),
+        "fit_polynomial_order_by_plane": {
+            str(k): int(v) for k, v in fit_order_by_plane.items()
+        },
+        "fit_polynomial_eff_1": list(fit_poly_by_plane[1]) if 1 in fit_poly_by_plane else None,
+        "fit_polynomial_eff_2": list(fit_poly_by_plane[2]) if 2 in fit_poly_by_plane else None,
+        "fit_polynomial_eff_3": list(fit_poly_by_plane[3]) if 3 in fit_poly_by_plane else None,
+        "fit_polynomial_eff_4": list(fit_poly_by_plane[4]) if 4 in fit_poly_by_plane else None,
+        "fit_line_eff_1": list(fit_poly_by_plane[1]) if 1 in fit_poly_by_plane else None,
+        "fit_line_eff_2": list(fit_poly_by_plane[2]) if 2 in fit_poly_by_plane else None,
+        "fit_line_eff_3": list(fit_poly_by_plane[3]) if 3 in fit_poly_by_plane else None,
+        "fit_line_eff_4": list(fit_poly_by_plane[4]) if 4 in fit_poly_by_plane else None,
         "dict_relerr_eff1_fit_max_pct": dict_relerr_eff1_fit_max,
         "dict_relerr_eff2_fit_max_pct": dict_relerr_eff2_fit_max,
         "dict_relerr_eff3_fit_max_pct": dict_relerr_eff3_fit_max,
@@ -1005,7 +1155,8 @@ def main() -> int:
         dataset,
         dictionary,
         param_cols,
-        fit_line_by_plane=fit_line_by_plane,
+        fit_poly_by_plane=fit_poly_by_plane,
+        fit_order_by_plane=fit_order_by_plane,
         dict_relerr_eff1_fit_max=dict_relerr_eff1_fit_max,
         dict_relerr_eff2_fit_max=dict_relerr_eff2_fit_max,
         dict_relerr_eff3_fit_max=dict_relerr_eff3_fit_max,
@@ -1023,7 +1174,8 @@ def _make_plots(
     dataset: pd.DataFrame,
     dictionary: pd.DataFrame,
     param_cols: list[str],
-    fit_line_by_plane: dict[int, tuple[float, float]] | None,
+    fit_poly_by_plane: dict[int, list[float]] | None,
+    fit_order_by_plane: dict[int, int] | None,
     dict_relerr_eff1_fit_max: float,
     dict_relerr_eff2_fit_max: float,
     dict_relerr_eff3_fit_max: float,
@@ -1164,6 +1316,7 @@ def _make_plots(
         },
         min_events_cut=dict_min_events,
         hist_y_scale=relerr_hist_y_scale,
+        fit_order_by_plane=fit_order_by_plane,
     )
 
     # ── 5. Events distribution ───────────────────────────────────────
@@ -1192,7 +1345,7 @@ def _make_plots(
         dataset,
         dictionary,
         PLOTS_DIR / "scatter_eff_sim_vs_estimated.png",
-        fit_line_by_plane=fit_line_by_plane,
+        fit_poly_by_plane=fit_poly_by_plane,
     )
 
     # ── 8. Empirical efficiency 2 vs 3 (single-panel scatter) ──────

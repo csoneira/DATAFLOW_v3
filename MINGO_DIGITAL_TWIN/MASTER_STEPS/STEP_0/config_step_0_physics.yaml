@@ -7,7 +7,7 @@ flux_cm2_min: [0.8, 1.2]
 # Append strategy:
 # - uniform_random: existing behavior
 # - regular_mesh: build a regular grid around random center values
-mode: regular_mesh
+mode: uniform_random
 
 # Used only when mode=regular_mesh.
 # Example below creates a mesh in flux and identical efficiencies.
@@ -19,7 +19,7 @@ regular_mesh_relative_span: 0.5
 
 # Step 3
 ## Efficiencies
-efficiencies: [0.5, 1]
+efficiencies: [0.1, 1]
 efficiencies_identical: true
 
 # Optional: generate multiple rows per run, sharing selected columns.
@@ -29,4 +29,4 @@ expand_z_positions: true  # one sampled geometry per new line
 
 # Optional fixed detector geometry override for STEP_0.
 # Use one 4-value list for a single geometry, or a list of 4-value lists for several.
-z_positions_override_mm: [0, 65, 160, 195]
+z_positions_override_mm: [0, 65, 130, 195]

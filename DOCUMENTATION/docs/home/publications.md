@@ -1,57 +1,122 @@
-## Publications about TRASGO or TRASGO-related
+# Publications and reports
 
-### Published Papers
+*Last updated: March 2026*
 
-* Soneira-Landin, C., Blanco, A., Fraile, L.M., Garzón, J.A., Kornakov, G., Lopes, L., Nouvilas, V.M., & Udías, J.M. (2025). **miniTRASGO: A compact RPC tracker for cosmic ray studies.** *Nuclear Instruments and Methods in Physics Research Section A: Accelerators, Spectrometers, Detectors and Associated Equipment*. [https://doi.org/10.1016/j.nima.2025.170511](https://doi.org/10.1016/j.nima.2025.170511)  
+This page collects peer‑reviewed papers, theses and technical reports that
+are directly related to the TRASGO/miniTRASGO detector family and the
+analysis methods developed in this repository.  It is intended to serve as a
+centralised reference for collaborators preparing new manuscripts or
+reporting results; if you publish a new work please add it here.
 
-* Soneira-Landin, C., Blanco, A., Fraile, L.M., Garzón, J.A., Kornakov, G., Lopes, L., Michel, J., Nouvilas, V.M., & Udías, J.M. (2025). **miniTRASGO: Design and initial results of a compact Resistive Plate Chamber telescope for worldwide cosmic ray monitoring.** *Advances in Space Research*. [https://doi.org/10.1016/j.asr.2025.07.096](https://doi.org/10.1016/j.asr.2025.07.096)  
+## Citation guidance
 
-* Soneira-Landín, C., Blanco, A., Fraile, L.M., Garzón, J.A., Kornakov, G., Lopes, L., Nouvilas, V.M., & Udías, J.M. (2025). **miniTRASGO: A compact RPC telescope for global cosmic ray monitoring.** In *Proceedings of the 39th International Cosmic Ray Conference (ICRC2025)*, 15–24 July 2025, Geneva, Switzerland. PoS(ICRC2025)1368. (submitted)  
+When referring to the hardware or software described in this documentation,
+please cite one of the flagship miniTRASGO papers (2025) listed below and, if
+appropriate, the digital‑twin or dictionary method publications once they are
+published.  A generic BibTeX entry for the NIM A paper is:
 
-* Riádigos, I., González-Díaz, D., & Pérez-Muñuzuri, V. (2022). **Revisiting the limits of atmospheric temperature retrieval from cosmic-ray measurements.** *Earth and Space Science*, 9, e2021EA001982. [https://doi.org/10.1029/2021EA001982](https://doi.org/10.1029/2021EA001982)  
+```bibtex
+@article{soneira2025nima,
+  title        = {miniTRASGO: A compact RPC tracker for cosmic ray studies},
+  author       = {Soneira-Landin, C. and Blanco, A. and Fraile, L.M. and
+                  Garz{\'on}, J.A. and Kornakov, G. and Lopes, L. and
+                  Nouvilas, V.M. and Ud{\'\i}as, J.M.},
+  journal      = {Nuclear Instruments and Methods in Physics Research A},
+  year         = {2025},
+  doi          = {10.1016/j.nima.2025.170511},
+}
+```
 
-* García-Castro, D., Ajoor, M., Alvarez-Pol, H., Blanco, A., Cabanelas, P., Castro, E., Díaz, J., Fonte, P., Garzón, J.A., Gil, A., González-Díaz, D., Kornakov, G., Lopes, L., Palka, M., Pérez-Trigo, E., & Soriano, J. (2021). **The TRASGO Project. Present status and results.** *Physics of Atomic Nuclei*, 84, 1070–1079. [https://doi.org/10.1134/S1063778821130093](https://doi.org/10.1134/S1063778821130093)  
-
-* Riádigos, I., on behalf of the TRAGALDABAS Collaboration (2021). **Analysis of the atmospheric effect on the TRAGALDABAS high resolution Cosmic Ray detector.** In *Proceedings of the 36th International Cosmic Ray Conference (ICRC2019)*, Madison, USA. PoS(ICRC2019)132. [https://doi.org/10.22323/1.358.0132](https://doi.org/10.22323/1.358.0132)  
-
-* Riádigos, I., García-Castro, D., González-Díaz, D., & Pérez-Muñuzuri, V. (2020). **Atmospheric temperature effect in secondary cosmic rays observed with a 2 m² ground-based tRPC detector.** *Earth and Space Science*, 7, e2020EA001131. [https://doi.org/10.1029/2020EA001131](https://doi.org/10.1029/2020EA001131)  
-
-* Saraiva, J.P., Blanco, A., Garzón, J.A., García-Castro, D., Lopes, L., & Villasante-Marcos, V. (2020). **The TRISTAN detector—2018–2019 latitude survey of cosmic rays.** *Journal of Instrumentation (JINST)*, 15, C09024. [https://doi.org/10.1088/1748-0221/15/09/C09024](https://doi.org/10.1088/1748-0221/15/09/C09024)
-
-* Riádigos, I., García-Castro, D., González-Díaz, D., Garzón-Heydt, J.A., Pérez-Muñuzuri, V., & the TRAGALDABAS Collaboration (2018). **Study of the atmosphere with a high resolution Cosmic Ray detector.** *Geophysical Research Abstracts*, 20, EGU2018-18049. EGU General Assembly 2018, Vienna, Austria.  
-
-* Assis, P., Blanco, A., Carolino, N., Conceição, R., Cunha, O., Dobrigkeit, C., Ferreira, M., Fonte, P., Lopes, L., et al. (2018). **Autonomous RPCs for a Cosmic Ray ground array.** In *Proceedings of the 35th International Cosmic Ray Conference (ICRC2017)*, Bexco, Korea. PoS(ICRC2017)379.  
-
-* Garzón, J.A., Collazo, J., Cuenca-García, J., García-Castro, D., Otero, J., Yermo, M., Blanco, J.J., Kurtukian, T., Morozova, A., Pais, M.A., Blanco, A., Fonte, P., Lopes, L., et al. (2017). **TRAGALDABAS: First results on cosmic ray studies and their relation with solar activity, the Earth magnetic field and atmospheric properties.** *arXiv preprint* arXiv:1701.07277. [https://arxiv.org/abs/1701.07277](https://arxiv.org/abs/1701.07277)  
-
-* Blanco, A., Fonte, P., Lopes, L., et al. (2015). **TRAGALDABAS: A new high resolution detector for the regular study of cosmic rays.** *Journal of Physics: Conference Series*, 632, 012010.  
-
-* Blanco, A., et al. (2014). **TRAGALDABAS: A new RPC based detector for the regular study of cosmic rays.** *Journal of Instrumentation (JINST)*, 9, C09027.  
-
-* Belver, D., Blanco, A., Cabanelas, P., Díaz, J., Fonte, P., Garzón, J.A., Gil, A., González-Díaz, D., Koenig, W., Kolb, B., Kornakov, G., Lopes, L., et al. (2012). **Analysis of the space-time microstructure of cosmic ray air showers using the HADES RPC TOF wall.** *Journal of Instrumentation (JINST)*, 7, P10007.  
-
-* Blanco, A., Belver, D., Cabanelas, P., Díaz, J., Fonte, P., Garzón, J.A., Gil, A., González-Díaz, D., Koenig, W., Kolb, B., Lopes, L., et al. (2012). **RPC HADES-TOF wall cosmic ray test performance.** *Nuclear Instruments and Methods in Physics Research Section A: Accelerators, Spectrometers, Detectors and Associated Equipment*, 661, S114.  
-
-* Belver, D., Cabanelas, P., Domínguez, D., Garzón, J.A., Kornakov, G., & Morales, M.F. (2012). **TRASGO: A proposal for a timing RPC-based detector for analyzing cosmic ray air showers.** *Nuclear Instruments and Methods in Physics Research Section A: Accelerators, Spectrometers, Detectors and Associated Equipment*, 661, S163–S167. [https://doi.org/10.1016/j.nima.2010.09.173](https://doi.org/10.1016/j.nima.2010.09.173)  
-
-* Assis, P., Blanco, A., Brogueira, P., Cazon, L., Fonte, P., Lopes, L., Pereira, A., Pimenta, M., dos Santos, E., & Schweizer, T. (2011). **R&D for an autonomous RPC station in air shower detector arrays.** In *Proceedings of the 32nd International Cosmic Ray Conference (ICRC2011)*, Beijing, China.  
+Feel free to adapt the author list to match the subset of collaborators
+involved.  For internal reports or theses, use the appropriate institutional
+identifier (e.g. [UMI handle](http://hdl.handle.net)).
 
 ---
 
-### Ph.D. Theses
+## Core miniTRASGO publications (2025)
 
-* García Castro, Damián. **Cosmic Rays' study with a TRASGO detector.** PhD thesis, Universidade de Santiago de Compostela. Escola de Doutoramento Internacional (EDIUS), Universidade de Santiago de Compostela. Programa de Doutoramento en Física Nuclear e de Partículas, 2022. Embargo: 2023-07-22. URI: [http://hdl.handle.net/10347/29288](http://hdl.handle.net/10347/29288). Rights: Attribution-NonCommercial-NoDerivatives 4.0 Internacional. Advisor: Juan Pablo Garzón Heydt.
+| Year | Topic | Citation |
+|------|-------|----------|
+| 2025 | Hardware & detector description | Soneira-Landin *et al.*, *NIM A* (2025). [DOI](https://doi.org/10.1016/j.nima.2025.170511) |
+| 2025 | Design and first monitoring results | Soneira-Landin *et al.*, *Adv. Space Res.* (2025). [DOI](https://doi.org/10.1016/j.asr.2025.07.096) |
+| 2025 | Conference proceedings (ICRC2025) | Soneira-Landin *et al.* PoS(ICRC2025)1368 (submitted) |
 
-* Fontenla Barba, Yanis. **Studies on the composition and energy of secondary cosmic rays with the Tragaldabas detector.** PhD thesis, Universidade de Santiago de Compostela. Centro Internacional de Estudos de Doutoramento e Avanzados (CIEDUS), Universidade de Santiago de Compostela. Escola de Doutoramento Internacional en Ciencias e Tecnoloxía, Universidade de Santiago de Compostela. Programa de Doutoramento en Física Nuclear e de Partículas, 2019. URI: [http://hdl.handle.net/10347/20655](http://hdl.handle.net/10347/20655). Rights: Attribution-NonCommercial-NoDerivatives 4.0 Internacional. Advisors: Juan Antonio Garzón Heydt, Pablo Cabanelas Eiras.
-
-* Ajoor, Marwan Yassir Kamel. **Study of Cosmic Ray data with the TRISTAN and TRAGALDABAS detection systems.** PhD thesis, Universidade de Santiago de Compostela. Escola de Doutoramento Internacional (EDIUS), Universidade de Santiago de Compostela. Programa de Doutoramento en Física Nuclear e de Partículas, 2022. URI: [http://hdl.handle.net/10347/28824](http://hdl.handle.net/10347/28824). Rights: Attribution-NonCommercial-NoDerivatives 4.0 Internacional. Advisors: Juan Pablo Garzón Heydt, Pablo Cabanelas Eiras.
-
-* Cuenca García, José Javier. **Simulation and reconstruction algorithms for a commercial muon tomography system.** PhD thesis, Universidade de Santiago de Compostela. Centro Internacional de Estudos de Doutoramento e Avanzados (CIEDUS), Universidade de Santiago de Compostela. Escola de Doutoramento Internacional en Ciencias e Tecnoloxía, Universidade de Santiago de Compostela.
+The first paper contains a complete description of the RPC geometry,
+electronics and assembly procedures; the second focuses on the network of
+stations and initial cosmic‑ray rate measurements.
 
 ---
 
-### Projects and Industry Reports
+## Ancillary journal articles and conference papers
 
-* Logicmelt (2025). **Stratos DS – Stratospheric temperature prediction using artificial intelligence.** Logicmelt – Use Cases. Retrieved from [https://logicmelt.com/en/use-cases_eng/stratos-ds-prediction-of-the-stratosphere-temperature/](https://logicmelt.com/en/use-cases_eng/stratos-ds-prediction-of-the-stratosphere-temperature/)  
+### Analysis & environmental effects
 
-* NAC-Intercom (2025). **Project STRATOS – Ground Station for Continuous Monitoring of the Stratosphere Temperature through Cosmic Ray Directional Flow.** NAC-Intercom – Projects. Retrieved from [https://www.nac-inter.com/en/content/30-project-stratos](https://www.nac-inter.com/en/content/30-project-stratos)
+* Ri{\'a}digos, I., González-Díaz, D. & Pérez-Muñuzuri, V. (2022). Revisiting
+the limits of atmospheric temperature retrieval from cosmic-ray
+measurements. *Earth and Space Science*, 9, e2021EA001982.
+* Ri{\'a}digos *et al.* (2020). Atmospheric temperature effect in secondary
+cosmic rays observed with a 2 m² ground-based tRPC detector. *Earth and Space
+Science*, 7, e2020EA001131.
+
+### TRASGO / TRAGALDABAS legacy work
+
+Many of the early publications describe the predecessor detectors that
+informed miniTRASGO.  Key references include the TRAGALDABAS performance
+papers (2014–2017) and the TRASGO proposal (2012).  See the original list
+below for full details.
+
+* García-Castro *et al.* (2021). The TRASGO Project – status and results.
+  *Phys. Atom. Nucl.*, 84, 1070–1079.
+* Saraiva *et al.* (2020). The TRISTAN detector latitude survey. *JINST* 15,
+  C09024.
+* Assis *et al.* (2018). Autonomous RPCs for a ground array. ICRC2017.
+* Garzón *et al.* (2017). TRAGALDABAS first results (arXiv:1701.07277).
+* Blanco *et al.* (2015, 2014). TRAGALDABAS detector design (JPhysConfSer, JINST).
+* Belver *et al.* (2012). Analysis of cosmic-ray air showers with HADES RPC
+  wall. *JINST* 7, P10007.
+* Belver *et al.* (2012). RPC HADES-TOF wall cosmic ray test. *NIM A* 661, S114.
+* Belver *et al.* (2012). TRASGO proposal. *NIM A* 661, S163–S167.
+* Assis *et al.* (2011). R&D for an autonomous RPC station. ICRC2011.
+
+See the full chronological list at the bottom of this page for additional
+items.
+
+---
+
+## PhD theses and technical reports
+
+* García Castro, D. (2022). *Cosmic Rays' study with a TRASGO detector.*
+  [UMI handle](http://hdl.handle.net/10347/29288). Advisor: Juan P. Garzón Heydt.
+* Fontenla Barba, Y. (2019). *Studies on the composition and energy of
+  secondary cosmic rays with the Tragaldabas detector.* [UMI handle](http://hdl.handle.net/10347/20655).
+* Ajoor, M. (2022). *Study of Cosmic Ray data with the TRISTAN and TRAGALDABAS
+  detection systems.* [UMI handle](http://hdl.handle.net/10347/28824).
+* Cuenca García, J.J. **Simulation and reconstruction algorithms for a
+  commercial muon tomography system.** (no handle available).
+
+---
+
+## Industry collaborations and project reports
+
+* Logicmelt (2025). Stratos DS – Stratospheric temperature prediction using
+  artificial intelligence. [link](https://logicmelt.com/en/use-cases_eng/stratos-ds-prediction-of-the-stratosphere-temperature/)
+* NAC-Intercom (2025). Project STRATOS – Ground Station for Continuous Monitoring
+  of the Stratosphere Temperature through Cosmic Ray Directional Flow.
+  [link](https://www.nac-inter.com/en/content/30-project-stratos)
+
+---
+
+### How to add new entries
+
+Edit this markdown file and insert a new bullet in the appropriate section.
+Keep the format consistent (year, authors, title, journal/conference, DOI or
+URL).  If the paper is still in preparation, mark it as such and update the
+entry once it is accepted.
+
+If you produce figures or tables from a new paper that should appear on the
+public documentation site, add them to the `plot_list.txt` configuration and
+run the `update_plots.sh` script to copy them into `docs/assets`.
+
+---
+
+*(End of publications list)*

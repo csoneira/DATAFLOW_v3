@@ -1,10 +1,22 @@
+*Last updated: March 2026*
+
 ## Frame of reference convention and nomenclature
 
-The x axis follows the direction of the strip, the z is pointing down (to reflect the most likely direction of the incoming cosmic ray) and y is dextro-rotatory respect to the other two. Later we will associate this frame of reference with the cardinal points, making easy to transform into any other frame of reference, such as equatorial or galactical, more useful for physical purposes.
+The coordinate system used throughout the project is defined as follows:
+- **x** axis along the strip direction,
+- **z** axis pointing downward (toward the expected cosmic-ray incidence),
+- **y** axis completing a right-handed triad.
+
+This frame is later associated with cardinal directions, which simplifies
+transformations to equatorial or galactic coordinates for physics analyses.
 
 ![mingo](https://github.com/cayesoneira/miniTRASGO-documentation/assets/21690353/f9801f0b-73a7-4bb7-98f7-d1948eaadc27)
 
 ## Geometry of the telescope
+
+The simulation (digital twin) reproduces the same physical layout and
+coordinate conventions described on this page; see the [Digital twin](../simulation/index.md) documentation for
+implementation details.
 
 - 4 parallel square RPC detectors (fig. 1):
     - Active area: approximately 30x30 cm (we have to calculate it effectively).

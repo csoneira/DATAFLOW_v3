@@ -1,6 +1,6 @@
 # miniTRASGO Documentation
 
-*Last updated: September 2025*
+*Last updated: March 2026*
 
 The miniTRASGO (miniature TRASGO) programme delivers a transportable cosmic-ray
 tracking station that combines multi-gap Resistive Plate Chambers (RPCs) with a
@@ -25,14 +25,30 @@ operation, data quality assurance, and collaborative analysis.
   flow.
 - **Network deployment.** Stations in Madrid, Warsaw, and Puebla are providing
   continuous coverage, with additional nodes in commissioning for Monterrey and
-  other CASTRO collaboration partners. Cross-site analysis leverages common data
-  formats and calibration workflows developed within the miniTRASGO analysis
-  software suite.
+  other CASTRO collaboration partners.  ![stations logo](/assets/logo_mingo_stations.png){height="24"}
+  Cross-site analysis leverages common data formats and calibration workflows
+  developed within the miniTRASGO analysis software suite. ![analysis logo](/assets/logo_mingo_analysis.png){height="24"}
+- **Digital twin & dictionary.** A parameterized simulation of the RPC detector
+  (the "digital twin") lives in the repository alongside the operational code.
+  Synthetic outputs are used to build a lookup dictionary that maps measured
+  rates and efficiencies to physical flux; this dictionary underpins the rapid
+  reconstruction algorithms described on the [Digital twin](simulation/index.md)
+  and [Dictionary correction](dictionary/index.md) pages.
+- **Software analysis suite.** The heart of the data processing stack is a
+  four‑stage pipeline that ingests raw station data, applies environmental
+  corrections, and produces analytics tables.  The [Analysis software]
+  page summarises the directory layout, cron orchestration, and how to run the
+  pipeline locally.
 
 ## Project resources
 
 - **Logbook.** Track fabrication, operation, and maintenance tasks in the
   [miniTRASGO logbook](https://docs.google.com/spreadsheets/d/1ato36QkIXCxFkDT_LtAaLjPP7pvLcor-xZAP4fy00l0/edit?gid=816573551#gid=816573551).
+- **Publications & reports.** See the [Publications](home/publications.md) page
+  for a curated list of papers, theses and technical reports citing TRASGO
+  detectors.
+- **Task tracker.** The [Tasks](tasks/index.md) page embeds our Trello board for
+  ongoing development priorities.
 - **Notebook.** Consult the detailed calculation record in the
   [miniTRASGO notebook](https://docs.google.com/document/d/e/2PACX-1vQD_Zr4IW3ZZl0sX4jf7jcD_9tdXbD-kIDpydO0k9HWhewk7yDDWJEF4PC4ARUu1nk-mdEexsyPXXY-/pub).
 - **Documentation repository.** This site is built from the

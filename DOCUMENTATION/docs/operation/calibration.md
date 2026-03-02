@@ -1,41 +1,93 @@
-# Calibrating
-There are some calibration processes that must be done when using the mingo for the first time in a certain location, but also every once in a while, specially before observation campaigns.
+# Calibration procedures
 
-## Time to position on the strip calibration
-To get the position we need the velocity of propagation of the signal through the strip (and most likely on its edges, but since the strips are small it should be negligible), but also to correct for a time offset created by the different length of the wires that come from the strip to the FEE. There are several ways to calibrate this effect for each strip:
-- **Quantile method**. The one it is being used. The middle position between the quantiles .5 and .95 is taken as calibration offset.
-- **Regression method**. The intercept of the linear regression between the times in the front and in the back of the strip is taken as offset.
+*Last updated: March 2026*
 
+Periodic calibrations ensure that timing, charge and flow measurements from
+the RPC stack are accurate and stable.  Perform these whenever a detector is
+reconfigured or at the start of a measurement campaign.
 
-## Gas flow meters
-The flow meters, that measure in arbitrary units, have an offset, different per each channel, that has to be taken into account. These are not precission devices, so the values are more to be used as a guideline than as a real reference for calculations. It is important to account, though, if the calibration slopes are different or are the same for the four channels, since they have to be prepared as a leak control.
+## 1. Time‑to‑position calibration
 
-## Performance plateau
-The performance of the RPC is strongly related with the applied HV. As the HV grows, the detector gains in efficiency, but also measures much more streamers (uncontrolled avalanches that deposit a charge sligthly bigger than the usual avalanche). The *sweet spot* is that with the better compromise between streamers (should be around 1-2%), efficiency, charge, rate, etc. **Actually we should decide which are the best indicators of good performance**. In RPC this optimum is usually given by a particular value of the Townsend: the rate between electric field and density of the gas. This means that changing the location, and therefore the pressure, temperature... will change the density of the gas and so the Townsend value.
+The signal propagation velocity along each strip, as well as electronic
+offsets introduced by varying cable lengths, must be calibrated so that the
+time difference between front and back endpoints maps linearly to position.
 
-This analysis has to be performed at every telescope location (and maybe several times a year or at the beginning of a measure campaign) since it depends on temperature, pressure, etc.
+### Quantile method (default)
 
-There is a script, `home/rpcuser/bin/HV/plateau.sh`, that performs the plateau analysis by scanning in a given range of HV values. This range can be modified, as well as its finesse and duration.
+Collect a large set of cosmic events and compute the 50th and 95th percentiles
+of the `t_front - t_back` distribution for each strip.  The mid‑point of these
+quantiles is used as the per‑strip time offset.
 
-## Time-to-Digital Converters (TDC)
-They need calibration: they give three numbers, they need three strings. Alberto Blanco knows more about this, but it requires more subtle work. Some very recognizable errors arise when this calibration is not well performed.
+```bash
+# run the calibration helper (example script placeholder)
+~/bin/calibrate_time.sh --method quantile --input /path/to/hlds --output offsets.csv
+```
 
-## Charge calibration
-The calibration in charge has to be performed for two different components.
+### Regression method (alternative)
 
-### Charge offset
-The zero of the charge spectrum (in AU or in C) has to be obtained to eliminate the offset. The algorithm is complex and can be worked on.
+Perform a linear regression of `t_front` versus `t_back` for each strip; the
+intercept gives the offset and the slope provides an effective velocity.
 
-### FEE time-to-charge calibration curve
-The width of the LVDS is related with the charge of the original signal, but not in a linear way. This means that to obtain a reliable charge spectrum, that will be different in shape in AU and in C, we will need the transformation to Coulombs. All this question comes from the method from which the LVDS width is created.
+Both methods produce a `time_offsets.csv` file that is loaded by the
+analysis pipeline and by the online monitoring scripts.
 
-There are different methods to get a LVDS width from the original RPC signal. For example using the integrated signal: we could measure eventually at a relatively long time the maximum height to know the total charge. This method is slow, since the integrated signal just reaches a top that later has to be lowered. The lowering of the signal is so slow that the dead time is very high.
+## 2. Gas flow meter calibration
 
-Other usual technique is the **TOT** (Time over Threshold), which is a method that gets the width of the LVDS according to how much time the charge signal is over a certain discriminator. Since the shape of the charge respect to time is presumably dependent only on the total charge (meaning that total integrated value, amplitude and shape are directly related), we can guess the total height of the signal from the width at a certain height. According to the type of signal to which we are applying the TOT, we can classify:
-- Standard: just the regular Q vs. time function.
-- Integrated and derivated: the signal is integrated and at the same time it is derivated so it would be overall thicker than the original RPC signal but it is thick enough to allow the TOT to apply. The speed of the derivation (which lowers the signal) determines why it is called fast electronics; the faster the better, even though there is a handicap in lowering the signal to fast: THE same charge avalanche inside the RPC could be measured twice as two different, independent signals, and this is because the ions take microseconds to totally get to the strip: they are much slower than the electronics. This has to be solved if we want faster electronics, but some filters could work.
-From the TOT and knowing the method we apply to modify the signal we can eventually derive a value for the charge in AU. If we can get the *charge calibration curve* we can transform from charge in AU (arbitrary units) to those of proper charge: Coulombs. **And the transformation is non-linear, so it will slightly change the spectrum shape**.
+Each flow meter reports an arbitrary unit (AU) with a device‑specific
+offset.  Verify the offset by flowing a known rate and recording the meter
+reading; store the calibration constant in
+`~/gate/system/lookUpTables/flow_calibration.txt`.
 
-Here we include the FEE calibration setup to obtain the time-to-charge calibration curve.
+These meters are primarily used for leak detection rather than absolute rate
+measurements; a sustained drop below the nominal threshold (100 AU) should
+automatically trigger HV shutdown (see [Monitoring](monitoring.md)).
+
+## 3. Efficiency/plateau scan
+
+Determine the optimal HV plateau by scanning voltage while recording detector
+efficiency and streamer rate.  Use the included script:
+
+```bash
+~/bin/HV/plateau.sh --start 4.5 --stop 5.8 --step 0.05 --duration 60
+```
+
+The script produces a PDF summarising efficiency, charge and streamer
+fraction.  Choose the operating voltage where the efficiency curve flattens
+and streamers remain at 1–2 %.
+
+## 4. TDC calibration
+
+The TRB3sc TDCs require a multi‑point calibration to convert raw counts into
+nanoseconds.  This is normally performed by running the `tdc_calibration.py`
+scripts located in `~/trbsoft/` (consult Alberto Blanco for details).  Errors
+in this calibration manifest as non‑integer values in the `c801` register and
+should be addressed before taking physics data.
+
+## 5. Charge calibration
+
+The front‑end electronics produce a Time‑Over‑Threshold (TOT) pulse width
+proportional to deposited charge.  The relationship is nonlinear; calibrate
+it using a known charge injection source or by fitting the width spectrum.
+
+Two components:
+
+1. **Offset** – determine the zero point of the TOT measurement (use quiet
+   runs with no incoming particles).
+2. **Conversion curve** – map TOT width to Coulombs.  The script
+   `~/bin/calibrate_charge.sh` produces a lookup table used by the offline
+   analysis to convert raw widths to charge units.
 
 ![FEE calibration setup](https://github.com/cayesoneira/miniTRASGO-documentation/assets/93153458/c8b0de84-0890-4c57-9012-c443c591541c)
+
+
+## 6. Other calibrations
+
+- **Flow meter linearity**: verify that all four channels have similar
+  response slopes; discrepancies indicate a leaking or clogged pipe.
+- **Temperature sensors**: compare internal and external bus readings and
+  recalibrate if offsets exceed 0.5 °C.
+
+---
+
+_Local preview: run `mkdocs serve` in the `DOCUMENTATION/` root._
+

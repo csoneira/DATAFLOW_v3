@@ -1353,6 +1353,7 @@ def main() -> None:
         _log_warn("Multiple SIM_RUNs requested; using baseline_only input collection per SIM_RUN.")
         input_collect = "baseline_only"
     _log_info(f"SIM_RUNs selected: {len(sim_runs)}")
+    processed_sim_runs = 0
 
     mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
     if not mesh_dir.is_absolute():
@@ -1945,6 +1946,24 @@ def main() -> None:
             _log_warn(
                 f"Left mesh row pending for param_set_id={param_set_id} because sampling was interrupted."
             )
+
+        processed_sim_runs += 1
+        if threshold > 0 and not args.ignore_backpressure:
+            mid_snapshot = build_pending_backpressure_snapshot(
+                SIMULATED_DATA_DIR_DEFAULT,
+                SIMULATED_DATA_FILES_DIR_DEFAULT,
+                STATIONS_STEP1_DIR_DEFAULT,
+            )
+            if mid_snapshot["pending_total"] >= threshold:
+                _log_warn(
+                    "backpressure_gate status=blocked_mid_batch "
+                    f"threshold={threshold} source={threshold_source} "
+                    f"pending_total={mid_snapshot['pending_total']} "
+                    f"processed_sim_runs={processed_sim_runs} "
+                    f"current_sim_run={sim_run} "
+                    "stopping early; remaining SIM_RUNs will continue next invocation."
+                )
+                break
 
 
 if __name__ == "__main__":
