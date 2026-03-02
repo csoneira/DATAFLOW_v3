@@ -34,7 +34,7 @@
   <text x="348" y="220" class="small">ingest -> clean -> correct -> enrich</text>
 
   <rect x="680" y="160" width="250" height="90" class="box common"/>
-  <text x="698" y="196" class="label">Analysis outputs</text>
+  <text x="698" y="196" class="label">STATIONS outputs</text>
   <text x="698" y="220" class="small">station analytics tables</text>
 
   <line x1="270" y1="205" x2="330" y2="205" class="flow"/>

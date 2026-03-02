@@ -23,8 +23,8 @@ pip install -r CONFIG/requirements.list
 
 ```text
 DATAFLOW_v3/
-├─ MASTER/                # Operational pipeline stages
-├─ STATIONS/              # Per-station trees (MINGO00..MINGO04)
+├─ MASTER/                # Mother analysis code (real + simulated input processing)
+├─ STATIONS/              # Per-station trees and output locations (MINGO00..MINGO04)
 ├─ MINGO_DIGITAL_TWIN/    # STEP_0..STEP_FINAL simulation pipeline
 ├─ OPERATIONS/            # Orchestration/observability utilities
 ├─ OPERATIONS_RUNTIME/    # Runtime locks, logs, status markers
@@ -90,4 +90,4 @@ Open `http://127.0.0.1:8000`.
 - [Software](../software/index.md)
 - [Operational Notes](../operations/index.md)
 - [Conventions and Standards](../standards/index.md)
-
+- [Reader Guide](reader-guide.md)

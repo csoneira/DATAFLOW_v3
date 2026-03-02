@@ -13,8 +13,8 @@ DATAFLOW_v3 combines two upstream sources that converge into analysis workflows:
 
 ## Path summary
 
-- Real data: station DAQ/log sources -> STAGE_0 -> STAGE_1 -> STAGE_2 -> STAGE_3
-- Simulated data: STEP_0 -> STEP_1..STEP_10 -> STEP_FINAL `.dat` -> STAGE_0 -> STAGE_1..STAGE_3
+- Real data: station DAQ/log sources -> `MASTER` STAGE_0 -> STAGE_1 -> STAGE_2 -> STAGE_3 -> outputs in `STATIONS/`
+- Simulated data: STEP_0 -> STEP_1..STEP_10 -> STEP_FINAL `.dat` -> `MASTER` STAGE_0 -> STAGE_1..STAGE_3 -> outputs in `STATIONS/`
 
 ## Data products and directories
 
@@ -25,6 +25,7 @@ DATAFLOW_v3 combines two upstream sources that converge into analysis workflows:
 | Runtime cron logs | `OPERATIONS_RUNTIME/CRON_LOGS/` |
 | Runtime locks | `OPERATIONS_RUNTIME/LOCKS/` |
 | Operational station trees | `STATIONS/MINGO0X/` |
+| Materialized analysis outputs | `STATIONS/MINGO0X/STAGE_*/...` |
 
 ## Key formats
 

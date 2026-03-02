@@ -1,4 +1,16 @@
-"""Utilities for aggregating status CSV logs and serving them for dashboards."""
+"""
+DATAFLOW_v3 Script Header v1
+Script: MASTER/common/status_dashboard.py
+Purpose: Utilities for aggregating status CSV logs and serving them for dashboards.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/common/status_dashboard.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
 
 from __future__ import annotations
 

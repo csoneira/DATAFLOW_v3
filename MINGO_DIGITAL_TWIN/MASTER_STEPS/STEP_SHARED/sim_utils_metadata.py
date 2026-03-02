@@ -1,4 +1,16 @@
-"""Metadata extraction and SIM_RUN identifier helpers."""
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_SHARED/sim_utils_metadata.py
+Purpose: Metadata extraction and SIM_RUN identifier helpers.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_SHARED/sim_utils_metadata.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
 
 from __future__ import annotations
 

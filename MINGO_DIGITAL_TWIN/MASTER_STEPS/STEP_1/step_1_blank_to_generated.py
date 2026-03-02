@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Step 1: generate primary muon parameters (x, y, z, theta, phi) in batch form.
-
-Inputs: physics/runtime configs.
-Outputs: muon_sample_<N>.(pkl|csv) with metadata and optional plots.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_1/step_1_blank_to_generated.py
+Purpose: Step 1: generate primary muon parameters (x, y, z, theta, phi) in batch form.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_1/step_1_blank_to_generated.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

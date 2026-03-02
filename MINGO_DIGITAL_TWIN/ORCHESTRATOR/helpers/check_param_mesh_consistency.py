@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Check param_mesh rows for missing upstream INTERSTEPS SIM_RUNs.
-
-Exit codes:
-  0 = OK (no missing upstream)
-  2 = missing upstream SIM_RUN(s) found
-
-Usage:
-  check_param_mesh_consistency.py --mesh <param_mesh.csv or mesh_dir> --intersteps <INTERSTEPS_DIR> [--step 3]
 """
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/check_param_mesh_consistency.py
+Purpose: Check param_mesh rows for missing upstream INTERSTEPS SIM_RUNs.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/check_param_mesh_consistency.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
+
 from __future__ import annotations
 
 import argparse

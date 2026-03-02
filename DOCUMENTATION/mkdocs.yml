@@ -7,6 +7,7 @@ nav:
   - Overview:
       - Home: index.md
       - Getting Started: getting-started/index.md
+      - Reader Guide: getting-started/reader-guide.md
   - Collaborators:
       - collaborators/index.md
   - Software:
@@ -34,10 +35,13 @@ nav:
       - Conventions and Governance: standards/conventions-and-governance.md
       - Determinism and Provenance: standards/determinism-and-provenance.md
       - Documentation Lifecycle: standards/documentation-lifecycle.md
+      - Documentation Quality Checklist: standards/documentation-quality-checklist.md
+      - Script Header Standard: standards/script-header-standard.md
   - Publications and References:
       - references/index.md
       - Publications and Reports: references/publications-and-reports.md
       - Repository Source Documents: references/source-documents.md
+      - Figure Gallery and Provenance: references/figure-gallery.md
   - Appendices:
       - appendices/index.md
       - Data Dictionaries: appendices/data-dictionaries.md
@@ -72,7 +76,20 @@ plugins:
 
 extra_javascript:
   - https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML
+  - https://unpkg.com/mermaid@10/dist/mermaid.min.js
+  - assets/js/mermaid-init.js
 
 markdown_extensions:
-  - pymdownx.superfences
+  - admonition
+  - attr_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
   - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format

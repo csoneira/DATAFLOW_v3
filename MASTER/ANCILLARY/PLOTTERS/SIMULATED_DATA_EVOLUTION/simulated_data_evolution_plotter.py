@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Plot simulated parameter evolution with MASTER-stage color coding."""
+"""
+DATAFLOW_v3 Script Header v1
+Script: MASTER/ANCILLARY/PLOTTERS/SIMULATED_DATA_EVOLUTION/simulated_data_evolution_plotter.py
+Purpose: Plot simulated parameter evolution with MASTER-stage color coding.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/ANCILLARY/PLOTTERS/SIMULATED_DATA_EVOLUTION/simulated_data_evolution_plotter.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
 
 from __future__ import annotations
 

@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
-"""Compact analysis: show original data (time series + scatters),
-apply ONE decorrelation method (robust linear), and show resulting
-scatter + time series for validation.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/A_SMALL_SIDE_QUEST/TRYING_DECORRELATION/scatter_simulated_file.py
+Purpose: Compact analysis: show original data (time series + scatters),.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/A_SMALL_SIDE_QUEST/TRYING_DECORRELATION/scatter_simulated_file.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 import os

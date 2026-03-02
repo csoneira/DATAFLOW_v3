@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-
-"""Plots for STEP 1 — adapted from MASTER_STEPS/STEP_1/step_1_blank_to_generated.py
-
-Loads any available `step_1` chunk from INTERSTEPS and produces a small PDF with
-representative histograms/scatter plots (copies plotting functions from the master
-step file).
 """
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/STEP_1/plot_step_1.py
+Purpose: Plots for STEP 1 — adapted from MASTER_STEPS/STEP_1/step_1_blank_to_generated.py.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/STEP_1/plot_step_1.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,17 @@
+% =============================================================================
+% DATAFLOW_v3 Script Header v1
+% Script: MASTER/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/software/daq/unpackerTRB3LunchContinuous.m
+% Purpose: unpackerTRB3LunchContinuous function implementation.
+% Owner: DATAFLOW_v3 contributors
+% Sign-off: csoneira <csoneira@ucm.es>
+% Last Updated: 2026-03-02
+% Runtime: octave/matlab
+% Usage: Run from MATLAB/Octave entrypoint with expected args/context.
+% Inputs: Variables, config files, environment, and/or upstream files.
+% Outputs: Variables, files, plots, or logs.
+% Notes: Keep behavior configuration-driven and reproducible.
+% =============================================================================
+
 function tmpFolder = unpackerTRB3LunchContinuous(inputVars)
 
 %2024-02-27 on Generic - Change a bit the inputVars to tranport conf and therefore scriptVersions

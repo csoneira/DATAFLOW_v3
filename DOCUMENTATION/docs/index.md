@@ -2,7 +2,7 @@
 
 DATAFLOW_v3 contains two coordinated systems:
 
-1. The **operational pipeline** (`MASTER/`, `STATIONS/`) for real station data ingestion, correction, and analytics.
+1. The **analysis mother code and output trees**: `MASTER/` contains the core analysis pipeline for both real and simulated inputs, while `STATIONS/` contains per-station runtime trees and output materialization.
 2. The **MINGO digital twin** (`MINGO_DIGITAL_TWIN/`) for synthetic RPC event generation from STEP_0 to STEP_FINAL.
 
 This documentation is organized by subsystem and role so collaborators can move from onboarding to operations and troubleshooting without hunting across folders.
@@ -10,6 +10,7 @@ This documentation is organized by subsystem and role so collaborators can move 
 ## Documentation map
 
 - [Getting Started](getting-started/index.md): environment, dependencies, and common commands.
+- [Reader Guide](getting-started/reader-guide.md): role-based reading paths and navigation strategy.
 - [Collaborators](collaborators/index.md): team roles, institutions, and contact points.
 - [Software](software/index.md): architecture, workflows, and code structure for analysis, simulation, and inference.
 - [Hardware](hardware/index.md): detector stations, DAQ, infrastructure, and maintenance practices.
@@ -17,6 +18,7 @@ This documentation is organized by subsystem and role so collaborators can move 
 - [Troubleshooting and FAQs](troubleshooting/index.md): recurring failure patterns and operator Q&A.
 - [Conventions and Standards](standards/index.md): governance rules, reproducibility, determinism, and naming/config policies.
 - [Publications and References](references/index.md): papers, reports, and source documentation pointers.
+- [Figure Gallery](references/figure-gallery.md): curated repository figures with provenance.
 - [Appendices](appendices/index.md): dictionaries, contracts, glossary, and full contact list.
 - [Legacy miniTRASGO Pages](legacy/index.md): archived context pages retained for continuity.
 

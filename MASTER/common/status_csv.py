@@ -1,9 +1,15 @@
-"""Utility helpers for tracking script execution status via CSV files.
-
-Status rows are stored with the columns:
-``filename_base,execution_date,completion_fraction``.
-The completion value is clamped in ``[0, 1]`` and can be updated throughout
-the execution lifecycle (for example: 0, 0.25, 0.5, 0.75, 1).
+"""
+DATAFLOW_v3 Script Header v1
+Script: MASTER/common/status_csv.py
+Purpose: Utility helpers for tracking script execution status via CSV files.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/common/status_csv.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

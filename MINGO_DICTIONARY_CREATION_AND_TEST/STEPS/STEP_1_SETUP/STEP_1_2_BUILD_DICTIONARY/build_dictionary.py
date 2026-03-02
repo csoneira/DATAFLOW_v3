@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
-"""STEP 1.2 — Dictionary and dataset creation.
-
-Takes the collected_data.csv from STEP 1.1 and:
-1. Computes empirical efficiencies (eff_1..eff_4) from trigger topology counts.
-2. Filters outliers where eff_2 or eff_3 fall outside configured bounds.
-3. Splits the remaining table into:
-   - **dataset**: the full clean table (all rows).
-   - **dictionary**: a carefully chosen subsample satisfying:
-     a) relative error of all four planes to their fitted acceptance lines below a threshold,
-     c) event count above a minimum,
-     d) one entry per unique parameter set (the one with the largest count).
-4. Produces diagnostic plots showing dictionary quality and coverage.
-
-Output
-------
-OUTPUTS/FILES/dataset.csv          — full cleaned dataset
-OUTPUTS/FILES/dictionary.csv       — selected dictionary entries
-OUTPUTS/FILES/build_summary.json   — summary stats
-OUTPUTS/PLOTS/                     — diagnostic plots
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/build_dictionary.py
+Purpose: STEP 1.2 — Dictionary and dataset creation.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/build_dictionary.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

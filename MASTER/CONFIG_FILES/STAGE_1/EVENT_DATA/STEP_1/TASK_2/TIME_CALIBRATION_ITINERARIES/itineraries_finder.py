@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Utilities to generate and persist time-calibration itineraries."""
+"""
+DATAFLOW_v3 Script Header v1
+Script: MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries_finder.py
+Purpose: Utilities to generate and persist time-calibration itineraries.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries_finder.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
 
 from __future__ import annotations
 

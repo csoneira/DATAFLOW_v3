@@ -15,7 +15,7 @@ It defines for each step:
 
 ## Operational stage interfaces
 
-Operational stages are split as STAGE_0..STAGE_3 with handoffs via station trees and metadata files.
+Operational stages are split as STAGE_0..STAGE_3, implemented in `MASTER/` (mother code), with handoffs and materialized outputs in station trees under `STATIONS/`.
 
 Key interface assumptions:
 
@@ -33,4 +33,3 @@ Any interface change should include:
 
 See standards:
 - [Conventions and Governance](../standards/conventions-and-governance.md)
-

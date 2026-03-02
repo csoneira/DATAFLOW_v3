@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: OPERATIONS/OBSERVABILITY/EXECUTION_TOP_OFFENDERS/execution_top_offenders.sh
+# Purpose: Execution top offenders.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash OPERATIONS/OBSERVABILITY/EXECUTION_TOP_OFFENDERS/execution_top_offenders.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
+
 set -euo pipefail
 
 BASE_DIR="${BASE_DIR:-$HOME/DATAFLOW_v3}"

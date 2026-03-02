@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """
-Scan Stage 1 metadata CSVs and remove rows containing NaN values, invalid basenames,
-or oversized fields that would trip the default csv.field_size_limit.
+DATAFLOW_v3 Script Header v1
+Script: OPERATIONS/DATA_MAINTENANCE/FIX_METADATA_FILES/fix_event_metadata_files.py
+Purpose: Scan Stage 1 metadata CSVs and remove rows containing NaN values, invalid basenames,.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 OPERATIONS/DATA_MAINTENANCE/FIX_METADATA_FILES/fix_event_metadata_files.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

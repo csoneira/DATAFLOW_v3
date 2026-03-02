@@ -37,3 +37,8 @@ Reference pattern:
 - Keep runbooks date-stamped with symptom, root cause, fix, and verification.
 - Prefer concise but complete technical prose.
 
+## Script header standard
+
+- All tracked `.py`, `.sh`, `.m`, and `.html` scripts must use the standard header marker `DATAFLOW_v3 Script Header v1`.
+- Headers must include sign-off, purpose, runtime, usage, input/output summary, and last update date.
+- Canonical reference: [Script Header Standard](script-header-standard.md).

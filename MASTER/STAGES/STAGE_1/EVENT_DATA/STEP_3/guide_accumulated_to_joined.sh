@@ -1,4 +1,17 @@
 #!/bin/bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh
+# Purpose: Guide accumulated to joined.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
 
 log_ts() {
   date '+%Y-%m-%d %H:%M:%S'

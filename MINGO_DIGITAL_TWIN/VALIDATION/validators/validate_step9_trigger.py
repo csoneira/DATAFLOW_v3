@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Validator for STEP 9 trigger selection logic."""
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/VALIDATION/validators/validate_step9_trigger.py
+Purpose: Validator for STEP 9 trigger selection logic.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/VALIDATION/validators/validate_step9_trigger.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
 
 from __future__ import annotations
 

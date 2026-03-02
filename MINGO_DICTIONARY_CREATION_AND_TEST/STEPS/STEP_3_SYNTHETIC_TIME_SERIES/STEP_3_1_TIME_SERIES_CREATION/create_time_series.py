@@ -1,34 +1,16 @@
 #!/usr/bin/env python3
-"""STEP 3.1 — Random complete trajectory + event-based discretization.
-
-This step creates one complete random trajectory in `(flux_cm2_min, eff)` and
-discretizes it into synthetic files using:
-
-- total trajectory duration,
-- global rate along the trajectory (interpolated from dictionary),
-- target events per file.
-
-Key idea
---------
-If `rate(t)` is known, cumulative events are:
-`N(t) = integral(rate(t) dt)`.
-File boundaries are placed at `N = k * events_per_file`, producing variable
-time widths and physically consistent sampling density.
-
-Output
-------
-OUTPUTS/FILES/time_series.csv
-    One row per synthetic file with timing, flux, efficiency, global rate and
-    expected events.
-OUTPUTS/FILES/complete_curve_time_series.csv
-    Complete trajectory before discretization.
-OUTPUTS/FILES/time_series_summary.json
-    Run metadata including the used random seed.
-OUTPUTS/PLOTS/curve_flux_vs_eff.png
-    Trajectory over semitransparent global-rate contour map.
-OUTPUTS/PLOTS/time_series_flux_eff.png
-    Combined time-series view: complete curve and discretized points
-    overlaid for flux, efficiency and global rate.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION/create_time_series.py
+Purpose: STEP 3.1 — Random complete trajectory + event-based discretization.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION/create_time_series.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

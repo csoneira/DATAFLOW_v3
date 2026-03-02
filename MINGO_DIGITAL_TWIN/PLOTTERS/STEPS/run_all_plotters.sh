@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/run_all_plotters.sh
+# Purpose: Run all step plotters (STEP_1 .. STEP_10) and report per-step status.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/run_all_plotters.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
+
 # Run all step plotters (STEP_1 .. STEP_10) and report per-step status
 cd "$(dirname "$0")" || exit 2
 # discover plot scripts under STEP_*/* and run each with numeric step ordering

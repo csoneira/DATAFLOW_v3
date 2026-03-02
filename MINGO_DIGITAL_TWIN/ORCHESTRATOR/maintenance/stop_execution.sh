@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/stop_execution.sh
+# Purpose: Emergency process guard for cron:.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/stop_execution.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
 
 # Emergency process guard for cron:
 # if the pipeline accumulates too many duplicated/pending jobs, stop them.

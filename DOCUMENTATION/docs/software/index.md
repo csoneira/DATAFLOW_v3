@@ -2,7 +2,7 @@
 
 DATAFLOW_v3 software is organized around three domains:
 
-1. **Operational analysis pipeline** (real detector data): `MASTER/`, `STATIONS/`
+1. **Analysis mother code and station outputs**: `MASTER/` provides the analysis logic for both real and simulated inputs; `STATIONS/` stores station-scoped runtime/output trees.
 2. **Digital twin simulation** (synthetic detector data): `MINGO_DIGITAL_TWIN/`
 3. **Dictionary and inference tooling** (flux/efficiency estimation): `MINGO_DICTIONARY_CREATION_AND_TEST/` plus `MASTER/common`
 
@@ -18,4 +18,4 @@ The architecture and dataflow figures used across this section are designed for 
 
 ## Cross-system principle
 
-The operational pipeline and the digital twin intentionally share geometry, timing conventions, and data-format assumptions so synthetic outputs can be injected into analysis and compared with real station behavior.
+The `MASTER` analysis code and the digital twin intentionally share geometry, timing conventions, and data-format assumptions so synthetic outputs can be injected and processed through the same analysis logic as real station data.

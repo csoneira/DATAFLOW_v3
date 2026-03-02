@@ -1,27 +1,16 @@
 #!/usr/bin/env python3
-"""STEP 3.1 — Uncertainty assessment.
-
-Given the validation results (estimated vs simulated parameters, number of
-events), this step:
-
-1. Bins the data along each estimated parameter AND number of events.
-2. For each bin, computes the histogram of relative errors.
-3. Identifies and flags outliers using an IQR-based rule.
-4. Calculates quantiles (p50, p68, p90, p95) from the non-outlier
-   distribution.
-5. Assigns an uncertainty per bin centre → builds a Look-Up Table (LUT).
-6. Saves the LUT as a CSV (with a header comment describing the
-   dictionary that produced it).
-7. Provides an interpolation function: given an estimated parameter set
-   and event count, retrieves the corresponding uncertainty from the LUT.
-8. Plots per-bin histograms, outlier-marked, and the resulting LUT slices.
-
-Output
-------
-OUTPUTS/FILES/uncertainty_lut.csv         — the LUT
-OUTPUTS/FILES/uncertainty_lut_meta.json   — metadata about the LUT
-OUTPUTS/FILES/uncertainty_summary.json
-OUTPUTS/PLOTS/                            — diagnostic plots
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_2_INFERENCE/STEP_2_3_UNCERTAINTY/build_uncertainty_lut.py
+Purpose: STEP 3.1 — Uncertainty assessment.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_2_INFERENCE/STEP_2_3_UNCERTAINTY/build_uncertainty_lut.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

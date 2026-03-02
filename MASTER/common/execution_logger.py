@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 """
-Utility helpers for recording execution timing information to a shared CSV log.
-
-Each script that wants to record timing information should import
-`execution_logger` and wrap its top-level invocation in `log_execution`.
-
-Example
--------
-
-    from MASTER.common import execution_logger
-
-    def main(station: int) -> None:
-        ...
-
-    if __name__ == "__main__":
-        station = parse_args()
-        with execution_logger.log_execution(__file__, station):
-            main(station)
+DATAFLOW_v3 Script Header v1
+Script: MASTER/common/execution_logger.py
+Purpose: Utility helpers for recording execution timing information to a shared CSV log.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/common/execution_logger.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

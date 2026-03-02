@@ -1,5 +1,18 @@
 # Common Issues
 
+## Triage decision tree
+
+```mermaid
+flowchart TD
+    A[Observed failure] --> B{Are cron logs updating?}
+    B -- No --> C[Check cron service and crontab]
+    B -- Yes --> D{Is target process running?}
+    D -- No --> E[Check lock/gate skips and command path]
+    D -- Yes --> F{Is queue progressing?}
+    F -- No --> G[Run consistency/audit checks]
+    F -- Yes --> H[Inspect data quality and downstream errors]
+```
+
 ## Operational pipeline
 
 ### Symptom: stage logs stop updating
@@ -108,4 +121,3 @@ Likely cause:
 Action:
 
 - rerun calibration workflow and validate outputs
-

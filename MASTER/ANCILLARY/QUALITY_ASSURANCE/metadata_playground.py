@@ -1,3 +1,16 @@
+"""
+DATAFLOW_v3 Script Header v1
+Script: MASTER/ANCILLARY/QUALITY_ASSURANCE/metadata_playground.py
+Purpose: %%.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/ANCILLARY/QUALITY_ASSURANCE/metadata_playground.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
 
 #%%
 

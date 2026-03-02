@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MINGO_DICTIONARY_CREATION_AND_TEST/run_new_pipeline.sh
+# Purpose: ===========================================================================.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MINGO_DICTIONARY_CREATION_AND_TEST/run_new_pipeline.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
+
 # ===========================================================================
 # run_pipeline.sh — Run the inference dictionary validation pipeline.
 #

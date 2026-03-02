@@ -1,31 +1,16 @@
 #!/usr/bin/env python3
-"""STEP 3.2 — Build synthetic dataset from basis table + complete curve.
-
-For each discretized point from STEP 3.1 in the `(flux, eff)` plane, this step:
-
-1. Computes basis-row proximity weights in `(flux, eff)`.
-2. Builds a synthetic row by weighted combination of numeric basis columns.
-3. Keeps non-numeric morphology from the dominant contributor.
-4. Overrides key truth/time columns with STEP 3.1 values.
-5. Constrains basis rows per time point using that point's `n_events`.
-
-The output table keeps STEP 1.2 dataset morphology (same base columns) and adds
-time/traceability columns.
-
-Output
-------
-OUTPUTS/FILES/synthetic_dataset.csv
-    Synthetic table for STEP 3.3 inference/correction.
-OUTPUTS/FILES/synthetic_generation_summary.json
-    Summary of weighting settings and generated table statistics.
-OUTPUTS/FILES/highlight_point_contributions.csv
-    Contribution percentages for one highlighted curve point.
-OUTPUTS/PLOTS/dictionary_contributions_highlight.png
-    Single combined plot: dictionary contributions + complete/discretized curve.
-OUTPUTS/PLOTS/synthetic_time_series_overview.png
-    Complete/discretized overlays for flux/eff and global-rate comparison.
-OUTPUTS/PLOTS/events_count_dataset_vs_basis_subset.png
-    Histogram of `n_events` for full dataset and selected basis subset (same bins).
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_2_SYNTHETIC_TIME_SERIES/synthetic_time_series.py
+Purpose: STEP 3.2 — Build synthetic dataset from basis table + complete curve.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_2_SYNTHETIC_TIME_SERIES/synthetic_time_series.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

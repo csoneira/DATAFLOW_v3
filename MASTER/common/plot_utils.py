@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-Utilities to ensure matplotlib figures are rasterised before exporting to PDF.
+DATAFLOW_v3 Script Header v1
+Script: MASTER/common/plot_utils.py
+Purpose: Utilities to ensure matplotlib figures are rasterised before exporting to PDF.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/common/plot_utils.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
-"""STEP 1.1 — Collect simulated data results and match with simulation parameters.
-
-For each task in config["task_ids"], loads the metadata CSV
-(task_*_metadata_specific.csv) from the station and the simulation
-parameters CSV (step_final_simulation_params.csv).  Rows are joined on
-``filename_base``, keeping only files present in BOTH tables.  The
-``file_name`` column is dropped (no longer needed after joining).
-
-A z-position configuration cut is applied: only rows whose
-(z_plane_1..4) match the selected configuration are kept.  If no
-configuration is specified in the config, a random one is chosen from
-the available options.
-
-Output
-------
-OUTPUTS/FILES/collected_data.csv
-    Full merged table with simulation parameters + metadata columns.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/collect_data.py
+Purpose: STEP 1.1 — Collect simulated data results and match with simulation parameters.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/collect_data.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

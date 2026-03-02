@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Try linear transformations of `eff` (scale only) and show results.
-
-Produces:
- - metric vs eff-scale (corr between flux and decorrelated global rate)
- - time-series overlay: flux (z) vs best-scale decorrelated global rate (z)
- - scatter: flux vs best-scale decorrelated global rate
-
-Saves PNGs to a local `PLOTS/` folder.
 """
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/A_SMALL_SIDE_QUEST/TRYING_LINEAR_TRANSFORMATIONS/LUT_BASED/try_linear_transforms.py
+Purpose: Try linear transformations of `eff` (scale only) and show results.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/A_SMALL_SIDE_QUEST/TRYING_LINEAR_TRANSFORMATIONS/LUT_BASED/try_linear_transforms.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
+
 import os
 import shutil
 import numpy as np

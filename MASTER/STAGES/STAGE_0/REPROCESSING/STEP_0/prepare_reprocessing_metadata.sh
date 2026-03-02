@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MASTER/STAGES/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh
+# Purpose: prepare_reprocessing_metadata.sh.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MASTER/STAGES/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
+
 # ---------------------------------------------------------------------------
 # prepare_reprocessing_metadata.sh
 #   Refresh and clean the STEP_0 metadata CSVs for STAGE_0 reprocessing.

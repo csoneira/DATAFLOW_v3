@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Step 8: apply front-end thresholding and charge-to-time conversion (uncalibration/decalibration).
-
-Inputs: Step 7 output.
-Outputs: step_8.(pkl|csv) or step_8_chunks.chunks.json with thresholded channels.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_8/step_8_uncalibrated_to_threshold.py
+Purpose: Step 8: apply front-end thresholding and charge-to-time conversion (uncalibration/decalibration).
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_8/step_8_uncalibrated_to_threshold.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

@@ -1,4 +1,18 @@
 #!/bin/bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MASTER/STAGES/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh
+# Purpose: Usage: ./unpack_reprocessing_files.sh <station>.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MASTER/STAGES/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
+
 # Usage: ./unpack_reprocessing_files.sh <station>
 # Example: ./unpack_reprocessing_files.sh 1
 

@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Step 7: apply timing offsets to front/back channels (uncalibration/decalibration).
-
-Inputs: Step 6 output.
-Outputs: step_7.(pkl|csv) or step_7_chunks.chunks.json with uncalibrated timing/charge.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_7/step_7_timing_to_uncalibrated.py
+Purpose: Step 7: apply timing offsets to front/back channels (uncalibration/decalibration).
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_7/step_7_timing_to_uncalibrated.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

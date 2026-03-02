@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
-"""STEP 2.2 — Validation of the inverse-problem solution.
-
-Takes the estimated parameters from STEP 2.1 and the dataset from STEP 1.2
-and produces validation plots and tables:
-
-1. Estimated vs simulated parameters (scatter + identity line, with
-   relative error in colour or as a secondary panel).
-2. Contour plots in flux–eff space of the relative error, with dictionary
-   points marked.
-3. Relative error statistics saved for the next step (STEP 3.1).
-
-Output
-------
-OUTPUTS/FILES/validation_results.csv  — per-point errors and estimates
-OUTPUTS/FILES/validation_summary.json
-OUTPUTS/PLOTS/                        — validation plots
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_2_INFERENCE/STEP_2_2_VALIDATION/validate_solution.py
+Purpose: STEP 2.2 — Validation of the inverse-problem solution.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_2_INFERENCE/STEP_2_2_VALIDATION/validate_solution.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

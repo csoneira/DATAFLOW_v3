@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
-
-"""Compare angular flux (Theta/Phi) across STEP 1, 2, 9 and 10 for the same sim-run.
-
-This module re-uses the plotting conventions from STEP_1/STEP_2/STEP_10 and
-produces a differential + cumulative comparison figure for the four key stages
-of crossing/efficiency/trigger acceptance.
-
-Behavior:
-- Prefer a STEP_10 chunk and walk upstream via metadata.source_dataset to locate
-  the matching STEP_9/STEP_2/STEP_1 chunks (ensures "same line" of simulation).
-- If STEP_10 not available, will attempt to compare whichever subset is
-  available (but prefers matching-chain files when possible).
-- Plot layout and units match existing STEP_10/STEP_1 plots.
-
-Usage:
-- Import `plot_muon_flux_tt_comparison(pdf, sample_path=None)` from other
-  plotters, or run as a script to write a PDF into PLOTTERS/STEPS/COMMON/PLOTS.
 """
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/COMMON/ANGULAR_FLUX/angular_flux.py
+Purpose: Compare angular flux (Theta/Phi) across STEP 1, 2, 9 and 10 for the same sim-run.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/COMMON/ANGULAR_FLUX/angular_flux.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

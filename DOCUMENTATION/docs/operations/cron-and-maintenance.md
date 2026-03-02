@@ -14,6 +14,18 @@ Key behaviors:
 
 *Figure 3. Cron-triggered workers coordinated by locks, gates, and maintenance jobs with shared observability outputs.*
 
+## Runtime control flow
+
+```mermaid
+flowchart TD
+    C[Cron trigger] --> G{Lock and gate pass?}
+    G -- No --> S[Skip and log reason]
+    G -- Yes --> R[Run stage worker]
+    R --> L[Write logs and status markers]
+    L --> M[Run maintenance jobs]
+    M --> V[Observability and audits]
+```
+
 ## Critical runtime logs
 
 - `OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/...`

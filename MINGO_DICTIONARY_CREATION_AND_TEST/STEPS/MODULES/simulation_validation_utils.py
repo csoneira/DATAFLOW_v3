@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Shared utilities for the INFERENCE_DICTIONARY_VALIDATION pipeline.
-
-This module consolidates common helpers used across STEP_1 through STEP_4
-to eliminate code duplication and ensure consistent behavior.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/MODULES/simulation_validation_utils.py
+Purpose: Shared utilities for the INFERENCE_DICTIONARY_VALIDATION pipeline.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/MODULES/simulation_validation_utils.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

@@ -6,4 +6,4 @@ This section collects the scientific and technical reference backbone for DATAFL
 
 - [Publications and Reports](publications-and-reports.md)
 - [Repository Source Documents](source-documents.md)
-
+- [Figure Gallery and Provenance](figure-gallery.md)

@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Real-time STEP_1 status timeline viewer (Tkinter, X11-friendly).
-
-Usage:
-  python3 MASTER/ANCILLARY/PIPELINE_REAL_TIME_CHECK/step1_status_timeline_gui.py
-  python3 MASTER/ANCILLARY/PIPELINE_REAL_TIME_CHECK/step1_status_timeline_gui.py --lookback-hours 2 --refresh-seconds 3
-  python3 MASTER/ANCILLARY/PIPELINE_REAL_TIME_CHECK/step1_status_timeline_gui.py --stations 0,1 --tasks 1,2,3,4
+"""
+DATAFLOW_v3 Script Header v1
+Script: OPERATIONS/NOTIFICATIONS/STATUS_GUI/step1_status_timeline_gui.py
+Purpose: Real-time STEP_1 status timeline viewer (Tkinter, X11-friendly).
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 OPERATIONS/NOTIFICATIONS/STATUS_GUI/step1_status_timeline_gui.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

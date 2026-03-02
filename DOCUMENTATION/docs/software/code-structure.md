@@ -6,12 +6,12 @@ This page provides a navigation map for developers working across analysis, simu
 
 ```text
 DATAFLOW_v3/
-├─ MASTER/                      # Operational analysis stages + shared logic
+├─ MASTER/                      # Mother analysis code (real + simulated input processing)
 │  ├─ STAGES/
 │  ├─ ANCILLARY/
 │  ├─ CONFIG_FILES/
 │  └─ common/
-├─ STATIONS/                    # Station-specific runtime trees
+├─ STATIONS/                    # Station-specific runtime trees and materialized outputs
 ├─ MINGO_DIGITAL_TWIN/          # STEP_0..STEP_FINAL simulation stack
 │  ├─ MASTER_STEPS/
 │  ├─ ORCHESTRATOR/
@@ -33,9 +33,8 @@ DATAFLOW_v3/
 
 ## Change impact guidance
 
-- Changes under `MASTER/STAGES/` can affect real-data processing and cron jobs.
+- Changes under `MASTER/STAGES/` can affect both real-data and simulated-data analysis processing, plus cron jobs.
 - Changes under `MINGO_DIGITAL_TWIN/MASTER_STEPS/` can affect simulation outputs and dictionary quality.
 - Changes under `OPERATIONS/` can affect orchestration safety and incident response.
 
 When behavior changes, update runbooks and standards in the same PR.
-

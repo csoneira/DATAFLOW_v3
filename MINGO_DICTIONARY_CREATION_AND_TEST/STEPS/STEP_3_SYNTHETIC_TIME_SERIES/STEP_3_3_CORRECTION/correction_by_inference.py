@@ -1,32 +1,16 @@
 #!/usr/bin/env python3
-
-"""STEP 3.3 — Correction by inference on synthetic dataset.
-
-This step applies the dictionary-based inference from STEP 2 to the synthetic
-dataset built in STEP 3.2, then propagates uncertainties using the LUT created
-in STEP 2.3.
-
-Main actions
-------------
-1. Run inverse estimation (`estimate_parameters`) on STEP 3.2 synthetic table.
-2. Interpolate uncertainty per row from the STEP 2.3 LUT.
-3. Build a corrected/diagnostic table with true vs estimated parameters.
-4. Produce diagnostic plots:
-   - Flux true vs estimated (y=x).
-   - Efficiency true vs estimated (y=x).
-   - Time-series comparison with uncertainty bands.
-   - Simulated and estimated flux overlaid with global rate.
-   - A 2x2 summary plot combining all above.
-
-Output
-------
-OUTPUTS/FILES/corrected_by_inference.csv
-    Synthetic rows enriched with estimated parameters and uncertainties.
-OUTPUTS/FILES/correction_summary.json
-    Summary statistics and run configuration.
-OUTPUTS/PLOTS/correction_overview_2x2.png
-OUTPUTS/PLOTS/synthetic_time_series_overview_with_estimated.png
-OUTPUTS/PLOTS/flux_recovery_vs_global_rate.png
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_3_CORRECTION/correction_by_inference.py
+Purpose: STEP 3.3 — Correction by inference on synthetic dataset.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_3_CORRECTION/correction_by_inference.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

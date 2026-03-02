@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
-"""Calibrate a compact affine inverse from (global_rate, eff) to flux.
-
-Method (straight to the point)
-1) From a dictionary in (flux, eff, global_rate), estimate local gradients of
-   global_rate in (flux, eff) space.
-2) Keep points whose gradient direction tan(angle)=dR/dE / dR/dF is close to the
-   median (near-parallel iso-rate assumption).
-3) Fit a single global affine model on kept points:
-      global_rate = a*flux + b*eff + c
-4) Invert it analytically:
-      flux = (global_rate - b*eff - c)/a
-   which is equivalent to:
-      [flux]   [1/a   -b/a] [global_rate] + [-c/a]
-      [ eff] = [ 0      1 ] [   eff    ] + [  0 ]
-
-Outputs are written under PURELY_LINEAR/PLOTS.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/A_SMALL_SIDE_QUEST/TRYING_LINEAR_TRANSFORMATIONS/PURELY_LINEAR/try_purely_linear_transform.py
+Purpose: Calibrate a compact affine inverse from (global_rate, eff) to flux.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/A_SMALL_SIDE_QUEST/TRYING_LINEAR_TRANSFORMATIONS/PURELY_LINEAR/try_purely_linear_transform.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

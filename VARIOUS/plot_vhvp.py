@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Simple script to plot VHVp vs time from scan_hv_oct_24.csv.
-
-Usage:
-    python plot_vhvp.py
-
-Generates: /home/mingo/DATAFLOW_v3/VARIOUS/scan_hv_oct_24_20240916-30_4-6.png (filtered)
 """
+DATAFLOW_v3 Script Header v1
+Script: VARIOUS/plot_vhvp.py
+Purpose: Simple script to plot VHVp vs time from scan_hv_oct_24.csv.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 VARIOUS/plot_vhvp.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
+
 import os
 import pandas as pd
 import matplotlib.pyplot as plt

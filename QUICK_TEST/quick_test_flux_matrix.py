@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
-"""Quick test: apply affine flux formula already calibrated in PURELY_LINEAR.
-
-Important: this script does NOT calibrate a matrix.
-It only:
-1) extracts the affine formula from PURELY_LINEAR summary,
-2) computes global_rate_hz, eff_2, eff_3, reference_efficiency on real metadata,
-3) detects active station z-positions (P1..P4),
-4) applies the extracted formula to estimate flux,
-5) writes outputs + quick plots.
+"""
+DATAFLOW_v3 Script Header v1
+Script: QUICK_TEST/quick_test_flux_matrix.py
+Purpose: Quick test: apply affine flux formula already calibrated in PURELY_LINEAR.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 QUICK_TEST/quick_test_flux_matrix.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

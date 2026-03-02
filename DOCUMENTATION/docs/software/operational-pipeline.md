@@ -1,6 +1,6 @@
 # Operational Pipeline
 
-The operational pipeline turns raw miniTRASGO station data into corrected and enriched analysis products.
+`MASTER` is the analysis mother code: it processes raw miniTRASGO station data and also processes simulated station-format inputs. Resulting station-scoped artifacts are materialized under `STATIONS/`.
 
 ## Stage model
 
@@ -11,7 +11,19 @@ The operational pipeline turns raw miniTRASGO station data into corrected and en
 | STAGE 2 | Environmental corrections and source integration | `MASTER/STAGES/STAGE_2/` |
 | STAGE 3 | NMDB integration and enriched analytics | `MASTER/STAGES/STAGE_3/` |
 
-Per-station trees live under `STATIONS/MINGO00` to `STATIONS/MINGO04`.
+Per-station trees and outputs live under `STATIONS/MINGO00` to `STATIONS/MINGO04`.
+
+## Stage interaction diagram
+
+```mermaid
+flowchart LR
+    R[Real station inputs] --> S0[MASTER STAGE_0]
+    D[Simulated .dat inputs] --> S0
+    S0 --> S1[STAGE_1]
+    S1 --> S2[STAGE_2]
+    S2 --> S3[STAGE_3]
+    S3 --> O[STATIONS materialized outputs]
+```
 
 ## Typical workflow
 
@@ -39,4 +51,3 @@ Per-station trees live under `STATIONS/MINGO00` to `STATIONS/MINGO04`.
 - Cron behavior: <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/BEHAVIOUR/CRON_AND_SCHEDULING.md>
 - Incident runbook: <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/REPO_DOCS/TROUBLESHOOTING/OPERATIONS_RUNBOOK.md>
 - Governance rules: <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/REPO_DOCS/REPOSITORY_GOVERNANCE.md>
-

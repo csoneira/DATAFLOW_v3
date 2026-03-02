@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MINGO_DIGITAL_TWIN/ANCILLARY/restart_simulation_pipeline_totally.sh
+# Purpose: Restart simulation pipeline totally.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MINGO_DIGITAL_TWIN/ANCILLARY/restart_simulation_pipeline_totally.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
+
 set -euo pipefail
 
 usage() {

@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-Scan cron log files for Tracebacks and store the stack traces in a single report.
-
-The script remembers which portion of every cron log was already checked by adding
-markers inside the log files themselves. Only Tracebacks found after the most
-recent marker are inspected, which keeps subsequent runs fast. Unique Tracebacks
-are appended to the report alongside the execution timestamp and the source log.
+DATAFLOW_v3 Script Header v1
+Script: OPERATIONS/OBSERVABILITY/SEARCH_FOR_ERRORS/error_finder.py
+Purpose: Scan cron log files for Tracebacks and store the stack traces in a single report.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 OPERATIONS/OBSERVABILITY/SEARCH_FOR_ERRORS/error_finder.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

@@ -16,6 +16,11 @@ The project combines hardware deployment, station operations, and software devel
 - Benemerita Universidad Autonoma de Puebla, Mexico
 - Universidad Pedagogica y Tecnologica de Colombia, Colombia
 
+![Collaboration network map (repository figure)](/assets/repository_figures/network_map_attic.png)
+
+Source path:
+- `.ATTIC/network_map.png`
+
 ## Roles and contact points
 
 | Area | Role | Contact |
@@ -37,4 +42,3 @@ The project combines hardware deployment, station operations, and software devel
 - Use pull requests for any procedural or behavior-impacting documentation update.
 - Keep incident notes date-stamped and reproducible.
 - When code behavior changes, update both technical docs and runbooks in the same change set.
-

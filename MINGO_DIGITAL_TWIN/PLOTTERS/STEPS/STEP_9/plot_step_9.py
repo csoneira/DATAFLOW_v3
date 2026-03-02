@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
-"""Plots for STEP 9 — adapted from MASTER_STEPS/STEP_9/step_9_threshold_to_trigger.py
 """
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/STEP_9/plot_step_9.py
+Purpose: Plots for STEP 9 — adapted from MASTER_STEPS/STEP_9/step_9_threshold_to_trigger.py.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/STEP_9/plot_step_9.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,33 +1,18 @@
 #!/usr/bin/env python3
 """
-Prune step_final_simulation_params.csv using real file/metadata presence.
-
-Rows are kept only when their ``file_name`` exists in at least one known
-pipeline directory OR is referenced by known metadata registries.
-
-Directory sources:
-  - MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES
-  - MINGO_DIGITAL_TWIN/SIMULATED_DATA (legacy root .dat)
-  - STATIONS/MINGO00/STAGE_0_to_1
-  - STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/*/*
-
-Metadata sources:
-  - STATIONS/MINGO00/STAGE_0/SIMULATION/imported_basenames.csv
-  - STATIONS/MINGO00/STAGE_0/SIMULATION/imported_basenames_history.csv
-  - STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_*/METADATA/task_*_metadata_execution.csv
-
-Rows removed from step_final_simulation_params.csv are archived to:
-  - MINGO_DIGITAL_TWIN/SIMULATED_DATA/rejected_step_final_simulation_params.csv
-
-The script also removes malformed rows (empty file_name) and duplicate rows by
-file_name (keeping the latest occurrence).
-
-Writes atomically: temp file alongside the target, then replace().
-
-Usage:
-    python3 prune_step_final_params.py              # live run
-    python3 prune_step_final_params.py --dry-run    # report only, no write
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/prune_step_final_params.py
+Purpose: Prune step_final_simulation_params.csv using real file/metadata presence.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/prune_step_final_params.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
+
 from __future__ import annotations
 
 import csv

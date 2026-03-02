@@ -5,6 +5,7 @@ This page points to canonical documentation sources maintained alongside code.
 ## Repository-wide governance and operations
 
 - Repository governance: <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/REPO_DOCS/REPOSITORY_GOVERNANCE.md>
+- Script header standard: <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/REPO_DOCS/SCRIPT_HEADER_STANDARD.md>
 - Cron and scheduling behavior: <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/BEHAVIOUR/CRON_AND_SCHEDULING.md>
 - Operations runbook: <https://github.com/csoneira/DATAFLOW_v3/blob/main/DOCS/REPO_DOCS/TROUBLESHOOTING/OPERATIONS_RUNBOOK.md>
 
@@ -25,4 +26,3 @@ This page points to canonical documentation sources maintained alongside code.
 - Legacy operation pages: `DOCUMENTATION/docs/operation/`
 - Legacy data pages: `DOCUMENTATION/docs/data/`
 - Legacy troubleshooting page: `DOCUMENTATION/docs/help/index.md`
-

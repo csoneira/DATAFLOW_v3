@@ -22,6 +22,7 @@ Update docs in the same pull request when any of these change:
 - One updated technical page in `DOCUMENTATION/docs/`.
 - One updated canonical source doc when applicable (`DOCS/` or `MINGO_DIGITAL_TWIN/DOCS/`).
 - Validation notes indicating how correctness was checked.
+- Diagram updates (Mermaid/SVG) when execution flow or interfaces change.
 
 ## Review checklist
 
@@ -32,6 +33,7 @@ Before merge:
 - New assumptions are explicit.
 - Any non-deterministic behavior is documented.
 - Incident/recovery steps include verification criteria.
+- The [Documentation Quality Checklist](documentation-quality-checklist.md) is satisfied.
 
 ## Release and upkeep cadence
 

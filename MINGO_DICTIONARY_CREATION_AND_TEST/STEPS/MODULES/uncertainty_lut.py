@@ -1,35 +1,16 @@
 #!/usr/bin/env python3
-"""Uncertainty LUT loader and interpolation module (pure empirical).
-
-This module provides a single entry point for downstream code to translate
-a **data-side** parameter estimate + event count into uncertainty values:
-
-    from uncertainty_lut import UncertaintyLUT
-    lut = UncertaintyLUT.load("STEP_6_UNCERTAINTY_LUT/output/lut")
-    sigma_flux, sigma_eff = lut.query(est_flux=1.02, est_eff=0.92,
-                                       n_events=40000)
-
-Terminology
------------
-- **Dictionary**: the fixed reference lookup table of (flux, eff) →
-  observables, built from simulations in Step 1.
-- **Data**: the sample being analysed — may be a simulated validation
-  sample *or* a real detector measurement.  The query inputs ``est_flux``,
-  ``est_eff``, and ``n_events`` are always data-side quantities.
-
-Query strategy
---------------
-1. **Trilinear interpolation** on the dense 3-D grid
-   (est_flux × est_eff × n_events) → (σ_flux_pct, σ_eff_pct).
-   Values are clamped to the grid boundaries (no extrapolation).
-
-2. **Global fall-back** — position-independent quantile of the entire
-   validation dataset, used only if the grid is completely empty or
-   something unexpected happens.
-
-All returned uncertainties are in **percent relative error** (matching the
-convention of ``abs_flux_rel_error_pct`` / ``abs_eff_rel_error_pct`` from
-Step 3).
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/MODULES/uncertainty_lut.py
+Purpose: Uncertainty LUT loader and interpolation module (pure empirical).
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/MODULES/uncertainty_lut.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

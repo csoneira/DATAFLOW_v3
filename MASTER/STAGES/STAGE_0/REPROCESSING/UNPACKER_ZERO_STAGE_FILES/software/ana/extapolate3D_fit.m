@@ -1,3 +1,17 @@
+% =============================================================================
+% DATAFLOW_v3 Script Header v1
+% Script: MASTER/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/software/ana/extapolate3D_fit.m
+% Purpose: extapolate3D_fit function implementation.
+% Owner: DATAFLOW_v3 contributors
+% Sign-off: csoneira <csoneira@ucm.es>
+% Last Updated: 2026-03-02
+% Runtime: octave/matlab
+% Usage: Run from MATLAB/Octave entrypoint with expected args/context.
+% Inputs: Variables, config files, environment, and/or upstream files.
+% Outputs: Variables, files, plots, or logs.
+% Notes: Keep behavior configuration-driven and reproducible.
+% =============================================================================
+
 function [X, Y, Z] = extapolate3D_fit(points,Z0)
 
 % points  are athe 3d point in the form X_,Y_,Z_ as many as I want X_ = points(:,1), Y_ = points(:,2), Z_ = points(:,3)

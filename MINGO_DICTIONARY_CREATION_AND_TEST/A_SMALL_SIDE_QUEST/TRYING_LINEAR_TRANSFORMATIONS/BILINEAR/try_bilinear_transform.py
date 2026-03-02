@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""Calibrate an inverse mapping from (global_rate, eff) to flux using a bilinear lookup.
-
-Method (straight to the point)
-1) From a dictionary in (flux, eff, global_rate), estimate local gradients of
-   global_rate in (flux, eff) space and keep near-parallel iso-rate points.
-2) Build a rectangular grid in (global_rate, eff) and interpolate flux at grid
-   nodes from the kept training points (triangulation).
-3) Use bilinear interpolation on that grid for fast inverse mapping:
-      flux_est = bilinear_lookup(global_rate, eff)
-   A compact global affine linearization is still computed for diagnostics.
-4) Outputs (plots + predictions) are written under PLOTS.
-
-This keeps the original gradient-based filtering but switches the inverse used
-at prediction time from a single affine matrix to a bilinear lookup table.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/A_SMALL_SIDE_QUEST/TRYING_LINEAR_TRANSFORMATIONS/BILINEAR/try_bilinear_transform.py
+Purpose: Calibrate an inverse mapping from (global_rate, eff) to flux using a bilinear lookup.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/A_SMALL_SIDE_QUEST/TRYING_LINEAR_TRANSFORMATIONS/BILINEAR/try_bilinear_transform.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

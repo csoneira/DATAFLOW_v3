@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Step 6: build front/back timing and charge vectors per strip.
-
-Inputs: Step 5 output.
-Outputs: step_6.(pkl|csv) or step_6_chunks.chunks.json with T_front/T_back/Q_front/Q_back.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_6/step_6_triggered_to_timing.py
+Purpose: Step 6: build front/back timing and charge vectors per strip.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_6/step_6_triggered_to_timing.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

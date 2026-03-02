@@ -7,6 +7,8 @@ This section defines development and operations standards that preserve scientif
 - [Conventions and Governance](conventions-and-governance.md)
 - [Determinism and Provenance](determinism-and-provenance.md)
 - [Documentation Lifecycle](documentation-lifecycle.md)
+- [Documentation Quality Checklist](documentation-quality-checklist.md)
+- [Script Header Standard](script-header-standard.md)
 
 Canonical source:
 

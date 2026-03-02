@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Persist snapshots of the main config files when they change."""
+"""
+DATAFLOW_v3 Script Header v1
+Script: OPERATIONS/OBSERVABILITY/VERSION_CONTROL/snapshot_config.py
+Purpose: Persist snapshots of the main config files when they change.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 OPERATIONS/OBSERVABILITY/VERSION_CONTROL/snapshot_config.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
 
 from __future__ import annotations
 

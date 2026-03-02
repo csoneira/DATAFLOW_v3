@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Step 5: derive per-strip time/charge differences from measured hits.
-
-Inputs: Step 4 output.
-Outputs: step_5.(pkl|csv) or step_5_chunks.chunks.json with T_diff/q_diff and metadata.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_5/step_5_measured_to_triggered.py
+Purpose: Step 5: derive per-strip time/charge differences from measured hits.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_5/step_5_measured_to_triggered.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MINGO_DIGITAL_TWIN/PLOTTERS/EXECUTION/run_simulation_plots.sh
+# Purpose: Run simulation plots.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MINGO_DIGITAL_TWIN/PLOTTERS/EXECUTION/run_simulation_plots.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
+
 set -euo pipefail
 
 EXTRA_ARGS=()

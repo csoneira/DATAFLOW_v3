@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
-"""Check for stale STEP_1 and unpacker lock files.
-
-This helper is meant to be executed from cron.  It scans the lock directory
-(`~/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS`) and tries to determine whether a lock
-file is stale.  A lock is considered stale when both of the following are true:
-
-* the file is older than the configured threshold, and
-* there is no `guide_raw_to_corrected.sh --station <station> [--task <task>]`
-  process still running for the station/task encoded in the file name.
-
-The routine also keeps an eye on the STEP_0 unpacker shared lock
-(`.unpack_shared.lock`). That lock is considered stale only when it
-exceeds the age threshold *and* there is no
-``unpack_reprocessing_files.sh`` process still holding it.
-
-When a stale lock is detected, the script removes it and records the action in
-`~/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/solve_stale_locks.log` so operators can
-audit what happened.
+"""
+DATAFLOW_v3 Script Header v1
+Script: OPERATIONS/ORCHESTRATION/SOLVE_STALE_LOCKS/solve_stale_locks.py
+Purpose: Check for stale STEP_1 and unpacker lock files.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 OPERATIONS/ORCHESTRATION/SOLVE_STALE_LOCKS/solve_stale_locks.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

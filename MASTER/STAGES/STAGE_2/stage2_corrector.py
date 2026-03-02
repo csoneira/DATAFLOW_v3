@@ -1,14 +1,18 @@
-# %% [markdown]
 """
-# Stage 2 quicklook helper
+DATAFLOW_v3 Script Header v1
+Script: MASTER/STAGES/STAGE_2/stage2_corrector.py
+Purpose: # Stage 2 quicklook helper.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/STAGES/STAGE_2/stage2_corrector.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
 
-This notebook-like script loads LAB_LOGS and EVENT_DATA daily CSV files for a
-given station (MINGO0x), merges the requested days, and draws quick plots for
-events, temperature, and pressure. The figure files are stored under each
-station's `STAGE_2` directory so every site keeps its own quicklook archive.
-Run it as a regular script or import the `quicklook` function inside a notebook
-for more ad-hoc exploration.
-"""
+# %% [markdown]
 
 # %%
 from __future__ import annotations

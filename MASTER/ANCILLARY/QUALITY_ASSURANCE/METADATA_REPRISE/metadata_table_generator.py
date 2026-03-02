@@ -1,29 +1,16 @@
 #!/usr/bin/env python3
-"""Detect outliers in STEP-1 task metadata tables and prepare reprocessing CSVs.
-
-For each requested station/task combination the script:
-
-* loads the available `task_*_metadata_*.csv` files,
-* extracts the requested numeric columns,
-* sorts entries by the timestamp encoded in the acquisition basename,
-* applies a centred rolling-median filter (horizontal median) to obtain
-  smoothed values,
-* flags rows whose residual (original - smoothed) lies outside the requested
-  quantile thresholds, and
-* writes compact CSV tables with the rows that need reprocessing.
-
-When ``--plot`` is supplied, a PDF is produced per station/task illustrating
-the original series alongside its smoothed counterpart, the residual trace,
-and the residual histogram for each analysed column.
-
-By default, task-specific column families are analysed:
-
-* Task 2: every column matching ``P*_s*_*`` (including the ``*_coeffs`` series).
-* Task 4: all ``sigmoid_width_*`` and ``background_slope_*`` columns.
-* All tasks: the execution-level ``data_purity_percentage`` metric.
-
-Reprocessing tables are emitted to ``MASTER/CONFIG_FILES/METADATA_REPRISE/REFERENCE_TABLES``
-unless ``--output-dir`` is provided.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MASTER/ANCILLARY/QUALITY_ASSURANCE/METADATA_REPRISE/metadata_table_generator.py
+Purpose: Detect outliers in STEP-1 task metadata tables and prepare reprocessing CSVs.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/ANCILLARY/QUALITY_ASSURANCE/METADATA_REPRISE/metadata_table_generator.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

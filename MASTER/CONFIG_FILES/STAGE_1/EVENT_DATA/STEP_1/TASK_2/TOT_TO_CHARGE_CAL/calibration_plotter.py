@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Plot TOT-to-charge calibration curves and export them as PDF."""
+"""
+DATAFLOW_v3 Script Header v1
+Script: MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TOT_TO_CHARGE_CAL/calibration_plotter.py
+Purpose: Plot TOT-to-charge calibration curves and export them as PDF.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TOT_TO_CHARGE_CAL/calibration_plotter.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
 
 from __future__ import annotations
 

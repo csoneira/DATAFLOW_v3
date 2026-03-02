@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""STEP_0: append one parameter row with sampled z positions.
-
-Inputs: station configuration CSVs in ONLINE_RUN_DICTIONARY.
-Outputs: param_mesh.csv in STEP_0_TO_1.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py
+Purpose: STEP_0: append one parameter row with sampled z positions.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

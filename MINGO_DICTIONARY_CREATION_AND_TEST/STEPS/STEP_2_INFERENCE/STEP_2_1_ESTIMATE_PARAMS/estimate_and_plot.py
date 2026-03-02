@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""STEP 2.1 — Solution to the inverse problem.
-
-Uses the self-contained `estimate_parameters` module to reconstruct
-physical parameters (flux, cos_n, efficiencies) for each dataset entry
-by matching its rate fingerprint against the dictionary.
-
-Produces the estimation results CSV and diagnostic plots.
-
-Output
-------
-OUTPUTS/FILES/estimated_params.csv   — estimated parameters for each data point
-OUTPUTS/FILES/estimation_summary.json
-OUTPUTS/PLOTS/                       — diagnostic plots
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_2_INFERENCE/STEP_2_1_ESTIMATE_PARAMS/estimate_and_plot.py
+Purpose: STEP 2.1 — Solution to the inverse problem.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_2_INFERENCE/STEP_2_1_ESTIMATE_PARAMS/estimate_and_plot.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

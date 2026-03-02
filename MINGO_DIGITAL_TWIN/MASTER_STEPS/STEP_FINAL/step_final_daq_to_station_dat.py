@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-STEP_FINAL: format DAQ data and emit station .dat files with assigned date ranges.
-
-Inputs: Step 10 output (step_10 or step_10_chunks).
-Outputs: SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat
-         + step_final_output_registry.json.
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py
+Purpose: STEP_FINAL: format DAQ data and emit station .dat files with assigned date ranges.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

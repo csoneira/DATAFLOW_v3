@@ -1,44 +1,16 @@
 #!/usr/bin/env python3
-"""Self-contained dictionary-based parameter estimation module.
-
-This module provides a single primary function:
-
-    estimate_parameters(dictionary_path, dataset_path, **kwargs)
-        → DataFrame with estimated parameters for every row in the dataset.
-
-It is designed to be completely self-contained so it can be imported and
-used with ANY dictionary and ANY dataset (simulated or real) for the
-inverse-problem solution: given observed rate fingerprints, find the
-physical parameters (flux, cos_n, efficiencies) that best match.
-
-The algorithm:
-1. Load dictionary and dataset CSVs.
-2. For each point in the dataset, restrict candidate dictionary entries
-   to those sharing the same z-plane geometry.
-3. Build feature vectors from selected columns (e.g. raw_tt_*_rate_hz).
-4. Score each candidate using a chosen distance metric on scaled features.
-5. Estimate physical parameters via IDW interpolation over the K nearest
-   candidates (or all candidates if K is None).
-
-Distance metrics
-----------------
-- ``l2_zscore``  — Euclidean distance on z-score-scaled features (default).
-- ``l2_raw``     — Euclidean distance on raw feature values.
-- ``chi2``       — Chi-squared-like distance (weighted by observed value).
-- ``poisson``    — Poisson deviance–like distance.
-
-Usage example
--------------
-    from estimate_parameters import estimate_parameters
-
-    results = estimate_parameters(
-        dictionary_path="dictionary.csv",
-        dataset_path="dataset.csv",
-        feature_columns="auto",       # or explicit list
-        distance_metric="l2_zscore",
-        interpolation_k=5,
-    )
-    results.to_csv("estimated_params.csv", index=False)
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_2_INFERENCE/estimate_parameters.py
+Purpose: Self-contained dictionary-based parameter estimation module.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_2_INFERENCE/estimate_parameters.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

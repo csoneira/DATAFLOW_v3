@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Cascade cleanup for consumed INTERSTEPS SIM_RUN directories.
-
-Rules:
-- STEP_3..STEP_9: preserve existing behavior, remove upstream SIM_RUN when a
-  downstream SIM_RUN with the same prefix has a non-empty manifest.
-- STEP_1..STEP_2: same downstream check, plus a safety gate:
-  keep upstream data while param_mesh still has unfinished rows for that prefix.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/cascade_cleanup_intersteps.py
+Purpose: Cascade cleanup for consumed INTERSTEPS SIM_RUN directories.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/cascade_cleanup_intersteps.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

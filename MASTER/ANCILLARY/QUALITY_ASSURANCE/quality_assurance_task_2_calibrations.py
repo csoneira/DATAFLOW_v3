@@ -1,16 +1,20 @@
+"""
+DATAFLOW_v3 Script Header v1
+Script: MASTER/ANCILLARY/QUALITY_ASSURANCE/quality_assurance_task_2_calibrations.py
+Purpose: Generate calibration plots and per-configuration medians for STEP_1 TASK_2.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MASTER/ANCILLARY/QUALITY_ASSURANCE/quality_assurance_task_2_calibrations.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
+"""
+
 #%%
 
 #!/usr/bin/env python3
-"""
-Generate calibration plots and per-configuration medians for STEP_1 TASK_2.
-
-Supports both CLI execution (with station/pdf flags) and notebook usage via
-importing and calling `run_analysis(station=..., pdf_generate=...)`.
-
-
-Small text to show the GitHb capabilitites.
-
-"""
 
 # Small text to show the GitHb capabilitites.
 

@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Step 2: propagate muons through station geometry and compute plane crossings.
-
-Inputs: muon_sample from Step 1.
-Outputs: step_2.(pkl|csv) with crossing coordinates/times and metadata.
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_2/step_2_generated_to_crossing.py
+Purpose: Step 2: propagate muons through station geometry and compute plane crossings.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_2/step_2_generated_to_crossing.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

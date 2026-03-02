@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MASTER/STAGES/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh
+# Purpose: bring_reprocessing_files.sh.
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MASTER/STAGES/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
+
 # ---------------------------------------------------------------------------
 # bring_reprocessing_files.sh
 #   Fetch HLD data from backuplip, writing

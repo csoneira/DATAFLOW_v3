@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
-"""Simple NMDB time-series plotter.
-
-Reads NMDB export files that include metadata/comment blocks and a semicolon-
-separated table, then plots one or more station columns as a time series.
+"""
+DATAFLOW_v3 Script Header v1
+Script: QUICK_TEST/NMDB/NMBD_simple_plot_time_series.py
+Purpose: Simple NMDB time-series plotter.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 QUICK_TEST/NMDB/NMBD_simple_plot_time_series.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations

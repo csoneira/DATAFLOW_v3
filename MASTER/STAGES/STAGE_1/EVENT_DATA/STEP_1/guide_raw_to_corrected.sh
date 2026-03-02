@@ -1,4 +1,17 @@
 #!/bin/bash
+# =============================================================================
+# DATAFLOW_v3 Script Header v1
+# Script: MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh
+# Purpose: log_file="${LOG_FILE:-~/cron_logs/bring_and_analyze_events_${station}.log}".
+# Owner: DATAFLOW_v3 contributors
+# Sign-off: csoneira <csoneira@ucm.es>
+# Last Updated: 2026-03-02
+# Runtime: bash
+# Usage: bash MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh [options]
+# Inputs: CLI args, config files, environment variables, and/or upstream files.
+# Outputs: Files, logs, or process-level side effects.
+# Notes: Keep behavior configuration-driven and reproducible.
+# =============================================================================
 
 # log_file="${LOG_FILE:-~/cron_logs/bring_and_analyze_events_${station}.log}"
 # mkdir -p "$(dirname "$log_file")"

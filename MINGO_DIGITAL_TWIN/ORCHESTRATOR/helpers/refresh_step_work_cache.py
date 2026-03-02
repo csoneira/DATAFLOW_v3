@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Build run_step scheduler cache/state CSV snapshots.
-
-Positional args:
-  1) param_mesh.csv path
-  2) INTERSTEPS directory
-  3) output cache CSV path
-  4) output state CSV path
-  5) output stuck-lines CSV path
-  6) output broken-runs CSV path
-  7) strict-line-closure flag (0/1)
-  8) step_1 stuck threshold in seconds
+"""
+DATAFLOW_v3 Script Header v1
+Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/refresh_step_work_cache.py
+Purpose: Build run_step scheduler cache/state CSV snapshots.
+Owner: DATAFLOW_v3 contributors
+Sign-off: csoneira <csoneira@ucm.es>
+Last Updated: 2026-03-02
+Runtime: python3
+Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/refresh_step_work_cache.py [options]
+Inputs: CLI args, config files, environment variables, and/or upstream files.
+Outputs: Files, logs, plots, or stdout/stderr side effects.
+Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations
