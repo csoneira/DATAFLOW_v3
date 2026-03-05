@@ -673,17 +673,14 @@ if files:  # Check if the directory contains any files
 # Charge calibration to fC
 calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
 
-# Charge front-back
-charge_front_back = config["charge_front_back"]
-
 # Slewing correction
+# (charge_front_back_mode is read later with the other calibration modes)
 slewing_correction = config["slewing_correction"]
 
 # Time filtering
 time_window_filtering = config["time_window_filtering"]
 
-# Time calibration
-time_calibration = config["time_calibration"]
+# Time calibration (time_calibration_mode is read later with the other calibration modes)
 old_timing_method = config["old_timing_method"]
 
 # Y position
@@ -746,7 +743,10 @@ res_tdif_filter = config.get("res_tdif_filter", 1.0)
 
 # Fitting comparison
 
-try_to_use_reprocessing_table = config["try_to_use_reprocessing_table"]
+charge_side_mode          = config["charge_side"]           # null | file | make
+charge_front_back_mode    = config["charge_front_back"]     # null | file | make
+time_calibration_mode     = config["time_calibration"]      # null | file | make
+time_dif_calibration_mode = config["time_dif_calibration"]  # null | file | make
 
 # Calibrations
 CRT_gaussian_fit_quantile = config["CRT_gaussian_fit_quantile"]
@@ -1779,83 +1779,87 @@ print(
     force=True,
 )
 
-if try_to_use_reprocessing_table:
+# --- Compute analysis_mode as prime-product composite code ---
+# Each calibration type contributes one prime factor:
+#   charge_side:          null=×1, file=×2,  make=×3
+#   charge_front_back:    null=×1, file=×5,  make=×7
+#   time_calibration:     null=×1, file=×11, make=×13
+#   time_dif_calibration: null=×1, file=×17, make=×19
+# Decode by divisibility: analysis_mode % 2 == 0 → charge_side=file, etc.
+_cs_prime  = {None: 1, "file": 2,  "make": 3 }[charge_side_mode]
+_cfb_prime = {None: 1, "file": 5,  "make": 7 }[charge_front_back_mode]
+_tc_prime  = {None: 1, "file": 11, "make": 13}[time_calibration_mode]
+_tdc_prime = {None: 1, "file": 17, "make": 19}[time_dif_calibration_mode]
+global_variables["analysis_mode"] = _cs_prime * _cfb_prime * _tc_prime * _tdc_prime
+print(
+    f"analysis_mode={global_variables['analysis_mode']} "
+    f"(charge_side={charge_side_mode}, charge_front_back={charge_front_back_mode}, "
+    f"time_calibration={time_calibration_mode}, time_dif_calibration={time_dif_calibration_mode})"
+)
 
-    REPROCESSING_PARAMETERS_CSV = str(
+# --- Load calibration CSV once if any calibration uses file mode ---
+_cal_csv_data = None
+if any(m == "file" for m in [charge_side_mode, charge_front_back_mode,
+                               time_calibration_mode, time_dif_calibration_mode]):
+    _cal_csv_path = str(
         repo_root
         / "MASTER"
         / "ANCILLARY"
         / "QUALITY_ASSURANCE"
-        / "OUTPUT_FILES"
-        / f"MINGO0{station}_task2_calibration_parameters.csv"
+        / "STEP_1_CALIBRATIONS"
+        / "TASK_2"
+        / "STATIONS"
+        / f"MINGO0{station}"
+        / "OUTPUTS"
+        / "FILES"
+        / "calibrations_task_2.csv"
     )
-    reprocessing_parameters = pd.read_csv(REPROCESSING_PARAMETERS_CSV)
-    
-    if not reprocessing_parameters.empty:
-        global_variables["analysis_mode"] = 1
-        print("Reprocessing parameters found for this file. Setting analysis_mode to 1.")
-        
-        # print(reprocessing_parameters)
-        # print(current_conf_number)
+    _cal_csv_data = pd.read_csv(_cal_csv_path)
+    print(f"Calibration table loaded: {_cal_csv_path}")
 
-        reprocessing_parameters = reprocessing_parameters[reprocessing_parameters["conf"] == current_conf_number]
+# --- Derive per-calibration control flags ---
+calculate_charge_side       = (charge_side_mode == "make")
+apply_charge_side           = (charge_side_mode in ["make", "file"])
 
-        # print(reprocessing_parameters)
+calculate_Q_FB_calibration  = (charge_front_back_mode == "make")
+apply_Q_FB_calibration      = (charge_front_back_mode in ["make", "file"])
 
-        # Create 4x4 matrices with the calibration parameters, considering that
-        #              conf  plane  strip      variable     parameter
-        # 512    10      1      1         T_sum  0.000000e+00
-        # 513    10      1      2         T_sum  3.707547e-01
-        
-        reprocessing_plane = (
-            reprocessing_parameters["plane"].to_numpy(dtype=np.int64, copy=False) - 1
-        )
-        reprocessing_strip = (
-            reprocessing_parameters["strip"].to_numpy(dtype=np.int64, copy=False) - 1
-        )
-        reprocessing_variable = reprocessing_parameters["variable"].to_numpy(copy=False)
-        reprocessing_value = reprocessing_parameters["parameter"].to_numpy(
-            dtype=float,
-            copy=False,
-        )
+calculate_T_sum_calibration = (time_calibration_mode == "make")
+apply_T_sum_calibration     = (time_calibration_mode in ["make", "file"])
 
-        def create_calibration_matrix(param_name: str) -> np.ndarray:
-            matrix = np.full((4, 4), np.nan)
-            variable_mask = reprocessing_variable == param_name
-            if np.any(variable_mask):
-                matrix[
-                    reprocessing_plane[variable_mask],
-                    reprocessing_strip[variable_mask],
-                ] = reprocessing_value[variable_mask]
-            return matrix
-        
-        T_sum_calibration = create_calibration_matrix("T_sum")
-        T_dif_calibration = create_calibration_matrix("T_dif")
-        Q_sum_calibration = create_calibration_matrix("Q_sum")
+calculate_T_dif_calibration = (time_dif_calibration_mode == "make")
+apply_T_dif_calibration     = (time_dif_calibration_mode in ["make", "file"])
 
-        Q_FB_coeff_1 = create_calibration_matrix("Q_FB_coeff_1")
-        Q_FB_coeff_2 = create_calibration_matrix("Q_FB_coeff_2")
-        Q_FB_coeff_3 = create_calibration_matrix("Q_FB_coeff_3")
-        Q_FB_coeff_4 = create_calibration_matrix("Q_FB_coeff_4")
-        Q_FB_coeff_5 = create_calibration_matrix("Q_FB_coeff_5")
+crosstalk_removal_and_recalibration = True  # not refactored in this change
 
-        calculate_Q_sum_calibration = False
-        calculate_T_dif_calibration = False
-        calculate_Q_FB_calibration = False
-        calculate_T_sum_calibration = False
-        crosstalk_removal_and_recalibration = False
-    else:
-        calculate_Q_sum_calibration = True
-        calculate_T_dif_calibration = True
-        calculate_Q_FB_calibration = True
-        calculate_T_sum_calibration = True
-        crosstalk_removal_and_recalibration = True
-else:
-    calculate_Q_sum_calibration = True
-    calculate_T_dif_calibration = True
-    calculate_Q_FB_calibration = True
-    calculate_T_sum_calibration = True
-    crosstalk_removal_and_recalibration = True
+# --- Pre-populate matrices for `file` mode calibrations ---
+if charge_side_mode == "file":
+    QF_pedestal = np.full((4, 4), np.nan)
+    QB_pedestal = np.full((4, 4), np.nan)
+    for _M in range(1, 5):
+        for _s in range(1, 5):
+            QF_pedestal[_M-1][_s-1] = get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_Q_F")
+            QB_pedestal[_M-1][_s-1] = get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_Q_B")
+
+if time_dif_calibration_mode == "file":
+    Tdiff_cal = np.full((4, 4), np.nan)
+    for _M in range(1, 5):
+        for _s in range(1, 5):
+            Tdiff_cal[_M-1][_s-1] = get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_T_dif")
+
+if time_calibration_mode == "file":
+    Tsum_cal = [
+        [get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_T_sum") for _s in range(1, 5)]
+        for _M in range(1, 5)
+    ]
+
+if charge_front_back_mode == "file":
+    import json as _json
+    for _M in range(1, 5):
+        for _s in range(1, 5):
+            _raw = get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_Q_FB_coeffs")
+            _coeffs = _json.loads(_raw) if isinstance(_raw, str) else list(_raw)
+            global_variables[f"P{_M}_s{_s}_Q_FB_coeffs"] = _coeffs
 
 # print(Q_sum_calibration)
 
@@ -2967,65 +2971,49 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-calculate_Q_sum_calibration = True
-print("Calculating Q sum calibration:")
-
 _prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
-if calculate_Q_sum_calibration:
+if apply_charge_side:
     print("--------------------------------------------------------------------------")
     print("-------------------- Charge pedestal calibration -------------------------")
     print("--------------------------------------------------------------------------")
 
     charge_test = working_df.copy()
 
-    # New pedestal calibration for charges ------------------------------------------------
-    QF_pedestal = []
-    for key in ['1', '2', '3', '4']:
-        Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
-        Q_F = working_df[Q_F_cols].values
-        
-        Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
-        Q_B = working_df[Q_B_cols].values
-        
-        T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
-        T_F = working_df[T_F_cols].values
-        
-        QF_pedestal_component = [calibrate_strip_Q_pedestal(Q_F[:,i], T_F[:,i], Q_B[:,i]) for i in range(4)]
-        QF_pedestal.append(QF_pedestal_component)
-    QF_pedestal = np.array(QF_pedestal)
+    if calculate_charge_side:
+        # New pedestal calibration for charges ------------------------------------------------
+        QF_pedestal = []
+        for key in ['1', '2', '3', '4']:
+            Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
+            Q_F = working_df[Q_F_cols].values
 
-    QB_pedestal = []
-    for key in ['1', '2', '3', '4']:
-        Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
-        Q_F = working_df[Q_F_cols].values
-        
-        Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
-        Q_B = working_df[Q_B_cols].values
-        
-        T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
-        T_B = working_df[T_B_cols].values
-        
-        QB_pedestal_component = [calibrate_strip_Q_pedestal(Q_B[:,i], T_B[:,i], Q_F[:,i]) for i in range(4)]
-        QB_pedestal.append(QB_pedestal_component)
-    QB_pedestal = np.array(QB_pedestal)
+            Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
+            Q_B = working_df[Q_B_cols].values
 
-    # Change the values for the ones in 
-    if global_variables["analysis_mode"] == 1:
-        for M in [1, 2, 3, 4]:
-            for s in [1, 2, 3, 4]:
-                qf_key = f"P{M}_s{s}_Q_F_smoothed"
-                qf_value = get_reprocessing_value(reprocessing_parameters, qf_key)
-                if qf_value is not None:
-                    print("Using smoothed Q_F pedestal for P",M,"s",s)
-                    QF_pedestal[M-1][s-1] = qf_value
-                qb_key = f"P{M}_s{s}_Q_B_smoothed"
-                qb_value = get_reprocessing_value(reprocessing_parameters, qb_key)
-                if qb_value is not None:
-                    print("Using smoothed Q_B pedestal for P",M,"s",s)
-                    QB_pedestal[M-1][s-1] = qb_value
+            T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
+            T_F = working_df[T_F_cols].values
 
-    print("\nFront Charge Pedestal:")
+            QF_pedestal_component = [calibrate_strip_Q_pedestal(Q_F[:,i], T_F[:,i], Q_B[:,i]) for i in range(4)]
+            QF_pedestal.append(QF_pedestal_component)
+        QF_pedestal = np.array(QF_pedestal)
+
+        QB_pedestal = []
+        for key in ['1', '2', '3', '4']:
+            Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
+            Q_F = working_df[Q_F_cols].values
+
+            Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
+            Q_B = working_df[Q_B_cols].values
+
+            T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
+            T_B = working_df[T_B_cols].values
+
+            QB_pedestal_component = [calibrate_strip_Q_pedestal(Q_B[:,i], T_B[:,i], Q_F[:,i]) for i in range(4)]
+            QB_pedestal.append(QB_pedestal_component)
+        QB_pedestal = np.array(QB_pedestal)
+
+    # QF_pedestal and QB_pedestal are either computed above (make) or pre-populated (file)
+    print(f"\nFront Charge Pedestal (mode={charge_side_mode}):")
     print(QF_pedestal)
     print("\nBack Charge Pedestal:")
     print(QB_pedestal,"\n")
@@ -3450,15 +3438,13 @@ if calculate_Q_sum_calibration:
         del charge_test
         gc.collect()
 else:
-    QF_pedestal = Q_sum_calibration
-    QB_pedestal = Q_sum_calibration
-    print("Skipping Charge Pedestal Calibration as per configuration.")
+    print("Skipping charge side calibration (mode=null).")
 
 
 
 _prof["s_charge_pedestal_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
-if calculate_T_dif_calibration:
+if apply_T_dif_calibration:
     print("----------------------------------------------------------------------")
     print("------------------- Position offset calibration ----------------------")
     print("----------------------------------------------------------------------")
@@ -3469,29 +3455,22 @@ if calculate_T_dif_calibration:
             pos_test[f'{key}_dif_{j+1}'] = ( pos_test[f'{key}_B_{j+1}'] - pos_test[f'{key}_F_{j+1}'] ) / 2
 
     pos_test_copy = pos_test.copy()
-    Tdiff_cal = []
-    for key in ['1', '2', '3', '4']:
-        T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
-        T_F = working_df[T_F_cols].values
-        
-        T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
-        T_B = working_df[T_B_cols].values
-        
-        Tdiff_cal_component = [calibrate_strip_T_diff(T_F[:,i], T_B[:,i]) for i in range(4)]
-        Tdiff_cal.append(Tdiff_cal_component)
-    Tdiff_cal = np.array(Tdiff_cal)
 
-    # Change the values for the ones in 
-    if global_variables["analysis_mode"] == 1:
-        for M in [1, 2, 3, 4]:
-            for s in [1, 2, 3, 4]:
-                tdif_key = f"P{M}_s{s}_T_dif_smoothed"
-                tdif_value = get_reprocessing_value(reprocessing_parameters, tdif_key)
-                if tdif_value is not None:
-                    print("Using smoothed T_diff for P",M,"s",s)
-                    Tdiff_cal[M-1][s-1] = tdif_value
+    if calculate_T_dif_calibration:
+        Tdiff_cal = []
+        for key in ['1', '2', '3', '4']:
+            T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
+            T_F = working_df[T_F_cols].values
 
-    print("\nTime diff. offset:")
+            T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
+            T_B = working_df[T_B_cols].values
+
+            Tdiff_cal_component = [calibrate_strip_T_diff(T_F[:,i], T_B[:,i]) for i in range(4)]
+            Tdiff_cal.append(Tdiff_cal_component)
+        Tdiff_cal = np.array(Tdiff_cal)
+    # else: Tdiff_cal pre-populated from calibration CSV (file mode)
+
+    print(f"\nTime diff. offset (mode={time_dif_calibration_mode}):")
     print(Tdiff_cal, "\n")
 
     if validate_pos_cal:
@@ -3566,16 +3545,6 @@ if calculate_T_dif_calibration:
         Tdiff_cal_ST = np.array(Tdiff_cal_ST)
         
         
-        # Change the values for the ones in 
-        if global_variables["analysis_mode"] == 1:
-            for M in [1, 2, 3, 4]:
-                for s in [1, 2, 3, 4]:
-                    tdif_key = f"P{M}_s{s}_T_dif_smoothed"
-                    tdif_value = get_reprocessing_value(reprocessing_parameters, tdif_key)
-                    if tdif_value is not None:
-                        print("Using smoothed T_diff for P",M,"s",s)
-                        Tdiff_cal_ST[M-1][s-1] = tdif_value
-        
         print("\nSELF TRIGGER Time diff. offset:")
         print(Tdiff_cal_ST, "\n")
 
@@ -3633,8 +3602,7 @@ if calculate_T_dif_calibration:
         del pos_test_copy
     gc.collect()
 else:
-    print("Skipping T_dif Calibration as per configuration.")
-    Tdiff_cal = T_dif_calibration
+    print("Skipping T_dif calibration (mode=null).")
 
     
 
@@ -3984,10 +3952,11 @@ print("----------------------------------------------------------------------")
 print("----------------- Time diff calibration and filtering ----------------")
 print("----------------------------------------------------------------------")
 
-for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-    for j in range(4):
-        mask = working_df[f'{key}_T_dif_{j+1}'] != 0
-        working_df.loc[mask, f'{key}_T_dif_{j+1}'] -= Tdiff_cal[i][j]
+if apply_T_dif_calibration:
+    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+        for j in range(4):
+            mask = working_df[f'{key}_T_dif_{j+1}'] != 0
+            working_df.loc[mask, f'{key}_T_dif_{j+1}'] -= Tdiff_cal[i][j]
 
 print("--------------------- Filter 3.2: time diff filtering ----------------")
 _debug_plot_filter_group(
@@ -4000,7 +3969,7 @@ for col in working_df.columns:
     if 'T_diff' in col:
         working_df[col] = np.where((working_df[col] > T_dif_cal_threshold) | (working_df[col] < -T_dif_cal_threshold), 0, working_df[col])
 
-if self_trigger:
+if self_trigger and apply_T_dif_calibration:
     for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         for j in range(4):
             mask = working_st_df[f'{key}_T_dif_{j+1}'] != 0
@@ -4199,9 +4168,9 @@ def _compute_slew_pair(pair, data_arrays, y_lookup, z_positions, tdiff_to_x, c_m
     })
 
 
-if charge_front_back:
+if charge_front_back_mode is not None:
 
-    # ── Phase 1: pre-extract arrays and run 16 fits in parallel ──────────────
+    # ── Phase 1: pre-extract arrays and run 16 fits in parallel (make mode) ──
     _qfb_tasks = []
     for key in [1, 2, 3, 4]:
         for i in range(4):
@@ -4210,34 +4179,30 @@ if charge_front_back:
             cond   = (Q_sum != 0) & (Q_diff != 0)
             _qfb_tasks.append((key, i, Q_sum[cond], Q_diff[cond], cond))
 
-    _qfb_coeffs_map = {}
-    with ThreadPoolExecutor(max_workers=4) as _qfb_pool:
-        _qfb_futures = {
-            _qfb_pool.submit(_fit_qfb_coeffs, Q_sum_adj, Q_dif_adj): (key, i)
-            for key, i, Q_sum_adj, Q_dif_adj, cond in _qfb_tasks
-            if np.sum(Q_sum_adj) != 0
-        }
-        for fut in as_completed(_qfb_futures):
-            _key, _i = _qfb_futures[fut]
-            _qfb_coeffs_map[(_key, _i)] = fut.result()
+    if calculate_Q_FB_calibration:
+        _qfb_coeffs_map = {}
+        with ThreadPoolExecutor(max_workers=4) as _qfb_pool:
+            _qfb_futures = {
+                _qfb_pool.submit(_fit_qfb_coeffs, Q_sum_adj, Q_dif_adj): (key, i)
+                for key, i, Q_sum_adj, Q_dif_adj, cond in _qfb_tasks
+                if np.sum(Q_sum_adj) != 0
+            }
+            for fut in as_completed(_qfb_futures):
+                _key, _i = _qfb_futures[fut]
+                _qfb_coeffs_map[(_key, _i)] = fut.result()
+            # Store computed coefficients in global_variables
+            for (_key, _i), _coeffs in _qfb_coeffs_map.items():
+                global_variables[f'P{_key}_s{_i+1}_Q_FB_coeffs'] = _coeffs.tolist()
+    # else (file mode): global_variables already populated from calibration CSV
 
-    # ── Phase 2: sequential apply corrections (+ optional plots) ─────────────
+    # ── Phase 2: apply corrections using coefficients from global_variables ───
     for key, i, Q_sum_adj, Q_dif_adj, cond in _qfb_tasks:
         if np.sum(Q_sum_adj) == 0:
             continue
-        coeffs = _qfb_coeffs_map.get((key, i))
+        coeffs = global_variables.get(f'P{key}_s{i+1}_Q_FB_coeffs')
         if coeffs is None:
             continue
         print([f"{coeff:.3g}" for coeff in coeffs])
-        global_variables[f'P{key}_s{i+1}_Q_FB_coeffs'] = coeffs.tolist()
-
-        # if global_variables["analysis_mode"] == 1:
-        #     for index in [0, 1, 2, 3, 4, 5, 6]:
-        #         coeff_key = f"P{key}_s{i+1}_Q_FB_coeffs[{index}]_smoothed"
-        #         coeff_value = get_reprocessing_value(reprocessing_parameters, coeff_key)
-        #         if coeff_value is not None:
-        #             print("Using smoothed Q_FB_coeffs for P",key,"s",i+1,"index",index)
-        #             coeffs[index] = coeff_value
 
         column_name  = f'Q{key}_Q_dif_{i+1}'
         target_dtype = working_df[column_name].dtype
@@ -4255,41 +4220,45 @@ if charge_front_back:
         print("SELF TRIGGER Charge front-back correction...")
         for key in [1, 2, 3, 4]:
             for i in range(4):
-                # Extract data from the DataFrame
                 Q_sum = working_st_df[f'Q{key}_Q_sum_{i+1}'].values
                 Q_diff = working_st_df[f'Q{key}_Q_dif_{i+1}'].values
 
-                # Apply condition to filter non-zero Q_sum and Q_diff
                 cond = (Q_sum != 0) & (Q_diff != 0)
                 Q_sum_adjusted = Q_sum[cond]
                 Q_dif_adjusted = Q_diff[cond]
-            
-                # Skip correction if no data is left after filtering
+
                 if np.sum(Q_sum_adjusted) == 0:
                     continue
 
-                # Perform scatter plot and fit
                 title = f"Q{key}_{i+1}. SELF TRIGGER Charge diff. vs. charge sum."
                 x_label = "Charge sum"
                 y_label = "Charge diff"
                 name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_dif_vs_sum_ST"
 
-                
-
                 if calculate_Q_FB_calibration:
                     coeffs = scatter_2d_and_fit_new(Q_sum_adjusted, Q_dif_adjusted, title, x_label, y_label, name_of_file)
                 else:
-                    coeffs = Q_FB_coeff_1[key-1][i], Q_FB_coeff_2[key-1][i], Q_FB_coeff_3[key-1][i], Q_FB_coeff_4[key-1][i], Q_FB_coeff_5[key-1][i], Q_FB_coeff_6[key-1][i], Q_FB_coeff_7[key-1][i]
+                    # file mode: use pre-loaded coefficients from global_variables
+                    coeffs = global_variables.get(f'P{key}_s{i+1}_Q_FB_coeffs')
+                    if coeffs is None:
+                        continue
 
                 column_name = f'Q{key}_Q_dif_{i+1}'
                 target_dtype = working_st_df[column_name].dtype
                 corrected_diff = Q_dif_adjusted - polynomial(Q_sum_adjusted, *coeffs)
                 working_st_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
-    
-    print('\nCharge front-back correction performed.')
-    
+
+    print(f'\nCharge front-back correction performed (mode={charge_front_back_mode}).')
+
+    # file mode: coefficients were loaded into global_variables for application only;
+    # remove them so they are not persisted to the calibration metadata CSV.
+    if charge_front_back_mode == "file":
+        for _M in range(1, 5):
+            for _s in range(1, 5):
+                global_variables.pop(f"P{_M}_s{_s}_Q_FB_coeffs", None)
+
 else:
-    print('Charge front-back correction was selected to not be performed.')
+    print('Charge front-back correction skipped (mode=null).')
     Q_dif_cal_threshold_FB = Q_dif_cal_threshold_FB_wide
 
 _prof["s_charge_fb_s"] = round(time.perf_counter() - _t_sec, 2)
@@ -5229,7 +5198,7 @@ print("----------------------------------------------------------------------")
 print("----------------------- Time sum calibration -------------------------")
 print("----------------------------------------------------------------------")
 
-if time_calibration:
+if time_calibration_mode is not None:
     forced_old_timing_method = not slewing_correction
 
     if forced_old_timing_method:
@@ -5565,38 +5534,23 @@ if time_calibration:
         
         nan_mask = np.isnan(calibration_times)
         if np.any(nan_mask):
-            calibration_times[nan_mask] = T_sum_calibration[nan_mask]
-            print("Some NaN values were replaced in the calibration in times.")
-    
-    else:
-        calibration_times = T_sum_calibration
-        working_df['CRT_avg'] = 1000 # An extreme time to not crush the program
-        print("Calibration in times was set to configured T_sum_calibration (calibration was not performed)\n", calibration_times)
+            calibration_times[nan_mask] = 0.0
+            print("Some NaN values in calibration times were set to 0 (no correction applied for those strips).")
+
+        # Build Tsum_cal from freshly computed calibration_times
+        Tsum_cal = [list(calibration_times[i]) for i in range(len(calibration_times))]
+    # else (file mode): Tsum_cal is pre-populated from calibration CSV, nothing to do here
+
+    if apply_T_sum_calibration:
+        print(f"Final calibration in times used (mode={time_calibration_mode}):", _format_value_for_print(Tsum_cal))
+        # Applying time calibration
+        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+            for j in range(4):
+                mask = working_df[f'{key}_T_sum_{j+1}'] != 0
+                working_df.loc[mask, f'{key}_T_sum_{j+1}'] += Tsum_cal[i][j]
 
 else:
-    calibration_times = T_sum_calibration
-    working_df['CRT_avg'] = 1000 # An extreme time to not crush the program
-    print("Calibration in times was set to configured T_sum_calibration (calibration was not performed)\n", calibration_times)
-
-# Turn the matrix into a list of lists for easier access
-Tsum_cal = [list(calibration_times[i]) for i in range(len(calibration_times))]
-
-if global_variables["analysis_mode"] == 1:
-    for M in [1, 2, 3, 4]:
-        for s in [1, 2, 3, 4]:
-            tsum_key = f"P{M}_s{s}_T_sum_smoothed"
-            tsum_value = get_reprocessing_value(reprocessing_parameters, tsum_key)
-            if tsum_value is not None:
-                print("Using smoothed T_sum for P",M,"s",s)
-                Tsum_cal[M-1][s-1] = tsum_value
-
-print("Final calibration in times used:", _format_value_for_print(Tsum_cal))
-
-# Applying time calibration
-for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-    for j in range(4):
-        mask = working_df[f'{key}_T_sum_{j+1}'] != 0
-        working_df.loc[mask, f'{key}_T_sum_{j+1}'] += Tsum_cal[i][j]
+    print("Skipping time calibration (mode=null).")
 
 # Print the unique types in clean_tt column
 iteration_tt_check += 1
@@ -5715,21 +5669,6 @@ if crosstalk_removal_and_recalibration:
         crosstalk_limits[f'crstlk_limit_P{key}s{j+1}']      = mu + 3 * sigma
     
     
-    # Change the values for the ones in 
-    if global_variables["analysis_mode"] == 1:
-        for M in [1, 2, 3, 4]:
-            for s in [1, 2, 3, 4]:
-                limit_key = f"P{M}_s{s}_crstlk_limit_smoothed"
-                limit_value = get_reprocessing_value(reprocessing_parameters, limit_key)
-                if limit_value is not None:
-                    print("Using smoothed crosstalk limit for P",M,"s",s)
-                    crosstalk_limits[f'crstlk_limit_P{M}s{s}'] = limit_value
-                pedestal_key = f"P{M}_s{s}_crstlk_pedestal_smoothed"
-                pedestal_value = get_reprocessing_value(reprocessing_parameters, pedestal_key)
-                if pedestal_value is not None:
-                    print("Using smoothed crosstalk pedestal for P",M,"s",s)
-                    crosstalk_pedestal[f'crstlk_pedestal_P{M}s{s}'] = pedestal_value
-
     print("\nCrosstalk limit after fitting a gaussian to the peak:")
     print(_format_dict_for_print(crosstalk_limits))
     print("\nCrosstalk pedestal after fitting a gaussian to the peak:")
@@ -6128,6 +6067,9 @@ if slewing_correction:
             corrected_values = mean_correction + mean_values
             working_df.loc[update_mask, ps_to_t_col[ps]] = corrected_values[update_mask]
 
+_prof["s_slewing_2_math_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
+
 if create_plots or create_essential_plots:
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
@@ -6175,10 +6117,13 @@ if create_plots or create_essential_plots:
         plot_list.append(save_fig_path)
         save_plot_figure(save_fig_path, format='png')
     
-    if show_plots: 
+    if show_plots:
         plt.show()
     plt.close()
     del plot_df
+
+_prof["s_qt_histplot_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # print("----------------------------------------------------------------------")
 # print("------------------------- Time sum filtering -------------------------")
@@ -6274,6 +6219,10 @@ if time_study_tsum:
             axis=1,
         ).copy()
 
+    # Pre-compute per-tt boolean masks once outside the pair loop (~204 pairs × N_tt avoided)
+    _tt_arr = working_df['clean_tt'].to_numpy()
+    _tt_masks = {tt: (_tt_arr == tt) for tt in tt_values}
+
     for plane_1 in range(1, 5):
         for plane_2 in range(1, 5):
             for strip_1 in range(1, 5):
@@ -6296,41 +6245,42 @@ if time_study_tsum:
                         print(f"Skipping {col}: missing charge columns.")
                         continue
 
+                    # Compute difference once for the whole DataFrame (vectorized, no per-tt .loc writes)
+                    _valid_pair = (working_df[col_1].to_numpy() != 0) & (working_df[col_2].to_numpy() != 0)
+                    working_df[col] = np.where(_valid_pair, working_df[col_1] - working_df[col_2], np.nan)
+
+                    # Extract numpy arrays once; per-tt slicing uses cheap boolean indexing
+                    _col_arr = working_df[col].to_numpy()
+                    _q1_arr = working_df[q_col_1].to_numpy()
+                    _q2_arr = working_df[q_col_2].to_numpy()
+
                     tt_hist_data = []
                     for tt in tt_values:
-                        mask = working_df['clean_tt'] == tt
-                        if not mask.any():
+                        _m = _tt_masks[tt]
+                        if not _m.any():
                             tt_hist_data.append((tt, np.array([]), np.array([]), np.array([]), np.array([])))
                             continue
 
-                        mask_nonzero = (working_df.loc[mask, col_1] != 0) & (working_df.loc[mask, col_2] != 0)
-                        working_df.loc[mask & mask_nonzero, col] = working_df.loc[mask & mask_nonzero, col_1] - working_df.loc[mask & mask_nonzero, col_2]
-                        subset = working_df.loc[mask, [col, q_col_1, q_col_2]].copy()
-                        subset = subset[(subset[col] != 0) & subset[col].notna()]
+                        col_tt = _col_arr[_m]
+                        q1_tt = _q1_arr[_m]
+                        q2_tt = _q2_arr[_m]
 
-                        if subset.empty or len(subset[col]) < 100:
-                            print(f"Skipping {col} for tt={tt}: too few entries ({len(subset[col])})")
+                        valid_tt = np.isfinite(col_tt) & (col_tt != 0)
+                        if valid_tt.sum() < 100:
+                            print(f"Skipping {col} for tt={tt}: too few entries ({int(valid_tt.sum())})")
                             tt_hist_data.append((tt, np.array([]), np.array([]), np.array([]), np.array([])))
                             continue
 
-                        charges_1 = subset[q_col_1]
-                        charges_2 = subset[q_col_2]
-                        nonzero = subset[col]
+                        nonzero = col_tt[valid_tt]
+                        charges_1 = q1_tt[valid_tt]
+                        charges_2 = q2_tt[valid_tt]
                         charge_diff = charges_1 - charges_2
                         charge_sum = charges_1 + charges_2
 
                         high_charge_mask = (charges_1 > tsum_charge_threshold) & (charges_2 > tsum_charge_threshold)
-                        high_charge_data = nonzero[high_charge_mask].values
+                        high_charge_data = nonzero[high_charge_mask]
 
-                        tt_hist_data.append(
-                            (
-                                tt,
-                                nonzero.values,
-                                high_charge_data,
-                                charge_diff.values,
-                                charge_sum.values,
-                            )
-                        )
+                        tt_hist_data.append((tt, nonzero, high_charge_data, charge_diff, charge_sum))
 
                     if not tt_hist_data:
                         print(f"No valid histograms for {col}; skipping figure.")
@@ -6612,6 +6562,9 @@ if time_study_tsum:
     #         plt.show()
     #     plt.close()
 
+_prof["s_tsum_study_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
+
 print("----------------------------------------------------------------------")
 print("---------- Filter if any variable in the strip is 0 (4/3) ------------")
 print("----------------------------------------------------------------------")
@@ -6636,7 +6589,7 @@ print("----------------------------------------------------------------------")
 print("--------------------- Using clean_tt as trigger ----------------------")
 print("----------------------------------------------------------------------")
 
-_prof["s_slewing_2_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_strip_zeroing_3_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 if time_window_filtering:
     print("----------------------------------------------------------------------")
@@ -6865,17 +6818,21 @@ for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
         global_variables[f'{module}_s{strip}_crstlk_pedestal'] = crosstalk_pedestal[f'crstlk_pedestal_{module}s{strip}']
         global_variables[f'{module}_s{strip}_crstlk_limit'] = crosstalk_limits[f'crstlk_limit_{module}s{strip}']
         
-        if crosstalk_fitting:
-            q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2 - crosstalk_pedestal[f'crstlk_pedestal_{module}s{strip}']
+        if apply_charge_side:
+            if crosstalk_fitting:
+                q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2 - crosstalk_pedestal[f'crstlk_pedestal_{module}s{strip}']
+            else:
+                q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2
         else:
-            q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2
-            
-        global_variables[f'{module}_s{strip}_Q_sum'] = q_sum
-        
-        global_variables[f'{module}_s{strip}_Q_F'] = QF_pedestal[i][j]
-        global_variables[f'{module}_s{strip}_Q_B'] = QB_pedestal[i][j]
-        global_variables[f'{module}_s{strip}_T_sum'] = Tsum_cal[i][j]
-        global_variables[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j]
+            q_sum = None
+
+        # Only record values computed in this run (make mode).
+        # null and file modes leave the calibration metadata columns empty.
+        global_variables[f'{module}_s{strip}_Q_sum'] = q_sum if calculate_charge_side else None
+        global_variables[f'{module}_s{strip}_Q_F'] = QF_pedestal[i][j] if calculate_charge_side else None
+        global_variables[f'{module}_s{strip}_Q_B'] = QB_pedestal[i][j] if calculate_charge_side else None
+        global_variables[f'{module}_s{strip}_T_sum'] = Tsum_cal[i][j] if calculate_T_sum_calibration else None
+        global_variables[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j] if calculate_T_dif_calibration else None
 
 # # Load or initialize metadata DataFrame
 # if os.path.exists(csv_path):
@@ -7127,6 +7084,10 @@ metadata_execution_csv_path = save_metadata(
         "data_purity_percentage": round(float(data_purity_percentage), 4),
         "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
         "analysis_mode": int(global_variables["analysis_mode"]),
+        "charge_side_mode": charge_side_mode,
+        "charge_front_back_mode": charge_front_back_mode,
+        "time_calibration_mode": time_calibration_mode,
+        "time_dif_calibration_mode": time_dif_calibration_mode,
     },
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
@@ -7189,13 +7150,19 @@ calibration_variables = extract_calibration_metadata(
     global_variables,
     remove_from_source=True,
 )
-metadata_calibration_csv_path = save_metadata(
-    csv_path_calibration,
-    calibration_variables,
-    preferred_fieldnames=("filename_base", "execution_timestamp", "param_hash"),
-    drop_field_predicate=should_drop_calibration_metadata_field,
-)
-print(f"Metadata (calibration) CSV updated at: {metadata_calibration_csv_path}")
+# Only write a calibration row if at least one calibration was freshly computed
+# (make mode). null and file modes produce no new information worth persisting.
+if any(m == "make" for m in [charge_side_mode, charge_front_back_mode,
+                               time_calibration_mode, time_dif_calibration_mode]):
+    metadata_calibration_csv_path = save_metadata(
+        csv_path_calibration,
+        calibration_variables,
+        preferred_fieldnames=("filename_base", "execution_timestamp", "param_hash"),
+        drop_field_predicate=should_drop_calibration_metadata_field,
+    )
+    print(f"Metadata (calibration) CSV updated at: {metadata_calibration_csv_path}")
+else:
+    print("Skipping calibration metadata CSV write (no make-mode calibrations in this run).")
 
 print(f"Specific metadata keys to be saved: {len(global_variables)}")
 if VERBOSE:

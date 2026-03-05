@@ -384,17 +384,24 @@ def apply_step1_task_parameter_overrides(
 
 
 def normalize_analysis_mode_value(value: object) -> str:
+    """Normalise analysis_mode to a non-negative integer string.
+
+    analysis_mode is a prime-product composite that encodes per-calibration
+    modes (charge_side × charge_front_back × time_calibration ×
+    time_dif_calibration).  Any positive integer is valid; empty string is
+    used when the value is absent.
+    """
     if value is None:
         return ""
     text = str(value).strip()
-    if text in {"", "0", "1"}:
+    if text == "":
+        return ""
+    # Strip trailing .0 produced by float-to-string conversion
+    if text.endswith(".0"):
+        text = text[:-2]
+    # Accept any non-negative integer string
+    if text.lstrip("-").isdigit() and not text.startswith("-"):
         return text
-    if text in {"0.0", "1.0"}:
-        return text[0]
-    if "1" in text:
-        return "1"
-    if "0" in text:
-        return "0"
     return ""
 
 
@@ -610,7 +617,7 @@ def _save_metadata_rewrite(
     rows.append(row_filtered)
     fixed_during_rewrite = sanitize_analysis_mode_rows(rows)
     if fixed_during_rewrite:
-        log_fn(f"Clamped analysis_mode to 0/1 in {fixed_during_rewrite} metadata row(s).")
+        log_fn(f"Normalised analysis_mode in {fixed_during_rewrite} metadata row(s).")
 
     seen = set(fieldnames)
     for item in rows:
@@ -780,7 +787,7 @@ def save_metadata(
         }
     fixed_new_row = sanitize_analysis_mode_rows([row_data])
     if fixed_new_row:
-        log_fn(f"Clamped analysis_mode to 0/1 in {fixed_new_row} metadata row(s).")
+        log_fn(f"Normalised analysis_mode in {fixed_new_row} metadata row(s).")
 
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = _metadata_lock_path(metadata_path)

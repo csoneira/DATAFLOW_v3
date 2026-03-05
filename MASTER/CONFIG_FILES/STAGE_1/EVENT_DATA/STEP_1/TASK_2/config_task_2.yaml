@@ -4,7 +4,6 @@ selection:
   date_ranges:
     - start: 2024-09-16
       end: 2024-09-30
-try_to_use_reprocessing_table: false
 complete_reanalysis: false
 article_format: false
 # create_plots options: null | debug | usual | all
@@ -13,8 +12,16 @@ limit_number: null
 number_of_time_cal_figures: 3
 calibrate_charge_ns_to_fc: true
 validate_charge_pedestal_calibration: false
-charge_front_back: true
+# Calibration modes: null (skip) | file (load from QA CSV) | make (compute fresh)
+# analysis_mode is a prime-product composite: cs×cfb×tc×tdc
+# charge_side primes:       null=×1, file=×2,  make=×3
+# charge_front_back primes: null=×1, file=×5,  make=×7
+# time_calibration primes:  null=×1, file=×11, make=×13
+# time_dif_calibration:     null=×1, file=×17, make=×19
+charge_side: make
+charge_front_back: make
+time_calibration: make
+time_dif_calibration: make
 slewing_correction: false
 time_window_filtering: true
-time_calibration: true
 old_timing_method: true
