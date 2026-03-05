@@ -19,6 +19,7 @@ import builtins
 import csv
 import fcntl
 import math
+import re
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 
@@ -42,6 +43,237 @@ EVENTS_PER_SECOND_COLUMNS = [
     "events_per_second_global_rate",
 ]
 EVENTS_PER_SECOND_COLUMN_SET = frozenset(EVENTS_PER_SECOND_COLUMNS)
+TRACEABILITY_COLUMNS: Tuple[str, ...] = ("filename_base", "execution_timestamp", "param_hash")
+CANONICAL_TT_LABELS: frozenset[str] = frozenset(
+    {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "12",
+        "13",
+        "14",
+        "23",
+        "24",
+        "34",
+        "123",
+        "124",
+        "134",
+        "234",
+        "1234",
+    }
+)
+TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
+
+
+def _metadata_value_is_empty(value: object) -> bool:
+    return value is None or value == "" or (isinstance(value, float) and math.isnan(value))
+
+
+def normalize_tt_label(value: object, default: str = "0") -> str:
+    """Return canonical TT label text (e.g. 12.0 -> 12, 12.0_134.0 -> 12_134)."""
+    if value is None:
+        return default
+
+    if isinstance(value, (np.integer, int)):
+        return str(int(value))
+
+    if isinstance(value, (np.floating, float)):
+        if not np.isfinite(value):
+            return default
+        if float(value).is_integer():
+            return str(int(value))
+        return str(value)
+
+    text = str(value).strip()
+    if not text:
+        return default
+
+    if "_" in text:
+        return "_".join(normalize_tt_label(part, default=default) for part in text.split("_"))
+
+    try:
+        numeric = float(text)
+    except (TypeError, ValueError):
+        return text
+
+    if not np.isfinite(numeric):
+        return default
+    if numeric.is_integer():
+        return str(int(numeric))
+    return text
+
+
+def _normalize_metadata_tt_key(key: str) -> str:
+    if "_tt_" not in key:
+        return key
+
+    suffix = ""
+    for candidate in ("_count_rate_hz", "_count", "_fraction"):
+        if key.endswith(candidate):
+            suffix = candidate
+            key = key[: -len(candidate)]
+            break
+
+    prefix, tt_fragment = key.rsplit("_tt_", 1)
+    normalized_fragment = normalize_tt_label(tt_fragment, default="0")
+    return f"{prefix}_tt_{normalized_fragment}{suffix}"
+
+
+def _normalize_metadata_fieldnames(fieldnames: Iterable[str]) -> List[str]:
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw_name in fieldnames:
+        if raw_name is None:
+            continue
+        name = _normalize_metadata_tt_key(str(raw_name))
+        if name in seen:
+            continue
+        seen.add(name)
+        normalized.append(name)
+    return normalized
+
+
+def _is_entries_metric_key(key: str) -> bool:
+    return key.endswith("_entries") or "_entries_" in key
+
+
+RATE_HISTOGRAM_REQUIRED_COLUMNS = frozenset(
+    {
+        "count_rate_denominator_seconds",
+        "events_per_second_total_seconds",
+        "events_per_second_global_rate",
+    }
+)
+
+
+def is_rate_histogram_metadata_column(column_name: str) -> bool:
+    if column_name in RATE_HISTOGRAM_REQUIRED_COLUMNS:
+        return True
+    if column_name.startswith("events_per_second_") and column_name.endswith("_rate_hz"):
+        return True
+    return False
+
+
+def is_rate_histogram_file_column(column_name: str) -> bool:
+    if column_name in TRACEABILITY_COLUMNS:
+        return True
+    return is_rate_histogram_metadata_column(column_name)
+
+
+def is_redundant_count_metadata_column(column_name: str) -> bool:
+    if column_name == "count_rate_denominator_seconds":
+        return False
+    if column_name.endswith("_count"):
+        return True
+    if column_name.endswith("_fraction"):
+        return True
+    if _is_entries_metric_key(column_name) and not column_name.endswith("_rate_hz"):
+        return True
+    return False
+
+
+def is_specific_metadata_excluded_column(column_name: str) -> bool:
+    return is_redundant_count_metadata_column(column_name) or is_rate_histogram_metadata_column(
+        column_name
+    )
+
+
+def extract_rate_histogram_metadata(
+    metadata: Dict[str, object],
+    remove_from_source: bool = True,
+) -> Dict[str, object]:
+    extracted: Dict[str, object] = {}
+    for key in TRACEABILITY_COLUMNS:
+        if key in metadata:
+            extracted[key] = metadata[key]
+
+    for key in list(metadata.keys()):
+        if not isinstance(key, str):
+            continue
+        if not is_rate_histogram_metadata_column(key):
+            continue
+        extracted[key] = metadata[key]
+        if remove_from_source:
+            metadata.pop(key, None)
+
+    return extracted
+
+
+def is_trigger_type_metadata_column(column_name: str, tt_prefixes: Iterable[str]) -> bool:
+    for prefix in tt_prefixes:
+        if column_name.startswith(f"{prefix}_"):
+            return True
+    return False
+
+
+def is_trigger_type_file_column(column_name: str, tt_prefixes: Iterable[str]) -> bool:
+    if column_name in TRACEABILITY_COLUMNS:
+        return True
+    if column_name == "count_rate_denominator_seconds":
+        return True
+    if is_trigger_type_metadata_column(column_name, tt_prefixes):
+        return column_name.endswith("_rate_hz")
+    return False
+
+
+def extract_trigger_type_metadata(
+    metadata: Dict[str, object],
+    tt_prefixes: Iterable[str],
+    remove_from_source: bool = True,
+) -> Dict[str, object]:
+    prefixes = tuple(str(prefix) for prefix in tt_prefixes)
+    extracted: Dict[str, object] = {}
+
+    for key in TRACEABILITY_COLUMNS:
+        if key in metadata:
+            extracted[key] = metadata[key]
+
+    for key in list(metadata.keys()):
+        if not isinstance(key, str):
+            continue
+        if not is_trigger_type_metadata_column(key, prefixes):
+            continue
+        extracted[key] = metadata[key]
+        if remove_from_source:
+            metadata.pop(key, None)
+
+    return extracted
+
+
+def prune_redundant_count_metadata(
+    metadata: Dict[str, object],
+    log_fn: Callable[..., None] = builtins.print,
+) -> int:
+    dropped: list[str] = []
+    for key in list(metadata.keys()):
+        if not isinstance(key, str):
+            continue
+        if key == "count_rate_denominator_seconds":
+            continue
+
+        if key.endswith("_count"):
+            rate_key = key[: -len("_count")] + "_rate_hz"
+            if rate_key in metadata:
+                dropped.append(key)
+            continue
+
+        if _is_entries_metric_key(key) and not key.endswith("_rate_hz"):
+            rate_key = f"{key}_rate_hz"
+            if rate_key in metadata:
+                dropped.append(key)
+            continue
+
+        if key.endswith("_fraction"):
+            dropped.append(key)
+
+    for key in dropped:
+        metadata.pop(key, None)
+
+    if dropped:
+        log_fn(f"[metadata] Dropped {len(dropped)} redundant count/fraction column(s).")
+    return len(dropped)
 
 
 def build_step1_cli_parser(
@@ -250,13 +482,23 @@ def repair_metadata_file(metadata_path: Path) -> int:
 
 
 def _normalize_metadata_row(raw: Dict[str, object]) -> Dict[str, object]:
-    return {key: value for key, value in raw.items() if key is not None}
+    normalized: Dict[str, object] = {}
+    for key, value in raw.items():
+        if key is None:
+            continue
+        out_key = _normalize_metadata_tt_key(str(key)) if isinstance(key, str) else key
+        if out_key in normalized:
+            if _metadata_value_is_empty(normalized[out_key]) and not _metadata_value_is_empty(value):
+                normalized[out_key] = value
+            continue
+        normalized[out_key] = value
+    return normalized
 
 
 def _load_existing_rows(metadata_path: Path) -> Tuple[List[str], List[Dict[str, object]]]:
     with metadata_path.open("r", newline="") as csvfile:
         reader = csv.DictReader(csvfile)
-        existing_fields = list(reader.fieldnames or [])
+        existing_fields = _normalize_metadata_fieldnames(list(reader.fieldnames or []))
         existing_rows = [_normalize_metadata_row(dict(existing)) for existing in reader]
     return existing_fields, existing_rows
 
@@ -270,6 +512,9 @@ def _apply_preferred_field_order(
         preferred = [name for name in preferred_fieldnames if name in seen]
         remainder = [name for name in fieldnames if name not in preferred]
         fieldnames = preferred + remainder
+    identity_prefix = [name for name in TRACEABILITY_COLUMNS if name in fieldnames]
+    if identity_prefix:
+        fieldnames = identity_prefix + [name for name in fieldnames if name not in identity_prefix]
     if "data_purity_percentage" in fieldnames:
         fieldnames = [name for name in fieldnames if name != "data_purity_percentage"] + [
             "data_purity_percentage"
@@ -280,9 +525,16 @@ def _apply_preferred_field_order(
 def _format_metadata_row(item: Dict[str, object], fieldnames: List[str]) -> Dict[str, object]:
     formatted: Dict[str, object] = {}
     for key in fieldnames:
-        if key in EVENTS_PER_SECOND_COLUMN_SET:
+        if (
+            key in EVENTS_PER_SECOND_COLUMN_SET
+            or key.startswith("events_per_second_")
+            or key == "analysis_mode"
+            or key.endswith("_count")
+            or key.endswith("_rate_hz")
+            or key.endswith("_fraction")
+        ):
             value = item.get(key, 0)
-            if value in ("", None) or (isinstance(value, float) and math.isnan(value)):
+            if _metadata_value_is_empty(value):
                 formatted[key] = 0
             else:
                 formatted[key] = value
@@ -302,9 +554,19 @@ def _save_metadata_rewrite(
     row: Dict[str, object],
     preferred_fieldnames: Iterable[str] | None,
     log_fn: Callable[..., None],
+    drop_field_predicate: Callable[[str], bool] | None = None,
 ) -> None:
     rows: List[Dict[str, object]] = []
     fieldnames: List[str] = []
+    row_filtered = {
+        key: value
+        for key, value in row.items()
+        if not (
+            drop_field_predicate
+            and isinstance(key, str)
+            and drop_field_predicate(key)
+        )
+    }
 
     if metadata_path.exists() and metadata_path.stat().st_size > 0:
         try:
@@ -323,9 +585,29 @@ def _save_metadata_rewrite(
                     ) from err
             else:
                 raise
+        if drop_field_predicate:
+            existing_rows = [
+                {
+                    key: value
+                    for key, value in existing.items()
+                    if not (
+                        isinstance(key, str)
+                        and drop_field_predicate(key)
+                    )
+                }
+                for existing in existing_rows
+            ]
+            fieldnames = [
+                key
+                for key in fieldnames
+                if not (
+                    isinstance(key, str)
+                    and drop_field_predicate(key)
+                )
+            ]
         rows.extend(existing_rows)
 
-    rows.append(row)
+    rows.append(row_filtered)
     fixed_during_rewrite = sanitize_analysis_mode_rows(rows)
     if fixed_during_rewrite:
         log_fn(f"Clamped analysis_mode to 0/1 in {fixed_during_rewrite} metadata row(s).")
@@ -333,6 +615,12 @@ def _save_metadata_rewrite(
     seen = set(fieldnames)
     for item in rows:
         for key in item.keys():
+            if (
+                drop_field_predicate
+                and isinstance(key, str)
+                and drop_field_predicate(key)
+            ):
+                continue
             if key not in seen:
                 fieldnames.append(key)
                 seen.add(key)
@@ -345,8 +633,20 @@ def _save_metadata_rewrite(
             writer.writerow(_format_metadata_row(item, fieldnames))
 
 
-def _filename_base_index_path(metadata_path: Path) -> Path:
+def _metadata_operation_dir(metadata_path: Path) -> Path:
+    return metadata_path.parent / "OPERATION"
+
+
+def _metadata_lock_path(metadata_path: Path) -> Path:
+    return _metadata_operation_dir(metadata_path) / f"{metadata_path.name}.lock"
+
+
+def _legacy_filename_base_index_path(metadata_path: Path) -> Path:
     return metadata_path.with_suffix(metadata_path.suffix + ".filename_base.index")
+
+
+def _filename_base_index_path(metadata_path: Path) -> Path:
+    return _metadata_operation_dir(metadata_path) / f"{metadata_path.name}.filename_base.index"
 
 
 def _load_filename_base_index(index_path: Path) -> set[str]:
@@ -363,6 +663,7 @@ def _load_filename_base_index(index_path: Path) -> set[str]:
 
 def _write_filename_base_index(index_path: Path, values: Iterable[str]) -> None:
     unique_values = sorted({value.strip() for value in values if str(value).strip()})
+    index_path.parent.mkdir(parents=True, exist_ok=True)
     with index_path.open("w", encoding="utf-8", newline="") as handle:
         for value in unique_values:
             handle.write(f"{value}\n")
@@ -373,9 +674,11 @@ def _sync_filename_base_index_from_csv(
     log_fn: Callable[..., None],
 ) -> set[str]:
     index_path = _filename_base_index_path(metadata_path)
+    legacy_index_path = _legacy_filename_base_index_path(metadata_path)
     if not metadata_path.exists() or metadata_path.stat().st_size == 0:
-        if index_path.exists():
-            index_path.unlink()
+        for candidate in (index_path, legacy_index_path):
+            if candidate.exists():
+                candidate.unlink()
         return set()
 
     try:
@@ -383,8 +686,9 @@ def _sync_filename_base_index_from_csv(
             reader = csv.DictReader(csvfile)
             fieldnames = list(reader.fieldnames or [])
             if "filename_base" not in fieldnames:
-                if index_path.exists():
-                    index_path.unlink()
+                for candidate in (index_path, legacy_index_path):
+                    if candidate.exists():
+                        candidate.unlink()
                 return set()
             values = {
                 str(raw).strip()
@@ -409,13 +713,47 @@ def _load_or_build_filename_base_index(
     log_fn: Callable[..., None],
 ) -> Tuple[Path, set[str]]:
     index_path = _filename_base_index_path(metadata_path)
+    legacy_index_path = _legacy_filename_base_index_path(metadata_path)
     if index_path.exists():
         try:
             return index_path, _load_filename_base_index(index_path)
         except OSError:
             # Fall back to rebuilding from the CSV below.
             pass
+
+    if legacy_index_path.exists():
+        try:
+            legacy_values = _load_filename_base_index(legacy_index_path)
+            _write_filename_base_index(index_path, legacy_values)
+            try:
+                legacy_index_path.unlink()
+            except OSError:
+                pass
+            return index_path, legacy_values
+        except OSError:
+            # Fall back to rebuilding from CSV below.
+            pass
+
     return index_path, _sync_filename_base_index_from_csv(metadata_path, log_fn)
+
+
+def _compose_drop_field_predicate(
+    metadata_path: Path,
+    drop_field_predicate: Callable[[str], bool] | None,
+) -> Callable[[str], bool] | None:
+    """Return effective drop predicate, enforcing per-file schema constraints."""
+    if metadata_path.name.endswith("_metadata_rate_histogram.csv"):
+        def _rate_histogram_drop(column_name: str) -> bool:
+            return not is_rate_histogram_file_column(column_name)
+
+        if drop_field_predicate is None:
+            return _rate_histogram_drop
+
+        return lambda column_name: (
+            drop_field_predicate(column_name) or _rate_histogram_drop(column_name)
+        )
+
+    return drop_field_predicate
 
 
 def save_metadata(
@@ -423,15 +761,30 @@ def save_metadata(
     row: Dict[str, object],
     preferred_fieldnames: Iterable[str] | None = None,
     log_fn: Callable[..., None] = builtins.print,
+    drop_field_predicate: Callable[[str], bool] | None = None,
 ) -> Path:
     metadata_path = Path(metadata_path)
+    effective_drop_field_predicate = _compose_drop_field_predicate(
+        metadata_path,
+        drop_field_predicate,
+    )
     row_data = _normalize_metadata_row(dict(row))
+    if effective_drop_field_predicate:
+        row_data = {
+            key: value
+            for key, value in row_data.items()
+            if not (
+                isinstance(key, str)
+                and effective_drop_field_predicate(key)
+            )
+        }
     fixed_new_row = sanitize_analysis_mode_rows([row_data])
     if fixed_new_row:
         log_fn(f"Clamped analysis_mode to 0/1 in {fixed_new_row} metadata row(s).")
 
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = metadata_path.with_suffix(metadata_path.suffix + ".lock")
+    lock_path = _metadata_lock_path(metadata_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     with lock_path.open("a", encoding="utf-8") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
@@ -448,26 +801,69 @@ def save_metadata(
         try:
             with metadata_path.open("r", newline="") as csvfile:
                 reader = csv.DictReader(csvfile)
-                existing_fields = list(reader.fieldnames or [])
+                raw_existing_fields = list(reader.fieldnames or [])
+                existing_fields = _normalize_metadata_fieldnames(raw_existing_fields)
         except csv.Error as exc:
             if "field larger than field limit" in str(exc).lower():
                 fixed = repair_metadata_file(metadata_path)
                 log_fn(
                     f"Detected oversized analysis_mode entries in {metadata_path}; normalized {fixed} row(s)."
                 )
-                _save_metadata_rewrite(metadata_path, row_data, preferred_fieldnames, log_fn)
+                _save_metadata_rewrite(
+                    metadata_path,
+                    row_data,
+                    preferred_fieldnames,
+                    log_fn,
+                    drop_field_predicate=effective_drop_field_predicate,
+                )
                 _sync_filename_base_index_from_csv(metadata_path, log_fn)
                 return metadata_path
             raise
 
         if not existing_fields:
-            _save_metadata_rewrite(metadata_path, row_data, preferred_fieldnames, log_fn)
+            _save_metadata_rewrite(
+                metadata_path,
+                row_data,
+                preferred_fieldnames,
+                log_fn,
+                drop_field_predicate=effective_drop_field_predicate,
+            )
+            _sync_filename_base_index_from_csv(metadata_path, log_fn)
+            return metadata_path
+
+        if existing_fields != raw_existing_fields:
+            _save_metadata_rewrite(
+                metadata_path,
+                row_data,
+                preferred_fieldnames,
+                log_fn,
+                drop_field_predicate=effective_drop_field_predicate,
+            )
+            _sync_filename_base_index_from_csv(metadata_path, log_fn)
+            return metadata_path
+
+        if effective_drop_field_predicate and any(
+            isinstance(name, str) and effective_drop_field_predicate(name) for name in existing_fields
+        ):
+            _save_metadata_rewrite(
+                metadata_path,
+                row_data,
+                preferred_fieldnames,
+                log_fn,
+                drop_field_predicate=effective_drop_field_predicate,
+            )
             _sync_filename_base_index_from_csv(metadata_path, log_fn)
             return metadata_path
 
         existing_field_set = set(existing_fields)
         if any(key not in existing_field_set for key in row_data.keys()):
-            _save_metadata_rewrite(metadata_path, row_data, preferred_fieldnames, log_fn)
+            _save_metadata_rewrite(
+                metadata_path,
+                row_data,
+                preferred_fieldnames,
+                log_fn,
+                drop_field_predicate=effective_drop_field_predicate,
+            )
             _sync_filename_base_index_from_csv(metadata_path, log_fn)
             return metadata_path
 
@@ -558,7 +954,7 @@ def add_normalized_count_metadata(
             continue
 
         is_count = key.endswith("_count")
-        is_entries = key.endswith(("_entries", "_entries_final", "_entries_initial"))
+        is_entries = _is_entries_metric_key(key) and not key.endswith("_rate_hz")
         if not (is_count or is_entries):
             continue
         try:
@@ -569,14 +965,95 @@ def add_normalized_count_metadata(
             continue
 
         if is_count:
-            if key.startswith("events_per_second_"):
-                out_key = key[: -len("_count")] + "_fraction"
-            else:
-                out_key = key[: -len("_count")] + "_rate_hz"
+            out_key = key[: -len("_count")] + "_rate_hz"
         else:
             out_key = key + "_rate_hz"
 
         metadata[out_key] = round(num / denom, 6)
+
+
+def _normalize_tt_prefix(prefix: object) -> str:
+    text = str(prefix).strip()
+    if text.endswith("_"):
+        text = text[:-1]
+    return text
+
+
+def _extract_tt_rate_components(column_name: str) -> tuple[str, str] | None:
+    match = TT_RATE_COLUMN_RE.match(column_name)
+    if match is None:
+        return None
+    prefix = _normalize_tt_prefix(match.group("prefix"))
+    label = normalize_tt_label(match.group("label"), default="")
+    if not prefix or not label:
+        return None
+    return prefix, label
+
+
+def compute_global_rate_from_tt_rates(
+    metadata: Dict[str, object],
+    preferred_prefixes: Iterable[str] | None = None,
+) -> tuple[float | None, str | None]:
+    by_prefix: dict[str, dict[str, float]] = {}
+
+    for key, value in metadata.items():
+        if not isinstance(key, str):
+            continue
+        parsed = _extract_tt_rate_components(key)
+        if parsed is None:
+            continue
+        prefix, tt_label = parsed
+        if tt_label not in CANONICAL_TT_LABELS:
+            # Ignore transition-matrix keys like clean_to_cal_tt_12_34_rate_hz.
+            continue
+        try:
+            rate_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(rate_value):
+            continue
+        by_prefix.setdefault(prefix, {})[tt_label] = rate_value
+
+    if not by_prefix:
+        return None, None
+
+    selected_prefix: str | None = None
+    if preferred_prefixes is not None:
+        for raw_prefix in preferred_prefixes:
+            normalized_prefix = _normalize_tt_prefix(raw_prefix)
+            if normalized_prefix in by_prefix and by_prefix[normalized_prefix]:
+                selected_prefix = normalized_prefix
+                break
+
+    if selected_prefix is None:
+        selected_prefix = min(
+            by_prefix.keys(),
+            key=lambda prefix: (-len(by_prefix[prefix]), prefix),
+        )
+
+    total_rate = float(sum(by_prefix[selected_prefix].values()))
+    return round(total_rate, 6), selected_prefix
+
+
+def set_global_rate_from_tt_rates(
+    metadata: Dict[str, object],
+    preferred_prefixes: Iterable[str] | None = None,
+    global_rate_key: str = "events_per_second_global_rate",
+    log_fn: Callable[..., None] | None = None,
+) -> bool:
+    total_rate, selected_prefix = compute_global_rate_from_tt_rates(
+        metadata,
+        preferred_prefixes=preferred_prefixes,
+    )
+    if total_rate is None or selected_prefix is None:
+        return False
+
+    metadata[global_rate_key] = round(float(total_rate), 6)
+    if log_fn is not None:
+        log_fn(
+            f"[global-rate] {global_rate_key} set as sum of {selected_prefix}_*_rate_hz."
+        )
+    return True
 
 
 def load_itineraries_from_file(

@@ -184,6 +184,7 @@ def main() -> int:
     config = _load_config(Path(args.config))
     _clear_plots_dir()
     cfg_22 = config.get("step_2_2", {})
+    cfg_21 = config.get("step_2_1", {})
 
     est_path = _resolve_input_path(args.estimated_csv) if args.estimated_csv else DEFAULT_ESTIMATED
     dict_path = _resolve_input_path(args.dictionary_csv) if args.dictionary_csv else DEFAULT_DICTIONARY
@@ -201,8 +202,15 @@ def main() -> int:
 
     relerr_clip = float(cfg_22.get("relerr_threshold_pct", 50.0))
 
-    # Plot parameters: prefer step_2_2, fallback to shared step_1_2 selection.
-    plot_params = cfg_22.get("plot_parameters", None)
+    # Plot parameters: use step_2_1 as the shared source for STEP 2.x.
+    plot_params = cfg_21.get("plot_parameters", None)
+    if plot_params is None:
+        legacy_plot_params = cfg_22.get("plot_parameters", None)
+        if legacy_plot_params is not None:
+            log.warning(
+                "Deprecated config key step_2_2.plot_parameters detected; use step_2_1.plot_parameters."
+            )
+            plot_params = legacy_plot_params
     if plot_params is None:
         plot_params = config.get("step_1_2", {}).get("plot_parameters", None)
 

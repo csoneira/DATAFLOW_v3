@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+from itertools import combinations
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -73,6 +75,28 @@ _PLOT_EXTENSIONS = {
     ".gif",
     ".webp",
 }
+
+CANONICAL_TT_LABELS = frozenset(
+    {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "12",
+        "13",
+        "14",
+        "23",
+        "24",
+        "34",
+        "123",
+        "124",
+        "134",
+        "234",
+        "1234",
+    }
+)
+TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
 
 
 def _clear_plots_dir() -> None:
@@ -165,10 +189,8 @@ def _preferred_count_prefixes_for_task_ids(task_ids: list[int]) -> list[str]:
     if max_task_id == 4:
         return ["list_tt_", "list_to_fit_tt_", "cal_tt_", "clean_tt_", "raw_to_clean_tt_", "raw_tt_"]
     return [
-        "corr_tt_",
-        "task5_to_corr_tt_",
-        "fit_to_corr_tt_",
-        "definitive_tt_",
+        "post_tt_",
+        "fit_to_post_tt_",
         "fit_tt_",
         "list_to_fit_tt_",
         "list_tt_",
@@ -176,6 +198,10 @@ def _preferred_count_prefixes_for_task_ids(task_ids: list[int]) -> list[str]:
         "clean_tt_",
         "raw_to_clean_tt_",
         "raw_tt_",
+        "corr_tt_",
+        "task5_to_corr_tt_",
+        "fit_to_corr_tt_",
+        "definitive_tt_",
     ]
 
 
@@ -185,14 +211,24 @@ def _compute_eff(n_four: pd.Series, n_three_missing: pd.Series) -> pd.Series:
     return n_four / denom.replace({0: np.nan})
 
 
-def _find_count_prefix(df: pd.DataFrame, preferred_prefixes: list[str] | None = None) -> str:
-    """Detect which trigger-topology prefix is available (raw_tt_, clean_tt_, etc.)."""
+def _find_topology_prefix(
+    df: pd.DataFrame,
+    preferred_prefixes: list[str] | None = None,
+) -> tuple[str, str]:
+    """
+    Detect trigger-topology prefix and value kind.
+
+    Returns:
+      (prefix, value_suffix) where value_suffix is "count" or "rate_hz".
+    """
     default_prefixes = [
         "raw_tt_",
         "clean_tt_",
         "cal_tt_",
         "list_tt_",
         "fit_tt_",
+        "post_tt_",
+        "fit_to_post_tt_",
         "corr_tt_",
         "definitive_tt_",
         "task5_to_corr_tt_",
@@ -203,8 +239,115 @@ def _find_count_prefix(df: pd.DataFrame, preferred_prefixes: list[str] | None = 
     ordered_prefixes = preferred_prefixes if preferred_prefixes else default_prefixes
     for prefix in ordered_prefixes:
         if f"{prefix}1234_count" in df.columns:
-            return prefix
-    raise KeyError("No trigger-topology count columns found (e.g. raw_tt_1234_count).")
+            return prefix, "count"
+    for prefix in ordered_prefixes:
+        if f"{prefix}1234_rate_hz" in df.columns:
+            return prefix, "rate_hz"
+    raise KeyError(
+        "No trigger-topology columns found (expected e.g. raw_tt_1234_count or raw_tt_1234_rate_hz)."
+    )
+
+
+def _normalize_tt_label(label: object) -> str:
+    text = str(label).strip()
+    if not text:
+        return ""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return text
+    if not np.isfinite(value):
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return text
+
+
+def _derive_global_rate_from_tt_sum(
+    df: pd.DataFrame,
+    *,
+    target_col: str = "events_per_second_global_rate",
+) -> str | None:
+    by_prefix: dict[str, list[str]] = {}
+    for col in df.columns:
+        match = TT_RATE_COLUMN_RE.match(str(col))
+        if match is None:
+            continue
+        prefix = str(match.group("prefix")).strip()
+        label = _normalize_tt_label(match.group("label"))
+        if label not in CANONICAL_TT_LABELS:
+            continue
+        by_prefix.setdefault(prefix, []).append(col)
+
+    if not by_prefix:
+        return None
+
+    prefix_priority = [
+        "post_tt",
+        "fit_tt",
+        "list_tt",
+        "cal_tt",
+        "clean_tt",
+        "raw_tt",
+    ]
+    selected_prefix: str | None = None
+    for prefix in prefix_priority:
+        if prefix in by_prefix and by_prefix[prefix]:
+            selected_prefix = prefix
+            break
+    if selected_prefix is None:
+        selected_prefix = min(by_prefix.keys(), key=lambda p: (-len(by_prefix[p]), p))
+
+    cols = sorted(set(by_prefix[selected_prefix]))
+    if not cols:
+        return None
+
+    summed = pd.Series(0.0, index=df.index, dtype=float)
+    valid_any = pd.Series(False, index=df.index)
+    for col in cols:
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        summed = summed + numeric.fillna(0.0)
+        valid_any = valid_any | numeric.notna()
+
+    df[target_col] = summed.where(valid_any, np.nan)
+    return target_col
+
+
+def _pick_global_rate_column(df: pd.DataFrame, preferred: str = "events_per_second_global_rate") -> str | None:
+    """Pick/derive global-rate column without 1234-only shortcuts."""
+    ordered = [
+        preferred,
+        "events_per_second_global_rate",
+        "global_rate_hz",
+        "global_rate_hz_mean",
+    ]
+
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for col in ordered:
+        if col and col not in seen:
+            candidates.append(col)
+            seen.add(col)
+
+    for col in df.columns:
+        cl = str(col).strip().lower()
+        if not cl or col in seen:
+            continue
+        if "global_rate" in cl and ("hz" in cl or cl.endswith("_rate")):
+            candidates.append(col)
+            seen.add(col)
+
+    for col in candidates:
+        if col not in df.columns:
+            continue
+        vals = pd.to_numeric(df[col], errors="coerce")
+        if vals.notna().any():
+            return col
+    for col in candidates:
+        if col in df.columns:
+            return col
+
+    return _derive_global_rate_from_tt_sum(df, target_col="events_per_second_global_rate")
 
 
 def _fit_empirical_vs_simulated(
@@ -348,25 +491,49 @@ def _min_distance_to_points(queries: np.ndarray, points: np.ndarray, chunk: int 
     return out
 
 
-def _plot_dictionary_coverage(dictionary: pd.DataFrame, path) -> None:
-    """Coverage diagnostics in normalized (flux, eff) space."""
-    flux_col, eff_col = "flux_cm2_min", "eff_sim_1"
-    if flux_col not in dictionary.columns or eff_col not in dictionary.columns:
-        log.warning("Cannot plot dictionary coverage: missing %s or %s", flux_col, eff_col)
+def _sanitize_plot_token(token: str) -> str:
+    out = []
+    for char in str(token):
+        if char.isalnum() or char in {"_", "-"}:
+            out.append(char)
+        else:
+            out.append("_")
+    return "".join(out).strip("_") or "param"
+
+
+def _plot_dictionary_coverage(
+    dictionary: pd.DataFrame,
+    path,
+    x_col: str,
+    y_col: str,
+) -> None:
+    """Coverage diagnostics in normalized 2D parameter space."""
+    if x_col not in dictionary.columns or y_col not in dictionary.columns:
+        log.warning("Cannot plot dictionary coverage: missing %s or %s", x_col, y_col)
         return
-    flux = pd.to_numeric(dictionary[flux_col], errors="coerce").dropna().to_numpy(dtype=float)
-    eff = pd.to_numeric(dictionary[eff_col], errors="coerce").dropna().to_numpy(dtype=float)
-    if len(flux) < 3 or len(eff) < 3:
-        log.warning("Too few dictionary points for coverage plot")
+    x_vals = pd.to_numeric(dictionary[x_col], errors="coerce")
+    y_vals = pd.to_numeric(dictionary[y_col], errors="coerce")
+    mask = x_vals.notna() & y_vals.notna()
+    if int(mask.sum()) < 3:
+        log.warning("Too few dictionary points for coverage plot in (%s, %s).", x_col, y_col)
         return
+    x = x_vals[mask].to_numpy(dtype=float)
+    y = y_vals[mask].to_numpy(dtype=float)
 
     # Normalize to [0, 1] bounding box
-    f_min, f_max = flux.min(), flux.max()
-    e_min, e_max = eff.min(), eff.max()
-    f_span = f_max - f_min if f_max > f_min else 1.0
-    e_span = e_max - e_min if e_max > e_min else 1.0
-    xy = np.column_stack([(flux - f_min) / f_span, (eff - e_min) / e_span])
+    x_min, x_max = x.min(), x.max()
+    y_min, y_max = y.min(), y.max()
+    x_span = x_max - x_min if x_max > x_min else 1.0
+    y_span = y_max - y_min if y_max > y_min else 1.0
+    xy = np.column_stack([(x - x_min) / x_span, (y - y_min) / y_span])
     unique_xy = np.unique(xy, axis=0)
+    if len(unique_xy) < 3:
+        log.warning(
+            "Too few unique dictionary points for coverage plot in (%s, %s).",
+            x_col,
+            y_col,
+        )
+        return
 
     # NN distances
     nn_d = _nearest_neighbor_distances(unique_xy)
@@ -423,10 +590,12 @@ def _plot_dictionary_coverage(dictionary: pd.DataFrame, path) -> None:
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("Normalized flux")
-    ax.set_ylabel("Normalized efficiency")
+    ax.set_xlabel(f"Normalized {x_col}")
+    ax.set_ylabel(f"Normalized {y_col}")
     ax.set_title("Dictionary map (color = local spacing)")
-    ax.legend(fontsize=8, loc="upper right")
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize=8, loc="upper right")
     ax.grid(True, alpha=0.2)
 
     # Top-right: NN spacing histogram with percentile guides
@@ -483,7 +652,7 @@ def _plot_dictionary_coverage(dictionary: pd.DataFrame, path) -> None:
             f"Hull area: {hull_pct:.1f}% of bbox | "
             f"NN median: {np.median(nn_pct):.2f}% | "
             f"Radius@90% cov: {r90:.2f}%")
-    fig.suptitle(info, fontsize=9)
+    fig.suptitle(f"{x_col} vs {y_col} | {info}", fontsize=9)
     fig.tight_layout()
     _save_figure(fig, path, dpi=150)
     plt.close(fig)
@@ -617,10 +786,12 @@ def _plot_iso_rate(dictionary: pd.DataFrame, path) -> None:
     if "efficiencies" not in dictionary.columns:
         log.warning("No 'efficiencies' column — skipping iso-rate plot.")
         return
-    gr_col = "events_per_second_global_rate"
-    if gr_col not in dictionary.columns:
+    gr_col = _pick_global_rate_column(dictionary, preferred="events_per_second_global_rate")
+    if gr_col is None:
         log.warning("No global rate column — skipping iso-rate plot.")
         return
+    if gr_col != "events_per_second_global_rate":
+        log.info("Iso-rate plot using global-rate column: %s", gr_col)
 
     try:
         effs = dictionary["efficiencies"].apply(_ast.literal_eval)
@@ -943,15 +1114,18 @@ def main() -> int:
     log.info("  Rows loaded: %d", len(df))
 
     # ── Compute empirical efficiencies ───────────────────────────────
-    prefix = _find_count_prefix(df, preferred_prefixes=preferred_count_prefixes)
-    log.info("  Using count prefix: %s", prefix)
+    prefix, topology_value_suffix = _find_topology_prefix(
+        df,
+        preferred_prefixes=preferred_count_prefixes,
+    )
+    log.info("  Using topology prefix: %s (source=%s)", prefix, topology_value_suffix)
 
-    four_col = f"{prefix}1234_count"
+    four_col = f"{prefix}1234_{topology_value_suffix}"
     miss_cols = {
-        1: f"{prefix}234_count",
-        2: f"{prefix}134_count",
-        3: f"{prefix}124_count",
-        4: f"{prefix}123_count",
+        1: f"{prefix}234_{topology_value_suffix}",
+        2: f"{prefix}134_{topology_value_suffix}",
+        3: f"{prefix}124_{topology_value_suffix}",
+        4: f"{prefix}123_{topology_value_suffix}",
     }
 
     # Coerce to numeric
@@ -1119,6 +1293,7 @@ def main() -> int:
         "task_ids_used": task_ids_used,
         "count_prefix_preferred_order": preferred_count_prefixes,
         "count_prefix_used": prefix,
+        "topology_value_source": topology_value_suffix,
         "eff2_range": eff2_range,
         "eff3_range": eff3_range,
         "fit_polynomial_order_requested": int(fit_polynomial_order),
@@ -1203,30 +1378,7 @@ def _make_plots(
         log.warning("Dataset is empty — skipping plots.")
         return
 
-    # ── 1. Dictionary coverage: flux vs eff scatter ──────────────────
-    flux_col = "flux_cm2_min"
-    eff_col = "eff_sim_1"  # simulated efficiency plane 1
-    if flux_col in dataset.columns and eff_col in dataset.columns:
-        fig, ax = plt.subplots(figsize=(7, 5))
-        ax.scatter(
-            dataset[flux_col], dataset[eff_col],
-            s=10, alpha=0.5, color="#AAAAAA", label="Dataset", zorder=2,
-        )
-        if not dictionary.empty:
-            ax.scatter(
-                dictionary[flux_col], dictionary[eff_col],
-                s=30, alpha=0.8, marker="x", color="#E45756",
-                label="Dictionary", zorder=3, linewidths=1.2,
-            )
-        ax.set_xlabel("Flux [cm⁻² min⁻¹]")
-        ax.set_ylabel("Simulated efficiency (plane 1)")
-        ax.set_title("Dictionary coverage in flux–efficiency plane")
-        ax.legend(fontsize=8)
-        fig.tight_layout()
-        _save_figure(fig, PLOTS_DIR / "dictionary_coverage_flux_eff.png")
-        plt.close(fig)
-
-    # ── 2. Parameter histograms: data vs dictionary ──────────────────
+    # ── 1. Parameter histograms: data vs dictionary ──────────────────
     hist_cols = [c for c in plot_cols if c in dataset.columns]
     if hist_cols:
         n_cols = len(hist_cols)
@@ -1252,7 +1404,7 @@ def _make_plots(
         _save_figure(fig, PLOTS_DIR / "parameter_histograms.png")
         plt.close(fig)
 
-    # ── 3. Scatter matrix of key params (data vs dictionary) ─────────
+    # ── 2. Scatter matrix of key params (data vs dictionary) ─────────
     scatter_cols = [c for c in plot_cols if c in dataset.columns]
     n_sc = len(scatter_cols)
     if n_sc >= 2:
@@ -1296,7 +1448,7 @@ def _make_plots(
         _save_figure(fig, PLOTS_DIR / "parameter_scatter_matrix.png")
         plt.close(fig)
 
-    # ── 4. Comprehensive relative error report for eff 1..4 ────
+    # ── 3. Comprehensive relative error report for eff 1..4 ────
     _plot_relerr_report(
         dataset,
         dictionary,
@@ -1312,7 +1464,7 @@ def _make_plots(
         fit_order_by_plane=fit_order_by_plane,
     )
 
-    # ── 5. Events distribution ───────────────────────────────────────
+    # ── 4. Events distribution ───────────────────────────────────────
     if "n_events" in dataset.columns:
         fig, ax = plt.subplots(figsize=(6, 4))
         d_ev = dataset["n_events"].dropna()
@@ -1330,10 +1482,24 @@ def _make_plots(
         _save_figure(fig, PLOTS_DIR / "event_count_histogram.png")
         plt.close(fig)
 
-    # ── 6. Dictionary coverage (NN spacing + radius-based filling) ──
-    _plot_dictionary_coverage(dictionary, PLOTS_DIR / "dictionary_coverage.png")
+    # ── 5. Dictionary coverage (NN spacing + radius-based filling) ──
+    coverage_cols = [c for c in plot_cols if c in dictionary.columns]
+    coverage_pairs = list(combinations(coverage_cols, 2))
+    if not coverage_pairs and "flux_cm2_min" in dictionary.columns and "eff_sim_1" in dictionary.columns:
+        coverage_pairs = [("flux_cm2_min", "eff_sim_1")]
+    if not coverage_pairs:
+        log.warning("No valid parameter pairs for dictionary coverage diagnostics.")
+    for x_col, y_col in coverage_pairs:
+        sx = _sanitize_plot_token(x_col)
+        sy = _sanitize_plot_token(y_col)
+        _plot_dictionary_coverage(
+            dictionary,
+            PLOTS_DIR / f"dictionary_coverage_{sx}__{sy}.png",
+            x_col=x_col,
+            y_col=y_col,
+        )
 
-    # ── 7. Efficiency sim vs empirical (2×2 scatter) ─────────────────
+    # ── 6. Efficiency sim vs empirical (2×2 scatter) ─────────────────
     _plot_eff_sim_vs_empirical(
         dataset,
         dictionary,
@@ -1341,14 +1507,14 @@ def _make_plots(
         fit_poly_by_plane=fit_poly_by_plane,
     )
 
-    # ── 8. Empirical efficiency 2 vs 3 (single-panel scatter) ──────
+    # ── 7. Empirical efficiency 2 vs 3 (single-panel scatter) ──────
     _plot_empirical_eff2_vs_eff3(
         dataset,
         dictionary,
         PLOTS_DIR / "scatter_empirical_eff2_vs_eff3.png",
     )
 
-    # ── 9. Iso-rate contour in flux–eff space ────────────────────────
+    # ── 8. Iso-rate contour in flux–eff space ────────────────────────
     _plot_iso_rate(dictionary, PLOTS_DIR / "iso_rate_global_rate.png")
 
 

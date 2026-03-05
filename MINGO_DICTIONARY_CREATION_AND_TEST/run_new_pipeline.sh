@@ -108,6 +108,26 @@ run_step() {
     echo "  ✓ Step ${step} completed."
 }
 
+clear_output_plots() {
+    local -a plot_dirs=()
+    local plot_dir
+
+    while IFS= read -r plot_dir; do
+        plot_dirs+=("$plot_dir")
+    done < <(find "$STEP_ROOT" -type d -path "*/OUTPUTS/PLOTS" | sort)
+
+    if [[ ${#plot_dirs[@]} -eq 0 ]]; then
+        echo "No OUTPUTS/PLOTS directories found under ${STEP_ROOT}; skipping plot cleanup."
+        return 0
+    fi
+
+    echo "Clearing existing plot outputs before execution..."
+    for plot_dir in "${plot_dirs[@]}"; do
+        find "$plot_dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+        echo "  Cleared: ${plot_dir}"
+    done
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -126,6 +146,12 @@ if [[ "${1:-}" == "--from" ]]; then
         echo "ERROR: --from requires a step number (e.g. --from 2.1)" >&2
         exit 1
     fi
+    if [[ -z "${STEP_SCRIPTS[$FROM_STEP]:-}" ]]; then
+        echo "ERROR: Unknown step: $FROM_STEP" >&2
+        list_steps
+        exit 1
+    fi
+    clear_output_plots
     FOUND=0
     for step in "${STEP_ORDER[@]}"; do
         if [[ "$step" == "$FROM_STEP" ]]; then
@@ -151,6 +177,9 @@ if [[ $# -gt 0 ]]; then
             list_steps
             exit 1
         fi
+    done
+    clear_output_plots
+    for step in "$@"; do
         run_step "$step"
     done
     exit 0
@@ -158,6 +187,7 @@ fi
 
 # Default: run all steps
 echo "Running full pipeline..."
+clear_output_plots
 for step in "${STEP_ORDER[@]}"; do
     run_step "$step"
 done

@@ -1,0 +1,61 @@
+{
+  "_comment": "Optional runtime-only overrides. Keep this file minimal and local.",
+  "simulation_params_csv": null,
+  "_simulation_params_csv_comment": "Optional STEP 1.1 input override. If null, use MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv.",
+  "step_1_3": {
+    "base_dataset_csv": null,
+    "_base_dataset_csv_comment": "Optional override. If null, STEP 1.3 uses STEP_1_2 OUTPUTS/FILES/dataset.csv.",
+    "dictionary_csv": null,
+    "_dictionary_csv_comment": "Optional override. If null, STEP 1.3 uses STEP_1_2 OUTPUTS/FILES/dictionary.csv.",
+    "enlarged_dataset_csv": null,
+    "_enlarged_dataset_csv_comment": "Optional override for STEP 2 input path when STEP 1.3 is enabled."
+  },
+  "step_3_1": {
+    "source_csv": null,
+    "_source_csv_comment": "Optional source-table override for STEP 3.1. If null, use source_table selection (dataset/dictionary defaults).",
+    "rate_dictionary_csv": null,
+    "_rate_dictionary_csv_comment": "Optional dictionary used for global-rate contour/rate model in STEP 3.1."
+  },
+  "step_3_2": {
+    "time_series_csv": null,
+    "_time_series_csv_comment": "Optional STEP 3.2 input override. If null, use STEP 3.1 OUTPUTS/FILES/time_series.csv.",
+    "complete_curve_csv": null,
+    "_complete_curve_csv_comment": "Optional STEP 3.2 input override. If null, use STEP 3.1 OUTPUTS/FILES/complete_curve.csv.",
+    "dictionary_csv": null,
+    "_dictionary_csv_comment": "Optional STEP 3.2 dictionary override. If null, use STEP 1.2 OUTPUTS/FILES/dictionary.csv.",
+    "dataset_template_csv": null,
+    "_dataset_template_csv_comment": "Optional STEP 3.2 template override. If null, use STEP 1.1 OUTPUTS/FILES/dataset.csv."
+  },
+  "step_3_3": {
+    "synthetic_dataset_csv": null,
+    "_synthetic_dataset_csv_comment": "Optional STEP 3.3 synthetic dataset override. If null, use STEP 3.2 OUTPUTS/FILES/synthetic_dataset.csv.",
+    "time_series_csv": null,
+    "_time_series_csv_comment": "Optional STEP 3.3 time-series override. If null, use STEP 3.1 OUTPUTS/FILES/time_series.csv.",
+    "complete_curve_csv": null,
+    "_complete_curve_csv_comment": "Optional STEP 3.3 complete-curve override. If null, use STEP 3.1 OUTPUTS/FILES/complete_curve.csv.",
+    "dictionary_csv": null,
+    "_dictionary_csv_comment": "Optional STEP 3.3 dictionary override. If null, use STEP 1.2 OUTPUTS/FILES/dictionary.csv.",
+    "dataset_template_csv": null,
+    "_dataset_template_csv_comment": "Optional STEP 3.3 template override. If null, use STEP 1.1 OUTPUTS/FILES/dataset.csv.",
+    "uncertainty_lut_csv": null,
+    "_uncertainty_lut_csv_comment": "Optional STEP 3.3 uncertainty LUT override. If null, use STEP 2.3 OUTPUTS/FILES/uncertainty_lut.csv.",
+    "uncertainty_lut_meta_json": null,
+    "_uncertainty_lut_meta_json_comment": "Optional STEP 3.3 uncertainty LUT metadata override."
+  },
+  "step_4_1": {
+    "dictionary_csv": null,
+    "_dictionary_csv_comment": "Optional STEP 4.1 dictionary override used for z-position consistency filtering and comparison columns."
+  },
+  "step_4_2": {
+    "real_collected_csv": null,
+    "_real_collected_csv_comment": "Optional STEP 4.2 real-data input override. If null, use STEP 4.1 OUTPUTS/FILES/real_collected.csv.",
+    "dictionary_csv": null,
+    "_dictionary_csv_comment": "Optional STEP 4.2 dictionary override. If null, use STEP 1.2 OUTPUTS/FILES/dictionary.csv.",
+    "uncertainty_lut_csv": null,
+    "_uncertainty_lut_csv_comment": "Optional STEP 4.2 uncertainty LUT override. If null, use STEP 2.3 OUTPUTS/FILES/uncertainty_lut.csv.",
+    "uncertainty_lut_meta_json": null,
+    "_uncertainty_lut_meta_json_comment": "Optional STEP 4.2 uncertainty LUT metadata override.",
+    "build_summary_json": null,
+    "_build_summary_json_comment": "Optional STEP 4.2 build_summary override. If null, use STEP 1.2 OUTPUTS/FILES/build_summary.json."
+  }
+}

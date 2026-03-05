@@ -128,15 +128,15 @@ def normalize_step_params(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def expand_params(raw_params: list[str], merged_df: pd.DataFrame) -> list[str]:
-    """Expand config tokens into actual numeric column names present in merged_df.
+def expand_params(raw_params: list[str], base_df: pd.DataFrame) -> list[str]:
+    """Expand config tokens into actual numeric column names present in base_df.
 
     Supported expansions:
     - "efficiencies" -> expands to ["eff_p1", "eff_p2", "eff_p3", "eff_p4"] if those
       columns exist and are numeric.
     - "eff_1" / "eff1" -> maps to "eff_p1" (supports indices 1..4).
 
-    Returns a list of unique numeric column names that exist in merged_df, preserving order.
+    Returns a list of unique numeric column names that exist in base_df, preserving order.
     """
     expanded: list[str] = []
     for p in raw_params:
@@ -144,7 +144,7 @@ def expand_params(raw_params: list[str], merged_df: pd.DataFrame) -> list[str]:
             # token formats: "efficiencies", "efficiencies", "eff_1", "eff1", "eff_p1"
             if p == "efficiencies":
                 eff_cols = [c for c in ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
-                            if c in merged_df.columns and pd.api.types.is_numeric_dtype(merged_df[c])]
+                            if c in base_df.columns and pd.api.types.is_numeric_dtype(base_df[c])]
                 expanded.extend(eff_cols)
                 continue
             # match eff_1, eff1, eff-p1, eff_p1
@@ -154,56 +154,69 @@ def expand_params(raw_params: list[str], merged_df: pd.DataFrame) -> list[str]:
             if m:
                 idx = int(m.group(1))
                 col = f"eff_p{idx}"
-                if col in merged_df.columns and pd.api.types.is_numeric_dtype(merged_df[col]):
+                if col in base_df.columns and pd.api.types.is_numeric_dtype(base_df[col]):
                     expanded.append(col)
                 continue
             # if user already specified eff_p1..eff_p4, we'll treat below in default branch
         # default: keep the token as-is (will be filtered later)
         expanded.append(p)
 
-    # Final filter: only keep numeric columns that exist in merged_df and preserve order/uniqueness
+    # Final filter: only keep numeric columns that exist in base_df and preserve order/uniqueness
     final: list[str] = []
     for p in expanded:
-        if p in merged_df.columns and pd.api.types.is_numeric_dtype(merged_df[p]):
+        if p in base_df.columns and pd.api.types.is_numeric_dtype(base_df[p]):
             if p not in final:
                 final.append(p)
     return final
 
 
-def build_completed_mask(mesh_df: pd.DataFrame, completed_df: pd.DataFrame, decimals: int = 6) -> pd.Series:
-    key_cols = [
-        "cos_n",
-        "flux_cm2_min",
-        "eff_p1",
-        "eff_p2",
-        "eff_p3",
-        "eff_p4",
-        "z_p1",
-        "z_p2",
-        "z_p3",
-        "z_p4",
-    ]
-    missing_mesh = [col for col in key_cols if col not in mesh_df.columns]
-    if missing_mesh:
-        raise ValueError(f"Missing required columns in param mesh: {', '.join(missing_mesh)}")
-
-    missing_completed = [col for col in key_cols if col not in completed_df.columns]
-    if missing_completed:
-        raise ValueError(f"Missing required columns in completed params: {', '.join(missing_completed)}")
-
-    mesh_keys = mesh_df[key_cols].round(decimals).copy()
-    mesh_keys["_mesh_index"] = mesh_df.index
-    completed_keys = completed_df[key_cols].round(decimals).drop_duplicates()
-
-    merged = mesh_keys.merge(completed_keys, on=key_cols, how="left", indicator=True)
-    status = merged["_merge"].eq("both").groupby(merged["_mesh_index"]).any()
-    return status.reindex(mesh_df.index, fill_value=False)
+def _next_nice_interval(raw_interval: int, allowed: list[int]) -> int:
+    for interval in allowed:
+        if raw_interval <= interval:
+            return interval
+    return allowed[-1]
 
 
-def split_by_status(df: pd.DataFrame, completed_mask: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame]:
-    completed_df = df.loc[completed_mask]
-    in_process_df = df.loc[~completed_mask]
-    return completed_df, in_process_df
+def make_fixed_date_locator(values: pd.Series, max_ticks: int = 4) -> mdates.DateLocator:
+    dt_values = pd.to_datetime(values, errors="coerce").dropna()
+    if dt_values.empty:
+        return mdates.DayLocator(interval=1)
+
+    span_seconds = (dt_values.max() - dt_values.min()).total_seconds()
+    if not np.isfinite(span_seconds) or span_seconds <= 0:
+        return mdates.HourLocator(interval=1)
+
+    tick_count = max(2, int(max_ticks))
+    denominator = max(1, tick_count - 1)
+    span_days = span_seconds / 86400.0
+
+    if span_seconds <= 2 * 3600:
+        raw_minutes = int(np.ceil((span_seconds / 60.0) / denominator))
+        minutes = _next_nice_interval(max(1, raw_minutes), [1, 2, 5, 10, 15, 20, 30, 60])
+        if minutes < 60:
+            return mdates.MinuteLocator(interval=minutes)
+        return mdates.HourLocator(interval=max(1, minutes // 60))
+
+    if span_seconds <= 7 * 24 * 3600:
+        raw_hours = int(np.ceil((span_seconds / 3600.0) / denominator))
+        hours = _next_nice_interval(max(1, raw_hours), [1, 2, 3, 4, 6, 8, 12, 24, 48, 72])
+        if hours < 24:
+            return mdates.HourLocator(interval=hours)
+        return mdates.DayLocator(interval=max(1, hours // 24))
+
+    if span_days <= 120:
+        raw_days = int(np.ceil(span_days / denominator))
+        days = _next_nice_interval(max(1, raw_days), [1, 2, 3, 5, 7, 10, 14, 21, 30])
+        return mdates.DayLocator(interval=days)
+
+    if span_days <= 5 * 365:
+        raw_months = int(np.ceil((span_days / 30.0) / denominator))
+        months = _next_nice_interval(max(1, raw_months), [1, 2, 3, 4, 6, 12])
+        return mdates.MonthLocator(interval=months)
+
+    raw_years = int(np.ceil((span_days / 365.25) / denominator))
+    years = _next_nice_interval(max(1, raw_years), [1, 2, 5, 10, 20, 50])
+    return mdates.YearLocator(base=years)
 
 
 
@@ -221,70 +234,27 @@ def main() -> None:
         raise FileNotFoundError(f"Completed params file not found: {completed_path}")
     completed_df = pd.read_csv(completed_path)
     completed_df = normalize_step_params(completed_df)
-    # ensure execution_time is interpreted as a true timestamp.  we
-    # always plot using the *completed* dataset, so the value should
-    # come from the full params file (`step_final_simulation_params.csv`).
-    # previously the column was left as an object/string, which caused
-    # matplotlib to treat every value as ``0`` when the series was
-    # empty or unparsable; the date formatter then showed 1970–01–01.
-    if "execution_time" in completed_df.columns:
-        completed_df["execution_time"] = pd.to_datetime(
-            completed_df["execution_time"], errors="coerce",
-        )
 
-    # load mesh (in-process) which may be empty or disjoint
+    # load mesh and keep only rows currently in progress (done == 0)
     if not mesh_path.exists():
         raise FileNotFoundError(f"Mesh params file not found: {mesh_path}")
     mesh_df = pd.read_csv(mesh_path)
     mesh_df = normalize_step_params(mesh_df)
-    # mesh files sometimes contain an ``execution_time`` column too; convert
-    # it so that merges don't cast the dtype to ``object``.  the mesh
-    # value is not used for plotting but keeping the type consistent
-    # avoids surprises when building ``merged_df`` later.
-    if "execution_time" in mesh_df.columns:
-        mesh_df["execution_time"] = pd.to_datetime(
-            mesh_df["execution_time"], errors="coerce",
-        )
-
-    # determine shared columns for merging (used to detect overlap)
-    # prefer explicit identifiers if available
-    if "file_name" in mesh_df.columns and "file_name" in completed_df.columns:
-        shared_cols = ["file_name"]
-    elif "param_hash" in mesh_df.columns and "param_hash" in completed_df.columns:
-        shared_cols = ["param_hash"]
+    if "done" in mesh_df.columns:
+        done_series = pd.to_numeric(mesh_df["done"], errors="coerce").fillna(0).astype(int)
+        pending_df = mesh_df.loc[done_series == 0].copy()
     else:
-        shared_cols = [
-            col for col in mesh_df.columns
-            if col in completed_df.columns and mesh_df[col].dtype == completed_df[col].dtype
-        ]
+        print("[plot_param_mesh] mesh has no 'done' column; treating all mesh rows as in-progress", flush=True)
+        pending_df = mesh_df.copy()
 
-    if mesh_df.empty:
-        print("[plot_param_mesh] mesh file is empty; all rows treated as completed", flush=True)
-    if not shared_cols:
-        # no shared columns; overlay cannot be performed
-        print("[plot_param_mesh] no shared columns between mesh and completed; overlay ignored", flush=True)
-        merged_df = completed_df.copy()
-        merged_df["_merge"] = "left_only"
+    if pending_df.empty:
+        print("[plot_param_mesh] no done=0 rows in mesh; in-progress overlay is empty", flush=True)
+
+    # Plot on a combined dataframe so ranges include pending points too.
+    if pending_df.empty:
+        df = completed_df.copy()
     else:
-        # perform a left merge so that the resulting DataFrame has the same
-        # length and index as ``completed_df``.  we only care about marking
-        # completed rows that also appear in the mesh; any mesh-only rows are
-        # irrelevant for plotting and previously caused a length mismatch when
-        # we tried to apply the boolean mask back to ``completed_df``.
-        merged_df = pd.merge(
-            completed_df, mesh_df, on=shared_cols, how="left", suffixes=("", "_mesh"), indicator=True
-        )
-
-    # rows present in mesh will have _merge == 'both'; mask is therefore
-    # exactly the same length as ``completed_df`` and can be used safely.
-    in_process_mask = merged_df.get("_merge") == "both"
-    # the following two variables are currently unused but kept for clarity
-    # and potential future diagnostics
-    in_process_df = completed_df.loc[in_process_mask]
-    completed_only_df = completed_df.loc[~in_process_mask]
-
-    # we will plot using completed_df as the base
-    df = completed_df
+        df = pd.concat([completed_df, pending_df], ignore_index=True, sort=False)
 
     required = [
         "cos_n",
@@ -298,18 +268,6 @@ def main() -> None:
     if missing:
         raise ValueError(f"Missing required columns: {', '.join(missing)}")
 
-
-    eff_p1 = df["eff_p1"]
-    eff_p2 = df["eff_p2"]
-    eff_p3 = df["eff_p3"]
-    eff_p4 = df["eff_p4"]
-
-    prod_all = eff_p1 * eff_p2 * eff_p3 * eff_p4
-    prod_12 = eff_p1 * eff_p2
-    prod_23 = eff_p2 * eff_p3
-    prod_34 = eff_p3 * eff_p4
-    prod_41 = eff_p4 * eff_p1
-
     with PdfPages(output_path) as pdf:
         # --- Parameter matrix plot (pairplot style) ---
         import yaml
@@ -317,19 +275,44 @@ def main() -> None:
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
         raw_params = config.get("params", [])
-        # Expand tokens using the *base* DataFrame (completed dataset)
-        param_list = expand_params(raw_params, merged_df)
+        completed_color = "#2ca02c"
+        pending_color = "#ff7f0e"
+
+        def _column_or_empty(source_df: pd.DataFrame, col_name: str) -> pd.Series:
+            if col_name not in source_df.columns:
+                return pd.Series(dtype=float)
+            return source_df[col_name].dropna()
+
+        def _valid_xy(source_df: pd.DataFrame, x_col: str, y_col: str) -> tuple[pd.Series, pd.Series]:
+            if x_col not in source_df.columns or y_col not in source_df.columns:
+                return pd.Series(dtype=float), pd.Series(dtype=float)
+            x_vals = source_df[x_col]
+            y_vals = source_df[y_col]
+            valid = x_vals.notna() & y_vals.notna()
+            return x_vals[valid], y_vals[valid]
+
+        # Expand tokens using the combined DataFrame so pending-only ranges are included.
+        param_list = expand_params(raw_params, df)
         # if execution_time column exists, add a last-2-hours view and place
         # both datetime columns at the front in fixed order.
         exec_time_cols: list[str] = []
-        if "execution_time" in merged_df.columns:
+        if "execution_time" in df.columns:
             recent_col = "execution_time_last_2h"
             cutoff_utc = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=2)
-            exec_time_utc = pd.to_datetime(merged_df["execution_time"], errors="coerce", utc=True)
-            # Matplotlib cannot scatter tz-aware datetime series containing NaT.
-            # Normalize both execution-time views to naive UTC before plotting.
-            merged_df["execution_time"] = exec_time_utc.dt.tz_convert(None)
-            merged_df[recent_col] = exec_time_utc.where(exec_time_utc >= cutoff_utc, pd.NaT).dt.tz_convert(None)
+
+            def _prepare_time_columns(source_df: pd.DataFrame) -> None:
+                if "execution_time" not in source_df.columns:
+                    return
+                exec_time_utc = pd.to_datetime(source_df["execution_time"], errors="coerce", utc=True)
+                # Matplotlib cannot scatter tz-aware datetime series containing NaT.
+                source_df["execution_time"] = exec_time_utc.dt.tz_convert(None)
+                source_df[recent_col] = exec_time_utc.where(
+                    exec_time_utc >= cutoff_utc, pd.NaT
+                ).dt.tz_convert(None)
+
+            _prepare_time_columns(completed_df)
+            _prepare_time_columns(pending_df)
+            _prepare_time_columns(df)
             for col in ("execution_time", recent_col):
                 if col in param_list:
                     param_list.remove(col)
@@ -340,14 +323,19 @@ def main() -> None:
         if n > 0:
             # keep datetime columns wider for readable tick labels
             width_ratios = [3.0 if param_list[i] in exec_time_cols else 1.0 for i in range(n)]
+            # Preserve the visual size of non-datetime cells even when datetime
+            # columns are wider by scaling figure width with the ratio sum.
+            base_cell_size = 2.8
+            fig_width = base_cell_size * float(sum(width_ratios))
+            fig_height = base_cell_size * n
             fig, axes = plt.subplots(
-                n, n, figsize=(2.8 * n, 2.8 * n), dpi=110,
+                n, n, figsize=(fig_width, fig_height), dpi=110,
                 gridspec_kw={"width_ratios": width_ratios},
             )
             # Compute global axis limits for all parameters
             axis_limits = {}
             for idx, param in enumerate(param_list):
-                col = merged_df[param]
+                col = df[param]
                 if col.dtype.kind in {'M', 'O'}:
                     continue
                 vmin = col.min()
@@ -363,8 +351,8 @@ def main() -> None:
             for i in range(n):
                 for j in range(n):
                     ax = axes[i, j] if n > 1 else axes
-                    x = merged_df[param_list[j]]
-                    y = merged_df[param_list[i]]
+                    x = df[param_list[j]]
+                    y = df[param_list[i]]
                     # Set identical axis limits for off-diagonal plots only.  Diagonal
                     # panels are histograms; using the raw parameter range for y makes the
                     # bars nearly invisible when counts are much smaller than the value
@@ -373,7 +361,6 @@ def main() -> None:
                         ax.set_xlim(axis_limits[param_list[j]])
                     if i != j and param_list[i] in axis_limits:
                         ax.set_ylim(axis_limits[param_list[i]])
-                    ax.set_aspect('auto')
                     # Clean, minimal style
                     ax.grid(True, linestyle=':', linewidth=0.4, alpha=0.3)
                     # draw a simple border around each subplot
@@ -388,28 +375,80 @@ def main() -> None:
                             unique_count = int(pd.Series(x_clean).nunique())
                             if unique_count > 0:
                                 hist_bins = min(max(unique_count, 2), 40)
-                        ax.hist(
-                            x_clean,
-                            bins=hist_bins,
-                            color="#4f8cff",
-                            alpha=0.5,
-                            edgecolor='white',
-                            linewidth=0.5,
-                        )
+                        completed_vals = _column_or_empty(completed_df, param_list[i])
+                        if not completed_vals.empty:
+                            ax.hist(
+                                completed_vals,
+                                bins=hist_bins,
+                                color=completed_color,
+                                alpha=0.45,
+                                edgecolor='white',
+                                linewidth=0.5,
+                            )
+                        pending_vals = _column_or_empty(pending_df, param_list[i])
+                        if not pending_vals.empty:
+                            ax.hist(
+                                pending_vals,
+                                bins=hist_bins,
+                                color=pending_color,
+                                alpha=0.55,
+                                edgecolor='white',
+                                linewidth=0.5,
+                            )
                         # put variable name above histogram
                         ax.set_title(param_list[i], fontsize=10, pad=4)
                         # ensure y limits fit the bars
                         ax.autoscale_view(scalex=False, scaley=True)
                     elif i > j:
-                        ax.scatter(x, y, s=7, alpha=0.4, color="#2ca02c")
+                        x_completed, y_completed = _valid_xy(completed_df, param_list[j], param_list[i])
+                        if not x_completed.empty:
+                            ax.scatter(x_completed, y_completed, s=7, alpha=0.4, color=completed_color)
+                        x_pending, y_pending = _valid_xy(pending_df, param_list[j], param_list[i])
+                        if not x_pending.empty:
+                            ax.scatter(
+                                x_pending,
+                                y_pending,
+                                s=16,
+                                alpha=0.8,
+                                color=pending_color,
+                                marker="x",
+                                linewidths=0.8,
+                            )
+                        x_is_execution_time = param_list[j] in exec_time_cols
+                        if x_is_execution_time:
+                            # Keep execution-time X panels unconstrained for readable date axes.
+                            ax.set_aspect("auto")
+                        else:
+                            # Keep individual non-execution-time scatter panels square.
+                            # Axis limits remain shared per row/column via axis_limits above.
+                            if hasattr(ax, "set_box_aspect"):
+                                ax.set_box_aspect(1)
+                            else:
+                                ax.set_aspect("equal", adjustable="box")
                         # if this column is execution_time-like, connect points to form a
                         # time series line.  sorting ensures the line follows increasing
                         # time even if the DataFrame index isn't ordered.
                         if param_list[j] in exec_time_cols:
                             try:
-                                order = np.argsort(x.values)
-                                ax.plot(x.values[order], y.values[order],
-                                        color="#2ca02c", alpha=0.7, linewidth=0.8)
+                                if len(x_completed) > 1:
+                                    order = np.argsort(x_completed.values)
+                                    ax.plot(
+                                        x_completed.values[order],
+                                        y_completed.values[order],
+                                        color=completed_color,
+                                        alpha=0.7,
+                                        linewidth=0.8,
+                                    )
+                                if len(x_pending) > 1:
+                                    order = np.argsort(x_pending.values)
+                                    ax.plot(
+                                        x_pending.values[order],
+                                        y_pending.values[order],
+                                        color=pending_color,
+                                        alpha=0.8,
+                                        linewidth=0.8,
+                                        linestyle="--",
+                                    )
                             except Exception:
                                 pass
                     else:
@@ -426,8 +465,26 @@ def main() -> None:
                         # leftmost column: label y-axis
                         ax.set_ylabel(param_list[i], fontsize=10, rotation=90, labelpad=10)
                     ax.tick_params(axis='both', which='major', labelsize=9, width=1, length=3)
-            fig.suptitle("Parameter Matrix", fontsize=14, y=1.01)
+            fig.suptitle("Parameter Matrix (Completed + In-Progress Mesh)", fontsize=14, y=1.01)
             fig.subplots_adjust(left=0.07, right=0.93, top=0.93, bottom=0.07, wspace=0.03, hspace=0.03)
+            legend_handles = [
+                Patch(
+                    facecolor=completed_color,
+                    edgecolor="none",
+                    alpha=0.6,
+                    label="Completed (step_final_simulation_params.csv)",
+                ),
+            ]
+            if not pending_df.empty:
+                legend_handles.append(
+                    Patch(
+                        facecolor=pending_color,
+                        edgecolor="none",
+                        alpha=0.7,
+                        label="In progress (param_mesh done=0)",
+                    )
+                )
+            fig.legend(handles=legend_handles, loc="upper right", fontsize=9, frameon=True)
             # Datetime axis formatting for execution time columns
             if exec_time_cols:
                 et_indices = [param_list.index(col) for col in exec_time_cols if col in param_list]
@@ -437,7 +494,9 @@ def main() -> None:
                         _ax = axes[_i, _j] if n > 1 else axes
                         if _j in et_indices:
                             _ax.xaxis.set_major_formatter(date_fmt)
-                            _ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=4))
+                            _ax.xaxis.set_major_locator(
+                                make_fixed_date_locator(df[param_list[_j]], max_ticks=4)
+                            )
                             # only label the lowest row
                             if _i == n-1:
                                 plt.setp(_ax.xaxis.get_majorticklabels(), rotation=15, ha="right", fontsize=8)
@@ -445,7 +504,9 @@ def main() -> None:
                                 _ax.set_xticklabels([])
                         if _i in et_indices and _i != _j:
                             _ax.yaxis.set_major_formatter(date_fmt)
-                            _ax.yaxis.set_major_locator(mdates.AutoDateLocator(maxticks=4))
+                            _ax.yaxis.set_major_locator(
+                                make_fixed_date_locator(df[param_list[_i]], max_ticks=4)
+                            )
                             plt.setp(_ax.yaxis.get_majorticklabels(), fontsize=8)
                 now = pd.Timestamp.now(tz="UTC").tz_convert(None)
                 for i in range(n):

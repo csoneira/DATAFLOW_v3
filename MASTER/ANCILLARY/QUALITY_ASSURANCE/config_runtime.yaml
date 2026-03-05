@@ -1,0 +1,18 @@
+# Shared runtime configuration for all QUALITY_ASSURANCE steps/tasks.
+date_range:
+  # Use format: YYYY-MM-DD HH:MM:SS (local station time convention).
+  # Set to null to disable each boundary.
+  start: 2024-09-27
+  end: 2024-10-01
+
+# Preferred timestamp sources for time-series plots and date filtering.
+time_columns_priority:
+  - execution_timestamp
+  - datetime
+
+# Default x-axis behavior for plotting scripts.
+x_axis:
+  mode: filename_timestamp
+  filename_column: filename_base
+  # Used when mode=column.
+  column: null

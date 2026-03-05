@@ -1,0 +1,65 @@
+stations: [0, 1, 2, 3, 4]
+task_id: 2
+metadata_type: calibration
+metadata_csv_filename: task_2_metadata_calibration.csv
+column_patterns_file: task_2_calibration_columns.txt
+pass_default_value: 1.0
+pass_column_name: task_2_calibration_pass
+
+column_patterns:
+  - filename_base
+  - execution_timestamp
+  - param_hash
+  - P[1-4]_s[1-4]_Q_B
+  - P[1-4]_s[1-4]_Q_F
+  - P[1-4]_s[1-4]_Q_FB_coeffs
+  - P[1-4]_s[1-4]_Q_sum
+  - P[1-4]_s[1-4]_T_dif
+  - P[1-4]_s[1-4]_T_sum
+  - P[1-4]_s[1-4]_crstlk_limit
+  - P[1-4]_s[1-4]_crstlk_pedestal
+
+plots:
+  ncols: 4
+  dpi: 150
+  format: png
+  figsize_per_col: 4.8
+  figsize_per_row: 3.0
+  marker_size: 2.0
+  line_width: 0.9
+  plot_groups:
+    - name: crstlk
+      columns:
+        - P[1-4]_s[1-4]_crstlk_pedestal
+        - P[1-4]_s[1-4]_crstlk_limit
+      pair_suffixes:
+        - crstlk_pedestal
+        - crstlk_limit
+      pair_labels:
+        - pedestal
+        - limit
+    - name: q_b
+      columns:
+        - P[1-4]_s[1-4]_Q_B
+    - name: q_f
+      columns:
+        - P[1-4]_s[1-4]_Q_F
+    - name: q_sum
+      columns:
+        - P[1-4]_s[1-4]_Q_sum
+    - name: q_fb_coeffs
+      columns:
+        - P[1-4]_s[1-4]_Q_FB_coeffs
+    - name: t_sum
+      columns:
+        - P[1-4]_s[1-4]_T_sum
+    - name: t_dif
+      columns:
+        - P[1-4]_s[1-4]_T_dif
+
+summary:
+  output_filename: calibrations_task_2.csv
+  method: robust_median
+  outlier_filter:
+    iqr_multiplier: 1.5
+    min_points: 8

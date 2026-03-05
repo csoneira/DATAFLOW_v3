@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from pathlib import Path
 
 import matplotlib
@@ -72,6 +73,28 @@ _PLOT_EXTENSIONS = {
     ".gif",
     ".webp",
 }
+
+CANONICAL_TT_LABELS = frozenset(
+    {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "12",
+        "13",
+        "14",
+        "23",
+        "24",
+        "34",
+        "123",
+        "124",
+        "134",
+        "234",
+        "1234",
+    }
+)
+TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
 
 
 def _clear_plots_dir() -> None:
@@ -170,6 +193,114 @@ def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
         if candidate in df.columns:
             return candidate
     raise KeyError("No efficiency column found in source table.")
+
+
+def _normalize_tt_label(label: object) -> str:
+    text = str(label).strip()
+    if not text:
+        return ""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return text
+    if not np.isfinite(value):
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return text
+
+
+def _derive_global_rate_from_tt_sum(
+    df: pd.DataFrame,
+    *,
+    target_col: str = "events_per_second_global_rate",
+) -> str | None:
+    by_prefix: dict[str, list[str]] = {}
+    for col in df.columns:
+        match = TT_RATE_COLUMN_RE.match(str(col))
+        if match is None:
+            continue
+        prefix = str(match.group("prefix")).strip()
+        label = _normalize_tt_label(match.group("label"))
+        if label not in CANONICAL_TT_LABELS:
+            continue
+        by_prefix.setdefault(prefix, []).append(col)
+
+    if not by_prefix:
+        return None
+
+    prefix_priority = [
+        "post_tt",
+        "fit_tt",
+        "list_tt",
+        "cal_tt",
+        "clean_tt",
+        "raw_tt",
+    ]
+    selected_prefix: str | None = None
+    for prefix in prefix_priority:
+        if prefix in by_prefix and by_prefix[prefix]:
+            selected_prefix = prefix
+            break
+    if selected_prefix is None:
+        selected_prefix = min(by_prefix.keys(), key=lambda p: (-len(by_prefix[p]), p))
+
+    cols = sorted(set(by_prefix[selected_prefix]))
+    if not cols:
+        return None
+
+    summed = pd.Series(0.0, index=df.index, dtype=float)
+    valid_any = pd.Series(False, index=df.index)
+    for col in cols:
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        summed = summed + numeric.fillna(0.0)
+        valid_any = valid_any | numeric.notna()
+
+    df[target_col] = summed.where(valid_any, np.nan)
+    return target_col
+
+
+def _pick_rate_column(df: pd.DataFrame, preferred: str) -> str | None:
+    """Resolve a usable global-rate column, deriving it as TT-rate sum when needed."""
+    ordered_candidates: list[str] = []
+    preferred_clean = str(preferred).strip()
+    if preferred_clean:
+        ordered_candidates.append(preferred_clean)
+    ordered_candidates.extend(
+        [
+            "events_per_second_global_rate",
+            "global_rate_hz",
+            "global_rate_hz_mean",
+        ]
+    )
+
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for col in ordered_candidates:
+        if col and col not in seen:
+            candidates.append(col)
+            seen.add(col)
+
+    for col in df.columns:
+        cl = str(col).strip().lower()
+        if not cl or col in seen:
+            continue
+        if "global_rate" in cl and ("hz" in cl or cl.endswith("_rate")):
+            candidates.append(col)
+            seen.add(col)
+
+    for col in candidates:
+        if col not in df.columns:
+            continue
+        vals = pd.to_numeric(df[col], errors="coerce")
+        if vals.notna().any():
+            return col
+
+    for col in candidates:
+        if col in df.columns:
+            return col
+
+    return _derive_global_rate_from_tt_sum(df, target_col="events_per_second_global_rate")
 
 
 def _resolve_numeric_range(
@@ -826,10 +957,20 @@ def main() -> int:
             log.error("%s", exc)
             return 1
 
-    rate_col = str(cfg_31.get("rate_column", "events_per_second_global_rate"))
-    if rate_col not in rate_df.columns:
-        log.error("Global-rate column '%s' not found in rate dictionary.", rate_col)
+    rate_col_requested = str(cfg_31.get("rate_column", "events_per_second_global_rate"))
+    rate_col = _pick_rate_column(rate_df, rate_col_requested)
+    if rate_col is None:
+        log.error(
+            "Global-rate column not found in rate dictionary (requested='%s').",
+            rate_col_requested,
+        )
         return 1
+    if rate_col != rate_col_requested:
+        log.info(
+            "Global-rate column '%s' missing/unusable; using '%s'.",
+            rate_col_requested,
+            rate_col,
+        )
 
     try:
         rate_model = _build_rate_model(rate_df, rate_flux_col, rate_eff_col, rate_col)
@@ -954,6 +1095,7 @@ def main() -> int:
         "eff_column": eff_col,
         "rate_flux_column": rate_flux_col,
         "rate_eff_column": rate_eff_col,
+        "rate_column_requested": rate_col_requested,
         "rate_column": rate_col,
         "generator": "random_complete",
         "random_seed": int(seed),

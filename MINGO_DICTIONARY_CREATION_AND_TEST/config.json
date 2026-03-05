@@ -1,0 +1,209 @@
+{
+  "_comment": "Pipeline configuration for INFERENCE_DICTIONARY_VALIDATION",
+
+  "station_id": 0,
+  "task_ids": [1,2,3,4,5],
+
+  "date_from": null,
+  "_date_from_comment": "ISO 8601 string ('2026-01-01' or '2026-01-01T00:00:00Z'). Null = no lower bound. Used by STEP 4.1.",
+  "date_to": null,
+  "_date_to_comment": "ISO 8601 string. Null = no upper bound. Used by STEP 4.1.",
+  "_runtime_paths_comment": "Optional path overrides are defined in config_runtime.json.",
+
+  "z_position_config": [0, 65, 130, 195],
+  "_z_position_config_comment": "Set to [z1, z2, z3, z4] to select a specific z config, e.g. [0.0, 100.0, 200.0, 400.0]. If null, a random one is chosen.",
+
+  "metadata_agg": "latest",
+
+  "step_1_1": {
+    "_path_overrides_comment": "Optional simulation_params_csv override is defined at top-level in config_runtime.json.",
+    "metadata_prefix": "raw_tt_",
+    "metadata_cols": "all"
+  },
+
+  "step_1_2": {
+    "outlier_eff_2_range": [0.5, 1.0],
+    "outlier_eff_3_range": [0.5, 1.0],
+    "dictionary_relerr_eff_1_fit_max_pct": 5,
+    "dictionary_relerr_eff_2_max_pct": 5,
+    "dictionary_relerr_eff_3_max_pct": 5,
+    "dictionary_relerr_eff_4_fit_max_pct": 5,
+    "dictionary_min_events": 20000,
+    "relerr_hist_y_scale": "log",
+    "eff_fit_polynomial_order": 2,
+    "_eff_fit_polynomial_order_comment": "Polynomial order n for empirical-vs-simulated fits used in STEP 1.2 and STEP 4.2 efficiency correction.",
+    "plot_parameters": ["eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4", "flux_cm2_min"],
+    "_plot_parameters_comment": "Parameters to include in scatter matrix, histograms, and coverage plots. Use any subset of param_cols."
+  },
+
+  "step_1_3": {
+    "enabled": false,
+    "_enabled_comment": "Single switch for STEP 1.3 enlargement. If enabled and enlarged dataset exists, STEP 2 uses it automatically; otherwise STEP 2 falls back to STEP 1.2 dataset.",
+    "n_new_rows": null,
+    "_n_new_rows_comment": "Exact number of synthetic rows to add. If null, use size_multiplier.",
+    "size_multiplier": null,
+    "_size_multiplier_comment": "When n_new_rows is null: added_rows = round((size_multiplier - 1) * N_base).",
+    "start_time_utc": "2026-01-01T00:00:00Z",
+    "random_seed": null,
+    "_random_seed_comment": "Null = random seed (stored in summary JSON). Set integer for deterministic enlargement.",
+    "events_per_file": null,
+    "_events_per_file_comment": "If set, use constant n_events for all new points. If null and sample_n_events_from_base=true, n_events are sampled from base dataset.",
+    "sample_n_events_from_base": true,
+    "_sample_n_events_from_base_comment": "When events_per_file is null, sample n_events from the base dataset distribution to keep realistic event-count spread.",
+    "uniform_jitter_fraction": 1.0,
+    "_uniform_jitter_fraction_comment": "Uniform target generation uses one point per randomized grid cell in (flux,eff). 0=center of each cell, 1=full-cell jitter.",
+    "flux_column": "flux_cm2_min",
+    "eff_column": "eff_sim_2",
+    "flux_range": null,
+    "eff_range": null,
+    "_flux_eff_range_comment": "Null = full dictionary bounds for chosen flux/eff columns. If set, range is clamped to dictionary bounds.",
+    "rate_column": "events_per_second_global_rate",
+    "rate_flux_column": "flux_cm2_min",
+    "rate_eff_column": "eff_sim_2",
+    "_target_generation_comment": "STEP 1.3 now enlarges with uniform-density points in (flux,eff), not a STEP 3.1 curve trajectory.",
+    "weighting_shared": {
+      "basis_source": "dataset",
+      "basis_n_events_column": "n_events",
+      "basis_parameter_set_column": "param_hash_x",
+      "basis_n_events_tolerance_pct": 25,
+      "basis_min_rows": 1,
+      "flux_column": "flux_cm2_min",
+      "eff_column": "eff_sim_1",
+      "time_n_events_column": "n_events",
+      "time_rate_column": "global_rate_hz_mean",
+      "time_duration_column": "duration_seconds",
+      "weighting_method": "gaussian",
+      "distance_sigma_flux_fraction": 0.15,
+      "distance_sigma_eff_fraction": 0.15,
+      "distance_sigma_flux_abs": null,
+      "distance_sigma_eff_abs": null,
+      "distance_hardness": 1.0,
+      "density_correction_enabled": true,
+      "density_correction_k_neighbors": null,
+      "density_correction_exponent": 1.0,
+      "density_correction_clip_min": null,
+      "density_correction_clip_max": null,
+      "top_k": null,
+      "random_seed": null,
+      "highlight_point_index": null
+    },
+    "_weighting_shared_comment": "Centralized shared weighting controls. STEP 1.3 and STEP 3.2 both read this block; null entries fall back to internal code defaults.",
+    "weighting_overrides": {},
+    "_weighting_overrides_comment": "Optional final overrides on top of step_1_3.weighting_shared (kept for backward compatibility)."
+  },
+
+  "step_2_1": {
+    "feature_columns": "auto",
+    "_feature_columns_comment": "List of column names to use as feature vector, or 'auto' to use the most advanced available *_tt_*_rate_hz prefix (excluding single-plane *_tt_[0-4]_rate_hz columns).",
+    "distance_metric": "l2_raw",
+    "_distance_metric_comment": "Options: l2_zscore, l2_raw, chi2, poisson",
+    "plot_parameters": ["eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4", "flux_cm2_min"],
+    "_plot_parameters_comment": "Shared STEP 2 parameter selection: controls STEP 2.1 true-vs-estimated panels, the STEP 2.1 random-showcase matrix axes, and STEP 2.2 validation plots.",
+    "interpolation_k": null,
+    "_interpolation_k_comment": "If null, use all dictionary entries for interpolation. Otherwise, use k-nearest neighbors in feature space.",
+    "include_global_rate": false,
+    "global_rate_col": "events_per_second_global_rate",
+    "showcase_seed": null,
+    "_showcase_seed_comment": "Seed for random showcase point selection. Null/'auto'/'random' = different point each run; integer = reproducible point.",
+    "showcase_fixed_tolerance_pct": 50.0,
+    "_showcase_fixed_tolerance_pct_comment": "Global tolerance (%) used when fixing non-active parameters in showcase slices. For each fixed parameter, choose the closest available value within +/- tolerance_pct * parameter_span / 100, where parameter_span=max(candidate)-min(candidate). If none are within band, that subplot is left as N/A."
+  },
+
+  "step_2_2": {
+    "relerr_threshold_pct": 50.0,
+    "_relerr_threshold_pct_comment": "Maximum relative error (%) for robust color scaling in contour plots.",
+    "relerr_plot_limits_pct": [-5.0, 5.0],
+    "_relerr_plot_limits_pct_comment": "Relative-error plotting window [min, max] in percent, used in validation and error-vs-events plots."
+  },
+
+  "step_2_3": {
+    "n_bins_per_param": {
+      "__default__": 1,
+      "cos_n": 1,
+      "flux_cm2_min": 2,
+      "eff_sim_1": 2,
+      "eff_sim_2": 2,
+      "eff_sim_3": 2,
+      "eff_sim_4": 2
+    },
+    "_n_bins_per_param_comment": "Set an integer to use the same bins for all parameters, or a dict with per-parameter bin counts.",
+    "n_bins_events": 2,
+    "exclude_dictionary_entries": true,
+    "_exclude_dictionary_entries_comment": "If true, rows marked true_is_dictionary_entry are removed before LUT/error calculations.",
+    "relerr_filter_pct": [-2.0, 2.0],
+    "_relerr_filter_pct_comment": "Signed relative-error window [min, max] (%) applied before histogramming and LUT statistics.",
+    "min_bin_count": 1,
+    "quantiles": [0.50, 0.68, 0.90, 0.95],
+    "outlier_iqr_factor": 3,
+    "_outlier_iqr_factor_comment": "Outliers are defined as points outside [Q1 - factor*IQR, Q3 + factor*IQR]."
+  },
+
+  "step_3_1": {
+    "_path_overrides_comment": "Optional source_csv/rate_dictionary_csv overrides are defined in config_runtime.json.",
+    "source_table": "dataset",
+    "_source_table_comment": "dataset or dictionary. Used when source_csv is null.",
+    "flux_column": "flux_cm2_min",
+    "eff_column": "eff_sim_1",
+    "flux_range": [0.92, 1.08],
+    "_flux_range_comment": "Set [min, max] for flux movement. Use equal values for constant flux.",
+    "eff_range": [0.75, 0.97],
+    "_eff_range_comment": "Set [min, max] for efficiency movement. Use equal values for constant efficiency.",
+    "duration_hours": 48.0,
+    "dense_points": 4000,
+    "_dense_points_comment": "High-resolution points used for event integration along the smooth trajectory.",
+    "start_time_utc": "2026-01-01T00:00:00Z",
+    "random_seed": null,
+    "_random_seed_comment": "(1784447138, 1168061690 was nice) - Set an integer to reproduce exactly the same curve. Null means random seed each run (saved in summary JSON).",
+    "events_per_file": 50000,
+    "_events_per_file_comment": "Target counts per synthetic file used to discretize the trajectory.",
+    "include_partial_last_file": false,
+    "_include_partial_last_file_comment": "If true, include final partial segment when remaining events are below events_per_file.",
+    "rate_column": "events_per_second_global_rate",
+    "rate_flux_column": "flux_cm2_min",
+    "rate_eff_column": "eff_sim_1",
+    "contour_grid_points": 180,
+    "n_harmonics": 2,
+    "_n_harmonics_comment": "Higher values add more local structure while staying smooth.",
+    "roughness": 3,
+    "_roughness_comment": "Higher values suppress high-frequency components (smoother look).",
+    "smoothing_window_points": 11,
+    "smoothing_passes": 2
+  },
+
+  "step_3_2": {
+    "_path_overrides_comment": "Optional CSV path overrides moved to config_runtime.json.",
+    "_weighting_source_comment": "All STEP 3.2 weighting settings are defined once in step_1_3.weighting_shared."
+  },
+
+  "step_4_1": {
+    "station_id": 1,
+    "_station_id_comment": "Station selector for STEP 4 real-data collection. Use 1 or 'MINGO01'. Null falls back to top-level station_id.",
+    "task_ids": [4,5],
+    "_task_ids_comment": "Task IDs for STEP 4 real-data collection (e.g. [1] or [1,2,3,4,5]). Null falls back to top-level task_ids.",
+    "_path_overrides_comment": "Optional dictionary_csv path override moved to config_runtime.json.",
+    "global_rate_col": "events_per_second_global_rate",
+    "_global_rate_col_comment": "Preferred global-rate column name (Hz) for STEP 4.1/4.2 diagnostics.",
+    "timestamp_column": "execution_timestamp",
+    "_timestamp_column_comment": "Column used for latest-execution aggregation per filename_base.",
+    "date_from": "2024-09-27",
+    "_date_from_comment": "Optional ISO 8601 lower bound applied to data-time parsed from filename_base (inclusive).",
+    "date_to": "2024-10-01",
+    "_date_to_comment": "Optional ISO 8601 upper bound applied to data-time parsed from filename_base (inclusive).",
+    "timeline_freq": "D",
+    "_timeline_freq_comment": "Pandas time-floor frequency used for timeline coverage plot bins (e.g., D, 12H, W)."
+  },
+
+  "step_4_2": {
+    "_path_overrides_comment": "Optional real_collected_csv/dictionary_csv/uncertainty_lut_csv/uncertainty_lut_meta_json moved to config_runtime.json.",
+    "_criteria_source_comment": "STEP 4.2 matching criteria are always inherited from step_2_1 (feature_columns, distance_metric, interpolation_k, include_global_rate, global_rate_col).",
+    "exclude_same_file": false,
+    "eff2_global_rate_eff_source": "auto",
+    "_eff2_global_rate_eff_source_comment": "Controls y-efficiency source in STEP_4_2_5 plot: auto | transformed | raw. Auto falls back to raw when transformed dictionary eff2 is largely outside [0,1].",
+    "uncertainty_quantile": 0.68,
+    "n_events_column": "auto",
+    "_n_events_column_comment": "Column used as n_events for LUT interpolation. 'auto' selects the best available count-like column.",
+    "coverage_frequency": "D",
+    "_coverage_frequency_comment": "Time-bin frequency for coverage-fraction plot when timestamps are available."
+  }
+
+}

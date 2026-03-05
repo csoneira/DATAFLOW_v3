@@ -529,7 +529,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "output_dir",
         step1_to_2,
         "STEP_1 final corrected outputs (task 5).",
-        "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py",
+        "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_post.py",
         count_dir_files(step1_to_2),
     )
 

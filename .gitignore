@@ -57,6 +57,8 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 !MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_*/config_parameters_task_*.csv
 !MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/config_lab_logs.csv
 !grafana/**/*.json
+!MINGO_DICTIONARY_CREATION_AND_TEST/config.json
+!MINGO_DICTIONARY_CREATION_AND_TEST/config_runtime.json
 
 # ----------------------------------------------------------------------
 # Logs, temp files, and merge leftovers
@@ -122,3 +124,8 @@ node_modules/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ----------------------------------------------------------------------
+# Internal
+# ----------------------------------------------------------------------
+ARTICLES_AND_THESIS/

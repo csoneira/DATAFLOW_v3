@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -71,6 +72,28 @@ _PLOT_EXTENSIONS = {
     ".webp",
 }
 
+CANONICAL_TT_LABELS = frozenset(
+    {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "12",
+        "13",
+        "14",
+        "23",
+        "24",
+        "34",
+        "123",
+        "124",
+        "134",
+        "234",
+        "1234",
+    }
+)
+TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
+
 
 def _clear_plots_dir() -> None:
     """Remove previously generated plot files from the plots directory."""
@@ -93,14 +116,21 @@ log = logging.getLogger("STEP_1.1")
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-def _task_metadata_path(station_id: int, task_id: int) -> Path:
-    """Return the path to the task-specific metadata CSV."""
+def _task_metadata_dir(station_id: int, task_id: int) -> Path:
+    """Return the task metadata directory."""
     station = f"MINGO{station_id:02d}"
     return (
         REPO_ROOT / "STATIONS" / station / "STAGE_1" / "EVENT_DATA"
         / "STEP_1" / f"TASK_{task_id}" / "METADATA"
-        / f"task_{task_id}_metadata_specific.csv"
     )
+
+
+def _task_specific_metadata_path(station_id: int, task_id: int) -> Path:
+    return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_specific.csv"
+
+
+def _task_trigger_type_metadata_path(station_id: int, task_id: int) -> Path:
+    return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_trigger_type.csv"
 
 
 def _load_config(path: Path) -> dict:
@@ -162,6 +192,75 @@ def _aggregate_latest(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df = df.groupby("filename_base").tail(1)
     return df
+
+
+def _normalize_tt_label(label: object) -> str:
+    text = str(label).strip()
+    if not text:
+        return ""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return text
+    if not np.isfinite(value):
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return text
+
+
+def _preferred_tt_prefixes_for_task(task_id: int) -> tuple[str, ...]:
+    # task_1 requirement from user: raw global-rate = sum(raw_tt_*).
+    if task_id == 1:
+        return ("raw_tt", "clean_tt")
+    if task_id == 2:
+        return ("cal_tt", "clean_tt")
+    if task_id == 3:
+        return ("list_tt", "cal_tt")
+    if task_id == 4:
+        return ("fit_tt", "list_tt")
+    if task_id == 5:
+        return ("post_tt", "fit_tt")
+    return ("post_tt", "fit_tt", "list_tt", "cal_tt", "clean_tt", "raw_tt")
+
+
+def _attach_tt_sum_global_rate(meta_df: pd.DataFrame, task_id: int) -> tuple[pd.DataFrame, str | None]:
+    by_prefix: dict[str, list[str]] = {}
+    for col in meta_df.columns:
+        match = TT_RATE_COLUMN_RE.match(str(col))
+        if match is None:
+            continue
+        prefix = str(match.group("prefix")).strip()
+        label = _normalize_tt_label(match.group("label"))
+        if label not in CANONICAL_TT_LABELS:
+            continue
+        by_prefix.setdefault(prefix, []).append(col)
+
+    if not by_prefix:
+        return meta_df, None
+
+    selected_prefix: str | None = None
+    for preferred in _preferred_tt_prefixes_for_task(task_id):
+        if preferred in by_prefix and by_prefix[preferred]:
+            selected_prefix = preferred
+            break
+    if selected_prefix is None:
+        selected_prefix = min(by_prefix.keys(), key=lambda p: (-len(by_prefix[p]), p))
+
+    cols = sorted(set(by_prefix[selected_prefix]))
+    if not cols:
+        return meta_df, None
+
+    rate_sum = pd.Series(0.0, index=meta_df.index, dtype=float)
+    valid_any = pd.Series(False, index=meta_df.index)
+    for col in cols:
+        numeric = pd.to_numeric(meta_df[col], errors="coerce")
+        rate_sum = rate_sum + numeric.fillna(0.0)
+        valid_any = valid_any | numeric.notna()
+
+    out = meta_df.copy()
+    out["events_per_second_global_rate"] = rate_sum.where(valid_any, np.nan)
+    return out, selected_prefix
 
 
 # ── Main ─────────────────────────────────────────────────────────────────
@@ -251,22 +350,68 @@ def main() -> int:
     all_merged: list[pd.DataFrame] = []
 
     for task_id in task_ids:
-        meta_path = _task_metadata_path(station_id, task_id)
-        if not meta_path.exists():
-            log.warning("Metadata CSV not found for task %d: %s — skipping.", task_id, meta_path)
+        specific_path = _task_specific_metadata_path(station_id, task_id)
+        trigger_path = _task_trigger_type_metadata_path(station_id, task_id)
+
+        meta_df: pd.DataFrame | None = None
+
+        # Primary source: trigger_type metadata.
+        if trigger_path.exists():
+            log.info("Loading metadata (trigger_type) for task %d: %s", task_id, trigger_path)
+            trigger_df = pd.read_csv(trigger_path, low_memory=False)
+            if "filename_base" not in trigger_df.columns:
+                log.error("  No 'filename_base' column in task %d trigger_type metadata.", task_id)
+                trigger_df = None
+            elif metadata_agg == "latest":
+                trigger_df = _aggregate_latest(trigger_df)
+            if trigger_df is not None:
+                log.info("  Trigger-type rows (after aggregation): %d", len(trigger_df))
+                meta_df = trigger_df
+        else:
+            log.info("Trigger-type metadata CSV not found for task %d: %s", task_id, trigger_path)
+
+        # Fallback source: specific metadata only when trigger_type is unavailable.
+        if meta_df is None:
+            if specific_path.exists():
+                log.warning(
+                    "Using fallback metadata (specific) for task %d because trigger_type is unavailable: %s",
+                    task_id,
+                    specific_path,
+                )
+                specific_df = pd.read_csv(specific_path, low_memory=False)
+                if "filename_base" not in specific_df.columns:
+                    log.error("  No 'filename_base' column in task %d specific metadata.", task_id)
+                else:
+                    if metadata_agg == "latest":
+                        specific_df = _aggregate_latest(specific_df)
+                    log.info("  Specific rows (after aggregation): %d", len(specific_df))
+                    meta_df = specific_df
+            else:
+                log.warning("Specific metadata CSV not found for task %d: %s", task_id, specific_path)
+
+        if meta_df is None:
+            log.warning("No usable metadata for task %d — skipping.", task_id)
             continue
 
-        log.info("Loading metadata for task %d: %s", task_id, meta_path)
-        meta_df = pd.read_csv(meta_path, low_memory=False)
+        meta_df, rate_prefix = _attach_tt_sum_global_rate(meta_df, task_id)
+        if rate_prefix is not None:
+            log.info(
+                "  Global rate for task %d set as TT-rate sum from prefix '%s'.",
+                task_id,
+                rate_prefix,
+            )
+        elif "events_per_second_global_rate" in meta_df.columns:
+            log.info(
+                "  Using existing global-rate column for task %d: events_per_second_global_rate",
+                task_id,
+            )
+        else:
+            log.warning(
+                "  No TT-rate columns found to derive global rate for task %d.",
+                task_id,
+            )
 
-        if "filename_base" not in meta_df.columns:
-            log.error("  No 'filename_base' column in task %d metadata.", task_id)
-            continue
-
-        # Aggregate
-        if metadata_agg == "latest":
-            meta_df = _aggregate_latest(meta_df)
-        log.info("  Metadata rows (after aggregation): %d", len(meta_df))
+        log.info("  Metadata rows (selected source): %d", len(meta_df))
 
         # Inner join on filename_base: only keep rows present in BOTH
         merged = params_df.merge(meta_df, on="filename_base", how="inner")

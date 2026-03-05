@@ -1,0 +1,2 @@
+# If null, a random seed is used and printed by itineraries_finder.py.
+seed: null

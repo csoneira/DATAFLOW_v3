@@ -1,0 +1,29 @@
+stations: [0, 1, 2, 3, 4]
+task_id: 3
+metadata_type: trigger_types
+metadata_csv_filename: task_3_metadata_trigger_type.csv
+column_patterns_file: task_3_trigger_types_columns.txt
+pass_default_value: 1.0
+pass_column_name: task_3_trigger_types_pass
+column_patterns:
+  - 'filename_base'
+  - 'execution_timestamp'
+  - 'count_rate_denominator_seconds'
+  - 'cal_tt_*_rate_hz'
+  - 'list_tt_*_rate_hz'
+  - 'cal_to_list_tt_*_rate_hz'
+plots:
+  plot_groups:
+    - name: cal_vs_list_rates
+      overlay_columns:
+        - cal_tt_*_rate_hz
+        - list_tt_*_rate_hz
+      overlay_labels:
+        - cal
+        - list
+    - name: cal_to_list_rates
+      columns:
+        - cal_to_list_tt_*_rate_hz
+  ncols: 4
+  dpi: 150
+  format: png

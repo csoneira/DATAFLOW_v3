@@ -250,7 +250,8 @@ def _merge_weighting_cfg(cfg_32: dict, cfg_13: dict) -> dict:
 
     Priority:
     1. internal defaults,
-    2. `step_1_3.step_3_2_weighting` (centralized weighting block),
+    2. `step_1_3.weighting_shared` (centralized weighting block),
+       fallback: `step_1_3.step_3_2_weighting` (deprecated alias),
     3. `step_1_3.weighting_overrides` (final explicit overrides).
     """
     raw_cfg_32 = dict(cfg_32) if isinstance(cfg_32, dict) else {}
@@ -259,12 +260,22 @@ def _merge_weighting_cfg(cfg_32: dict, cfg_13: dict) -> dict:
     )
     if ignored_step32_weighting_keys:
         log.info(
-            "Ignoring %d weighting key(s) from step_3_2; using step_1_3.step_3_2_weighting + internal defaults.",
+            "Ignoring %d weighting key(s) from step_3_2; using step_1_3.weighting_shared + internal defaults.",
             len(ignored_step32_weighting_keys),
         )
 
     merged = dict(STEP32_WEIGHTING_DEFAULTS)
-    central_weighting = cfg_13.get("step_3_2_weighting", {})
+    legacy_central_weighting = cfg_13.get("step_3_2_weighting", {})
+    if isinstance(legacy_central_weighting, dict):
+        if legacy_central_weighting and not isinstance(cfg_13.get("weighting_shared"), dict):
+            log.info(
+                "Using deprecated key step_1_3.step_3_2_weighting; prefer step_1_3.weighting_shared."
+            )
+        for key, value in legacy_central_weighting.items():
+            if value is not None:
+                merged[key] = value
+
+    central_weighting = cfg_13.get("weighting_shared", {})
     if isinstance(central_weighting, dict):
         for key, value in central_weighting.items():
             if value is not None:
@@ -732,6 +743,121 @@ def _plot_events_overlay(
     plt.close(fig)
 
 
+def _resolve_scatter_matrix_columns(
+    *,
+    original_df: pd.DataFrame,
+    enlarged_df: pd.DataFrame,
+    requested_cols: list[str] | None,
+) -> list[str]:
+    cols: list[str] = []
+    if requested_cols:
+        cols = [str(c) for c in requested_cols if str(c) in original_df.columns and str(c) in enlarged_df.columns]
+
+    if len(cols) < 2:
+        fallback = [
+            "flux_cm2_min",
+            "cos_n",
+            "eff_sim_1",
+            "eff_sim_2",
+            "eff_sim_3",
+            "eff_sim_4",
+            "eff_empirical_1",
+            "eff_empirical_2",
+            "eff_empirical_3",
+            "eff_empirical_4",
+        ]
+        cols = [
+            c
+            for c in fallback
+            if c in original_df.columns and c in enlarged_df.columns
+        ]
+
+    usable: list[str] = []
+    for col in cols:
+        o = pd.to_numeric(original_df[col], errors="coerce")
+        e = pd.to_numeric(enlarged_df[col], errors="coerce")
+        if o.notna().sum() > 0 and e.notna().sum() > 0:
+            usable.append(col)
+    return usable
+
+
+def _plot_parameter_scatter_matrix_overlay(
+    *,
+    original_df: pd.DataFrame,
+    enlarged_df: pd.DataFrame,
+    plot_cols: list[str],
+    path: Path,
+) -> None:
+    n_sc = len(plot_cols)
+    if n_sc < 2:
+        log.warning("Need at least two parameters for STEP 1.3 scatter-matrix overlay.")
+        return
+
+    fig, axes = plt.subplots(n_sc, n_sc, figsize=(3 * n_sc, 3 * n_sc))
+    for i, cy in enumerate(plot_cols):
+        for j, cx in enumerate(plot_cols):
+            ax = axes[i][j] if n_sc > 1 else axes
+            if j < i:
+                ax.set_visible(False)
+            elif i == j:
+                o_vals = pd.to_numeric(original_df[cx], errors="coerce").dropna()
+                e_vals = pd.to_numeric(enlarged_df[cx], errors="coerce").dropna()
+                if not o_vals.empty:
+                    ax.hist(
+                        o_vals,
+                        bins=28,
+                        alpha=0.55,
+                        color="#4C78A8",
+                        label="Original",
+                    )
+                if not e_vals.empty:
+                    ax.hist(
+                        e_vals,
+                        bins=28,
+                        alpha=0.35,
+                        color="#E45756",
+                        label="Enlarged",
+                    )
+                ax.set_yscale("log")
+                ax.set_xlabel(cx, fontsize=7)
+                if i == 0 and j == 0:
+                    ax.legend(fontsize=6.8, loc="best")
+            else:
+                ox = pd.to_numeric(original_df[cx], errors="coerce")
+                oy = pd.to_numeric(original_df[cy], errors="coerce")
+                om = ox.notna() & oy.notna()
+                if om.sum() > 0:
+                    ax.scatter(
+                        ox[om],
+                        oy[om],
+                        s=6,
+                        alpha=0.25,
+                        color="#4C78A8",
+                    )
+
+                ex = pd.to_numeric(enlarged_df[cx], errors="coerce")
+                ey = pd.to_numeric(enlarged_df[cy], errors="coerce")
+                em = ex.notna() & ey.notna()
+                if em.sum() > 0:
+                    ax.scatter(
+                        ex[em],
+                        ey[em],
+                        s=16,
+                        alpha=0.65,
+                        marker="x",
+                        color="#E45756",
+                        linewidths=0.8,
+                    )
+                ax.set_xlabel(cx, fontsize=7)
+                ax.set_ylabel(cy, fontsize=7)
+            ax.tick_params(labelsize=6)
+
+    fig.suptitle("STEP 1.3 parameter scatter matrix (blue=original, red×=enlarged)", fontsize=10)
+    fig.tight_layout()
+    _save_figure(fig, path, dpi=180)
+    plt.close(fig)
+
+
 def _plot_iso_rate_global_rate(
     *,
     enlarged_df: pd.DataFrame,
@@ -1005,6 +1131,7 @@ def main() -> int:
 
     flux_col = str(ts_info.get("flux_column", "flux_cm2_min"))
     eff_pref = str(_pick_cfg(cfg_13, cfg_31, "eff_column", "eff_sim_1"))
+    plot_params_cfg = cfg_13.get("plot_parameters", config.get("step_1_2", {}).get("plot_parameters", None))
     cfg_weight = _merge_weighting_cfg(cfg_32, cfg_13)
 
     try:
@@ -1047,14 +1174,20 @@ def main() -> int:
             if candidate in enlarged_df.columns:
                 eff_for_plot = candidate
                 break
-    if flux_col in enlarged_df.columns and eff_for_plot in enlarged_df.columns:
-        _plot_flux_eff_overlay(
-            original_df=base_out,
-            synthetic_df=synth_out,
-            flux_col=flux_col,
-            eff_col=eff_for_plot,
-            path=PLOTS_DIR / "flux_eff_original_vs_enlarged.png",
-        )
+    requested_scatter_cols: list[str] | None = None
+    if isinstance(plot_params_cfg, (list, tuple, set)):
+        requested_scatter_cols = [str(c) for c in plot_params_cfg]
+    scatter_cols = _resolve_scatter_matrix_columns(
+        original_df=base_out,
+        enlarged_df=enlarged_df,
+        requested_cols=requested_scatter_cols,
+    )
+    _plot_parameter_scatter_matrix_overlay(
+        original_df=base_out,
+        enlarged_df=enlarged_df,
+        plot_cols=scatter_cols,
+        path=PLOTS_DIR / "parameter_scatter_matrix_original_vs_enlarged.png",
+    )
     _plot_events_overlay(
         original_df=base_out,
         synthetic_df=synth_out,

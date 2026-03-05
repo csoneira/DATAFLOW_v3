@@ -1,0 +1,77 @@
+stations: [0, 1, 2, 3, 4]
+task_id: 3
+metadata_type: specific
+metadata_csv_filename: task_3_metadata_specific.csv
+column_patterns_file: task_3_specific_columns.txt
+pass_default_value: 1.0
+pass_column_name: task_3_specific_pass
+column_patterns:
+  - 'filename_base'
+  - 'execution_timestamp'
+  - 'analysis_mode'
+  - 'param_hash'
+  - 'count_rate_denominator_seconds'
+  - 'z_P1'
+  - 'z_P2'
+  - 'z_P3'
+  - 'z_P4'
+  - 'active_strips_P*_*_rate_hz'
+plots:
+  ncols: 4
+  dpi: 150
+  format: png
+  plot_groups:
+    - name: active_strips_sum1
+      overlay_columns:
+        - 'active_strips_P1_*_rate_hz'
+        - 'active_strips_P2_*_rate_hz'
+        - 'active_strips_P3_*_rate_hz'
+        - 'active_strips_P4_*_rate_hz'
+      overlay_labels:
+        - P1
+        - P2
+        - P3
+        - P4
+      panel_rows:
+        - ['1000', '0100', '0010', '0001']
+    - name: active_strips_sum2
+      overlay_columns:
+        - 'active_strips_P1_*_rate_hz'
+        - 'active_strips_P2_*_rate_hz'
+        - 'active_strips_P3_*_rate_hz'
+        - 'active_strips_P4_*_rate_hz'
+      overlay_labels:
+        - P1
+        - P2
+        - P3
+        - P4
+      panel_rows:
+        - ['1100', '0110', '0011']
+        - ['1010', '0101', '1001']
+    - name: active_strips_sum3
+      overlay_columns:
+        - 'active_strips_P1_*_rate_hz'
+        - 'active_strips_P2_*_rate_hz'
+        - 'active_strips_P3_*_rate_hz'
+        - 'active_strips_P4_*_rate_hz'
+      overlay_labels:
+        - P1
+        - P2
+        - P3
+        - P4
+      panel_rows:
+        - ['1110', '0111']
+        - ['1011', '1101']
+    - name: active_strips_sum4
+      overlay_columns:
+        - 'active_strips_P1_*_rate_hz'
+        - 'active_strips_P2_*_rate_hz'
+        - 'active_strips_P3_*_rate_hz'
+        - 'active_strips_P4_*_rate_hz'
+      overlay_labels:
+        - P1
+        - P2
+        - P3
+        - P4
+      panel_rows:
+        - ['1111']

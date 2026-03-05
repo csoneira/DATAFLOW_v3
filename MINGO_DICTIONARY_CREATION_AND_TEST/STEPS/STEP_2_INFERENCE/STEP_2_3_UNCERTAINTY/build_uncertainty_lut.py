@@ -16,6 +16,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import argparse
+from itertools import combinations
 import json
 import logging
 import sys
@@ -627,8 +628,10 @@ def main() -> int:
     exclude_dictionary_entries = _as_bool(cfg_31.get("exclude_dictionary_entries", True))
 
     # Plot-relevant parameters from config:
-    # prefer step_2_3, fallback to step_2_2, then step_1_2.
+    # prefer step_2_3, fallback to step_2_1 (shared STEP 2.x), then legacy step_2_2, then step_1_2.
     plot_params = cfg_31.get("plot_parameters", None)
+    if plot_params is None:
+        plot_params = config.get("step_2_1", {}).get("plot_parameters", None)
     if plot_params is None:
         plot_params = config.get("step_2_2", {}).get("plot_parameters", None)
     if plot_params is None:
@@ -862,6 +865,7 @@ def _make_plots(
         "error_histograms_parameter_event_space.png",
         "error_histograms_parameter_event_space_*.png",
         "lut_heatmap_*.png",
+        "lut_ellipse_*.png",
         "uncertainty_vs_events_*.png",
     ):
         for old_plot in PLOTS_DIR.glob(pattern):
@@ -1257,259 +1261,277 @@ def _make_plots(
             _save_figure(fig, PLOTS_DIR / "lut_heatmap_eff_flux_plane.png", dpi=170)
             plt.close(fig)
 
-    # ── 3. Ellipse-plane plot: show simulated (true) pairs, dictionary, and
-    #      uncertainty ellipses centred on estimated pairs. (Simple, configurable)
+    # ── 3. Ellipse-plane plots for selected parameter pairs ──────────
     if ellipse_cfg is None:
         ellipse_cfg = {"params": None, "n_points": 0, "quantile": 0.68}
 
-    # Decide which two parameters to use
-    ppair = None
-    if ellipse_cfg.get("params") and isinstance(ellipse_cfg.get("params"), (list, tuple)):
-        a, b = ellipse_cfg.get("params")[:2]
-        if a in param_names and b in param_names:
-            ppair = (a, b)
+    n_points_cfg = max(0, int(ellipse_cfg.get("n_points", 0)))
+    if n_points_cfg <= 0:
+        return
 
-    # Prefer the flux vs efficiency plane if both are present: (flux_cm2_min, eff_sim_2)
-    if ppair is None:
-        preferred = ("flux_cm2_min", "eff_sim_2")
-        if preferred[0] in param_names and preferred[1] in param_names:
-            ppair = preferred
-        elif len(param_names) >= 2:
-            ppair = (param_names[0], param_names[1])
+    ellipse_pairs: list[tuple[str, str]] = []
+    raw_pairs = ellipse_cfg.get("params")
+    if isinstance(raw_pairs, (list, tuple)):
+        if raw_pairs and isinstance(raw_pairs[0], (list, tuple)):
+            for pair in raw_pairs:
+                if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                    continue
+                a, b = str(pair[0]), str(pair[1])
+                if a in param_names and b in param_names and a != b:
+                    ellipse_pairs.append((a, b))
+        elif len(raw_pairs) >= 2:
+            a, b = str(raw_pairs[0]), str(raw_pairs[1])
+            if a in param_names and b in param_names and a != b:
+                ellipse_pairs.append((a, b))
 
-    # Disable a specific undesired plot: flux_cm2_min vs cos_n
+    if not ellipse_pairs:
+        pair_source = [p for p in plot_pnames if p in param_names]
+        if len(pair_source) < 2:
+            pair_source = list(param_names)
+        ellipse_pairs = list(combinations(pair_source, 2))
 
-    if ppair is not None and ellipse_cfg.get("n_points", 0) > 0:
-        x_p, y_p = ppair
+    if not ellipse_pairs:
+        return
+
+    # De-duplicate while preserving order.
+    seen_pairs: set[tuple[str, str]] = set()
+    unique_pairs: list[tuple[str, str]] = []
+    for a, b in ellipse_pairs:
+        key = (a, b)
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        unique_pairs.append(key)
+
+    produced = 0
+    q_ellipse = float(ellipse_cfg.get("quantile", 0.68))
+    for x_p, y_p in unique_pairs:
         est_x_col = f"est_{x_p}"
         est_y_col = f"est_{y_p}"
         true_x_col = f"true_{x_p}"
         true_y_col = f"true_{y_p}"
 
-        if {est_x_col, est_y_col}.issubset(set(val_df.columns)):
-            # Prepare sample of validation points
-            vv = val_df.dropna(subset=[est_x_col, est_y_col, "n_events"]).reset_index(drop=True)
-            n_points = int(min(len(vv), max(0, int(ellipse_cfg.get("n_points", 0)))))
-            if n_points > 0 and len(vv) > 0:
-                if len(vv) <= n_points:
-                    sel_idx = np.arange(len(vv))
-                else:
-                    sel_idx = np.linspace(0, len(vv) - 1, n_points, dtype=int)
-                sel = vv.iloc[sel_idx]
+        if not {est_x_col, est_y_col}.issubset(set(val_df.columns)):
+            log.warning("Skipping ellipse pair (%s, %s): missing estimated columns.", x_p, y_p)
+            continue
 
-                fig, ax = plt.subplots(figsize=(8.2, 6.4))
-                ax.set_facecolor("#FCFCFD")
-                ax.set_xlabel(x_p)
-                ax.set_ylabel(y_p)
-                ax.set_title(f"Validation: {y_p} vs {x_p} — ellipses (p{int(ellipse_cfg.get('quantile', 0.68)*100)})")
-                ax.grid(True, linestyle="--", linewidth=0.7, alpha=0.35)
+        vv = val_df.dropna(subset=[est_x_col, est_y_col, "n_events"]).reset_index(drop=True)
+        if vv.empty:
+            log.warning("Skipping ellipse pair (%s, %s): no finite validation rows.", x_p, y_p)
+            continue
 
-                # Plot all available validation truths as a light background cloud.
-                n_truth_bg = 0
-                if {true_x_col, true_y_col}.issubset(set(vv.columns)):
-                    vtruth = vv.dropna(subset=[true_x_col, true_y_col])
-                    n_truth_bg = len(vtruth)
-                    if n_truth_bg > 0:
-                        ax.scatter(
-                            vtruth[true_x_col],
-                            vtruth[true_y_col],
-                            marker="o",
-                            s=22,
-                            color="#666666",
-                            alpha=0.34,
-                            edgecolors="white",
-                            linewidths=0.22,
-                            zorder=1,
-                            label=f"Validation truths (all: {n_truth_bg})",
-                        )
+        n_points = int(min(len(vv), n_points_cfg))
+        if n_points <= 0:
+            continue
+        if len(vv) <= n_points:
+            sel_idx = np.arange(len(vv))
+        else:
+            sel_idx = np.linspace(0, len(vv) - 1, n_points, dtype=int)
+        sel = vv.iloc[sel_idx]
 
-                # Plot all dictionary entries for context (no subsampling).
-                n_dict = 0
-                if dict_df is not None and {x_p, y_p}.issubset(set(dict_df.columns)):
-                    ddf = dict_df.dropna(subset=[x_p, y_p])
-                    n_dict = len(ddf)
-                    if n_dict > 0:
-                        ax.scatter(
-                            ddf[x_p],
-                            ddf[y_p],
-                            marker="s",
-                            facecolors="none",
-                            edgecolors="#2F4B7C",
-                            s=30,
-                            alpha=0.86,
-                            linewidths=0.75,
-                            zorder=2,
-                            label=f"Dictionary (all: {n_dict})",
-                        )
+        fig, ax = plt.subplots(figsize=(8.2, 6.4))
+        ax.set_facecolor("#FCFCFD")
+        ax.set_xlabel(x_p)
+        ax.set_ylabel(y_p)
+        ax.set_title(f"Validation: {y_p} vs {x_p} — ellipses (p{int(q_ellipse * 100)})")
+        ax.grid(True, linestyle="--", linewidth=0.7, alpha=0.35)
 
-                # Plot selected points: ellipses centred at estimates and markers for true values
-                x_series = pd.to_numeric(vv[est_x_col], errors="coerce").to_numpy(dtype=float)
-                y_series = pd.to_numeric(vv[est_y_col], errors="coerce").to_numpy(dtype=float)
-                if {true_x_col, true_y_col}.issubset(set(vv.columns)):
-                    x_true_series = pd.to_numeric(vv[true_x_col], errors="coerce").to_numpy(dtype=float)
-                    y_true_series = pd.to_numeric(vv[true_y_col], errors="coerce").to_numpy(dtype=float)
-                    x_series = np.concatenate([x_series, x_true_series[np.isfinite(x_true_series)]])
-                    y_series = np.concatenate([y_series, y_true_series[np.isfinite(y_true_series)]])
-                x_series = x_series[np.isfinite(x_series)]
-                y_series = y_series[np.isfinite(y_series)]
-                x_span = float(np.nanmax(x_series) - np.nanmin(x_series)) if x_series.size else 1.0
-                y_span = float(np.nanmax(y_series) - np.nanmin(y_series)) if y_series.size else 1.0
-                if not np.isfinite(x_span) or x_span <= 0:
-                    x_span = 1.0
-                if not np.isfinite(y_span) or y_span <= 0:
-                    y_span = 1.0
-
-                arrow_lengths: list[float] = []
-                for _, row in sel.iterrows():
-                    true_x = float(row[true_x_col]) if true_x_col in row and not pd.isna(row[true_x_col]) else np.nan
-                    true_y = float(row[true_y_col]) if true_y_col in row and not pd.isna(row[true_y_col]) else np.nan
-                    est_x = float(row[est_x_col]) if est_x_col in row and not pd.isna(row[est_x_col]) else np.nan
-                    est_y = float(row[est_y_col]) if est_y_col in row and not pd.isna(row[est_y_col]) else np.nan
-                    if np.isfinite(est_x) and np.isfinite(est_y) and np.isfinite(true_x) and np.isfinite(true_y):
-                        dlen = float(np.hypot((true_x - est_x) / x_span, (true_y - est_y) / y_span))
-                        arrow_lengths.append(dlen)
-
-                arrow_norm = None
-                arrow_cmap = None
-                if arrow_lengths:
-                    lmin = float(np.nanmin(arrow_lengths))
-                    lmax = float(np.nanmax(arrow_lengths))
-                    if not np.isfinite(lmin) or not np.isfinite(lmax):
-                        lmin, lmax = 0.0, 1.0
-                    if lmax <= lmin:
-                        lmax = lmin + 1e-12
-                    arrow_norm = Normalize(vmin=lmin, vmax=lmax)
-                    arrow_cmap = plt.get_cmap("viridis")
-
-                ell_label_shown = False
-                est_label_shown = False
-                true_label_shown = False
-                arrows_drawn = 0
-                for _, row in sel.iterrows():
-                    est_x = float(row[est_x_col])
-                    est_y = float(row[est_y_col])
-                    ne = float(row.get("n_events", np.nan))
-                    true_x = float(row[true_x_col]) if true_x_col in row and not pd.isna(row[true_x_col]) else None
-                    true_y = float(row[true_y_col]) if true_y_col in row and not pd.isna(row[true_y_col]) else None
-
-                    # Interpolate uncertainties from LUT
-                    try:
-                        q = float(ellipse_cfg.get("quantile", 0.68))
-                        est_values = {f"est_{x_p}": est_x, f"est_{y_p}": est_y, "n_events": ne}
-                        sigs = interpolate_uncertainty(lut_df, est_values, param_names, quantile=q)
-                        sigma_x_pct = sigs.get(x_p, np.nan)
-                        sigma_y_pct = sigs.get(y_p, np.nan)
-                    except Exception:
-                        sigma_x_pct = np.nan
-                        sigma_y_pct = np.nan
-
-                    if np.isfinite(sigma_x_pct) and np.isfinite(sigma_y_pct) and sigma_x_pct > 0 and sigma_y_pct > 0:
-                        sigma_x = sigma_x_pct / 100.0 * abs(est_x)
-                        sigma_y = sigma_y_pct / 100.0 * abs(est_y)
-                        # width/height are diameters
-                        ell = Ellipse((est_x, est_y), width=2*sigma_x, height=2*sigma_y,
-                                      edgecolor=(31/255, 119/255, 180/255, 0.90),
-                                      facecolor=(31/255, 119/255, 180/255, 0.22),
-                                      linewidth=1.25)
-                        ax.add_patch(ell)
-                        if not ell_label_shown:
-                            ax.plot([], [], color="#1f77b4", linewidth=1.25, label="Uncertainty ellipse")
-                            ell_label_shown = True
-                        ax.scatter(
-                            [est_x], [est_y],
-                            marker="x",
-                            color="#1f77b4",
-                            s=48,
-                            zorder=4,
-                            label="Estimate" if not est_label_shown else "",
-                        )
-                        est_label_shown = True
-                    else:
-                        ax.scatter(
-                            [est_x], [est_y],
-                            marker="x",
-                            color="#1f77b4",
-                            s=48,
-                            zorder=4,
-                            label="Estimate" if not est_label_shown else "",
-                        )
-                        est_label_shown = True
-
-                    if true_x is not None and true_y is not None:
-                        ax.scatter(
-                            [true_x], [true_y],
-                            marker="o",
-                            color="#d62728",
-                            s=34,
-                            zorder=5,
-                            label="True" if not true_label_shown else "",
-                        )
-                        true_label_shown = True
-                        # Draw arrow from estimate → true.
-                        if np.isfinite(true_x) and np.isfinite(true_y):
-                            dlen = float(np.hypot((true_x - est_x) / x_span, (true_y - est_y) / y_span))
-                            if arrow_norm is not None and arrow_cmap is not None:
-                                arrow_color = arrow_cmap(float(arrow_norm(dlen)))
-                            else:
-                                arrow_color = "#6E6E6E"
-                            # Thick translucent trail to make direction/error magnitude visually clear.
-                            ax.plot(
-                                [est_x, true_x],
-                                [est_y, true_y],
-                                color=arrow_color,
-                                linewidth=4.2,
-                                alpha=0.32,
-                                solid_capstyle="round",
-                                zorder=3,
-                            )
-                            ax.annotate(
-                                "",
-                                xy=(true_x, true_y),
-                                xytext=(est_x, est_y),
-                                arrowprops={
-                                    "arrowstyle": "-|>",
-                                    "color": arrow_color,
-                                    "linewidth": 1.35,
-                                    "alpha": 0.96,
-                                    "mutation_scale": 11,
-                                    "shrinkA": 2,
-                                    "shrinkB": 2,
-                                },
-                                zorder=4,
-                            )
-                            arrows_drawn += 1
-
-                if arrows_drawn > 0:
-                    ax.plot([], [], color="#6E6E6E", linewidth=1.35, label="Estimate -> True")
-                    if arrow_norm is not None and arrow_cmap is not None:
-                        sm = cm.ScalarMappable(norm=arrow_norm, cmap=arrow_cmap)
-                        sm.set_array([])
-                        cbar = fig.colorbar(sm, ax=ax, pad=0.015, fraction=0.045)
-                        cbar.set_label("Estimate -> true distance (norm.)", fontsize=8)
-                        cbar.ax.tick_params(labelsize=7)
-
-                ax.text(
-                    0.015,
-                    0.985,
-                    f"Dictionary: {n_dict}\nValidation truths: {n_truth_bg}\nSelected tests: {len(sel)}",
-                    transform=ax.transAxes,
-                    ha="left",
-                    va="top",
-                    fontsize=8,
-                    bbox={
-                        "boxstyle": "round,pad=0.28",
-                        "facecolor": "white",
-                        "edgecolor": "#B7B7B7",
-                        "alpha": 0.88,
-                    },
+        n_truth_bg = 0
+        if {true_x_col, true_y_col}.issubset(set(vv.columns)):
+            vtruth = vv.dropna(subset=[true_x_col, true_y_col])
+            n_truth_bg = len(vtruth)
+            if n_truth_bg > 0:
+                ax.scatter(
+                    vtruth[true_x_col],
+                    vtruth[true_y_col],
+                    marker="o",
+                    s=22,
+                    color="#666666",
+                    alpha=0.34,
+                    edgecolors="white",
+                    linewidths=0.22,
+                    zorder=1,
+                    label=f"Validation truths (all: {n_truth_bg})",
                 )
 
-                ax.legend(fontsize=8, framealpha=0.95)
-                fig.tight_layout()
-                outname = PLOTS_DIR / f"lut_ellipse_{x_p}_{y_p}.png"
-                _save_figure(fig, outname)
-                plt.close(fig)
-                log.info("Wrote ellipse scatter plot: %s", outname)
+        n_dict = 0
+        if dict_df is not None and {x_p, y_p}.issubset(set(dict_df.columns)):
+            ddf = dict_df.dropna(subset=[x_p, y_p])
+            n_dict = len(ddf)
+            if n_dict > 0:
+                ax.scatter(
+                    ddf[x_p],
+                    ddf[y_p],
+                    marker="s",
+                    facecolors="none",
+                    edgecolors="#2F4B7C",
+                    s=30,
+                    alpha=0.86,
+                    linewidths=0.75,
+                    zorder=2,
+                    label=f"Dictionary (all: {n_dict})",
+                )
+
+        x_series = pd.to_numeric(vv[est_x_col], errors="coerce").to_numpy(dtype=float)
+        y_series = pd.to_numeric(vv[est_y_col], errors="coerce").to_numpy(dtype=float)
+        if {true_x_col, true_y_col}.issubset(set(vv.columns)):
+            x_true_series = pd.to_numeric(vv[true_x_col], errors="coerce").to_numpy(dtype=float)
+            y_true_series = pd.to_numeric(vv[true_y_col], errors="coerce").to_numpy(dtype=float)
+            x_series = np.concatenate([x_series, x_true_series[np.isfinite(x_true_series)]])
+            y_series = np.concatenate([y_series, y_true_series[np.isfinite(y_true_series)]])
+        x_series = x_series[np.isfinite(x_series)]
+        y_series = y_series[np.isfinite(y_series)]
+        x_span = float(np.nanmax(x_series) - np.nanmin(x_series)) if x_series.size else 1.0
+        y_span = float(np.nanmax(y_series) - np.nanmin(y_series)) if y_series.size else 1.0
+        if not np.isfinite(x_span) or x_span <= 0:
+            x_span = 1.0
+        if not np.isfinite(y_span) or y_span <= 0:
+            y_span = 1.0
+
+        arrow_lengths: list[float] = []
+        for _, row in sel.iterrows():
+            true_x = float(row[true_x_col]) if true_x_col in row and not pd.isna(row[true_x_col]) else np.nan
+            true_y = float(row[true_y_col]) if true_y_col in row and not pd.isna(row[true_y_col]) else np.nan
+            est_x = float(row[est_x_col]) if est_x_col in row and not pd.isna(row[est_x_col]) else np.nan
+            est_y = float(row[est_y_col]) if est_y_col in row and not pd.isna(row[est_y_col]) else np.nan
+            if np.isfinite(est_x) and np.isfinite(est_y) and np.isfinite(true_x) and np.isfinite(true_y):
+                dlen = float(np.hypot((true_x - est_x) / x_span, (true_y - est_y) / y_span))
+                arrow_lengths.append(dlen)
+
+        arrow_norm = None
+        arrow_cmap = None
+        if arrow_lengths:
+            lmin = float(np.nanmin(arrow_lengths))
+            lmax = float(np.nanmax(arrow_lengths))
+            if not np.isfinite(lmin) or not np.isfinite(lmax):
+                lmin, lmax = 0.0, 1.0
+            if lmax <= lmin:
+                lmax = lmin + 1e-12
+            arrow_norm = Normalize(vmin=lmin, vmax=lmax)
+            arrow_cmap = plt.get_cmap("viridis")
+
+        ell_label_shown = False
+        est_label_shown = False
+        true_label_shown = False
+        arrows_drawn = 0
+        for _, row in sel.iterrows():
+            est_x = float(row[est_x_col])
+            est_y = float(row[est_y_col])
+            ne = float(row.get("n_events", np.nan))
+            true_x = float(row[true_x_col]) if true_x_col in row and not pd.isna(row[true_x_col]) else None
+            true_y = float(row[true_y_col]) if true_y_col in row and not pd.isna(row[true_y_col]) else None
+
+            try:
+                est_values = {f"est_{x_p}": est_x, f"est_{y_p}": est_y, "n_events": ne}
+                sigs = interpolate_uncertainty(lut_df, est_values, param_names, quantile=q_ellipse)
+                sigma_x_pct = sigs.get(x_p, np.nan)
+                sigma_y_pct = sigs.get(y_p, np.nan)
+            except Exception:
+                sigma_x_pct = np.nan
+                sigma_y_pct = np.nan
+
+            if np.isfinite(sigma_x_pct) and np.isfinite(sigma_y_pct) and sigma_x_pct > 0 and sigma_y_pct > 0:
+                sigma_x = sigma_x_pct / 100.0 * abs(est_x)
+                sigma_y = sigma_y_pct / 100.0 * abs(est_y)
+                ell = Ellipse(
+                    (est_x, est_y),
+                    width=2 * sigma_x,
+                    height=2 * sigma_y,
+                    edgecolor=(31 / 255, 119 / 255, 180 / 255, 0.90),
+                    facecolor=(31 / 255, 119 / 255, 180 / 255, 0.22),
+                    linewidth=1.25,
+                )
+                ax.add_patch(ell)
+                if not ell_label_shown:
+                    ax.plot([], [], color="#1f77b4", linewidth=1.25, label="Uncertainty ellipse")
+                    ell_label_shown = True
+            ax.scatter(
+                [est_x], [est_y],
+                marker="x",
+                color="#1f77b4",
+                s=48,
+                zorder=4,
+                label="Estimate" if not est_label_shown else "",
+            )
+            est_label_shown = True
+
+            if true_x is not None and true_y is not None:
+                ax.scatter(
+                    [true_x], [true_y],
+                    marker="o",
+                    color="#d62728",
+                    s=34,
+                    zorder=5,
+                    label="True" if not true_label_shown else "",
+                )
+                true_label_shown = True
+                if np.isfinite(true_x) and np.isfinite(true_y):
+                    dlen = float(np.hypot((true_x - est_x) / x_span, (true_y - est_y) / y_span))
+                    if arrow_norm is not None and arrow_cmap is not None:
+                        arrow_color = arrow_cmap(float(arrow_norm(dlen)))
+                    else:
+                        arrow_color = "#6E6E6E"
+                    ax.plot(
+                        [est_x, true_x],
+                        [est_y, true_y],
+                        color=arrow_color,
+                        linewidth=4.2,
+                        alpha=0.32,
+                        solid_capstyle="round",
+                        zorder=3,
+                    )
+                    ax.annotate(
+                        "",
+                        xy=(true_x, true_y),
+                        xytext=(est_x, est_y),
+                        arrowprops={
+                            "arrowstyle": "-|>",
+                            "color": arrow_color,
+                            "linewidth": 1.35,
+                            "alpha": 0.96,
+                            "mutation_scale": 11,
+                            "shrinkA": 2,
+                            "shrinkB": 2,
+                        },
+                        zorder=4,
+                    )
+                    arrows_drawn += 1
+
+        if arrows_drawn > 0:
+            ax.plot([], [], color="#6E6E6E", linewidth=1.35, label="Estimate -> True")
+            if arrow_norm is not None and arrow_cmap is not None:
+                sm = cm.ScalarMappable(norm=arrow_norm, cmap=arrow_cmap)
+                sm.set_array([])
+                cbar = fig.colorbar(sm, ax=ax, pad=0.015, fraction=0.045)
+                cbar.set_label("Estimate -> true distance (norm.)", fontsize=8)
+                cbar.ax.tick_params(labelsize=7)
+
+        ax.text(
+            0.015,
+            0.985,
+            f"Dictionary: {n_dict}\nValidation truths: {n_truth_bg}\nSelected tests: {len(sel)}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=8,
+            bbox={
+                "boxstyle": "round,pad=0.28",
+                "facecolor": "white",
+                "edgecolor": "#B7B7B7",
+                "alpha": 0.88,
+            },
+        )
+
+        ax.legend(fontsize=8, framealpha=0.95)
+        fig.tight_layout()
+        outname = PLOTS_DIR / f"lut_ellipse_{x_p}_{y_p}.png"
+        _save_figure(fig, outname)
+        plt.close(fig)
+        produced += 1
+        log.info("Wrote ellipse scatter plot: %s", outname)
+
+    if produced == 0:
+        log.warning("No ellipse plots generated for the selected parameter pairs.")
 
 
 if __name__ == "__main__":

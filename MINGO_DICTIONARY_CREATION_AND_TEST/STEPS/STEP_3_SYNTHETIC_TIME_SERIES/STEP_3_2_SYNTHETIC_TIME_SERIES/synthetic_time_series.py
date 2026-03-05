@@ -180,7 +180,8 @@ def _merge_weighting_cfg_from_step13(cfg_32: dict, cfg_13: dict) -> tuple[dict, 
 
     - Keep non-weighting keys from `step_3_2` (mainly path overrides).
     - Fill weighting keys from internal defaults.
-    - Apply centralized weighting keys from `step_1_3.step_3_2_weighting`.
+    - Apply centralized weighting keys from `step_1_3.weighting_shared`.
+      Fallback: `step_1_3.step_3_2_weighting` (deprecated alias).
     - Apply optional backward-compatibility overrides from `step_1_3.weighting_overrides`.
     """
     raw_cfg_32 = dict(cfg_32)
@@ -189,7 +190,7 @@ def _merge_weighting_cfg_from_step13(cfg_32: dict, cfg_13: dict) -> tuple[dict, 
     )
     if ignored_step32_weighting_keys:
         log.info(
-            "Ignoring %d weighting key(s) from step_3_2; using step_1_3.step_3_2_weighting + internal defaults.",
+            "Ignoring %d weighting key(s) from step_3_2; using step_1_3.weighting_shared + internal defaults.",
             len(ignored_step32_weighting_keys),
         )
 
@@ -201,7 +202,18 @@ def _merge_weighting_cfg_from_step13(cfg_32: dict, cfg_13: dict) -> tuple[dict, 
     merged.update(STEP32_WEIGHTING_DEFAULTS)
     applied_keys: set[str] = set()
 
-    central_weighting = cfg_13.get("step_3_2_weighting", {})
+    legacy_central_weighting = cfg_13.get("step_3_2_weighting", {})
+    if isinstance(legacy_central_weighting, dict):
+        if legacy_central_weighting and not isinstance(cfg_13.get("weighting_shared"), dict):
+            log.info(
+                "Using deprecated key step_1_3.step_3_2_weighting; prefer step_1_3.weighting_shared."
+            )
+        for key in STEP32_WEIGHTING_KEYS:
+            if key in legacy_central_weighting and legacy_central_weighting.get(key) is not None:
+                merged[key] = legacy_central_weighting[key]
+                applied_keys.add(key)
+
+    central_weighting = cfg_13.get("weighting_shared", {})
     if isinstance(central_weighting, dict):
         for key in STEP32_WEIGHTING_KEYS:
             if key in central_weighting and central_weighting.get(key) is not None:

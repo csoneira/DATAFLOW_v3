@@ -132,6 +132,7 @@ def _sample_efficiencies(
     rng: np.random.Generator,
     eff_range: object,
     efficiencies_identical: bool,
+    efficiencies_max_spread: float | None,
 ) -> list[float]:
     eff_base = _sample_range(rng, eff_range, "efficiencies")
     if efficiencies_identical:
@@ -139,9 +140,11 @@ def _sample_efficiencies(
     if not isinstance(eff_range, list) or len(eff_range) != 2:
         raise ValueError("efficiencies must be a 2-value list [min, max] when not identical.")
     min_val, max_val = float(eff_range[0]), float(eff_range[1])
-    # Keep per-plane efficiencies within +/-0.05 of a base value (max spread 0.10).
-    lo = max(min_val, eff_base - 0.05)
-    hi = min(max_val, eff_base + 0.05)
+    if efficiencies_max_spread is None:
+        return [float(rng.uniform(min_val, max_val)) for _ in range(4)]
+    half_spread = float(efficiencies_max_spread) / 2.0
+    lo = max(min_val, eff_base - half_spread)
+    hi = min(max_val, eff_base + half_spread)
     return [float(rng.uniform(lo, hi)) for _ in range(4)]
 
 
@@ -171,6 +174,29 @@ def _range_bounds(value: object, name: str) -> tuple[float, float]:
             raise ValueError(f"{name} range must satisfy min <= max.")
         return lo, hi
     raise ValueError(f"{name} must be a number or a 2-value list [min, max].")
+
+
+def _parse_efficiency_max_spread(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            parsed = float(value.strip())
+        except ValueError as exc:
+            raise ValueError(
+                "efficiencies_max_spread must be a non-negative number or null."
+            ) from exc
+    elif isinstance(value, (int, float, np.integer, np.floating)):
+        parsed = float(value)
+    else:
+        raise ValueError(
+            "efficiencies_max_spread must be a non-negative number or null."
+        )
+    if not np.isfinite(parsed):
+        raise ValueError("efficiencies_max_spread must be finite or null.")
+    if parsed < 0:
+        raise ValueError("efficiencies_max_spread must be >= 0.")
+    return parsed
 
 
 def _build_regular_mesh_overrides(
@@ -355,6 +381,9 @@ def _append_param_row(
     efficiencies_identical = _as_bool(
         physics_cfg.get("efficiencies_identical", False), default=False
     )
+    efficiencies_max_spread = _parse_efficiency_max_spread(
+        physics_cfg.get("efficiencies_max_spread", 0.10)
+    )
     eff_range = physics_cfg.get("efficiencies")
     if eff_range is None:
         raise ValueError("efficiencies must be set in config_step_0_physics.yaml.")
@@ -440,7 +469,12 @@ def _append_param_row(
             rng, physics_cfg.get("flux_cm2_min"), "flux_cm2_min"
         )
     if {"eff_p1", "eff_p2", "eff_p3", "eff_p4"} & shared:
-        effs_shared = _sample_efficiencies(rng, eff_range, efficiencies_identical)
+        effs_shared = _sample_efficiencies(
+            rng,
+            eff_range,
+            efficiencies_identical,
+            efficiencies_max_spread,
+        )
         shared_values.update(
             {
                 "eff_p1": float(effs_shared[0]),
@@ -469,7 +503,12 @@ def _append_param_row(
         flux_cm2_min = shared_values.get(
             "flux_cm2_min", _sample_range(rng, physics_cfg.get("flux_cm2_min"), "flux_cm2_min")
         )
-        effs = _sample_efficiencies(rng, eff_range, efficiencies_identical)
+        effs = _sample_efficiencies(
+            rng,
+            eff_range,
+            efficiencies_identical,
+            efficiencies_max_spread,
+        )
         for key in ("eff_p1", "eff_p2", "eff_p3", "eff_p4"):
             if key in shared_values:
                 idx = int(key.split("_p")[-1]) - 1
@@ -545,6 +584,7 @@ def _append_param_row(
         "updated_at": now_iso(),
         "row_count": int(len(mesh)),
         "efficiencies_identical": efficiencies_identical,
+        "efficiencies_max_spread": efficiencies_max_spread,
         "repeat_samples": repeat_samples,
         "expand_z_positions": expand_z_positions,
         "shared_columns": sorted(shared),

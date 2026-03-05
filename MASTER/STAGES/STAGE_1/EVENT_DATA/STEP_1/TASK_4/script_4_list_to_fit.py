@@ -120,8 +120,16 @@ from MASTER.common.step1_shared import (
     build_step1_cli_parser,
     build_step1_filtered_print,
     collect_columns,
+    extract_rate_histogram_metadata,
+    extract_trigger_type_metadata,
+    is_trigger_type_file_column,
+    is_trigger_type_metadata_column,
+    is_specific_metadata_excluded_column,
     load_itineraries_from_file,
+    normalize_tt_label,
+    prune_redundant_count_metadata,
     save_metadata,
+    set_global_rate_from_tt_rates,
     resolve_step1_plot_options,
     validate_step1_input_file_args,
     y_pos,
@@ -221,25 +229,6 @@ def close_direct_pdf_writer() -> None:
     if _direct_pdf_pages is not None:
         _direct_pdf_pages.close()
         _direct_pdf_pages = None
-
-def align_metadata_row_with_existing_schema(metadata_path: str | Path, row: dict[str, object]) -> None:
-    path = Path(metadata_path)
-    if not path.exists() or path.stat().st_size == 0:
-        return
-    try:
-        with path.open("r", newline="") as handle:
-            reader = csv.reader(handle)
-            fieldnames = next(reader, [])
-    except OSError as exc:
-        print(f"Warning: unable to read metadata schema from {path}: {exc}")
-        return
-    for key in fieldnames:
-        if not key or key in row:
-            continue
-        if key == "analysis_mode" or key.endswith("_count") or key.startswith("events_per_second_"):
-            row[key] = 0
-        else:
-            row[key] = ""
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -924,6 +913,14 @@ debug_fig_idx = 1
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
+csv_path_rate_histogram = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_rate_histogram.csv",
+)
+csv_path_trigger_type = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_trigger_type.csv",
+)
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
@@ -1346,6 +1343,7 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=0.25,
+        param_hash=str(global_variables.get("param_hash", "")),
     )
 
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
@@ -1453,7 +1451,8 @@ list_tt_columns = {
 working_df = compute_tt(working_df, "list_tt", list_tt_columns)
 list_tt_counts_initial = working_df["list_tt"].value_counts()
 for tt_value, count in list_tt_counts_initial.items():
-    global_variables[f"list_tt_{tt_value}_count"] = int(count)
+    tt_label = normalize_tt_label(tt_value)
+    global_variables[f"list_tt_{tt_label}_count"] = int(count)
 working_df["processed_tt"] = working_df["list_tt"].astype(int)
 
 # Ensure cal_tt is present for downstream correlations
@@ -1470,6 +1469,7 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=0.5,
+        param_hash=str(global_variables.get("param_hash", "")),
     )
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
@@ -4327,6 +4327,7 @@ if create_plots and "processed_tt" in working_df.columns and "datetime" in worki
 
 # Combine detached and TimTrack estimates ------------------------------------
 combined_core_vars = ["x", "y", "theta", "phi", "s", "t0"]
+combined_columns = {}
 for base in combined_core_vars:
     det_col = f"det_{base}"
     tim_col = f"tim_{base}"
@@ -4337,14 +4338,11 @@ for base in combined_core_vars:
         diff = np.angle(np.exp(1j * (det_vals - tim_vals)))
         avg = tim_vals + diff / 2.0
         avg = np.angle(np.exp(1j * avg))  # wrap back to [-pi, pi]
-        working_df[base] = avg
-        working_df[f"{base}_err"] = diff / 2.0
+        combined_columns[base] = avg
+        combined_columns[f"{base}_err"] = diff / 2.0
     else:
-        working_df[base] = 0.5 * (det_vals + tim_vals)
-        working_df[f"{base}_err"] = 0.5 * (det_vals - tim_vals)
-
-# Defrag once after all combined-core-variable columns have been written
-working_df = working_df.copy()
+        combined_columns[base] = 0.5 * (det_vals + tim_vals)
+        combined_columns[f"{base}_err"] = 0.5 * (det_vals - tim_vals)
 
 residual_sets = [
     ("res_ystr", "det_res_ystr_", "tim_res_ystr_"),
@@ -4359,8 +4357,20 @@ for base, det_prefix, tim_prefix in residual_sets:
         tim_col = f"{tim_prefix}{p}"
         det_vals = working_df[det_col].to_numpy(copy=False) if det_col in working_df else np.zeros(len(working_df))
         tim_vals = working_df[tim_col].to_numpy(copy=False) if tim_col in working_df else np.zeros(len(working_df))
-        working_df[f"{base}_{p}"] = 0.5 * (det_vals + tim_vals)
-        working_df[f"{base}_{p}_err"] = 0.5 * (det_vals - tim_vals)
+        combined_columns[f"{base}_{p}"] = 0.5 * (det_vals + tim_vals)
+        combined_columns[f"{base}_{p}_err"] = 0.5 * (det_vals - tim_vals)
+
+if combined_columns:
+    combined_df = pd.DataFrame(combined_columns, index=working_df.index)
+    overlap_cols = [col for col in combined_df.columns if col in working_df.columns]
+    if overlap_cols:
+        working_df.loc[:, overlap_cols] = combined_df[overlap_cols].to_numpy()
+    new_cols = [col for col in combined_df.columns if col not in working_df.columns]
+    if new_cols:
+        working_df = pd.concat([working_df, combined_df[new_cols]], axis=1)
+
+# Defrag after all combined-column writes are complete
+working_df = working_df.copy()
 
 if create_debug_plots:
     def _emit_param_debug(param_label, columns, thresholds, *, tag="tunable"):
@@ -7042,16 +7052,20 @@ record_filter_metric(
     fit_tt_total if fit_tt_total else 0,
 )
 working_df.loc[:, "list_to_fit_tt"] = (
-    working_df["list_tt"].astype(str) + "_" + working_df["fit_tt"].astype(str)
+    pd.to_numeric(working_df["list_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+    + "_"
+    + pd.to_numeric(working_df["fit_tt"], errors="coerce").fillna(0).astype(int).astype(str)
 )
 
 fit_tt_counts = working_df["fit_tt"].value_counts()
 for tt_value, count in fit_tt_counts.items():
-    global_variables[f"fit_tt_{tt_value}_count"] = int(count)
+    tt_label = normalize_tt_label(tt_value)
+    global_variables[f"fit_tt_{tt_label}_count"] = int(count)
 
 list_to_fit_counts = working_df["list_to_fit_tt"].value_counts()
 for combo_value, count in list_to_fit_counts.items():
-    global_variables[f"list_to_fit_tt_{combo_value}_count"] = int(count)
+    combo_label = normalize_tt_label(combo_value)
+    global_variables[f"list_to_fit_tt_{combo_label}_count"] = int(count)
 
 # Final number of events
 final_number_of_events = len(working_df)
@@ -7080,6 +7094,8 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
+param_hash_value = str(simulated_param_hash) if simulated_param_hash else str(global_variables.get("param_hash", ""))
+global_variables["param_hash"] = param_hash_value
 
 # This line is a placeholder
 
@@ -7092,12 +7108,14 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=0.75,
+        param_hash=str(global_variables.get("param_hash", "")),
     )
 
 filter_metrics["data_purity_percentage"] = round(float(data_purity_percentage), 4)
 filter_row = {
     "filename_base": filename_base,
     "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
 }
 for name in FILTER_METRIC_NAMES:
     filter_row[name] = filter_metrics.get(name, "")
@@ -7105,7 +7123,7 @@ for name in FILTER_METRIC_NAMES:
 metadata_filter_csv_path = save_metadata(
     csv_path_filter,
     filter_row,
-    preferred_fieldnames=("filename_base", "execution_timestamp", *FILTER_METRIC_NAMES),
+    preferred_fieldnames=("filename_base", "execution_timestamp", "param_hash", *FILTER_METRIC_NAMES),
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
@@ -7124,6 +7142,7 @@ metadata_execution_csv_path = save_metadata(
     {
         "filename_base": filename_base,
         "execution_timestamp": execution_timestamp,
+        "param_hash": param_hash_value,
         "data_purity_percentage": round(float(data_purity_percentage), 4),
         "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
     },
@@ -7132,6 +7151,7 @@ print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
 _prof["filename_base"] = filename_base
 _prof["execution_timestamp"] = execution_timestamp
+_prof["param_hash"] = param_hash_value
 _prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
 save_metadata(csv_path_profiling, _prof)
 
@@ -7140,14 +7160,54 @@ save_metadata(csv_path_profiling, _prof)
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
+ensure_global_count_keys(("list_tt", "fit_tt", "list_to_fit_tt"))
 add_normalized_count_metadata(
     global_variables,
     global_variables.get("events_per_second_total_seconds", 0),
 )
-
+set_global_rate_from_tt_rates(
+    global_variables,
+    preferred_prefixes=("fit_tt", "list_tt"),
+    log_fn=print,
+)
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp
-ensure_global_count_keys(("list_tt", "fit_tt", "list_to_fit_tt", "definitive_tt"))
+global_variables["param_hash"] = param_hash_value
+
+rate_histogram_variables = extract_rate_histogram_metadata(global_variables, remove_from_source=True)
+metadata_rate_histogram_csv_path = save_metadata(
+    csv_path_rate_histogram,
+    rate_histogram_variables,
+)
+print(f"Metadata (rate_histogram) CSV updated at: {metadata_rate_histogram_csv_path}")
+
+# Keep denominator available for both trigger_type and specific metadata outputs.
+global_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
+    "count_rate_denominator_seconds",
+    0,
+)
+
+prune_redundant_count_metadata(global_variables, log_fn=print)
+trigger_type_prefixes = ("list_tt", "fit_tt", "list_to_fit_tt")
+trigger_type_variables = extract_trigger_type_metadata(
+    global_variables,
+    trigger_type_prefixes,
+    remove_from_source=True,
+)
+# Keep the denominator in trigger_type so rate_hz values can be converted back to counts.
+trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
+    "count_rate_denominator_seconds",
+    0,
+)
+metadata_trigger_type_csv_path = save_metadata(
+    csv_path_trigger_type,
+    trigger_type_variables,
+    drop_field_predicate=lambda column_name: not is_trigger_type_file_column(
+        column_name,
+        trigger_type_prefixes,
+    ),
+)
+print(f"Metadata (trigger_type) CSV updated at: {metadata_trigger_type_csv_path}")
 
 print(f"Specific metadata keys to be saved: {len(global_variables)}")
 if VERBOSE:
@@ -7167,10 +7227,17 @@ print(
     force=True,
 )
 
-align_metadata_row_with_existing_schema(csv_path_specific, global_variables)
 metadata_specific_csv_path = save_metadata(
     csv_path_specific,
     global_variables,
+    drop_field_predicate=lambda column_name: (
+        (
+            is_specific_metadata_excluded_column(column_name)
+            and column_name != "count_rate_denominator_seconds"
+        )
+        or is_trigger_type_metadata_column(column_name, trigger_type_prefixes)
+        or column_name.startswith("definitive_tt_")
+    ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
@@ -7203,6 +7270,7 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=1.0,
+        param_hash=str(global_variables.get("param_hash", "")),
     )
 
 # %%

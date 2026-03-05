@@ -29,7 +29,7 @@ from MASTER.common.execution_logger import start_timer
 
 start_timer(__file__)
 
-STATUS_FIELDNAMES = ("filename_base", "execution_date", "completion_fraction")
+STATUS_FIELDNAMES = ("filename_base", "execution_date", "param_hash", "completion_fraction")
 
 
 def _clamp_completion(completion: object) -> float:
@@ -66,10 +66,12 @@ def _load_status_rows(path: Path) -> list[dict[str, str]]:
                 "completion_fraction",
                 raw.get("completion", raw.get("status", "0")),
             )
+            param_hash = str(raw.get("param_hash", "") or "")
             rows.append(
                 {
                     "filename_base": filename_base,
                     "execution_date": execution_date,
+                    "param_hash": param_hash,
                     "completion_fraction": _format_completion(completion),
                 }
             )
@@ -88,6 +90,7 @@ def initialize_status_row(
     status_csv_path: Path | str,
     filename_base: str,
     execution_date: str | None = None,
+    param_hash: str = "",
     completion_fraction: float = 0.0,
 ) -> str:
     """Append a status row and return the execution date key used for updates."""
@@ -101,6 +104,7 @@ def initialize_status_row(
         {
             "filename_base": str(filename_base),
             "execution_date": execution_date,
+            "param_hash": str(param_hash or ""),
             "completion_fraction": _format_completion(completion_fraction),
         }
     )
@@ -113,6 +117,7 @@ def update_status_progress(
     filename_base: str,
     execution_date: str,
     completion_fraction: float,
+    param_hash: str | None = None,
 ) -> bool:
     """Update completion for the matching ``filename_base`` + ``execution_date`` row."""
 
@@ -127,6 +132,8 @@ def update_status_progress(
             and row.get("execution_date") == execution_date
         ):
             row["completion_fraction"] = _format_completion(completion_fraction)
+            if param_hash is not None:
+                row["param_hash"] = str(param_hash or "")
             _write_status_rows(path, rows)
             return True
     return False

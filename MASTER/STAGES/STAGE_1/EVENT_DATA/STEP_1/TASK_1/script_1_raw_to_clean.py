@@ -121,8 +121,16 @@ from MASTER.common.step1_shared import (
     build_step1_cli_parser,
     build_step1_filtered_print,
     collect_columns,
+    extract_rate_histogram_metadata,
+    extract_trigger_type_metadata,
+    is_trigger_type_file_column,
+    is_trigger_type_metadata_column,
+    is_specific_metadata_excluded_column,
     load_itineraries_from_file,
+    normalize_tt_label,
+    prune_redundant_count_metadata,
     save_metadata,
+    set_global_rate_from_tt_rates,
     resolve_step1_plot_options,
     validate_step1_input_file_args,
     y_pos,
@@ -222,25 +230,6 @@ def close_direct_pdf_writer() -> None:
     if _direct_pdf_pages is not None:
         _direct_pdf_pages.close()
         _direct_pdf_pages = None
-
-def align_metadata_row_with_existing_schema(metadata_path: str | Path, row: dict[str, object]) -> None:
-    path = Path(metadata_path)
-    if not path.exists() or path.stat().st_size == 0:
-        return
-    try:
-        with path.open("r", newline="") as handle:
-            reader = csv.reader(handle)
-            fieldnames = next(reader, [])
-    except OSError as exc:
-        print(f"Warning: unable to read metadata schema from {path}: {exc}")
-        return
-    for key in fieldnames:
-        if not key or key in row:
-            continue
-        if key == "analysis_mode" or key.endswith("_count") or key.startswith("events_per_second_"):
-            row[key] = 0
-        else:
-            row[key] = ""
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -432,6 +421,14 @@ for directory in base_directories.values():
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
+csv_path_rate_histogram = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_rate_histogram.csv",
+)
+csv_path_trigger_type = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_trigger_type.csv",
+)
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
@@ -917,6 +914,7 @@ def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "q_front_back_zero_rows_pct",
+    "valid_lines_in_binary_file_percentage",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
     "clean_tt_lt_10_rows_removed_pct",
@@ -1972,6 +1970,7 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=0.25,
+        param_hash=str(global_variables.get("param_hash", "")),
     )
 
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
@@ -2356,6 +2355,7 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=0.5,
+        param_hash=str(global_variables.get("param_hash", "")),
     )
 
 working_df["datetime"] = selected_df['datetime']
@@ -2455,7 +2455,8 @@ working_df = compute_tt(working_df, "raw_tt")
 
 raw_tt_counts = working_df["raw_tt"].value_counts()
 for tt_value, count in raw_tt_counts.items():
-    global_variables[f"raw_tt_{tt_value}_count"] = int(count)
+    tt_label = normalize_tt_label(tt_value)
+    global_variables[f"raw_tt_{tt_label}_count"] = int(count)
 
 # Print the counts of each raw_tt value and the percentage
 total_events = len(working_df)
@@ -3431,16 +3432,20 @@ record_filter_metric(
     clean_tt_total if clean_tt_total else 0,
 )
 working_df.loc[:, "raw_to_clean_tt"] = (
-    working_df["raw_tt"].astype(str) + "_" + working_df["clean_tt"].astype(str)
+    pd.to_numeric(working_df["raw_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+    + "_"
+    + pd.to_numeric(working_df["clean_tt"], errors="coerce").fillna(0).astype(int).astype(str)
 )
 
 clean_tt_counts = working_df["clean_tt"].value_counts()
 for tt_value, count in clean_tt_counts.items():
-    global_variables[f"clean_tt_{tt_value}_count"] = int(count)
+    tt_label = normalize_tt_label(tt_value)
+    global_variables[f"clean_tt_{tt_label}_count"] = int(count)
 
 raw_to_clean_counts = working_df["raw_to_clean_tt"].value_counts()
 for combo_value, count in raw_to_clean_counts.items():
-    global_variables[f"raw_to_clean_tt_{combo_value}_count"] = int(count)
+    combo_label = normalize_tt_label(combo_value)
+    global_variables[f"raw_to_clean_tt_{combo_label}_count"] = int(count)
 
 # Final number of events
 final_number_of_events = len(working_df)
@@ -3476,6 +3481,8 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
+param_hash_value = str(simulated_param_hash) if simulated_param_hash else str(global_variables.get("param_hash", ""))
+global_variables["param_hash"] = param_hash_value
 
  
 # -------------------------------------------------------------------------------
@@ -3487,12 +3494,18 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=0.75,
+        param_hash=str(global_variables.get("param_hash", "")),
     )
 
 filter_metrics["data_purity_percentage"] = round(float(data_purity_percentage), 4)
+filter_metrics["valid_lines_in_binary_file_percentage"] = round(
+    float(global_variables.get("valid_lines_in_binary_file_percentage", 0.0)),
+    4,
+)
 filter_row = {
     "filename_base": filename_base,
     "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
 }
 for name in FILTER_METRIC_NAMES:
     filter_row[name] = filter_metrics.get(name, "")
@@ -3500,7 +3513,7 @@ for name in FILTER_METRIC_NAMES:
 metadata_filter_csv_path = save_metadata(
     csv_path_filter,
     filter_row,
-    preferred_fieldnames=("filename_base", "execution_timestamp", *FILTER_METRIC_NAMES),
+    preferred_fieldnames=("filename_base", "execution_timestamp", "param_hash", *FILTER_METRIC_NAMES),
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
@@ -3520,6 +3533,7 @@ metadata_execution_csv_path = save_metadata(
     {
         "filename_base": filename_base,
         "execution_timestamp": execution_timestamp,
+        "param_hash": param_hash_value,
         "data_purity_percentage": round(float(data_purity_percentage), 4),
         "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
     },
@@ -3528,6 +3542,7 @@ print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
 _prof["filename_base"] = filename_base
 _prof["execution_timestamp"] = execution_timestamp
+_prof["param_hash"] = param_hash_value
 _prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
 save_metadata(csv_path_profiling, _prof)
 
@@ -3536,14 +3551,48 @@ save_metadata(csv_path_profiling, _prof)
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
+ensure_global_count_keys(("raw_tt", "clean_tt", "raw_to_clean_tt"))
 add_normalized_count_metadata(
     global_variables,
     global_variables.get("events_per_second_total_seconds", 0),
 )
-
+set_global_rate_from_tt_rates(
+    global_variables,
+    preferred_prefixes=("raw_tt", "clean_tt"),
+    log_fn=print,
+)
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp
-ensure_global_count_keys(("raw_tt", "clean_tt", "raw_to_clean_tt"))
+global_variables["param_hash"] = param_hash_value
+
+rate_histogram_variables = extract_rate_histogram_metadata(global_variables, remove_from_source=True)
+metadata_rate_histogram_csv_path = save_metadata(
+    csv_path_rate_histogram,
+    rate_histogram_variables,
+)
+print(f"Metadata (rate_histogram) CSV updated at: {metadata_rate_histogram_csv_path}")
+
+prune_redundant_count_metadata(global_variables, log_fn=print)
+trigger_type_prefixes = ("raw_tt", "clean_tt", "raw_to_clean_tt")
+trigger_type_variables = extract_trigger_type_metadata(
+    global_variables,
+    trigger_type_prefixes,
+    remove_from_source=True,
+)
+# Keep the denominator in trigger_type so rate_hz values can be converted back to counts.
+trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
+    "count_rate_denominator_seconds",
+    0,
+)
+metadata_trigger_type_csv_path = save_metadata(
+    csv_path_trigger_type,
+    trigger_type_variables,
+    drop_field_predicate=lambda column_name: not is_trigger_type_file_column(
+        column_name,
+        trigger_type_prefixes,
+    ),
+)
+print(f"Metadata (trigger_type) CSV updated at: {metadata_trigger_type_csv_path}")
 
 print(f"Specific metadata keys to be saved: {len(global_variables)}")
 # if VERBOSE:
@@ -3563,10 +3612,14 @@ print(
     force=True,
 )
 
-align_metadata_row_with_existing_schema(csv_path_specific, global_variables)
 metadata_specific_csv_path = save_metadata(
     csv_path_specific,
     global_variables,
+    drop_field_predicate=lambda column_name: (
+        is_specific_metadata_excluded_column(column_name)
+        or is_trigger_type_metadata_column(column_name, trigger_type_prefixes)
+        or column_name == "valid_lines_in_binary_file_percentage"
+    ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
@@ -3614,4 +3667,5 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=1.0,
+        param_hash=str(global_variables.get("param_hash", "")),
     )

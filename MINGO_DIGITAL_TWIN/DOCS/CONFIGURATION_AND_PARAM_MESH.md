@@ -41,6 +41,7 @@ Canonical contracts are summarized in:
 Physics:
 - `cos_n`, `flux_cm2_min`
 - `efficiencies`, `efficiencies_identical`
+- `efficiencies_max_spread` (number or `null` when `efficiencies_identical=false`)
 - `repeat_samples`, `shared_columns`
 - `expand_z_positions`
 

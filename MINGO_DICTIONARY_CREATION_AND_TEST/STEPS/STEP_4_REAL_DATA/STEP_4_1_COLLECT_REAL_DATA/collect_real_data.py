@@ -146,6 +146,34 @@ def _safe_task_ids(raw: object) -> list[int]:
     return sorted(set(out)) or [1]
 
 
+def _preferred_feature_prefixes_for_task_ids(task_ids: list[int]) -> list[str]:
+    """Preferred TT-rate prefixes for auto feature/comparison selection."""
+    max_task_id = max(task_ids) if task_ids else 1
+    if max_task_id <= 1:
+        return ["raw", "clean"]
+    if max_task_id == 2:
+        return ["clean", "raw_to_clean", "raw"]
+    if max_task_id == 3:
+        return ["cal", "clean", "raw_to_clean", "raw"]
+    if max_task_id == 4:
+        return ["fit", "list_to_fit", "list", "cal", "clean", "raw_to_clean", "raw"]
+    return [
+        "post",
+        "fit_to_post",
+        "fit",
+        "list_to_fit",
+        "list",
+        "cal",
+        "clean",
+        "raw_to_clean",
+        "raw",
+        "corr",
+        "task5_to_corr",
+        "fit_to_corr",
+        "definitive",
+    ]
+
+
 def _safe_station_id(raw: object, default: int = 0) -> int:
     """Parse station selector from int-like or MINGOxx string."""
     if raw in (None, "", "null", "None"):
@@ -171,7 +199,7 @@ def _safe_station_id(raw: object, default: int = 0) -> int:
     )
 
 
-def _task_metadata_path(station_id: int, task_id: int) -> Path:
+def _task_metadata_dir(station_id: int, task_id: int) -> Path:
     station = f"MINGO{station_id:02d}"
     return (
         REPO_ROOT
@@ -182,8 +210,15 @@ def _task_metadata_path(station_id: int, task_id: int) -> Path:
         / "STEP_1"
         / f"TASK_{task_id}"
         / "METADATA"
-        / f"task_{task_id}_metadata_specific.csv"
     )
+
+
+def _task_specific_metadata_path(station_id: int, task_id: int) -> Path:
+    return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_specific.csv"
+
+
+def _task_trigger_type_metadata_path(station_id: int, task_id: int) -> Path:
+    return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_trigger_type.csv"
 
 
 def _normalize_basename_for_time(value: object) -> str:
@@ -479,28 +514,113 @@ def _choose_best_col(columns: list[str]) -> str:
     return scored[0][1]
 
 
-def _pick_global_rate_column(df: pd.DataFrame, preferred: str = "events_per_second_global_rate") -> str | None:
-    if preferred in df.columns:
-        vals = pd.to_numeric(df[preferred], errors="coerce")
-        if vals.notna().any():
-            return preferred
+def _normalize_tt_label(label: object) -> str:
+    text = str(label).strip()
+    if not text:
+        return ""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return text
+    if not np.isfinite(value):
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return text
 
-    candidates = []
+
+def _derive_global_rate_from_tt_sum(
+    df: pd.DataFrame,
+    *,
+    target_col: str = "events_per_second_global_rate",
+) -> str | None:
+    canonical_labels = {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "12",
+        "13",
+        "14",
+        "23",
+        "24",
+        "34",
+        "123",
+        "124",
+        "134",
+        "234",
+        "1234",
+    }
+    by_prefix: dict[str, list[str]] = {}
+    for col in df.columns:
+        match = re.match(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$", str(col))
+        if match is None:
+            continue
+        prefix = str(match.group("prefix")).strip()
+        label = _normalize_tt_label(match.group("label"))
+        if label not in canonical_labels:
+            continue
+        by_prefix.setdefault(prefix, []).append(col)
+
+    if not by_prefix:
+        return None
+
+    selected_prefix = min(
+        by_prefix.keys(),
+        key=lambda p: (-len(by_prefix[p]), _prefix_rank(p.replace("_tt", "")), p),
+    )
+    cols = sorted(set(by_prefix[selected_prefix]))
+    if not cols:
+        return None
+
+    summed = pd.Series(0.0, index=df.index, dtype=float)
+    valid_any = pd.Series(False, index=df.index)
+    for col in cols:
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        summed = summed + numeric.fillna(0.0)
+        valid_any = valid_any | numeric.notna()
+
+    df[target_col] = summed.where(valid_any, np.nan)
+    return target_col
+
+
+def _pick_global_rate_column(df: pd.DataFrame, preferred: str = "events_per_second_global_rate") -> str | None:
+    candidates: list[str] = []
+    preferred_clean = str(preferred).strip()
+    if preferred_clean:
+        candidates.append(preferred_clean)
+    candidates.extend(
+        [
+            "events_per_second_global_rate",
+            "global_rate_hz",
+            "global_rate_hz_mean",
+        ]
+    )
+    seen = set(candidates)
     for c in df.columns:
         cl = c.lower()
-        if "global_rate" in cl and ("hz" in cl or cl.endswith("_rate")):
+        if (
+            "global_rate" in cl and ("hz" in cl or cl.endswith("_rate"))
+        ) and c not in seen:
             candidates.append(c)
-    candidates = sorted(candidates)
+            seen.add(c)
     for c in candidates:
+        if c not in df.columns:
+            continue
         vals = pd.to_numeric(df[c], errors="coerce")
         if vals.notna().any():
             return c
-    return None
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return _derive_global_rate_from_tt_sum(df, target_col="events_per_second_global_rate")
 
 
 def _resolve_comparison_preview(
     real_df: pd.DataFrame,
     dict_df: pd.DataFrame | None,
+    preferred_prefixes: list[str] | None = None,
 ) -> tuple[str, list[str], list[dict[str, str]]]:
     """Preview columns likely to be used in STEP 4.2 comparison."""
     real_tt = _tt_rate_columns(real_df)
@@ -510,7 +630,9 @@ def _resolve_comparison_preview(
 
     if dict_df is not None and not dict_df.empty:
         dict_tt = _tt_rate_columns(dict_df)
-        prefixes = ["raw", "clean", "cal", "list", "fit", "corr", "definitive"]
+        prefixes = [str(p).strip() for p in (preferred_prefixes or []) if str(p).strip()]
+        if not prefixes:
+            prefixes = ["raw", "clean", "cal", "list", "fit", "corr", "definitive"]
         for prefix in prefixes:
             common = sorted(
                 [c for c in dict_tt if c.startswith(f"{prefix}_tt_") and c in set(real_tt)]
@@ -621,6 +743,30 @@ def _pick_event_count_column(df: pd.DataFrame) -> str | None:
     return None
 
 
+def _pick_duration_seconds_column(df: pd.DataFrame) -> str | None:
+    """Pick an acquisition-duration column (seconds) for count derivation."""
+    priority = [
+        "events_per_second_total_seconds",
+        "count_rate_denominator_seconds",
+        "duration_seconds",
+        "acquisition_seconds",
+    ]
+    for col in priority:
+        if col in df.columns:
+            values = pd.to_numeric(df[col], errors="coerce")
+            if values.notna().any():
+                return col
+
+    pattern = re.compile(r"(duration|denominator|acquisition).*(second|sec)|second|sec", re.IGNORECASE)
+    for col in sorted(df.columns):
+        if not pattern.search(str(col)):
+            continue
+        values = pd.to_numeric(df[col], errors="coerce")
+        if values.notna().any():
+            return col
+    return None
+
+
 def _plot_placeholder(path: Path, title: str, message: str) -> None:
     fig, ax = plt.subplots(figsize=(9, 4.6))
     ax.axis("off")
@@ -642,9 +788,9 @@ def _make_event_histogram(df: pd.DataFrame) -> str | None:
 
     # Last-resort fallback: estimate counts from global rate and acquisition duration.
     if values.empty:
-        duration_col = "events_per_second_total_seconds"
+        duration_col = _pick_duration_seconds_column(df)
         global_rate_col = _pick_global_rate_column(df, preferred="events_per_second_global_rate")
-        if duration_col in df.columns and global_rate_col is not None:
+        if duration_col is not None and global_rate_col is not None:
             duration = pd.to_numeric(df[duration_col], errors="coerce")
             global_rate = pd.to_numeric(df[global_rate_col], errors="coerce")
             values = (duration * global_rate).dropna()
@@ -807,6 +953,7 @@ def main() -> int:
         else cfg_41.get("task_ids", config.get("task_ids", [1]))
     )
     task_ids = _safe_task_ids(task_ids_cfg)
+    preferred_feature_prefixes = _preferred_feature_prefixes_for_task_ids(task_ids)
 
     timestamp_col = str(cfg_41.get("timestamp_column", "execution_timestamp"))
     metadata_agg = str(config.get("metadata_agg", "latest")).strip().lower()
@@ -820,6 +967,7 @@ def main() -> int:
 
     log.info("Station: %s", station_name)
     log.info("Task IDs: %s", task_ids)
+    log.info("Preferred TT prefix order for auto comparison features: %s", preferred_feature_prefixes)
     log.info(
         "Date range (applied to filename_base data-time): %s .. %s",
         date_from if date_from is not None else "None",
@@ -897,11 +1045,17 @@ def main() -> int:
     task_stats: dict[str, dict[str, int]] = {}
 
     for task_id in task_ids:
-        meta_path = _task_metadata_path(station_id, task_id)
+        specific_path = _task_specific_metadata_path(station_id, task_id)
+        trigger_path = _task_trigger_type_metadata_path(station_id, task_id)
         key = str(task_id)
         task_stats[key] = {
             "rows_read": 0,
+            "rows_read_specific": 0,
+            "rows_read_trigger_type": 0,
             "rows_after_latest_agg": 0,
+            "rows_after_latest_agg_specific": 0,
+            "rows_after_latest_agg_trigger_type": 0,
+            "rows_after_metadata_merge": 0,
             "rows_after_date_filter": 0,
             "rows_with_online_z_mapped": 0,
             "rows_after_z_filter": 0,
@@ -909,21 +1063,53 @@ def main() -> int:
             "rows_with_valid_timestamp": 0,
         }
 
-        if not meta_path.exists():
-            log.warning("Task %d metadata not found: %s", task_id, meta_path)
+        meta_df: pd.DataFrame | None = None
+
+        # Primary source: trigger_type metadata.
+        if trigger_path.exists():
+            log.info("Loading task %d trigger_type metadata: %s", task_id, trigger_path)
+            trigger_df = pd.read_csv(trigger_path, low_memory=False)
+            task_stats[key]["rows_read_trigger_type"] = int(len(trigger_df))
+            if "filename_base" not in trigger_df.columns:
+                log.warning("Task %d trigger_type metadata has no 'filename_base'; skipping trigger_type.", task_id)
+            else:
+                if metadata_agg == "latest":
+                    trigger_df = _aggregate_latest(trigger_df, timestamp_col=timestamp_col)
+                task_stats[key]["rows_after_latest_agg_trigger_type"] = int(len(trigger_df))
+                meta_df = trigger_df
+        else:
+            log.info("Task %d trigger_type metadata not found: %s", task_id, trigger_path)
+
+        # Fallback source: specific metadata only when trigger_type is unavailable.
+        if meta_df is None:
+            if specific_path.exists():
+                log.warning(
+                    "Using fallback specific metadata for task %d because trigger_type is unavailable: %s",
+                    task_id,
+                    specific_path,
+                )
+                specific_df = pd.read_csv(specific_path, low_memory=False)
+                task_stats[key]["rows_read_specific"] = int(len(specific_df))
+                if "filename_base" not in specific_df.columns:
+                    log.warning("Task %d specific metadata has no 'filename_base'; skipping specific.", task_id)
+                else:
+                    if metadata_agg == "latest":
+                        specific_df = _aggregate_latest(specific_df, timestamp_col=timestamp_col)
+                    task_stats[key]["rows_after_latest_agg_specific"] = int(len(specific_df))
+                    meta_df = specific_df
+            else:
+                log.warning("Task %d specific metadata not found: %s", task_id, specific_path)
+
+        task_stats[key]["rows_read"] = int(
+            task_stats[key]["rows_read_specific"] + task_stats[key]["rows_read_trigger_type"]
+        )
+
+        if meta_df is None:
+            log.warning("Task %d has no usable trigger_type/specific metadata; skipping.", task_id)
             continue
 
-        log.info("Loading task %d metadata: %s", task_id, meta_path)
-        meta_df = pd.read_csv(meta_path, low_memory=False)
-        task_stats[key]["rows_read"] = int(len(meta_df))
-
-        if "filename_base" not in meta_df.columns:
-            log.warning("Task %d metadata has no 'filename_base'; skipping.", task_id)
-            continue
-
-        if metadata_agg == "latest":
-            meta_df = _aggregate_latest(meta_df, timestamp_col=timestamp_col)
         task_stats[key]["rows_after_latest_agg"] = int(len(meta_df))
+        task_stats[key]["rows_after_metadata_merge"] = int(len(meta_df))
 
         file_ts = meta_df["filename_base"].map(_parse_filename_base_ts)
         meta_df["file_timestamp_utc"] = file_ts
@@ -996,6 +1182,7 @@ def main() -> int:
     comparison_strategy, comparison_cols, comparison_map_preview = _resolve_comparison_preview(
         real_df=collected,
         dict_df=dict_df if not dict_df.empty else None,
+        preferred_prefixes=preferred_feature_prefixes,
     )
     global_rate_col_used = _pick_global_rate_column(collected, preferred=global_rate_col_pref)
     n_compare_shown = _make_comparison_columns_plot(
@@ -1011,16 +1198,12 @@ def main() -> int:
         "station_name": station_name,
         "task_ids_requested": task_ids,
         "source_path_template": str(
-            REPO_ROOT
-            / "STATIONS"
-            / station_name
-            / "STAGE_1"
-            / "EVENT_DATA"
-            / "STEP_1"
-            / "TASK_<id>"
-            / "METADATA"
-            / "task_<id>_metadata_specific.csv"
+            _task_metadata_dir(station_id, "<id>")
         ),
+        "source_metadata_files": [
+            "task_<id>_metadata_specific.csv",
+            "task_<id>_metadata_trigger_type.csv",
+        ],
         "task_stats": task_stats,
         "metadata_aggregation": metadata_agg,
         "timestamp_column": timestamp_col,
@@ -1036,6 +1219,7 @@ def main() -> int:
         "common_z_tuples_used_for_filter": [list(z) for z in sorted(common_z_tuples)],
         "timeline_column": timeline_col,
         "comparison_preview_strategy": comparison_strategy,
+        "comparison_preview_preferred_prefix_order": preferred_feature_prefixes,
         "comparison_preview_columns_total": int(len(comparison_cols)),
         "comparison_preview_columns_shown": int(n_compare_shown),
         "comparison_preview_columns": comparison_cols[:100],

@@ -1,0 +1,8 @@
+# Shared static configuration for all QUALITY_ASSURANCE steps/tasks.
+stations: [0, 1, 2, 3, 4]
+stations_root: STATIONS
+station_subdirectories:
+  - OUTPUTS/FILES
+  - OUTPUTS/PLOTS
+date_range_excluded_stations:
+  - MINGO00

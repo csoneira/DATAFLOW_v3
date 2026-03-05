@@ -71,6 +71,8 @@ DEFAULT_EXECUTION_LOG_SCALE_SECONDS = 3600.0
 UNTRACKED_STAGE_INDEX = -1
 UNTRACKED_STAGE_LABEL = "UNTRACKED (not in STEP 0 history)"
 UNTRACKED_STAGE_COLOR = "#bdbdbd"
+UNTRACKED_SCATTER_ALPHA_SCALE = 0.05
+UNTRACKED_HIST_ALPHA = 0.12
 
 
 @dataclass(frozen=True)
@@ -283,11 +285,13 @@ def normalize_basename(value: object) -> str:
 
 
 def build_discrete_stage_colors() -> Tuple[str, ...]:
-    # STEP 0 remains white/hollow; TASK 1..5 use discretized turbo.
+    # STEP 0 remains white/hollow; TASK 1..5 sample turbo away from
+    # both endpoints so first/last task colors are not both dark.
     turbo_steps = 5
-    turbo = colormaps["turbo"].resampled(turbo_steps)
+    turbo = colormaps["turbo"]
+    sample_points = np.linspace(0.10, 0.90, turbo_steps)
     colors: List[str] = ["#ffffff"]
-    colors.extend(to_hex(turbo(i)) for i in range(turbo_steps))
+    colors.extend(to_hex(turbo(point)) for point in sample_points)
     return tuple(colors)
 
 
@@ -630,21 +634,23 @@ def _plot_diagonal_hist(
             continue
         if is_datetime:
             x = mdates.date2num(pd.to_datetime(values).to_numpy(dtype="datetime64[ns]"))
+            hist_alpha = UNTRACKED_HIST_ALPHA if stage_index == UNTRACKED_STAGE_INDEX else 0.28
             ax.hist(
                 x,
                 bins=bins,
                 color=stage_colors.get(stage_index, UNTRACKED_STAGE_COLOR),
-                alpha=0.28,
+                alpha=hist_alpha,
                 edgecolor="black",
                 linewidth=0.3,
             )
             ax.xaxis_date()
         else:
+            hist_alpha = UNTRACKED_HIST_ALPHA if stage_index == UNTRACKED_STAGE_INDEX else 0.28
             ax.hist(
                 values.to_numpy(),
                 bins=bins,
                 color=stage_colors.get(stage_index, UNTRACKED_STAGE_COLOR),
-                alpha=0.28,
+                alpha=hist_alpha,
                 edgecolor="black",
                 linewidth=0.3,
             )
@@ -738,7 +744,9 @@ def _scatter_stage_points(
             facecolors=stage_colors.get(stage_index, UNTRACKED_STAGE_COLOR),
             edgecolors="black",
             linewidths=0.2,
-            alpha=alpha,
+            alpha=max(0.02, alpha * UNTRACKED_SCATTER_ALPHA_SCALE)
+            if stage_index == UNTRACKED_STAGE_INDEX
+            else alpha,
             zorder=3,
         )
 
@@ -871,13 +879,11 @@ def plot_stage_colored_parameter_matrix(
         param_list[idx]: _datetime_locator_and_formatter(frame[param_list[idx]])
         for idx in datetime_indices
     }
-    width_ratios = [2.7 if idx in datetime_indices else 1.0 for idx in range(n)]
     fig, axes = plt.subplots(
         n,
         n,
-        figsize=(2.7 * n + 3.4, 2.7 * n),
+        figsize=(2.9 * n + 2.8, 2.9 * n + 2.8),
         dpi=120,
-        gridspec_kw={"width_ratios": width_ratios},
     )
     axes_arr = np.asarray(axes).reshape(n, n)
 
@@ -898,6 +904,7 @@ def plot_stage_colored_parameter_matrix(
                 spine.set_visible(True)
                 spine.set_linewidth(0.65)
                 spine.set_color("black")
+            ax.set_box_aspect(1.0)
 
             if i == j:
                 _plot_diagonal_hist(ax, frame[y_col], frame, stage_order, stage_colors)

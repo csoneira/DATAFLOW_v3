@@ -232,6 +232,34 @@ def _preferred_tt_prefixes_for_task_ids(task_ids: list[int]) -> list[str]:
     ]
 
 
+def _preferred_feature_prefixes_for_task_ids(task_ids: list[int]) -> list[str]:
+    """Preferred TT-rate prefixes for STEP 4.2 auto feature selection."""
+    max_task_id = max(task_ids) if task_ids else 1
+    if max_task_id <= 1:
+        return ["raw", "clean"]
+    if max_task_id == 2:
+        return ["clean", "raw_to_clean", "raw"]
+    if max_task_id == 3:
+        return ["cal", "clean", "raw_to_clean", "raw"]
+    if max_task_id == 4:
+        return ["fit", "list_to_fit", "list", "cal", "clean", "raw_to_clean", "raw"]
+    return [
+        "post",
+        "fit_to_post",
+        "fit",
+        "list_to_fit",
+        "list",
+        "cal",
+        "clean",
+        "raw_to_clean",
+        "raw",
+        "corr",
+        "task5_to_corr",
+        "fit_to_corr",
+        "definitive",
+    ]
+
+
 def _coalesce(primary: object, fallback: object) -> object:
     if primary in (None, "", "null", "None"):
         return fallback
@@ -295,14 +323,26 @@ def _prefix_rank(prefix: str) -> int:
         return len(order)
 
 
-def _choose_best_col(columns: list[str]) -> str:
-    scored: list[tuple[int, str]] = []
+def _choose_best_col(columns: list[str], df: pd.DataFrame | None = None) -> str:
+    scored: list[tuple[int, int, str]] = []
     for col in columns:
         parts = _extract_tt_parts(col)
         rank = _prefix_rank(parts[0]) if parts is not None else 999
-        scored.append((rank, col))
-    scored.sort(key=lambda x: (x[0], x[1]))
-    return scored[0][1]
+        finite_rank = 0
+        if df is not None and col in df.columns:
+            finite_count = int(pd.to_numeric(df[col], errors="coerce").notna().sum())
+            finite_rank = -finite_count
+        scored.append((finite_rank, rank, col))
+    scored.sort(key=lambda x: (x[0], x[1], x[2]))
+    return scored[0][2]
+
+
+def _count_rows_with_min_finite_features(df: pd.DataFrame, features: list[str], min_finite: int = 2) -> int:
+    if not features:
+        return 0
+    usable_min = min(max(1, int(min_finite)), len(features))
+    vals = df[features].apply(pd.to_numeric, errors="coerce")
+    return int((vals.notna().sum(axis=1) >= usable_min).sum())
 
 
 def _resolve_feature_columns_auto(
@@ -310,6 +350,7 @@ def _resolve_feature_columns_auto(
     real_df: pd.DataFrame,
     include_global_rate: bool,
     global_rate_col: str,
+    preferred_prefixes: list[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], str, list[dict[str, str]]]:
     """Build a robust feature set even when task prefixes differ."""
     dict_tt = _tt_rate_columns(dict_df)
@@ -318,7 +359,9 @@ def _resolve_feature_columns_auto(
     feature_mapping: list[dict[str, str]] = []
 
     # 1) Prefer same-prefix direct intersections (mirrors STEP 2.1 behavior).
-    prefixes = ["raw", "clean", "cal", "list", "fit", "corr", "definitive"]
+    prefixes = [str(p).strip() for p in (preferred_prefixes or []) if str(p).strip()]
+    if not prefixes:
+        prefixes = ["raw", "clean", "cal", "list", "fit", "corr", "definitive"]
     for prefix in prefixes:
         common = sorted(
             [c for c in dict_tt if c.startswith(f"{prefix}_tt_") and c in set(real_tt)]
@@ -332,6 +375,29 @@ def _resolve_feature_columns_auto(
                 and global_rate_col not in features
             ):
                 features.append(global_rate_col)
+            min_finite = 2 if len(features) >= 2 else 1
+            dict_rows_usable = _count_rows_with_min_finite_features(
+                dict_df, features, min_finite=min_finite
+            )
+            real_rows_usable = _count_rows_with_min_finite_features(
+                real_df, features, min_finite=min_finite
+            )
+            if dict_rows_usable <= 0 or real_rows_usable <= 0:
+                log.info(
+                    "Skipping direct_prefix:%s (usable rows with >=%d finite features: dict=%d, real=%d).",
+                    prefix,
+                    min_finite,
+                    dict_rows_usable,
+                    real_rows_usable,
+                )
+                continue
+            log.info(
+                "Selected direct_prefix:%s with %d features (usable rows: dict=%d, real=%d).",
+                prefix,
+                len(features),
+                dict_rows_usable,
+                real_rows_usable,
+            )
             return (
                 dict_df,
                 real_df,
@@ -351,7 +417,27 @@ def _resolve_feature_columns_auto(
             and global_rate_col not in features
         ):
             features.append(global_rate_col)
-        return (dict_df, real_df, features, "direct_exact", feature_mapping)
+        min_finite = 2 if len(features) >= 2 else 1
+        dict_rows_usable = _count_rows_with_min_finite_features(
+            dict_df, features, min_finite=min_finite
+        )
+        real_rows_usable = _count_rows_with_min_finite_features(
+            real_df, features, min_finite=min_finite
+        )
+        if dict_rows_usable > 0 and real_rows_usable > 0:
+            log.info(
+                "Selected direct_exact with %d features (usable rows: dict=%d, real=%d).",
+                len(features),
+                dict_rows_usable,
+                real_rows_usable,
+            )
+            return (dict_df, real_df, features, "direct_exact", feature_mapping)
+        log.info(
+            "Skipping direct_exact (usable rows with >=%d finite features: dict=%d, real=%d).",
+            min_finite,
+            dict_rows_usable,
+            real_rows_usable,
+        )
 
     # 3) Align by tt topology key and create temporary aliases.
     dict_key_to_cols: dict[str, list[str]] = {}
@@ -381,11 +467,15 @@ def _resolve_feature_columns_auto(
     real_work = real_df.copy()
     features: list[str] = []
     for idx, key in enumerate(common_keys):
-        dcol = _choose_best_col(dict_key_to_cols[key])
-        rcol = _choose_best_col(real_key_to_cols[key])
+        dcol = _choose_best_col(dict_key_to_cols[key], dict_df)
+        rcol = _choose_best_col(real_key_to_cols[key], real_df)
+        dvals = pd.to_numeric(dict_df[dcol], errors="coerce")
+        rvals = pd.to_numeric(real_df[rcol], errors="coerce")
+        if int(dvals.notna().sum()) <= 0 or int(rvals.notna().sum()) <= 0:
+            continue
         alias = f"tt_feature_{idx:03d}_rate_hz"
-        dict_work[alias] = pd.to_numeric(dict_work[dcol], errors="coerce")
-        real_work[alias] = pd.to_numeric(real_work[rcol], errors="coerce")
+        dict_work[alias] = dvals
+        real_work[alias] = rvals
         features.append(alias)
         feature_mapping.append(
             {
@@ -409,6 +499,31 @@ def _resolve_feature_columns_auto(
                 "tt_key": "global_rate",
             }
         )
+
+    if not features:
+        raise ValueError(
+            "No usable aligned tt-rate features found between dictionary and real data."
+        )
+
+    min_finite = 2 if len(features) >= 2 else 1
+    dict_rows_usable = _count_rows_with_min_finite_features(
+        dict_work, features, min_finite=min_finite
+    )
+    real_rows_usable = _count_rows_with_min_finite_features(
+        real_work, features, min_finite=min_finite
+    )
+    if dict_rows_usable <= 0 or real_rows_usable <= 0:
+        raise ValueError(
+            "Aligned tt-rate features are not usable: "
+            f"dict rows with >={min_finite} finite features={dict_rows_usable}, "
+            f"real rows with >={min_finite} finite features={real_rows_usable}."
+        )
+    log.info(
+        "Selected aligned_by_tt_key with %d features (usable rows: dict=%d, real=%d).",
+        len(features),
+        dict_rows_usable,
+        real_rows_usable,
+    )
 
     return (dict_work, real_work, features, "aligned_by_tt_key", feature_mapping)
 
@@ -440,6 +555,77 @@ def _pick_n_events_column(df: pd.DataFrame) -> str | None:
     return None
 
 
+def _normalize_tt_label(label: object) -> str:
+    text = str(label).strip()
+    if not text:
+        return ""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return text
+    if not np.isfinite(value):
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return text
+
+
+def _derive_global_rate_from_tt_sum(
+    df: pd.DataFrame,
+    *,
+    target_col: str = "events_per_second_global_rate",
+) -> str | None:
+    canonical_labels = {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "12",
+        "13",
+        "14",
+        "23",
+        "24",
+        "34",
+        "123",
+        "124",
+        "134",
+        "234",
+        "1234",
+    }
+    by_prefix: dict[str, list[str]] = {}
+    for col in df.columns:
+        match = re.match(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$", str(col))
+        if match is None:
+            continue
+        prefix = str(match.group("prefix")).strip()
+        label = _normalize_tt_label(match.group("label"))
+        if label not in canonical_labels:
+            continue
+        by_prefix.setdefault(prefix, []).append(col)
+
+    if not by_prefix:
+        return None
+
+    selected_prefix = min(
+        by_prefix.keys(),
+        key=lambda p: (-len(by_prefix[p]), _prefix_rank(p.replace("_tt", "")), p),
+    )
+    cols = sorted(set(by_prefix[selected_prefix]))
+    if not cols:
+        return None
+
+    summed = pd.Series(0.0, index=df.index, dtype=float)
+    valid_any = pd.Series(False, index=df.index)
+    for col in cols:
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        summed = summed + numeric.fillna(0.0)
+        valid_any = valid_any | numeric.notna()
+
+    df[target_col] = summed.where(valid_any, np.nan)
+    return target_col
+
+
 def _pick_global_rate_column(df: pd.DataFrame, preferred: str = "events_per_second_global_rate") -> str | None:
     if preferred in df.columns:
         vals = pd.to_numeric(df[preferred], errors="coerce")
@@ -455,7 +641,7 @@ def _pick_global_rate_column(df: pd.DataFrame, preferred: str = "events_per_seco
         vals = pd.to_numeric(df[c], errors="coerce")
         if vals.notna().any():
             return c
-    return None
+    return _derive_global_rate_from_tt_sum(df, target_col="events_per_second_global_rate")
 
 
 def _find_tt_rate_column(
@@ -576,25 +762,27 @@ def _invert_polynomial_values(
     y_values: pd.Series,
     coeffs: np.ndarray,
 ) -> pd.Series:
-    """Solve P(x)=y row-wise and select a physically meaningful real root.
+    """Solve P(x)=y row-wise with physical-root preference and smooth fallback.
 
-    Primary selection uses real roots within [0, 1] (efficiency domain), choosing
-    the one closest to y as a stable tie-break. If no in-range root exists,
-    fallback to all real roots and pick the closest-to-y root.
+    Prefer real roots within [0, 1] (efficiency domain). When no physical root
+    exists, fall back to nearby real roots instead of hard clipping to bounds.
     """
     y = pd.to_numeric(y_values, errors="coerce").to_numpy(dtype=float)
     out = np.full(y.shape, np.nan, dtype=float)
     degree = int(len(coeffs) - 1)
 
-    x_grid = np.linspace(0.0, 1.0, 4001, dtype=float)
+    x_grid = np.linspace(-0.5, 1.5, 8001, dtype=float)
     y_grid = np.polyval(coeffs, x_grid)
+
+    def _distance_to_unit_interval(values: np.ndarray) -> np.ndarray:
+        vals = np.asarray(values, dtype=float)
+        return np.where(vals < 0.0, -vals, np.where(vals > 1.0, vals - 1.0, 0.0))
 
     if degree == 1:
         a, b = float(coeffs[0]), float(coeffs[1])
         if np.isfinite(a) and abs(a) >= 1e-12:
             out = (y - b) / a
             out[~np.isfinite(out)] = np.nan
-            out = np.clip(out, 0.0, 1.0)
         return pd.Series(out, index=y_values.index)
 
     for idx, target in enumerate(y):
@@ -616,10 +804,20 @@ def _invert_polynomial_values(
             continue
         physical_roots = real_roots[(real_roots >= 0.0) & (real_roots <= 1.0)]
         if physical_roots.size > 0:
-            out[idx] = float(physical_roots[np.argmin(np.abs(physical_roots - target))])
+            clipped_target = float(np.clip(target, 0.0, 1.0))
+            order = np.lexsort(
+                (
+                    np.abs(physical_roots - 0.5),
+                    np.abs(physical_roots - clipped_target),
+                )
+            )
+            out[idx] = float(physical_roots[int(order[0])])
             continue
-        idx_best = int(np.argmin(np.abs(y_grid - target)))
-        out[idx] = float(x_grid[idx_best])
+        # No physical root: keep transformation behavior via nearest real root
+        # to the physical interval, instead of forcing boundary clipping.
+        dist = _distance_to_unit_interval(real_roots)
+        order = np.lexsort((np.abs(real_roots), np.abs(real_roots - 0.5), dist))
+        out[idx] = float(real_roots[int(order[0])])
     return pd.Series(out, index=y_values.index)
 
 
@@ -1113,10 +1311,11 @@ def _plot_pre_estimation_efficiencies(
     transform_mode: str,
     out_path: Path,
 ) -> None:
-    """Three-panel diagnostic:
+    """Four-panel diagnostic:
     top: global-rate only,
     middle: raw eff(1..4) from 1 - three/four,
-    bottom: transformed efficiencies using STEP 1.2 fit polynomials.
+    third: transformed efficiencies using STEP 1.2 fit polynomials,
+    bottom: same transformed efficiencies zoomed to y in [0.75, 1.0].
     """
     raw_valid = any(pd.to_numeric(raw_eff_by_plane.get(p), errors="coerce").notna().any() for p in (1, 2, 3, 4))
     tr_valid = any(
@@ -1153,7 +1352,7 @@ def _plot_pre_estimation_efficiencies(
         return (lo - pad, hi + pad)
 
     xv = x.to_numpy()
-    fig, axes = plt.subplots(3, 1, figsize=(12.2, 11.2), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(12.2, 14.0), sharex=True)
 
     # Top panel: global rate only
     ax_rate = axes[0]
@@ -1205,8 +1404,9 @@ def _plot_pre_estimation_efficiencies(
     ax_raw.set_title(f"Efficiencies from {source_prefix_label} rates (1 - threeplane/fourplane)")
     ax_raw.grid(True, alpha=0.22)
 
-    # Bottom panel: transformed efficiencies
+    # Third and bottom panels: transformed efficiencies (full + zoomed).
     ax_bot = axes[2]
+    ax_bot_zoom = axes[3]
     n_drawn = 0
     tr_y_min = np.inf
     tr_y_max = -np.inf
@@ -1215,24 +1415,34 @@ def _plot_pre_estimation_efficiencies(
         valid = eff_t.notna()
         if valid.any():
             yvals_t = eff_t[valid].to_numpy(dtype=float)
+            xvals_t = xv[valid.to_numpy()]
             if yvals_t.size:
                 tr_y_min = min(tr_y_min, float(np.nanmin(yvals_t)))
                 tr_y_max = max(tr_y_max, float(np.nanmax(yvals_t)))
+            label = f"transformed_eff_{plane}"
             ax_bot.scatter(
-                xv[valid.to_numpy()],
+                xvals_t,
                 yvals_t,
                 s=10,
                 alpha=0.9,
                 color=color_by_plane[plane],
-                label=f"transformed_eff_{plane}",
+                label=label,
+            )
+            ax_bot_zoom.scatter(
+                xvals_t,
+                yvals_t,
+                s=10,
+                alpha=0.9,
+                color=color_by_plane[plane],
+                label=label,
             )
             n_drawn += 1
     if n_drawn == 0:
         ax_bot.text(0.5, 0.5, "No transformed efficiency values available", ha="center", va="center")
+        ax_bot_zoom.text(0.5, 0.5, "No transformed efficiency values available", ha="center", va="center")
 
     ax_bot.set_ylim(*_eff_ylim(tr_y_min, tr_y_max))
     ax_bot.set_ylabel("Transformed efficiencies")
-    ax_bot.set_xlabel(xlabel)
     ax_bot.set_title(
         "Transformed efficiency (using STEP 1.2 fit polynomials; "
         f"mode={transform_mode})"
@@ -1241,12 +1451,23 @@ def _plot_pre_estimation_efficiencies(
     if n_drawn > 0:
         ax_bot.legend(loc="best", fontsize=8, frameon=True, ncol=2)
 
+    ax_bot_zoom.set_ylim(0.75, 1.0)
+    ax_bot_zoom.set_ylabel("Transf. eff (zoom)")
+    ax_bot_zoom.set_xlabel(xlabel)
+    ax_bot_zoom.set_title(
+        "Transformed efficiency (zoomed y-range: [0.75, 1.0])"
+    )
+    ax_bot_zoom.grid(True, alpha=0.22)
+    if n_drawn > 0:
+        ax_bot_zoom.legend(loc="best", fontsize=8, frameon=True, ncol=2)
+
     if not has_time_axis and len(xv) > 0:
         xmin = float(np.nanmin(xv))
         xmax = float(np.nanmax(xv)) if len(xv) > 1 else xmin + 1.0
         ax_rate.set_xlim(xmin, xmax)
         ax_raw.set_xlim(xmin, xmax)
         ax_bot.set_xlim(xmin, xmax)
+        ax_bot_zoom.set_xlim(xmin, xmax)
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -1372,7 +1593,7 @@ def _plot_flux_recovery_story_real(
         axes[0].text(0.5, 0.5, f"No finite values for {distance_label}", ha="center", va="center")
     axes[0].set_ylabel("Best distance")
     _apply_striped_background(axes[0], distance)
-    axes[0].legend(loc="best", fontsize=8)
+    _legend_if_labeled(axes[0], loc="best", fontsize=8)
 
     # 2) Estimated efficiency.
     m_eff = np.isfinite(xv) & np.isfinite(eff)
@@ -1396,7 +1617,7 @@ def _plot_flux_recovery_story_real(
         axes[1].text(0.5, 0.5, f"No finite values for {eff_label}", ha="center", va="center")
     axes[1].set_ylabel("Estimated eff")
     _apply_striped_background(axes[1], eff)
-    axes[1].legend(loc="best", fontsize=8)
+    _legend_if_labeled(axes[1], loc="best", fontsize=8)
 
     # 3) Global rate.
     m_rate = np.isfinite(xv) & np.isfinite(rate)
@@ -1417,7 +1638,7 @@ def _plot_flux_recovery_story_real(
         axes[2].text(0.5, 0.5, f"No finite values for {global_rate_label}", ha="center", va="center")
     axes[2].set_ylabel("Global rate")
     _apply_striped_background(axes[2], rate)
-    axes[2].legend(loc="best", fontsize=8)
+    _legend_if_labeled(axes[2], loc="best", fontsize=8)
 
     # 4) Estimated flux (+ uncertainty), with optional real-data-derived reference.
     m_flux = np.isfinite(xv) & np.isfinite(flux_est)
@@ -1478,7 +1699,7 @@ def _plot_flux_recovery_story_real(
         axes[3],
         flux_est if np.isfinite(flux_est).any() else (flux_ref if flux_ref is not None else np.array([])),
     )
-    axes[3].legend(loc="best", fontsize=8)
+    _legend_if_labeled(axes[3], loc="best", fontsize=8)
 
     if not has_time_axis and len(xv) > 0:
         xmin = float(np.nanmin(xv))
@@ -1493,6 +1714,13 @@ def _plot_flux_recovery_story_real(
     fig.tight_layout()
     fig.savefig(out_path, dpi=170)
     plt.close(fig)
+
+
+def _legend_if_labeled(ax: plt.Axes, **legend_kwargs: object) -> None:
+    handles, labels = ax.get_legend_handles_labels()
+    has_labeled = any(str(lbl).strip() and not str(lbl).startswith("_") for lbl in labels)
+    if has_labeled and len(handles) > 0:
+        ax.legend(**legend_kwargs)
 
 
 def _plot_eff2_vs_global_rate(
@@ -1718,13 +1946,26 @@ def _plot_estimated_curve_flux_vs_eff(
 
     real_flux = pd.to_numeric(real_df[est_flux_col], errors="coerce")
     real_eff = pd.to_numeric(real_df[est_eff_col], errors="coerce")
+    n_real_flux = int(real_flux.notna().sum())
+    n_real_eff = int(real_eff.notna().sum())
     real_valid = real_flux.notna() & real_eff.notna()
     n_real = int(real_valid.sum())
     if n_real == 0:
+        log.warning(
+            "STEP_4.2.6 no finite estimated curve points: %s finite=%d/%d, %s finite=%d/%d.",
+            est_flux_col,
+            n_real_flux,
+            len(real_df),
+            est_eff_col,
+            n_real_eff,
+            len(real_df),
+        )
         _plot_placeholder(
             out_path,
             "Estimated curve in flux-eff plane",
-            "No finite estimated (flux, eff) points available.",
+            "No finite estimated (flux, eff) points available.\n"
+            f"{est_flux_col}: {n_real_flux}/{len(real_df)} finite, "
+            f"{est_eff_col}: {n_real_eff}/{len(real_df)} finite.",
         )
         return (n_real, n_dict)
 
@@ -1899,6 +2140,7 @@ def main() -> int:
     task_ids_cfg = cfg_41.get("task_ids", config.get("task_ids", [1]))
     selected_task_ids = _safe_task_ids(task_ids_cfg)
     preferred_tt_prefixes = _preferred_tt_prefixes_for_task_ids(selected_task_ids)
+    preferred_feature_prefixes = _preferred_feature_prefixes_for_task_ids(selected_task_ids)
     eff_transform_mode = str(cfg_42.get("eff_transform_mode", "inverse")).strip().lower()
     if eff_transform_mode not in {"inverse", "forward"}:
         eff_transform_mode = "inverse"
@@ -1909,6 +2151,7 @@ def main() -> int:
     log.info("Fit summary:    %s", build_summary_path)
     log.info("Task IDs used for efficiency source: %s", selected_task_ids)
     log.info("Preferred TT prefix order for efficiencies: %s", preferred_tt_prefixes)
+    log.info("Preferred TT prefix order for auto features: %s", preferred_feature_prefixes)
     log.info("Metric=%s, k=%s, uncertainty_quantile=%.3f", distance_metric, interpolation_k, uncertainty_quantile)
 
     real_df = pd.read_csv(real_path, low_memory=False)
@@ -1926,6 +2169,7 @@ def main() -> int:
             real_df=real_df,
             include_global_rate=include_global_rate,
             global_rate_col=global_rate_col,
+            preferred_prefixes=preferred_feature_prefixes,
         )
     else:
         if isinstance(feature_columns_cfg, str):
@@ -2058,6 +2302,49 @@ def main() -> int:
     if eff_est_col is not None:
         success &= pd.to_numeric(merged[eff_est_col], errors="coerce").notna()
     merged["inference_success"] = success.astype(int)
+    n_success = int(merged["inference_success"].sum())
+    if n_success == 0:
+        n_total = int(len(merged))
+        finite_best_distance = int(pd.to_numeric(merged[distance_col], errors="coerce").notna().sum())
+        finite_flux = (
+            int(pd.to_numeric(merged[flux_est_col], errors="coerce").notna().sum())
+            if flux_est_col is not None
+            else 0
+        )
+        finite_eff = (
+            int(pd.to_numeric(merged[eff_est_col], errors="coerce").notna().sum())
+            if eff_est_col is not None
+            else 0
+        )
+        no_candidate_rows = 0
+        if "n_candidates" in merged.columns:
+            no_candidate_rows = int(
+                (pd.to_numeric(merged["n_candidates"], errors="coerce").fillna(0.0) <= 0.0).sum()
+            )
+        dict_feature_counts = ", ".join(
+            f"{col}={int(pd.to_numeric(dict_work[col], errors='coerce').notna().sum())}"
+            for col in feature_columns[:6]
+            if col in dict_work.columns
+        )
+        real_feature_counts = ", ".join(
+            f"{col}={int(pd.to_numeric(real_work[col], errors='coerce').notna().sum())}"
+            for col in feature_columns[:6]
+            if col in real_work.columns
+        )
+        if len(feature_columns) > 6:
+            dict_feature_counts += ", ..."
+            real_feature_counts += ", ..."
+        log.warning(
+            "Inference produced 0/%d successful rows (best_distance finite=%d, flux finite=%d, eff finite=%d, no-candidate rows=%d). "
+            "Feature finite counts (dict): %s | (real): %s",
+            n_total,
+            finite_best_distance,
+            finite_flux,
+            finite_eff,
+            no_candidate_rows,
+            dict_feature_counts or "n/a",
+            real_feature_counts or "n/a",
+        )
 
     x, x_label, has_time_axis = _time_axis(merged)
     if has_time_axis:

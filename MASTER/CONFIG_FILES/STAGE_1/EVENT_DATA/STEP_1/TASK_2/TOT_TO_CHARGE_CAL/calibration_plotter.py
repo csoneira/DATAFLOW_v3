@@ -2,10 +2,10 @@
 """
 DATAFLOW_v3 Script Header v1
 Script: MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TOT_TO_CHARGE_CAL/calibration_plotter.py
-Purpose: Plot TOT-to-charge calibration curves and export them as PDF.
+Purpose: Plot TOT-to-charge calibration curves and export them as PNG by default.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
-Last Updated: 2026-03-02
+Last Updated: 2026-03-05
 Runtime: python3
 Usage: python3 MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TOT_TO_CHARGE_CAL/calibration_plotter.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
@@ -28,7 +28,7 @@ from matplotlib.patches import Patch, Rectangle
 
 THIS_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT = THIS_DIR / "tot_to_charge_calibration.csv"
-DEFAULT_OUTPUT = THIS_DIR / "tot_to_charge_calibration_plot.pdf"
+DEFAULT_OUTPUT = THIS_DIR / "tot_to_charge_calibration_plot.png"
 
 
 @dataclass
@@ -54,7 +54,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
-        help="Destination PDF file.",
+        help="Destination plot image file (PNG by default).",
     )
     parser.add_argument(
         "--title",
@@ -97,9 +97,8 @@ def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
     crosstalk_x = 1.0
     streamer_x = 100.0
     crosstalk_color = "tab:purple"
+    avalanche_color = "tab:green"
     streamer_color = "tab:red"
-
-    x_min = widths.min()
 
     # Calibration curve.
     ax.plot(
@@ -146,63 +145,90 @@ def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
     crosstalk_y = float(np.interp(crosstalk_x, widths, charges))
     streamer_y = float(np.interp(streamer_x, widths, charges))
 
-    streamer_rect = Rectangle(
-        (x_axis_min, y_bottom),
-        max(streamer_x - x_axis_min, 0.0),
-        max(streamer_y - y_bottom, 0.0),
+    crosstalk_x_plot = float(np.clip(crosstalk_x, x_axis_min, x_axis_max))
+    streamer_x_plot = float(np.clip(streamer_x, x_axis_min, x_axis_max))
+    crosstalk_y_plot = float(np.clip(crosstalk_y, y_bottom, y_top))
+    streamer_y_plot = float(np.clip(streamer_y, y_bottom, y_top))
+
+    streamer_right_rect = Rectangle(
+        (streamer_x_plot, y_bottom),
+        max(x_axis_max - streamer_x_plot, 0.0),
+        max(y_top - y_bottom, 0.0),
         facecolor=streamer_color,
-        alpha=0.15,
+        alpha=0.08,
         edgecolor="none",
         zorder=0,
     )
-    ax.add_patch(streamer_rect)
+    ax.add_patch(streamer_right_rect)
+
+    streamer_top_rect = Rectangle(
+        (x_axis_min, streamer_y_plot),
+        max(streamer_x_plot - x_axis_min, 0.0),
+        max(y_top - streamer_y_plot, 0.0),
+        facecolor=streamer_color,
+        alpha=0.08,
+        edgecolor="none",
+        zorder=0,
+    )
+    ax.add_patch(streamer_top_rect)
+
+    avalanche_rect = Rectangle(
+        (x_axis_min, y_bottom),
+        max(streamer_x_plot - x_axis_min, 0.0),
+        max(streamer_y_plot - y_bottom, 0.0),
+        facecolor=avalanche_color,
+        alpha=0.12,
+        edgecolor="none",
+        zorder=1,
+    )
+    ax.add_patch(avalanche_rect)
 
     crosstalk_rect = Rectangle(
         (x_axis_min, y_bottom),
-        max(crosstalk_x - x_axis_min, 0.0),
-        max(crosstalk_y - y_bottom, 0.0),
+        max(crosstalk_x_plot - x_axis_min, 0.0),
+        max(crosstalk_y_plot - y_bottom, 0.0),
         facecolor=crosstalk_color,
         alpha=0.15,
         edgecolor="none",
-        zorder=1,
+        zorder=2,
     )
     ax.add_patch(crosstalk_rect)
 
     ax.plot(
-        [x_axis_min, crosstalk_x],
-        [crosstalk_y, crosstalk_y],
+        [x_axis_min, crosstalk_x_plot],
+        [crosstalk_y_plot, crosstalk_y_plot],
         color=crosstalk_color,
         linewidth=1.5,
         linestyle="--",
         label="Crosstalk threshold",
-        zorder=2,
+        zorder=3,
     )
     ax.plot(
-        [crosstalk_x, crosstalk_x],
-        [y_bottom, crosstalk_y],
+        [crosstalk_x_plot, crosstalk_x_plot],
+        [y_bottom, crosstalk_y_plot],
         color=crosstalk_color,
         linewidth=1.5,
         linestyle="--",
-        zorder=2,
+        zorder=3,
         label="_nolegend_",
     )
 
     ax.plot(
-        [x_axis_min, streamer_x],
-        [streamer_y, streamer_y],
+        [x_axis_min, streamer_x_plot],
+        [streamer_y_plot, streamer_y_plot],
         color=streamer_color,
         linewidth=1.5,
         linestyle="--",
         label="Streamer threshold",
-        zorder=2,
+        zorder=3,
     )
     ax.plot(
-        [streamer_x, streamer_x],
-        [y_bottom, streamer_y],
+        [streamer_x_plot, streamer_x_plot],
+        [y_bottom, streamer_y_plot],
         color=streamer_color,
         linewidth=1.5,
         linestyle="--",
-        zorder=2,
+        zorder=3,
         label="_nolegend_",
     )
 
@@ -215,11 +241,12 @@ def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
         handles, labels = [], []
     handles.extend(
         [
-            Patch(facecolor=crosstalk_color, alpha=0.12, edgecolor="none", label="Crosstalk region"),
+            Patch(facecolor=crosstalk_color, alpha=0.15, edgecolor="none", label="Crosstalk region"),
+            Patch(facecolor=avalanche_color, alpha=0.12, edgecolor="none", label="Avalanche region"),
             Patch(facecolor=streamer_color, alpha=0.08, edgecolor="none", label="Streamer region"),
         ]
     )
-    labels.extend(["Crosstalk region", "Streamer region"])
+    labels.extend(["Crosstalk region", "Avalanche region", "Streamer region"])
     ax.legend(handles, labels, loc="upper left", frameon=True, framealpha=0.92)
 
     plt.tight_layout()

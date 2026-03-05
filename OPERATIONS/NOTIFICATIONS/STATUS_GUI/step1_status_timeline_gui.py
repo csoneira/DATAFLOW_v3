@@ -481,13 +481,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--lookback-hours",
         type=float,
-        default=6.0,
+        default=0.5,
         help="Initial lookback window in hours.",
     )
     parser.add_argument(
         "--refresh-seconds",
         type=int,
-        default=5,
+        default=30,
         help="Auto-refresh interval in seconds.",
     )
     parser.add_argument(

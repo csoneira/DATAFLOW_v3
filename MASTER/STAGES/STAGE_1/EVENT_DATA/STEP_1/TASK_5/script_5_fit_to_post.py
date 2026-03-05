@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 DATAFLOW_v3 Script Header v1
-Script: MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py
+Script: MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_post.py
 Purpose: !/usr/bin/env python3.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_corr.py [options]
+Usage: python3 MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_post.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -124,8 +124,16 @@ from MASTER.common.step1_shared import (
     build_step1_cli_parser,
     build_step1_filtered_print,
     collect_columns,
+    extract_rate_histogram_metadata,
+    extract_trigger_type_metadata,
+    is_trigger_type_file_column,
+    is_trigger_type_metadata_column,
+    is_specific_metadata_excluded_column,
     load_itineraries_from_file,
+    normalize_tt_label,
+    prune_redundant_count_metadata,
     save_metadata,
+    set_global_rate_from_tt_rates,
     resolve_step1_plot_options,
     validate_step1_input_file_args,
     y_pos,
@@ -225,25 +233,6 @@ def close_direct_pdf_writer() -> None:
     if _direct_pdf_pages is not None:
         _direct_pdf_pages.close()
         _direct_pdf_pages = None
-
-def align_metadata_row_with_existing_schema(metadata_path: str | Path, row: dict[str, object]) -> None:
-    path = Path(metadata_path)
-    if not path.exists() or path.stat().st_size == 0:
-        return
-    try:
-        with path.open("r", newline="") as handle:
-            reader = csv.reader(handle)
-            fieldnames = next(reader, [])
-    except OSError as exc:
-        print(f"Warning: unable to read metadata schema from {path}: {exc}")
-        return
-    for key in fieldnames:
-        if not key or key in row:
-            continue
-        if key == "analysis_mode" or key.endswith("_count") or key.startswith("events_per_second_"):
-            row[key] = 0
-        else:
-            row[key] = ""
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -440,6 +429,14 @@ debug_fig_idx = 1
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
+csv_path_rate_histogram = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_rate_histogram.csv",
+)
+csv_path_trigger_type = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_trigger_type.csv",
+)
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
@@ -852,6 +849,7 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=0.25,
+        param_hash=str(simulated_param_hash) if simulated_param_hash else "",
     )
 
 left_limit_time = pd.to_datetime("1-1-2000", format='%d-%m-%Y')
@@ -955,6 +953,7 @@ fit_tt_columns = {
 
 # Prefer the corr_tt already provided by upstream steps.
 CORR_TT_COLUMN = "corr_tt"
+POST_TT_COLUMN = "post_tt"
 global_variables = {
     'analysis_mode': 0,
 }
@@ -1033,11 +1032,19 @@ else:
 
 fit_tt_counts_initial = working_df["fit_tt"].value_counts()
 for tt_value, count in fit_tt_counts_initial.items():
-    global_variables[f"fit_tt_{tt_value}_count"] = int(count)
+    tt_label = normalize_tt_label(tt_value)
+    global_variables[f"fit_tt_{tt_label}_count"] = int(count)
 
-corr_tt_counts_initial = working_df[CORR_TT_COLUMN].value_counts()
-for tt_value, count in corr_tt_counts_initial.items():
-    global_variables[f"{CORR_TT_COLUMN}_{tt_value}_count"] = int(count)
+working_df.loc[:, POST_TT_COLUMN] = (
+    pd.to_numeric(working_df[CORR_TT_COLUMN], errors="coerce")
+    .fillna(0)
+    .astype(int)
+)
+
+post_tt_counts_initial = working_df[POST_TT_COLUMN].value_counts()
+for tt_value, count in post_tt_counts_initial.items():
+    tt_label = normalize_tt_label(tt_value)
+    global_variables[f"{POST_TT_COLUMN}_{tt_label}_count"] = int(count)
 
 # Change 'Time' column to 'datetime' ------------------------------------------
 if 'Time' in working_df.columns:
@@ -1053,6 +1060,7 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=0.5,
+        param_hash=str(global_variables.get("param_hash", "")),
     )
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
@@ -1537,6 +1545,7 @@ if datetime_series.empty:
             filename_base=status_filename_base,
             execution_date=status_execution_date,
             completion_fraction=1.0,
+            param_hash=str(global_variables.get("param_hash", "")),
         )
     sys.exit(0)
 
@@ -2733,36 +2742,39 @@ if component_cols:
     )
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
-if create_debug_plots and CORR_TT_COLUMN in working_df.columns:
+if create_debug_plots and POST_TT_COLUMN in working_df.columns:
     debug_fig_idx = plot_debug_histograms(
         working_df,
-        [CORR_TT_COLUMN],
-        {CORR_TT_COLUMN: [10]},
-        title=f"Task 5 pre-filter: {CORR_TT_COLUMN} >= 10 [NON-TUNABLE] (station {station})",
+        [POST_TT_COLUMN],
+        {POST_TT_COLUMN: [10]},
+        title=f"Task 5 pre-filter: {POST_TT_COLUMN} >= 10 [NON-TUNABLE] (station {station})",
         out_dir=debug_plot_directory,
         fig_idx=debug_fig_idx,
     )
-corr_tt_total = len(working_df)
-corr_tt_mask = working_df[CORR_TT_COLUMN].notna() & (working_df[CORR_TT_COLUMN] >= 10)
-working_df = working_df.loc[corr_tt_mask].copy()
+post_tt_total = len(working_df)
+post_tt_mask = working_df[POST_TT_COLUMN].notna() & (working_df[POST_TT_COLUMN] >= 10)
+working_df = working_df.loc[post_tt_mask].copy()
 record_filter_metric(
     "corr_tt_lt_10_rows_removed_pct",
-    corr_tt_total - int(corr_tt_mask.sum()),
-    corr_tt_total if corr_tt_total else 0,
+    post_tt_total - int(post_tt_mask.sum()),
+    post_tt_total if post_tt_total else 0,
 )
 
-working_df.loc[:, "task5_to_corr_tt"] = working_df[CORR_TT_COLUMN].astype(str)
-# Backward-compatible alias used by downstream metadata consumers.
-working_df.loc[:, "fit_to_corr_tt"] = working_df["task5_to_corr_tt"]
+working_df.loc[:, "fit_to_post_tt"] = (
+    pd.to_numeric(working_df["fit_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+    + "_"
+    + pd.to_numeric(working_df[POST_TT_COLUMN], errors="coerce").fillna(0).astype(int).astype(str)
+)
 
-corr_tt_counts = working_df[CORR_TT_COLUMN].value_counts()
-for tt_value, count in corr_tt_counts.items():
-    global_variables[f"corr_tt_{tt_value}_count"] = int(count)
+post_tt_counts = working_df[POST_TT_COLUMN].value_counts()
+for tt_value, count in post_tt_counts.items():
+    tt_label = normalize_tt_label(tt_value)
+    global_variables[f"{POST_TT_COLUMN}_{tt_label}_count"] = int(count)
 
-fit_to_corr_counts = working_df["task5_to_corr_tt"].value_counts()
-for combo_value, count in fit_to_corr_counts.items():
-    global_variables[f"task5_to_corr_tt_{combo_value}_count"] = int(count)
-    global_variables[f"fit_to_corr_tt_{combo_value}_count"] = int(count)
+fit_to_post_counts = working_df["fit_to_post_tt"].value_counts()
+for combo_value, count in fit_to_post_counts.items():
+    combo_label = normalize_tt_label(combo_value)
+    global_variables[f"fit_to_post_tt_{combo_label}_count"] = int(count)
 
 # Final number of events
 final_number_of_events = len(working_df)
@@ -2803,6 +2815,8 @@ filename_base = basename_no_ext
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 data_purity_percentage = data_purity
 total_execution_time_minutes = execution_time_minutes
+param_hash_value = str(simulated_param_hash) if simulated_param_hash else str(global_variables.get("param_hash", ""))
+global_variables["param_hash"] = param_hash_value
 
 # -------------------------------------------------------------------------------
 # Filter metadata (ancillary) ---------------------------------------------------
@@ -2813,12 +2827,14 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=0.75,
+        param_hash=str(global_variables.get("param_hash", "")),
     )
 
 filter_metrics["data_purity_percentage"] = round(float(data_purity_percentage), 4)
 filter_row = {
     "filename_base": filename_base,
     "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
 }
 for name in FILTER_METRIC_NAMES:
     filter_row[name] = filter_metrics.get(name, "")
@@ -2826,7 +2842,7 @@ for name in FILTER_METRIC_NAMES:
 metadata_filter_csv_path = save_metadata(
     csv_path_filter,
     filter_row,
-    preferred_fieldnames=("filename_base", "execution_timestamp", *FILTER_METRIC_NAMES),
+    preferred_fieldnames=("filename_base", "execution_timestamp", "param_hash", *FILTER_METRIC_NAMES),
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
@@ -2845,6 +2861,7 @@ metadata_execution_csv_path = save_metadata(
     {
         "filename_base": filename_base,
         "execution_timestamp": execution_timestamp,
+        "param_hash": param_hash_value,
         "data_purity_percentage": round(float(data_purity_percentage), 4),
         "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
     },
@@ -2853,6 +2870,7 @@ print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
 _prof["filename_base"] = filename_base
 _prof["execution_timestamp"] = execution_timestamp
+_prof["param_hash"] = param_hash_value
 _prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
 save_metadata(csv_path_profiling, _prof)
 
@@ -2861,14 +2879,52 @@ save_metadata(csv_path_profiling, _prof)
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
+ensure_global_count_keys(("fit_tt", "post_tt", "fit_to_post_tt"))
 add_normalized_count_metadata(
     global_variables,
     global_variables.get("events_per_second_total_seconds", 0),
 )
-
+set_global_rate_from_tt_rates(
+    global_variables,
+    preferred_prefixes=("post_tt", "fit_tt"),
+    log_fn=print,
+)
 global_variables["filename_base"] = filename_base
 global_variables["execution_timestamp"] = execution_timestamp
-ensure_global_count_keys(("fit_tt", "corr_tt", "task5_to_corr_tt", "fit_to_corr_tt"))
+global_variables["param_hash"] = param_hash_value
+
+rate_histogram_variables = extract_rate_histogram_metadata(global_variables, remove_from_source=True)
+metadata_rate_histogram_csv_path = save_metadata(
+    csv_path_rate_histogram,
+    rate_histogram_variables,
+)
+print(f"Metadata (rate_histogram) CSV updated at: {metadata_rate_histogram_csv_path}")
+
+prune_redundant_count_metadata(global_variables, log_fn=print)
+trigger_type_prefixes = ("fit_tt", "post_tt", "fit_to_post_tt")
+legacy_trigger_type_prefixes = ("corr_tt", "task5_to_corr_tt", "fit_to_corr_tt")
+trigger_type_variables = extract_trigger_type_metadata(
+    global_variables,
+    trigger_type_prefixes,
+    remove_from_source=True,
+)
+# Keep the denominator in trigger_type so rate_hz values can be converted back to counts.
+trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
+    "count_rate_denominator_seconds",
+    0,
+)
+metadata_trigger_type_csv_path = save_metadata(
+    csv_path_trigger_type,
+    trigger_type_variables,
+    drop_field_predicate=lambda column_name: (
+        (not is_trigger_type_file_column(column_name, trigger_type_prefixes))
+        or is_trigger_type_metadata_column(
+            column_name,
+            legacy_trigger_type_prefixes,
+        )
+    ),
+)
+print(f"Metadata (trigger_type) CSV updated at: {metadata_trigger_type_csv_path}")
 
 print(f"Specific metadata keys to be saved: {len(global_variables)}")
 if VERBOSE:
@@ -2888,10 +2944,16 @@ print(
     force=True,
 )
 
-align_metadata_row_with_existing_schema(csv_path_specific, global_variables)
 metadata_specific_csv_path = save_metadata(
     csv_path_specific,
     global_variables,
+    drop_field_predicate=lambda column_name: (
+        is_specific_metadata_excluded_column(column_name)
+        or is_trigger_type_metadata_column(
+            column_name,
+            trigger_type_prefixes + legacy_trigger_type_prefixes,
+        )
+    ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
@@ -2920,4 +2982,5 @@ if status_execution_date is not None:
         filename_base=status_filename_base,
         execution_date=status_execution_date,
         completion_fraction=1.0,
+        param_hash=str(global_variables.get("param_hash", "")),
     )

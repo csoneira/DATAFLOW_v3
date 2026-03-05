@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+import re
 from typing import Sequence
 
 import numpy as np
@@ -117,19 +118,88 @@ DISTANCE_FNS_MANY = {
 # Feature selection helpers
 # =====================================================================
 
+TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+?)_tt_(?P<label>[^_]+)_rate_hz$")
+AUTO_TT_PREFIX_PRIORITY = [
+    "post",
+    "fit_to_post",
+    "fit",
+    "list_to_fit",
+    "list",
+    "cal",
+    "clean",
+    "raw_to_clean",
+    "raw",
+    "corr",
+    "task5_to_corr",
+    "fit_to_corr",
+    "definitive",
+]
+
+
+def _normalize_tt_label(label: object) -> str:
+    text = str(label).strip()
+    if not text:
+        return ""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return text
+    if not np.isfinite(value):
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return text
+
+
+def _is_multi_plane_tt_label(label: object) -> bool:
+    norm = _normalize_tt_label(label)
+    if len(norm) < 2:
+        return False
+    if not all(ch in {"1", "2", "3", "4"} for ch in norm):
+        return False
+    return len(set(norm)) == len(norm)
+
+
+def _prefix_rank(prefix: str) -> int:
+    try:
+        return AUTO_TT_PREFIX_PRIORITY.index(prefix)
+    except ValueError:
+        return len(AUTO_TT_PREFIX_PRIORITY)
+
+
 def _auto_feature_columns(
     df: pd.DataFrame,
     include_global_rate: bool = True,
     global_rate_col: str = "events_per_second_global_rate",
 ) -> list[str]:
-    """Automatically detect rate columns to build the feature vector."""
-    cols = sorted([
-        c for c in df.columns
-        if c.startswith("raw_tt_") and c.endswith("_rate_hz")
-    ])
-    if not cols:
-        # Fallback: try clean_tt_ or any _rate_hz
-        cols = sorted([c for c in df.columns if c.endswith("_rate_hz")])
+    """Select TT-rate features from the most advanced available task prefix."""
+    by_prefix: dict[str, list[str]] = {}
+    fallback_non_tt_rate_cols: list[str] = []
+
+    for col in df.columns:
+        text = str(col)
+        if not text.endswith("_rate_hz"):
+            continue
+        match = TT_RATE_COLUMN_RE.match(text)
+        if match is None:
+            fallback_non_tt_rate_cols.append(text)
+            continue
+        prefix = str(match.group("prefix")).strip()
+        label = match.group("label")
+        if not _is_multi_plane_tt_label(label):
+            continue
+        by_prefix.setdefault(prefix, []).append(text)
+
+    cols: list[str] = []
+    if by_prefix:
+        selected_prefix = min(
+            by_prefix.keys(),
+            key=lambda p: (_prefix_rank(p), -len(by_prefix[p]), p),
+        )
+        cols = sorted(set(by_prefix[selected_prefix]))
+    elif fallback_non_tt_rate_cols:
+        cols = sorted(set(fallback_non_tt_rate_cols))
+
     if include_global_rate and global_rate_col in df.columns:
         if global_rate_col not in cols:
             cols.append(global_rate_col)
@@ -164,7 +234,8 @@ def estimate_parameters(
         CSV with dataset entries to estimate parameters for.
     feature_columns : "auto" or list of str
         Columns used to build the fingerprint vector. If "auto", uses
-        raw_tt_*_rate_hz columns.
+        the most advanced available *_tt_*_rate_hz prefix and only
+        multi-plane topologies (2-, 3-, and 4-plane combinations).
     distance_metric : str
         One of "l2_zscore", "l2_raw", "chi2", "poisson".
     interpolation_k : int or None
