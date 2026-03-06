@@ -13,15 +13,21 @@ number_of_time_cal_figures: 3
 calibrate_charge_ns_to_fc: true
 validate_charge_pedestal_calibration: false
 # Calibration modes: null (skip) | file (load from QA CSV) | make (compute fresh)
+# Each key accepts either a scalar (all stations) or a per-station list
+# [MINGO00, MINGO01, MINGO02, MINGO03, MINGO04]; missing entries default to "make".
 # analysis_mode is a prime-product composite: cs×cfb×tc×tdc
 # charge_side primes:       null=×1, file=×2,  make=×3
 # charge_front_back primes: null=×1, file=×5,  make=×7
 # time_calibration primes:  null=×1, file=×11, make=×13
 # time_dif_calibration:     null=×1, file=×17, make=×19
-charge_side: make
-charge_front_back: make
-time_calibration: make
-time_dif_calibration: make
+charge_side: [file]
+charge_front_back: [file]
+time_calibration: [file]
+time_dif_calibration: [file]
 slewing_correction: false
 time_window_filtering: true
 old_timing_method: true
+# Calibration behaviour flags (moved here from config_parameters_task_2.csv)
+validate_pos_cal: true
+interpolate_fast_charge_log_scale: true
+crosstalk_fitting: true

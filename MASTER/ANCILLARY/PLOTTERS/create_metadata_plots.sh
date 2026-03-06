@@ -55,6 +55,11 @@ run_plotter \
   python3 -u "$PLOTTERS_ROOT/METADATA/EXECUTION/execution_metadata_plotter.py" \
   --config "$PLOTTERS_ROOT/METADATA/EXECUTION/execution_metadata_config.json"
 
+run_plotter \
+  "simulated_data_evolution_plotter" \
+  python3 -u "$PLOTTERS_ROOT/SIMULATED_DATA_EVOLUTION/simulated_data_evolution_plotter.py" \
+  --config "$PLOTTERS_ROOT/SIMULATED_DATA_EVOLUTION/simulated_data_evolution_config.json"
+
 if [[ $failures -ne 0 ]]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] FINISH with ${failures} failure(s)"
   exit 1

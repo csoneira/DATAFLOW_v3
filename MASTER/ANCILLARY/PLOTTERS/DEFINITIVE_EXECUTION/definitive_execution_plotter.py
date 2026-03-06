@@ -61,7 +61,7 @@ DEFAULT_OUTPUT_FILENAME = "definitive_execution_map_report.pdf"
 DEFAULT_CONFIG_PATH = PLOTTER_DIR / "definitive_execution_config.json"
 DEFAULT_LAST_HOURS = 2.0
 DEFAULT_POINT_SIZE = 16.0
-DEFAULT_MINGO00_STAGE0_SOURCE = "live"
+DEFAULT_MINGO00_STAGE0_SOURCE = "auto"
 MINGO00_STAGE0_SOURCE_CHOICES: Tuple[str, ...] = ("live", "history", "auto")
 DEFAULT_SHARED_X_STATIONS: Tuple[str, ...] = ("MINGO01", "MINGO02", "MINGO03", "MINGO04")
 DEFAULT_FREE_X_STATIONS: Tuple[str, ...] = ("MINGO01",)
@@ -72,6 +72,10 @@ NOW_Y_MARGIN_MINUTES = 10.0
 TASK_IDS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 BASENAME_TIMESTAMP_DIGITS = 11
 FILENAME_TIMESTAMP_PATTERN = re.compile(r"mi0\d(\d{11})$", re.IGNORECASE)
+STAGE0_COLOR = "#ffffff"
+PRE_TASK_STAGE_COLORS: Tuple[str, str] = ("#9e9e9e", "#616161")
+TASK_COLORMAP_NAME = "rainbow"
+TASK_COLOR_SAMPLE_RANGE: Tuple[float, float] = (0.08, 0.82)
 
 
 @dataclass(frozen=True)
@@ -87,16 +91,21 @@ class StageSpec:
     use_csv_timestamp_as_execution: bool = False
 
 
-def build_discrete_turbo_stage_colors() -> Tuple[str, ...]:
-    # Stage 0 is rendered as a hollow marker; all other stages use a discretized Turbo palette.
-    turbo_steps = 7  # STEP 1, STEP 2, TASK 1..5
-    turbo_cmap = colormaps["turbo"].resampled(turbo_steps)
-    colors: List[str] = ["#ffffff"]
-    colors.extend(to_hex(turbo_cmap(step)) for step in range(turbo_steps))
-    return tuple(colors)
+def build_shared_task_color_map() -> Dict[int, str]:
+    # Keep task colors identical across stations and plotters.
+    sample_points = np.linspace(
+        TASK_COLOR_SAMPLE_RANGE[0],
+        TASK_COLOR_SAMPLE_RANGE[1],
+        len(TASK_IDS),
+    )
+    cmap = colormaps[TASK_COLORMAP_NAME]
+    return {
+        task_id: to_hex(cmap(point))
+        for task_id, point in zip(TASK_IDS, sample_points)
+    }
 
 
-STAGE_COLORS = build_discrete_turbo_stage_colors()
+TASK_COLORS = build_shared_task_color_map()
 
 
 def configure_matplotlib_style() -> None:
@@ -438,7 +447,7 @@ def stage_specs_for_station(
         StageSpec(
             index=0,
             label=stage0_label,
-            color=STAGE_COLORS[0],
+            color=STAGE0_COLOR,
             csv_path=stage0_csv,
             basename_columns=("basename", "filename_base", "hld_name", "dat_name"),
             execution_columns=stage0_execution_columns,
@@ -453,7 +462,7 @@ def stage_specs_for_station(
                 StageSpec(
                     index=1,
                     label="STEP 1 - hld_files_brought",
-                    color=STAGE_COLORS[1],
+                    color=PRE_TASK_STAGE_COLORS[0],
                     csv_path=root
                     / "STAGE_0"
                     / "REPROCESSING"
@@ -467,7 +476,7 @@ def stage_specs_for_station(
                 StageSpec(
                     index=2,
                     label="STEP 2 - dat_files_unpacked",
-                    color=STAGE_COLORS[2],
+                    color=PRE_TASK_STAGE_COLORS[1],
                     csv_path=root
                     / "STAGE_0"
                     / "REPROCESSING"
@@ -488,7 +497,7 @@ def stage_specs_for_station(
             StageSpec(
                 index=stage_index,
                 label=f"TASK {task_id} - metadata_execution",
-                color=STAGE_COLORS[stage_index],
+                color=TASK_COLORS[task_id],
                 csv_path=root
                 / "STAGE_1"
                 / "EVENT_DATA"
@@ -668,6 +677,38 @@ def build_completeness_dataframe(
     return result
 
 
+def extend_completeness_to_timestamp(
+    completeness_df: pd.DataFrame,
+    target_timestamp: pd.Timestamp,
+) -> pd.DataFrame:
+    if completeness_df.empty or "execution_timestamp" not in completeness_df.columns:
+        return completeness_df
+
+    y_values = pd.to_datetime(completeness_df["execution_timestamp"], errors="coerce")
+    valid = y_values.dropna()
+    if valid.empty:
+        return completeness_df
+
+    last_idx = valid.index[-1]
+    last_ts = pd.Timestamp(valid.iloc[-1])
+    target_ts = pd.Timestamp(target_timestamp)
+
+    if last_ts.tzinfo is None and target_ts.tzinfo is not None:
+        target_ts = target_ts.tz_localize(None)
+    elif last_ts.tzinfo is not None and target_ts.tzinfo is None:
+        target_ts = target_ts.tz_localize(last_ts.tzinfo)
+
+    if target_ts <= last_ts:
+        return completeness_df
+
+    extension_row = completeness_df.loc[last_idx].copy()
+    extension_row["execution_timestamp"] = target_ts
+    return pd.concat(
+        [completeness_df, pd.DataFrame([extension_row], columns=completeness_df.columns)],
+        ignore_index=True,
+    )
+
+
 def _scatter_stage_points(
     ax: plt.Axes,
     data: pd.DataFrame,
@@ -696,8 +737,8 @@ def _scatter_stage_points(
                 stage_points["execution_timestamp"],
                 s=point_size,
                 facecolors=stage.color,
-                edgecolors="black",
-                linewidths=0.25,
+                edgecolors="none",
+                linewidths=0.0,
                 alpha=0.9,
                 zorder=3,
             )
@@ -732,8 +773,8 @@ def _scatter_stage_presence_points(
                 y_values,
                 s=point_size,
                 facecolors=stage.color,
-                edgecolors="black",
-                linewidths=0.25,
+                edgecolors="none",
+                linewidths=0.0,
                 alpha=0.9,
                 zorder=3,
             )
@@ -1119,6 +1160,17 @@ def plot_station_page(
         plt.close(fig)
         return
 
+    x_min = data["file_timestamp"].min()
+    x_max = data["file_timestamp"].max()
+    y_min = data["execution_timestamp"].min()
+    y_max = data["execution_timestamp"].max()
+    if y_min.tzinfo is None:
+        now = pd.Timestamp.utcnow().tz_localize(None)
+    else:
+        now = pd.Timestamp.utcnow().tz_convert(y_min.tzinfo)
+
+    completeness_for_plot = extend_completeness_to_timestamp(completeness_df, now)
+
     fig_width = 16.6
     fig_height = 9.7
     top_ratio = max(float(panel_height_ratios[0]), 1e-6)
@@ -1151,9 +1203,9 @@ def plot_station_page(
     _scatter_stage_points(ax_zoom, data, stages, point_size=point_size)
     _scatter_stage_points(ax_full, data, stages, point_size=point_size)
     _scatter_stage_presence_points(ax_presence, data, stages, point_size=point_size)
-    plot_completeness_fill(ax_zoom_comp, completeness_df, stages)
-    plot_completeness_fill(ax_full_comp, completeness_df, stages)
-    plot_completeness_pie(ax_pie, completeness_df, stages)
+    plot_completeness_fill(ax_zoom_comp, completeness_for_plot, stages)
+    plot_completeness_fill(ax_full_comp, completeness_for_plot, stages)
+    plot_completeness_pie(ax_pie, completeness_for_plot, stages)
 
     # Keep top-right square; make middle-right have the same X size as top-right.
     middle_comp_box_aspect = middle_ratio / top_ratio
@@ -1196,15 +1248,6 @@ def plot_station_page(
     ax_presence.set_yticks([0])
     ax_presence.set_yticklabels(["present"])
     ax_presence.set_ylim(-0.8, 0.8)
-
-    x_min = data["file_timestamp"].min()
-    x_max = data["file_timestamp"].max()
-    y_min = data["execution_timestamp"].min()
-    y_max = data["execution_timestamp"].max()
-    if y_min.tzinfo is None:
-        now = pd.Timestamp.utcnow().tz_localize(None)
-    else:
-        now = pd.Timestamp.utcnow().tz_convert(y_min.tzinfo)
 
     if x_limits_override is None:
         if x_min == x_max:

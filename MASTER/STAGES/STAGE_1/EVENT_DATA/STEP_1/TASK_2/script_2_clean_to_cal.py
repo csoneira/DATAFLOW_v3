@@ -255,6 +255,23 @@ def should_drop_calibration_metadata_field(column_name: str) -> bool:
     return not is_calibration_metadata_column(column_name)
 
 
+def _resolve_station_mode(raw, station_id: str, default: str = "make") -> str:
+    """Resolve a calibration-mode config value for a specific station.
+
+    raw may be:
+      - a scalar string ("make" / "file" / null) → returned as-is for every station
+      - a list [MINGO00_value, MINGO01_value, ...] → indexed by int(station_id);
+        missing indices (list too short) and None entries fall back to default.
+    """
+    station_index = int(station_id)
+    if isinstance(raw, list):
+        if station_index < len(raw):
+            v = raw[station_index]
+            return v if v is not None else default
+        return default
+    return raw if raw is not None else default
+
+
 def extract_calibration_metadata(
     metadata: dict[str, object],
     remove_from_source: bool = True,
@@ -743,10 +760,12 @@ res_tdif_filter = config.get("res_tdif_filter", 1.0)
 
 # Fitting comparison
 
-charge_side_mode          = config["charge_side"]           # null | file | make
-charge_front_back_mode    = config["charge_front_back"]     # null | file | make
-time_calibration_mode     = config["time_calibration"]      # null | file | make
-time_dif_calibration_mode = config["time_dif_calibration"]  # null | file | make
+# Each calibration mode key accepts a scalar string or a per-station list.
+# _resolve_station_mode selects the value for this station; missing → "make".
+charge_side_mode          = _resolve_station_mode(config["charge_side"],          station)
+charge_front_back_mode    = _resolve_station_mode(config["charge_front_back"],    station)
+time_calibration_mode     = _resolve_station_mode(config["time_calibration"],     station)
+time_dif_calibration_mode = _resolve_station_mode(config["time_dif_calibration"], station)
 
 # Calibrations
 CRT_gaussian_fit_quantile = config["CRT_gaussian_fit_quantile"]

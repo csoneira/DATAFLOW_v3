@@ -62,7 +62,7 @@ DEFAULT_SIM_PARAMS = REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step
 DEFAULT_OUTPUT = PLOTS_DIR / "simulated_data_evolution_report.pdf"
 DEFAULT_CONFIG_PATH = PLOTTER_DIR / "simulated_data_evolution_config.json"
 DEFAULT_STATION = "MINGO00"
-DEFAULT_MINGO00_STAGE0_SOURCE = "live"
+DEFAULT_MINGO00_STAGE0_SOURCE = "auto"
 MINGO00_STAGE0_SOURCE_CHOICES: Tuple[str, ...] = ("live", "history", "auto")
 DEFAULT_PARAMS: Tuple[str, ...] = ("execution_time", "cos_n", "flux_cm2_min", "eff_1", "selected_rows")
 DEFAULT_POINT_SIZE = 8.0
@@ -73,6 +73,10 @@ UNTRACKED_STAGE_LABEL = "UNTRACKED (not in STEP 0 history)"
 UNTRACKED_STAGE_COLOR = "#bdbdbd"
 UNTRACKED_SCATTER_ALPHA_SCALE = 0.05
 UNTRACKED_HIST_ALPHA = 0.12
+TASK_IDS: Tuple[int, ...] = (1, 2, 3, 4, 5)
+STAGE0_COLOR = "#ffffff"
+TASK_COLORMAP_NAME = "rainbow"
+TASK_COLOR_SAMPLE_RANGE: Tuple[float, float] = (0.08, 0.82)
 
 
 @dataclass(frozen=True)
@@ -284,18 +288,21 @@ def normalize_basename(value: object) -> str:
     return Path(text).stem.strip()
 
 
-def build_discrete_stage_colors() -> Tuple[str, ...]:
-    # STEP 0 remains white/hollow; TASK 1..5 sample turbo away from
-    # both endpoints so first/last task colors are not both dark.
-    turbo_steps = 5
-    turbo = colormaps["turbo"]
-    sample_points = np.linspace(0.10, 0.90, turbo_steps)
-    colors: List[str] = ["#ffffff"]
-    colors.extend(to_hex(turbo(point)) for point in sample_points)
-    return tuple(colors)
+def build_shared_task_color_map() -> Dict[int, str]:
+    # Keep task colors aligned with definitive_execution_plotter.
+    sample_points = np.linspace(
+        TASK_COLOR_SAMPLE_RANGE[0],
+        TASK_COLOR_SAMPLE_RANGE[1],
+        len(TASK_IDS),
+    )
+    cmap = colormaps[TASK_COLORMAP_NAME]
+    return {
+        task_id: to_hex(cmap(point))
+        for task_id, point in zip(TASK_IDS, sample_points)
+    }
 
 
-STAGE_COLORS = build_discrete_stage_colors()
+TASK_COLORS = build_shared_task_color_map()
 
 
 def stage_specs_for_station(
@@ -322,17 +329,17 @@ def stage_specs_for_station(
         StageSpec(
             index=0,
             label=stage0_label,
-            color=STAGE_COLORS[0],
+            color=STAGE0_COLOR,
             csv_path=stage0_csv,
             basename_columns=("basename", "filename_base", "hld_name", "dat_name"),
         )
     ]
-    for task_id in range(1, 6):
+    for task_id in TASK_IDS:
         specs.append(
             StageSpec(
                 index=task_id,
                 label=f"TASK {task_id} - metadata_execution",
-                color=STAGE_COLORS[task_id],
+                color=TASK_COLORS[task_id],
                 csv_path=root
                 / "STAGE_1"
                 / "EVENT_DATA"

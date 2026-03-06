@@ -1485,28 +1485,34 @@ debug_mode = False
 last_file_test = config["last_file_test"]
 
 def load_iteration_settings(cfg):
+    number_of_det_executions = max(1, int(cfg.get("number_of_det_executions", 1)))
+    number_of_tt_executions = max(1, int(cfg.get("number_of_tt_executions", 1)))
     return (
-        cfg["alternative_iteration"],
-        cfg["number_of_det_executions"],
+        number_of_det_executions,
         cfg["fixed_speed"],
         cfg["res_ana_removing_planes"],
-        cfg["timtrack_iteration"],
-        cfg["number_of_TT_executions"],
+        number_of_tt_executions,
         cfg.get("complete_reanalysis", False),
         cfg.get("limit_number", None),
     )
 
 (
-    alternative_iteration,
     number_of_det_executions,
     fixed_speed,
     res_ana_removing_planes,
-    timtrack_iteration,
-    number_of_TT_executions,
+    number_of_tt_executions,
     complete_reanalysis,
     limit_number,
 ) = load_iteration_settings(config)
 limit = limit_number is not None
+
+fit_method = str(config.get("fit_method", "both")).strip().lower()
+if fit_method not in {"detached", "timtrack", "both"}:
+    print(f"Warning: Invalid fit_method='{fit_method}'. Falling back to 'both'.")
+    fit_method = "both"
+run_detached_fit = fit_method in {"detached", "both"}
+run_timtrack_fit = fit_method in {"timtrack", "both"}
+print(f"Fitting mode selected: fit_method='{fit_method}'")
 
 # Charge calibration to fC
 
@@ -1901,12 +1907,10 @@ last_file_test = config["last_file_test"]
 crontab_execution = config["crontab_execution"]
 
 (
-    alternative_iteration,
     number_of_det_executions,
     fixed_speed,
     res_ana_removing_planes,
-    timtrack_iteration,
-    number_of_TT_executions,
+    number_of_tt_executions,
     complete_reanalysis,
     limit_number,
 ) = load_iteration_settings(config)
@@ -2313,12 +2317,10 @@ last_file_test = config["last_file_test"]
 crontab_execution = config["crontab_execution"]
 
 (
-    alternative_iteration,
     number_of_det_executions,
     fixed_speed,
     res_ana_removing_planes,
-    timtrack_iteration,
-    number_of_TT_executions,
+    number_of_tt_executions,
     complete_reanalysis,
     limit_number,
 ) = load_iteration_settings(config)
@@ -3352,6 +3354,137 @@ def fit_3d_line(
 # ---------------------------- Loop starts here -----------------------------
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Vectorized replacement for the per-event detached fitting loop.
+# Groups events by active-plane bitmask; within each group a single batched
+# np.linalg.svd call replaces N individual calls. np.polyfit is replaced by
+# the closed-form OLS formula so it can be applied across the batch in one go.
+# Numerically identical to the original per-event loop.
+# ---------------------------------------------------------------------------
+def _detached_vectorized(
+    det_Q, det_Tdif, det_Y, det_Tsum,
+    z_positions, tdiff_to_x,
+    anc_sx, anc_sy, anc_sz, anc_sts,
+    n, nplan,
+    fit_res, slow_res,
+    ext_res_ystr, ext_res_tsum, ext_res_tdif,
+):
+    _sx2sy2sz2 = float(anc_sx**2 + anc_sy**2 + anc_sz**2)
+
+    def _batch_line_fit(x_b, y_b, z_sel):
+        """Batched SVD line fit. x_b, y_b: (n_g, n_pl); z_sel: (n_pl,)."""
+        n_g, n_pl = x_b.shape
+        z_br  = np.broadcast_to(z_sel, (n_g, n_pl))
+        pts   = np.stack([x_b, y_b, z_br], axis=2)        # (n_g, n_pl, 3)
+        c     = pts.mean(axis=1, keepdims=True)             # (n_g,  1,   3)
+        pts_c = pts - c
+        _, _, vt = np.linalg.svd(pts_c, full_matrices=False)
+        d = vt[:, 0, :].copy()                              # (n_g, 3)
+        d[d[:, 2] < 0] *= -1
+        d /= np.linalg.norm(d, axis=1, keepdims=True)
+        c3  = c[:, 0, :]
+        t0  = np.where(d[:, 2] != 0.0, -c3[:, 2] / d[:, 2], np.nan)
+        xz0 = c3[:, 0] + t0 * d[:, 0]
+        yz0 = c3[:, 1] + t0 * d[:, 1]
+        pdot = np.einsum('npi,ni->np', pts_c, d)            # (n_g, n_pl)
+        proj = pdot[:, :, np.newaxis] * d[:, np.newaxis, :] # (n_g, n_pl, 3)
+        res  = pts_c - proj
+        res_td = res[:, :, 0] / tdiff_to_x
+        res_y  = res[:, :, 1]
+        chi2   = np.einsum('npi,npi->n', res, res) / _sx2sy2sz2
+        return d, xz0, yz0, chi2, res_td, res_y
+
+    def _batch_slowness(xz0, yz0, d, z_sel, Tsum_g):
+        """Vectorized polyfit(s_rel, t_rel, 1) for a batch of events."""
+        n_g, n_pl = Tsum_g.shape
+        x_fit = xz0[:, np.newaxis] + d[:, 0:1] * z_sel / d[:, 2:3]
+        y_fit = yz0[:, np.newaxis] + d[:, 1:2] * z_sel / d[:, 2:3]
+        pos   = np.stack([x_fit, y_fit, np.broadcast_to(z_sel, (n_g, n_pl))], axis=2)
+        rdist = np.einsum('npi,ni->np', pos, d)             # (n_g, n_pl)
+        s_rel = rdist - rdist[:, 0:1]
+        t_rel = Tsum_g - Tsum_g[:, 0:1]
+        s_m   = s_rel.mean(axis=1); t_m = t_rel.mean(axis=1)
+        ss2   = np.sum(s_rel ** 2, axis=1)
+        st    = np.sum(s_rel * t_rel, axis=1)
+        denom = ss2 - n_pl * s_m ** 2
+        k     = np.where(np.abs(denom) > 0.0, (st - n_pl * s_m * t_m) / denom, 0.0)
+        b     = t_m - k * s_m
+        t_fit = k[:, np.newaxis] * s_rel + b[:, np.newaxis]
+        res   = t_rel - t_fit
+        chi2  = np.sum((res / anc_sts) ** 2, axis=1)
+        return k, b, chi2, res, rdist
+
+    q_pos   = det_Q > 0                                              # (n, nplan) bool
+    bitmask = (q_pos * (1 << np.arange(nplan))).sum(axis=1).astype(np.int32)
+
+    for bm in np.unique(bitmask):
+        if bm == 0:
+            continue
+        active_idx = np.array([p for p in range(nplan) if bm & (1 << p)], dtype=int)
+        n_pl       = len(active_idx)
+        if n_pl < 2:
+            continue
+        plane_ids = active_idx + 1                                    # 1-based
+        g_idx     = np.where(bitmask == bm)[0]
+        n_g       = len(g_idx)
+        z_sel     = z_positions[active_idx]                           # (n_pl,)
+        Tdif_g    = det_Tdif[np.ix_(g_idx, active_idx)]
+        Y_g       = det_Y   [np.ix_(g_idx, active_idx)]
+        Tsum_g    = det_Tsum[np.ix_(g_idx, active_idx)]
+        x_g       = tdiff_to_x * Tdif_g
+        y_g       = Y_g
+
+        # --- Primary fit ---
+        d, xz0, yz0, chi2, res_td, res_y = _batch_line_fit(x_g, y_g, z_sel)
+        theta = np.arccos(np.clip(d[:, 2], -1.0, 1.0))
+        phi   = np.arctan2(d[:, 1], d[:, 0])
+        fit_res['det_x']    [g_idx] = xz0
+        fit_res['det_y']    [g_idx] = yz0
+        fit_res['det_theta'][g_idx] = theta
+        fit_res['det_phi']  [g_idx] = phi
+        fit_res['det_chi2'] [g_idx] = chi2
+        for k_pl, pid in enumerate(plane_ids):
+            fit_res[f'det_res_tdif_{pid}'][g_idx] = res_td[:, k_pl]
+            fit_res[f'det_res_ystr_{pid}'][g_idx] = res_y [:, k_pl]
+
+        # --- Slowness ---
+        k_slow, b_slow, chi2_slow, res_slow, _ = _batch_slowness(xz0, yz0, d, z_sel, Tsum_g)
+        slow_res['det_s']         [g_idx] = k_slow
+        slow_res['det_s_ordinate'][g_idx] = b_slow
+        slow_res['chi2_tsum_fit'] [g_idx] = chi2_slow
+        for k_pl, pid in enumerate(plane_ids):
+            slow_res[f'det_res_tsum_{pid}'][g_idx] = res_slow[:, k_pl]
+
+        # --- Leave-one-out (requires ≥3 active planes) ---
+        if n_pl < 3:
+            continue
+        for k_exc in range(n_pl):
+            lo_k = [j for j in range(n_pl) if j != k_exc]
+            if len(lo_k) < 2:
+                continue
+            pid_exc = int(plane_ids[k_exc])
+            out_p   = pid_exc - 1                                     # 0-based output col
+            z_lo    = z_sel[lo_k]
+            x_lo    = x_g[:, lo_k]
+            y_lo    = y_g[:, lo_k]
+            ts_lo   = Tsum_g[:, lo_k]
+
+            d_lo, xz0_lo, yz0_lo, _, _, _ = _batch_line_fit(x_lo, y_lo, z_lo)
+
+            z_p    = float(z_sel[k_exc])
+            x_pred = xz0_lo + d_lo[:, 0] * z_p / d_lo[:, 2]
+            y_pred = yz0_lo + d_lo[:, 1] * z_p / d_lo[:, 2]
+
+            ext_res_tdif[g_idx, out_p] = (x_g[:, k_exc] - x_pred) / tdiff_to_x
+            ext_res_ystr[g_idx, out_p] = (y_g[:, k_exc] - y_pred)
+
+            # Tsum external residual
+            k_lo, b_lo, _, _, rdist_lo = _batch_slowness(xz0_lo, yz0_lo, d_lo, z_lo, ts_lo)
+            pos_p  = np.stack([x_pred, y_pred, np.full(n_g, z_p)], axis=1)
+            s_p    = np.einsum('ni,ni->n', pos_p, d_lo) - rdist_lo[:, 0]
+            t_p    = Tsum_g[:, k_exc] - ts_lo[:, 0]
+            ext_res_tsum[g_idx, out_p] = t_p - (k_lo * s_p + b_lo)
+
 n = len(working_df)
 
 # Angular definitions
@@ -3372,135 +3505,53 @@ _det_Y    = np.column_stack([working_df[f'P{p}_Y_final'].to_numpy(dtype=float)  
 _det_Tsum = np.column_stack([working_df[f'P{p}_T_sum_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
 
 # Alternative analysis starts -----------------------------------------------
-repeat = number_of_det_executions - 1 if alternative_iteration else 0
-for det_iteration in range(repeat + 1):
-    fitted = 0
-    if alternative_iteration:
-        print(f"Alternative iteration {det_iteration+1} out of {number_of_det_executions}.")
-    
-    fit_res = {c: np.zeros(n, dtype=float) for c in fit_cols}
-    slow_res  = {c: np.zeros(n, dtype=float) for c in slow_cols}
-    det_ext_res_ystr_arr = np.zeros((n, 4), dtype=float)
-    det_ext_res_tsum_arr = np.zeros((n, 4), dtype=float)
-    det_ext_res_tdif_arr = np.zeros((n, 4), dtype=float)
-    det_processed_tt_arr = working_df.get("list_tt", pd.Series([0]*n)).astype(int).to_numpy()
-    
-    for i in range(n):
-        planes = [p for p in range(1, nplan + 1) if _det_Q[i, p - 1] > 0]
-        if len(planes) < 2:
-            continue
-        # Angular part -----------------------------------------------------------------
-        _pidx = np.array(planes) - 1
-        x = tdiff_to_x * _det_Tdif[i, _pidx]
-        y = _det_Y[i, _pidx]
-        z = z_positions[_pidx]
+if run_detached_fit:
+    repeat = number_of_det_executions - 1
+    for det_iteration in range(repeat + 1):
+        fitted = 0
+        if number_of_det_executions > 1:
+            print(f"Alternative iteration {det_iteration+1} out of {number_of_det_executions}.")
+        
+        fit_res = {c: np.zeros(n, dtype=float) for c in fit_cols}
+        slow_res  = {c: np.zeros(n, dtype=float) for c in slow_cols}
+        det_ext_res_ystr_arr = np.zeros((n, 4), dtype=float)
+        det_ext_res_tsum_arr = np.zeros((n, 4), dtype=float)
+        det_ext_res_tdif_arr = np.zeros((n, 4), dtype=float)
+        det_processed_tt_arr = working_df.get("list_tt", pd.Series([0]*n)).astype(int).to_numpy()
+        
+        _detached_vectorized(
+            _det_Q, _det_Tdif, _det_Y, _det_Tsum,
+            z_positions, tdiff_to_x,
+            anc_sx, anc_sy, anc_sz, anc_sts,
+            n, nplan,
+            fit_res, slow_res,
+            det_ext_res_ystr_arr, det_ext_res_tsum_arr, det_ext_res_tdif_arr,
+        )
 
-        (fit_res['det_x'][i], fit_res['det_y'][i], fit_res['det_theta'][i], fit_res['det_phi'][i], fit_res['det_chi2'][i], res_td, res_y) = fit_3d_line(x, y, z, anc_sx, anc_sy, anc_sz, planes, tdiff_to_x)
+        # 4.  Assemble all results and join once
+        all_res = {**fit_res, **slow_res}
+        all_res['det_ext_res_ystr_1'] = det_ext_res_ystr_arr[:, 0]
+        all_res['det_ext_res_ystr_2'] = det_ext_res_ystr_arr[:, 1]
+        all_res['det_ext_res_ystr_3'] = det_ext_res_ystr_arr[:, 2]
+        all_res['det_ext_res_ystr_4'] = det_ext_res_ystr_arr[:, 3]
+        all_res['det_ext_res_tsum_1'] = det_ext_res_tsum_arr[:, 0]
+        all_res['det_ext_res_tsum_2'] = det_ext_res_tsum_arr[:, 1]
+        all_res['det_ext_res_tsum_3'] = det_ext_res_tsum_arr[:, 2]
+        all_res['det_ext_res_tsum_4'] = det_ext_res_tsum_arr[:, 3]
+        all_res['det_ext_res_tdif_1'] = det_ext_res_tdif_arr[:, 0]
+        all_res['det_ext_res_tdif_2'] = det_ext_res_tdif_arr[:, 1]
+        all_res['det_ext_res_tdif_3'] = det_ext_res_tdif_arr[:, 2]
+        all_res['det_ext_res_tdif_4'] = det_ext_res_tdif_arr[:, 3]
+        all_res['det_th_chi'] = all_res['det_chi2'] + all_res['chi2_tsum_fit']
+        all_res['det_processed_tt'] = det_processed_tt_arr
 
-        for p in range(1, 5):
-            fit_res[f'det_res_tdif_{p}'][i] = res_td.get(p, 0.0)
-            fit_res[f'det_res_ystr_{p}'][i] = res_y .get(p, 0.0)
-
-        # Slowness part ----------------------------------------------------------------
-        tsum = _det_Tsum[i, _pidx]
-
-        # Reconstruct fitted points using the fitted direction and z-positions
-        θ, φ = fit_res['det_theta'][i], fit_res['det_phi'][i]
-        x0, y0 = fit_res['det_x'][i], fit_res['det_y'][i]
-
-        v = np.array([np.sin(θ) * np.cos(φ),
-                      np.sin(θ) * np.sin(φ),
-                      np.cos(θ)])
-        v /= np.linalg.norm(v)
-
-        # Compute fitted positions along z
-        x_fit = x0 + v[0] * z / v[2]
-        y_fit = y0 + v[1] * z / v[2]
-        positions = np.stack((x_fit, y_fit, z), axis=1)
-
-        # Distance along the fitted track (scalar projection)
-        real_dist = positions @ v
-        s_rel = real_dist - real_dist[0]
-        t_rel = tsum - tsum[0]
-
-        k, b = np.polyfit(s_rel, t_rel, 1)
-        res  = t_rel - (k * s_rel + b)
-        chi2 = np.sum((res / anc_sts) ** 2)
-
-        slow_res['det_s'][i]          = k
-        slow_res['det_s_ordinate'][i] = b
-        slow_res['chi2_tsum_fit'][i]  = chi2
-        for p, r in zip(planes, res):
-            slow_res[f'det_res_tsum_{p}'][i] = r
-
-        # External residuals (leave-one-plane-out) -----------------------------------
-        if len(planes) >= 3:
-            for p in planes:
-                lo_planes = [pl for pl in planes if pl != p]
-                if len(lo_planes) < 2:
-                    continue
-
-                _lo_idx = np.array(lo_planes) - 1
-                x_lo = tdiff_to_x * _det_Tdif[i, _lo_idx]
-                y_lo = _det_Y[i, _lo_idx]
-                z_lo = z_positions[_lo_idx]
-                tsum_lo = _det_Tsum[i, _lo_idx]
-
-                (x0_lo, y0_lo, theta_lo, phi_lo, _, _, _) = fit_3d_line(
-                    x_lo, y_lo, z_lo, anc_sx, anc_sy, anc_sz, lo_planes, tdiff_to_x
-                )
-                v_lo = np.array([np.sin(theta_lo) * np.cos(phi_lo),
-                                 np.sin(theta_lo) * np.sin(phi_lo),
-                                 np.cos(theta_lo)])
-                v_lo /= np.linalg.norm(v_lo)
-
-                z_p = z_positions[p - 1]
-                x_pred_p = x0_lo + v_lo[0] * z_p / v_lo[2]
-                y_pred_p = y0_lo + v_lo[1] * z_p / v_lo[2]
-                x_obs_p = tdiff_to_x * _det_Tdif[i, p - 1]
-                y_obs_p = _det_Y[i, p - 1]
-
-                det_ext_res_tdif_arr[i, p - 1] = (x_obs_p - x_pred_p) / tdiff_to_x
-                det_ext_res_ystr_arr[i, p - 1] = (y_obs_p - y_pred_p)
-
-                # tsum external residual using leave-one-out slope
-                x_fit_lo = x0_lo + v_lo[0] * z_lo / v_lo[2]
-                y_fit_lo = y0_lo + v_lo[1] * z_lo / v_lo[2]
-                positions_lo = np.stack((x_fit_lo, y_fit_lo, z_lo), axis=1)
-                real_dist_lo = positions_lo @ v_lo
-                s_rel_lo = real_dist_lo - real_dist_lo[0]
-                t_rel_lo = tsum_lo - tsum_lo[0]
-                if len(s_rel_lo) >= 2:
-                    k_lo, b_lo = np.polyfit(s_rel_lo, t_rel_lo, 1)
-                    x_fit_p = x_pred_p
-                    y_fit_p = y_pred_p
-                    pos_p = np.array([x_fit_p, y_fit_p, z_p])
-                    s_rel_p = pos_p @ v_lo - real_dist_lo[0]
-                    t_rel_p = _det_Tsum[i, p - 1] - tsum_lo[0]
-                    det_ext_res_tsum_arr[i, p - 1] = t_rel_p - (k_lo * s_rel_p + b_lo)
-
-    # 4.  Assemble all results and join once
-    all_res = {**fit_res, **slow_res}
-    all_res['det_ext_res_ystr_1'] = det_ext_res_ystr_arr[:, 0]
-    all_res['det_ext_res_ystr_2'] = det_ext_res_ystr_arr[:, 1]
-    all_res['det_ext_res_ystr_3'] = det_ext_res_ystr_arr[:, 2]
-    all_res['det_ext_res_ystr_4'] = det_ext_res_ystr_arr[:, 3]
-    all_res['det_ext_res_tsum_1'] = det_ext_res_tsum_arr[:, 0]
-    all_res['det_ext_res_tsum_2'] = det_ext_res_tsum_arr[:, 1]
-    all_res['det_ext_res_tsum_3'] = det_ext_res_tsum_arr[:, 2]
-    all_res['det_ext_res_tsum_4'] = det_ext_res_tsum_arr[:, 3]
-    all_res['det_ext_res_tdif_1'] = det_ext_res_tdif_arr[:, 0]
-    all_res['det_ext_res_tdif_2'] = det_ext_res_tdif_arr[:, 1]
-    all_res['det_ext_res_tdif_3'] = det_ext_res_tdif_arr[:, 2]
-    all_res['det_ext_res_tdif_4'] = det_ext_res_tdif_arr[:, 3]
-    all_res['det_th_chi'] = all_res['det_chi2'] + all_res['chi2_tsum_fit']
-    all_res['det_processed_tt'] = det_processed_tt_arr
-
-    new_cols = pd.DataFrame(all_res, index=working_df.index)
-    dupes = new_cols.columns.intersection(working_df.columns)
-    working_df = working_df.drop(columns=dupes, errors='ignore')
-    working_df = working_df.join(new_cols)
-    working_df = working_df.copy()
+        new_cols = pd.DataFrame(all_res, index=working_df.index)
+        dupes = new_cols.columns.intersection(working_df.columns)
+        working_df = working_df.drop(columns=dupes, errors='ignore')
+        working_df = working_df.join(new_cols)
+        working_df = working_df.copy()
+else:
+    print("Skipping detached fitting (fit_method excludes detached).")
 
     # # Filter according to residual ------------------------------------------------
     # det_changed_event_count = 0
@@ -3879,6 +3930,100 @@ def covariance_inv_diag(matrix):
     except np.linalg.LinAlgError:
         return np.diag(np.linalg.pinv(matrix))
 
+def solve_and_covdiag(matrix, rhs):
+    """Solve matrix @ x = rhs and return (x, diag(inv(matrix))) with one factorization.
+
+    Fast path uses a single Cholesky factorization and reuses it for both the
+    linear solve and covariance-diagonal extraction. Fallback uses pinv once.
+    """
+    try:
+        cho = linalg.cho_factor(matrix, lower=True, check_finite=False)
+        sol = linalg.cho_solve(cho, rhs, check_finite=False)
+        inv_diag = np.diag(
+            linalg.cho_solve(cho, np.eye(matrix.shape[0], dtype=matrix.dtype), check_finite=False)
+        )
+        return sol, inv_diag
+    except linalg.LinAlgError:
+        matrix_pinv = np.linalg.pinv(matrix)
+        return matrix_pinv @ rhs, np.diag(matrix_pinv)
+
+def _accumulate_mk_va(npar, vs, ydat, tsdat, tddat, zi, w_arr, ss, lenx, sc_val, fixed_speed_flag, mk, va):
+    """In-place TimTrack accumulator: adds one plane contribution into mk and va.
+
+    Avoids per-plane temporary (npar x npar) and (npar,) allocations from
+    return-based helpers in the main fitting hot loop.
+    """
+    XP = vs[1]
+    YP = vs[3]
+    S0 = sc_val if fixed_speed_flag else vs[5]
+    kz = math.sqrt(1.0 + XP * XP + YP * YP)
+    kzi = 1.0 / kz
+
+    w0 = w_arr[0]
+    w1 = w_arr[1]
+    w2 = w_arr[2]
+
+    zi2 = zi * zi
+    sszi = ss * zi
+    th = 0.5 * lenx * ss
+
+    # Non-zero entries of the 3 Jacobian rows (g0, g1, g2)
+    g0_2 = 1.0
+    g0_3 = zi
+
+    g1_1 = kzi * S0 * XP * zi
+    g1_3 = kzi * S0 * YP * zi
+    g1_4 = 1.0
+
+    g2_0 = ss
+    g2_1 = sszi
+
+    # vdmg terms simplify exactly for this linearised model
+    vd0 = ydat
+    vd1 = tsdat - th
+    vd2 = tddat
+
+    # g0 contribution (weight w0)
+    mk[2, 2] += w0 * g0_2 * g0_2
+    mk[2, 3] += w0 * g0_2 * g0_3
+    mk[3, 2] += w0 * g0_3 * g0_2
+    mk[3, 3] += w0 * g0_3 * g0_3
+    va[2] += w0 * g0_2 * vd0
+    va[3] += w0 * g0_3 * vd0
+
+    # g2 contribution (weight w2)
+    mk[0, 0] += w2 * g2_0 * g2_0
+    mk[0, 1] += w2 * g2_0 * g2_1
+    mk[1, 0] += w2 * g2_1 * g2_0
+    mk[1, 1] += w2 * g2_1 * g2_1
+    va[0] += w2 * g2_0 * vd2
+    va[1] += w2 * g2_1 * vd2
+
+    # g1 contribution (weight w1)
+    mk[1, 1] += w1 * g1_1 * g1_1
+    mk[1, 3] += w1 * g1_1 * g1_3
+    mk[3, 1] += w1 * g1_3 * g1_1
+    mk[1, 4] += w1 * g1_1 * g1_4
+    mk[4, 1] += w1 * g1_4 * g1_1
+    mk[3, 3] += w1 * g1_3 * g1_3
+    mk[3, 4] += w1 * g1_3 * g1_4
+    mk[4, 3] += w1 * g1_4 * g1_3
+    mk[4, 4] += w1 * g1_4 * g1_4
+    va[1] += w1 * g1_1 * vd1
+    va[3] += w1 * g1_3 * vd1
+    va[4] += w1 * g1_4 * vd1
+
+    if not fixed_speed_flag:
+        g1_5 = kz * zi
+        mk[1, 5] += w1 * g1_1 * g1_5
+        mk[5, 1] += w1 * g1_5 * g1_1
+        mk[3, 5] += w1 * g1_3 * g1_5
+        mk[5, 3] += w1 * g1_5 * g1_3
+        mk[4, 5] += w1 * g1_4 * g1_5
+        mk[5, 4] += w1 * g1_5 * g1_4
+        mk[5, 5] += w1 * g1_5 * g1_5
+        va[5] += w1 * g1_5 * vd1
+
 def fres(vs, vdat, lenx, ss, zi):  # Residuals array
     X0 = vs[0]; XP = vs[1]; Y0 = vs[2]; YP = vs[3]; T0 = vs[4]
     if fixed_speed:
@@ -3943,13 +4088,42 @@ _tt_Tsum = np.column_stack([working_df[f'P{p}_T_sum_final'].to_numpy(dtype=float
 _tt_Tdif = np.column_stack([working_df[f'P{p}_T_dif_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
 _tt_Y    = np.column_stack([working_df[f'P{p}_Y_final'].to_numpy(dtype=float)     for p in range(1, nplan + 1)])
 _tt_vsig = [anc_sy, anc_sts, anc_std]
+# Pre-computed weight array for _fmk_and_va (constant for all events/planes/iterations)
+_w_arr  = np.array([1.0 / anc_sy**2, 1.0 / anc_sts**2, 1.0 / anc_std**2], dtype=float)
+_sc_val = sc
+
+_tt_seed_enabled = False
+_tt_seed_slope_abs_max = float(config.get("tt_seed_slope_abs_max", 5.0))
+if run_detached_fit and all(
+    col in working_df.columns
+    for col in ("det_x", "det_y", "det_theta", "det_phi", "det_t0", "det_s")
+):
+    _seed_x = working_df["det_x"].to_numpy(dtype=float)
+    _seed_y = working_df["det_y"].to_numpy(dtype=float)
+    _seed_theta = working_df["det_theta"].to_numpy(dtype=float)
+    _seed_phi = working_df["det_phi"].to_numpy(dtype=float)
+    _seed_t0 = working_df["det_t0"].to_numpy(dtype=float)
+    _seed_s = working_df["det_s"].to_numpy(dtype=float)
+    _tt_seed_enabled = True
+    print("TimTrack warm-start enabled from detached fit columns.")
+else:
+    print("TimTrack warm-start disabled (detached seed columns unavailable).")
+
+# TimTrack thin profiling breakdown (accumulated across all TT iterations)
+_tt_intro_s = 0.0
+_tt_main_fit_s = 0.0
+_tt_residual_s = 0.0
+_tt_residual_loo_s = 0.0
+_tt_writeback_s = 0.0
 
 # TimTrack starts ------------------------------------------------------
-repeat = number_of_TT_executions - 1 if timtrack_iteration else 0
+if not run_timtrack_fit:
+    print("Skipping TimTrack fitting (fit_method excludes timtrack).")
+repeat = number_of_tt_executions - 1 if run_timtrack_fit else -1
 for iteration in range(repeat + 1):
     fitted = 0
-    if timtrack_iteration:
-        print(f"TimTrack iteration {iteration+1} out of {number_of_TT_executions}")
+    if number_of_tt_executions > 1:
+        print(f"TimTrack iteration {iteration+1} out of {number_of_tt_executions}")
     
     n_rows = len(working_df)
     charge_arr = np.zeros((n_rows, 4), dtype=float)
@@ -3981,6 +4155,7 @@ for iteration in range(repeat + 1):
         iterator = tqdm(iterator, total=n_rows, desc="Processing events")
 
     for pos in iterator:
+        _tt_t = time.perf_counter()
         # INTRODUCTION ------------------------------------------------------------------
         planes_to_iterate = []
         charge_event = 0.0
@@ -3994,12 +4169,16 @@ for iteration in range(repeat + 1):
             ts_plane     = _ts_row[i_plane]
             td_plane     = _td_row[i_plane]
             y_plane      = _y_row[i_plane]
-            plane_values = np.array([charge_plane, ts_plane, td_plane, y_plane], dtype=float)
-            if np.all(np.isfinite(plane_values)) and np.all(plane_values != 0):
+            if (
+                charge_plane != 0 and ts_plane != 0 and td_plane != 0 and y_plane != 0
+                and np.isfinite(charge_plane) and np.isfinite(ts_plane)
+                and np.isfinite(td_plane) and np.isfinite(y_plane)
+            ):
                 planes_to_iterate.append(plane_id)
                 if plane_id <= 4:
                     charge_arr[pos, plane_id - 1] = charge_plane
                 charge_event += charge_plane
+        _tt_intro_s += time.perf_counter() - _tt_t
         
         charge_event_arr[pos] = charge_event
         
@@ -4014,12 +4193,40 @@ for iteration in range(repeat + 1):
             conv_distance_arr[pos] = np.nan
             th_chi_arr[pos] = np.nan
             continue
+        _tt_t = time.perf_counter()
         
         if fixed_speed:
             vs  = np.zeros(5, dtype=float)
         else:
             vs  = np.zeros(6, dtype=float)
             vs[5] = sc
+
+        if _tt_seed_enabled:
+            sx = _seed_x[pos]
+            sy = _seed_y[pos]
+            stheta = _seed_theta[pos]
+            sphi = _seed_phi[pos]
+            st0 = _seed_t0[pos]
+            if np.isfinite(sx) and np.isfinite(sy) and np.isfinite(stheta) and np.isfinite(sphi) and np.isfinite(st0):
+                tan_theta = math.tan(stheta)
+                xp_seed = tan_theta * math.cos(sphi)
+                yp_seed = tan_theta * math.sin(sphi)
+                if (
+                    np.isfinite(xp_seed)
+                    and np.isfinite(yp_seed)
+                    and abs(xp_seed) <= _tt_seed_slope_abs_max
+                    and abs(yp_seed) <= _tt_seed_slope_abs_max
+                ):
+                    vs[0] = sx
+                    vs[1] = xp_seed
+                    vs[2] = sy
+                    vs[3] = yp_seed
+                    vs[4] = st0
+                    if not fixed_speed:
+                        ss_seed = _seed_s[pos]
+                        if np.isfinite(ss_seed) and ss_seed > 0:
+                            vs[5] = ss_seed
+
         mk  = np.zeros([npar, npar])
         va  = np.zeros(npar)
         istp = 0   # nb. of fitting steps
@@ -4028,18 +4235,28 @@ for iteration in range(repeat + 1):
             mk.fill(0.0)
             va.fill(0.0)
             for iplane in planes_to_iterate:
-                
-                # Data --------------------------------------------------------
-                vdat, vsig, zi = extract_plane_data(pos, iplane)
-                # -------------------------------------------------------------
-
-                mk += fmkx(nvar, npar, vs, vsig, ss, zi)
-                va += fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
+                plane_idx = iplane - 1
+                zi   = z_positions[plane_idx]
+                _accumulate_mk_va(
+                    npar,
+                    vs,
+                    _y_row[plane_idx],
+                    _ts_row[plane_idx],
+                    _td_row[plane_idx],
+                    zi,
+                    _w_arr,
+                    ss,
+                    lenx,
+                    _sc_val,
+                    fixed_speed,
+                    mk,
+                    va,
+                )
             istp = istp + 1
             vs0 = vs
-            vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
-            merr_diag = covariance_inv_diag(mk)  # Only compute if needed for fmahd()
+            vs, merr_diag = solve_and_covdiag(mk, va)
             dist = fmahd(npar, vs, vs0, merr_diag)
+        _tt_main_fit_s += time.perf_counter() - _tt_t
             
         if istp >= iter_max or dist >= cocut:
             converged_arr[pos] = 1
@@ -4056,14 +4273,13 @@ for iteration in range(repeat + 1):
         res_ystr = res_tsum = res_tdif = ndat = 0
         
         if len(planes_to_iterate) > 1:
+            _tt_t = time.perf_counter()
             for iplane in planes_to_iterate:
                 
                 ndat = ndat + nvar
-                
-                # Data --------------------------------------------------------------------------------
-                vdat, vsig, zi = extract_plane_data(pos, iplane)
-                # -------------------------------------------------------------------------------------
-                
+                plane_idx = iplane - 1
+                zi   = z_positions[plane_idx]
+                vdat = (_y_row[plane_idx], _ts_row[plane_idx], _td_row[plane_idx])
                 vres = fres(vsf, vdat, lenx, ss, zi)
                 
                 res_ystr  = res_ystr  + vres[0]
@@ -4091,19 +4307,21 @@ for iteration in range(repeat + 1):
                 s_arr[pos] = sc
             else:
                 s_arr[pos] = vsf[5]
+            _tt_residual_s += time.perf_counter() - _tt_t
         
         
         # ---------------------------------------------------------------------------------------------
         # Residual analysis with 4-plane tracks (hide a plane and make a fit in the 3 remaining planes)
         # ---------------------------------------------------------------------------------------------
         if len(planes_to_iterate) >= 3 and res_ana_removing_planes:
+            _tt_t = time.perf_counter()
             
             # for iplane_ref, istrip_ref in zip(planes_to_iterate, istrip_list):
             for iplane_ref in planes_to_iterate:
                 
-                # Data ------------------------------------------------------------
-                vdat_ref, _, z_ref = extract_plane_data(pos, iplane_ref)
-                # -----------------------------------------------------------------
+                z_ref    = z_positions[iplane_ref - 1]
+                ref_idx = iplane_ref - 1
+                vdat_ref = (_y_row[ref_idx], _ts_row[ref_idx], _td_row[ref_idx])
                 
                 planes_to_iterate_short = [p for p in planes_to_iterate if p != iplane_ref]
                 
@@ -4116,18 +4334,26 @@ for iteration in range(repeat + 1):
                     mk.fill(0.0)
                     va.fill(0.0)
                     for iplane in planes_to_iterate_short:
-                    
-                        # Data --------------------------------------------------------
-                        vdat, vsig, zi = extract_plane_data(pos, iplane)
-                        zi  = zi - z_ref
-                        # -------------------------------------------------------------
-                        
-                        mk += fmkx(nvar, npar, vs, vsig, ss, zi)
-                        va += fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi)
+                        plane_idx = iplane - 1
+                        zi   = z_positions[plane_idx] - z_ref
+                        _accumulate_mk_va(
+                            npar,
+                            vs,
+                            _y_row[plane_idx],
+                            _ts_row[plane_idx],
+                            _td_row[plane_idx],
+                            zi,
+                            _w_arr,
+                            ss,
+                            lenx,
+                            _sc_val,
+                            fixed_speed,
+                            mk,
+                            va,
+                        )
                     istp = istp + 1
                     vs0 = vs
-                    vs = np.linalg.solve(mk, va)  # Solve mk @ vs = va
-                    merr_diag = covariance_inv_diag(mk)  # Only compute if needed for fmahd()
+                    vs, merr_diag = solve_and_covdiag(mk, va)
                     dist = fmahd(npar, vs, vs0, merr_diag)
                     
                 v_res = fres(vs, vdat_ref, lenx, ss, 0)
@@ -4136,8 +4362,10 @@ for iteration in range(repeat + 1):
                     ext_res_ystr_arr[pos, iplane_ref - 1] = v_res[0]
                     ext_res_tsum_arr[pos, iplane_ref - 1] = v_res[1]
                     ext_res_tdif_arr[pos, iplane_ref - 1] = v_res[2]
+            _tt_residual_loo_s += time.perf_counter() - _tt_t
     
     # Push the accumulated results back to the DataFrame in a single shot ------
+    _tt_t = time.perf_counter()
     for plane_idx in range(4):
         col_suffix = plane_idx + 1
         working_df[f'tim_charge_{col_suffix}'] = charge_arr[:, plane_idx]
@@ -4167,6 +4395,7 @@ for iteration in range(repeat + 1):
     possible_ndf = {ndf for ndf in possible_ndf if ndf >= 0}
     for ndf in possible_ndf:
         working_df[f'th_chi_{ndf}'] = th_chi_ndf_arrays.get(ndf, np.zeros(n_rows, dtype=float))
+    _tt_writeback_s += time.perf_counter() - _tt_t
     
     # # Filter according to residual ------------------------------------------------
     # plane_cols = range(1, 5)
@@ -4943,6 +5172,11 @@ if timeseries_and_fits:
 # working_df['chi_alternative'] = working_df['det_th_chi']
 
 _prof["s_timtrack_fitting_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_tt_intro_s"] = round(_tt_intro_s, 2)
+_prof["s_tt_main_fit_s"] = round(_tt_main_fit_s, 2)
+_prof["s_tt_residual_s"] = round(_tt_residual_s, 2)
+_prof["s_tt_residual_loo_s"] = round(_tt_residual_loo_s, 2)
+_prof["s_tt_writeback_s"] = round(_tt_writeback_s, 2)
 _t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("-------------------- Real tracking trigger type ----------------------")
@@ -6976,6 +7210,137 @@ fit_tt_columns = {
     for i_plane in range(1, 5)
 }
 working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
+
+# Store TimTrack convergence controls in specific metadata for later studies.
+global_variables["timtrack_d0"] = float(d0)
+global_variables["timtrack_cocut"] = float(cocut)
+global_variables["timtrack_iter_max"] = int(iter_max)
+
+# Store TimTrack convergence outcomes for runout-vs-cut studies.
+timtrack_outcome_keys = (
+    "timtrack_attempted_fit_n",
+    "timtrack_itermax_reached_n",
+    "timtrack_itermax_reached_ratio",
+    "timtrack_itermax_runout_n",
+    "timtrack_itermax_runout_ratio",
+    "timtrack_converged_on_cocut_n",
+    "timtrack_converged_on_cocut_ratio",
+)
+
+if run_timtrack_fit and {"tim_iterations", "tim_conv_distance"}.issubset(working_df.columns):
+    tim_iterations_arr = pd.to_numeric(
+        working_df["tim_iterations"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    tim_conv_distance_arr = pd.to_numeric(
+        working_df["tim_conv_distance"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+
+    attempted_mask = np.isfinite(tim_iterations_arr) & (tim_iterations_arr > 0)
+    attempted_count = int(np.count_nonzero(attempted_mask))
+    global_variables["timtrack_attempted_fit_n"] = attempted_count
+
+    if attempted_count > 0:
+        itermax_reached_mask = attempted_mask & (tim_iterations_arr >= float(iter_max))
+        converged_on_cocut_mask = (
+            attempted_mask
+            & np.isfinite(tim_conv_distance_arr)
+            & (tim_conv_distance_arr <= float(cocut))
+        )
+        itermax_runout_mask = itermax_reached_mask & (~converged_on_cocut_mask)
+
+        itermax_reached_count = int(np.count_nonzero(itermax_reached_mask))
+        itermax_runout_count = int(np.count_nonzero(itermax_runout_mask))
+        converged_on_cocut_count = int(np.count_nonzero(converged_on_cocut_mask))
+
+        global_variables["timtrack_itermax_reached_n"] = itermax_reached_count
+        global_variables["timtrack_itermax_reached_ratio"] = (
+            itermax_reached_count / attempted_count
+        )
+        global_variables["timtrack_itermax_runout_n"] = itermax_runout_count
+        global_variables["timtrack_itermax_runout_ratio"] = (
+            itermax_runout_count / attempted_count
+        )
+        global_variables["timtrack_converged_on_cocut_n"] = converged_on_cocut_count
+        global_variables["timtrack_converged_on_cocut_ratio"] = (
+            converged_on_cocut_count / attempted_count
+        )
+    else:
+        global_variables["timtrack_itermax_reached_n"] = 0
+        global_variables["timtrack_itermax_reached_ratio"] = np.nan
+        global_variables["timtrack_itermax_runout_n"] = 0
+        global_variables["timtrack_itermax_runout_ratio"] = np.nan
+        global_variables["timtrack_converged_on_cocut_n"] = 0
+        global_variables["timtrack_converged_on_cocut_ratio"] = np.nan
+else:
+    for metadata_key in timtrack_outcome_keys:
+        global_variables[metadata_key] = np.nan
+
+# Detached vs TimTrack comparison metadata:
+# median( 2 * abs(detached - timtrack) / (detached + timtrack) )
+comparison_pairs = {
+    "x": ("det_x", "tim_x"),
+    "y": ("det_y", "tim_y"),
+    "theta": ("det_theta", "tim_theta"),
+    "phi": ("det_phi", "tim_phi"),
+    "s": ("det_s", "tim_s"),
+}
+
+median_relerr_values = []
+for metric_name, (det_col, tim_col) in comparison_pairs.items():
+    metadata_key = f"fit_compare_median_relerr_{metric_name}"
+    if run_detached_fit and run_timtrack_fit and det_col in working_df.columns and tim_col in working_df.columns:
+        det_arr = pd.to_numeric(working_df[det_col], errors="coerce").to_numpy(dtype=float)
+        tim_arr = pd.to_numeric(working_df[tim_col], errors="coerce").to_numpy(dtype=float)
+        denom = det_arr + tim_arr
+        relerr = np.divide(
+            2.0 * np.abs(det_arr - tim_arr),
+            denom,
+            out=np.full(det_arr.shape, np.nan, dtype=float),
+            where=denom != 0,
+        )
+        relerr = relerr[np.isfinite(relerr)]
+        if relerr.size > 0:
+            med_val = float(np.median(relerr))
+            global_variables[metadata_key] = med_val
+            median_relerr_values.append(med_val)
+        else:
+            global_variables[metadata_key] = np.nan
+    else:
+        global_variables[metadata_key] = np.nan
+
+global_variables["fit_compare_mean_error"] = (
+    float(np.mean(median_relerr_values)) if median_relerr_values else np.nan
+)
+
+# Simulated-data truth comparison in slowness basis.
+# Classic relative error: (s_cal - s_c) / s_c, with s_c = 1/c.
+# Median excludes zero slowness entries (placeholders/non-fits).
+def _store_slowness_relerr_to_sc(metadata_key: str, slowness_col: str) -> None:
+    if not is_simulated_file or slowness_col not in working_df.columns:
+        global_variables[metadata_key] = np.nan
+        return
+
+    slowness_arr = pd.to_numeric(working_df[slowness_col], errors="coerce").to_numpy(dtype=float)
+    valid_slowness = slowness_arr[np.isfinite(slowness_arr) & (slowness_arr != 0.0)]
+    if valid_slowness.size == 0:
+        global_variables[metadata_key] = np.nan
+        return
+
+    relerr_arr = (valid_slowness - sc) / sc
+    relerr_arr = relerr_arr[np.isfinite(relerr_arr)]
+    global_variables[metadata_key] = float(np.median(relerr_arr)) if relerr_arr.size > 0 else np.nan
+
+if run_detached_fit:
+    _store_slowness_relerr_to_sc("fit_compare_median_relerr_detached_s_to_1_over_c", "det_s")
+else:
+    global_variables["fit_compare_median_relerr_detached_s_to_1_over_c"] = np.nan
+
+if run_timtrack_fit:
+    _store_slowness_relerr_to_sc("fit_compare_median_relerr_timtrack_s_to_1_over_c", "tim_s")
+else:
+    global_variables["fit_compare_median_relerr_timtrack_s_to_1_over_c"] = np.nan
 
 tt_columns_desired = ['datetime', 'raw_tt', 'clean_tt', 'cal_tt', 'list_tt', 'tracking_tt', 'definitive_tt', 'fit_tt']
 tt_columns_present = [col for col in tt_columns_desired if col in working_df.columns]

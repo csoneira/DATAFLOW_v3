@@ -7,15 +7,15 @@ selection:
       end: 2024-09-30
 self_trigger: false
 timeseries_and_fits: false
-complete_reanalysis: false
+complete_reanalysis: true
 # create_plots options: null | debug | usual | all
 create_plots: null
 save_rejected_rows: false
 create_reject_plots: false
 limit_number: null
-alternative_iteration: false
-number_of_det_executions: 2
+number_of_det_executions: 1
+number_of_tt_executions: 1
+# fit_method options: detached | timtrack | both
+fit_method: both
 fixed_speed: false
 res_ana_removing_planes: true
-timtrack_iteration: true
-number_of_TT_executions: 1
