@@ -35,7 +35,7 @@ STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent
 PIPELINE_DIR = INFERENCE_DIR.parent               # .../STEPS
 PROJECT_DIR = PIPELINE_DIR.parent                 # .../MINGO_DICTIONARY_CREATION_AND_TEST
-DEFAULT_CONFIG = PROJECT_DIR / "config.json"
+DEFAULT_CONFIG = PROJECT_DIR / "config_method.json"
 
 DEFAULT_ESTIMATED = (
     INFERENCE_DIR / "STEP_2_1_ESTIMATE_PARAMS"
@@ -118,13 +118,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
 
 def _as_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -202,17 +210,30 @@ def main() -> int:
 
     relerr_clip = float(cfg_22.get("relerr_threshold_pct", 50.0))
 
-    # Plot parameters: use step_2_1 as the shared source for STEP 2.x.
-    plot_params = cfg_21.get("plot_parameters", None)
+    # Plot parameters: use top-level shared source across steps.
+    # Keep step-local keys only as deprecated compatibility fallback.
+    plot_params = config.get("plot_parameters", None)
+    if plot_params is None:
+        legacy_plot_params_21 = cfg_21.get("plot_parameters", None)
+        if legacy_plot_params_21 is not None:
+            log.warning(
+                "Deprecated config key step_2_1.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params = legacy_plot_params_21
     if plot_params is None:
         legacy_plot_params = cfg_22.get("plot_parameters", None)
         if legacy_plot_params is not None:
             log.warning(
-                "Deprecated config key step_2_2.plot_parameters detected; use step_2_1.plot_parameters."
+                "Deprecated config key step_2_2.plot_parameters detected; use top-level plot_parameters."
             )
             plot_params = legacy_plot_params
     if plot_params is None:
-        plot_params = config.get("step_1_2", {}).get("plot_parameters", None)
+        legacy_plot_params_12 = config.get("step_1_2", {}).get("plot_parameters", None)
+        if legacy_plot_params_12 is not None:
+            log.warning(
+                "Deprecated config key step_1_2.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params = legacy_plot_params_12
 
     relerr_plot_limits_cfg = cfg_22.get("relerr_plot_limits_pct", [-5.0, 5.0])
     relerr_plot_limits = (-5.0, 5.0)

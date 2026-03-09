@@ -3,8 +3,8 @@ last_file_test: true
 selection:
   stations: [0, 1]
   date_ranges:
-    - start: 2024-09-16
-      end: 2024-09-30
+    - start: 2024-09-27
+      end: 2024-10-01
 self_trigger: false
 timeseries_and_fits: false
 complete_reanalysis: true
@@ -19,3 +19,13 @@ number_of_tt_executions: 1
 fit_method: both
 fixed_speed: false
 res_ana_removing_planes: true
+# Optional TimTrack LOO (external residual) controls for runtime tuning:
+# - every_n=1 means compute LOO on every eligible event (current behavior).
+# - increase every_n to reduce CPU cost when LOO diagnostics are not critical.
+# - leave iter_max/cocut empty to inherit the main TimTrack convergence values.
+tt_loo_every_n: 1
+tt_loo_iter_max: null
+tt_loo_cocut: null
+# tt_loo_mode: single_step (one Newton-Raphson step from full-track solution)
+#              or iterative (legacy convergence loop). single_step is ~10x faster.
+tt_loo_mode: single_step

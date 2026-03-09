@@ -29,9 +29,19 @@ import pandas as pd
 
 # ── Paths ────────────────────────────────────────────────────────────────
 STEP_DIR = Path(__file__).resolve().parent
-PIPELINE_DIR = STEP_DIR.parents[1]  # INFERENCE_DICTIONARY_VALIDATION
+# Support both layouts:
+#   - <pipeline>/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_2_SYNTHETIC_TIME_SERIES
+#   - <pipeline>/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_2_SYNTHETIC_TIME_SERIES
+if STEP_DIR.parents[1].name == "STEPS":
+    PIPELINE_DIR = STEP_DIR.parents[2]
+else:
+    PIPELINE_DIR = STEP_DIR.parents[1]
+if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENCE").exists():
+    STEP_ROOT = PIPELINE_DIR
+else:
+    STEP_ROOT = PIPELINE_DIR / "STEPS"
 SYNTHETIC_DIR = STEP_DIR.parent      # STEP_3_SYNTHETIC_TIME_SERIES
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
 
 DEFAULT_TIME_SERIES = (
     SYNTHETIC_DIR / "STEP_3_1_TIME_SERIES_CREATION" / "OUTPUTS" / "FILES" / "time_series.csv"
@@ -40,10 +50,10 @@ DEFAULT_COMPLETE_CURVE = (
     SYNTHETIC_DIR / "STEP_3_1_TIME_SERIES_CREATION" / "OUTPUTS" / "FILES" / "complete_curve_time_series.csv"
 )
 DEFAULT_DICTIONARY = (
-    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dictionary.csv"
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dictionary.csv"
 )
 DEFAULT_DATASET_TEMPLATE = (
-    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dataset.csv"
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dataset.csv"
 )
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
@@ -96,57 +106,63 @@ logging.basicConfig(
 )
 log = logging.getLogger("STEP_3.2")
 
+CANONICAL_FLUX_COLUMN = "flux_cm2_min"
+CANONICAL_EFF_COLUMN = "eff_sim_1"
+CANONICAL_TIME_EVENTS_COLUMN = "n_events"
+CANONICAL_TIME_RATE_COLUMN = "global_rate_hz_mean"
+CANONICAL_TIME_RATE_FALLBACK_COLUMN = "global_rate_hz_mid"
+CANONICAL_TIME_DURATION_COLUMN = "duration_seconds"
+CANONICAL_DENSITY_EXPONENT = 1.0
+CANONICAL_DENSITY_CLIP_MIN = 0.25
+CANONICAL_DENSITY_CLIP_MAX = 4.0
+
 
 STEP32_WEIGHTING_KEYS = {
     "basis_source",
     "basis_n_events_column",
     "basis_parameter_set_column",
+    "parameter_space_columns",
     "basis_n_events_tolerance_pct",
     "basis_n_events_tolerance",
     "basis_min_rows",
+    "weighting_method",
+    "distance_hardness",
+    "density_correction_enabled",
+    "density_correction_k_neighbors",
+    "enforce_distance_monotonic_weights",
+    "top_k",
+    "random_seed",
+    "highlight_point_index",
+}
+
+STEP32_WEIGHTING_LEGACY_IGNORED_KEYS = {
     "flux_column",
     "eff_column",
     "time_n_events_column",
     "time_rate_column",
     "time_duration_column",
-    "weighting_method",
     "distance_sigma_flux_fraction",
     "distance_sigma_eff_fraction",
     "distance_sigma_flux_abs",
     "distance_sigma_eff_abs",
-    "distance_hardness",
-    "density_correction_enabled",
-    "density_correction_k_neighbors",
+    "density_correction_space",
     "density_correction_exponent",
     "density_correction_clip_min",
     "density_correction_clip_max",
-    "top_k",
-    "random_seed",
-    "highlight_point_index",
 }
 
 STEP32_WEIGHTING_DEFAULTS = {
     "basis_source": "dataset",
     "basis_n_events_column": "n_events",
     "basis_parameter_set_column": "param_hash_x",
+    "parameter_space_columns": None,
     "basis_n_events_tolerance_pct": 25,
     "basis_min_rows": 1,
-    "flux_column": "flux_cm2_min",
-    "eff_column": "eff_sim_1",
-    "time_n_events_column": "n_events",
-    "time_rate_column": "global_rate_hz_mean",
-    "time_duration_column": "duration_seconds",
     "weighting_method": "gaussian",
-    "distance_sigma_flux_fraction": 0.15,
-    "distance_sigma_eff_fraction": 0.15,
-    "distance_sigma_flux_abs": None,
-    "distance_sigma_eff_abs": None,
     "distance_hardness": 1.0,
     "density_correction_enabled": True,
     "density_correction_k_neighbors": None,
-    "density_correction_exponent": 1.0,
-    "density_correction_clip_min": None,
-    "density_correction_clip_max": None,
+    "enforce_distance_monotonic_weights": False,
     "top_k": None,
     "random_seed": None,
     "highlight_point_index": None,
@@ -154,7 +170,6 @@ STEP32_WEIGHTING_DEFAULTS = {
 
 
 def _load_config(path: Path) -> dict:
-    """Load JSON config if it exists."""
     def _merge_dicts(base: dict, override: dict) -> dict:
         out = dict(base)
         for k, v in override.items():
@@ -167,13 +182,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
 
 def _merge_weighting_cfg_from_step13(cfg_32: dict, cfg_13: dict) -> tuple[dict, list[str]]:
     """Build STEP 3.2 config with weighting sourced only from STEP 1.3 block.
@@ -193,11 +216,17 @@ def _merge_weighting_cfg_from_step13(cfg_32: dict, cfg_13: dict) -> tuple[dict, 
             "Ignoring %d weighting key(s) from step_3_2; using step_1_3.weighting_shared + internal defaults.",
             len(ignored_step32_weighting_keys),
         )
+    for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
+        if raw_cfg_32.get(legacy_key) is not None:
+            log.warning(
+                "Deprecated key step_3_2.%s detected; ignored. Using fixed canonical settings.",
+                legacy_key,
+            )
 
     merged = {
         key: value
         for key, value in raw_cfg_32.items()
-        if key not in STEP32_WEIGHTING_KEYS
+        if key not in STEP32_WEIGHTING_KEYS and key not in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS
     }
     merged.update(STEP32_WEIGHTING_DEFAULTS)
     applied_keys: set[str] = set()
@@ -208,13 +237,39 @@ def _merge_weighting_cfg_from_step13(cfg_32: dict, cfg_13: dict) -> tuple[dict, 
             log.info(
                 "Using deprecated key step_1_3.step_3_2_weighting; prefer step_1_3.weighting_shared."
             )
+        for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
+            if legacy_central_weighting.get(legacy_key) is not None:
+                log.warning(
+                    "Deprecated key step_1_3.step_3_2_weighting.%s detected; ignored. "
+                    "Using fixed canonical settings.",
+                    legacy_key,
+                )
         for key in STEP32_WEIGHTING_KEYS:
             if key in legacy_central_weighting and legacy_central_weighting.get(key) is not None:
                 merged[key] = legacy_central_weighting[key]
                 applied_keys.add(key)
 
+    # Warn when deprecated and current keys conflict
+    central_check = cfg_13.get("weighting_shared", {})
+    if isinstance(legacy_central_weighting, dict) and isinstance(central_check, dict):
+        for key in STEP32_WEIGHTING_KEYS:
+            lv, cv = legacy_central_weighting.get(key), central_check.get(key)
+            if lv is not None and cv is not None and lv != cv:
+                log.warning(
+                    "Config conflict: step_1_3.step_3_2_weighting.%s=%r vs "
+                    "step_1_3.weighting_shared.%s=%r; using weighting_shared.",
+                    key, lv, key, cv,
+                )
+
     central_weighting = cfg_13.get("weighting_shared", {})
     if isinstance(central_weighting, dict):
+        for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
+            if central_weighting.get(legacy_key) is not None:
+                log.warning(
+                    "Deprecated key step_1_3.weighting_shared.%s detected; ignored. "
+                    "Using fixed canonical settings.",
+                    legacy_key,
+                )
         for key in STEP32_WEIGHTING_KEYS:
             if key in central_weighting and central_weighting.get(key) is not None:
                 merged[key] = central_weighting[key]
@@ -223,6 +278,13 @@ def _merge_weighting_cfg_from_step13(cfg_32: dict, cfg_13: dict) -> tuple[dict, 
     # Backward-compatible alias already used by STEP 1.3 itself.
     legacy_overrides = cfg_13.get("weighting_overrides", {})
     if isinstance(legacy_overrides, dict):
+        for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
+            if legacy_overrides.get(legacy_key) is not None:
+                log.warning(
+                    "Deprecated key step_1_3.weighting_overrides.%s detected; ignored. "
+                    "Using fixed canonical settings.",
+                    legacy_key,
+                )
         for key in STEP32_WEIGHTING_KEYS:
             if key in legacy_overrides and legacy_overrides.get(key) is not None:
                 merged[key] = legacy_overrides[key]
@@ -292,6 +354,171 @@ def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
         if candidate in df.columns:
             return candidate
     raise KeyError("No efficiency column found in table.")
+
+
+def _choose_common_eff_column(
+    time_df: pd.DataFrame,
+    basis_df: pd.DataFrame,
+    preferred: str,
+) -> str:
+    """Resolve one efficiency column present in both time targets and basis."""
+    ordered = [preferred]
+    ordered.extend([
+        "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
+        "eff_empirical_1", "eff_empirical_2", "eff_empirical_3", "eff_empirical_4",
+        "eff",
+    ])
+    seen: set[str] = set()
+    for candidate in ordered:
+        name = str(candidate).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        if name in time_df.columns and name in basis_df.columns:
+            return name
+    raise KeyError(
+        "No common efficiency column found between time series and basis "
+        f"(preferred={preferred!r})."
+    )
+
+
+def _is_parameter_space_column(name: str) -> bool:
+    col = str(name).strip()
+    if not col:
+        return False
+    if col in {"flux_cm2_min", "cos_n"}:
+        return True
+    if col.startswith("eff_sim_"):
+        return True
+    if col.startswith("eff_empirical_"):
+        return True
+    return False
+
+
+def _resolve_parameter_space_columns(
+    time_df: pd.DataFrame,
+    basis_df: pd.DataFrame,
+    preferred_eff: str | None = None,
+) -> list[str]:
+    """Return ordered parameter-space dimensions shared by target and basis tables."""
+    common = set(time_df.columns) & set(basis_df.columns)
+    ordered: list[str] = []
+
+    if "flux_cm2_min" in common:
+        ordered.append("flux_cm2_min")
+    if "cos_n" in common:
+        ordered.append("cos_n")
+
+    eff_priority = [
+        "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
+        "eff_empirical_1", "eff_empirical_2", "eff_empirical_3", "eff_empirical_4",
+    ]
+    if preferred_eff is not None:
+        pe = str(preferred_eff).strip()
+        if pe in common and pe not in eff_priority:
+            eff_priority = [pe] + eff_priority
+        elif pe in common:
+            eff_priority = [pe] + [c for c in eff_priority if c != pe]
+    for col in eff_priority:
+        if col in common and col not in ordered:
+            ordered.append(col)
+
+    for col in sorted(common):
+        if col in ordered:
+            continue
+        if _is_parameter_space_column(col):
+            ordered.append(col)
+    return ordered
+
+
+def _parse_column_spec(value: object) -> list[str]:
+    """Parse list-like config values accepting arrays or comma-separated text."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.lower() == "auto":
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if str(x).strip()]
+            except json.JSONDecodeError:
+                pass
+        return [part.strip() for part in text.split(",") if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(x).strip() for x in value if str(x).strip()]
+    text = str(value).strip()
+    return [text] if text and text.lower() != "auto" else []
+
+
+def _resolve_parameter_space_columns_from_cfg(
+    *,
+    time_df: pd.DataFrame,
+    basis_df: pd.DataFrame,
+    preferred_eff: str | None = None,
+    configured_columns: object = None,
+) -> list[str]:
+    """Resolve parameter-space columns from config or fallback auto detection."""
+    requested = _parse_column_spec(configured_columns)
+    if not requested:
+        return _resolve_parameter_space_columns(
+            time_df=time_df,
+            basis_df=basis_df,
+            preferred_eff=preferred_eff,
+        )
+
+    common = set(time_df.columns) & set(basis_df.columns)
+    resolved: list[str] = []
+    missing: list[str] = []
+    for col in requested:
+        if col in common and col not in resolved:
+            resolved.append(col)
+        elif col not in common:
+            missing.append(col)
+
+    if missing:
+        log.warning(
+            "Ignoring configured parameter-space columns not present in both tables: %s",
+            missing,
+        )
+    if not resolved:
+        raise KeyError("No configured parameter-space columns available in both time and basis tables.")
+    return resolved
+
+
+def _prepare_standardized_param_space(
+    dict_param_matrix: np.ndarray,
+    target_param_matrix: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Scale parameter dimensions by dictionary min-max span for isotropic distances."""
+    X = np.asarray(dict_param_matrix, dtype=float)
+    Y = np.asarray(target_param_matrix, dtype=float)
+    if X.ndim != 2 or Y.ndim != 2:
+        raise ValueError("Parameter matrices must be 2D.")
+    if X.shape[1] != Y.shape[1]:
+        raise ValueError("Dictionary and target parameter matrices must share n_dims.")
+
+    mins = np.nanmin(X, axis=0)
+    maxs = np.nanmax(X, axis=0)
+    spans = maxs - mins
+    spans = np.where(np.isfinite(spans) & (spans > 1e-12), spans, 1.0)
+    Xs = (X - mins[np.newaxis, :]) / spans[np.newaxis, :]
+    Ys = (Y - mins[np.newaxis, :]) / spans[np.newaxis, :]
+    return Xs, Ys, spans
+
+
+def _pairwise_standardized_squared_distances(
+    dict_param_matrix: np.ndarray,
+    target_param_matrix: np.ndarray,
+) -> np.ndarray:
+    """Pairwise squared Euclidean distances in standardized parameter space."""
+    Xs, Ys, _ = _prepare_standardized_param_space(dict_param_matrix, target_param_matrix)
+    x2 = np.sum(Xs * Xs, axis=1, dtype=float)
+    y2 = np.sum(Ys * Ys, axis=1, dtype=float)
+    d2 = y2[:, None] + x2[None, :] - 2.0 * (Ys @ Xs.T)
+    return np.maximum(d2, 0.0)
 
 
 def _build_event_mask(
@@ -374,15 +601,21 @@ def _build_one_per_parameter_set_mask(
     parameter_set_values: np.ndarray,
     basis_events: np.ndarray | None,
     target_events: np.ndarray | None,
-    basis_flux: np.ndarray,
-    basis_eff: np.ndarray,
-    target_flux: np.ndarray,
-    target_eff: np.ndarray,
+    basis_param_matrix: np.ndarray,
+    target_param_matrix: np.ndarray,
 ) -> tuple[np.ndarray, dict]:
     """Select exactly one basis row per parameter set and target point."""
     group_vals = np.asarray(parameter_set_values, dtype=object)
     n_basis = len(group_vals)
-    n_targets = len(target_flux)
+    basis_params = np.asarray(basis_param_matrix, dtype=float)
+    target_params = np.asarray(target_param_matrix, dtype=float)
+    if basis_params.ndim != 2 or target_params.ndim != 2:
+        raise ValueError("basis_param_matrix and target_param_matrix must be 2D.")
+    if basis_params.shape[0] != n_basis:
+        raise ValueError("basis_param_matrix row count must match parameter_set_values length.")
+    if basis_params.shape[1] != target_params.shape[1]:
+        raise ValueError("Basis/target parameter matrices must share n_dims.")
+    n_targets = int(target_params.shape[0])
     if n_basis == 0 or n_targets == 0:
         return np.zeros((n_targets, n_basis), dtype=bool), {
             "mode": "empty",
@@ -392,6 +625,13 @@ def _build_one_per_parameter_set_mask(
             "allowed_rows_per_target_max": 0,
         }
 
+    # Standardize dimensions once so nearest decisions are isotropic
+    # across all parameter-space coordinates.
+    basis_params_std, target_params_std, _ = _prepare_standardized_param_space(
+        dict_param_matrix=basis_params,
+        target_param_matrix=target_params,
+    )
+
     # Stable per-group indices preserving first-seen group order.
     groups: dict[object, list[int]] = {}
     for j, g in enumerate(group_vals):
@@ -400,16 +640,11 @@ def _build_one_per_parameter_set_mask(
 
     be = None if basis_events is None else np.asarray(basis_events, dtype=float)
     te = None if target_events is None else np.asarray(target_events, dtype=float)
-    bf = np.asarray(basis_flux, dtype=float)
-    beff = np.asarray(basis_eff, dtype=float)
-    tf = np.asarray(target_flux, dtype=float)
-    teff = np.asarray(target_eff, dtype=float)
 
     mask = np.zeros((n_targets, n_basis), dtype=bool)
     for i in range(n_targets):
         t_ev = np.nan if te is None or i >= len(te) else float(te[i])
-        t_fx = float(tf[i]) if i < len(tf) else np.nan
-        t_ef = float(teff[i]) if i < len(teff) else np.nan
+        t_vec = target_params_std[i]
 
         for idxs in group_index_arrays:
             chosen = int(idxs[0])
@@ -421,31 +656,28 @@ def _build_one_per_parameter_set_mask(
                     dev = np.abs(be[cand] - t_ev)
                     best = np.flatnonzero(dev == np.min(dev))
                     cand_best = cand[best]
-                    if len(cand_best) > 1 and np.isfinite(t_fx) and np.isfinite(t_ef):
-                        d = (bf[cand_best] - t_fx) ** 2 + (beff[cand_best] - t_ef) ** 2
+                    if len(cand_best) > 1:
+                        d = np.sum((basis_params_std[cand_best] - t_vec[np.newaxis, :]) ** 2, axis=1)
                         chosen = int(cand_best[int(np.argmin(d))])
                     else:
                         chosen = int(cand_best[0])
                 elif np.any(finite):
                     cand = idxs[finite]
-                    if np.isfinite(t_fx) and np.isfinite(t_ef):
-                        d = (bf[cand] - t_fx) ** 2 + (beff[cand] - t_ef) ** 2
-                        chosen = int(cand[int(np.argmin(d))])
-                    else:
-                        chosen = int(cand[0])
-                elif np.isfinite(t_fx) and np.isfinite(t_ef):
-                    d = (bf[idxs] - t_fx) ** 2 + (beff[idxs] - t_ef) ** 2
+                    d = np.sum((basis_params_std[cand] - t_vec[np.newaxis, :]) ** 2, axis=1)
+                    chosen = int(cand[int(np.argmin(d))])
+                else:
+                    d = np.sum((basis_params_std[idxs] - t_vec[np.newaxis, :]) ** 2, axis=1)
                     chosen = int(idxs[int(np.argmin(d))])
             else:
-                if np.isfinite(t_fx) and np.isfinite(t_ef):
-                    d = (bf[idxs] - t_fx) ** 2 + (beff[idxs] - t_ef) ** 2
-                    chosen = int(idxs[int(np.argmin(d))])
+                d = np.sum((basis_params_std[idxs] - t_vec[np.newaxis, :]) ** 2, axis=1)
+                chosen = int(idxs[int(np.argmin(d))])
             mask[i, chosen] = True
 
     counts = np.sum(mask, axis=1)
     info = {
         "mode": "one_row_per_parameter_set",
         "n_parameter_sets": int(len(group_index_arrays)),
+        "parameter_space_dims": int(basis_params.shape[1]),
         "allowed_rows_per_target_min": int(np.min(counts)) if len(counts) else 0,
         "allowed_rows_per_target_median": float(np.median(counts)) if len(counts) else 0.0,
         "allowed_rows_per_target_max": int(np.max(counts)) if len(counts) else 0,
@@ -530,8 +762,7 @@ def _build_linear_distance_center_weights(
 
 
 def _compute_inverse_density_scaling(
-    basis_flux: np.ndarray,
-    basis_eff: np.ndarray,
+    basis_param_matrix: np.ndarray,
     *,
     k_neighbors: int,
     exponent: float,
@@ -539,9 +770,10 @@ def _compute_inverse_density_scaling(
     clip_max: float,
 ) -> tuple[np.ndarray, dict]:
     """Compute per-basis scaling to reduce dense-region dominance."""
-    bf = np.asarray(basis_flux, dtype=float)
-    be = np.asarray(basis_eff, dtype=float)
-    n = len(bf)
+    basis = np.asarray(basis_param_matrix, dtype=float)
+    if basis.ndim != 2:
+        raise ValueError("basis_param_matrix must be 2D.")
+    n = int(basis.shape[0])
     info = {
         "enabled": True,
         "k_neighbors": int(k_neighbors),
@@ -549,17 +781,17 @@ def _compute_inverse_density_scaling(
         "clip_min": float(clip_min),
         "clip_max": float(clip_max),
         "n_basis": int(n),
+        "n_dims": int(basis.shape[1]) if basis.ndim == 2 else 0,
     }
     if n == 0:
         return np.array([], dtype=float), info
     if n == 1:
         return np.ones(1, dtype=float), info
 
-    sx = max(float(np.nanmax(bf) - np.nanmin(bf)), 1e-12)
-    sy = max(float(np.nanmax(be) - np.nanmin(be)), 1e-12)
-    x = (bf - np.nanmin(bf)) / sx
-    y = (be - np.nanmin(be)) / sy
-    coords = np.column_stack([x, y])
+    coords, _, _ = _prepare_standardized_param_space(
+        dict_param_matrix=basis,
+        target_param_matrix=basis,
+    )
 
     k = max(1, int(k_neighbors))
     k_eff = min(k, n - 1)
@@ -595,25 +827,21 @@ def _compute_inverse_density_scaling(
 
 
 def _build_weights(
-    dict_flux: np.ndarray,
-    dict_eff: np.ndarray,
-    target_flux: np.ndarray,
-    target_eff: np.ndarray,
+    dict_param_matrix: np.ndarray,
+    target_param_matrix: np.ndarray,
     *,
     method: str,
-    sigma_flux: float,
-    sigma_eff: float,
     top_k: int | None,
     distance_hardness: float = 1.0,
     density_scaling: np.ndarray | None = None,
     event_mask: np.ndarray | None = None,
+    enforce_distance_monotonic_weights: bool = False,
 ) -> np.ndarray:
     """Compute normalized basis weights for each target point."""
-    sigma_flux = max(float(sigma_flux), 1e-12)
-    sigma_eff = max(float(sigma_eff), 1e-12)
-    dx = (target_flux[:, None] - dict_flux[None, :]) / sigma_flux
-    dy = (target_eff[:, None] - dict_eff[None, :]) / sigma_eff
-    d2 = dx * dx + dy * dy
+    d2 = _pairwise_standardized_squared_distances(
+        dict_param_matrix=np.asarray(dict_param_matrix, dtype=float),
+        target_param_matrix=np.asarray(target_param_matrix, dtype=float),
+    )
     if event_mask is not None and event_mask.shape != d2.shape:
         raise ValueError("event_mask shape must match (n_targets, n_basis)")
 
@@ -650,6 +878,26 @@ def _build_weights(
         rows = np.arange(w.shape[0])[:, None]
         keep[rows, idx_part] = True
         w = np.where(keep, w, 0.0)
+
+    if enforce_distance_monotonic_weights:
+        # Ensure distance ordering is reflected in final contributions:
+        # for each target row, farther selected candidates cannot exceed
+        # closer candidates in pre-normalization weight.
+        for i in range(w.shape[0]):
+            pos = w[i] > 0.0
+            if not np.any(pos):
+                continue
+            idx = np.where(pos & np.isfinite(d2[i]))[0]
+            if idx.size < 2:
+                continue
+            idx = idx[np.argsort(d2[i, idx])]
+            prev = float(w[i, idx[0]])
+            for j in idx[1:]:
+                cur = float(w[i, j])
+                if cur > prev:
+                    w[i, j] = prev
+                    cur = prev
+                prev = cur
 
     # Row-wise normalization with nearest fallback on empty rows.
     row_sum = w.sum(axis=1, keepdims=True)
@@ -814,6 +1062,7 @@ def _plot_highlight_contributions(
     time_df: pd.DataFrame,
     dictionary_df: pd.DataFrame,
     weights: np.ndarray,
+    event_allowed_mask: np.ndarray | None,
     flux_col: str,
     eff_col_time: str,
     eff_col_dict: str,
@@ -828,19 +1077,38 @@ def _plot_highlight_contributions(
     dx_s = pd.to_numeric(dictionary_df.get(flux_col), errors="coerce")
     dy_s = pd.to_numeric(dictionary_df.get(eff_col_dict), errors="coerce")
     contrib_all = weights[highlight_idx] * 100.0
+    if event_allowed_mask is None:
+        event_allowed = np.ones_like(contrib_all, dtype=bool)
+    else:
+        event_allowed = np.asarray(event_allowed_mask, dtype=bool)
+        if event_allowed.ndim != 1 or event_allowed.shape[0] != contrib_all.shape[0]:
+            event_allowed = np.ones_like(contrib_all, dtype=bool)
     m_dict = dx_s.notna() & dy_s.notna() & np.isfinite(contrib_all)
     if m_dict.any():
         m_nonzero = m_dict & (contrib_all > 0.0)
-        m_zero = m_dict & ~m_nonzero
-        if m_zero.any():
+        m_event_excluded = m_dict & ~event_allowed
+        m_allowed_zero = m_dict & event_allowed & ~m_nonzero
+        if m_event_excluded.any():
             ax.scatter(
-                dx_s[m_zero],
-                dy_s[m_zero],
-                s=14,
+                dx_s[m_event_excluded],
+                dy_s[m_event_excluded],
+                s=16,
+                marker="x",
                 color="lightgray",
                 alpha=0.80,
-                linewidths=0.0,
+                linewidths=0.8,
                 label=f"{basis_label} (excluded by event constraint)",
+                zorder=0,
+            )
+        if m_allowed_zero.any():
+            ax.scatter(
+                dx_s[m_allowed_zero],
+                dy_s[m_allowed_zero],
+                s=14,
+                color="#C7CBD1",
+                alpha=0.70,
+                linewidths=0.0,
+                label=f"{basis_label} (allowed, zero after weighting)",
                 zorder=0,
             )
         if m_nonzero.any():
@@ -1325,8 +1593,8 @@ def main() -> int:
         log.error("Dataset template CSV is empty: %s", template_path)
         return 1
 
-    flux_col = str(cfg_32.get("flux_column", "flux_cm2_min"))
-    eff_pref = str(cfg_32.get("eff_column", "eff_sim_1"))
+    flux_col = CANONICAL_FLUX_COLUMN
+    eff_pref = CANONICAL_EFF_COLUMN
     basis_source = str(cfg_32.get("basis_source", "dataset")).strip().lower()
     if basis_source == "dictionary":
         basis_input_df = dictionary_df
@@ -1344,28 +1612,58 @@ def main() -> int:
         log.error("Flux column '%s' must exist in time series and selected basis (%s).", flux_col, basis_source)
         return 1
     try:
-        eff_col_time = _choose_eff_column(time_df, eff_pref)
-        eff_col_basis = _choose_eff_column(basis_input_df, eff_pref)
+        eff_col_common = _choose_common_eff_column(time_df, basis_input_df, eff_pref)
     except KeyError as exc:
         log.error("%s", exc)
         return 1
-    if eff_col_time != eff_col_basis:
-        log.warning("Using %s for time series and %s for basis.", eff_col_time, eff_col_basis)
+    eff_col_time = eff_col_common
+    eff_col_basis = eff_col_common
+    if eff_col_common != eff_pref:
+        log.info(
+            "Requested efficiency column %s not available in both tables; using common column %s.",
+            eff_pref,
+            eff_col_common,
+        )
+    parameter_space_cfg = cfg_32.get("parameter_space_columns", None)
+    try:
+        parameter_space_cols = _resolve_parameter_space_columns_from_cfg(
+            time_df=time_df,
+            basis_df=basis_input_df,
+            preferred_eff=eff_col_common,
+            configured_columns=parameter_space_cfg,
+        )
+    except KeyError as exc:
+        log.error("%s", exc)
+        return 1
+    if not parameter_space_cols:
+        log.error("No shared parameter-space columns available between time series and selected basis.")
+        return 1
 
-    time_events_col = str(cfg_32.get("time_n_events_column", "n_events"))
+    for legacy_key in ("time_n_events_column", "time_rate_column", "time_duration_column"):
+        if cfg_32.get(legacy_key) is not None:
+            log.warning(
+                "Deprecated key step_3_2.%s detected; ignored. "
+                "Using fixed time columns %s/%s/%s.",
+                legacy_key,
+                CANONICAL_TIME_EVENTS_COLUMN,
+                CANONICAL_TIME_RATE_COLUMN,
+                CANONICAL_TIME_DURATION_COLUMN,
+            )
+
+    time_events_col = CANONICAL_TIME_EVENTS_COLUMN
     if time_events_col not in time_df.columns:
         log.error("Time series column '%s' not found.", time_events_col)
         return 1
-    time_rate_col = str(cfg_32.get("time_rate_column", "global_rate_hz_mean"))
+    time_rate_col = CANONICAL_TIME_RATE_COLUMN
     if time_rate_col not in time_df.columns:
         # Fallback to midpoint rate if mean is not present.
-        fallback = "global_rate_hz_mid"
+        fallback = CANONICAL_TIME_RATE_FALLBACK_COLUMN
         if fallback in time_df.columns:
             time_rate_col = fallback
         else:
             log.error("No time-series rate column found (%s / %s).", time_rate_col, fallback)
             return 1
-    time_duration_col = str(cfg_32.get("time_duration_column", "duration_seconds"))
+    time_duration_col = CANONICAL_TIME_DURATION_COLUMN
     if time_duration_col not in time_df.columns:
         log.error("Time series duration column '%s' not found.", time_duration_col)
         return 1
@@ -1378,30 +1676,47 @@ def main() -> int:
     basis_parameter_set_col_cfg = cfg_32.get("basis_parameter_set_column", None)
     basis_min_rows = _safe_int(cfg_32.get("basis_min_rows", 200), 200, minimum=1)
 
-    basis_flux_all = pd.to_numeric(basis_input_df[flux_col], errors="coerce").to_numpy(dtype=float)
-    basis_eff_all = pd.to_numeric(basis_input_df[eff_col_basis], errors="coerce").to_numpy(dtype=float)
+    basis_param_all = (
+        basis_input_df[parameter_space_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     basis_events_all = None
     if basis_events_col in basis_input_df.columns:
         basis_events_all = pd.to_numeric(basis_input_df[basis_events_col], errors="coerce").to_numpy(dtype=float)
     else:
         log.warning("Basis events column '%s' not found in selected basis; event filtering disabled.", basis_events_col)
 
-    target_flux = pd.to_numeric(time_df[flux_col], errors="coerce").to_numpy(dtype=float)
-    target_eff = pd.to_numeric(time_df[eff_col_time], errors="coerce").to_numpy(dtype=float)
+    target_param_matrix = (
+        time_df[parameter_space_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     target_events = pd.to_numeric(time_df[time_events_col], errors="coerce").to_numpy(dtype=float)
 
-    valid_basis = np.isfinite(basis_flux_all) & np.isfinite(basis_eff_all)
-    valid_target = np.isfinite(target_flux) & np.isfinite(target_eff)
+    valid_basis = np.all(np.isfinite(basis_param_all), axis=1)
+    valid_target = np.all(np.isfinite(target_param_matrix), axis=1)
     if not np.any(valid_basis):
-        log.error("No valid basis points in (%s, %s).", flux_col, eff_col_basis)
+        log.error(
+            "No valid basis points in parameter space columns: %s",
+            parameter_space_cols,
+        )
         return 1
     if not np.all(valid_target):
-        log.error("Time series has invalid target points in (%s, %s).", flux_col, eff_col_time)
+        invalid_rows = int(np.sum(~valid_target))
+        log.error(
+            "Time series has %d invalid target row(s) in parameter space columns: %s",
+            invalid_rows,
+            parameter_space_cols,
+        )
         return 1
 
     dictionary_work = basis_input_df.loc[valid_basis].reset_index(drop=True)
-    basis_flux = basis_flux_all[valid_basis]
-    basis_eff = basis_eff_all[valid_basis]
+    basis_param_matrix = basis_param_all[valid_basis]
+    basis_flux = pd.to_numeric(dictionary_work[flux_col], errors="coerce").to_numpy(dtype=float)
+    basis_eff = pd.to_numeric(dictionary_work[eff_col_basis], errors="coerce").to_numpy(dtype=float)
+    target_flux = pd.to_numeric(time_df[flux_col], errors="coerce").to_numpy(dtype=float)
+    target_eff = pd.to_numeric(time_df[eff_col_time], errors="coerce").to_numpy(dtype=float)
     basis_events = None if basis_events_all is None else basis_events_all[valid_basis]
     basis_parameter_set_col = _select_parameter_set_column(dictionary_work, basis_parameter_set_col_cfg)
     if basis_parameter_set_col is None:
@@ -1416,10 +1731,8 @@ def main() -> int:
         parameter_set_values=parameter_set_values,
         basis_events=basis_events,
         target_events=target_events,
-        basis_flux=basis_flux,
-        basis_eff=basis_eff,
-        target_flux=target_flux,
-        target_eff=target_eff,
+        basis_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
     )
 
     # Enforce one-row-per-parameter-set, then apply optional event-count tolerance.
@@ -1449,10 +1762,11 @@ def main() -> int:
         "targets_with_zero_selected_rows": int(np.sum(sel_counts <= 0)) if sel_counts.size else 0,
     }
     log.info(
-        "Basis source=%s rows=%d (valid_flux_eff=%d), one-per-set=%s(%s), tol_pct=%.3f -> selected/point min=%.0f med=%.1f max=%.0f (zero=%d).",
+        "Basis source=%s rows=%d (valid_parameter_rows=%d; dims=%d), one-per-set=%s(%s), tol_pct=%.3f -> selected/point min=%.0f med=%.1f max=%.0f (zero=%d).",
         basis_source,
         int(len(basis_input_df)),
         int(len(dictionary_work)),
+        int(basis_param_matrix.shape[1]),
         str(one_per_set_info.get("mode", "n/a")),
         str(basis_filter_info.get("parameter_set_column")),
         float(basis_events_tol_pct),
@@ -1462,58 +1776,59 @@ def main() -> int:
         int(basis_filter_info.get("targets_with_zero_selected_rows", 0)),
     )
 
-    flux_span = max(float(np.nanmax(basis_flux) - np.nanmin(basis_flux)), 1e-9)
-    eff_span = max(float(np.nanmax(basis_eff) - np.nanmin(basis_eff)), 1e-9)
-    sigma_flux = _safe_float(
-        cfg_32.get("distance_sigma_flux_abs"),
-        _safe_float(cfg_32.get("distance_sigma_flux_fraction", 0.10), 0.10) * flux_span,
-    )
-    sigma_eff = _safe_float(
-        cfg_32.get("distance_sigma_eff_abs"),
-        _safe_float(cfg_32.get("distance_sigma_eff_fraction", 0.10), 0.10) * eff_span,
-    )
     method = str(cfg_32.get("weighting_method", "gaussian"))
     top_k_raw = cfg_32.get("top_k", None)
     top_k = None if top_k_raw in (None, "", 0) else _safe_int(top_k_raw, 8, minimum=1)
     distance_hardness = _safe_float(cfg_32.get("distance_hardness", 1.0), 1.0)
+    enforce_distance_monotonic_weights = _safe_bool(
+        cfg_32.get("enforce_distance_monotonic_weights", False),
+        False,
+    )
     density_enabled = _safe_bool(cfg_32.get("density_correction_enabled", True), True)
     density_k = _safe_int(cfg_32.get("density_correction_k_neighbors", 10), 10, minimum=1)
-    density_exp = _safe_float(cfg_32.get("density_correction_exponent", 1.0), 1.0)
-    density_clip_min = _safe_float(cfg_32.get("density_correction_clip_min", 0.25), 0.25)
-    density_clip_max = _safe_float(cfg_32.get("density_correction_clip_max", 4.0), 4.0)
-    if density_clip_max < density_clip_min:
-        density_clip_max = density_clip_min
+    for legacy_key in (
+        "density_correction_space",
+        "density_correction_exponent",
+        "density_correction_clip_min",
+        "density_correction_clip_max",
+    ):
+        if cfg_32.get(legacy_key) is not None:
+            log.warning(
+                "Deprecated key step_3_2.%s detected; ignored. "
+                "Using fixed density exponent/clip constants.",
+                legacy_key,
+            )
     density_scaling = None
     density_info = {"enabled": bool(density_enabled)}
     if density_enabled:
         density_scaling, density_info = _compute_inverse_density_scaling(
-            basis_flux=basis_flux,
-            basis_eff=basis_eff,
+            basis_param_matrix=basis_param_matrix,
             k_neighbors=density_k,
-            exponent=density_exp,
-            clip_min=density_clip_min,
-            clip_max=density_clip_max,
+            exponent=CANONICAL_DENSITY_EXPONENT,
+            clip_min=CANONICAL_DENSITY_CLIP_MIN,
+            clip_max=CANONICAL_DENSITY_CLIP_MAX,
         )
 
     weights = _build_weights(
-        dict_flux=basis_flux,
-        dict_eff=basis_eff,
-        target_flux=target_flux,
-        target_eff=target_eff,
+        dict_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
         method=method,
-        sigma_flux=sigma_flux,
-        sigma_eff=sigma_eff,
         top_k=top_k,
         distance_hardness=distance_hardness,
         density_scaling=density_scaling,
         event_mask=event_mask,
+        enforce_distance_monotonic_weights=enforce_distance_monotonic_weights,
     )
-    # Diagnostic center in (flux, eff): weighted by the same basis weights used
-    # for synthetic-column generation (includes density modulation when enabled).
+    # Diagnostic center in parameter space: weighted by the same basis weights
+    # used for synthetic-column generation (includes density modulation when enabled).
+    diagnostic_columns: list[str] = []
+    for col in parameter_space_cols + [flux_col, eff_col_basis]:
+        if col in dictionary_work.columns and col not in diagnostic_columns:
+            diagnostic_columns.append(col)
     diagnostic_center_values = _weighted_numeric_columns(
         weights=weights,
         dict_df=dictionary_work,
-        columns=[flux_col, eff_col_basis],
+        columns=diagnostic_columns,
     )
     diagnostic_flux = np.asarray(
         diagnostic_center_values.get(flux_col, np.full(len(time_df), np.nan, dtype=float)),
@@ -1523,26 +1838,31 @@ def main() -> int:
         diagnostic_center_values.get(eff_col_basis, np.full(len(time_df), np.nan, dtype=float)),
         dtype=float,
     )
+    diagnostic_param_mae: dict[str, float | None] = {}
+    for col_idx, col_name in enumerate(parameter_space_cols):
+        center_col = np.asarray(
+            diagnostic_center_values.get(col_name, np.full(len(time_df), np.nan, dtype=float)),
+            dtype=float,
+        )
+        target_col = np.asarray(target_param_matrix[:, col_idx], dtype=float)
+        m_col = np.isfinite(center_col) & np.isfinite(target_col)
+        diagnostic_param_mae[col_name] = (
+            float(np.mean(np.abs(center_col[m_col] - target_col[m_col])))
+            if np.any(m_col)
+            else None
+        )
     diagnostic_center_label = (
-        "Density-modulated weighted center (diagnostic)"
+        "Density-modulated weighted parameter-space center (diagnostic)"
         if density_enabled
-        else "Weighted center (diagnostic)"
+        else "Weighted parameter-space center (diagnostic)"
     )
-    m_diag_flux = np.isfinite(diagnostic_flux) & np.isfinite(target_flux)
-    m_diag_eff = np.isfinite(diagnostic_eff) & np.isfinite(target_eff)
-    diagnostic_flux_mae = (
-        float(np.mean(np.abs(diagnostic_flux[m_diag_flux] - target_flux[m_diag_flux])))
-        if np.any(m_diag_flux)
-        else None
-    )
-    diagnostic_eff_mae = (
-        float(np.mean(np.abs(diagnostic_eff[m_diag_eff] - target_eff[m_diag_eff])))
-        if np.any(m_diag_eff)
-        else None
-    )
+    diagnostic_flux_mae = diagnostic_param_mae.get(flux_col)
+    diagnostic_eff_mae = diagnostic_param_mae.get(eff_col_time)
     log.info(
-        "Diagnostic center check: flux MAE=%.6g, eff MAE=%.6g.",
+        "Diagnostic center check: %s MAE=%.6g, %s MAE=%.6g.",
+        flux_col,
         float(diagnostic_flux_mae) if diagnostic_flux_mae is not None else float("nan"),
+        eff_col_time,
         float(diagnostic_eff_mae) if diagnostic_eff_mae is not None else float("nan"),
     )
 
@@ -1584,17 +1904,71 @@ def main() -> int:
         highlight_idx = int(np.clip(_safe_int(highlight_cfg, 0), 0, len(time_df) - 1))
 
     contrib = weights[highlight_idx]
+    event_allowed_highlight = np.asarray(event_mask[highlight_idx], dtype=bool)
+    highlight_target_param_matrix = target_param_matrix[highlight_idx:highlight_idx + 1, :]
+    distance_sigma = np.sqrt(
+        _pairwise_standardized_squared_distances(
+            dict_param_matrix=basis_param_matrix,
+            target_param_matrix=highlight_target_param_matrix,
+        )[0]
+    )
+
+    distance_rank_all = np.full(len(contrib), np.nan, dtype=float)
+    finite_dist = np.isfinite(distance_sigma)
+    if np.any(finite_dist):
+        idx_all = np.where(finite_dist)[0]
+        ord_all = np.argsort(distance_sigma[idx_all], kind="mergesort")
+        distance_rank_all[idx_all[ord_all]] = np.arange(1, len(idx_all) + 1, dtype=float)
+
+    distance_rank_event_allowed = np.full(len(contrib), np.nan, dtype=float)
+    finite_allowed = finite_dist & event_allowed_highlight
+    if np.any(finite_allowed):
+        idx_allowed = np.where(finite_allowed)[0]
+        ord_allowed = np.argsort(distance_sigma[idx_allowed], kind="mergesort")
+        distance_rank_event_allowed[idx_allowed[ord_allowed]] = np.arange(1, len(idx_allowed) + 1, dtype=float)
+
+    def _nearest_idx(mask: np.ndarray) -> int | None:
+        if not np.any(mask):
+            return None
+        cand = np.where(mask, distance_sigma, np.inf)
+        if not np.isfinite(cand).any():
+            return None
+        return int(np.argmin(cand))
+
+    nearest_any_idx = _nearest_idx(finite_dist)
+    nearest_allowed_idx = _nearest_idx(finite_allowed)
+    top_weight_idx = int(np.argmax(contrib)) if contrib.size else None
+
+    pos = (contrib > 0.0) & np.isfinite(distance_sigma)
+    monotonic_inversions = 0
+    monotonic_pairs = 0
+    if np.count_nonzero(pos) >= 2:
+        pos_idx = np.where(pos)[0]
+        ord_pos = np.argsort(distance_sigma[pos_idx], kind="mergesort")
+        w_sorted = contrib[pos_idx][ord_pos]
+        monotonic_pairs = max(len(w_sorted) - 1, 0)
+        monotonic_inversions = int(np.sum(w_sorted[1:] > (w_sorted[:-1] + 1e-15)))
+
     contrib_df = pd.DataFrame({
         "rank": np.arange(1, len(contrib) + 1),
         "basis_index": np.arange(len(contrib)),
         "dictionary_index": np.arange(len(contrib)),
+        "distance_parameter_space": distance_sigma,
+        "distance_sigma": distance_sigma,
+        "distance_rank_all": distance_rank_all,
+        "distance_rank_event_allowed": distance_rank_event_allowed,
         "weight": contrib,
         "weight_pct": contrib * 100.0,
-        "is_event_allowed": contrib > 0.0,
+        "is_event_allowed": event_allowed_highlight,
+        "is_weight_positive": contrib > 0.0,
         flux_col: basis_flux,
         eff_col_basis: basis_eff,
         "basis_source": basis_source,
     })
+    for col in parameter_space_cols:
+        if col in contrib_df.columns or col not in dictionary_work.columns:
+            continue
+        contrib_df[col] = pd.to_numeric(dictionary_work[col], errors="coerce")
     if basis_parameter_set_col is not None and basis_parameter_set_col in dictionary_work.columns:
         contrib_df["basis_parameter_set_id"] = dictionary_work[basis_parameter_set_col].astype(str)
     if "filename_base" in dictionary_work.columns:
@@ -1603,8 +1977,10 @@ def main() -> int:
         contrib_df["events_per_second_global_rate"] = pd.to_numeric(
             dictionary_work["events_per_second_global_rate"], errors="coerce"
         )
-    contrib_df = contrib_df.sort_values("weight", ascending=False).reset_index(drop=True)
+    contrib_df = contrib_df.sort_values(["weight", "distance_sigma"], ascending=[False, True]).reset_index(drop=True)
     contrib_df["rank"] = np.arange(1, len(contrib_df) + 1)
+    for col in ("distance_rank_all", "distance_rank_event_allowed"):
+        contrib_df[col] = pd.to_numeric(contrib_df[col], errors="coerce").round().astype("Int64")
 
     out_contrib = FILES_DIR / "highlight_point_contributions.csv"
     contrib_df.to_csv(out_contrib, index=False)
@@ -1617,6 +1993,7 @@ def main() -> int:
         time_df=time_df,
         dictionary_df=dictionary_work,
         weights=weights,
+        event_allowed_mask=event_allowed_highlight,
         flux_col=flux_col,
         eff_col_time=eff_col_time,
         eff_col_dict=eff_col_basis,
@@ -1670,10 +2047,18 @@ def main() -> int:
         "dataset_template_csv": str(template_path),
         "basis_source": basis_source,
         "basis_csv": str(basis_path),
+        "flux_column_used": flux_col,
+        "efficiency_column_requested": eff_pref,
+        "efficiency_column_used_time": eff_col_time,
+        "efficiency_column_used_basis": eff_col_basis,
+        "parameter_space_columns_config": parameter_space_cfg,
+        "parameter_space_columns_used_for_weighting": parameter_space_cols,
+        "parameter_space_dimensions": int(len(parameter_space_cols)),
         "basis_events_filter": basis_filter_info,
         "flux_eff_assignment_method": "target_discretized_from_step_3_1",
-        "diagnostic_flux_eff_center_method": "weighted_basis_center_not_used_for_output",
+        "diagnostic_center_method": "weighted_parameter_space_center_not_used_for_output",
         "diagnostic_flux_eff_center_label": diagnostic_center_label,
+        "diagnostic_parameter_mae_vs_target": diagnostic_param_mae,
         "diagnostic_flux_center_mae_vs_target": diagnostic_flux_mae,
         "diagnostic_eff_center_mae_vs_target": diagnostic_eff_mae,
         "diagnostic_flux_center_range": [
@@ -1694,12 +2079,35 @@ def main() -> int:
         "n_dictionary_points": int(len(dictionary_work)),
         "n_synthetic_rows": int(len(synthetic_df)),
         "weighting_method": method,
-        "sigma_flux": float(sigma_flux),
-        "sigma_eff": float(sigma_eff),
+        "distance_definition": "standardized_euclidean_in_parameter_space",
         "distance_hardness": float(distance_hardness),
+        "enforce_distance_monotonic_weights": bool(enforce_distance_monotonic_weights),
         "top_k": int(top_k) if top_k is not None else None,
         "highlight_point_index": int(highlight_idx),
         "highlight_random_seed": seed_used,
+        "highlight_nearest_any_basis_index": nearest_any_idx,
+        "highlight_nearest_any_distance_sigma": (
+            float(distance_sigma[nearest_any_idx]) if nearest_any_idx is not None else None
+        ),
+        "highlight_nearest_any_event_allowed": (
+            bool(event_allowed_highlight[nearest_any_idx]) if nearest_any_idx is not None else None
+        ),
+        "highlight_nearest_allowed_basis_index": nearest_allowed_idx,
+        "highlight_nearest_allowed_distance_sigma": (
+            float(distance_sigma[nearest_allowed_idx]) if nearest_allowed_idx is not None else None
+        ),
+        "highlight_top_weight_basis_index": top_weight_idx,
+        "highlight_top_weight_distance_sigma": (
+            float(distance_sigma[top_weight_idx]) if top_weight_idx is not None else None
+        ),
+        "highlight_top_weight_pct": (
+            float(contrib[top_weight_idx] * 100.0) if top_weight_idx is not None else None
+        ),
+        "highlight_nonzero_adjacent_monotonic_inversions": int(monotonic_inversions),
+        "highlight_nonzero_adjacent_monotonic_pairs": int(monotonic_pairs),
+        "highlight_nonzero_adjacent_monotonic_inversion_rate": (
+            float(monotonic_inversions / monotonic_pairs) if monotonic_pairs > 0 else 0.0
+        ),
         "median_effective_contributors": float(np.nanmedian(effective_n)),
         "min_effective_contributors": float(np.nanmin(effective_n)),
         "max_effective_contributors": float(np.nanmax(effective_n)),

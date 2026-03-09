@@ -33,7 +33,8 @@ STEP_DIR = Path(__file__).resolve().parent
 SYNTHETIC_DIR = STEP_DIR.parent
 PIPELINE_DIR = SYNTHETIC_DIR.parent
 PROJECT_DIR = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PROJECT_DIR / "config.json"
+DEFAULT_CONFIG = PROJECT_DIR / "config_method.json"
+CONFIG_COLUMNS_PATH = PROJECT_DIR / "config_columns.json"
 
 DEFAULT_SYNTHETIC_DATASET = (
     SYNTHETIC_DIR / "STEP_3_2_SYNTHETIC_TIME_SERIES" / "OUTPUTS" / "FILES" / "synthetic_dataset.csv"
@@ -107,19 +108,34 @@ logging.basicConfig(
 )
 log = logging.getLogger("STEP_3.3")
 
+CANONICAL_FLUX_COLUMN = "flux_cm2_min"
+CANONICAL_EFF_COLUMN = "eff_sim_1"
+CANONICAL_TIME_EVENTS_COLUMN = "n_events"
+CANONICAL_DENSITY_EXPONENT = 1.0
+CANONICAL_DENSITY_CLIP_MIN = 0.25
+CANONICAL_DENSITY_CLIP_MAX = 4.0
+
 # Import estimation function from STEP 2 module.
 INFERENCE_DIR = PIPELINE_DIR / "STEP_2_INFERENCE"
 if str(INFERENCE_DIR) not in sys.path:
     sys.path.insert(0, str(INFERENCE_DIR))
 try:
-    from estimate_parameters import estimate_parameters  # noqa: E402
+    from estimate_parameters import (  # noqa: E402
+        _auto_feature_columns as _shared_auto_feature_columns,
+        estimate_parameters,
+        resolve_inverse_mapping_cfg,
+    )
+    from feature_columns_config import (  # noqa: E402
+        parse_explicit_feature_columns,
+        resolve_feature_columns_from_catalog,
+        sync_feature_column_catalog,
+    )
 except Exception as exc:
     log.error("Failed to import estimate_parameters from %s: %s", INFERENCE_DIR, exc)
     raise
 
 
 def _load_config(path: Path) -> dict:
-    """Load JSON config if it exists."""
     def _merge_dicts(base: dict, override: dict) -> dict:
         out = dict(base)
         for k, v in override.items():
@@ -132,13 +148,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
 
 def _safe_float(value: object, default: float) -> float:
     """Convert value to float with fallback."""
@@ -190,6 +214,69 @@ def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
         if candidate in df.columns:
             return candidate
     raise KeyError("No efficiency column found in dataframe.")
+
+
+def _resolve_inference_feature_columns(
+    *,
+    feature_cfg: object,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    include_global_rate: bool,
+    global_rate_col: str,
+) -> tuple[list[str], str]:
+    """Resolve feature columns for STEP 3.3 inference using STEP 2.1 criteria."""
+    auto_feature_cols = sorted(
+        set(_shared_auto_feature_columns(dict_df, include_global_rate, global_rate_col))
+        & set(_shared_auto_feature_columns(data_df, include_global_rate, global_rate_col))
+    )
+    catalog = sync_feature_column_catalog(
+        catalog_path=CONFIG_COLUMNS_PATH,
+        dict_df=dict_df,
+        default_enabled_columns=auto_feature_cols,
+    )
+
+    if isinstance(feature_cfg, str):
+        mode = feature_cfg.strip().lower()
+        if mode == "auto":
+            return auto_feature_cols, "auto"
+        if mode in {"config_columns", "catalog", "config_columns_json"}:
+            selected, info = resolve_feature_columns_from_catalog(
+                catalog=catalog,
+                available_columns=sorted(set(dict_df.columns) & set(data_df.columns)),
+            )
+            if info.get("invalid_include_patterns"):
+                log.warning(
+                    "Ignoring invalid include pattern(s) in %s: %s",
+                    CONFIG_COLUMNS_PATH,
+                    info.get("invalid_include_patterns"),
+                )
+            if info.get("invalid_exclude_patterns"):
+                log.warning(
+                    "Ignoring invalid exclude pattern(s) in %s: %s",
+                    CONFIG_COLUMNS_PATH,
+                    info.get("invalid_exclude_patterns"),
+                )
+            if selected:
+                return selected, "config_columns"
+            if auto_feature_cols:
+                log.warning(
+                    "No features selected by config_columns catalog; falling back to auto (%d columns).",
+                    len(auto_feature_cols),
+                )
+                return auto_feature_cols, "auto_fallback_from_config_columns"
+            raise ValueError("No features selected by config_columns catalog and no auto fallback available.")
+
+    requested = parse_explicit_feature_columns(feature_cfg)
+    selected = [
+        c for c in requested
+        if c in dict_df.columns and c in data_df.columns
+    ]
+    if not selected:
+        raise ValueError(
+            "No explicit feature columns found in dictionary/dataset intersection. "
+            f"Requested={requested!r}"
+        )
+    return selected, "explicit"
 
 
 def _load_lut(lut_path: Path) -> pd.DataFrame:
@@ -370,14 +457,29 @@ def _compute_density_center_series(
         return None, None, None
 
     try:
-        eff_col_time = step32._choose_eff_column(time_df, eff_pref)
-        eff_col_basis = step32._choose_eff_column(basis_input_df, eff_pref)
+        eff_col_common = step32._choose_common_eff_column(time_df, basis_input_df, eff_pref)
     except Exception:
         return None, None, None
+    eff_col_time = eff_col_common
+    eff_col_basis = eff_col_common
     if flux_col not in time_df.columns or flux_col not in basis_input_df.columns:
         return None, None, None
+    parameter_space_cols = step32._resolve_parameter_space_columns_from_cfg(
+        time_df=time_df,
+        basis_df=basis_input_df,
+        preferred_eff=eff_col_common,
+        configured_columns=cfg_32.get("parameter_space_columns", None),
+    )
+    if not parameter_space_cols:
+        return None, None, eff_col_time
 
-    time_events_col = str(cfg_32.get("time_n_events_column", "n_events"))
+    if cfg_32.get("time_n_events_column") is not None:
+        log.warning(
+            "Deprecated key step_3_2.time_n_events_column detected; ignored. "
+            "Using fixed column %s.",
+            CANONICAL_TIME_EVENTS_COLUMN,
+        )
+    time_events_col = CANONICAL_TIME_EVENTS_COLUMN
     basis_events_col = str(cfg_32.get("basis_n_events_column", "n_events"))
     basis_events_tol_pct = _safe_float(
         cfg_32.get("basis_n_events_tolerance_pct", cfg_32.get("basis_n_events_tolerance", 30.0)),
@@ -386,28 +488,36 @@ def _compute_density_center_series(
     basis_min_rows = max(1, int(_safe_float(cfg_32.get("basis_min_rows", 1), 1)))
     basis_parameter_set_col_cfg = cfg_32.get("basis_parameter_set_column", None)
 
-    basis_flux_all = pd.to_numeric(basis_input_df.get(flux_col), errors="coerce").to_numpy(dtype=float)
-    basis_eff_all = pd.to_numeric(basis_input_df.get(eff_col_basis), errors="coerce").to_numpy(dtype=float)
+    basis_param_all = (
+        basis_input_df[parameter_space_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     basis_events_all = None
     if basis_events_col in basis_input_df.columns:
         basis_events_all = pd.to_numeric(basis_input_df[basis_events_col], errors="coerce").to_numpy(dtype=float)
 
-    target_flux = pd.to_numeric(time_df.get(flux_col), errors="coerce").to_numpy(dtype=float)
-    target_eff = pd.to_numeric(time_df.get(eff_col_time), errors="coerce").to_numpy(dtype=float)
+    target_param_matrix = (
+        time_df[parameter_space_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     target_events = (
         pd.to_numeric(time_df.get(time_events_col), errors="coerce").to_numpy(dtype=float)
         if time_events_col in time_df.columns
         else None
     )
-    if len(target_flux) == 0 or len(target_eff) == 0:
+    if target_param_matrix.shape[0] == 0:
         return None, None, eff_col_time
 
-    valid_basis = np.isfinite(basis_flux_all) & np.isfinite(basis_eff_all)
+    valid_basis = np.all(np.isfinite(basis_param_all), axis=1)
+    valid_target = np.all(np.isfinite(target_param_matrix), axis=1)
     if not np.any(valid_basis):
         return None, None, eff_col_time
+    if not np.all(valid_target):
+        return None, None, eff_col_time
     dictionary_work = basis_input_df.loc[valid_basis].reset_index(drop=True)
-    basis_flux = basis_flux_all[valid_basis]
-    basis_eff = basis_eff_all[valid_basis]
+    basis_param_matrix = basis_param_all[valid_basis]
     basis_events = None if basis_events_all is None else basis_events_all[valid_basis]
 
     basis_parameter_set_col = step32._select_parameter_set_column(dictionary_work, basis_parameter_set_col_cfg)
@@ -420,10 +530,8 @@ def _compute_density_center_series(
         parameter_set_values=parameter_set_values,
         basis_events=basis_events,
         target_events=target_events,
-        basis_flux=basis_flux,
-        basis_eff=basis_eff,
-        target_flux=target_flux,
-        target_eff=target_eff,
+        basis_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
     )
     event_mask_extra, _ = step32._build_event_mask(
         basis_events=basis_events,
@@ -433,16 +541,6 @@ def _compute_density_center_series(
     )
     event_mask = one_per_set_mask if event_mask_extra is None else (one_per_set_mask & event_mask_extra)
 
-    flux_span = max(float(np.nanmax(basis_flux) - np.nanmin(basis_flux)), 1e-9)
-    eff_span = max(float(np.nanmax(basis_eff) - np.nanmin(basis_eff)), 1e-9)
-    sigma_flux = _safe_float(
-        cfg_32.get("distance_sigma_flux_abs"),
-        _safe_float(cfg_32.get("distance_sigma_flux_fraction", 0.10), 0.10) * flux_span,
-    )
-    sigma_eff = _safe_float(
-        cfg_32.get("distance_sigma_eff_abs"),
-        _safe_float(cfg_32.get("distance_sigma_eff_fraction", 0.10), 0.10) * eff_span,
-    )
     method = str(cfg_32.get("weighting_method", "gaussian"))
     top_k_raw = cfg_32.get("top_k", None)
     top_k = None if top_k_raw in (None, "", 0) else max(1, int(_safe_float(top_k_raw, 8)))
@@ -451,29 +549,31 @@ def _compute_density_center_series(
     density_enabled = _safe_bool(cfg_32.get("density_correction_enabled", True), True)
     density_scaling = None
     if density_enabled:
+        for legacy_key in (
+            "density_correction_space",
+            "density_correction_exponent",
+            "density_correction_clip_min",
+            "density_correction_clip_max",
+        ):
+            if cfg_32.get(legacy_key) is not None:
+                log.warning(
+                    "Deprecated key step_3_2.%s detected; ignored. "
+                    "Using fixed density exponent/clip constants.",
+                    legacy_key,
+                )
         density_k = max(1, int(_safe_float(cfg_32.get("density_correction_k_neighbors", 10), 10)))
-        density_exp = _safe_float(cfg_32.get("density_correction_exponent", 1.0), 1.0)
-        density_clip_min = _safe_float(cfg_32.get("density_correction_clip_min", 0.25), 0.25)
-        density_clip_max = _safe_float(cfg_32.get("density_correction_clip_max", 4.0), 4.0)
-        if density_clip_max < density_clip_min:
-            density_clip_max = density_clip_min
         density_scaling, _ = step32._compute_inverse_density_scaling(
-            basis_flux=basis_flux,
-            basis_eff=basis_eff,
+            basis_param_matrix=basis_param_matrix,
             k_neighbors=density_k,
-            exponent=density_exp,
-            clip_min=density_clip_min,
-            clip_max=density_clip_max,
+            exponent=CANONICAL_DENSITY_EXPONENT,
+            clip_min=CANONICAL_DENSITY_CLIP_MIN,
+            clip_max=CANONICAL_DENSITY_CLIP_MAX,
         )
 
     weights = step32._build_weights(
-        dict_flux=basis_flux,
-        dict_eff=basis_eff,
-        target_flux=target_flux,
-        target_eff=target_eff,
+        dict_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
         method=method,
-        sigma_flux=sigma_flux,
-        sigma_eff=sigma_eff,
         top_k=top_k,
         distance_hardness=distance_hardness,
         density_scaling=density_scaling,
@@ -1239,29 +1339,83 @@ def main() -> int:
             log.error("%s CSV not found: %s", label, p)
             return 1
 
-    feature_columns = cfg_21.get("feature_columns", "auto")
+    feature_columns_cfg = cfg_21.get("feature_columns", "auto")
     distance_metric = str(cfg_21.get("distance_metric", "l2_zscore"))
-    interpolation_k = int(_safe_float(cfg_21.get("interpolation_k", 5), 5))
+    interpolation_k_raw = cfg_21.get("interpolation_k", None)
+    if interpolation_k_raw in (None, "", "null", "None"):
+        interpolation_k: int | None = None
+    else:
+        interpolation_k = int(interpolation_k_raw)
+    inverse_mapping_cfg = resolve_inverse_mapping_cfg(
+        inverse_mapping_cfg=cfg_21.get("inverse_mapping", {}),
+        interpolation_k=interpolation_k,
+        histogram_distance_weight=float(cfg_21.get("histogram_distance_weight", 1.0)),
+        histogram_distance_blend_mode=str(cfg_21.get("histogram_distance_blend_mode", "normalized")),
+    )
     include_global_rate = _safe_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
     exclude_same_file = _safe_bool(cfg_33.get("exclude_same_file", True), True)
     uncertainty_quantile = _safe_float(cfg_33.get("uncertainty_quantile", 0.68), 0.68)
     uncertainty_quantile = float(np.clip(uncertainty_quantile, 0.0, 1.0))
 
-    flux_col = str(cfg_32.get("flux_column", config.get("step_3_1", {}).get("flux_column", "flux_cm2_min")))
-    eff_pref = str(cfg_32.get("eff_column", config.get("step_3_1", {}).get("eff_column", "eff_sim_1")))
+    if (
+        cfg_32.get("flux_column") is not None
+        or cfg_32.get("eff_column") is not None
+        or config.get("step_3_1", {}).get("flux_column") is not None
+        or config.get("step_3_1", {}).get("eff_column") is not None
+    ):
+        log.warning(
+            "Deprecated keys step_3_2/step_3_1 flux_column/eff_column detected; ignored. "
+            "Using fixed columns %s/%s.",
+            CANONICAL_FLUX_COLUMN,
+            CANONICAL_EFF_COLUMN,
+        )
+    flux_col = CANONICAL_FLUX_COLUMN
+    eff_pref = CANONICAL_EFF_COLUMN
 
     log.info("Synthetic dataset: %s", synthetic_path)
     log.info("Time series:      %s", time_series_path)
     log.info("Complete curve:   %s", complete_curve_path)
     log.info("Dictionary:       %s", dictionary_path)
     log.info("LUT:              %s", lut_path)
-    log.info("Metric=%s, k=%d, uncertainty_quantile=%.3f", distance_metric, interpolation_k, uncertainty_quantile)
+    log.info("Metric=%s, k=%s, uncertainty_quantile=%.3f", distance_metric, interpolation_k, uncertainty_quantile)
+    log.info(
+        "Inverse mapping: selection=%s k=%s weighting=%s aggregation=%s hist_weight=%.3g hist_blend=%s",
+        inverse_mapping_cfg.get("neighbor_selection"),
+        ("all" if inverse_mapping_cfg.get("neighbor_count") is None else str(inverse_mapping_cfg.get("neighbor_count"))),
+        inverse_mapping_cfg.get("weighting"),
+        inverse_mapping_cfg.get("aggregation"),
+        float(inverse_mapping_cfg.get("histogram_distance_weight", 1.0)),
+        inverse_mapping_cfg.get("histogram_distance_blend_mode"),
+    )
 
     synthetic_df = pd.read_csv(synthetic_path, low_memory=False)
     if synthetic_df.empty:
         log.error("Synthetic dataset is empty: %s", synthetic_path)
         return 1
+    dictionary_df = pd.read_csv(dictionary_path, low_memory=False)
+    if dictionary_df.empty:
+        log.error("Dictionary table is empty: %s", dictionary_path)
+        return 1
+
+    try:
+        resolved_feature_columns, feature_strategy = _resolve_inference_feature_columns(
+            feature_cfg=feature_columns_cfg,
+            dict_df=dictionary_df,
+            data_df=synthetic_df,
+            include_global_rate=include_global_rate,
+            global_rate_col=global_rate_col,
+        )
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 1
+    log.info(
+        "Feature selection: strategy=%s selected=%d (config=%r, catalog=%s)",
+        feature_strategy,
+        len(resolved_feature_columns),
+        feature_columns_cfg,
+        CONFIG_COLUMNS_PATH,
+    )
 
     time_df = pd.DataFrame()
     if time_series_path.exists():
@@ -1296,12 +1450,13 @@ def main() -> int:
     est_df = estimate_parameters(
         dictionary_path=str(dictionary_path),
         dataset_path=str(synthetic_path),
-        feature_columns=feature_columns,
+        feature_columns=resolved_feature_columns,
         distance_metric=distance_metric,
         interpolation_k=interpolation_k,
         include_global_rate=include_global_rate,
         global_rate_col=global_rate_col,
         exclude_same_file=exclude_same_file,
+        inverse_mapping_cfg=inverse_mapping_cfg,
     )
 
     # Merge with synthetic rows for time axes and true values.
@@ -1411,6 +1566,12 @@ def main() -> int:
         "uncertainty_lut_csv": str(lut_path),
         "distance_metric": distance_metric,
         "interpolation_k": interpolation_k,
+        "inverse_mapping": inverse_mapping_cfg,
+        "feature_columns_config": feature_columns_cfg,
+        "feature_columns_strategy": feature_strategy,
+        "feature_columns_resolved_count": int(len(resolved_feature_columns)),
+        "feature_columns_resolved": resolved_feature_columns,
+        "feature_columns_catalog": str(CONFIG_COLUMNS_PATH),
         "uncertainty_quantile": uncertainty_quantile,
         "n_rows": int(len(merged)),
         "n_successful_flux_estimates": int(pd.to_numeric(merged.get(est_flux_col), errors="coerce").notna().sum()),

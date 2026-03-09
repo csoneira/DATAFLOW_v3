@@ -2,8 +2,8 @@ last_file_test: true
 selection:
   stations: [0, 1]
   date_ranges:
-    - start: 2024-09-16
-      end: 2024-09-30
+    - start: 2024-09-27
+      end: 2024-10-01
 complete_reanalysis: false
 article_format: false
 # create_plots options: null | debug | usual | all

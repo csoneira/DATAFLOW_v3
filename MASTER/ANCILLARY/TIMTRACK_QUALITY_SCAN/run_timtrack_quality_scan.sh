@@ -17,7 +17,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-DEFAULT_CONFIG_PATH="${SCRIPT_DIR}/timtrack_quality_scan.conf"
+DEFAULT_CONFIG_PATH="${SCRIPT_DIR}/CONFIGS/timtrack_quality_scan.conf"
+if [[ ! -f "${DEFAULT_CONFIG_PATH}" ]]; then
+  # Backward compatibility with legacy location.
+  DEFAULT_CONFIG_PATH="${SCRIPT_DIR}/timtrack_quality_scan.conf"
+fi
 PLOT_SCRIPT_PATH="${SCRIPT_DIR}/timtrack_quality_scan_plotter.py"
 
 CONFIG_PATH="${DEFAULT_CONFIG_PATH}"
@@ -41,6 +45,7 @@ Usage:
 
 Options:
   --config <path>            Path to scan config file.
+                             Default: MASTER/ANCILLARY/TIMTRACK_QUALITY_SCAN/CONFIGS/timtrack_quality_scan.conf
   --once                     Run one scan cycle and exit.
   --max-cycles <n>           Stop after n cycles (0 = no limit).
   --plot-only                Skip scanning and generate plots from existing metadata.
@@ -164,7 +169,7 @@ restore_default_after_sweep="${restore_default_after_sweep:-false}"
 default_d0="${default_d0:-${fixed_d0}}"
 default_cocut="${default_cocut:-${cocut_max}}"
 default_iter_max="${default_iter_max:-${fixed_iter_max}}"
-profiles_csv="${profiles_csv:-MASTER/ANCILLARY/TIMTRACK_QUALITY_SCAN/scan_profiles.csv}"
+profiles_csv="${profiles_csv:-}"
 plot_output_dir="${plot_output_dir:-MASTER/ANCILLARY/TIMTRACK_QUALITY_SCAN/OUTPUT}"
 scan_log_csv="${scan_log_csv:-MASTER/ANCILLARY/TIMTRACK_QUALITY_SCAN/OUTPUT/timtrack_quality_scan_log.csv}"
 run_reference_csv="${run_reference_csv:-MASTER/ANCILLARY/TIMTRACK_QUALITY_SCAN/OUTPUT/timtrack_quality_scan_run_reference.csv}"
@@ -379,6 +384,14 @@ for cocut in ordered:
 PY
     )
   else
+    if [[ -z "${PROFILES_CSV_ABS}" ]]; then
+      log_err "profiles_csv must be set when use_cocut_range=false"
+      exit 1
+    fi
+    if [[ ! -f "${PROFILES_CSV_ABS}" ]]; then
+      log_err "profiles_csv not found: ${PROFILES_CSV_ABS}"
+      exit 1
+    fi
     mapfile -t PROFILE_ROWS < <(
       python3 - "${PROFILES_CSV_ABS}" <<'PY'
 import csv

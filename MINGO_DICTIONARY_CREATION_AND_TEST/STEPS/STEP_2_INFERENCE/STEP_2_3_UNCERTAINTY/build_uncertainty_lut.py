@@ -36,7 +36,7 @@ STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent
 PIPELINE_DIR = INFERENCE_DIR.parent
 PROJECT_DIR = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PROJECT_DIR / "config.json"
+DEFAULT_CONFIG = PROJECT_DIR / "config_method.json"
 
 DEFAULT_VALIDATION = (
     INFERENCE_DIR / "STEP_2_2_VALIDATION"
@@ -111,17 +111,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
-
-# =====================================================================
-# Binning helpers
-# =====================================================================
 
 def _as_bool(value: object) -> bool:
     """Parse config-like truthy values."""
@@ -628,14 +632,36 @@ def main() -> int:
     exclude_dictionary_entries = _as_bool(cfg_31.get("exclude_dictionary_entries", True))
 
     # Plot-relevant parameters from config:
-    # prefer step_2_3, fallback to step_2_1 (shared STEP 2.x), then legacy step_2_2, then step_1_2.
-    plot_params = cfg_31.get("plot_parameters", None)
+    # prefer global top-level plot_parameters; keep step-local keys as deprecated fallback.
+    plot_params = config.get("plot_parameters", None)
     if plot_params is None:
-        plot_params = config.get("step_2_1", {}).get("plot_parameters", None)
+        legacy_plot_params_23 = cfg_31.get("plot_parameters", None)
+        if legacy_plot_params_23 is not None:
+            log.warning(
+                "Deprecated config key step_2_3.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params = legacy_plot_params_23
     if plot_params is None:
-        plot_params = config.get("step_2_2", {}).get("plot_parameters", None)
+        legacy_plot_params_21 = config.get("step_2_1", {}).get("plot_parameters", None)
+        if legacy_plot_params_21 is not None:
+            log.warning(
+                "Deprecated config key step_2_1.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params = legacy_plot_params_21
     if plot_params is None:
-        plot_params = config.get("step_1_2", {}).get("plot_parameters", None)
+        legacy_plot_params_22 = config.get("step_2_2", {}).get("plot_parameters", None)
+        if legacy_plot_params_22 is not None:
+            log.warning(
+                "Deprecated config key step_2_2.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params = legacy_plot_params_22
+    if plot_params is None:
+        legacy_plot_params_12 = config.get("step_1_2", {}).get("plot_parameters", None)
+        if legacy_plot_params_12 is not None:
+            log.warning(
+                "Deprecated config key step_1_2.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params = legacy_plot_params_12
 
     # Ellipse-plot configuration (simple, optional).
     # n_points limits only the number of validation/tested points drawn.

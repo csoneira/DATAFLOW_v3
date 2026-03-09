@@ -39,7 +39,7 @@ if STEP_DIR.parents[2].name == "STEPS":
 else:
     PIPELINE_DIR = STEP_DIR.parents[2]
 REPO_ROOT = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
 if (PIPELINE_DIR / "STEP_1_SETUP").exists():
     STEP_ROOT = PIPELINE_DIR
 else:
@@ -83,6 +83,7 @@ _PLOT_EXTENSIONS = {
     ".webp",
 }
 _FILE_TS_RE = re.compile(r"(\d{11})$")
+RATE_HIST_BIN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz")
 
 logging.basicConfig(format="[%(levelname)s] STEP_4.1 - %(message)s", level=logging.INFO)
 log = logging.getLogger("STEP_4.1")
@@ -114,13 +115,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
 
 def _safe_task_ids(raw: object) -> list[int]:
     if raw is None:
@@ -219,6 +228,10 @@ def _task_specific_metadata_path(station_id: int, task_id: int) -> Path:
 
 def _task_trigger_type_metadata_path(station_id: int, task_id: int) -> Path:
     return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_trigger_type.csv"
+
+
+def _task_rate_histogram_metadata_path(station_id: int, task_id: int) -> Path:
+    return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_rate_histogram.csv"
 
 
 def _normalize_basename_for_time(value: object) -> str:
@@ -695,6 +708,53 @@ def _aggregate_latest(df: pd.DataFrame, timestamp_col: str) -> pd.DataFrame:
     return work.groupby("filename_base").tail(1)
 
 
+def _load_rate_histogram_bins(
+    *,
+    station_id: int,
+    task_id: int,
+    metadata_agg: str,
+    timestamp_col: str,
+) -> tuple[pd.DataFrame | None, list[str]]:
+    """Load per-file histogram-bin columns from metadata_rate_histogram."""
+    rate_hist_path = _task_rate_histogram_metadata_path(station_id, task_id)
+    if not rate_hist_path.exists():
+        log.info("Task %d rate_histogram metadata not found: %s", task_id, rate_hist_path)
+        return (None, [])
+
+    log.info("Loading task %d rate_histogram metadata: %s", task_id, rate_hist_path)
+    rate_hist_df = pd.read_csv(rate_hist_path, low_memory=False)
+    if "filename_base" not in rate_hist_df.columns:
+        log.warning(
+            "Task %d rate_histogram metadata has no 'filename_base'; skipping histogram merge.",
+            task_id,
+        )
+        return (None, [])
+    if metadata_agg == "latest":
+        rate_hist_df = _aggregate_latest(rate_hist_df, timestamp_col=timestamp_col)
+
+    hist_cols = [
+        c for c in rate_hist_df.columns
+        if RATE_HIST_BIN_RE.match(str(c)) is not None
+    ]
+    hist_cols.sort(key=lambda c: int(RATE_HIST_BIN_RE.match(str(c)).group("bin")))
+    if not hist_cols:
+        log.warning(
+            "Task %d rate_histogram metadata has no events_per_second_<bin>_rate_hz columns.",
+            task_id,
+        )
+        return (None, [])
+
+    out = rate_hist_df[["filename_base", *hist_cols]].copy()
+    out = out.groupby("filename_base", sort=False).tail(1)
+    log.info(
+        "Task %d rate_histogram rows (after aggregation): %d with %d bin columns.",
+        task_id,
+        len(out),
+        len(hist_cols),
+    )
+    return (out, hist_cols)
+
+
 def _pick_event_count_column(df: pd.DataFrame) -> str | None:
     # Prefer explicit event-count columns for TT=1234; do not use duration columns.
     priority = [
@@ -1052,10 +1112,13 @@ def main() -> int:
             "rows_read": 0,
             "rows_read_specific": 0,
             "rows_read_trigger_type": 0,
+            "rows_read_rate_histogram": 0,
             "rows_after_latest_agg": 0,
             "rows_after_latest_agg_specific": 0,
             "rows_after_latest_agg_trigger_type": 0,
+            "rows_after_latest_agg_rate_histogram": 0,
             "rows_after_metadata_merge": 0,
+            "rows_with_rate_histogram_after_merge": 0,
             "rows_after_date_filter": 0,
             "rows_with_online_z_mapped": 0,
             "rows_after_z_filter": 0,
@@ -1100,13 +1163,47 @@ def main() -> int:
             else:
                 log.warning("Task %d specific metadata not found: %s", task_id, specific_path)
 
+        rate_hist_df, rate_hist_cols = _load_rate_histogram_bins(
+            station_id=station_id,
+            task_id=task_id,
+            metadata_agg=metadata_agg,
+            timestamp_col=timestamp_col,
+        )
+        if rate_hist_df is not None:
+            task_stats[key]["rows_read_rate_histogram"] = int(len(rate_hist_df))
+            task_stats[key]["rows_after_latest_agg_rate_histogram"] = int(len(rate_hist_df))
+
         task_stats[key]["rows_read"] = int(
-            task_stats[key]["rows_read_specific"] + task_stats[key]["rows_read_trigger_type"]
+            task_stats[key]["rows_read_specific"]
+            + task_stats[key]["rows_read_trigger_type"]
+            + task_stats[key]["rows_read_rate_histogram"]
         )
 
         if meta_df is None:
             log.warning("Task %d has no usable trigger_type/specific metadata; skipping.", task_id)
             continue
+
+        if rate_hist_df is not None and rate_hist_cols:
+            new_hist_cols = [c for c in rate_hist_cols if c not in meta_df.columns]
+            if new_hist_cols:
+                meta_df = meta_df.merge(
+                    rate_hist_df[["filename_base", *new_hist_cols]],
+                    on="filename_base",
+                    how="left",
+                )
+                task_stats[key]["rows_with_rate_histogram_after_merge"] = int(
+                    meta_df[new_hist_cols].notna().any(axis=1).sum()
+                )
+                log.info(
+                    "Task %d joined rate_histogram bins: %d columns, %d/%d rows with histogram values.",
+                    task_id,
+                    len(new_hist_cols),
+                    task_stats[key]["rows_with_rate_histogram_after_merge"],
+                    len(meta_df),
+                )
+            else:
+                task_stats[key]["rows_with_rate_histogram_after_merge"] = int(len(meta_df))
+                log.info("Task %d rate_histogram bins already present; merge skipped.", task_id)
 
         task_stats[key]["rows_after_latest_agg"] = int(len(meta_df))
         task_stats[key]["rows_after_metadata_merge"] = int(len(meta_df))
@@ -1203,6 +1300,7 @@ def main() -> int:
         "source_metadata_files": [
             "task_<id>_metadata_specific.csv",
             "task_<id>_metadata_trigger_type.csv",
+            "task_<id>_metadata_rate_histogram.csv",
         ],
         "task_stats": task_stats,
         "metadata_aggregation": metadata_agg,

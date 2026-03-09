@@ -25,6 +25,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+log = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -307,8 +309,9 @@ def chi2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
         return np.nan
     y_t = y_true[mask]
     y_p = y_pred[mask]
-    sigma2 = np.maximum(y_t, 1.0)
-    return float(np.sum((y_t - y_p) ** 2 / sigma2))
+    # Poisson variance estimate: max(|observed|, 1) prevents division by zero
+    variance_floor = np.maximum(np.abs(y_t), 1.0)
+    return float(np.sum((y_t - y_p) ** 2 / variance_floor))
 
 
 def poisson_deviance(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -727,6 +730,7 @@ def build_validation_table(
         (c for c in event_count_candidates if c in out.columns), None)
     if (source_event_col is not None
             and source_event_col != "generated_events_count"):
+        log.info("Event count column resolved via fallback: '%s'.", source_event_col)
         out["generated_events_count"] = out[source_event_col]
 
     numeric_cols = [four_col, *miss_cols.values(), "flux_cm2_min", "cos_n",

@@ -16,6 +16,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import json
 import logging
@@ -34,7 +35,7 @@ STEP_DIR = Path(__file__).resolve().parent
 SETUP_DIR = STEP_DIR.parent
 PIPELINE_DIR = SETUP_DIR.parent                    # .../STEPS
 PROJECT_DIR = PIPELINE_DIR.parent                  # .../MINGO_DICTIONARY_CREATION_AND_TEST
-DEFAULT_CONFIG = PROJECT_DIR / "config.json"
+DEFAULT_CONFIG = PROJECT_DIR / "config_method.json"
 
 DEFAULT_BASE_DATASET = (
     SETUP_DIR / "STEP_1_2_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dataset.csv"
@@ -101,18 +102,24 @@ logging.basicConfig(
 )
 log = logging.getLogger("STEP_1.3")
 
+CANONICAL_FLUX_COLUMN = "flux_cm2_min"
+CANONICAL_EFF_COLUMN = "eff_sim_1"
+CANONICAL_TIME_EVENTS_COLUMN = "n_events"
+CANONICAL_TIME_RATE_COLUMN = "global_rate_hz_mean"
+CANONICAL_TIME_RATE_FALLBACK_COLUMN = "global_rate_hz_mid"
+CANONICAL_TIME_DURATION_COLUMN = "duration_seconds"
+CANONICAL_DENSITY_EXPONENT = 1.0
+CANONICAL_DENSITY_CLIP_MIN = 0.25
+CANONICAL_DENSITY_CLIP_MAX = 4.0
+
 STEP32_WEIGHTING_KEYS = {
     "basis_source",
     "basis_n_events_column",
     "basis_parameter_set_column",
+    "parameter_space_columns",
     "basis_n_events_tolerance_pct",
     "basis_n_events_tolerance",
     "basis_min_rows",
-    "flux_column",
-    "eff_column",
-    "time_n_events_column",
-    "time_rate_column",
-    "time_duration_column",
     "weighting_method",
     "distance_sigma_flux_fraction",
     "distance_sigma_eff_fraction",
@@ -121,25 +128,31 @@ STEP32_WEIGHTING_KEYS = {
     "distance_hardness",
     "density_correction_enabled",
     "density_correction_k_neighbors",
-    "density_correction_exponent",
-    "density_correction_clip_min",
-    "density_correction_clip_max",
+    "enforce_distance_monotonic_weights",
     "top_k",
     "random_seed",
     "highlight_point_index",
+}
+
+STEP32_WEIGHTING_LEGACY_IGNORED_KEYS = {
+    "flux_column",
+    "eff_column",
+    "time_n_events_column",
+    "time_rate_column",
+    "time_duration_column",
+    "density_correction_space",
+    "density_correction_exponent",
+    "density_correction_clip_min",
+    "density_correction_clip_max",
 }
 
 STEP32_WEIGHTING_DEFAULTS = {
     "basis_source": "dataset",
     "basis_n_events_column": "n_events",
     "basis_parameter_set_column": "param_hash_x",
+    "parameter_space_columns": None,
     "basis_n_events_tolerance_pct": 25,
     "basis_min_rows": 1,
-    "flux_column": "flux_cm2_min",
-    "eff_column": "eff_sim_1",
-    "time_n_events_column": "n_events",
-    "time_rate_column": "global_rate_hz_mean",
-    "time_duration_column": "duration_seconds",
     "weighting_method": "gaussian",
     "distance_sigma_flux_fraction": 0.15,
     "distance_sigma_eff_fraction": 0.15,
@@ -148,9 +161,7 @@ STEP32_WEIGHTING_DEFAULTS = {
     "distance_hardness": 1.0,
     "density_correction_enabled": True,
     "density_correction_k_neighbors": None,
-    "density_correction_exponent": 1.0,
-    "density_correction_clip_min": None,
-    "density_correction_clip_max": None,
+    "enforce_distance_monotonic_weights": False,
     "top_k": None,
     "random_seed": None,
     "highlight_point_index": None,
@@ -170,13 +181,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
 
 def _as_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -263,6 +282,12 @@ def _merge_weighting_cfg(cfg_32: dict, cfg_13: dict) -> dict:
             "Ignoring %d weighting key(s) from step_3_2; using step_1_3.weighting_shared + internal defaults.",
             len(ignored_step32_weighting_keys),
         )
+    for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
+        if raw_cfg_32.get(legacy_key) is not None:
+            log.warning(
+                "Deprecated key step_3_2.%s detected; ignored. Using fixed canonical settings.",
+                legacy_key,
+            )
 
     merged = dict(STEP32_WEIGHTING_DEFAULTS)
     legacy_central_weighting = cfg_13.get("step_3_2_weighting", {})
@@ -271,18 +296,54 @@ def _merge_weighting_cfg(cfg_32: dict, cfg_13: dict) -> dict:
             log.info(
                 "Using deprecated key step_1_3.step_3_2_weighting; prefer step_1_3.weighting_shared."
             )
-        for key, value in legacy_central_weighting.items():
+        for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
+            if legacy_central_weighting.get(legacy_key) is not None:
+                log.warning(
+                    "Deprecated key step_1_3.step_3_2_weighting.%s detected; ignored. "
+                    "Using fixed canonical settings.",
+                    legacy_key,
+                )
+        for key in STEP32_WEIGHTING_KEYS:
+            value = legacy_central_weighting.get(key, None)
             if value is not None:
                 merged[key] = value
 
+    # Warn when deprecated and current keys conflict
+    central_check = cfg_13.get("weighting_shared", {})
+    if isinstance(legacy_central_weighting, dict) and isinstance(central_check, dict):
+        for key in STEP32_WEIGHTING_KEYS:
+            lv, cv = legacy_central_weighting.get(key), central_check.get(key)
+            if lv is not None and cv is not None and lv != cv:
+                log.warning(
+                    "Config conflict: step_1_3.step_3_2_weighting.%s=%r vs "
+                    "step_1_3.weighting_shared.%s=%r; using weighting_shared.",
+                    key, lv, key, cv,
+                )
+
     central_weighting = cfg_13.get("weighting_shared", {})
     if isinstance(central_weighting, dict):
-        for key, value in central_weighting.items():
+        for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
+            if central_weighting.get(legacy_key) is not None:
+                log.warning(
+                    "Deprecated key step_1_3.weighting_shared.%s detected; ignored. "
+                    "Using fixed canonical settings.",
+                    legacy_key,
+                )
+        for key in STEP32_WEIGHTING_KEYS:
+            value = central_weighting.get(key, None)
             if value is not None:
                 merged[key] = value
     overrides = cfg_13.get("weighting_overrides", {})
     if isinstance(overrides, dict):
-        for key, value in overrides.items():
+        for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
+            if overrides.get(legacy_key) is not None:
+                log.warning(
+                    "Deprecated key step_1_3.weighting_overrides.%s detected; ignored. "
+                    "Using fixed canonical settings.",
+                    legacy_key,
+                )
+        for key in STEP32_WEIGHTING_KEYS:
+            value = overrides.get(key, None)
             if value is not None:
                 merged[key] = value
     return merged
@@ -315,8 +376,22 @@ def _build_uniform_targets(
     n_new_rows: int,
 ) -> tuple[pd.DataFrame, dict]:
     """Build near-uniform target points in (flux, eff) for dataset enlargement."""
-    flux_col = str(_pick_cfg(cfg_13, cfg_31, "flux_column", "flux_cm2_min"))
-    eff_pref = str(_pick_cfg(cfg_13, cfg_31, "eff_column", "eff_sim_1"))
+    flux_col = CANONICAL_FLUX_COLUMN
+    eff_pref = CANONICAL_EFF_COLUMN
+    if cfg_13.get("flux_column") is not None or cfg_13.get("eff_column") is not None:
+        log.warning(
+            "Deprecated keys step_1_3.flux_column/eff_column detected; ignored. "
+            "Using fixed columns %s/%s.",
+            CANONICAL_FLUX_COLUMN,
+            CANONICAL_EFF_COLUMN,
+        )
+    if cfg_31.get("flux_column") is not None or cfg_31.get("eff_column") is not None:
+        log.warning(
+            "Deprecated keys step_3_1.flux_column/eff_column detected; ignored by STEP 1.3. "
+            "Using fixed columns %s/%s.",
+            CANONICAL_FLUX_COLUMN,
+            CANONICAL_EFF_COLUMN,
+        )
 
     rate_col = str(_pick_cfg(cfg_13, cfg_31, "rate_column", "events_per_second_global_rate"))
     rate_flux_col = str(_pick_cfg(cfg_13, cfg_31, "rate_flux_column", flux_col))
@@ -535,15 +610,44 @@ def _generate_synthetic_rows(
 
     if flux_col not in time_df.columns or flux_col not in basis_input_df.columns:
         raise KeyError(f"Flux column '{flux_col}' must exist in time targets and basis.")
-    eff_col_time = step32._choose_eff_column(time_df, eff_pref)
-    eff_col_basis = step32._choose_eff_column(basis_input_df, eff_pref)
+    eff_col_common = step32._choose_common_eff_column(time_df, basis_input_df, eff_pref)
+    eff_col_time = eff_col_common
+    eff_col_basis = eff_col_common
+    parameter_space_cols = step32._resolve_parameter_space_columns_from_cfg(
+        time_df=time_df,
+        basis_df=basis_input_df,
+        preferred_eff=eff_col_common,
+        configured_columns=cfg_weight.get("parameter_space_columns", None),
+    )
+    if not parameter_space_cols:
+        raise ValueError("No shared parameter-space columns found between generated targets and basis table.")
 
-    time_events_col = str(cfg_weight.get("time_n_events_column", "n_events"))
-    time_rate_col = str(cfg_weight.get("time_rate_column", "global_rate_hz_mean"))
-    time_duration_col = str(cfg_weight.get("time_duration_column", "duration_seconds"))
-    for required_col in (time_events_col, time_rate_col, time_duration_col):
-        if required_col not in time_df.columns:
-            raise KeyError(f"Target time-series column '{required_col}' not found.")
+    for legacy_key in ("time_n_events_column", "time_rate_column", "time_duration_column"):
+        if cfg_weight.get(legacy_key) is not None:
+            log.warning(
+                "Deprecated key step_1_3.weighting_shared.%s detected; ignored. "
+                "Using fixed time columns %s/%s/%s.",
+                legacy_key,
+                CANONICAL_TIME_EVENTS_COLUMN,
+                CANONICAL_TIME_RATE_COLUMN,
+                CANONICAL_TIME_DURATION_COLUMN,
+            )
+
+    time_events_col = CANONICAL_TIME_EVENTS_COLUMN
+    if time_events_col not in time_df.columns:
+        raise KeyError(f"Target time-series column '{time_events_col}' not found.")
+    time_rate_col = CANONICAL_TIME_RATE_COLUMN
+    if time_rate_col not in time_df.columns:
+        if CANONICAL_TIME_RATE_FALLBACK_COLUMN in time_df.columns:
+            time_rate_col = CANONICAL_TIME_RATE_FALLBACK_COLUMN
+        else:
+            raise KeyError(
+                f"Target time-series rate column '{CANONICAL_TIME_RATE_COLUMN}' "
+                f"(or fallback '{CANONICAL_TIME_RATE_FALLBACK_COLUMN}') not found."
+            )
+    time_duration_col = CANONICAL_TIME_DURATION_COLUMN
+    if time_duration_col not in time_df.columns:
+        raise KeyError(f"Target time-series column '{time_duration_col}' not found.")
 
     basis_events_col = str(cfg_weight.get("basis_n_events_column", "n_events"))
     basis_events_tol_pct = step32._safe_float(
@@ -553,25 +657,38 @@ def _generate_synthetic_rows(
     basis_parameter_set_col_cfg = cfg_weight.get("basis_parameter_set_column", None)
     basis_min_rows = step32._safe_int(cfg_weight.get("basis_min_rows", 1), 1, minimum=1)
 
-    basis_flux_all = pd.to_numeric(basis_input_df[flux_col], errors="coerce").to_numpy(dtype=float)
-    basis_eff_all = pd.to_numeric(basis_input_df[eff_col_basis], errors="coerce").to_numpy(dtype=float)
+    basis_param_all = (
+        basis_input_df[parameter_space_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     basis_events_all = None
     if basis_events_col in basis_input_df.columns:
         basis_events_all = pd.to_numeric(basis_input_df[basis_events_col], errors="coerce").to_numpy(dtype=float)
 
+    target_param_matrix = (
+        time_df[parameter_space_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     target_flux = pd.to_numeric(time_df[flux_col], errors="coerce").to_numpy(dtype=float)
     target_eff = pd.to_numeric(time_df[eff_col_time], errors="coerce").to_numpy(dtype=float)
     target_events = pd.to_numeric(time_df[time_events_col], errors="coerce").to_numpy(dtype=float)
-    valid_basis = np.isfinite(basis_flux_all) & np.isfinite(basis_eff_all)
-    valid_target = np.isfinite(target_flux) & np.isfinite(target_eff)
+    valid_basis = np.all(np.isfinite(basis_param_all), axis=1)
+    valid_target = np.all(np.isfinite(target_param_matrix), axis=1)
     if not np.any(valid_basis):
-        raise ValueError("No valid basis points in selected basis table.")
+        raise ValueError(
+            "No valid basis rows in selected basis table for parameter-space columns "
+            f"{parameter_space_cols}."
+        )
     if not np.all(valid_target):
-        raise ValueError("Generated targets contain invalid flux/eff points.")
+        raise ValueError(
+            "Generated targets contain invalid values in parameter-space columns "
+            f"{parameter_space_cols}."
+        )
 
     basis_work = basis_input_df.loc[valid_basis].reset_index(drop=True)
-    basis_flux = basis_flux_all[valid_basis]
-    basis_eff = basis_eff_all[valid_basis]
+    basis_param_matrix = basis_param_all[valid_basis]
     basis_events = None if basis_events_all is None else basis_events_all[valid_basis]
 
     basis_parameter_set_col = step32._select_parameter_set_column(basis_work, basis_parameter_set_col_cfg)
@@ -584,10 +701,8 @@ def _generate_synthetic_rows(
         parameter_set_values=parameter_set_values,
         basis_events=basis_events,
         target_events=target_events,
-        basis_flux=basis_flux,
-        basis_eff=basis_eff,
-        target_flux=target_flux,
-        target_eff=target_eff,
+        basis_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
     )
     event_mask_extra, extra_info = step32._build_event_mask(
         basis_events=basis_events,
@@ -597,51 +712,48 @@ def _generate_synthetic_rows(
     )
     event_mask = one_per_set_mask if event_mask_extra is None else (one_per_set_mask & event_mask_extra)
 
-    flux_span = max(float(np.nanmax(basis_flux) - np.nanmin(basis_flux)), 1e-9)
-    eff_span = max(float(np.nanmax(basis_eff) - np.nanmin(basis_eff)), 1e-9)
-    sigma_flux = step32._safe_float(
-        cfg_weight.get("distance_sigma_flux_abs"),
-        step32._safe_float(cfg_weight.get("distance_sigma_flux_fraction", 0.10), 0.10) * flux_span,
-    )
-    sigma_eff = step32._safe_float(
-        cfg_weight.get("distance_sigma_eff_abs"),
-        step32._safe_float(cfg_weight.get("distance_sigma_eff_fraction", 0.10), 0.10) * eff_span,
-    )
     method = str(cfg_weight.get("weighting_method", "gaussian"))
     top_k_raw = cfg_weight.get("top_k", None)
     top_k = None if top_k_raw in (None, "", 0) else step32._safe_int(top_k_raw, 8, minimum=1)
     distance_hardness = step32._safe_float(cfg_weight.get("distance_hardness", 1.0), 1.0)
+    enforce_distance_monotonic_weights = step32._safe_bool(
+        cfg_weight.get("enforce_distance_monotonic_weights", False),
+        False,
+    )
 
     density_enabled = step32._safe_bool(cfg_weight.get("density_correction_enabled", True), True)
     density_scaling = None
     if density_enabled:
+        for legacy_key in (
+            "density_correction_space",
+            "density_correction_exponent",
+            "density_correction_clip_min",
+            "density_correction_clip_max",
+        ):
+            if cfg_weight.get(legacy_key) is not None:
+                log.warning(
+                    "Deprecated key step_1_3.weighting_shared.%s detected; ignored. "
+                    "Using fixed density exponent/clip constants.",
+                    legacy_key,
+                )
         density_k = step32._safe_int(cfg_weight.get("density_correction_k_neighbors", 10), 10, minimum=1)
-        density_exp = step32._safe_float(cfg_weight.get("density_correction_exponent", 1.0), 1.0)
-        density_clip_min = step32._safe_float(cfg_weight.get("density_correction_clip_min", 0.25), 0.25)
-        density_clip_max = step32._safe_float(cfg_weight.get("density_correction_clip_max", 4.0), 4.0)
-        if density_clip_max < density_clip_min:
-            density_clip_max = density_clip_min
         density_scaling, _ = step32._compute_inverse_density_scaling(
-            basis_flux=basis_flux,
-            basis_eff=basis_eff,
+            basis_param_matrix=basis_param_matrix,
             k_neighbors=density_k,
-            exponent=density_exp,
-            clip_min=density_clip_min,
-            clip_max=density_clip_max,
+            exponent=CANONICAL_DENSITY_EXPONENT,
+            clip_min=CANONICAL_DENSITY_CLIP_MIN,
+            clip_max=CANONICAL_DENSITY_CLIP_MAX,
         )
 
     weights = step32._build_weights(
-        dict_flux=basis_flux,
-        dict_eff=basis_eff,
-        target_flux=target_flux,
-        target_eff=target_eff,
+        dict_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
         method=method,
-        sigma_flux=sigma_flux,
-        sigma_eff=sigma_eff,
         top_k=top_k,
         distance_hardness=distance_hardness,
         density_scaling=density_scaling,
         event_mask=event_mask,
+        enforce_distance_monotonic_weights=enforce_distance_monotonic_weights,
     )
 
     synthetic_df, dominant_idx = step32._make_synthetic_dataset(
@@ -661,14 +773,17 @@ def _generate_synthetic_rows(
     info = {
         "basis_source": basis_source,
         "basis_rows_total": int(len(basis_input_df)),
-        "basis_rows_valid_flux_eff": int(len(basis_work)),
+        "basis_rows_valid_parameter_space": int(len(basis_work)),
         "basis_parameter_set_column": basis_parameter_set_col if basis_parameter_set_col is not None else "__row_index__",
+        "parameter_space_columns_config": cfg_weight.get("parameter_space_columns", None),
+        "parameter_space_columns_used_for_weighting": parameter_space_cols,
+        "parameter_space_dimensions": int(len(parameter_space_cols)),
         "one_per_set_mode": str(one_per_set_info.get("mode", "unknown")),
         "event_tolerance_info": extra_info,
-        "sigma_flux": float(sigma_flux),
-        "sigma_eff": float(sigma_eff),
         "weighting_method": method,
+        "distance_definition": "standardized_euclidean_in_parameter_space",
         "distance_hardness": float(distance_hardness),
+        "enforce_distance_monotonic_weights": bool(enforce_distance_monotonic_weights),
         "top_k": int(top_k) if top_k is not None else None,
         "density_correction_enabled": bool(density_enabled),
         "dominant_basis_unique_count": int(len(np.unique(dominant_idx))),
@@ -1129,9 +1244,23 @@ def main() -> int:
         log.error("Failed to build uniform-density enlargement targets: %s", exc)
         return 1
 
-    flux_col = str(ts_info.get("flux_column", "flux_cm2_min"))
-    eff_pref = str(_pick_cfg(cfg_13, cfg_31, "eff_column", "eff_sim_1"))
-    plot_params_cfg = cfg_13.get("plot_parameters", config.get("step_1_2", {}).get("plot_parameters", None))
+    flux_col = str(ts_info.get("flux_column", CANONICAL_FLUX_COLUMN))
+    eff_pref = CANONICAL_EFF_COLUMN
+    plot_params_cfg = config.get("plot_parameters", None)
+    if plot_params_cfg is None:
+        legacy_plot_params_13 = cfg_13.get("plot_parameters", None)
+        if legacy_plot_params_13 is not None:
+            log.warning(
+                "Deprecated config key step_1_3.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params_cfg = legacy_plot_params_13
+    if plot_params_cfg is None:
+        legacy_plot_params_12 = config.get("step_1_2", {}).get("plot_parameters", None)
+        if legacy_plot_params_12 is not None:
+            log.warning(
+                "Deprecated config key step_1_2.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params_cfg = legacy_plot_params_12
     cfg_weight = _merge_weighting_cfg(cfg_32, cfg_13)
 
     try:

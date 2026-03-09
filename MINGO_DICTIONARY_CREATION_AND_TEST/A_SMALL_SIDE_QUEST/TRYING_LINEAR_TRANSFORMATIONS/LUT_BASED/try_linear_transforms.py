@@ -13,8 +13,10 @@ Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
 """
 
+import argparse
 import os
 import shutil
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -22,26 +24,65 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-CSV_PATH = '/home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/A_SMALL_SIDE_QUEST/TRYING_LINEAR_TRANSFORMATIONS/dictionary_test.csv'
-HERE = os.path.dirname(os.path.abspath(__file__))
-PLOTS = os.path.join(HERE, 'PLOTS')
+HERE = Path(__file__).resolve().parent
+PROJECT_DIR = HERE.parents[2]
+CSV_PATH_CANDIDATES = [
+    HERE.parent / 'dictionary_test.csv',
+    PROJECT_DIR / 'STEPS' / 'STEP_1_SETUP' / 'STEP_1_2_BUILD_DICTIONARY' / 'OUTPUTS' / 'FILES' / 'dictionary.csv',
+    Path('/home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/A_SMALL_SIDE_QUEST/TRYING_LINEAR_TRANSFORMATIONS/dictionary_test.csv'),  # legacy path
+]
+PLOTS = HERE / 'PLOTS'
 DOWNSAMPLE = 10
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Tune simple linear transforms and LUT-based flux inversion."
+    )
+    parser.add_argument(
+        "--input-csv",
+        type=Path,
+        default=None,
+        help="Explicit input CSV path. If omitted, use built-in candidate search.",
+    )
+    parser.add_argument(
+        "--plots-dir",
+        type=Path,
+        default=PLOTS,
+        help="Output directory for generated plots (default: script PLOTS/).",
+    )
+    parser.add_argument(
+        "--downsample",
+        type=int,
+        default=DOWNSAMPLE,
+        help="Keep every N-th row from CSV (default: 10).",
+    )
+    return parser.parse_args()
+
+
+def _first_existing(paths):
+    for path in paths:
+        if Path(path).exists():
+            return Path(path)
+    raise FileNotFoundError(
+        'No input CSV found. Checked:\n' + '\n'.join(str(p) for p in paths)
+    )
+
+
 def prepare():
-    if os.path.exists(PLOTS):
+    if PLOTS.exists():
         shutil.rmtree(PLOTS)
-    os.makedirs(PLOTS, exist_ok=True)
+    PLOTS.mkdir(parents=True, exist_ok=True)
 
 
-def load():
+def load(csv_path):
     """Read CSV and create canonical columns used downstream:
     - `flux` (prefer `flux` else `flux_cm2_min`)
     - `eff` (prefer `eff` else `eff_empirical_1` else mean of eff_empirical_*)
     - `global_rate_hz` (prefer `events_per_second_global_rate`, else `clean_tt_1234_rate_hz`, else `raw_tt_1234_rate_hz`)
     - `time_utc` (prefer `time_utc`, else `execution_timestamp`, else fallback to integer index)
     """
-    df = pd.read_csv(CSV_PATH)
+    df = pd.read_csv(csv_path)
     # downsample for plotting speed
     df = df.iloc[::DOWNSAMPLE].reset_index(drop=True)
 
@@ -133,8 +174,21 @@ def format_time(ax):
 
 
 def main():
+    global PLOTS, DOWNSAMPLE
+    args = parse_args()
+    if args.downsample < 1:
+        raise SystemExit("--downsample must be >= 1")
+    DOWNSAMPLE = int(args.downsample)
+    PLOTS = Path(args.plots_dir).resolve()
+
     prepare()
-    df = load()
+    if args.input_csv is None:
+        csv_path = _first_existing(CSV_PATH_CANDIDATES)
+    else:
+        csv_path = Path(args.input_csv).resolve()
+        if not csv_path.exists():
+            raise FileNotFoundError(f"Input CSV not found: {csv_path}")
+    df = load(csv_path)
 
     results = tune_scale(df)
     scales = [r[0] for r in results]

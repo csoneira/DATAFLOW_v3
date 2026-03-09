@@ -1,5 +1,5 @@
 {
-  "_comment": "Optional runtime-only overrides. Keep this file minimal and local.",
+  "_comment": "Runtime-only path overrides. Keep this file minimal and local.",
   "simulation_params_csv": null,
   "_simulation_params_csv_comment": "Optional STEP 1.1 input override. If null, use MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv.",
   "step_1_3": {

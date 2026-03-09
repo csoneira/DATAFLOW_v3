@@ -39,7 +39,8 @@ if STEP_DIR.parents[2].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[3]
 else:
     PIPELINE_DIR = STEP_DIR.parents[2]
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
+CONFIG_COLUMNS_PATH = PIPELINE_DIR / "config_columns.json"
 
 if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENCE").exists():
     STEP_ROOT = PIPELINE_DIR
@@ -94,7 +95,6 @@ FILES_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 PLOT_EFF = PLOTS_DIR / "STEP_4_2_2_efficiency_vs_time.png"
-PLOT_EFF2_RATE = PLOTS_DIR / "STEP_4_2_5_eff2_vs_global_rate.png"
 PLOT_EST_CURVE = PLOTS_DIR / "STEP_4_2_6_estimated_curve_flux_vs_eff.png"
 PLOT_RECOVERY_STORY = PLOTS_DIR / "STEP_4_2_7_flux_recovery_vs_global_rate.png"
 
@@ -119,7 +119,12 @@ log = logging.getLogger("STEP_4.2")
 if str(INFERENCE_DIR) not in sys.path:
     sys.path.insert(0, str(INFERENCE_DIR))
 try:
-    from estimate_parameters import estimate_from_dataframes  # noqa: E402
+    from estimate_parameters import estimate_from_dataframes, resolve_inverse_mapping_cfg  # noqa: E402
+    from feature_columns_config import (  # noqa: E402
+        parse_explicit_feature_columns,
+        resolve_feature_columns_from_catalog,
+        sync_feature_column_catalog,
+    )
 except Exception as exc:
     log.error("Could not import estimate_from_dataframes from %s: %s", INFERENCE_DIR, exc)
     raise
@@ -151,13 +156,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
 
 def _safe_float(value: object, default: float) -> float:
     try:
@@ -821,14 +834,14 @@ def _invert_polynomial_values(
     return pd.Series(out, index=y_values.index)
 
 
-def _load_eff_fit_lines(summary_path: Path) -> tuple[dict[int, list[float]], str]:
+def _load_eff_fit_lines(summary_path: Path) -> tuple[dict[int, list[float]], str, dict]:
     """Load fit coefficients from STEP 1.2 build_summary.json (fit_line_eff_i = coeff list)."""
     if not summary_path.exists():
-        return ({}, f"missing:{summary_path}")
+        return ({}, f"missing:{summary_path}", {})
     try:
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        return ({}, f"invalid_json:{exc}")
+        return ({}, f"invalid_json:{exc}", {})
 
     out: dict[int, list[float]] = {}
     for plane in (1, 2, 3, 4):
@@ -852,7 +865,36 @@ def _load_eff_fit_lines(summary_path: Path) -> tuple[dict[int, list[float]], str
             coeffs.append(float(c))
         if valid and len(coeffs) >= 2:
             out[plane] = coeffs
-    return (out, "ok")
+    return (out, "ok", payload)
+
+
+def _resolve_eff_transform_mode(
+    requested_mode: str,
+    fit_summary_payload: dict,
+) -> tuple[str, str]:
+    """Resolve transform mode from config request and STEP 1.2 fit relation metadata."""
+    mode = str(requested_mode).strip().lower()
+    if mode in {"inverse", "forward"}:
+        return (mode, f"config:{mode}")
+    if mode != "auto":
+        mode = "auto"
+
+    relation_raw = str(fit_summary_payload.get("fit_polynomial_relation", "")).strip()
+    relation_norm = re.sub(r"\s+", "", relation_raw.lower())
+    x_var = str(fit_summary_payload.get("fit_polynomial_x_variable", "")).strip().lower()
+    y_var = str(fit_summary_payload.get("fit_polynomial_y_variable", "")).strip().lower()
+
+    if "simulated=p(empirical)" in relation_norm:
+        return ("forward", "summary_relation:simulated=P(empirical)")
+    if "empirical=p(simulated)" in relation_norm:
+        return ("inverse", "summary_relation:empirical=P(simulated)")
+    if "empirical" in x_var and "simulated" in y_var:
+        return ("forward", "summary_axes:x=empirical,y=simulated")
+    if "simulated" in x_var and "empirical" in y_var:
+        return ("inverse", "summary_axes:x=simulated,y=empirical")
+
+    # Legacy STEP 1.2 summaries did not store relation metadata.
+    return ("inverse", "fallback_legacy_inverse(no_relation_metadata)")
 
 
 def _read_fit_order_info(summary_path: Path) -> tuple[int | None, dict[str, int]]:
@@ -885,13 +927,13 @@ def _transform_efficiencies_with_fits(
     eff_by_plane: dict[int, pd.Series],
     fit_by_plane: dict[int, list[float]],
     *,
-    mode: str = "inverse",
+    mode: str = "forward",
 ) -> tuple[dict[int, pd.Series], dict[int, str]]:
     """Apply polynomial fit transform per plane.
 
-    Fits are from STEP 1.2: empirical = P(simulated).
-    mode='inverse' solves P(simulated_equivalent)=empirical.
-    mode='forward' applies corrected = P(empirical).
+    Fits are from STEP 1.2 and can represent either:
+    - empirical = P(simulated)  -> use mode='inverse'
+    - simulated = P(empirical)  -> use mode='forward'
     """
     transformed: dict[int, pd.Series] = {}
     formula: dict[int, str] = {}
@@ -911,10 +953,10 @@ def _transform_efficiencies_with_fits(
         poly_expr = _format_polynomial_expr(coeffs, variable="x", precision=8)
         if use_inverse:
             corr = _invert_polynomial_values(raw, coeffs)
-            formula[plane] = f"inverse_root(P(x)=eff_raw), deg={degree}, P(x)={poly_expr}"
+            formula[plane] = f"inverse_root(P(x)=eff_raw_empirical), deg={degree}, P(x)={poly_expr}"
         else:
             corr = pd.Series(np.polyval(coeffs, raw.to_numpy(dtype=float)), index=raw.index)
-            formula[plane] = f"P(eff_raw), deg={degree}, P(x)={poly_expr}"
+            formula[plane] = f"P(eff_raw_empirical), deg={degree}, P(x)={poly_expr}"
         # Keep transformed efficiencies fully unconstrained (no clipping).
         corr = corr.where(np.isfinite(corr), np.nan)
         transformed[plane] = corr
@@ -941,7 +983,7 @@ def _build_rate_model(
     y = pd.to_numeric(eff, errors="coerce").to_numpy(dtype=float)
     z = pd.to_numeric(rate, errors="coerce").to_numpy(dtype=float)
     mask = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
-    if int(mask.sum()) < 10:
+    if int(mask.sum()) < 1:
         return None
     x = x[mask]
     y = y[mask]
@@ -1002,71 +1044,6 @@ def _predict_rate(
     return zq.reshape(xq.shape)
 
 
-def _estimate_flux_from_eff_and_rate(
-    model: dict,
-    *,
-    eff_values: pd.Series,
-    rate_values: pd.Series,
-    n_flux_grid: int = 480,
-) -> pd.Series:
-    eff = pd.to_numeric(eff_values, errors="coerce")
-    rate = pd.to_numeric(rate_values, errors="coerce")
-    out = pd.Series(np.nan, index=eff.index, dtype=float)
-    flux_grid = np.linspace(model["flux_min"], model["flux_max"], max(80, int(n_flux_grid)), dtype=float)
-    for i in eff.index:
-        e_val = float(eff.loc[i]) if np.isfinite(eff.loc[i]) else np.nan
-        r_val = float(rate.loc[i]) if np.isfinite(rate.loc[i]) else np.nan
-        if not (np.isfinite(e_val) and np.isfinite(r_val)):
-            continue
-        pred = _predict_rate(
-            model,
-            flux_values=flux_grid,
-            eff_values=np.full_like(flux_grid, e_val, dtype=float),
-        )
-        valid = np.isfinite(pred)
-        if not np.any(valid):
-            continue
-        pred_v = np.asarray(pred[valid], dtype=float)
-        flux_v = np.asarray(flux_grid[valid], dtype=float)
-        diff = pred_v - r_val
-
-        # Prefer local linear interpolation between neighboring flux samples
-        # that bracket the target rate. Fall back to nearest sample.
-        nn_idx = int(np.argmin(np.abs(diff)))
-        nn_flux = float(flux_v[nn_idx])
-        best_flux = np.nan
-        best_score = (np.inf, np.inf)
-
-        cross_idx = np.where((diff[:-1] <= 0.0) & (diff[1:] >= 0.0) | ((diff[:-1] >= 0.0) & (diff[1:] <= 0.0)))[0]
-        for j in cross_idx:
-            p0 = float(pred_v[j])
-            p1 = float(pred_v[j + 1])
-            f0 = float(flux_v[j])
-            f1 = float(flux_v[j + 1])
-            if not (np.isfinite(p0) and np.isfinite(p1) and np.isfinite(f0) and np.isfinite(f1)):
-                continue
-            den = p1 - p0
-            if abs(den) <= 1e-12:
-                f_interp = 0.5 * (f0 + f1)
-                interp_err = min(abs(p0 - r_val), abs(p1 - r_val))
-            else:
-                t = (r_val - p0) / den
-                t = float(np.clip(t, 0.0, 1.0))
-                f_interp = f0 + t * (f1 - f0)
-                p_interp = p0 + t * den
-                interp_err = abs(p_interp - r_val)
-            score = (float(interp_err), abs(f_interp - nn_flux))
-            if score < best_score:
-                best_score = score
-                best_flux = f_interp
-
-        if np.isfinite(best_flux):
-            out.loc[i] = float(best_flux)
-        else:
-            out.loc[i] = nn_flux
-    return out
-
-
 def _ordered_row_indices(df: pd.DataFrame, valid_mask: pd.Series) -> np.ndarray:
     valid_idx = np.where(valid_mask.to_numpy(dtype=bool))[0]
     if len(valid_idx) == 0:
@@ -1101,6 +1078,36 @@ def _pick_dictionary_eff_col_for_plane(df: pd.DataFrame, plane: int = 2) -> str 
         if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any():
             return c
     return None
+
+
+def _mask_sim_eff_within_tolerance_band(
+    df: pd.DataFrame,
+    tolerance_pct: float,
+) -> np.ndarray:
+    """Rows where eff_sim_1..4 are finite and inside one tolerance band."""
+    n_rows = len(df)
+    if n_rows == 0:
+        return np.zeros(0, dtype=bool)
+    eff_cols = [f"eff_sim_{i}" for i in range(1, 5)]
+    if not all(col in df.columns for col in eff_cols):
+        return np.zeros(n_rows, dtype=bool)
+
+    tol_pct = float(tolerance_pct)
+    if not np.isfinite(tol_pct):
+        tol_pct = 10.0
+    tol_pct = max(0.0, tol_pct)
+    tol_abs = tol_pct / 100.0
+
+    eff_mat = np.column_stack(
+        [pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float) for col in eff_cols]
+    )
+    finite = np.isfinite(eff_mat).all(axis=1)
+    if not np.any(finite):
+        return np.zeros(n_rows, dtype=bool)
+    span = np.full(n_rows, np.nan, dtype=float)
+    eff_finite = eff_mat[finite]
+    span[finite] = np.max(eff_finite, axis=1) - np.min(eff_finite, axis=1)
+    return finite & (span <= (tol_abs + 1e-12))
 
 
 def _load_lut(lut_path: Path) -> pd.DataFrame:
@@ -1732,117 +1739,65 @@ def _plot_eff2_vs_global_rate(
     dict_eff2_col: str,
     dict_rate_col: str,
     out_path: Path,
-) -> tuple[int, int, str]:
-    """Contour-derived (flux, eff2) trajectory from (eff2, global_rate), styled like STEP 4.2.6."""
-    flux_col = "flux_cm2_min"
-    if flux_col not in dict_df.columns:
-        _plot_placeholder(
-            out_path,
-            "Eff2 contour placement in flux-eff plane",
-            f"Dictionary missing required column '{flux_col}'.",
-        )
-        return (0, 0, "missing_flux_column")
-
-    model = _build_rate_model(
-        flux=dict_df[flux_col],
-        eff=dict_df[dict_eff2_col],
-        rate=dict_df[dict_rate_col],
-    )
-    if model is None:
-        _plot_placeholder(
-            out_path,
-            "Eff2 contour placement in flux-eff plane",
-            "Not enough finite dictionary points to build iso-rate contours.",
-        )
-        return (0, 0, "model_unavailable")
-
+) -> tuple[int, int]:
+    """Plot real-data eff2 trajectory directly in the (global_rate, eff2) plane."""
     real_eff = pd.to_numeric(real_df[real_eff2_col], errors="coerce")
     real_rate = pd.to_numeric(real_df[real_rate_col], errors="coerce")
-    flux_from_contour_col = "flux_from_eff2_global_rate_hz"
-    real_df[flux_from_contour_col] = _estimate_flux_from_eff_and_rate(
-        model,
-        eff_values=real_eff,
-        rate_values=real_rate,
-        n_flux_grid=520,
-    )
-
-    dict_flux = pd.to_numeric(dict_df[flux_col], errors="coerce")
     dict_eff = pd.to_numeric(dict_df[dict_eff2_col], errors="coerce")
     dict_rate = pd.to_numeric(dict_df[dict_rate_col], errors="coerce")
-    dict_valid = dict_flux.notna() & dict_eff.notna() & dict_rate.notna()
-    n_dict = int(dict_valid.sum())
 
-    real_flux = pd.to_numeric(real_df[flux_from_contour_col], errors="coerce")
-    real_valid = real_flux.notna() & real_eff.notna() & real_rate.notna()
+    dict_valid = dict_eff.notna() & dict_rate.notna()
+    real_valid = real_eff.notna() & real_rate.notna()
+    n_dict = int(dict_valid.sum())
     n_real = int(real_valid.sum())
+
     if n_real == 0:
         _plot_placeholder(
             out_path,
-            "Eff2 contour placement in flux-eff plane",
-            "No finite real points available after contour-based flux inversion.",
+            "Eff2 vs global rate",
+            "No finite real points available for eff2/global-rate trajectory.",
         )
-        return (n_real, n_dict, flux_from_contour_col)
+        return (n_real, n_dict)
 
-    # Contour grid spans dictionary and real flux/eff locations.
-    x_ref = np.asarray(model["x"], dtype=float)
-    y_ref = np.asarray(model["y"], dtype=float)
-    x_real = real_flux[real_valid].to_numpy(dtype=float)
+    x_real = real_rate[real_valid].to_numpy(dtype=float)
     y_real = real_eff[real_valid].to_numpy(dtype=float)
-    x_all = np.concatenate([x_ref[np.isfinite(x_ref)], x_real[np.isfinite(x_real)]])
-    y_all = np.concatenate([y_ref[np.isfinite(y_ref)], y_real[np.isfinite(y_real)]])
+    x_dict = dict_rate[dict_valid].to_numpy(dtype=float)
+    y_dict = dict_eff[dict_valid].to_numpy(dtype=float)
+
+    x_all = np.concatenate([x_real, x_dict]) if x_dict.size else x_real
+    y_all = np.concatenate([y_real, y_dict]) if y_dict.size else y_real
     x_lo = float(np.nanmin(x_all))
     x_hi = float(np.nanmax(x_all))
     y_lo = float(np.nanmin(y_all))
     y_hi = float(np.nanmax(y_all))
     x_span = max(x_hi - x_lo, 1e-9)
     y_span = max(y_hi - y_lo, 1e-9)
-    x_lo -= 0.03 * x_span
-    x_hi += 0.03 * x_span
-    y_lo -= 0.03 * y_span
-    y_hi += 0.03 * y_span
-
-    xi = np.linspace(x_lo, x_hi, 230, dtype=float)
-    yi = np.linspace(y_lo, y_hi, 230, dtype=float)
-    Xi, Yi = np.meshgrid(xi, yi)
-    Zi = _predict_rate(model, Xi, Yi)
-    finite_z = Zi[np.isfinite(Zi)]
+    x_pad = max(0.03 * x_span, 1e-6)
+    y_pad = max(0.03 * y_span, 1e-6)
+    x_lo -= x_pad
+    x_hi += x_pad
+    y_lo -= y_pad
+    y_hi += y_pad
 
     fig, ax = plt.subplots(figsize=(9.2, 7.1))
-    if finite_z.size >= 10:
-        levels = np.linspace(float(np.nanmin(finite_z)), float(np.nanmax(finite_z)), 16)
-        cf = ax.contourf(Xi, Yi, Zi, levels=levels, cmap="viridis", alpha=0.35, zorder=0)
-        cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.048)
-        cbar.set_label("Global rate [Hz]")
-        ax.contour(Xi, Yi, Zi, levels=levels[::2], colors="k", linewidths=0.35, alpha=0.28, zorder=1)
-    else:
-        sc_fallback = ax.scatter(
-            dict_flux[dict_valid],
-            dict_eff[dict_valid],
-            c=dict_rate[dict_valid],
-            cmap="viridis",
-            s=12,
-            alpha=0.5,
+    if n_dict > 0:
+        ax.scatter(
+            x_dict,
+            y_dict,
+            s=11,
+            alpha=0.20,
+            color="#606060",
             edgecolors="none",
-            zorder=0,
+            zorder=1,
+            label="Dictionary points",
         )
-        cbar = fig.colorbar(sc_fallback, ax=ax, pad=0.02, fraction=0.048)
-        cbar.set_label("Global rate [Hz]")
 
-    # Reference dictionary points.
-    ax.scatter(
-        dict_flux[dict_valid],
-        dict_eff[dict_valid],
-        s=10,
-        alpha=0.18,
-        color="#606060",
-        zorder=1,
-        label="Dictionary points",
-    )
-
-    # Time-ordered contour-derived real trajectory.
     ordered_idx = _ordered_row_indices(real_df, real_valid)
-    x_ord = real_df.iloc[ordered_idx][flux_from_contour_col].to_numpy(dtype=float)
+    x_ord = real_df.iloc[ordered_idx][real_rate_col].to_numpy(dtype=float)
     y_ord = real_df.iloc[ordered_idx][real_eff2_col].to_numpy(dtype=float)
+    finite_ord = np.isfinite(x_ord) & np.isfinite(y_ord)
+    x_ord = x_ord[finite_ord]
+    y_ord = y_ord[finite_ord]
 
     ax.plot(
         x_ord,
@@ -1851,7 +1806,7 @@ def _plot_eff2_vs_global_rate(
         color="#1F77B4",
         alpha=0.92,
         zorder=3,
-        label="Contour-derived trajectory",
+        label="Real-data trajectory",
     )
     ax.scatter(
         x_ord,
@@ -1861,31 +1816,11 @@ def _plot_eff2_vs_global_rate(
         edgecolor="black",
         linewidth=0.6,
         zorder=4,
-        label="Contour-derived points",
+        label="Real-data points",
     )
 
-    ax.scatter(
-        [x_ord[0]],
-        [y_ord[0]],
-        color="#2CA02C",
-        marker="o",
-        s=82,
-        edgecolor="black",
-        linewidth=0.8,
-        zorder=5,
-        label="Start",
-    )
-    ax.scatter(
-        [x_ord[-1]],
-        [y_ord[-1]],
-        color="#D62728",
-        marker="X",
-        s=95,
-        edgecolor="black",
-        linewidth=0.8,
-        zorder=5,
-        label="End",
-    )
+    ax.scatter([x_ord[0]], [y_ord[0]], color="#2CA02C", marker="o", s=82, edgecolor="black", linewidth=0.8, zorder=5, label="Start")
+    ax.scatter([x_ord[-1]], [y_ord[-1]], color="#D62728", marker="X", s=95, edgecolor="black", linewidth=0.8, zorder=5, label="End")
 
     if len(x_ord) >= 3:
         i = min(len(x_ord) - 2, max(0, int(0.85 * len(x_ord))))
@@ -1899,10 +1834,10 @@ def _plot_eff2_vs_global_rate(
 
     ax.set_xlim(x_lo, x_hi)
     ax.set_ylim(y_lo, y_hi)
-    ax.set_xlabel("Flux [cm^-2 min^-1]")
+    ax.set_xlabel("Global rate [Hz]")
     ax.set_ylabel("Efficiency (eff2)")
     ax.set_title(
-        "Contour-derived real-data curve in flux-eff plane with global-rate contours\n"
+        "Real-data eff2 trajectory vs global rate\n"
         f"real_y={real_eff2_col} | dict_y={dict_eff2_col}"
     )
     ax.grid(True, alpha=0.2)
@@ -1910,7 +1845,7 @@ def _plot_eff2_vs_global_rate(
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    return (n_real, n_dict, flux_from_contour_col)
+    return (n_real, n_dict)
 
 
 def _plot_estimated_curve_flux_vs_eff(
@@ -1993,8 +1928,10 @@ def _plot_estimated_curve_flux_vs_eff(
     finite_z = Zi[np.isfinite(Zi)]
 
     fig, ax = plt.subplots(figsize=(9.2, 7.1))
-    if finite_z.size >= 10:
-        levels = np.linspace(float(np.nanmin(finite_z)), float(np.nanmax(finite_z)), 16)
+    z_min = float(np.nanmin(finite_z)) if finite_z.size else np.nan
+    z_max = float(np.nanmax(finite_z)) if finite_z.size else np.nan
+    if finite_z.size >= 10 and np.isfinite(z_min) and np.isfinite(z_max) and z_max > z_min:
+        levels = np.linspace(z_min, z_max, 16)
         cf = ax.contourf(Xi, Yi, Zi, levels=levels, cmap="viridis", alpha=0.35, zorder=0)
         cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.048)
         cbar.set_label("Global rate [Hz]")
@@ -2117,6 +2054,9 @@ def main() -> int:
         "feature_columns",
         "distance_metric",
         "interpolation_k",
+        "inverse_mapping",
+        "histogram_distance_weight",
+        "histogram_distance_blend_mode",
         "include_global_rate",
         "global_rate_col",
     ]
@@ -2131,19 +2071,35 @@ def main() -> int:
         interpolation_k: int | None = None
     else:
         interpolation_k = int(interpolation_k_raw)
+    inverse_mapping_cfg = resolve_inverse_mapping_cfg(
+        inverse_mapping_cfg=cfg_21.get("inverse_mapping", {}),
+        interpolation_k=interpolation_k,
+        histogram_distance_weight=float(cfg_21.get("histogram_distance_weight", 1.0)),
+        histogram_distance_blend_mode=str(cfg_21.get("histogram_distance_blend_mode", "normalized")),
+    )
     include_global_rate = _safe_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
     exclude_same_file = _safe_bool(cfg_42.get("exclude_same_file", False), False)
     uncertainty_quantile = _safe_float(cfg_42.get("uncertainty_quantile", 0.68), 0.68)
     uncertainty_quantile = float(np.clip(uncertainty_quantile, 0.0, 1.0))
+    contour_eff_band_tolerance_pct = max(
+        0.0,
+        _safe_float(
+            cfg_42.get(
+                "iso_rate_efficiency_band_tolerance_pct",
+                config.get("iso_rate_efficiency_band_tolerance_pct", 10.0),
+            ),
+            10.0,
+        ),
+    )
     n_events_column_cfg = cfg_42.get("n_events_column", "auto")
     task_ids_cfg = cfg_41.get("task_ids", config.get("task_ids", [1]))
     selected_task_ids = _safe_task_ids(task_ids_cfg)
     preferred_tt_prefixes = _preferred_tt_prefixes_for_task_ids(selected_task_ids)
     preferred_feature_prefixes = _preferred_feature_prefixes_for_task_ids(selected_task_ids)
-    eff_transform_mode = str(cfg_42.get("eff_transform_mode", "inverse")).strip().lower()
-    if eff_transform_mode not in {"inverse", "forward"}:
-        eff_transform_mode = "inverse"
+    eff_transform_mode_requested = str(cfg_42.get("eff_transform_mode", "auto")).strip().lower()
+    if eff_transform_mode_requested not in {"auto", "inverse", "forward"}:
+        eff_transform_mode_requested = "auto"
 
     log.info("Real collected: %s", real_path)
     log.info("Dictionary:     %s", dict_path)
@@ -2153,6 +2109,15 @@ def main() -> int:
     log.info("Preferred TT prefix order for efficiencies: %s", preferred_tt_prefixes)
     log.info("Preferred TT prefix order for auto features: %s", preferred_feature_prefixes)
     log.info("Metric=%s, k=%s, uncertainty_quantile=%.3f", distance_metric, interpolation_k, uncertainty_quantile)
+    log.info(
+        "Inverse mapping: selection=%s k=%s weighting=%s aggregation=%s hist_weight=%.3g hist_blend=%s",
+        inverse_mapping_cfg.get("neighbor_selection"),
+        ("all" if inverse_mapping_cfg.get("neighbor_count") is None else str(inverse_mapping_cfg.get("neighbor_count"))),
+        inverse_mapping_cfg.get("weighting"),
+        inverse_mapping_cfg.get("aggregation"),
+        float(inverse_mapping_cfg.get("histogram_distance_weight", 1.0)),
+        inverse_mapping_cfg.get("histogram_distance_blend_mode"),
+    )
 
     real_df = pd.read_csv(real_path, low_memory=False)
     dict_df = pd.read_csv(dict_path, low_memory=False)
@@ -2163,21 +2128,73 @@ def main() -> int:
         log.error("Dictionary table is empty: %s", dict_path)
         return 1
 
-    if isinstance(feature_columns_cfg, str) and feature_columns_cfg == "auto":
-        dict_work, real_work, feature_columns, feature_strategy, feature_mapping = _resolve_feature_columns_auto(
+    auto_resolution_error: str | None = None
+    try:
+        dict_auto, real_auto, auto_feature_columns, auto_feature_strategy, auto_feature_mapping = _resolve_feature_columns_auto(
             dict_df=dict_df,
             real_df=real_df,
             include_global_rate=include_global_rate,
             global_rate_col=global_rate_col,
             preferred_prefixes=preferred_feature_prefixes,
         )
-    else:
-        if isinstance(feature_columns_cfg, str):
-            explicit_features = [c.strip() for c in feature_columns_cfg.split(",") if c.strip()]
-        elif isinstance(feature_columns_cfg, (list, tuple)):
-            explicit_features = [str(c) for c in feature_columns_cfg]
+    except ValueError as exc:
+        auto_resolution_error = str(exc)
+        dict_auto, real_auto = dict_df, real_df
+        auto_feature_columns = []
+        auto_feature_strategy = "auto_unavailable"
+        auto_feature_mapping = []
+    catalog = sync_feature_column_catalog(
+        catalog_path=CONFIG_COLUMNS_PATH,
+        dict_df=dict_df,
+        default_enabled_columns=auto_feature_columns,
+    )
+
+    feature_mode = str(feature_columns_cfg).strip().lower() if isinstance(feature_columns_cfg, str) else ""
+    if feature_mode == "auto":
+        if auto_resolution_error is not None:
+            log.error("%s", auto_resolution_error)
+            return 1
+        dict_work, real_work = dict_auto, real_auto
+        feature_columns = auto_feature_columns
+        feature_strategy = auto_feature_strategy
+        feature_mapping = auto_feature_mapping
+    elif feature_mode in {"config_columns", "catalog", "config_columns_json"}:
+        selected, catalog_info = resolve_feature_columns_from_catalog(
+            catalog=catalog,
+            available_columns=sorted(set(dict_df.columns) & set(real_df.columns)),
+        )
+        if catalog_info.get("invalid_include_patterns"):
+            log.warning(
+                "Ignoring invalid include pattern(s) in %s: %s",
+                CONFIG_COLUMNS_PATH,
+                catalog_info.get("invalid_include_patterns"),
+            )
+        if catalog_info.get("invalid_exclude_patterns"):
+            log.warning(
+                "Ignoring invalid exclude pattern(s) in %s: %s",
+                CONFIG_COLUMNS_PATH,
+                catalog_info.get("invalid_exclude_patterns"),
+            )
+        if not selected:
+            if auto_feature_columns:
+                log.warning(
+                    "No features selected by config_columns catalog; falling back to auto (%d columns).",
+                    len(auto_feature_columns),
+                )
+                dict_work, real_work = dict_auto, real_auto
+                feature_columns = auto_feature_columns
+                feature_strategy = "auto_fallback_from_config_columns"
+                feature_mapping = auto_feature_mapping
+            else:
+                log.error("No features selected by config_columns catalog and no auto fallback available.")
+                return 1
         else:
-            explicit_features = []
+            dict_work, real_work = dict_df, real_df
+            feature_columns = selected
+            feature_strategy = "config_columns"
+            feature_mapping = []
+    else:
+        explicit_features = parse_explicit_feature_columns(feature_columns_cfg)
         feature_columns = [c for c in explicit_features if c in dict_df.columns and c in real_df.columns]
         if not feature_columns:
             log.error("No explicit feature columns found in both dictionary and real data.")
@@ -2203,6 +2220,7 @@ def main() -> int:
         include_global_rate=False,
         global_rate_col=global_rate_col,
         exclude_same_file=exclude_same_file,
+        inverse_mapping_cfg=inverse_mapping_cfg,
     )
 
     real_with_idx = real_df.copy()
@@ -2239,7 +2257,17 @@ def main() -> int:
     dict_global_rate_col = _pick_global_rate_column(dict_df_plot, preferred=global_rate_col)
 
     # Fit-polynomial transform of raw efficiencies using STEP 1.2 summary.
-    fit_models_by_plane, fit_status = _load_eff_fit_lines(build_summary_path)
+    fit_models_by_plane, fit_status, fit_summary_payload = _load_eff_fit_lines(build_summary_path)
+    eff_transform_mode, eff_transform_mode_reason = _resolve_eff_transform_mode(
+        eff_transform_mode_requested,
+        fit_summary_payload,
+    )
+    log.info(
+        "Efficiency transform mode: request=%s -> using=%s (%s)",
+        eff_transform_mode_requested,
+        eff_transform_mode,
+        eff_transform_mode_reason,
+    )
     fit_order_requested, fit_order_by_plane_from_summary = _read_fit_order_info(build_summary_path)
     transformed_eff_by_plane, transformed_eff_formula_by_plane = _transform_efficiencies_with_fits(
         raw_eff_by_plane,
@@ -2256,6 +2284,27 @@ def main() -> int:
     )
     for plane in (1, 2, 3, 4):
         dict_df_plot[f"dict_eff{plane}_transformed_from_rates"] = dict_transformed_eff_by_plane[plane]
+
+    dict_rows_total = int(len(dict_df_plot))
+    dict_contour_mask = _mask_sim_eff_within_tolerance_band(
+        dict_df_plot,
+        contour_eff_band_tolerance_pct,
+    )
+    dict_rows_for_contours = int(np.count_nonzero(dict_contour_mask))
+    dict_df_contours = dict_df_plot.loc[dict_contour_mask].copy()
+    if dict_rows_for_contours == 0:
+        log.warning(
+            "No dictionary rows satisfy 4-eff band tolerance (<= %.3f%%); "
+            "contour backgrounds will be unavailable.",
+            contour_eff_band_tolerance_pct,
+        )
+    else:
+        log.info(
+            "Contour-background dictionary rows: %d/%d (4-eff band <= %.3f%%).",
+            dict_rows_for_contours,
+            dict_rows_total,
+            contour_eff_band_tolerance_pct,
+        )
 
     lut_df = _load_lut(lut_path)
     lut_params = _lut_param_names(lut_df, lut_meta_path if lut_meta_path.exists() else None)
@@ -2380,9 +2429,6 @@ def main() -> int:
         out_path=PLOT_EFF,
     )
 
-    n_eff2_real = 0
-    n_eff2_dict = 0
-    flux_from_contour_col = "flux_from_eff2_global_rate_hz"
     eff2_plot_source_cfg = str(cfg_42.get("eff2_global_rate_eff_source", "auto")).strip().lower()
     if eff2_plot_source_cfg not in {"auto", "transformed", "raw"}:
         log.warning(
@@ -2425,7 +2471,7 @@ def main() -> int:
         )
         if transformed_available and not use_transformed_eff2_for_plane_plot:
             log.warning(
-                "STEP_4.2.5 fallback to raw eff2: transformed physical fractions "
+                "Fallback to raw eff2: transformed physical fractions "
                 "(real=%.3f, dict=%.3f) below threshold 0.95.",
                 real_eff2_trans_frac_physical,
                 dict_eff2_trans_frac_physical,
@@ -2437,27 +2483,6 @@ def main() -> int:
     dict_eff2_col_for_plane_plot = (
         "dict_eff2_transformed_from_rates" if use_transformed_eff2_for_plane_plot else dict_eff2_col
     )
-    if real_global_rate_col is not None and dict_global_rate_col is not None:
-        n_eff2_real, n_eff2_dict, flux_from_contour_col = _plot_eff2_vs_global_rate(
-            real_df=merged,
-            dict_df=dict_df_plot,
-            real_eff2_col=eff2_real_col_for_plane_plot,
-            real_rate_col=real_global_rate_col,
-            dict_eff2_col=dict_eff2_col_for_plane_plot,
-            dict_rate_col=dict_global_rate_col,
-            out_path=PLOT_EFF2_RATE,
-        )
-    else:
-        missing = []
-        if real_global_rate_col is None:
-            missing.append("real global_rate column")
-        if dict_global_rate_col is None:
-            missing.append("dictionary global_rate column")
-        _plot_placeholder(
-            PLOT_EFF2_RATE,
-            "Eff2 contour placement in flux-eff plane",
-            "Cannot build plot: missing " + ", ".join(missing) + ".",
-        )
 
     n_est_curve_real = 0
     n_est_curve_dict = 0
@@ -2471,7 +2496,7 @@ def main() -> int:
     ):
         n_est_curve_real, n_est_curve_dict = _plot_estimated_curve_flux_vs_eff(
             real_df=merged,
-            dict_df=dict_df_plot,
+            dict_df=dict_df_contours,
             est_flux_col=flux_est_col,
             est_eff_col=est_curve_eff_col,
             dict_eff_col=dict_curve_eff_col,
@@ -2495,12 +2520,6 @@ def main() -> int:
         )
 
     story_eff_col = eff_est_col if eff_est_col is not None else est_curve_eff_col
-    flux_reference_series = None
-    flux_reference_label = "Contour-derived flux reference"
-    if flux_from_contour_col in merged.columns:
-        cand_ref = pd.to_numeric(merged[flux_from_contour_col], errors="coerce")
-        if cand_ref.notna().any():
-            flux_reference_series = merged[flux_from_contour_col]
 
     if flux_est_col is not None and story_eff_col is not None and real_global_rate_col is not None:
         _plot_flux_recovery_story_real(
@@ -2515,8 +2534,8 @@ def main() -> int:
             global_rate_label=real_global_rate_col,
             flux_est_series=merged[flux_est_col],
             flux_unc_series=merged[flux_unc_abs_col] if flux_unc_abs_col is not None else None,
-            flux_reference_series=flux_reference_series,
-            flux_reference_label=flux_reference_label,
+            flux_reference_series=None,
+            flux_reference_label="Reference flux",
             out_path=PLOT_RECOVERY_STORY,
         )
     else:
@@ -2544,6 +2563,7 @@ def main() -> int:
         "matching_criteria_source": "step_2_1",
         "distance_metric": distance_metric,
         "interpolation_k": interpolation_k,
+        "inverse_mapping": inverse_mapping_cfg,
         "feature_strategy": feature_strategy,
         "n_features_used": int(len(feature_columns)),
         "feature_columns_used": feature_columns,
@@ -2556,8 +2576,15 @@ def main() -> int:
         "n_events_column_used": n_events_col_used,
         "real_global_rate_column_used": real_global_rate_col,
         "dictionary_global_rate_column_used": dict_global_rate_col,
+        "iso_rate_efficiency_band_tolerance_pct": float(contour_eff_band_tolerance_pct),
+        "dictionary_rows_total_for_iso_rate_contours": int(dict_rows_total),
+        "dictionary_rows_for_iso_rate_contours": int(dict_rows_for_contours),
+        "dictionary_rows_excluded_iso_rate_eff_band": int(dict_rows_total - dict_rows_for_contours),
         "build_summary_json_used": str(build_summary_path),
         "fit_lines_load_status": fit_status,
+        "fit_polynomial_relation_from_summary": fit_summary_payload.get("fit_polynomial_relation"),
+        "fit_polynomial_x_variable_from_summary": fit_summary_payload.get("fit_polynomial_x_variable"),
+        "fit_polynomial_y_variable_from_summary": fit_summary_payload.get("fit_polynomial_y_variable"),
         "fit_polynomial_order_requested": fit_order_requested,
         "fit_polynomial_order_by_plane": fit_order_by_plane_from_summary,
         "fit_lines_by_plane": {
@@ -2572,7 +2599,9 @@ def main() -> int:
             }
             for k, v in fit_models_by_plane.items()
         },
+        "eff_transform_mode_requested": eff_transform_mode_requested,
         "eff_transform_mode": eff_transform_mode,
+        "eff_transform_mode_resolution_reason": eff_transform_mode_reason,
         "raw_efficiency_columns": {
             "eff1": "eff1_raw_from_data",
             "eff2": "eff2_raw_from_data",
@@ -2626,10 +2655,6 @@ def main() -> int:
             "three_plane_col": dict_eff_cols_by_plane.get(2, {}).get("three_plane_col"),
             "four_plane_col": dict_eff_cols_by_plane.get(2, {}).get("four_plane_col"),
         },
-        "n_eff2_real_points_for_plane_plot": int(n_eff2_real),
-        "n_dictionary_points_for_plane_plot": int(n_eff2_dict),
-        "eff2_global_rate_plot": str(PLOT_EFF2_RATE),
-        "eff2_contour_flux_column": flux_from_contour_col,
         "pre_estimation_efficiency_plot": str(PLOT_EFF),
         "estimated_curve_eff_column": est_curve_eff_col,
         "dictionary_curve_eff_column": dict_curve_eff_col,
@@ -2640,9 +2665,6 @@ def main() -> int:
         "recovery_story_eff_column": story_eff_col,
         "recovery_story_global_rate_column": real_global_rate_col,
         "recovery_story_flux_column": flux_est_col,
-        "recovery_story_flux_reference_column": (
-            flux_from_contour_col if flux_reference_series is not None else None
-        ),
         "lut_param_names_used": lut_params,
         "uncertainty_quantile": uncertainty_quantile,
         "has_time_axis": bool(has_time_axis),

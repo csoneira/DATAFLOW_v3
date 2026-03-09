@@ -19,6 +19,7 @@ import argparse
 from itertools import combinations
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -35,7 +36,7 @@ STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent           # STEP_2_INFERENCE
 PIPELINE_DIR = INFERENCE_DIR.parent       # .../STEPS
 PROJECT_DIR = PIPELINE_DIR.parent         # .../MINGO_DICTIONARY_CREATION_AND_TEST
-DEFAULT_CONFIG = PROJECT_DIR / "config.json"
+DEFAULT_CONFIG = PROJECT_DIR / "config_method.json"
 
 DEFAULT_DICTIONARY = (
     PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
@@ -49,6 +50,7 @@ DEFAULT_DATASET_ENLARGED = (
     PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_3_ENLARGE_DATASET"
     / "OUTPUTS" / "FILES" / "enlarged_dataset.csv"
 )
+CONFIG_COLUMNS_PATH = PROJECT_DIR / "config_columns.json"
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
 PLOTS_DIR = STEP_DIR / "OUTPUTS" / "PLOTS"
@@ -99,14 +101,26 @@ def _clear_plots_dir() -> None:
 sys.path.insert(0, str(INFERENCE_DIR))
 from estimate_parameters import (  # noqa: E402
     DISTANCE_FNS,
+    _append_tt_global_sum_feature,
     _auto_feature_columns as _shared_auto_feature_columns,
-    estimate_parameters,
+    _resolve_shared_parameter_exclusion_mode,
+    build_shared_parameter_exclusion_mask,
+    compute_candidate_distances,
+    estimate_from_dataframes,
+    resolve_inverse_mapping_cfg,
+)
+from feature_columns_config import (  # noqa: E402
+    parse_explicit_feature_columns,
+    resolve_feature_columns_from_catalog,
+    sync_feature_column_catalog,
 )
 
 logging.basicConfig(
     format="[%(levelname)s] STEP_2.1 — %(message)s", level=logging.INFO
 )
 log = logging.getLogger("STEP_2.1")
+
+RATE_HISTOGRAM_BIN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz$")
 
 
 def _load_config(path: Path) -> dict:
@@ -122,12 +136,87 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
+
+
+STEP21_DENSITY_KEYS = {
+    "density_correction_enabled",
+    "density_correction_k_neighbors",
+}
+
+STEP21_DENSITY_DEFAULTS = {
+    "density_correction_enabled": True,
+    "density_correction_k_neighbors": 10,
+}
+
+
+def _merge_step21_density_cfg(config: dict) -> tuple[dict, list[str]]:
+    """Resolve STEP 2.1 density-correction config from centralized STEP 1.3 block.
+
+    Priority:
+    1. defaults (STEP 2.1 feature-space density behavior),
+    2. step_1_3.step_3_2_weighting (legacy alias),
+    3. step_1_3.weighting_shared (central source),
+    4. step_1_3.weighting_overrides (final explicit overrides).
+    """
+    cfg_13 = config.get("step_1_3", {}) if isinstance(config, dict) else {}
+    merged = dict(STEP21_DENSITY_DEFAULTS)
+    applied: set[str] = set()
+    warned_legacy_keys: set[str] = set()
+
+    for source_key in ("step_3_2_weighting", "weighting_shared", "weighting_overrides"):
+        source = cfg_13.get(source_key, {}) if isinstance(cfg_13, dict) else {}
+        if not isinstance(source, dict):
+            continue
+        for legacy_key in (
+            "flux_column",
+            "eff_column",
+            "density_correction_space",
+            "density_correction_exponent",
+            "density_correction_clip_min",
+            "density_correction_clip_max",
+        ):
+            if source.get(legacy_key) is not None and legacy_key not in warned_legacy_keys:
+                warned_legacy_keys.add(legacy_key)
+                log.warning(
+                    "Deprecated config key step_1_3.%s.%s detected; ignored. "
+                    "STEP 2.1 density correction now uses fixed feature-space behavior.",
+                    source_key,
+                    legacy_key,
+                )
+        for key in STEP21_DENSITY_KEYS:
+            if key in source and source.get(key) is not None:
+                merged[key] = source.get(key)
+                applied.add(key)
+
+    # Warn when deprecated and current keys conflict
+    legacy_source = cfg_13.get("step_3_2_weighting", {})
+    current_source = cfg_13.get("weighting_shared", {})
+    if isinstance(legacy_source, dict) and isinstance(current_source, dict):
+        for key in STEP21_DENSITY_KEYS:
+            lv, cv = legacy_source.get(key), current_source.get(key)
+            if lv is not None and cv is not None and lv != cv:
+                log.warning(
+                    "Config conflict: step_1_3.step_3_2_weighting.%s=%r vs "
+                    "step_1_3.weighting_shared.%s=%r; using weighting_shared.",
+                    key, lv, key, cv,
+                )
+
+    return merged, sorted(applied)
 
 
 def _as_bool(value: object, default: bool = False) -> bool:
@@ -176,6 +265,116 @@ def _select_default_dataset_path(config: dict) -> Path:
     return DEFAULT_DATASET
 
 
+def _resolve_step21_feature_columns(
+    *,
+    feature_cfg: object,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    include_global_rate: bool,
+    global_rate_col: str,
+    catalog_path: Path,
+) -> tuple[list[str], dict]:
+    """Resolve STEP 2.1 feature columns from auto/explicit/catalog config."""
+    auto_feature_cols = sorted(
+        set(_auto_feature_columns(dict_df, include_global_rate, global_rate_col))
+        & set(_auto_feature_columns(data_df, include_global_rate, global_rate_col))
+    )
+
+    catalog = sync_feature_column_catalog(
+        catalog_path=catalog_path,
+        dict_df=dict_df,
+        default_enabled_columns=auto_feature_cols,
+    )
+
+    strategy = "explicit"
+    selection_info: dict = {
+        "catalog_path": str(catalog_path),
+        "catalog_selection_mode": str(catalog.get("selection_mode", "enabled")),
+    }
+
+    if isinstance(feature_cfg, str):
+        mode = feature_cfg.strip().lower()
+        if mode == "auto":
+            strategy = "auto"
+            selected = auto_feature_cols
+            selection_info["source"] = "step_2_1.feature_columns=auto"
+            return selected, {"strategy": strategy, **selection_info}
+        if mode in {"config_columns", "catalog", "config_columns_json"}:
+            strategy = "config_columns"
+            available = sorted(set(dict_df.columns) & set(data_df.columns))
+            selected, catalog_info = resolve_feature_columns_from_catalog(
+                catalog=catalog,
+                available_columns=available,
+            )
+            selection_info.update(catalog_info)
+            selection_info["source"] = "config_columns.json"
+            if catalog_info.get("invalid_include_patterns"):
+                log.warning(
+                    "Ignoring invalid include pattern(s) in %s: %s",
+                    catalog_path,
+                    catalog_info.get("invalid_include_patterns"),
+                )
+            if catalog_info.get("invalid_exclude_patterns"):
+                log.warning(
+                    "Ignoring invalid exclude pattern(s) in %s: %s",
+                    catalog_path,
+                    catalog_info.get("invalid_exclude_patterns"),
+                )
+            if not selected:
+                if auto_feature_cols:
+                    log.warning(
+                        "No features selected by config_columns catalog; falling back to auto (%d columns).",
+                        len(auto_feature_cols),
+                    )
+                    strategy = "auto_fallback_from_config_columns"
+                    selected = auto_feature_cols
+                    selection_info["source"] = "auto_fallback"
+                else:
+                    raise ValueError(
+                        "No features selected by config_columns catalog and no auto fallback available."
+                    )
+            return selected, {"strategy": strategy, **selection_info}
+
+    requested = parse_explicit_feature_columns(feature_cfg)
+    selected = [
+        c for c in requested
+        if c in dict_df.columns and c in data_df.columns
+    ]
+    missing = [c for c in requested if c not in selected]
+    if missing:
+        log.warning(
+            "Ignoring %d explicit feature column(s) missing in dictionary/dataset intersection: %s",
+            len(missing),
+            missing,
+        )
+    if not selected:
+        raise ValueError(
+            "No explicit feature columns found in dictionary/dataset intersection. "
+            f"Requested={requested!r}"
+        )
+    selection_info["source"] = "step_2_1.feature_columns explicit list"
+    selection_info["explicit_requested_count"] = int(len(requested))
+    selection_info["explicit_missing_count"] = int(len(missing))
+    return selected, {"strategy": strategy, **selection_info}
+
+
+def _resolve_step21_inverse_mapping_cfg(
+    cfg_21: dict,
+    interpolation_k: int | None,
+) -> dict:
+    inverse_mapping_cfg = cfg_21.get("inverse_mapping", {})
+    if not isinstance(inverse_mapping_cfg, dict):
+        inverse_mapping_cfg = {}
+    legacy_hist_weight = cfg_21.get("histogram_distance_weight", 1.0)
+    legacy_hist_blend = cfg_21.get("histogram_distance_blend_mode", "normalized")
+    return resolve_inverse_mapping_cfg(
+        inverse_mapping_cfg=inverse_mapping_cfg,
+        interpolation_k=interpolation_k,
+        histogram_distance_weight=float(legacy_hist_weight),
+        histogram_distance_blend_mode=str(legacy_hist_blend),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Step 2.1: Estimate parameters using dictionary matching."
@@ -188,6 +387,7 @@ def main() -> int:
     config = _load_config(Path(args.config))
     _clear_plots_dir()
     cfg_21 = config.get("step_2_1", {})
+    density_cfg, density_cfg_keys = _merge_step21_density_cfg(config)
 
     dict_path = _resolve_input_path(args.dictionary_csv) if args.dictionary_csv else DEFAULT_DICTIONARY
     data_path = _resolve_input_path(args.dataset_csv) if args.dataset_csv else _select_default_dataset_path(config)
@@ -202,28 +402,72 @@ def main() -> int:
     else:
         dataset_mode = "step_1_2_original"
 
-    feature_columns = cfg_21.get("feature_columns", "auto")
+    feature_columns_cfg = cfg_21.get("feature_columns", "auto")
     distance_metric = cfg_21.get("distance_metric", "l2_zscore")
     interpolation_k_cfg = cfg_21.get("interpolation_k", 5)
     interpolation_k = None if interpolation_k_cfg is None else int(interpolation_k_cfg)
-    include_global_rate = cfg_21.get("include_global_rate", True)
+    inverse_mapping_cfg = _resolve_step21_inverse_mapping_cfg(cfg_21, interpolation_k)
+    include_global_rate = _as_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = cfg_21.get("global_rate_col", "events_per_second_global_rate")
-    plot_params = cfg_21.get("plot_parameters", None)
+    shared_exclusion_mode = _resolve_shared_parameter_exclusion_mode(
+        cfg_21.get("shared_parameter_exclusion_mode", None),
+        legacy_flag=_as_bool(cfg_21.get("exclude_candidates_sharing_parameter_values", False), False),
+    )
+    shared_param_cols_cfg = cfg_21.get("shared_parameter_exclusion_columns", "auto")
+    shared_param_ignore_cfg = cfg_21.get("shared_parameter_exclusion_ignore", ["cos_n"])
+    shared_param_match_atol = float(cfg_21.get("shared_parameter_match_atol", 1e-12))
+    # Shared plot-parameter source (global): top-level plot_parameters.
+    # Keep step-local keys only as deprecated compatibility fallback.
+    plot_params = config.get("plot_parameters", None)
     if plot_params is None:
-        legacy_plot_params = config.get("step_2_2", {}).get("plot_parameters", None)
-        if legacy_plot_params is not None:
+        legacy_plot_params_21 = cfg_21.get("plot_parameters", None)
+        if legacy_plot_params_21 is not None:
             log.warning(
-                "Deprecated config key step_2_2.plot_parameters detected; use step_2_1.plot_parameters."
+                "Deprecated config key step_2_1.plot_parameters detected; use top-level plot_parameters."
             )
-            plot_params = legacy_plot_params
+            plot_params = legacy_plot_params_21
     if plot_params is None:
-        plot_params = config.get("step_1_2", {}).get("plot_parameters", None)
+        legacy_plot_params_22 = config.get("step_2_2", {}).get("plot_parameters", None)
+        if legacy_plot_params_22 is not None:
+            log.warning(
+                "Deprecated config key step_2_2.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params = legacy_plot_params_22
+    if plot_params is None:
+        legacy_plot_params_12 = config.get("step_1_2", {}).get("plot_parameters", None)
+        if legacy_plot_params_12 is not None:
+            log.warning(
+                "Deprecated config key step_1_2.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params = legacy_plot_params_12
 
     if not dict_path.exists():
         log.error("Dictionary CSV not found: %s", dict_path)
         return 1
     if not data_path.exists():
         log.error("Dataset CSV not found: %s", data_path)
+        return 1
+
+    dict_df = pd.read_csv(dict_path, low_memory=False)
+    data_df = pd.read_csv(data_path, low_memory=False)
+    if dict_df.empty:
+        log.error("Dictionary table is empty: %s", dict_path)
+        return 1
+    if data_df.empty:
+        log.error("Dataset table is empty: %s", data_path)
+        return 1
+
+    try:
+        resolved_feature_columns, feature_resolution = _resolve_step21_feature_columns(
+            feature_cfg=feature_columns_cfg,
+            dict_df=dict_df,
+            data_df=data_df,
+            include_global_rate=include_global_rate,
+            global_rate_col=str(global_rate_col),
+            catalog_path=CONFIG_COLUMNS_PATH,
+        )
+    except ValueError as exc:
+        log.error("%s", exc)
         return 1
 
     log.info("Dictionary: %s", dict_path)
@@ -233,21 +477,58 @@ def main() -> int:
         "K:          %s",
         "all dictionary candidates" if interpolation_k is None else str(interpolation_k),
     )
+    log.info(
+        "Inverse mapping: selection=%s k=%s weighting=%s aggregation=%s hist_weight=%.3g hist_blend=%s",
+        inverse_mapping_cfg.get("neighbor_selection"),
+        ("all" if inverse_mapping_cfg.get("neighbor_count") is None else str(inverse_mapping_cfg.get("neighbor_count"))),
+        inverse_mapping_cfg.get("weighting"),
+        inverse_mapping_cfg.get("aggregation"),
+        float(inverse_mapping_cfg.get("histogram_distance_weight", 1.0)),
+        inverse_mapping_cfg.get("histogram_distance_blend_mode"),
+    )
+    log.info(
+        "Density cfg: enabled=%s k=%s "
+        "[feature-space only; fixed exponent=1 and clip=[0.25,4.0]]",
+        density_cfg.get("density_correction_enabled"),
+        density_cfg.get("density_correction_k_neighbors"),
+    )
+    log.info(
+        "Shared-parameter candidate exclusion: mode=%s cols=%s ignore=%s atol=%.3g",
+        shared_exclusion_mode,
+        shared_param_cols_cfg,
+        shared_param_ignore_cfg,
+        shared_param_match_atol,
+    )
+    if density_cfg_keys:
+        log.info(
+            "Density cfg source keys from step_1_3: %s",
+            ", ".join(density_cfg_keys),
+        )
+    log.info(
+        "Feature selection: strategy=%s selected=%d (config=%r, catalog=%s)",
+        feature_resolution.get("strategy", "unknown"),
+        len(resolved_feature_columns),
+        feature_columns_cfg,
+        CONFIG_COLUMNS_PATH,
+    )
 
     # ── Run estimation ───────────────────────────────────────────────
-    result_df = estimate_parameters(
-        dictionary_path=str(dict_path),
-        dataset_path=str(data_path),
-        feature_columns=feature_columns,
+    result_df = estimate_from_dataframes(
+        dict_df=dict_df,
+        data_df=data_df,
+        feature_columns=resolved_feature_columns,
         distance_metric=distance_metric,
         interpolation_k=interpolation_k,
         include_global_rate=include_global_rate,
         global_rate_col=global_rate_col,
         exclude_same_file=True,
+        shared_parameter_exclusion_mode=shared_exclusion_mode,
+        shared_parameter_exclusion_columns=shared_param_cols_cfg,
+        shared_parameter_exclusion_ignore=shared_param_ignore_cfg,
+        shared_parameter_match_atol=shared_param_match_atol,
+        density_weighting_cfg=density_cfg,
+        inverse_mapping_cfg=inverse_mapping_cfg,
     )
-
-    # ── Merge with dataset to have truth values alongside ────────────
-    data_df = pd.read_csv(data_path, low_memory=False)
 
     # Attach truth columns needed for validation
     truth_cols = ["flux_cm2_min", "cos_n",
@@ -271,7 +552,23 @@ def main() -> int:
         "dataset_source_mode": dataset_mode,
         "distance_metric": distance_metric,
         "interpolation_k": interpolation_k,
-        "feature_columns": feature_columns if isinstance(feature_columns, list) else "auto",
+        "inverse_mapping": inverse_mapping_cfg,
+        "feature_columns_config": feature_columns_cfg,
+        "feature_columns_strategy": feature_resolution.get("strategy", "unknown"),
+        "feature_columns_resolved_count": int(len(resolved_feature_columns)),
+        "feature_columns_resolved": resolved_feature_columns,
+        "feature_columns_catalog": str(CONFIG_COLUMNS_PATH),
+        "feature_columns_catalog_resolution": feature_resolution,
+        "density_weighting": {
+            "config": density_cfg,
+            "source_keys_from_step_1_3": density_cfg_keys,
+        },
+        "shared_parameter_candidate_exclusion": {
+            "mode": shared_exclusion_mode,
+            "columns": shared_param_cols_cfg,
+            "ignore_columns": shared_param_ignore_cfg,
+            "match_atol": shared_param_match_atol,
+        },
         "total_points": len(result_df),
         "successful_estimates": int(n_ok),
         "failed_estimates": int(n_fail),
@@ -286,6 +583,7 @@ def main() -> int:
         plot_params=plot_params,
         dict_path=dict_path,
         cfg_21=cfg_21,
+        resolved_feature_columns=resolved_feature_columns,
     )
 
     log.info("Done.")
@@ -321,6 +619,26 @@ def _axis_label_for_param(param_name: str) -> str:
     return param_name
 
 
+def _axis_label_for_feature(feature_name: str) -> str:
+    text = str(feature_name)
+    if text.startswith("__derived_tt_global_rate_hz"):
+        return "Derived TT global-rate sum [Hz]"
+    match = re.match(r"^(?P<prefix>.+?)_tt_(?P<label>[^_]+)_rate_hz$", text)
+    if match is not None:
+        prefix = str(match.group("prefix")).strip()
+        label = str(match.group("label")).strip()
+        try:
+            label_float = float(label)
+            if np.isfinite(label_float) and label_float.is_integer():
+                label = str(int(label_float))
+        except (TypeError, ValueError):
+            pass
+        return f"{prefix}:tt_{label} [Hz]"
+    if text.endswith("_rate_hz"):
+        return text[:-len("_rate_hz")] + " [Hz]"
+    return text
+
+
 def _sanitize_plot_token(token: str) -> str:
     out = []
     for char in str(token):
@@ -331,17 +649,311 @@ def _sanitize_plot_token(token: str) -> str:
     return "".join(out).strip("_") or "param"
 
 
+def _split_showcase_feature_groups(feature_cols: list[str]) -> tuple[list[str], list[str]]:
+    """Split feature columns into non-histogram and histogram-bin groups."""
+    hist_cols: list[str] = []
+    other_cols: list[str] = []
+    for col in feature_cols:
+        if RATE_HISTOGRAM_BIN_RE.match(str(col)) is not None:
+            hist_cols.append(str(col))
+        else:
+            other_cols.append(str(col))
+    hist_cols.sort(key=lambda c: int(RATE_HISTOGRAM_BIN_RE.match(str(c)).group("bin")))
+    return (other_cols, hist_cols)
+
+
+def _histogram_feature_indices_for_distance(feature_cols: list[str]) -> list[int]:
+    indexed: list[tuple[int, int]] = []
+    for idx, col in enumerate(feature_cols):
+        match = RATE_HISTOGRAM_BIN_RE.match(str(col))
+        if match is None:
+            continue
+        indexed.append((int(match.group("bin")), idx))
+    indexed.sort(key=lambda x: x[0])
+    return [idx for _, idx in indexed]
+
+
+def _normalize_histogram_profile(values: np.ndarray) -> np.ndarray:
+    vals = np.asarray(values, dtype=float)
+    if vals.ndim != 1 or vals.size == 0:
+        return np.asarray([], dtype=float)
+    vals = np.where(np.isfinite(vals), np.clip(vals, 0.0, None), np.nan)
+    finite = np.isfinite(vals)
+    out = np.full(vals.shape, np.nan, dtype=float)
+    if int(np.count_nonzero(finite)) < 2:
+        return out
+    total = float(np.nansum(vals[finite]))
+    if not np.isfinite(total) or total <= 0.0:
+        return out
+    out[finite] = vals[finite] / total
+    return out
+
+
+def _cdf_from_histogram_profile(profile: np.ndarray) -> np.ndarray:
+    vals = np.asarray(profile, dtype=float)
+    if vals.ndim != 1 or vals.size == 0:
+        return np.asarray([], dtype=float)
+    vals = np.where(np.isfinite(vals), np.clip(vals, 0.0, None), 0.0)
+    total = float(np.sum(vals))
+    if not np.isfinite(total) or total <= 0.0:
+        return np.full(vals.shape, np.nan, dtype=float)
+    vals = vals / total
+    return np.cumsum(vals)
+
+
+def _make_random_showcase_feature_histogram_plot(
+    *,
+    cand_feat: pd.DataFrame,
+    cand_distance: np.ndarray,
+    sample_feat_values: pd.Series,
+    best_feat_values: pd.Series,
+    hist_feature_cols: list[str],
+    cfg_21: dict,
+    ds_idx: int,
+    distance_metric: str,
+    showcase_seed_used: int,
+) -> None:
+    """Compact showcase for correlated histogram-bin features."""
+    if not hist_feature_cols:
+        return
+
+    hist_cols = [c for c in hist_feature_cols if c in cand_feat.columns]
+    if not hist_cols:
+        return
+    hist_cols.sort(key=lambda c: int(RATE_HISTOGRAM_BIN_RE.match(str(c)).group("bin")))
+
+    bins = np.asarray([int(RATE_HISTOGRAM_BIN_RE.match(str(c)).group("bin")) for c in hist_cols], dtype=float)
+    cand_hist = cand_feat[hist_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    sample_hist = pd.to_numeric(sample_feat_values.reindex(hist_cols), errors="coerce").to_numpy(dtype=float)
+    best_hist = pd.to_numeric(best_feat_values.reindex(hist_cols), errors="coerce").to_numpy(dtype=float)
+
+    sample_norm = _normalize_histogram_profile(sample_hist)
+    best_norm = _normalize_histogram_profile(best_hist)
+
+    finite_dist = np.isfinite(cand_distance)
+    if not np.any(finite_dist):
+        return
+    ranked_idx = np.where(finite_dist)[0][np.argsort(cand_distance[finite_dist])]
+
+    top_k_raw = cfg_21.get("showcase_histogram_top_candidates", 50)
+    try:
+        top_k = max(5, int(top_k_raw))
+    except (TypeError, ValueError):
+        top_k = 50
+    min_candidates_raw = cfg_21.get("showcase_histogram_min_candidates", 5)
+    try:
+        min_candidates = max(1, int(min_candidates_raw))
+    except (TypeError, ValueError):
+        min_candidates = 5
+    tol_pct_raw = cfg_21.get("showcase_histogram_distance_tolerance_pct", 10.0)
+    try:
+        tol_pct = max(0.0, float(tol_pct_raw))
+    except (TypeError, ValueError):
+        tol_pct = 10.0
+
+    best_dist = float(cand_distance[ranked_idx[0]])
+    if np.isfinite(best_dist) and best_dist > 0.0:
+        tol_limit = best_dist * (1.0 + tol_pct / 100.0)
+        tol_mask = cand_distance[ranked_idx] <= tol_limit
+    elif np.isfinite(best_dist):
+        abs_tol_raw = cfg_21.get("showcase_histogram_distance_tolerance_abs", 1e-12)
+        try:
+            abs_tol = max(0.0, float(abs_tol_raw))
+        except (TypeError, ValueError):
+            abs_tol = 1e-12
+        tol_limit = best_dist + abs_tol
+        tol_mask = cand_distance[ranked_idx] <= tol_limit
+    else:
+        tol_limit = np.nan
+        tol_mask = np.ones(len(ranked_idx), dtype=bool)
+
+    tol_idx = ranked_idx[tol_mask]
+    if len(tol_idx) == 0:
+        tol_idx = ranked_idx[:1]
+
+    target_cap = min(top_k, len(ranked_idx))
+    forced_floor = min(min_candidates, target_cap)
+    top_idx = tol_idx[: min(target_cap, len(tol_idx))]
+    used_forced_floor = False
+    if len(top_idx) < forced_floor:
+        top_idx = ranked_idx[:forced_floor]
+        used_forced_floor = True
+
+    norm_rows: list[np.ndarray] = []
+    used_idx: set[int] = set()
+    for idx in top_idx:
+        used_idx.add(int(idx))
+        norm_curve = _normalize_histogram_profile(cand_hist[idx])
+        if int(np.isfinite(norm_curve).sum()) >= 2:
+            norm_rows.append(norm_curve)
+
+    # Keep extending in rank order to satisfy the minimum requested curves when possible.
+    if len(norm_rows) < forced_floor:
+        for idx in ranked_idx:
+            idx_int = int(idx)
+            if idx_int in used_idx:
+                continue
+            used_idx.add(idx_int)
+            norm_curve = _normalize_histogram_profile(cand_hist[idx_int])
+            if int(np.isfinite(norm_curve).sum()) >= 2:
+                norm_rows.append(norm_curve)
+            if len(norm_rows) >= forced_floor:
+                break
+
+    if not norm_rows and int(np.isfinite(sample_norm).sum()) < 2 and int(np.isfinite(best_norm).sum()) < 2:
+        return
+
+    top_mat = np.vstack(norm_rows) if norm_rows else np.empty((0, len(hist_cols)), dtype=float)
+    if top_mat.size > 0:
+        p10 = np.nanpercentile(top_mat, 10.0, axis=0)
+        p50 = np.nanpercentile(top_mat, 50.0, axis=0)
+        p90 = np.nanpercentile(top_mat, 90.0, axis=0)
+    else:
+        p10 = np.full(len(hist_cols), np.nan, dtype=float)
+        p50 = np.full(len(hist_cols), np.nan, dtype=float)
+        p90 = np.full(len(hist_cols), np.nan, dtype=float)
+
+    log.info(
+        (
+            "Showcase histogram candidates: best_distance=%.6g, tolerance=+%.3g%%, "
+            "in_tolerance=%d, selected=%d (cap=%d, min=%d, forced=%s, tol_limit=%s)."
+        ),
+        best_dist,
+        tol_pct,
+        len(tol_idx),
+        len(norm_rows),
+        top_k,
+        min_candidates,
+        "yes" if used_forced_floor else "no",
+        ("nan" if not np.isfinite(tol_limit) else f"{tol_limit:.6g}"),
+    )
+
+    sample_cdf = _cdf_from_histogram_profile(sample_norm)
+    best_cdf = _cdf_from_histogram_profile(best_norm)
+    p50_cdf = _cdf_from_histogram_profile(p50)
+
+    fig, axes = plt.subplots(
+        2,
+        1,
+        figsize=(10.5, 6.4),
+        sharex=True,
+        gridspec_kw={"height_ratios": [1.25, 1.0]},
+    )
+    ax_top, ax_cdf = axes
+
+    band_mask = np.isfinite(p10) & np.isfinite(p90)
+    if np.any(band_mask):
+        ax_top.fill_between(
+            bins[band_mask],
+            p10[band_mask],
+            p90[band_mask],
+            color="#A0A0A0",
+            alpha=0.35,
+            linewidth=0.0,
+            label=f"Top-{len(norm_rows)} candidates p10-p90",
+        )
+    if np.isfinite(p50).any():
+        ax_top.plot(bins, p50, color="#555555", linewidth=1.5, alpha=0.95, label="Top candidates median")
+    if np.isfinite(sample_norm).any():
+        ax_top.plot(bins, sample_norm, color="#E45756", linewidth=2.0, linestyle="--", label="Sample histogram")
+    if np.isfinite(best_norm).any():
+        ax_top.plot(bins, best_norm, color="#F58518", linewidth=1.9, linestyle="-.", label="Best-match histogram")
+    ax_top.set_ylabel("Normalized bin weight")
+    ax_top.grid(True, alpha=0.22)
+    ax_top.legend(loc="upper right", fontsize=8)
+
+    if np.isfinite(sample_cdf).any():
+        ax_cdf.plot(bins, sample_cdf, color="#E45756", linewidth=2.0, linestyle="--", label="Sample CDF")
+    if np.isfinite(best_cdf).any():
+        ax_cdf.plot(bins, best_cdf, color="#F58518", linewidth=1.9, linestyle="-.", label="Best-match CDF")
+    if np.isfinite(p50_cdf).any():
+        ax_cdf.plot(bins, p50_cdf, color="#555555", linewidth=1.4, label="Top candidates median CDF")
+    ax_cdf.set_xlabel("Rate-histogram bin")
+    ax_cdf.set_ylabel("Cumulative fraction")
+    ax_cdf.set_ylim(-0.01, 1.01)
+    ax_cdf.grid(True, alpha=0.22)
+    ax_cdf.legend(loc="lower right", fontsize=8)
+
+    fig.suptitle(
+        "Random showcase rate-histogram profile\n"
+        f"(dataset_index={ds_idx}, metric={distance_metric}, seed={showcase_seed_used}, "
+        f"bins={len(hist_cols)}, tolerance=+{tol_pct:g}%)",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.95])
+    _save_figure(fig, PLOTS_DIR / "random_showcase_feature_rate_histogram.png")
+    plt.close(fig)
+
+
+def _normalize_plot_parameters(plot_params: object) -> list[str]:
+    """Normalize plot parameter config into an ordered unique list."""
+    if isinstance(plot_params, str):
+        requested = [x.strip() for x in plot_params.split(",") if x.strip()]
+    elif isinstance(plot_params, (list, tuple, set)):
+        requested = [str(x).strip() for x in plot_params if str(x).strip()]
+    else:
+        requested = []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for pname in requested:
+        if pname in seen:
+            continue
+        normalized.append(pname)
+        seen.add(pname)
+    return normalized
+
+
+def _exclude_candidates_sharing_plot_parameters(
+    cand_df: pd.DataFrame,
+    sample_row: pd.Series,
+    plot_params: object,
+) -> tuple[pd.DataFrame, np.ndarray, list[str]]:
+    """
+    Exclude candidate rows that match the sample on ANY configured plot parameter.
+
+    This is only active when plot_parameters are explicitly configured.
+    """
+    requested = _normalize_plot_parameters(plot_params)
+    if not requested:
+        # Fallback leakage guard for enlarged synthetic datasets.
+        if "param_set_id" in cand_df.columns and "param_set_id" in sample_row.index:
+            requested = ["param_set_id"]
+    if not requested:
+        keep_mask = np.ones(len(cand_df), dtype=bool)
+        return (cand_df.copy(), keep_mask, [])
+
+    keep_mask = np.ones(len(cand_df), dtype=bool)
+    used_params: list[str] = []
+    for pname in requested:
+        if pname not in cand_df.columns or pname not in sample_row.index:
+            continue
+
+        target = float(pd.to_numeric(pd.Series([sample_row.get(pname)]), errors="coerce").iloc[0])
+        if not np.isfinite(target):
+            continue
+
+        vals = pd.to_numeric(cand_df[pname], errors="coerce").to_numpy(dtype=float)
+        finite_mask = np.isfinite(vals)
+        if not np.any(finite_mask):
+            continue
+
+        atol = max(1e-12, 1e-12 * max(1.0, abs(target)))
+        same_mask = finite_mask & np.isclose(vals, target, rtol=0.0, atol=atol)
+        if np.any(same_mask):
+            keep_mask &= ~same_mask
+            used_params.append(pname)
+
+    filtered = cand_df.loc[keep_mask].copy()
+    return (filtered, keep_mask, used_params)
+
+
 def _select_showcase_param_pairs(
     plot_params: object,
     result_df: pd.DataFrame,
     cand_df: pd.DataFrame,
 ) -> list[tuple[str, str]]:
-    if isinstance(plot_params, (list, tuple)):
-        requested = [str(p) for p in plot_params]
-    elif isinstance(plot_params, set):
-        requested = sorted(str(p) for p in plot_params)
-    else:
-        requested = []
+    requested = _normalize_plot_parameters(plot_params)
 
     if not requested:
         requested = []
@@ -389,14 +1001,7 @@ def _select_showcase_matrix_parameters(
     cand_df: pd.DataFrame,
 ) -> list[str]:
     """Resolve ordered parameter list for showcase matrix cells."""
-    requested: list[str] = []
-
-    if isinstance(plot_params, str):
-        requested = [x.strip() for x in plot_params.split(",") if x.strip()]
-    elif isinstance(plot_params, (list, tuple, set)):
-        requested = [str(p) for p in plot_params]
-    else:
-        requested = []
+    requested: list[str] = _normalize_plot_parameters(plot_params)
 
     # Backward compatibility with previous showcase-only knobs.
     if not requested:
@@ -407,7 +1012,7 @@ def _select_showcase_matrix_parameters(
             requested = [str(x) for x in matrix_cfg]
         if requested:
             log.warning(
-                "Deprecated key step_2_1.showcase_matrix_parameters detected; use step_2_1.plot_parameters."
+                "Deprecated key step_2_1.showcase_matrix_parameters detected; use top-level plot_parameters."
             )
 
     if not requested:
@@ -581,12 +1186,76 @@ def _is_axis_alias_param(
     return bool(np.nanmax(delta) <= 1e-9 * scale)
 
 
+def _resolve_showcase_seed(
+    cfg_21: dict | None,
+    *,
+    context_label: str,
+) -> int:
+    """Resolve showcase seed from config (fixed or auto-random)."""
+    seed_raw = (cfg_21 or {}).get("showcase_seed", None)
+    auto_seed = seed_raw in (None, "", "null", "None", "auto", "random")
+    if auto_seed:
+        showcase_seed = int(np.random.default_rng().integers(0, 2**32 - 1))
+        log.info("%s seed (auto): %d", context_label, showcase_seed)
+        return showcase_seed
+    try:
+        showcase_seed = int(seed_raw)
+    except (TypeError, ValueError):
+        showcase_seed = int(np.random.default_rng().integers(0, 2**32 - 1))
+        log.warning(
+            "Invalid step_2_1.showcase_seed=%r; using auto seed %d for %s.",
+            seed_raw,
+            showcase_seed,
+            context_label.lower(),
+        )
+        return showcase_seed
+    log.info("%s seed (fixed): %d", context_label, showcase_seed)
+    return showcase_seed
+
+
+def _select_showcase_result_row(
+    result_df: pd.DataFrame,
+    cfg_21: dict | None,
+    *,
+    context_label: str,
+) -> tuple[int, int, int] | None:
+    """Pick one showcase row index and its dataset index using resolved seed."""
+    required = ["dataset_index", "best_distance"]
+    for col in required:
+        if col not in result_df.columns:
+            return None
+
+    valid_mask = (
+        pd.to_numeric(result_df["dataset_index"], errors="coerce").notna()
+        & result_df["best_distance"].notna()
+    )
+    if valid_mask.sum() == 0:
+        return None
+
+    showcase_seed = _resolve_showcase_seed(cfg_21, context_label=context_label)
+    rng = np.random.default_rng(showcase_seed)
+    valid_indices = result_df.index[valid_mask].to_numpy()
+    chosen_idx = int(rng.choice(valid_indices))
+    ds_raw = pd.to_numeric(pd.Series([result_df.loc[chosen_idx, "dataset_index"]]), errors="coerce").iloc[0]
+    if not np.isfinite(ds_raw):
+        return None
+    ds_idx = int(ds_raw)
+    log.info(
+        "%s selected dataset_index=%d (result row=%d).",
+        context_label,
+        ds_idx,
+        chosen_idx,
+    )
+    return (chosen_idx, ds_idx, showcase_seed)
+
+
 def _make_random_showcase_l2_contour(
     result_df: pd.DataFrame,
     data_df: pd.DataFrame,
     dict_path: Path,
     cfg_21: dict,
     plot_params: object = None,
+    resolved_feature_columns: list[str] | None = None,
 ) -> None:
     if not dict_path.exists():
         return
@@ -632,27 +1301,45 @@ def _make_random_showcase_l2_contour(
     )
     if ds_idx < 0 or ds_idx >= len(data_df):
         return
+    row = result_df.loc[chosen_idx]
 
     dict_df = pd.read_csv(dict_path, low_memory=False)
 
-    include_global_rate = bool(cfg_21.get("include_global_rate", True))
+    include_global_rate = _as_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
-    feature_cfg = cfg_21.get("feature_columns", "auto")
-    if isinstance(feature_cfg, str) and feature_cfg == "auto":
-        feature_cols = sorted(
-            set(_auto_feature_columns(dict_df, include_global_rate, global_rate_col))
-            & set(_auto_feature_columns(data_df, include_global_rate, global_rate_col))
-        )
+    if resolved_feature_columns is None:
+        try:
+            feature_cols, _ = _resolve_step21_feature_columns(
+                feature_cfg=cfg_21.get("feature_columns", "auto"),
+                dict_df=dict_df,
+                data_df=data_df,
+                include_global_rate=include_global_rate,
+                global_rate_col=global_rate_col,
+                catalog_path=CONFIG_COLUMNS_PATH,
+            )
+        except ValueError:
+            return
     else:
         feature_cols = [
-            str(c) for c in list(feature_cfg)
+            str(c)
+            for c in resolved_feature_columns
             if str(c) in dict_df.columns and str(c) in data_df.columns
         ]
     if not feature_cols:
         return
 
     dict_feat = dict_df[feature_cols].apply(pd.to_numeric, errors="coerce")
-    sample_feat = pd.to_numeric(data_df.loc[ds_idx, feature_cols], errors="coerce").to_numpy(dtype=float)
+    sample_feat_df = pd.DataFrame(
+        [pd.to_numeric(data_df.loc[ds_idx, feature_cols], errors="coerce")],
+        columns=feature_cols,
+    )
+    dict_feat, sample_feat_df, feature_cols, _, _ = _append_tt_global_sum_feature(
+        dict_features=dict_feat,
+        data_features=sample_feat_df,
+        feature_cols=feature_cols,
+        include_global_rate=include_global_rate,
+    )
+    sample_feat = sample_feat_df.iloc[0].to_numpy(dtype=float)
 
     distance_metric = str(cfg_21.get("distance_metric", "l2_zscore"))
     # short token for labels/filenames (e.g. 'l2' from 'l2_zscore', 'chi2' from 'chi2')
@@ -691,6 +1378,29 @@ def _make_random_showcase_l2_contour(
         return
 
     cand_mat = dict_mat[z_mask]
+    sample_row = data_df.loc[ds_idx]
+    n_before_exclusion = len(cand_df)
+    cand_df, keep_mask, exclusion_params = _exclude_candidates_sharing_plot_parameters(
+        cand_df=cand_df,
+        sample_row=sample_row,
+        plot_params=plot_params,
+    )
+    cand_mat = cand_mat[keep_mask]
+    if exclusion_params:
+        n_removed = int(n_before_exclusion - len(cand_df))
+        log.info(
+            "Random showcase: removed %d candidate rows sharing any of %s with dataset_index=%d (remaining=%d).",
+            n_removed,
+            exclusion_params,
+            ds_idx,
+            len(cand_df),
+        )
+    if cand_df.empty:
+        log.warning(
+            "Random showcase: no candidates remain after plot-parameter exclusion for dataset_index=%d.",
+            ds_idx,
+        )
+        return
 
     param_pairs = _select_showcase_param_pairs(
         plot_params=plot_params,
@@ -977,6 +1687,10 @@ def _make_random_showcase_distance_matrix(
     dict_path: Path,
     cfg_21: dict,
     plot_params: object = None,
+    resolved_feature_columns: list[str] | None = None,
+    showcase_result_row_index: int | None = None,
+    showcase_dataset_index: int | None = None,
+    showcase_seed: int | None = None,
 ) -> None:
     """Build one n x n showcase matrix with pair maps + diagonal projections."""
     if not dict_path.exists():
@@ -994,70 +1708,110 @@ def _make_random_showcase_distance_matrix(
     if valid_mask.sum() == 0:
         return
 
-    seed_raw = (cfg_21 or {}).get("showcase_seed", None)
-    auto_seed = seed_raw in (None, "", "null", "None", "auto", "random")
-    if auto_seed:
-        showcase_seed = int(np.random.default_rng().integers(0, 2**32 - 1))
-        log.info("Showcase matrix seed (auto): %d", showcase_seed)
+    if showcase_result_row_index is None:
+        selected = _select_showcase_result_row(
+            result_df=result_df,
+            cfg_21=cfg_21,
+            context_label="Showcase matrix",
+        )
+        if selected is None:
+            return
+        chosen_idx, ds_idx, showcase_seed_used = selected
     else:
-        try:
-            showcase_seed = int(seed_raw)
-        except (TypeError, ValueError):
-            showcase_seed = int(np.random.default_rng().integers(0, 2**32 - 1))
+        chosen_idx = int(showcase_result_row_index)
+        if chosen_idx not in result_df.index:
             log.warning(
-                "Invalid step_2_1.showcase_seed=%r; using auto seed %d for showcase matrix.",
-                seed_raw,
-                showcase_seed,
+                "Showcase matrix: requested shared result row %d is not present; skipping.",
+                chosen_idx,
             )
+            return
+        row_ds_raw = pd.to_numeric(
+            pd.Series([result_df.loc[chosen_idx, "dataset_index"]]),
+            errors="coerce",
+        ).iloc[0]
+        if showcase_dataset_index is None:
+            ds_raw = row_ds_raw
         else:
-            log.info("Showcase matrix seed (fixed): %d", showcase_seed)
-
-    rng = np.random.default_rng(showcase_seed)
-    valid_indices = result_df.index[valid_mask].to_numpy()
-    chosen_idx = int(rng.choice(valid_indices))
+            ds_raw = pd.to_numeric(pd.Series([showcase_dataset_index]), errors="coerce").iloc[0]
+        if not np.isfinite(ds_raw):
+            log.warning(
+                "Showcase matrix: shared dataset index is non-finite for row %d; skipping.",
+                chosen_idx,
+            )
+            return
+        ds_idx = int(ds_raw)
+        showcase_seed_used = int(showcase_seed) if showcase_seed is not None else _resolve_showcase_seed(
+            cfg_21,
+            context_label="Showcase matrix",
+        )
+        log.info(
+            "Showcase matrix using shared dataset_index=%d (result row=%d, seed=%d).",
+            ds_idx,
+            chosen_idx,
+            showcase_seed_used,
+        )
     row = result_df.loc[chosen_idx]
-    ds_idx = int(pd.to_numeric(pd.Series([row["dataset_index"]]), errors="coerce").iloc[0])
-    log.info(
-        "Showcase matrix selected dataset_index=%d (result row=%d).",
-        ds_idx,
-        chosen_idx,
-    )
     if ds_idx < 0 or ds_idx >= len(data_df):
         return
+    row = result_df.loc[chosen_idx]
 
     dict_df = pd.read_csv(dict_path, low_memory=False)
 
-    include_global_rate = bool(cfg_21.get("include_global_rate", True))
+    include_global_rate = _as_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
-    feature_cfg = cfg_21.get("feature_columns", "auto")
-    if isinstance(feature_cfg, str) and feature_cfg == "auto":
-        feature_cols = sorted(
-            set(_auto_feature_columns(dict_df, include_global_rate, global_rate_col))
-            & set(_auto_feature_columns(data_df, include_global_rate, global_rate_col))
-        )
+    if resolved_feature_columns is None:
+        try:
+            feature_cols, _ = _resolve_step21_feature_columns(
+                feature_cfg=cfg_21.get("feature_columns", "auto"),
+                dict_df=dict_df,
+                data_df=data_df,
+                include_global_rate=include_global_rate,
+                global_rate_col=global_rate_col,
+                catalog_path=CONFIG_COLUMNS_PATH,
+            )
+        except ValueError:
+            return
     else:
         feature_cols = [
-            str(c) for c in list(feature_cfg)
+            str(c)
+            for c in resolved_feature_columns
             if str(c) in dict_df.columns and str(c) in data_df.columns
         ]
     if not feature_cols:
         return
 
     dict_feat = dict_df[feature_cols].apply(pd.to_numeric, errors="coerce")
-    sample_feat = pd.to_numeric(data_df.loc[ds_idx, feature_cols], errors="coerce").to_numpy(dtype=float)
-
+    sample_feat_df = pd.DataFrame(
+        [pd.to_numeric(data_df.loc[ds_idx, feature_cols], errors="coerce")],
+        columns=feature_cols,
+    )
+    dict_feat, sample_feat_df, feature_cols, _, _ = _append_tt_global_sum_feature(
+        dict_features=dict_feat,
+        data_features=sample_feat_df,
+        feature_cols=feature_cols,
+        include_global_rate=include_global_rate,
+    )
     distance_metric = str(cfg_21.get("distance_metric", "l2_zscore"))
     metric_short = distance_metric.split("_")[0]
     metric_label = "L2" if metric_short == "l2" else metric_short
+    interpolation_k_cfg = cfg_21.get("interpolation_k", 5)
+    interpolation_k = None if interpolation_k_cfg in (None, "", "null", "None") else int(interpolation_k_cfg)
+    inverse_mapping_cfg = _resolve_step21_inverse_mapping_cfg(cfg_21, interpolation_k)
 
+    dict_raw_mat = dict_feat.to_numpy(dtype=float)
+    sample_raw_vec = sample_feat_df.iloc[0].to_numpy(dtype=float)
     if distance_metric == "l2_zscore":
         means = dict_feat.mean(axis=0, skipna=True)
         stds = dict_feat.std(axis=0, skipna=True).replace({0.0: np.nan})
-        dict_mat = ((dict_feat - means) / stds).to_numpy(dtype=float)
-        sample_vec = ((sample_feat - means.to_numpy(dtype=float)) / stds.to_numpy(dtype=float))
+        dict_scaled_full = ((dict_feat - means) / stds).to_numpy(dtype=float)
+        sample_scaled_full = ((sample_feat_df.iloc[0] - means) / stds).to_numpy(dtype=float)
     else:
-        dict_mat = dict_feat.to_numpy(dtype=float)
-        sample_vec = sample_feat
+        dict_scaled_full = dict_raw_mat
+        sample_scaled_full = sample_raw_vec
+
+    hist_feature_idx = _histogram_feature_indices_for_distance(feature_cols)
+    hist_feature_set = set(hist_feature_idx)
+    non_hist_feature_idx = [idx for idx in range(len(feature_cols)) if idx not in hist_feature_set]
 
     z_cols = [c for c in ["z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"] if c in dict_df.columns and c in data_df.columns]
     if z_cols:
@@ -1077,10 +1831,72 @@ def _make_random_showcase_distance_matrix(
         sample_id = str(data_df.loc[ds_idx, join_col])
         z_mask &= (dict_df[join_col].astype(str).to_numpy() != sample_id)
 
-    cand_df = dict_df.loc[z_mask].copy()
-    if cand_df.empty:
+    cand_indices = np.where(z_mask)[0]
+    if len(cand_indices) == 0:
         return
-    cand_mat = dict_mat[z_mask]
+
+    cand_df = dict_df.iloc[cand_indices].copy()
+    sample_row = data_df.loc[ds_idx]
+    shared_keep_mask, shared_info = build_shared_parameter_exclusion_mask(
+        dict_df=cand_df,
+        sample_row=sample_row,
+        initial_mask=np.ones(len(cand_df), dtype=bool),
+        param_columns=[
+            "flux_cm2_min",
+            "cos_n",
+            "eff_sim_1",
+            "eff_sim_2",
+            "eff_sim_3",
+            "eff_sim_4",
+            "eff_empirical_1",
+            "eff_empirical_2",
+            "eff_empirical_3",
+            "eff_empirical_4",
+        ],
+        shared_parameter_exclusion_mode=cfg_21.get("shared_parameter_exclusion_mode", None),
+        shared_parameter_exclusion_columns=cfg_21.get("shared_parameter_exclusion_columns", "auto"),
+        shared_parameter_exclusion_ignore=cfg_21.get("shared_parameter_exclusion_ignore", ["cos_n"]),
+        shared_parameter_match_atol=float(cfg_21.get("shared_parameter_match_atol", 1e-12)),
+    )
+    if int(shared_info.get("n_removed", 0)) > 0:
+        log.info(
+            "Showcase matrix: removed %d candidates by shared-parameter exclusion (mode=%s, remaining=%d).",
+            int(shared_info.get("n_removed", 0)),
+            shared_info.get("mode", "off"),
+            int(shared_info.get("n_after", int(np.sum(shared_keep_mask)))),
+        )
+
+    keep_mask = np.asarray(shared_keep_mask, dtype=bool)
+    apply_plot_exclusion = _as_bool(
+        cfg_21.get("showcase_exclude_shared_plot_parameters", False),
+        False,
+    )
+    if apply_plot_exclusion and np.any(keep_mask):
+        cand_after_shared = cand_df.loc[keep_mask].copy()
+        cand_after_shared, keep_plot_mask, exclusion_params = _exclude_candidates_sharing_plot_parameters(
+            cand_df=cand_after_shared,
+            sample_row=sample_row,
+            plot_params=plot_params,
+        )
+        shared_positions = np.where(keep_mask)[0]
+        keep_mask_after_plot = np.zeros_like(keep_mask, dtype=bool)
+        keep_mask_after_plot[shared_positions[keep_plot_mask]] = True
+        keep_mask = keep_mask_after_plot
+        if exclusion_params:
+            log.info(
+                "Showcase matrix: additionally removed %d candidates by plot-parameter exclusion (%s).",
+                int(np.sum(shared_keep_mask)) - int(np.sum(keep_mask)),
+                exclusion_params,
+            )
+
+    cand_indices = cand_indices[keep_mask]
+    cand_df = cand_df.loc[keep_mask].copy()
+    if cand_df.empty:
+        log.warning(
+            "Showcase matrix: no candidates remain after exclusion rules for dataset_index=%d.",
+            ds_idx,
+        )
+        return
 
     matrix_params = _select_showcase_matrix_parameters(
         cfg_21=cfg_21,
@@ -1106,14 +1922,37 @@ def _make_random_showcase_distance_matrix(
     if n_params == 0:
         return
 
-    dist_fn = DISTANCE_FNS.get(distance_metric, DISTANCE_FNS.get(metric_short, None))
-    if dist_fn is None:
-        cand_distance = _l2_distances(sample_vec, cand_mat)
-    else:
-        cand_distance = np.array([dist_fn(sample_vec, cand_mat[i]) for i in range(cand_mat.shape[0])], dtype=float)
+    cand_scaled_non_hist = (
+        dict_scaled_full[cand_indices][:, non_hist_feature_idx] if non_hist_feature_idx else None
+    )
+    sample_scaled_non_hist = (
+        sample_scaled_full[non_hist_feature_idx] if non_hist_feature_idx else None
+    )
+    cand_hist_raw = (
+        dict_raw_mat[cand_indices][:, hist_feature_idx] if hist_feature_idx else None
+    )
+    sample_hist_raw = sample_raw_vec[hist_feature_idx] if hist_feature_idx else None
+    cand_distance = compute_candidate_distances(
+        distance_metric=distance_metric,
+        sample_scaled_non_hist=sample_scaled_non_hist,
+        candidates_scaled_non_hist=cand_scaled_non_hist,
+        sample_hist_raw=sample_hist_raw,
+        candidates_hist_raw=cand_hist_raw,
+        histogram_distance_weight=float(inverse_mapping_cfg.get("histogram_distance_weight", 1.0)),
+        histogram_distance_blend_mode=str(inverse_mapping_cfg.get("histogram_distance_blend_mode", "normalized")),
+    )
 
     optimum_values: dict[str, float] = {}
     finite_dist = np.isfinite(cand_distance)
+    row_best_distance = float(pd.to_numeric(pd.Series([row.get("best_distance")]), errors="coerce").iloc[0])
+    if np.any(finite_dist) and np.isfinite(row_best_distance):
+        recomputed_best = float(np.nanmin(cand_distance[finite_dist]))
+        if abs(recomputed_best - row_best_distance) > 1e-8 * max(1.0, abs(row_best_distance)):
+            log.info(
+                "Showcase matrix: recomputed best_distance differs from result row (recomputed=%.6g, row=%.6g).",
+                recomputed_best,
+                row_best_distance,
+            )
     if np.any(finite_dist):
         best_local_idx = int(np.nanargmin(cand_distance))
         best_row = cand_df.iloc[best_local_idx]
@@ -1148,16 +1987,6 @@ def _make_random_showcase_distance_matrix(
         if np.isfinite(est_val):
             ext = np.append(ext, est_val)
         param_limits[pname] = _limits_with_pad(ext)
-
-    dist_limits = _limits_with_pad(cand_distance)
-    n_color_levels = 14
-    dist_levels = np.linspace(dist_limits[0], dist_limits[1], n_color_levels + 1)
-    base_colors = plt.get_cmap("viridis_r")(np.linspace(0.06, 0.94, n_color_levels))
-    pastel_mix = 0.32
-    pastel_rgb = (1.0 - pastel_mix) * base_colors[:, :3] + pastel_mix * 1.0
-    pastel_rgba = np.column_stack([pastel_rgb, np.full(n_color_levels, 0.96)])
-    dist_cmap = mcolors.ListedColormap(pastel_rgba, name="viridis_r_pastel")
-    dist_norm = mcolors.BoundaryNorm(dist_levels, dist_cmap.N, clip=True)
 
     def _slice_with_fixed(active_params: set[str]) -> tuple[pd.DataFrame, dict[str, float], str | None]:
         fixed_params = [p for p in matrix_params if p not in active_params]
@@ -1248,9 +2077,67 @@ def _make_random_showcase_distance_matrix(
 
         return (pd.DataFrame(), {}, last_reason or "empty_slice")
 
+    slice_cache: dict[tuple[str, ...], tuple[pd.DataFrame, dict[str, float], str | None]] = {}
+
+    def _slice_with_fixed_cached(active_params: set[str]) -> tuple[pd.DataFrame, dict[str, float], str | None]:
+        key = tuple(sorted(active_params))
+        cached = slice_cache.get(key, None)
+        if cached is None:
+            cached = _slice_with_fixed(active_params)
+            slice_cache[key] = cached
+        df, fixed_vals, reason = cached
+        return (df.copy(), dict(fixed_vals), reason)
+
+    def _prepare_pair_df(x_param: str, y_param: str) -> tuple[pd.DataFrame, str | None]:
+        pair_slice_df, _, pair_reason = _slice_with_fixed_cached({x_param, y_param})
+        pair_df = (
+            pair_slice_df[[x_param, y_param, "distance_value"]].copy()
+            if not pair_slice_df.empty
+            else pd.DataFrame(columns=[x_param, y_param, "distance_value"])
+        )
+        pair_df[x_param] = pd.to_numeric(pair_df[x_param], errors="coerce")
+        pair_df[y_param] = pd.to_numeric(pair_df[y_param], errors="coerce")
+        pair_df["distance_value"] = pd.to_numeric(pair_df["distance_value"], errors="coerce")
+        pair_df = pair_df.dropna(subset=[x_param, y_param, "distance_value"])
+        if not pair_df.empty:
+            pair_df = (
+                pair_df.groupby([x_param, y_param], as_index=False, sort=True)["distance_value"]
+                .min()
+            )
+        return (pair_df, pair_reason)
+
+    pair_data_cache: dict[tuple[str, str], tuple[pd.DataFrame, str | None]] = {}
+    pair_distance_arrays: list[np.ndarray] = []
+    for i, y_param in enumerate(matrix_params):
+        for j, x_param in enumerate(matrix_params):
+            if j >= i:
+                continue
+            pair_df, pair_reason = _prepare_pair_df(x_param, y_param)
+            pair_data_cache[(x_param, y_param)] = (pair_df, pair_reason)
+            if not pair_df.empty:
+                z_vals = pair_df["distance_value"].to_numpy(dtype=float)
+                z_vals = z_vals[np.isfinite(z_vals)]
+                if z_vals.size > 0:
+                    pair_distance_arrays.append(z_vals)
+
+    if pair_distance_arrays:
+        dist_limits = _limits_with_pad(np.concatenate(pair_distance_arrays))
+    else:
+        dist_limits = _limits_with_pad(cand_distance)
+
+    n_color_levels = 14
+    dist_levels = np.linspace(dist_limits[0], dist_limits[1], n_color_levels + 1)
+    base_colors = plt.get_cmap("viridis_r")(np.linspace(0.06, 0.94, n_color_levels))
+    pastel_mix = 0.32
+    pastel_rgb = (1.0 - pastel_mix) * base_colors[:, :3] + pastel_mix * 1.0
+    pastel_rgba = np.column_stack([pastel_rgb, np.full(n_color_levels, 0.96)])
+    dist_cmap = mcolors.ListedColormap(pastel_rgba, name="viridis_r_pastel")
+    dist_norm = mcolors.BoundaryNorm(dist_levels, dist_cmap.N, clip=True)
+
     fig_w = max(5.5, 3.2 * n_params)
     fig_h = max(5.0, 3.0 * n_params)
     fig, axes = plt.subplots(n_params, n_params, figsize=(fig_w, fig_h), squeeze=False)
+    diag_share_y = _as_bool(cfg_21.get("showcase_matrix_diag_share_y", True), True)
 
     plotted_lower_any = False
     for i, y_param in enumerate(matrix_params):
@@ -1261,7 +2148,7 @@ def _make_random_showcase_distance_matrix(
                 continue
 
             if i == j:
-                diag_df, fixed_vals, reason = _slice_with_fixed({x_param})
+                diag_df, fixed_vals, reason = _slice_with_fixed_cached({x_param})
                 diag_df[x_param] = pd.to_numeric(diag_df.get(x_param), errors="coerce")
                 diag_df["distance_value"] = pd.to_numeric(diag_df.get("distance_value"), errors="coerce")
                 diag_df = diag_df.dropna(subset=[x_param, "distance_value"])
@@ -1304,26 +2191,27 @@ def _make_random_showcase_distance_matrix(
                     ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=7, transform=ax.transAxes)
 
                 ax.set_xlim(*param_limits[x_param])
-                ax.set_ylim(*dist_limits)
+                if diag_share_y:
+                    ax.set_ylim(*dist_limits)
+                else:
+                    diag_y = (
+                        pd.to_numeric(curve.get("distance_value"), errors="coerce").to_numpy(dtype=float)
+                        if not curve.empty else np.asarray([], dtype=float)
+                    )
+                    best_distance_row = float(
+                        pd.to_numeric(pd.Series([row.get("best_distance")]), errors="coerce").iloc[0]
+                    )
+                    if np.isfinite(best_distance_row):
+                        diag_y = np.append(diag_y, best_distance_row)
+                    ax.set_ylim(*_limits_with_pad(diag_y))
                 ax.set_title(f"{x_param}", fontsize=8)
             else:
                 # Lower-triangle cells vary this pair while fixing all other
                 # parameters with the same tolerance policy used on diagonals.
-                pair_slice_df, _, pair_reason = _slice_with_fixed({x_param, y_param})
-                pair_df = (
-                    pair_slice_df[[x_param, y_param, "distance_value"]].copy()
-                    if not pair_slice_df.empty
-                    else pd.DataFrame(columns=[x_param, y_param, "distance_value"])
+                pair_df, pair_reason = pair_data_cache.get(
+                    (x_param, y_param),
+                    (pd.DataFrame(columns=[x_param, y_param, "distance_value"]), "empty_slice"),
                 )
-                pair_df[x_param] = pd.to_numeric(pair_df[x_param], errors="coerce")
-                pair_df[y_param] = pd.to_numeric(pair_df[y_param], errors="coerce")
-                pair_df["distance_value"] = pd.to_numeric(pair_df["distance_value"], errors="coerce")
-                pair_df = pair_df.dropna(subset=[x_param, y_param, "distance_value"])
-                if not pair_df.empty:
-                    pair_df = (
-                        pair_df.groupby([x_param, y_param], as_index=False, sort=True)["distance_value"]
-                        .min()
-                    )
 
                 plotted = False
                 if len(pair_df) >= 3:
@@ -1413,7 +2301,7 @@ def _make_random_showcase_distance_matrix(
 
     fig.suptitle(
         "Random showcase distance matrix\n"
-        f"(dataset_index={ds_idx}, metric={distance_metric}, seed={showcase_seed}, fixed_tol={fixed_tolerance_pct:.4g}%)",
+        f"(dataset_index={ds_idx}, metric={distance_metric}, seed={showcase_seed_used}, fixed_tol={fixed_tolerance_pct:.4g}%)",
         fontsize=11,
         y=0.995,
     )
@@ -1446,12 +2334,464 @@ def _make_random_showcase_distance_matrix(
     plt.close(fig)
 
 
+def _make_random_showcase_feature_space_matrix(
+    result_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    dict_path: Path,
+    cfg_21: dict,
+    plot_params: object = None,
+    resolved_feature_columns: list[str] | None = None,
+    showcase_result_row_index: int | None = None,
+    showcase_dataset_index: int | None = None,
+    showcase_seed: int | None = None,
+) -> None:
+    """Showcase pairwise feature-space projections for one random dataset point."""
+    if not dict_path.exists():
+        return
+
+    required = ["dataset_index", "best_distance"]
+    for col in required:
+        if col not in result_df.columns:
+            return
+
+    valid_mask = (
+        pd.to_numeric(result_df["dataset_index"], errors="coerce").notna()
+        & result_df["best_distance"].notna()
+    )
+    if valid_mask.sum() == 0:
+        return
+
+    if showcase_result_row_index is None:
+        selected = _select_showcase_result_row(
+            result_df=result_df,
+            cfg_21=cfg_21,
+            context_label="Showcase feature matrix",
+        )
+        if selected is None:
+            return
+        chosen_idx, ds_idx, showcase_seed_used = selected
+    else:
+        chosen_idx = int(showcase_result_row_index)
+        if chosen_idx not in result_df.index:
+            log.warning(
+                "Showcase feature matrix: requested shared result row %d is not present; skipping.",
+                chosen_idx,
+            )
+            return
+        row_ds_raw = pd.to_numeric(
+            pd.Series([result_df.loc[chosen_idx, "dataset_index"]]),
+            errors="coerce",
+        ).iloc[0]
+        if showcase_dataset_index is None:
+            ds_raw = row_ds_raw
+        else:
+            ds_raw = pd.to_numeric(pd.Series([showcase_dataset_index]), errors="coerce").iloc[0]
+        if not np.isfinite(ds_raw):
+            log.warning(
+                "Showcase feature matrix: shared dataset index is non-finite for row %d; skipping.",
+                chosen_idx,
+            )
+            return
+        ds_idx = int(ds_raw)
+        showcase_seed_used = int(showcase_seed) if showcase_seed is not None else _resolve_showcase_seed(
+            cfg_21,
+            context_label="Showcase feature matrix",
+        )
+        log.info(
+            "Showcase feature matrix using shared dataset_index=%d (result row=%d, seed=%d).",
+            ds_idx,
+            chosen_idx,
+            showcase_seed_used,
+        )
+    if ds_idx < 0 or ds_idx >= len(data_df):
+        return
+    row = result_df.loc[chosen_idx]
+
+    dict_df = pd.read_csv(dict_path, low_memory=False)
+    include_global_rate = _as_bool(cfg_21.get("include_global_rate", True), True)
+    global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
+
+    if resolved_feature_columns is None:
+        try:
+            feature_cols, _ = _resolve_step21_feature_columns(
+                feature_cfg=cfg_21.get("feature_columns", "auto"),
+                dict_df=dict_df,
+                data_df=data_df,
+                include_global_rate=include_global_rate,
+                global_rate_col=global_rate_col,
+                catalog_path=CONFIG_COLUMNS_PATH,
+            )
+        except ValueError:
+            return
+    else:
+        feature_cols = [
+            str(c)
+            for c in resolved_feature_columns
+            if str(c) in dict_df.columns and str(c) in data_df.columns
+        ]
+    if not feature_cols:
+        return
+
+    dict_feat = dict_df[feature_cols].apply(pd.to_numeric, errors="coerce")
+    sample_feat_df = pd.DataFrame(
+        [pd.to_numeric(data_df.loc[ds_idx, feature_cols], errors="coerce")],
+        columns=feature_cols,
+    )
+    dict_feat, sample_feat_df, feature_cols, _, _ = _append_tt_global_sum_feature(
+        dict_features=dict_feat,
+        data_features=sample_feat_df,
+        feature_cols=feature_cols,
+        include_global_rate=include_global_rate,
+    )
+    if not feature_cols:
+        return
+
+    distance_metric = str(cfg_21.get("distance_metric", "l2_zscore"))
+    metric_short = distance_metric.split("_")[0]
+    metric_label = "L2" if metric_short == "l2" else metric_short
+    interpolation_k_cfg = cfg_21.get("interpolation_k", 5)
+    interpolation_k = None if interpolation_k_cfg in (None, "", "null", "None") else int(interpolation_k_cfg)
+    inverse_mapping_cfg = _resolve_step21_inverse_mapping_cfg(cfg_21, interpolation_k)
+
+    dict_raw_mat = dict_feat.to_numpy(dtype=float)
+    sample_raw_vec = sample_feat_df.iloc[0].to_numpy(dtype=float)
+    if distance_metric == "l2_zscore":
+        means = dict_feat.mean(axis=0, skipna=True)
+        stds = dict_feat.std(axis=0, skipna=True).replace({0.0: np.nan})
+        dict_scaled_full = ((dict_feat - means) / stds).to_numpy(dtype=float)
+        sample_scaled_full = ((sample_feat_df.iloc[0] - means) / stds).to_numpy(dtype=float)
+    else:
+        dict_scaled_full = dict_raw_mat
+        sample_scaled_full = sample_raw_vec
+
+    hist_feature_idx = _histogram_feature_indices_for_distance(feature_cols)
+    hist_feature_set = set(hist_feature_idx)
+    non_hist_feature_idx = [idx for idx in range(len(feature_cols)) if idx not in hist_feature_set]
+
+    z_cols = [c for c in ["z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"] if c in dict_df.columns and c in data_df.columns]
+    if z_cols:
+        z_tol = float(cfg_21.get("z_tol", 1e-6))
+        dict_z = dict_df[z_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        sample_z = pd.to_numeric(data_df.loc[ds_idx, z_cols], errors="coerce").to_numpy(dtype=float)
+        z_mask = np.all(np.abs(dict_z - sample_z[np.newaxis, :]) <= z_tol, axis=1)
+    else:
+        z_mask = np.ones(len(dict_df), dtype=bool)
+
+    join_col = None
+    for candidate in ("filename_base", "file_name"):
+        if candidate in dict_df.columns and candidate in data_df.columns:
+            join_col = candidate
+            break
+    if join_col is not None:
+        sample_id = str(data_df.loc[ds_idx, join_col])
+        z_mask &= (dict_df[join_col].astype(str).to_numpy() != sample_id)
+
+    cand_indices = np.where(z_mask)[0]
+    if len(cand_indices) == 0:
+        log.warning(
+            "Showcase feature matrix: no candidates after z/self exclusion for dataset_index=%d.",
+            ds_idx,
+        )
+        return
+
+    cand_df = dict_df.iloc[cand_indices].copy()
+    sample_row = data_df.loc[ds_idx]
+    shared_keep_mask, shared_info = build_shared_parameter_exclusion_mask(
+        dict_df=cand_df,
+        sample_row=sample_row,
+        initial_mask=np.ones(len(cand_df), dtype=bool),
+        param_columns=[
+            "flux_cm2_min",
+            "cos_n",
+            "eff_sim_1",
+            "eff_sim_2",
+            "eff_sim_3",
+            "eff_sim_4",
+            "eff_empirical_1",
+            "eff_empirical_2",
+            "eff_empirical_3",
+            "eff_empirical_4",
+        ],
+        shared_parameter_exclusion_mode=cfg_21.get("shared_parameter_exclusion_mode", None),
+        shared_parameter_exclusion_columns=cfg_21.get("shared_parameter_exclusion_columns", "auto"),
+        shared_parameter_exclusion_ignore=cfg_21.get("shared_parameter_exclusion_ignore", ["cos_n"]),
+        shared_parameter_match_atol=float(cfg_21.get("shared_parameter_match_atol", 1e-12)),
+    )
+    if int(shared_info.get("n_removed", 0)) > 0:
+        log.info(
+            "Showcase feature matrix: removed %d candidates by shared-parameter exclusion (mode=%s, remaining=%d).",
+            int(shared_info.get("n_removed", 0)),
+            shared_info.get("mode", "off"),
+            int(shared_info.get("n_after", int(np.sum(shared_keep_mask)))),
+        )
+
+    keep_mask = np.asarray(shared_keep_mask, dtype=bool)
+    apply_plot_exclusion = _as_bool(
+        cfg_21.get("showcase_exclude_shared_plot_parameters", False),
+        False,
+    )
+    if apply_plot_exclusion and np.any(keep_mask):
+        cand_after_shared = cand_df.loc[keep_mask].copy()
+        cand_after_shared, keep_plot_mask, exclusion_params = _exclude_candidates_sharing_plot_parameters(
+            cand_df=cand_after_shared,
+            sample_row=sample_row,
+            plot_params=plot_params,
+        )
+        shared_positions = np.where(keep_mask)[0]
+        keep_mask_after_plot = np.zeros_like(keep_mask, dtype=bool)
+        keep_mask_after_plot[shared_positions[keep_plot_mask]] = True
+        keep_mask = keep_mask_after_plot
+        if exclusion_params:
+            log.info(
+                "Showcase feature matrix: additionally removed %d candidates by plot-parameter exclusion (%s).",
+                int(np.sum(shared_keep_mask)) - int(np.sum(keep_mask)),
+                exclusion_params,
+            )
+
+    cand_indices = cand_indices[keep_mask]
+    cand_df = cand_df.loc[keep_mask].copy()
+    if len(cand_indices) == 0:
+        log.warning(
+            "Showcase feature matrix: no candidates remain after exclusion rules for dataset_index=%d.",
+            ds_idx,
+        )
+        return
+
+    cand_feat = dict_feat.iloc[cand_indices].copy()
+
+    cand_scaled_non_hist = (
+        dict_scaled_full[cand_indices][:, non_hist_feature_idx] if non_hist_feature_idx else None
+    )
+    sample_scaled_non_hist = (
+        sample_scaled_full[non_hist_feature_idx] if non_hist_feature_idx else None
+    )
+    cand_hist_raw = (
+        dict_raw_mat[cand_indices][:, hist_feature_idx] if hist_feature_idx else None
+    )
+    sample_hist_raw = sample_raw_vec[hist_feature_idx] if hist_feature_idx else None
+    cand_distance = compute_candidate_distances(
+        distance_metric=distance_metric,
+        sample_scaled_non_hist=sample_scaled_non_hist,
+        candidates_scaled_non_hist=cand_scaled_non_hist,
+        sample_hist_raw=sample_hist_raw,
+        candidates_hist_raw=cand_hist_raw,
+        histogram_distance_weight=float(inverse_mapping_cfg.get("histogram_distance_weight", 1.0)),
+        histogram_distance_blend_mode=str(inverse_mapping_cfg.get("histogram_distance_blend_mode", "normalized")),
+    )
+
+    finite_dist = np.isfinite(cand_distance)
+    row_best_distance = float(pd.to_numeric(pd.Series([row.get("best_distance")]), errors="coerce").iloc[0])
+    if np.any(finite_dist) and np.isfinite(row_best_distance):
+        recomputed_best = float(np.nanmin(cand_distance[finite_dist]))
+        if abs(recomputed_best - row_best_distance) > 1e-8 * max(1.0, abs(row_best_distance)):
+            log.info(
+                "Showcase feature matrix: recomputed best_distance differs from result row (recomputed=%.6g, row=%.6g).",
+                recomputed_best,
+                row_best_distance,
+            )
+    if not np.any(finite_dist):
+        log.warning(
+            "Showcase feature matrix: all distances are non-finite for dataset_index=%d.",
+            ds_idx,
+        )
+        return
+
+    best_local_idx = int(np.nanargmin(cand_distance))
+    best_feat_values = cand_feat.iloc[best_local_idx]
+    sample_feat_values = sample_feat_df.iloc[0]
+
+    feature_plot_cols = [c for c in feature_cols if c in cand_feat.columns]
+    matrix_feature_cols, hist_feature_cols = _split_showcase_feature_groups(feature_plot_cols)
+    log.info(
+        "Showcase feature matrix split: %d non-hist features, %d histogram-bin features.",
+        len(matrix_feature_cols),
+        len(hist_feature_cols),
+    )
+    _make_random_showcase_feature_histogram_plot(
+        cand_feat=cand_feat,
+        cand_distance=cand_distance,
+        sample_feat_values=sample_feat_values,
+        best_feat_values=best_feat_values,
+        hist_feature_cols=hist_feature_cols,
+        cfg_21=cfg_21,
+        ds_idx=ds_idx,
+        distance_metric=distance_metric,
+        showcase_seed_used=showcase_seed_used,
+    )
+    max_features_raw = cfg_21.get("showcase_feature_matrix_max_features", None)
+    if max_features_raw not in (None, "", "null", "None"):
+        try:
+            max_features = max(1, int(max_features_raw))
+        except (TypeError, ValueError):
+            max_features = None
+            log.warning(
+                "Invalid step_2_1.showcase_feature_matrix_max_features=%r; using all feature dimensions.",
+                max_features_raw,
+            )
+        if max_features is not None and len(matrix_feature_cols) > max_features:
+            matrix_feature_cols = matrix_feature_cols[:max_features]
+
+    n_features = len(matrix_feature_cols)
+    if n_features == 0:
+        log.info(
+            "Showcase feature matrix skipped: no non-histogram features available for dataset_index=%d.",
+            ds_idx,
+        )
+        return
+
+    def _limits_with_pad(values: np.ndarray, pad_frac: float = 0.05) -> tuple[float, float]:
+        finite = np.asarray(values, dtype=float)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            return (0.0, 1.0)
+        lo = float(np.min(finite))
+        hi = float(np.max(finite))
+        if not np.isfinite(lo) or not np.isfinite(hi):
+            return (0.0, 1.0)
+        if np.isclose(lo, hi):
+            pad = max(1e-6, 0.02 * max(1.0, abs(lo)))
+            return (lo - pad, hi + pad)
+        pad = (hi - lo) * pad_frac
+        return (lo - pad, hi + pad)
+
+    feature_limits: dict[str, tuple[float, float]] = {}
+    for feature_name in matrix_feature_cols:
+        vals = pd.to_numeric(cand_feat[feature_name], errors="coerce").to_numpy(dtype=float)
+        sample_v = float(pd.to_numeric(pd.Series([sample_feat_values.get(feature_name)]), errors="coerce").iloc[0])
+        best_v = float(pd.to_numeric(pd.Series([best_feat_values.get(feature_name)]), errors="coerce").iloc[0])
+        ext = vals
+        if np.isfinite(sample_v):
+            ext = np.append(ext, sample_v)
+        if np.isfinite(best_v):
+            ext = np.append(ext, best_v)
+        feature_limits[feature_name] = _limits_with_pad(ext)
+
+    dist_limits = _limits_with_pad(cand_distance[finite_dist], pad_frac=0.02)
+    n_color_levels = 14
+    dist_levels = np.linspace(dist_limits[0], dist_limits[1], n_color_levels + 1)
+    base_colors = plt.get_cmap("viridis_r")(np.linspace(0.06, 0.94, n_color_levels))
+    pastel_mix = 0.32
+    pastel_rgb = (1.0 - pastel_mix) * base_colors[:, :3] + pastel_mix * 1.0
+    pastel_rgba = np.column_stack([pastel_rgb, np.full(n_color_levels, 0.96)])
+    dist_cmap = mcolors.ListedColormap(pastel_rgba, name="viridis_r_pastel_feature")
+    dist_norm = mcolors.BoundaryNorm(dist_levels, dist_cmap.N, clip=True)
+
+    fig_w = max(5.5, 3.0 * n_features)
+    fig_h = max(5.0, 2.8 * n_features)
+    fig, axes = plt.subplots(n_features, n_features, figsize=(fig_w, fig_h), squeeze=False)
+
+    plotted_lower_any = False
+    for i, y_feature in enumerate(matrix_feature_cols):
+        for j, x_feature in enumerate(matrix_feature_cols):
+            ax = axes[i, j]
+            if j > i:
+                ax.axis("off")
+                continue
+
+            if i == j:
+                x_vals = pd.to_numeric(cand_feat[x_feature], errors="coerce").to_numpy(dtype=float)
+                finite = np.isfinite(x_vals)
+                if np.any(finite):
+                    ax.hist(x_vals[finite], bins=24, color="#4C78A8", alpha=0.78, edgecolor="white")
+                else:
+                    ax.text(0.5, 0.5, "N/A", ha="center", va="center", fontsize=7, transform=ax.transAxes)
+
+                sample_x = float(pd.to_numeric(pd.Series([sample_feat_values.get(x_feature)]), errors="coerce").iloc[0])
+                best_x = float(pd.to_numeric(pd.Series([best_feat_values.get(x_feature)]), errors="coerce").iloc[0])
+                if np.isfinite(sample_x):
+                    ax.axvline(sample_x, color="#E45756", linestyle="--", linewidth=1.0)
+                if np.isfinite(best_x):
+                    ax.axvline(best_x, color="#F58518", linestyle="-.", linewidth=1.0)
+
+                ax.set_xlim(*feature_limits[x_feature])
+                ax.set_title(x_feature, fontsize=8)
+            else:
+                x_vals = pd.to_numeric(cand_feat[x_feature], errors="coerce").to_numpy(dtype=float)
+                y_vals = pd.to_numeric(cand_feat[y_feature], errors="coerce").to_numpy(dtype=float)
+                mask = np.isfinite(x_vals) & np.isfinite(y_vals) & finite_dist
+                if np.any(mask):
+                    ax.scatter(
+                        x_vals[mask],
+                        y_vals[mask],
+                        c=cand_distance[mask],
+                        s=14,
+                        cmap=dist_cmap,
+                        norm=dist_norm,
+                        alpha=0.90,
+                        linewidths=0.0,
+                        zorder=2,
+                    )
+
+                    sample_x = float(pd.to_numeric(pd.Series([sample_feat_values.get(x_feature)]), errors="coerce").iloc[0])
+                    sample_y = float(pd.to_numeric(pd.Series([sample_feat_values.get(y_feature)]), errors="coerce").iloc[0])
+                    best_x = float(pd.to_numeric(pd.Series([best_feat_values.get(x_feature)]), errors="coerce").iloc[0])
+                    best_y = float(pd.to_numeric(pd.Series([best_feat_values.get(y_feature)]), errors="coerce").iloc[0])
+                    if np.isfinite(sample_x) and np.isfinite(sample_y):
+                        ax.scatter([sample_x], [sample_y], s=44, marker="*", color="#E45756", edgecolors="black", linewidths=0.45, zorder=4)
+                    if np.isfinite(best_x) and np.isfinite(best_y):
+                        ax.scatter([best_x], [best_y], s=38, marker="X", color="#F58518", edgecolors="black", linewidths=0.45, zorder=4)
+                    plotted_lower_any = True
+                else:
+                    ax.text(0.5, 0.5, "N/A", ha="center", va="center", fontsize=7, transform=ax.transAxes)
+
+                ax.set_xlim(*feature_limits[x_feature])
+                ax.set_ylim(*feature_limits[y_feature])
+
+            if i < n_features - 1:
+                ax.set_xticklabels([])
+            else:
+                ax.set_xlabel(_axis_label_for_feature(x_feature))
+            if j > 0:
+                ax.set_yticklabels([])
+            else:
+                if i == j:
+                    ax.set_ylabel("Count")
+                else:
+                    ax.set_ylabel(_axis_label_for_feature(y_feature))
+
+    fig.suptitle(
+        "Random showcase feature-space matrix\n"
+        f"(dataset_index={ds_idx}, metric={distance_metric}, seed={showcase_seed_used}, "
+        f"candidates={len(cand_feat)}, features={n_features})",
+        fontsize=11,
+        y=0.995,
+    )
+    fig.subplots_adjust(
+        left=0.06,
+        right=0.88 if plotted_lower_any else 0.97,
+        bottom=0.06,
+        top=0.93,
+        wspace=0.08,
+        hspace=0.08,
+    )
+    if plotted_lower_any:
+        sm = plt.cm.ScalarMappable(norm=dist_norm, cmap=dist_cmap)
+        sm.set_array([])
+        cax = fig.add_axes([0.905, 0.10, 0.018, 0.78])
+        tick_step = max(1, int(np.ceil(n_color_levels / 6)))
+        tick_values = dist_levels[::tick_step]
+        if not np.isclose(tick_values[-1], dist_levels[-1]):
+            tick_values = np.append(tick_values, dist_levels[-1])
+        cbar = fig.colorbar(
+            sm,
+            cax=cax,
+            boundaries=dist_levels,
+            ticks=tick_values,
+            spacing="proportional",
+        )
+        cbar.set_label(f"{metric_label} distance")
+
+    _save_figure(fig, PLOTS_DIR / "random_showcase_feature_space_matrix.png")
+    plt.close(fig)
+
+
 def _make_plots(
     result_df: pd.DataFrame,
     data_df: pd.DataFrame,
     plot_params=None,
     dict_path: Path | None = None,
     cfg_21: dict | None = None,
+    resolved_feature_columns: list[str] | None = None,
 ) -> None:
     """Quick diagnostic plots for the estimation step."""
     plt.rcParams.update({
@@ -1751,7 +3091,7 @@ def _make_plots(
 
     if valid_pairs:
         n_p = len(valid_pairs)
-        fig, axes = plt.subplots(1, n_p, figsize=(5 * n_p, 5))
+        fig, axes = plt.subplots(1, n_p, figsize=(5 * n_p, 5.4))
         if n_p == 1:
             axes = [axes]
         for ax, (true_col, est_col, label) in zip(axes, valid_pairs):
@@ -1770,19 +3110,49 @@ def _make_plots(
             ax.set_title(f"True vs Est: {label}")
             ax.set_aspect("equal", adjustable="box")
         fig.suptitle(f"Parameter estimation: true vs estimated (metric={metric})", fontsize=11, y=0.98)
-        # Leave extra room under the suptitle so subplot titles don't collide
-        fig.tight_layout(rect=[0, 0, 1, 0.92])
-        _save_figure(fig, PLOTS_DIR / "true_vs_estimated.png")
+        # Keep enough bottom padding for long x-labels and ensure nothing is clipped on save.
+        fig.subplots_adjust(left=0.07, right=0.98, bottom=0.14, top=0.88, wspace=0.26)
+        _save_figure(
+            fig,
+            PLOTS_DIR / "true_vs_estimated.png",
+            bbox_inches="tight",
+            pad_inches=0.08,
+        )
         plt.close(fig)
 
     # ── 3. Random showcase matrix: lower-triangle 2D maps + diagonal projections ──
     if dict_path is not None:
+        shared_showcase = _select_showcase_result_row(
+            result_df=result_df,
+            cfg_21=cfg_21 or {},
+            context_label="Shared showcase",
+        )
+        shared_row_idx: int | None = None
+        shared_ds_idx: int | None = None
+        shared_seed: int | None = None
+        if shared_showcase is not None:
+            shared_row_idx, shared_ds_idx, shared_seed = shared_showcase
         _make_random_showcase_distance_matrix(
             result_df=result_df,
             data_df=data_df,
             dict_path=dict_path,
             cfg_21=cfg_21 or {},
             plot_params=plot_params,
+            resolved_feature_columns=resolved_feature_columns,
+            showcase_result_row_index=shared_row_idx,
+            showcase_dataset_index=shared_ds_idx,
+            showcase_seed=shared_seed,
+        )
+        _make_random_showcase_feature_space_matrix(
+            result_df=result_df,
+            data_df=data_df,
+            dict_path=dict_path,
+            cfg_21=cfg_21 or {},
+            plot_params=plot_params,
+            resolved_feature_columns=resolved_feature_columns,
+            showcase_result_row_index=shared_row_idx,
+            showcase_dataset_index=shared_ds_idx,
+            showcase_seed=shared_seed,
         )
 
 

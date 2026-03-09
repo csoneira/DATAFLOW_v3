@@ -38,7 +38,7 @@ if STEP_DIR.parents[1].name == "STEPS":
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
 REPO_ROOT = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
 PLOTS_DIR = STEP_DIR / "OUTPUTS" / "PLOTS"
@@ -93,6 +93,7 @@ CANONICAL_TT_LABELS = frozenset(
     }
 )
 TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
+RATE_HIST_BIN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz")
 
 
 def _clear_plots_dir() -> None:
@@ -133,6 +134,10 @@ def _task_trigger_type_metadata_path(station_id: int, task_id: int) -> Path:
     return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_trigger_type.csv"
 
 
+def _task_rate_histogram_metadata_path(station_id: int, task_id: int) -> Path:
+    return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_rate_histogram.csv"
+
+
 def _load_config(path: Path) -> dict:
     def _merge_dicts(base: dict, override: dict) -> dict:
         out = dict(base)
@@ -146,13 +151,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
 
 def _resolve_z_config_rng(config: dict) -> tuple[np.random.Generator, int, bool]:
     """Return RNG for z-config selection and report whether seed came from config."""
@@ -209,22 +222,74 @@ def _normalize_tt_label(label: object) -> str:
     return text
 
 
-def _preferred_tt_prefixes_for_task(task_id: int) -> tuple[str, ...]:
-    # task_1 requirement from user: raw global-rate = sum(raw_tt_*).
-    if task_id == 1:
+def _safe_task_ids(raw: object) -> list[int]:
+    if raw is None:
+        return [1]
+    if isinstance(raw, (int, float)):
+        return [int(raw)]
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return [1]
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            parsed = [x.strip() for x in stripped.split(",") if x.strip()]
+        raw = parsed
+    out: list[int] = []
+    if isinstance(raw, (list, tuple)):
+        for value in raw:
+            try:
+                out.append(int(value))
+            except (TypeError, ValueError):
+                continue
+    return sorted(set(out)) or [1]
+
+
+def _preferred_tt_prefixes_for_task_ids(task_ids: list[int]) -> tuple[str, ...]:
+    """Preferred TT-rate prefixes based on the most advanced selected task."""
+    max_task_id = max(task_ids) if task_ids else 1
+    if max_task_id <= 1:
         return ("raw_tt", "clean_tt")
-    if task_id == 2:
-        return ("cal_tt", "clean_tt")
-    if task_id == 3:
-        return ("list_tt", "cal_tt")
-    if task_id == 4:
-        return ("fit_tt", "list_tt")
-    if task_id == 5:
-        return ("post_tt", "fit_tt")
-    return ("post_tt", "fit_tt", "list_tt", "cal_tt", "clean_tt", "raw_tt")
+    if max_task_id == 2:
+        return ("clean_tt", "raw_to_clean_tt", "raw_tt")
+    if max_task_id == 3:
+        return ("cal_tt", "clean_tt", "raw_to_clean_tt", "raw_tt")
+    if max_task_id == 4:
+        return ("list_tt", "list_to_fit_tt", "cal_tt", "clean_tt", "raw_to_clean_tt", "raw_tt")
+    return (
+        "post_tt",
+        "fit_to_post_tt",
+        "fit_tt",
+        "list_to_fit_tt",
+        "list_tt",
+        "cal_tt",
+        "clean_tt",
+        "raw_to_clean_tt",
+        "raw_tt",
+        "corr_tt",
+        "task5_to_corr_tt",
+        "fit_to_corr_tt",
+        "definitive_tt",
+    )
 
 
-def _attach_tt_sum_global_rate(meta_df: pd.DataFrame, task_id: int) -> tuple[pd.DataFrame, str | None]:
+def _resolve_metadata_prefix_override(raw: object) -> str | None:
+    """Normalize optional metadata prefix override from config."""
+    if raw in (None, "", "null", "None"):
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.lower() == "auto":
+        return None
+    return text.rstrip("_")
+
+
+def _attach_tt_sum_global_rate(
+    meta_df: pd.DataFrame,
+    preferred_prefixes: tuple[str, ...],
+) -> tuple[pd.DataFrame, str | None]:
     by_prefix: dict[str, list[str]] = {}
     for col in meta_df.columns:
         match = TT_RATE_COLUMN_RE.match(str(col))
@@ -240,7 +305,7 @@ def _attach_tt_sum_global_rate(meta_df: pd.DataFrame, task_id: int) -> tuple[pd.
         return meta_df, None
 
     selected_prefix: str | None = None
-    for preferred in _preferred_tt_prefixes_for_task(task_id):
+    for preferred in preferred_prefixes:
         if preferred in by_prefix and by_prefix[preferred]:
             selected_prefix = preferred
             break
@@ -263,6 +328,65 @@ def _attach_tt_sum_global_rate(meta_df: pd.DataFrame, task_id: int) -> tuple[pd.
     return out, selected_prefix
 
 
+def _resolve_event_count_column(df: pd.DataFrame) -> str | None:
+    """Return preferred event-count column name if available."""
+    for candidate in (
+        "selected_rows",
+        "requested_rows",
+        "generated_events_count",
+        "num_events",
+        "event_count",
+    ):
+        if candidate in df.columns:
+            return candidate
+    return None
+
+
+def _load_rate_histogram_bins(
+    *,
+    station_id: int,
+    task_id: int,
+    metadata_agg: str,
+) -> tuple[pd.DataFrame | None, list[str]]:
+    """Load per-file rate-histogram bins for one task (if available)."""
+    rate_hist_path = _task_rate_histogram_metadata_path(station_id, task_id)
+    if not rate_hist_path.exists():
+        log.info("Rate-histogram metadata CSV not found for task %d: %s", task_id, rate_hist_path)
+        return (None, [])
+
+    log.info("Loading metadata (rate_histogram) for task %d: %s", task_id, rate_hist_path)
+    rate_hist_df = pd.read_csv(rate_hist_path, low_memory=False)
+    if "filename_base" not in rate_hist_df.columns:
+        log.warning(
+            "  Task %d rate_histogram metadata has no 'filename_base'; skipping histogram merge.",
+            task_id,
+        )
+        return (None, [])
+    if metadata_agg == "latest":
+        rate_hist_df = _aggregate_latest(rate_hist_df)
+
+    hist_cols = [
+        c for c in rate_hist_df.columns
+        if RATE_HIST_BIN_RE.match(str(c)) is not None
+    ]
+    hist_cols.sort(key=lambda c: int(RATE_HIST_BIN_RE.match(str(c)).group("bin")))
+    if not hist_cols:
+        log.warning(
+            "  Task %d rate_histogram metadata has no events_per_second_<bin>_rate_hz columns.",
+            task_id,
+        )
+        return (None, [])
+
+    out = rate_hist_df[["filename_base", *hist_cols]].copy()
+    out = out.groupby("filename_base", sort=False).tail(1)
+    log.info(
+        "  Rate-histogram rows (after aggregation): %d with %d bin columns.",
+        len(out),
+        len(hist_cols),
+    )
+    return (out, hist_cols)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -276,7 +400,40 @@ def main() -> int:
     _clear_plots_dir()
 
     station_id = int(config.get("station_id", 0))
-    task_ids = config.get("task_ids", [1])
+    task_ids = _safe_task_ids(config.get("task_ids", [1]))
+    cfg_11 = config.get("step_1_1", {})
+    min_rows_raw = cfg_11.get("min_rows_for_dataset", 0)
+    try:
+        min_rows_for_dataset = max(0, int(min_rows_raw))
+    except (TypeError, ValueError):
+        log.warning(
+            "Invalid step_1_1.min_rows_for_dataset=%r; using 0 (disabled).",
+            min_rows_raw,
+        )
+        min_rows_for_dataset = 0
+    metadata_prefix_override = _resolve_metadata_prefix_override(
+        cfg_11.get("metadata_prefix", "auto")
+    )
+    preferred_tt_prefixes = list(_preferred_tt_prefixes_for_task_ids(task_ids))
+    if metadata_prefix_override is not None:
+        preferred_tt_prefixes = [
+            metadata_prefix_override,
+            *[p for p in preferred_tt_prefixes if p != metadata_prefix_override],
+        ]
+    preferred_tt_prefixes_t = tuple(preferred_tt_prefixes)
+    if metadata_prefix_override is None:
+        log.info(
+            "STEP 1.1 metadata_prefix=auto -> preferred TT prefixes from task_ids %s: %s",
+            task_ids,
+            preferred_tt_prefixes_t,
+        )
+    else:
+        log.info(
+            "STEP 1.1 metadata_prefix override '%s' -> preferred TT prefixes: %s",
+            metadata_prefix_override,
+            preferred_tt_prefixes_t,
+        )
+
     default_sim_params_path = (
         REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
     )
@@ -393,7 +550,37 @@ def main() -> int:
             log.warning("No usable metadata for task %d — skipping.", task_id)
             continue
 
-        meta_df, rate_prefix = _attach_tt_sum_global_rate(meta_df, task_id)
+        rate_hist_df, rate_hist_cols = _load_rate_histogram_bins(
+            station_id=station_id,
+            task_id=task_id,
+            metadata_agg=metadata_agg,
+        )
+        if rate_hist_df is not None and rate_hist_cols:
+            new_hist_cols = [c for c in rate_hist_cols if c not in meta_df.columns]
+            if new_hist_cols:
+                meta_df = meta_df.merge(
+                    rate_hist_df[["filename_base", *new_hist_cols]],
+                    on="filename_base",
+                    how="left",
+                )
+                rows_with_hist = int(meta_df[new_hist_cols].notna().any(axis=1).sum())
+                log.info(
+                    "  Joined rate_histogram bins for task %d: %d columns, %d/%d rows with histogram values.",
+                    task_id,
+                    len(new_hist_cols),
+                    rows_with_hist,
+                    len(meta_df),
+                )
+            else:
+                log.info(
+                    "  Rate-histogram bin columns already present for task %d; merge skipped.",
+                    task_id,
+                )
+
+        meta_df, rate_prefix = _attach_tt_sum_global_rate(
+            meta_df,
+            preferred_prefixes=preferred_tt_prefixes_t,
+        )
         if rate_prefix is not None:
             log.info(
                 "  Global rate for task %d set as TT-rate sum from prefix '%s'.",
@@ -428,6 +615,34 @@ def main() -> int:
     collected = pd.concat(all_merged, ignore_index=True)
     log.info("Total collected rows (all tasks): %d", len(collected))
 
+    ev_col = _resolve_event_count_column(collected)
+    removed_below_min_rows = 0
+    if min_rows_for_dataset > 0:
+        if ev_col is None:
+            log.warning(
+                "step_1_1.min_rows_for_dataset=%d configured, but no event-count column is available; skipping row filter.",
+                min_rows_for_dataset,
+            )
+        else:
+            ev_vals = pd.to_numeric(collected[ev_col], errors="coerce")
+            keep_mask = ev_vals >= float(min_rows_for_dataset)
+            removed_below_min_rows = int(np.count_nonzero(~keep_mask))
+            collected = collected.loc[keep_mask].reset_index(drop=True)
+            log.info(
+                "Applied minimum event rows filter (%s >= %d): removed %d row(s), %d remain.",
+                ev_col,
+                min_rows_for_dataset,
+                removed_below_min_rows,
+                len(collected),
+            )
+            if collected.empty:
+                log.error(
+                    "No rows remain after applying step_1_1.min_rows_for_dataset=%d on column %s.",
+                    min_rows_for_dataset,
+                    ev_col,
+                )
+                return 1
+
     # ── Save ─────────────────────────────────────────────────────────
     out_path = FILES_DIR / "collected_data.csv"
     collected.to_csv(out_path, index=False)
@@ -442,6 +657,11 @@ def main() -> int:
         "total_rows": len(collected),
         "task_ids_used": task_ids,
         "station_id": station_id,
+        "metadata_prefix_override": metadata_prefix_override,
+        "metadata_prefix_preferred_order": list(preferred_tt_prefixes_t),
+        "min_rows_for_dataset": int(min_rows_for_dataset),
+        "event_count_column_used": ev_col,
+        "rows_removed_below_min_rows": int(removed_below_min_rows),
     }
     z_info_path = FILES_DIR / "z_config_selected.json"
     with open(z_info_path, "w", encoding="utf-8") as f:
@@ -449,8 +669,7 @@ def main() -> int:
     log.info("Wrote z config info: %s", z_info_path)
 
     # ── Plot: event count histogram ──────────────────────────────────
-    ev_col = "selected_rows" if "selected_rows" in collected.columns else "requested_rows"
-    if ev_col in collected.columns:
+    if ev_col is not None and ev_col in collected.columns:
         ev = pd.to_numeric(collected[ev_col], errors="coerce").dropna()
         if not ev.empty:
             fig, ax = plt.subplots(figsize=(7, 4.5))

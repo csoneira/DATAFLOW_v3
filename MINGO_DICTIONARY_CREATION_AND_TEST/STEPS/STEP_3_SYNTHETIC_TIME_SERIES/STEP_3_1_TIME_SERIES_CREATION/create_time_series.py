@@ -30,15 +30,25 @@ import pandas as pd
 
 # ── Paths ────────────────────────────────────────────────────────────────
 STEP_DIR = Path(__file__).resolve().parent
-PIPELINE_DIR = STEP_DIR.parents[1]  # INFERENCE_DICTIONARY_VALIDATION
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+# Support both layouts:
+#   - <pipeline>/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION
+#   - <pipeline>/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION
+if STEP_DIR.parents[1].name == "STEPS":
+    PIPELINE_DIR = STEP_DIR.parents[2]
+else:
+    PIPELINE_DIR = STEP_DIR.parents[1]
+if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENCE").exists():
+    STEP_ROOT = PIPELINE_DIR
+else:
+    STEP_ROOT = PIPELINE_DIR / "STEPS"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
 
 DEFAULT_DATASET = (
-    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
     / "OUTPUTS" / "FILES" / "dataset.csv"
 )
 DEFAULT_DICTIONARY = (
-    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
     / "OUTPUTS" / "FILES" / "dictionary.csv"
 )
 
@@ -114,9 +124,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("STEP_3.1")
 
+CANONICAL_FLUX_COLUMN = "flux_cm2_min"
+CANONICAL_EFF_COLUMN = "eff_sim_1"
+
 
 def _load_config(path: Path) -> dict:
-    """Load pipeline configuration from JSON path."""
     def _merge_dicts(base: dict, override: dict) -> dict:
         out = dict(base)
         for k, v in override.items():
@@ -129,13 +141,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
 
 def _safe_float(value: object, default: float) -> float:
     """Convert value to float, with default fallback."""
@@ -193,6 +213,36 @@ def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
         if candidate in df.columns:
             return candidate
     raise KeyError("No efficiency column found in source table.")
+
+
+def _mask_sim_eff_within_tolerance_band(
+    df: pd.DataFrame,
+    tolerance_pct: float,
+) -> np.ndarray:
+    """Rows where eff_sim_1..4 are finite and lie inside one tolerance band."""
+    n_rows = len(df)
+    if n_rows == 0:
+        return np.zeros(0, dtype=bool)
+    eff_cols = [f"eff_sim_{i}" for i in range(1, 5)]
+    if not all(col in df.columns for col in eff_cols):
+        return np.zeros(n_rows, dtype=bool)
+
+    tol_pct = float(tolerance_pct)
+    if not np.isfinite(tol_pct):
+        tol_pct = 10.0
+    tol_pct = max(0.0, tol_pct)
+    tol_abs = tol_pct / 100.0
+
+    eff_mat = np.column_stack(
+        [pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float) for col in eff_cols]
+    )
+    finite = np.isfinite(eff_mat).all(axis=1)
+    if not np.any(finite):
+        return np.zeros(n_rows, dtype=bool)
+    span = np.full(n_rows, np.nan, dtype=float)
+    eff_finite = eff_mat[finite]
+    span[finite] = np.max(eff_finite, axis=1) - np.min(eff_finite, axis=1)
+    return finite & (span <= (tol_abs + 1e-12))
 
 
 def _normalize_tt_label(label: object) -> str:
@@ -453,7 +503,7 @@ def _build_rate_model(
     x = x[mask]
     y = y[mask]
     z = z[mask]
-    if len(x) < 3:
+    if len(x) < 1:
         raise ValueError("Not enough valid points to build global-rate interpolation.")
 
     tri = None
@@ -603,15 +653,20 @@ def _plot_curve_flux_vs_eff(
     dense_eff: np.ndarray,
     file_df: pd.DataFrame,
     rate_model: dict,
+    contour_rate_model: dict | None,
     events_per_file: int,
     contour_grid_points: int,
+    contour_eff_band_tolerance_pct: float,
+    contour_model_points: int,
     path: Path,
 ) -> None:
     """Plot trajectory on semitransparent contour map of global rate."""
     fig, ax = plt.subplots(figsize=(9, 7))
 
-    x_ref = np.asarray(rate_model["x"], dtype=float)
-    y_ref = np.asarray(rate_model["y"], dtype=float)
+    bg_model = contour_rate_model
+    model_for_bounds = bg_model if bg_model is not None else rate_model
+    x_ref = np.asarray(model_for_bounds["x"], dtype=float)
+    y_ref = np.asarray(model_for_bounds["y"], dtype=float)
     src_flux = pd.to_numeric(source_df.get(source_flux_col), errors="coerce").to_numpy(dtype=float)
     src_eff = pd.to_numeric(source_df.get(source_eff_col), errors="coerce").to_numpy(dtype=float)
 
@@ -641,14 +696,17 @@ def _plot_curve_flux_vs_eff(
     xi = np.linspace(flux_lo, flux_hi, g, dtype=float)
     yi = np.linspace(eff_lo, eff_hi, g, dtype=float)
     Xi, Yi = np.meshgrid(xi, yi)
-    Zi = _predict_rate(rate_model, Xi, Yi, min_rate_hz=1e-6)
-    finite_z = Zi[np.isfinite(Zi)]
-    if finite_z.size >= 2:
-        levels = np.linspace(float(np.nanmin(finite_z)), float(np.nanmax(finite_z)), 16)
-        cf = ax.contourf(Xi, Yi, Zi, levels=levels, cmap="viridis", alpha=0.35, zorder=0)
-        cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.048)
-        cbar.set_label("Global rate [Hz]")
-        ax.contour(Xi, Yi, Zi, levels=levels[::2], colors="k", linewidths=0.35, alpha=0.25, zorder=1)
+    if bg_model is not None:
+        Zi = _predict_rate(bg_model, Xi, Yi, min_rate_hz=1e-6)
+        finite_z = Zi[np.isfinite(Zi)]
+        z_min = float(np.nanmin(finite_z)) if finite_z.size else np.nan
+        z_max = float(np.nanmax(finite_z)) if finite_z.size else np.nan
+        if finite_z.size >= 2 and np.isfinite(z_min) and np.isfinite(z_max) and z_max > z_min:
+            levels = np.linspace(z_min, z_max, 16)
+            cf = ax.contourf(Xi, Yi, Zi, levels=levels, cmap="viridis", alpha=0.35, zorder=0)
+            cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.048)
+            cbar.set_label("Global rate [Hz]")
+            ax.contour(Xi, Yi, Zi, levels=levels[::2], colors="k", linewidths=0.35, alpha=0.25, zorder=1)
 
     src_flux_s = pd.Series(src_flux)
     src_eff_s = pd.Series(src_eff)
@@ -699,7 +757,9 @@ def _plot_curve_flux_vs_eff(
     ax.set_ylabel("eff")
     ax.set_title(
         f"STEP 3.1 trajectory with global-rate contours\n"
-        f"event discretization target: {events_per_file:,} events/file"
+        f"event discretization target: {events_per_file:,} events/file | "
+        f"4-eff band <= {float(contour_eff_band_tolerance_pct):.2f}% "
+        f"(n={int(contour_model_points)})"
     )
     ax.grid(True, alpha=0.2)
     ax.legend(loc="best", fontsize=8)
@@ -900,11 +960,19 @@ def main() -> int:
         log.error("Source CSV is empty: %s", source_path)
         return 1
 
-    flux_col = str(cfg_31.get("flux_column", "flux_cm2_min"))
+    if cfg_31.get("flux_column") is not None or cfg_31.get("eff_column") is not None:
+        log.warning(
+            "Deprecated keys step_3_1.flux_column/eff_column detected; ignored. "
+            "Using fixed columns %s/%s.",
+            CANONICAL_FLUX_COLUMN,
+            CANONICAL_EFF_COLUMN,
+        )
+
+    flux_col = CANONICAL_FLUX_COLUMN
     if flux_col not in source_df.columns:
         log.error("Flux column '%s' not found in source table.", flux_col)
         return 1
-    preferred_eff_col = str(cfg_31.get("eff_column", "eff_sim_1"))
+    preferred_eff_col = CANONICAL_EFF_COLUMN
     try:
         eff_col = _choose_eff_column(source_df, preferred_eff_col)
     except KeyError as exc:
@@ -972,11 +1040,43 @@ def main() -> int:
             rate_col,
         )
 
+    contour_eff_band_tol_cfg = cfg_31.get(
+        "iso_rate_efficiency_band_tolerance_pct",
+        config.get("iso_rate_efficiency_band_tolerance_pct", 10.0),
+    )
+    contour_eff_band_tolerance_pct = max(
+        0.0,
+        _safe_float(contour_eff_band_tol_cfg, 10.0),
+    )
+    contour_band_mask = _mask_sim_eff_within_tolerance_band(rate_df, contour_eff_band_tolerance_pct)
+    n_rate_rows_total = int(len(rate_df))
+    n_rate_rows_contour = int(np.count_nonzero(contour_band_mask))
+    if n_rate_rows_contour == 0:
+        log.warning(
+            "No rate-dictionary rows satisfy 4-eff band tolerance (<= %.3f%%). "
+            "Contour background will be disabled.",
+            contour_eff_band_tolerance_pct,
+        )
+    elif n_rate_rows_contour < 3:
+        log.warning(
+            "Only %d rows satisfy 4-eff band tolerance (<= %.3f%%); "
+            "contours may be weakly constrained.",
+            n_rate_rows_contour,
+            contour_eff_band_tolerance_pct,
+        )
+
     try:
         rate_model = _build_rate_model(rate_df, rate_flux_col, rate_eff_col, rate_col)
     except ValueError as exc:
         log.error("%s", exc)
         return 1
+    contour_rate_model: dict | None = None
+    if n_rate_rows_contour >= 1:
+        rate_df_contour = rate_df.loc[contour_band_mask].copy()
+        try:
+            contour_rate_model = _build_rate_model(rate_df_contour, rate_flux_col, rate_eff_col, rate_col)
+        except ValueError:
+            contour_rate_model = None
 
     # Counts per synthetic file
     default_events_per_file = 50000
@@ -1097,6 +1197,9 @@ def main() -> int:
         "rate_eff_column": rate_eff_col,
         "rate_column_requested": rate_col_requested,
         "rate_column": rate_col,
+        "iso_rate_efficiency_band_tolerance_pct": float(contour_eff_band_tolerance_pct),
+        "rate_dictionary_rows_total": int(n_rate_rows_total),
+        "rate_dictionary_rows_for_iso_rate_contours": int(n_rate_rows_contour),
         "generator": "random_complete",
         "random_seed": int(seed),
         "complete_sampling_points": int(dense_points),
@@ -1156,8 +1259,11 @@ def main() -> int:
         dense_eff=dense_eff,
         file_df=out_df,
         rate_model=rate_model,
+        contour_rate_model=contour_rate_model,
         events_per_file=events_per_file,
         contour_grid_points=contour_grid_points,
+        contour_eff_band_tolerance_pct=contour_eff_band_tolerance_pct,
+        contour_model_points=n_rate_rows_contour,
         path=out_curve_plot,
     )
     log.info("Wrote plot: %s", out_curve_plot)

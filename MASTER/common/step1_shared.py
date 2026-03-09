@@ -36,7 +36,7 @@ DEFAULT_IMPORTANT_KEYWORDS: Tuple[str, ...] = (
     "usage",
 )
 
-EVENTS_PER_SECOND_MAX = 100
+EVENTS_PER_SECOND_MAX = 40
 EVENTS_PER_SECOND_COLUMNS = [
     *(f"events_per_second_{idx}_count" for idx in range(EVENTS_PER_SECOND_MAX + 1)),
     "events_per_second_total_seconds",
@@ -146,13 +146,15 @@ RATE_HISTOGRAM_REQUIRED_COLUMNS = frozenset(
         "events_per_second_global_rate",
     }
 )
+EVENTS_PER_SECOND_RATE_HZ_RE = re.compile(r"^events_per_second_(\d+)_rate_hz$")
 
 
 def is_rate_histogram_metadata_column(column_name: str) -> bool:
     if column_name in RATE_HISTOGRAM_REQUIRED_COLUMNS:
         return True
-    if column_name.startswith("events_per_second_") and column_name.endswith("_rate_hz"):
-        return True
+    match = EVENTS_PER_SECOND_RATE_HZ_RE.match(column_name)
+    if match:
+        return int(match.group(1)) <= EVENTS_PER_SECOND_MAX
     return False
 
 

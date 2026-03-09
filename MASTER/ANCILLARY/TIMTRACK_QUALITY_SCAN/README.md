@@ -7,8 +7,7 @@ and regenerates plots from metadata produced by your normal automatic pipeline.
 ## Files
 
 - `run_timtrack_quality_scan.sh`: scan orchestrator (parameter cycling + Task 4 runs + plot refresh).
-- `timtrack_quality_scan.conf`: runtime config (`station`, interval, paths, etc.).
-- `scan_profiles.csv`: convergence profiles (`d0`, `cocut`, `iter_max`) to cycle.
+- `CONFIGS/timtrack_quality_scan.conf`: runtime config (`station`, interval, paths, etc.).
 - `timtrack_quality_scan_plotter.py`: metadata plotter used by the orchestrator.
 
 ## Quick start
@@ -66,7 +65,7 @@ Set these in `timtrack_quality_scan.conf`:
 - `cocut_step=<value>`
 
 This creates a cocut scan only.  
-`profiles_csv` is kept only as fallback if `use_cocut_range=false`.
+If you set `use_cocut_range=false`, provide `profiles_csv=<path>` explicitly.
 
 ## Finite planned run + default restore
 

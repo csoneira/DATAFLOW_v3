@@ -56,6 +56,8 @@ DEFAULT_OUTPUT_FILENAME = "rates_metadata_report.pdf"
 
 TASK_IDS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 RATE_COLUMN_PREFIX = "events_per_second_"
+RATE_COUNT_COLUMN_SUFFIX = "_count"
+RATE_RATE_HZ_COLUMN_SUFFIX = "_rate_hz"
 
 DEFAULT_MAX_RATE_BIN = 100
 DEFAULT_Y_MAX_HZ = 100.0
@@ -317,8 +319,18 @@ def load_allowed_basenames(station: str) -> Set[str]:
     }
 
 
-def rate_columns(max_rate_bin: int) -> List[str]:
-    return [f"{RATE_COLUMN_PREFIX}{idx}_count" for idx in range(max_rate_bin + 1)]
+def rate_count_columns(max_rate_bin: int) -> List[str]:
+    return [
+        f"{RATE_COLUMN_PREFIX}{idx}{RATE_COUNT_COLUMN_SUFFIX}"
+        for idx in range(max_rate_bin + 1)
+    ]
+
+
+def rate_hz_columns(max_rate_bin: int) -> List[str]:
+    return [
+        f"{RATE_COLUMN_PREFIX}{idx}{RATE_RATE_HZ_COLUMN_SUFFIX}"
+        for idx in range(max_rate_bin + 1)
+    ]
 
 
 def read_header_columns(path: Path) -> List[str]:
@@ -332,11 +344,13 @@ def resolve_usecols(path: Path, max_rate_bin: int) -> Optional[List[str]]:
     if not header_cols:
         return None
 
-    required = set(rate_columns(max_rate_bin))
+    required = set(rate_count_columns(max_rate_bin))
+    required.update(rate_hz_columns(max_rate_bin))
     required.update(
         {
             "filename_base",
             "execution_timestamp",
+            "count_rate_denominator_seconds",
             "events_per_second_total_seconds",
             "events_per_second_global_rate",
         }
@@ -359,7 +373,7 @@ def load_task_metadata(
         / "STEP_1"
         / f"TASK_{task_id}"
         / "METADATA"
-        / f"task_{task_id}_metadata_specific.csv"
+        / f"task_{task_id}_metadata_rate_histogram.csv"
     )
     if not metadata_csv.exists():
         return pd.DataFrame()
@@ -398,8 +412,14 @@ def load_task_metadata(
         errors="coerce",
     )
 
+    total_seconds_source = df.get("events_per_second_total_seconds")
+    if total_seconds_source is None:
+        total_seconds_source = df.get("count_rate_denominator_seconds")
+    if total_seconds_source is None:
+        total_seconds_source = pd.Series([np.nan] * len(df), index=df.index)
+
     df["events_per_second_total_seconds"] = pd.to_numeric(
-        df.get("events_per_second_total_seconds", pd.Series([np.nan] * len(df))),
+        total_seconds_source,
         errors="coerce",
     ).fillna(0.0)
 
@@ -408,18 +428,36 @@ def load_task_metadata(
         errors="coerce",
     )
 
-    expected_rate_cols = rate_columns(max_rate_bin)
-    for col in expected_rate_cols:
-        if col not in df.columns:
-            df[col] = 0
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    expected_rate_hz_cols = rate_hz_columns(max_rate_bin)
+    expected_count_cols = rate_count_columns(max_rate_bin)
+    source_columns = set(df.columns)
+    has_histogram_bins = any(col in source_columns for col in expected_rate_hz_cols) or any(
+        col in source_columns for col in expected_count_cols
+    )
+    df["_has_histogram_bins"] = bool(has_histogram_bins)
+
+    denom = df["events_per_second_total_seconds"].replace(0, np.nan)
+    rate_payload: Dict[str, pd.Series] = {}
+    for rate_hz_col, count_col in zip(expected_rate_hz_cols, expected_count_cols):
+        if rate_hz_col in df.columns:
+            rate_values = pd.to_numeric(df[rate_hz_col], errors="coerce").fillna(0.0)
+        elif count_col in df.columns:
+            count_values = pd.to_numeric(df[count_col], errors="coerce").fillna(0.0)
+            rate_values = (count_values / denom).fillna(0.0)
+        else:
+            rate_values = pd.Series(0.0, index=df.index)
+        rate_payload[rate_hz_col] = rate_values
+
+    rate_matrix = pd.DataFrame(rate_payload, index=df.index)
+    df = df.drop(columns=expected_rate_hz_cols, errors="ignore")
+    df = pd.concat([df, rate_matrix], axis=1)
 
     missing_global = df["events_per_second_global_rate"].isna()
     if missing_global.any():
-        counts = df.loc[missing_global, expected_rate_cols]
-        total_events = (counts * np.arange(max_rate_bin + 1)).sum(axis=1)
-        denom = df.loc[missing_global, "events_per_second_total_seconds"].replace(0, np.nan)
-        df.loc[missing_global, "events_per_second_global_rate"] = (total_events / denom).fillna(0.0)
+        rates = df.loc[missing_global, expected_rate_hz_cols]
+        df.loc[missing_global, "events_per_second_global_rate"] = (
+            rates * np.arange(max_rate_bin + 1)
+        ).sum(axis=1)
 
     df = df[df["file_timestamp"].notna()].copy()
     if df.empty:
@@ -561,8 +599,28 @@ def plot_task_histogram_axis(
         )
         return
 
-    rate_cols = rate_columns(max_rate_bin)
-    matrix = (
+    if "_has_histogram_bins" in df.columns:
+        bins_available = bool(
+            pd.to_numeric(df["_has_histogram_bins"], errors="coerce")
+            .fillna(0)
+            .astype(bool)
+            .any()
+        )
+        if not bins_available:
+            ax.text(
+                0.5,
+                0.5,
+                "Missing histogram bins in metadata\n(events_per_second_*_rate_hz / *_count)",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="firebrick",
+            )
+            return
+
+    rate_cols = rate_hz_columns(max_rate_bin)
+    freq_matrix = (
         df[rate_cols]
         .fillna(0)
         .apply(pd.to_numeric, errors="coerce")
@@ -575,9 +633,6 @@ def plot_task_histogram_axis(
         df["events_per_second_total_seconds"],
         errors="coerce",
     ).fillna(0.0).to_numpy(dtype=float)
-
-    denom = np.where(total_seconds > 0, total_seconds, np.nan)
-    freq_matrix = matrix / denom
 
     time_nums = mdates.date2num(pd.to_datetime(df["file_timestamp"]).to_numpy())
     sort_idx = np.argsort(time_nums)

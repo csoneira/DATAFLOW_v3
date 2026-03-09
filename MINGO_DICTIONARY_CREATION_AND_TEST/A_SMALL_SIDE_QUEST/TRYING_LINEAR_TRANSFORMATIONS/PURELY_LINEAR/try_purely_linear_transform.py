@@ -15,6 +15,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 
 from __future__ import annotations
 
+import argparse
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,36 +31,74 @@ from matplotlib.tri import LinearTriInterpolator, Triangulation
 
 
 HERE = Path(__file__).resolve().parent
+PROJECT_DIR = HERE.parents[2]
 PLOTS = HERE / "PLOTS"
 
 # Keep this explicit and simple: dictionary_test currently matches the target
 # synthetic series domain better than older dictionary snapshots.
 TRAIN_CSV_CANDIDATES = [
-    # Path(
-    #     "/home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/A_SMALL_SIDE_QUEST/"
-    #     "TRYING_LINEAR_TRANSFORMATIONS/dictionary_test.csv"
-    # ),
+    HERE.parent / "dictionary_test.csv",
+    Path(
+        str(PROJECT_DIR / "STEPS" / "STEP_1_SETUP" /
+            "STEP_1_2_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dictionary.csv")
+    ),
     Path(
         "/home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/STEP_1_SETUP/"
         "STEP_1_2_BUILD_DICTIONARY/OUTPUTS/FILES/dictionary.csv"
-    ),
+    ),  # legacy path
 ]
 
 TARGET_CSV_CANDIDATES = [
-    # Path(
-    #     "/home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/A_SMALL_SIDE_QUEST/"
-    #     "the_simulated_file.csv"
-    # ),
+    HERE.parents[1] / "the_simulated_file.csv",
+    Path(
+        str(PROJECT_DIR / "STEPS" / "STEP_3_SYNTHETIC_TIME_SERIES" /
+            "STEP_3_1_TIME_SERIES_CREATION" / "OUTPUTS" / "FILES" / "complete_curve_time_series.csv")
+    ),
+    Path(
+        str(PROJECT_DIR / "STEPS" / "STEP_3_SYNTHETIC_TIME_SERIES" /
+            "STEP_3_2_SYNTHETIC_TIME_SERIES" / "OUTPUTS" / "FILES" / "synthetic_dataset.csv")
+    ),
     Path(
         "/home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION/OUTPUTS/FILES/"
         "complete_curve_time_series.csv"
-    ),
+    ),  # legacy path
     # HERE / "dictionary_test.csv",
 ]
 
 K_NEIGHBORS = 10
 MAD_MULTIPLIER = 2.0
 EPS = 1e-12
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Fit affine inverse mapping from (global_rate, eff) to flux."
+    )
+    parser.add_argument(
+        "--train-csv",
+        type=Path,
+        default=None,
+        help="Explicit training CSV path. If omitted, use built-in candidate search.",
+    )
+    parser.add_argument(
+        "--target-csv",
+        type=Path,
+        default=None,
+        help="Explicit target CSV path. If omitted, use built-in candidate search.",
+    )
+    parser.add_argument(
+        "--plots-dir",
+        type=Path,
+        default=PLOTS,
+        help="Output directory for generated plots (default: script PLOTS/).",
+    )
+    parser.add_argument(
+        "--k-neighbors",
+        type=int,
+        default=K_NEIGHBORS,
+        help="Neighborhood size for local gradient estimation (default: 10).",
+    )
+    return parser.parse_args()
 
 @dataclass
 class AffineInverse:
@@ -357,6 +396,8 @@ def plot_iso_quiver(df: pd.DataFrame, grads: pd.DataFrame, keep: np.ndarray) -> 
 
     # Chosen mean gradient (kept points only)
     kept = finite & keep
+    gmx = float("nan")
+    gmy = float("nan")
     if kept.sum() >= 3:
         gmx = float(np.nanmean(gx[kept]))
         gmy = float(np.nanmean(gy[kept]))
@@ -715,10 +756,28 @@ def write_outputs(
 
 
 def main() -> None:
+    global PLOTS, K_NEIGHBORS
+    args = parse_args()
+    if args.k_neighbors < 4:
+        raise SystemExit("--k-neighbors must be >= 4")
+    K_NEIGHBORS = int(args.k_neighbors)
+    PLOTS = Path(args.plots_dir).resolve()
+
     prepare_output_dir()
 
-    train_csv = first_existing(TRAIN_CSV_CANDIDATES, "training")
-    target_csv = first_existing(TARGET_CSV_CANDIDATES, "target")
+    if args.train_csv is None:
+        train_csv = first_existing(TRAIN_CSV_CANDIDATES, "training")
+    else:
+        train_csv = Path(args.train_csv).resolve()
+        if not train_csv.exists():
+            raise FileNotFoundError(f"Training CSV not found: {train_csv}")
+
+    if args.target_csv is None:
+        target_csv = first_existing(TARGET_CSV_CANDIDATES, "target")
+    else:
+        target_csv = Path(args.target_csv).resolve()
+        if not target_csv.exists():
+            raise FileNotFoundError(f"Target CSV not found: {target_csv}")
 
     # Prefer simulated efficiencies for this validation path (can still fall back automatically).
     df_train, train_meta = canonicalize(train_csv, prefer_sim_eff=True)

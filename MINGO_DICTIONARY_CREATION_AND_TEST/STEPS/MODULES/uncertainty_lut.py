@@ -16,9 +16,9 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -119,6 +119,13 @@ class UncertaintyLUT:
     global_sigma_flux: float
     global_sigma_eff: float
 
+    # Column mapping (supports legacy and current LUT schemas)
+    flux_dim_col: str = "flux_mid"
+    eff_dim_col: str = "eff_mid"
+    events_dim_col: str = "events_mid"
+    sigma_flux_col: str = "sigma_flux_pct"
+    sigma_eff_col: str = "sigma_eff_pct"
+
     # Derived 3-D grids (built at load time)
     _flux_mids: np.ndarray  = field(default_factory=lambda: np.array([]))
     _eff_mids: np.ndarray   = field(default_factory=lambda: np.array([]))
@@ -150,17 +157,225 @@ class UncertaintyLUT:
         lut_path = lut_dir / "uncertainty_lut.csv"
         if not lut_path.exists():
             raise FileNotFoundError(f"LUT CSV not found: {lut_path}")
-        lut_df = pd.read_csv(lut_path)
+        # Current STEP 2.3 writes a metadata header with comment lines.
+        lut_df = pd.read_csv(lut_path, comment="#", low_memory=False)
+        if lut_df.empty:
+            raise ValueError(f"LUT CSV is empty after parsing comments: {lut_path}")
+
+        def _strip_est_prefix(name: str) -> str:
+            return name[4:] if name.startswith("est_") else name
+
+        def _pick_first(options: list[str], available: set[str]) -> str | None:
+            for opt in options:
+                if opt in available:
+                    return opt
+            return None
+
+        def _pick_sigma_column(df: pd.DataFrame, param_name: str, q_target: int) -> str | None:
+            exact = f"sigma_{param_name}_p{q_target}"
+            if exact in df.columns:
+                return exact
+            std_col = f"sigma_{param_name}_std"
+            if std_col in df.columns:
+                return std_col
+
+            patt = re.compile(rf"^sigma_{re.escape(param_name)}_p(\d+)$")
+            ranked: list[tuple[int, str]] = []
+            for col in df.columns:
+                m = patt.match(str(col))
+                if m is None:
+                    continue
+                try:
+                    q_col = int(m.group(1))
+                except (TypeError, ValueError):
+                    continue
+                ranked.append((abs(q_col - q_target), col))
+            if not ranked:
+                return None
+            ranked.sort(key=lambda item: (item[0], item[1]))
+            return ranked[0][1]
+
+        legacy_schema = {"flux_mid", "eff_mid", "events_mid"}.issubset(set(lut_df.columns))
+        if legacy_schema:
+            flux_dim_col = "flux_mid"
+            eff_dim_col = "eff_mid"
+            events_dim_col = "events_mid"
+            sigma_flux_col = "sigma_flux_pct"
+            sigma_eff_col = "sigma_eff_pct"
+            missing_legacy = {
+                "flux_mid",
+                "eff_mid",
+                "events_mid",
+                "sigma_flux_pct",
+                "sigma_eff_pct",
+            } - set(lut_df.columns)
+            if missing_legacy:
+                raise ValueError(
+                    "Legacy LUT schema is incomplete. Missing columns: "
+                    f"{sorted(missing_legacy)}"
+                )
+        else:
+            centre_cols = [c for c in lut_df.columns if str(c).endswith("_centre")]
+            if not centre_cols:
+                raise ValueError(
+                    "LUT CSV schema is unsupported: expected legacy *_mid columns "
+                    "or modern *_centre columns."
+                )
+
+            dims_available = {str(c)[:-len("_centre")] for c in centre_cols}
+            flux_dim = _pick_first(
+                ["est_flux_cm2_min", "flux_cm2_min", "est_flux", "flux"],
+                dims_available,
+            )
+            eff_dim = _pick_first(
+                [
+                    "est_eff_sim_2",
+                    "est_eff_sim_1",
+                    "est_eff_sim_3",
+                    "est_eff_sim_4",
+                    "eff_sim_2",
+                    "eff_sim_1",
+                    "eff_sim_3",
+                    "eff_sim_4",
+                    "est_eff",
+                    "eff",
+                ],
+                dims_available,
+            )
+            events_dim = _pick_first(
+                ["n_events", "true_n_events", "events", "sample_events_count"],
+                dims_available,
+            )
+            if events_dim is None:
+                # Last-resort fallback for event-like dimensions.
+                event_like = sorted([d for d in dims_available if "event" in d.lower()])
+                events_dim = event_like[0] if event_like else None
+
+            if flux_dim is None or eff_dim is None or events_dim is None:
+                raise ValueError(
+                    "Could not map modern LUT dimensions to (flux, eff, n_events). "
+                    f"Available dimensions: {sorted(dims_available)}"
+                )
+
+            quantiles_raw = meta.get("quantiles", [])
+            q_labels: list[int] = []
+            if isinstance(quantiles_raw, list):
+                for q in quantiles_raw:
+                    try:
+                        qf = float(q)
+                    except (TypeError, ValueError):
+                        continue
+                    if np.isfinite(qf):
+                        q_labels.append(int(round(qf * 100.0)))
+            q_target = 68
+            if q_labels:
+                q_target = 68 if 68 in q_labels else min(q_labels, key=lambda v: abs(v - 68))
+
+            flux_param = _strip_est_prefix(flux_dim)
+            eff_param = _strip_est_prefix(eff_dim)
+            sigma_flux_col = _pick_sigma_column(lut_df, flux_param, q_target)
+            sigma_eff_col = _pick_sigma_column(lut_df, eff_param, q_target)
+            if sigma_flux_col is None:
+                sigma_candidates = sorted([c for c in lut_df.columns if str(c).startswith("sigma_")])
+                raise ValueError(
+                    f"Could not find sigma column for flux parameter '{flux_param}'. "
+                    f"Available sigma columns: {sigma_candidates}"
+                )
+            if sigma_eff_col is None:
+                sigma_candidates = sorted([c for c in lut_df.columns if str(c).startswith("sigma_")])
+                raise ValueError(
+                    f"Could not find sigma column for efficiency parameter '{eff_param}'. "
+                    f"Available sigma columns: {sigma_candidates}"
+                )
+
+            flux_dim_col = f"{flux_dim}_centre"
+            eff_dim_col = f"{eff_dim}_centre"
+            events_dim_col = f"{events_dim}_centre"
+
+        required_cols = [
+            flux_dim_col,
+            eff_dim_col,
+            events_dim_col,
+            sigma_flux_col,
+            sigma_eff_col,
+        ]
+        missing_required = [c for c in required_cols if c not in lut_df.columns]
+        if missing_required:
+            raise ValueError(
+                "LUT schema check failed: missing required mapped columns "
+                f"{missing_required}"
+            )
+
+        lut_df = lut_df.copy()
+        for col in required_cols:
+            lut_df[col] = pd.to_numeric(lut_df[col], errors="coerce")
+
+        valid_dims = (
+            np.isfinite(lut_df[flux_dim_col])
+            & np.isfinite(lut_df[eff_dim_col])
+            & np.isfinite(lut_df[events_dim_col])
+        )
+        if not bool(valid_dims.any()):
+            raise ValueError(
+                "LUT schema check failed: no rows have finite (flux, eff, n_events) mapped dimensions."
+            )
+
+        dup_mask = lut_df.duplicated(
+            subset=[flux_dim_col, eff_dim_col, events_dim_col],
+            keep=False,
+        )
+        if bool(dup_mask.any()):
+            # Keep loader deterministic when multiple calibration rows map to the
+            # same LUT cell: collapse to median uncertainty per cell.
+            lut_df = (
+                lut_df.loc[valid_dims, required_cols]
+                .groupby(
+                    [flux_dim_col, eff_dim_col, events_dim_col],
+                    as_index=False,
+                    sort=True,
+                )
+                .median(numeric_only=True)
+            )
+
+        valid_dims = (
+            np.isfinite(lut_df[flux_dim_col])
+            & np.isfinite(lut_df[eff_dim_col])
+            & np.isfinite(lut_df[events_dim_col])
+        )
+        if not bool(np.isfinite(lut_df.loc[valid_dims, sigma_flux_col]).any()):
+            raise ValueError(
+                f"LUT schema check failed: '{sigma_flux_col}' has no finite values on valid dimension rows."
+            )
+        if not bool(np.isfinite(lut_df.loc[valid_dims, sigma_eff_col]).any()):
+            raise ValueError(
+                f"LUT schema check failed: '{sigma_eff_col}' has no finite values on valid dimension rows."
+            )
 
         lut_meta = meta.get("lut", {})
-        global_sf = float(lut_meta.get("global_sigma_flux_pct", 5.0))
-        global_se = float(lut_meta.get("global_sigma_eff_pct",  4.0))
+        if isinstance(lut_meta, dict) and (
+            "global_sigma_flux_pct" in lut_meta or "global_sigma_eff_pct" in lut_meta
+        ):
+            global_sf = float(lut_meta.get("global_sigma_flux_pct", 5.0))
+            global_se = float(lut_meta.get("global_sigma_eff_pct", 4.0))
+        else:
+            # Current metadata no longer stores explicit global fallbacks.
+            sigma_flux_vals = pd.to_numeric(lut_df.get(sigma_flux_col), errors="coerce")
+            sigma_eff_vals = pd.to_numeric(lut_df.get(sigma_eff_col), errors="coerce")
+            sigma_flux_vals = sigma_flux_vals[np.isfinite(sigma_flux_vals)]
+            sigma_eff_vals = sigma_eff_vals[np.isfinite(sigma_eff_vals)]
+            global_sf = float(np.nanmedian(np.abs(sigma_flux_vals))) if len(sigma_flux_vals) else 5.0
+            global_se = float(np.nanmedian(np.abs(sigma_eff_vals))) if len(sigma_eff_vals) else 4.0
 
         obj = cls(
             lut=lut_df,
             meta=meta,
             global_sigma_flux=global_sf,
             global_sigma_eff=global_se,
+            flux_dim_col=flux_dim_col,
+            eff_dim_col=eff_dim_col,
+            events_dim_col=events_dim_col,
+            sigma_flux_col=sigma_flux_col,
+            sigma_eff_col=sigma_eff_col,
         )
         obj._build_grids()
         return obj
@@ -171,9 +386,26 @@ class UncertaintyLUT:
         if df.empty:
             return
 
-        flux_mids = np.sort(df["flux_mid"].unique())
-        eff_mids  = np.sort(df["eff_mid"].unique())
-        evts_mids = np.sort(df["events_mid"].unique())
+        required_cols = [
+            self.flux_dim_col,
+            self.eff_dim_col,
+            self.events_dim_col,
+        ]
+        for col in required_cols:
+            if col not in df.columns:
+                raise KeyError(f"Required LUT column missing: {col}")
+
+        work = df.copy()
+        for col in [*required_cols, self.sigma_flux_col, self.sigma_eff_col]:
+            if col in work.columns:
+                work[col] = pd.to_numeric(work[col], errors="coerce")
+        work = work.dropna(subset=required_cols)
+        if work.empty:
+            return
+
+        flux_mids = np.sort(work[self.flux_dim_col].unique())
+        eff_mids  = np.sort(work[self.eff_dim_col].unique())
+        evts_mids = np.sort(work[self.events_dim_col].unique())
 
         self._flux_mids   = flux_mids
         self._eff_mids    = eff_mids
@@ -190,14 +422,14 @@ class UncertaintyLUT:
         eff_idx   = {v: i for i, v in enumerate(eff_mids)}
         events_idx = {v: i for i, v in enumerate(evts_mids)}
 
-        for _, row in df.iterrows():
-            fi = flux_idx.get(row["flux_mid"])
-            ei = eff_idx.get(row["eff_mid"])
-            ni = events_idx.get(row["events_mid"])
+        for _, row in work.iterrows():
+            fi = flux_idx.get(row[self.flux_dim_col])
+            ei = eff_idx.get(row[self.eff_dim_col])
+            ni = events_idx.get(row[self.events_dim_col])
             if fi is None or ei is None or ni is None:
                 continue
-            sf = row.get("sigma_flux_pct")
-            se = row.get("sigma_eff_pct")
+            sf = row.get(self.sigma_flux_col)
+            se = row.get(self.sigma_eff_col)
             if sf is not None and np.isfinite(sf):
                 sf_grid[fi, ei, ni] = sf
             if se is not None and np.isfinite(se):

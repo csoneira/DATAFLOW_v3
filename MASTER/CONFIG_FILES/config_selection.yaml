@@ -1,7 +1,7 @@
 selection:
   # Non-empty list overrides station selection in lower-level configs.
-  stations: [0]
+  stations: [0, 1]
   # Non-empty list overrides date range selection in lower-level configs.
   date_ranges:
-    - start: 2024-09-16
-      end: 2024-09-30
+    - start: 2024-09-27
+      end: 2024-10-01

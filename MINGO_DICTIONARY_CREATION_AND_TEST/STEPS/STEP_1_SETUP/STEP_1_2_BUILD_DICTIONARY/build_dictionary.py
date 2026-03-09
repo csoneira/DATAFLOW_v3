@@ -39,7 +39,7 @@ if STEP_DIR.parents[1].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[2]
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
-DEFAULT_CONFIG = PIPELINE_DIR / "config.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
 DEFAULT_INPUT = (
     STEP_DIR.parent / "STEP_1_1_COLLECT_DATA" / "OUTPUTS" / "FILES" / "collected_data.csv"
 )
@@ -132,13 +132,21 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        log.warning("Config file not found: %s", path)
+
+    plots_path = path.with_name("config_plots.json")
+    if plots_path != path and plots_path.exists():
+        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, plots_cfg)
+        log.info("Loaded plot config: %s", plots_path)
+
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
-
 
 def _parse_efficiencies(value: object) -> list[float]:
     """Parse stringified [e1, e2, e3, e4] into four floats."""
@@ -176,6 +184,22 @@ def _safe_task_ids(raw: object) -> list[int]:
             except (TypeError, ValueError):
                 continue
     return sorted(set(out)) or [1]
+
+
+def _resolve_relerr_eff_fit_threshold(cfg_12: dict, plane: int, default: float) -> float:
+    """Resolve per-plane fit relative-error threshold, with legacy key fallback."""
+    new_key = f"dictionary_relerr_eff_{plane}_fit_max_pct"
+    old_key = f"dictionary_relerr_eff_{plane}_max_pct"
+    if new_key in cfg_12:
+        return cfg_12.get(new_key, default)
+    if old_key in cfg_12:
+        log.warning(
+            "Deprecated config key step_1_2.%s detected; use step_1_2.%s.",
+            old_key,
+            new_key,
+        )
+        return cfg_12.get(old_key, default)
+    return default
 
 
 def _preferred_count_prefixes_for_task_ids(task_ids: list[int]) -> list[str]:
@@ -350,12 +374,12 @@ def _pick_global_rate_column(df: pd.DataFrame, preferred: str = "events_per_seco
     return _derive_global_rate_from_tt_sum(df, target_col="events_per_second_global_rate")
 
 
-def _fit_empirical_vs_simulated(
+def _fit_simulated_vs_empirical(
     df: pd.DataFrame,
     plane: int,
     poly_order: int = 3,
 ) -> np.ndarray | None:
-    """Fit empirical = P(simulated) for one plane using polynomial order *poly_order*."""
+    """Fit simulated = P(empirical) for one plane using polynomial order *poly_order*."""
     sim_col = f"eff_sim_{plane}"
     emp_col = f"eff_empirical_{plane}"
     sim = pd.to_numeric(df.get(sim_col), errors="coerce")
@@ -363,8 +387,8 @@ def _fit_empirical_vs_simulated(
     m = sim.notna() & emp.notna()
     if m.sum() < 2:
         return None
-    x = sim[m].to_numpy(dtype=float)
-    y = emp[m].to_numpy(dtype=float)
+    x = emp[m].to_numpy(dtype=float)
+    y = sim[m].to_numpy(dtype=float)
     requested_order = max(1, int(poly_order))
     used_order = min(requested_order, int(len(x) - 1))
     if used_order < 1:
@@ -421,10 +445,70 @@ def _compute_fit_relerr_columns(
 
     sim = pd.to_numeric(df.get(sim_col), errors="coerce")
     emp = pd.to_numeric(df.get(emp_col), errors="coerce")
-    fit = pd.Series(np.polyval(np.asarray(coeffs, dtype=float), sim.to_numpy(dtype=float)), index=sim.index)
+    fit = pd.Series(np.polyval(np.asarray(coeffs, dtype=float), emp.to_numpy(dtype=float)), index=sim.index)
     df[fit_col] = fit
-    df[re_col] = (emp - fit) / fit.replace({0: np.nan}) * 100.0
+    df[re_col] = (sim - fit) / fit.replace({0: np.nan}) * 100.0
     df[abs_re_col] = df[re_col].abs()
+
+
+def _mask_all_sim_eff_equal(df: pd.DataFrame) -> np.ndarray:
+    """Rows where eff_sim_1..4 are all finite and equal (within numerical tolerance)."""
+    eff_cols = [f"eff_sim_{i}" for i in range(1, 5)]
+    if not all(col in df.columns for col in eff_cols):
+        return np.zeros(len(df), dtype=bool)
+    eff_arrays = [
+        pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+        for col in eff_cols
+    ]
+    finite = np.isfinite(eff_arrays[0])
+    for arr in eff_arrays[1:]:
+        finite &= np.isfinite(arr)
+    if not np.any(finite):
+        return np.zeros(len(df), dtype=bool)
+    equal_mask = finite.copy()
+    ref = eff_arrays[0]
+    atol = 1e-12
+    for arr in eff_arrays[1:]:
+        equal_mask &= np.isclose(arr, ref, rtol=0.0, atol=atol)
+    return equal_mask
+
+
+def _mask_sim_eff_within_tolerance_band(
+    df: pd.DataFrame,
+    tolerance_pct: float,
+) -> np.ndarray:
+    """Rows where all 4 simulated efficiencies are finite and within one band."""
+    n_rows = len(df)
+    if n_rows == 0:
+        return np.zeros(0, dtype=bool)
+
+    tol_pct = float(tolerance_pct)
+    if not np.isfinite(tol_pct):
+        tol_pct = 10.0
+    tol_pct = max(0.0, tol_pct)
+    tol_abs = tol_pct / 100.0
+
+    eff_cols = [f"eff_sim_{i}" for i in range(1, 5)]
+    if all(col in df.columns for col in eff_cols):
+        eff_mat = np.column_stack(
+            [pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float) for col in eff_cols]
+        )
+    elif "efficiencies" in df.columns:
+        parsed = df["efficiencies"].apply(_parse_efficiencies)
+        eff_mat = np.asarray(parsed.tolist(), dtype=float)
+        if eff_mat.ndim != 2 or eff_mat.shape[1] < 4:
+            return np.zeros(n_rows, dtype=bool)
+        eff_mat = eff_mat[:, :4]
+    else:
+        return np.zeros(n_rows, dtype=bool)
+
+    finite = np.isfinite(eff_mat).all(axis=1)
+    if not np.any(finite):
+        return np.zeros(n_rows, dtype=bool)
+    span = np.full(n_rows, np.nan, dtype=float)
+    eff_finite = eff_mat[finite]
+    span[finite] = np.max(eff_finite, axis=1) - np.min(eff_finite, axis=1)
+    return finite & (span <= (tol_abs + 1e-12))
 
 
 # ── Dictionary coverage helpers ──────────────────────────────────────────
@@ -664,21 +748,51 @@ def _plot_eff_sim_vs_empirical(
     path,
     fit_poly_by_plane: dict[int, np.ndarray | list[float] | tuple[float, ...]] | None = None,
 ) -> None:
-    """2×2 scatter of simulated vs empirical efficiency for all 4 planes."""
+    """2×2 scatter of empirical (x) vs simulated (y) efficiency for all 4 planes."""
     fig, axes = plt.subplots(2, 2, figsize=(10, 10), sharex=True, sharey=True)
-    min_vals, max_vals = [], []
+    x_min_vals, x_max_vals = [], []
+    y_min_vals, y_max_vals = [], []
     for plane in range(1, 5):
         sim_col = f"eff_sim_{plane}"
         emp_col = f"eff_empirical_{plane}"
-        for col in (sim_col, emp_col):
-            if col in dataset.columns:
-                s = pd.to_numeric(dataset[col], errors="coerce").dropna()
-                if not s.empty:
-                    min_vals.append(float(s.min()))
-                    max_vals.append(float(s.max()))
-    xmin = min(min_vals) if min_vals else 0.0
-    xmax = max(max_vals) if max_vals else 1.0
-    pad = 0.02 * (xmax - xmin) if xmax > xmin else 0.01
+        for frame in (dataset, dictionary):
+            if frame is None or frame.empty:
+                continue
+            if emp_col in frame.columns:
+                x_vals = pd.to_numeric(frame[emp_col], errors="coerce").dropna()
+                if not x_vals.empty:
+                    x_min_vals.append(float(x_vals.min()))
+                    x_max_vals.append(float(x_vals.max()))
+            if sim_col in frame.columns:
+                y_vals = pd.to_numeric(frame[sim_col], errors="coerce").dropna()
+                if not y_vals.empty:
+                    y_min_vals.append(float(y_vals.min()))
+                    y_max_vals.append(float(y_vals.max()))
+
+    x_min = min(x_min_vals) if x_min_vals else 0.0
+    x_max = max(x_max_vals) if x_max_vals else 1.0
+    if not np.isfinite(x_min) or not np.isfinite(x_max):
+        x_min, x_max = 0.0, 1.0
+    if x_max <= x_min:
+        x_min -= 0.01
+        x_max += 0.01
+    x_pad = 0.02 * (x_max - x_min)
+    x_lo = x_min - x_pad
+    x_hi = x_max + x_pad
+
+    y_min_data = min(y_min_vals) if y_min_vals else 0.0
+    y_max_data = max(y_max_vals) if y_max_vals else 1.0
+    if not np.isfinite(y_min_data) or not np.isfinite(y_max_data):
+        y_min_data, y_max_data = 0.0, 1.0
+    # Simulated efficiencies are physical in [0, 1], but keep room for tiny numerical spillover.
+    y_min = min(0.0, y_min_data)
+    y_max = max(1.0, y_max_data)
+    if y_max <= y_min:
+        y_min -= 0.01
+        y_max += 0.01
+    y_pad = 0.02 * (y_max - y_min)
+    y_lo = y_min - y_pad
+    y_hi = y_max + y_pad
 
     for plane in range(1, 5):
         ax = axes[(plane - 1) // 2, (plane - 1) % 2]
@@ -688,22 +802,24 @@ def _plot_eff_sim_vs_empirical(
         emp = pd.to_numeric(dataset.get(emp_col), errors="coerce")
         m = sim.notna() & emp.notna()
         if m.any():
-            ax.scatter(sim[m], emp[m], s=12, alpha=0.4, color="#AAAAAA", zorder=2)
+            ax.scatter(emp[m], sim[m], s=12, alpha=0.4, color="#AAAAAA", zorder=2)
         # Dictionary points
         if not dictionary.empty:
             ds = pd.to_numeric(dictionary.get(sim_col), errors="coerce")
             de = pd.to_numeric(dictionary.get(emp_col), errors="coerce")
             dm = ds.notna() & de.notna()
             if dm.any():
-                ax.scatter(ds[dm], de[dm], s=25, alpha=0.8, marker="x",
+                ax.scatter(de[dm], ds[dm], s=25, alpha=0.8, marker="x",
                            color="#E45756", linewidths=1.0, zorder=3, label="Dictionary")
-        ax.plot([xmin - pad, xmax + pad], [xmin - pad, xmax + pad], "k--", linewidth=1)
+        diag_lo = max(x_lo, y_lo)
+        diag_hi = min(x_hi, y_hi)
+        if diag_hi > diag_lo:
+            ax.plot([diag_lo, diag_hi], [diag_lo, diag_hi], "k--", linewidth=1)
         if fit_poly_by_plane and plane in fit_poly_by_plane:
             coeffs = np.asarray(fit_poly_by_plane[plane], dtype=float)
             degree = max(int(coeffs.size) - 1, 0)
-            xline = np.linspace(xmin - pad, xmax + pad, 200, dtype=float)
+            xline = np.linspace(x_lo, x_hi, 200, dtype=float)
             yline = np.polyval(coeffs, xline)
-            formula = _format_polynomial(coeffs, variable="x", precision=3)
             ax.plot(
                 xline,
                 yline,
@@ -711,21 +827,36 @@ def _plot_eff_sim_vs_empirical(
                 linewidth=1.5,
                 color="#2A9D8F",
                 zorder=4,
-                label=f"fit deg {degree}: y={formula}",
+                label=f"fit deg {degree}",
+            )
+            # Build multi-line fit-parameter annotation
+            fit_lines = [f"fit deg {degree}:"]
+            for idx, coef in enumerate(coeffs):
+                power = degree - idx
+                if power == 0:
+                    fit_lines.append(f"  c0 = {coef:+.4g}")
+                else:
+                    fit_lines.append(f"  c{power} = {coef:+.4g}")
+            ax.text(
+                0.03, 0.97, "\n".join(fit_lines),
+                transform=ax.transAxes, fontsize=6,
+                verticalalignment="top", horizontalalignment="left",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                          edgecolor="#2A9D8F", alpha=0.8),
+                color="#2A9D8F", family="monospace",
             )
             ax.set_title(f"Plane {plane} (poly-fit dict cut)")
-            ax.legend(fontsize=8, loc="lower right")
+            ax.legend(fontsize=7, loc="lower right")
         else:
             ax.set_title(f"Plane {plane} (direct dict cut)")
-        ax.set_xlabel("Simulated efficiency")
-        ax.set_ylabel("Empirical efficiency")
-        ax.set_xlim(xmin - pad, xmax + pad)
-        ax.set_ylim(xmin - pad, xmax + pad)
-        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("Empirical efficiency")
+        ax.set_ylabel("Simulated efficiency")
+        ax.set_xlim(x_lo, x_hi)
+        ax.set_ylim(y_lo, y_hi)
         ax.grid(True, alpha=0.3)
     fig.suptitle(
-        "Simulated vs Empirical Efficiency per Plane (grey=data, red×=dict)\n"
-        "All planes use polynomial-fit cuts (empirical = P(simulated)).",
+        "Empirical vs Simulated Efficiency per Plane (grey=data, red×=dict)\n"
+        "All planes use polynomial-fit cuts (simulated = P(empirical)).",
         fontsize=11,
     )
     fig.tight_layout()
@@ -778,14 +909,16 @@ def _plot_empirical_eff2_vs_eff3(dataset: pd.DataFrame, dictionary: pd.DataFrame
     plt.close(fig)
 
 
-def _plot_iso_rate(dictionary: pd.DataFrame, path) -> None:
+def _plot_iso_rate(
+    dictionary: pd.DataFrame,
+    path,
+    *,
+    eff_band_tolerance_pct: float = 10.0,
+) -> None:
     """Scatter + iso-contours of global rate in the flux–eff plane (dictionary only)."""
     import ast as _ast
     from matplotlib.tri import Triangulation, LinearTriInterpolator
 
-    if "efficiencies" not in dictionary.columns:
-        log.warning("No 'efficiencies' column — skipping iso-rate plot.")
-        return
     gr_col = _pick_global_rate_column(dictionary, preferred="events_per_second_global_rate")
     if gr_col is None:
         log.warning("No global rate column — skipping iso-rate plot.")
@@ -793,20 +926,40 @@ def _plot_iso_rate(dictionary: pd.DataFrame, path) -> None:
     if gr_col != "events_per_second_global_rate":
         log.info("Iso-rate plot using global-rate column: %s", gr_col)
 
+    eff_band_tol_pct = float(eff_band_tolerance_pct)
+    if not np.isfinite(eff_band_tol_pct):
+        eff_band_tol_pct = 10.0
+    eff_band_tol_pct = max(0.0, eff_band_tol_pct)
+
+    n_total = int(len(dictionary))
+    band_mask = _mask_sim_eff_within_tolerance_band(dictionary, eff_band_tol_pct)
+    n_band = int(np.count_nonzero(band_mask))
+    if n_band == 0:
+        log.warning(
+            "No dictionary rows satisfy iso-rate efficiency-band tolerance (<= %.3f%%).",
+            eff_band_tol_pct,
+        )
+        return
+    dict_use = dictionary.loc[band_mask].copy()
+
     try:
-        effs = dictionary["efficiencies"].apply(_ast.literal_eval)
-        eff = effs.apply(lambda x: float(x[0]))
+        if "eff_sim_1" in dict_use.columns:
+            eff = pd.to_numeric(dict_use["eff_sim_1"], errors="coerce")
+        else:
+            effs = dict_use["efficiencies"].apply(_ast.literal_eval)
+            eff = effs.apply(lambda x: float(x[0]))
     except Exception:
         log.warning("Could not parse efficiencies — skipping iso-rate plot.")
         return
 
-    flux = pd.to_numeric(dictionary["flux_cm2_min"], errors="coerce")
-    rate = pd.to_numeric(dictionary[gr_col], errors="coerce")
+    flux = pd.to_numeric(dict_use["flux_cm2_min"], errors="coerce")
+    rate = pd.to_numeric(dict_use[gr_col], errors="coerce")
     xm = flux.to_numpy(dtype=float)
     ym = eff.to_numpy(dtype=float)
     zm = rate.to_numpy(dtype=float)
     mask = np.isfinite(xm) & np.isfinite(ym) & np.isfinite(zm)
-    if mask.sum() < 10:
+    n_points = int(mask.sum())
+    if n_points < 1:
         log.warning("Too few valid points for iso-rate plot.")
         return
     xm, ym, zm = xm[mask], ym[mask], zm[mask]
@@ -815,12 +968,14 @@ def _plot_iso_rate(dictionary: pd.DataFrame, path) -> None:
     flux_hi = float(np.max(xm))
     eff_lo = float(np.min(ym))
     eff_hi = float(np.max(ym))
-    x_span = max(flux_hi - flux_lo, 1e-6)
-    y_span = max(eff_hi - eff_lo, 1e-6)
-    flux_lo -= 0.03 * x_span
-    flux_hi += 0.03 * x_span
-    eff_lo -= 0.03 * y_span
-    eff_hi += 0.03 * y_span
+    x_span = max(0.0, flux_hi - flux_lo)
+    y_span = max(0.0, eff_hi - eff_lo)
+    x_pad = max(0.03 * x_span, 0.02)
+    y_pad = max(0.03 * y_span, 0.02)
+    flux_lo -= x_pad
+    flux_hi += x_pad
+    eff_lo -= y_pad
+    eff_hi += y_pad
 
     g = 220
     xi = np.linspace(flux_lo, flux_hi, g)
@@ -829,62 +984,68 @@ def _plot_iso_rate(dictionary: pd.DataFrame, path) -> None:
 
     cmap = plt.cm.viridis
     fig, ax = plt.subplots(figsize=(9.5, 7.0))
+    rendered_contours = False
     try:
-        tri = Triangulation(xm, ym)
-        interp = LinearTriInterpolator(tri, zm)
-        Zi = interp(Xi, Yi)
-        Zi = np.asarray(np.ma.filled(Zi, np.nan), dtype=float)
-        finite_z = Zi[np.isfinite(Zi)]
-        if finite_z.size >= 2:
-            levels = np.linspace(float(np.min(finite_z)), float(np.max(finite_z)), 16)
-            cf = ax.contourf(Xi, Yi, Zi, levels=levels, cmap=cmap, alpha=0.35, zorder=0)
-            cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.048)
-            cbar.set_label("Global rate [Hz]")
-            ax.contour(
-                Xi,
-                Yi,
-                Zi,
-                levels=levels[::2],
-                colors="k",
-                linewidths=0.35,
-                alpha=0.25,
-                zorder=1,
-            )
-        else:
-            levels = np.linspace(float(np.min(zm)), float(np.max(zm)), 8)
-            sc = ax.scatter(
-                xm,
-                ym,
-                c=zm,
-                cmap=cmap,
-                s=20,
-                alpha=0.7,
-                edgecolors="0.35",
-                linewidths=0.3,
-                zorder=2,
-                vmin=levels.min(),
-                vmax=levels.max(),
-            )
-            cbar = fig.colorbar(sc, ax=ax, pad=0.02, fraction=0.048)
-            cbar.set_label("Global rate [Hz]")
+        if len(xm) >= 3:
+            tri = Triangulation(xm, ym)
+            interp = LinearTriInterpolator(tri, zm)
+            Zi = interp(Xi, Yi)
+            Zi = np.asarray(np.ma.filled(Zi, np.nan), dtype=float)
+            finite_z = Zi[np.isfinite(Zi)]
+            if finite_z.size >= 2:
+                z_min = float(np.min(finite_z))
+                z_max = float(np.max(finite_z))
+                if z_max > z_min:
+                    levels = np.linspace(z_min, z_max, 16)
+                    cf = ax.contourf(Xi, Yi, Zi, levels=levels, cmap=cmap, alpha=0.35, zorder=0)
+                    cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.048)
+                    cbar.set_label("Global rate [Hz]")
+                    ax.contour(
+                        Xi,
+                        Yi,
+                        Zi,
+                        levels=levels[::2],
+                        colors="k",
+                        linewidths=0.35,
+                        alpha=0.25,
+                        zorder=1,
+                    )
+                    rendered_contours = True
     except Exception as exc:
         log.warning("Contour interpolation failed: %s", exc)
-        levels = np.linspace(float(np.min(zm)), float(np.max(zm)), 8)
+
+    if not rendered_contours:
+        z_min = float(np.min(zm))
+        z_max = float(np.max(zm))
+        scatter_kwargs = {}
+        if z_max > z_min:
+            scatter_kwargs["vmin"] = z_min
+            scatter_kwargs["vmax"] = z_max
         sc = ax.scatter(
             xm,
             ym,
             c=zm,
             cmap=cmap,
-            s=20,
-            alpha=0.7,
-            edgecolors="0.35",
-            linewidths=0.3,
+            s=72,
+            alpha=0.9,
+            edgecolors="black",
+            linewidths=0.6,
             zorder=2,
-            vmin=levels.min(),
-            vmax=levels.max(),
+            **scatter_kwargs,
         )
         cbar = fig.colorbar(sc, ax=ax, pad=0.02, fraction=0.048)
         cbar.set_label("Global rate [Hz]")
+        ax.text(
+            0.02,
+            0.02,
+            f"Contours unavailable (n={n_points} filtered point{'s' if n_points != 1 else ''})",
+            transform=ax.transAxes,
+            fontsize=8,
+            ha="left",
+            va="bottom",
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="0.5", alpha=0.9),
+            zorder=6,
+        )
 
     ax.scatter(
         xm,
@@ -900,7 +1061,11 @@ def _plot_iso_rate(dictionary: pd.DataFrame, path) -> None:
     ax.set_ylim(eff_lo, eff_hi)
     ax.set_xlabel("Flux [cm^-2 min^-1]", fontsize=11)
     ax.set_ylabel("Efficiency (plane 1)", fontsize=11)
-    ax.set_title(f"Iso-global-rate map ({mask.sum()} dictionary entries)", fontsize=12)
+    ax.set_title(
+        f"Iso-global-rate map ({n_band}/{n_total} dict entries, "
+        f"4-eff band <= {eff_band_tol_pct:.2f}%)",
+        fontsize=12,
+    )
     ax.grid(True, alpha=0.2)
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
@@ -922,7 +1087,7 @@ def _plot_relerr_report(
     Layout (rows = plane 1, plane 2, plane 3, plane 4):
       col 0: relerr histogram (signed, filtered to ±3 %)
       col 1: relerr vs n_events scatter (signed)
-      col 2: relerr vs simulated efficiency scatter (signed)
+      col 2: relerr vs empirical efficiency scatter (signed)
     """
     BASE_HIST_CLIP_PCT = 3.0  # minimum histogram clip
     BASE_SCATTER_Y_CLIP_PCT = 5.0  # minimum scatter y-range clip
@@ -940,7 +1105,7 @@ def _plot_relerr_report(
             plane_mode = f"poly-fit (deg {fit_order_by_plane[plane]})"
         else:
             plane_mode = "fit-based"
-        sim_col = f"eff_sim_{plane}"
+        emp_col = f"eff_empirical_{plane}"
         ev_col = "n_events"
         relerr_cut = None
         if relerr_cut_by_plane and plane in relerr_cut_by_plane:
@@ -959,7 +1124,7 @@ def _plot_relerr_report(
         scatter_y_plot_lim = scatter_y_clip_pct * 1.05
 
         re = pd.to_numeric(dataset.get(re_col), errors="coerce")
-        sim_e = pd.to_numeric(dataset.get(sim_col), errors="coerce")
+        emp_e = pd.to_numeric(dataset.get(emp_col), errors="coerce")
         n_ev = pd.to_numeric(dataset.get(ev_col), errors="coerce")
         is_dict = dataset.get("is_dictionary_entry", pd.Series(dtype=bool)).astype(bool)
 
@@ -1026,17 +1191,17 @@ def _plot_relerr_report(
         )
         ax.legend(fontsize=7)
 
-        # ── Col 2: relerr vs simulated efficiency ──
+        # ── Col 2: relerr vs empirical efficiency ──
         ax = axes[row, 2]
-        m = re.notna() & sim_e.notna() & (re.abs() <= scatter_y_clip_pct)
+        m = re.notna() & emp_e.notna() & (re.abs() <= scatter_y_clip_pct)
         if m.sum() > 0:
             off = m & ~is_dict if is_dict.any() else m
             on = m & is_dict if is_dict.any() else pd.Series(False, index=m.index)
             if off.sum() > 0:
-                ax.scatter(sim_e[off], re[off], s=10, alpha=0.4,
+                ax.scatter(emp_e[off], re[off], s=10, alpha=0.4,
                            color="#AAAAAA", zorder=2, label="Dataset")
             if on.sum() > 0:
-                ax.scatter(sim_e[on], re[on], s=25, alpha=0.8, marker="x",
+                ax.scatter(emp_e[on], re[on], s=25, alpha=0.8, marker="x",
                            color="#E45756", linewidths=1.0, zorder=3, label="Dict")
         ax.axhline(0, color="black", linewidth=0.8)
         if relerr_cut is not None and np.isfinite(relerr_cut):
@@ -1044,16 +1209,16 @@ def _plot_relerr_report(
                        label=f"relerr cut ±{relerr_cut:.2f}%")
             ax.axhline(-relerr_cut, color=CUT_COLOR, linestyle="-.", linewidth=1.5)
         ax.set_ylim(-scatter_y_plot_lim, scatter_y_plot_lim)
-        ax.set_xlabel(f"Simulated eff {plane}")
+        ax.set_xlabel(f"Empirical eff {plane}")
         ax.set_ylabel(f"Rel. error eff {plane} [%]")
         ax.set_title(
-            f"Plane {plane} ({plane_mode}) — Rel. error vs Sim. eff (|re| ≤ {scatter_y_clip_pct:.1f}%)"
+            f"Plane {plane} ({plane_mode}) — Rel. error vs Emp. eff (|re| ≤ {scatter_y_clip_pct:.1f}%)"
         )
         ax.legend(fontsize=7)
 
     fig.suptitle(
         "Relative Error Report — Efficiency Planes 1, 2, 3 & 4\n"
-        "(all planes computed versus fitted polynomial y = P(x))",
+        "(all planes computed versus fitted polynomial simulated = P(empirical))",
         fontsize=13,
     )
     fig.tight_layout()
@@ -1080,18 +1245,30 @@ def main() -> int:
 
     eff2_range = cfg_12.get("outlier_eff_2_range", [0.5, 1.0])
     eff3_range = cfg_12.get("outlier_eff_3_range", [0.5, 1.0])
-    dict_relerr_eff2_fit_max = cfg_12.get("dictionary_relerr_eff_2_fit_max_pct",
-                                           cfg_12.get("dictionary_relerr_eff_2_max_pct", 5.0))
-    dict_relerr_eff3_fit_max = cfg_12.get("dictionary_relerr_eff_3_fit_max_pct",
-                                           cfg_12.get("dictionary_relerr_eff_3_max_pct", 5.0))
-    dict_relerr_eff1_fit_max = cfg_12.get("dictionary_relerr_eff_1_fit_max_pct", 3.0)
-    dict_relerr_eff4_fit_max = cfg_12.get("dictionary_relerr_eff_4_fit_max_pct", 3.0)
+    dict_relerr_eff1_fit_max = _resolve_relerr_eff_fit_threshold(cfg_12, plane=1, default=3.0)
+    dict_relerr_eff2_fit_max = _resolve_relerr_eff_fit_threshold(cfg_12, plane=2, default=5.0)
+    dict_relerr_eff3_fit_max = _resolve_relerr_eff_fit_threshold(cfg_12, plane=3, default=5.0)
+    dict_relerr_eff4_fit_max = _resolve_relerr_eff_fit_threshold(cfg_12, plane=4, default=3.0)
     dict_min_events = cfg_12.get("dictionary_min_events", 20000)
+    dict_exclude_all_equal_eff = bool(
+        cfg_12.get("dictionary_exclude_rows_with_all_sim_eff_equal", False)
+    )
     relerr_hist_y_scale = cfg_12.get("relerr_hist_y_scale", "log")
-    plot_params = cfg_12.get("plot_parameters", None)  # None = use all param_cols
+    plot_params = config.get("plot_parameters", None)  # None = use all param_cols
+    if plot_params is None:
+        legacy_plot_params = cfg_12.get("plot_parameters", None)
+        if legacy_plot_params is not None:
+            log.warning(
+                "Deprecated config key step_1_2.plot_parameters detected; use top-level plot_parameters."
+            )
+            plot_params = legacy_plot_params
     fit_polynomial_order_cfg = cfg_12.get(
         "eff_fit_polynomial_order",
         cfg_12.get("fit_polynomial_order", 3),
+    )
+    iso_rate_eff_band_tol_cfg = cfg_12.get(
+        "iso_rate_efficiency_band_tolerance_pct",
+        config.get("iso_rate_efficiency_band_tolerance_pct", 10.0),
     )
     task_ids_used = _safe_task_ids(config.get("task_ids", [1]))
     preferred_count_prefixes = _preferred_count_prefixes_for_task_ids(task_ids_used)
@@ -1103,6 +1280,14 @@ def main() -> int:
             fit_polynomial_order_cfg,
         )
         fit_polynomial_order = 3
+    try:
+        iso_rate_eff_band_tolerance_pct = max(0.0, float(iso_rate_eff_band_tol_cfg))
+    except (TypeError, ValueError):
+        log.warning(
+            "Invalid iso_rate_efficiency_band_tolerance_pct=%r; falling back to 10.",
+            iso_rate_eff_band_tol_cfg,
+        )
+        iso_rate_eff_band_tolerance_pct = 10.0
 
     # ── Load ─────────────────────────────────────────────────────────
     if not input_path.exists():
@@ -1149,6 +1334,8 @@ def main() -> int:
             event_col = candidate
             break
     if event_col:
+        if event_col != "selected_rows":
+            log.info("Event count column resolved via fallback: '%s'.", event_col)
         df["n_events"] = pd.to_numeric(df[event_col], errors="coerce")
     else:
         log.warning("No event count column found; setting n_events = NaN.")
@@ -1168,11 +1355,11 @@ def main() -> int:
     log.info("  Outlier removal: %d outliers dropped, %d rows remain.", n_outliers, len(df_clean))
 
     # Fit acceptance-adjusted polynomial relations for all 4 planes:
-    # empirical ≈ P(simulated)
+    # simulated ≈ P(empirical)
     fit_poly_by_plane: dict[int, list[float]] = {}
     fit_order_by_plane: dict[int, int] = {}
     for plane in (1, 2, 3, 4):
-        fit_coeffs = _fit_empirical_vs_simulated(
+        fit_coeffs = _fit_simulated_vs_empirical(
             df_clean,
             plane,
             poly_order=fit_polynomial_order,
@@ -1195,10 +1382,10 @@ def main() -> int:
                 fit_order_by_plane[plane],
             )
         log.info(
-            "  Plane %d polynomial fit (deg %d): empirical = %s",
+            "  Plane %d polynomial fit (deg %d): simulated = %s",
             plane,
             fit_order_by_plane[plane],
-            _format_polynomial(coeff_list, variable="simulated", precision=6),
+            _format_polynomial(coeff_list, variable="empirical", precision=6),
         )
 
     # ── Dataset = the full clean table ───────────────────────────────
@@ -1220,6 +1407,16 @@ def main() -> int:
     if df_clean["abs_relerr_eff_4_fit_pct"].notna().any():
         dict_mask &= df_clean["abs_relerr_eff_4_fit_pct"] < dict_relerr_eff4_fit_max
     dict_mask &= df_clean["n_events"] >= dict_min_events
+
+    n_equal_eff_rows_excluded = 0
+    if dict_exclude_all_equal_eff:
+        equal_eff_mask = _mask_all_sim_eff_equal(df_clean)
+        n_equal_eff_rows_excluded = int(np.count_nonzero(dict_mask & equal_eff_mask))
+        dict_mask &= ~equal_eff_mask
+        log.info(
+            "  Dictionary candidates: excluded %d row(s) with eff_sim_1==eff_sim_2==eff_sim_3==eff_sim_4.",
+            n_equal_eff_rows_excluded,
+        )
 
     dict_candidates = df_clean.loc[dict_mask].copy()
     log.info("  Dictionary candidates (pass quality): %d / %d",
@@ -1300,6 +1497,9 @@ def main() -> int:
         "fit_polynomial_order_by_plane": {
             str(k): int(v) for k, v in fit_order_by_plane.items()
         },
+        "fit_polynomial_relation": "simulated = P(empirical)",
+        "fit_polynomial_x_variable": "empirical_efficiency",
+        "fit_polynomial_y_variable": "simulated_efficiency",
         "fit_polynomial_eff_1": list(fit_poly_by_plane[1]) if 1 in fit_poly_by_plane else None,
         "fit_polynomial_eff_2": list(fit_poly_by_plane[2]) if 2 in fit_poly_by_plane else None,
         "fit_polynomial_eff_3": list(fit_poly_by_plane[3]) if 3 in fit_poly_by_plane else None,
@@ -1313,7 +1513,10 @@ def main() -> int:
         "dict_relerr_eff3_fit_max_pct": dict_relerr_eff3_fit_max,
         "dict_relerr_eff4_fit_max_pct": dict_relerr_eff4_fit_max,
         "dict_min_events": dict_min_events,
+        "dictionary_exclude_rows_with_all_sim_eff_equal": dict_exclude_all_equal_eff,
+        "dictionary_rows_excluded_all_sim_eff_equal": n_equal_eff_rows_excluded,
         "relerr_hist_y_scale": relerr_hist_y_scale,
+        "iso_rate_efficiency_band_tolerance_pct": float(iso_rate_eff_band_tolerance_pct),
     }
     with open(FILES_DIR / "build_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
@@ -1331,6 +1534,7 @@ def main() -> int:
         dict_relerr_eff4_fit_max=dict_relerr_eff4_fit_max,
         dict_min_events=dict_min_events,
         relerr_hist_y_scale=relerr_hist_y_scale,
+        iso_rate_eff_band_tolerance_pct=iso_rate_eff_band_tolerance_pct,
         plot_params=plot_params,
     )
 
@@ -1350,6 +1554,7 @@ def _make_plots(
     dict_relerr_eff4_fit_max: float,
     dict_min_events: float,
     relerr_hist_y_scale: str,
+    iso_rate_eff_band_tolerance_pct: float,
     plot_params: list[str] | None = None,
 ) -> None:
     """Generate concise diagnostic plots.
@@ -1515,7 +1720,11 @@ def _make_plots(
     )
 
     # ── 8. Iso-rate contour in flux–eff space ────────────────────────
-    _plot_iso_rate(dictionary, PLOTS_DIR / "iso_rate_global_rate.png")
+    _plot_iso_rate(
+        dictionary,
+        PLOTS_DIR / "iso_rate_global_rate.png",
+        eff_band_tolerance_pct=iso_rate_eff_band_tolerance_pct,
+    )
 
 
 if __name__ == "__main__":

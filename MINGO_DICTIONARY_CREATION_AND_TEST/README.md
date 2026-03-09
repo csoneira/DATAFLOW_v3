@@ -1,5 +1,9 @@
 # INFERENCE_DICTIONARY_VALIDATION
 
+*We do simulations like this: we choose a point in the parameter space, generate a dataset simulated with those parameters, then we analyze the resulting datafile and that analysis outputs a point in the feature space. But since we know the origina parameter set, we have a bijective relation established from parameter space to feature space. So, for a file that we dont know the parameter set that generated it, the idea is that we calculate distances in the feature space, maybe with 1 or with n neighbours, or with all the neighbours, then we use that set of results to calcualte to go back to the parameter space and, in that space, calculate a representative point for the tested entry. It's the concept of a continous function: if we know where the points around a point go, we can estimate where that point goes. in this case the function has its domain in the feature space and goes to the parameter (of simulation space).*
+
+*In other words. We construct a mapping between simulation parameter space and analysis feature space by generating simulated datasets at selected points in the parameter space and processing each dataset through the same analysis chain used for real data. Each simulation therefore produces a corresponding point in feature space, while its generating parameter vector is known by construction. In this way, the simulation set defines a sampled correspondence from parameters to features, and, equivalently, an empirical inverse relation from features back to parameters. For an input data file whose generating parameters are unknown, we first extract its feature-space coordinates and then compare this point with the simulated entries in feature space, for example using the single nearest neighbour, the n nearest neighbours, or a weighted combination of all neighbours. The associated parameter-space points of those neighbouring simulations are then used to infer the most representative parameter vector for the unknown file. The underlying idea is continuity: if nearby points in feature space arise from nearby points in parameter space, then the local structure of the simulated sample can be used to estimate the parameter-space origin of a previously unseen observation.*
+
 Validation pipeline for the MINGO simulation-based inference method.
 Given a dictionary of simulated detector responses, the pipeline tests
 whether the matching procedure can reliably recover the physical
@@ -46,7 +50,9 @@ into an `OUTPUTS/` subdirectory that is created automatically:
 ```
 STEP_N_<NAME>/
   script.py
-  config.json            (optional step-specific config)
+  config_method.json     (optional method config)
+  config_plots.json      (optional plotting config)
+  config_runtime.json    (optional runtime/path overrides)
   OUTPUTS/
     FILES/               CSVs, JSONs, markdown reports
     PLOTS/               PNG figures
@@ -77,12 +83,17 @@ Results are collected in `COMPARISON/metric_comparison.csv`.
 Each step reads parameters in this priority order:
 
 ```
-CLI argument  >  config.json key  >  hardcoded default
+CLI argument  >  config_runtime.json override  >  config_plots.json key  >  config_method.json key  >  hardcoded default
 ```
 
-Step-specific `config.json` files are in each step directory (step 1 uses
-`config/pipeline_config.json`).  Paths in these files are absolute; update
-them if you move the repository.
+Main configuration files at repo root:
+
+- `config_method.json`: inference and processing method knobs
+- `config_plots.json`: plotting/display knobs
+- `config_runtime.json`: runtime path overrides
+- `config_legacy.json`: deprecated keys kept only as reference
+
+`config.json` has been retired.
 
 ## Dependencies
 

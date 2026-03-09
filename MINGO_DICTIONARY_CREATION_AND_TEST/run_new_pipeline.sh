@@ -26,7 +26,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG="${SCRIPT_DIR}/config.json"
+CONFIG="${SCRIPT_DIR}/config_method.json"
 
 # Preferred layout: STEP_* directories directly under SCRIPT_DIR.
 # Legacy layout fallback: SCRIPT_DIR/STEPS/STEP_*.
@@ -109,15 +109,32 @@ run_step() {
 }
 
 clear_output_plots() {
+    local -a steps_to_clear=("$@")
     local -a plot_dirs=()
+    local step
+    local script
+    local step_dir
     local plot_dir
 
-    while IFS= read -r plot_dir; do
-        plot_dirs+=("$plot_dir")
-    done < <(find "$STEP_ROOT" -type d -path "*/OUTPUTS/PLOTS" | sort)
+    if [[ ${#steps_to_clear[@]} -eq 0 ]]; then
+        echo "No steps provided for plot cleanup; skipping."
+        return 0
+    fi
+
+    for step in "${steps_to_clear[@]}"; do
+        script="${STEP_SCRIPTS[$step]:-}"
+        if [[ -z "$script" ]]; then
+            continue
+        fi
+        step_dir="$(dirname "$script")"
+        plot_dir="${step_dir}/OUTPUTS/PLOTS"
+        if [[ -d "$plot_dir" ]]; then
+            plot_dirs+=("$plot_dir")
+        fi
+    done
 
     if [[ ${#plot_dirs[@]} -eq 0 ]]; then
-        echo "No OUTPUTS/PLOTS directories found under ${STEP_ROOT}; skipping plot cleanup."
+        echo "No OUTPUTS/PLOTS directories found for requested steps; skipping plot cleanup."
         return 0
     fi
 
@@ -142,6 +159,7 @@ fi
 
 if [[ "${1:-}" == "--from" ]]; then
     FROM_STEP="${2:-}"
+    RUN_STEPS=()
     if [[ -z "$FROM_STEP" ]]; then
         echo "ERROR: --from requires a step number (e.g. --from 2.1)" >&2
         exit 1
@@ -151,14 +169,13 @@ if [[ "${1:-}" == "--from" ]]; then
         list_steps
         exit 1
     fi
-    clear_output_plots
     FOUND=0
     for step in "${STEP_ORDER[@]}"; do
         if [[ "$step" == "$FROM_STEP" ]]; then
             FOUND=1
         fi
         if [[ $FOUND -eq 1 ]]; then
-            run_step "$step"
+            RUN_STEPS+=("$step")
         fi
     done
     if [[ $FOUND -eq 0 ]]; then
@@ -166,6 +183,10 @@ if [[ "${1:-}" == "--from" ]]; then
         list_steps
         exit 1
     fi
+    clear_output_plots "${RUN_STEPS[@]}"
+    for step in "${RUN_STEPS[@]}"; do
+        run_step "$step"
+    done
     exit 0
 fi
 
@@ -178,7 +199,7 @@ if [[ $# -gt 0 ]]; then
             exit 1
         fi
     done
-    clear_output_plots
+    clear_output_plots "$@"
     for step in "$@"; do
         run_step "$step"
     done
@@ -187,7 +208,7 @@ fi
 
 # Default: run all steps
 echo "Running full pipeline..."
-clear_output_plots
+clear_output_plots "${STEP_ORDER[@]}"
 for step in "${STEP_ORDER[@]}"; do
     run_step "$step"
 done

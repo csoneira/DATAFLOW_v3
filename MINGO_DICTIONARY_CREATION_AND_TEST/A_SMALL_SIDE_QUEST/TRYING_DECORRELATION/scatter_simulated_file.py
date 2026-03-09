@@ -13,8 +13,10 @@ Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
 """
 
+import argparse
 import os
 import shutil
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -23,29 +25,68 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # file locations
-HERE = os.path.dirname(os.path.abspath(__file__))
-# Always read the CSV from the fixed absolute path as requested
-CSV_PATH = '/home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/A_SMALL_SIDE_QUEST/the_simulated_file.csv'
+HERE = Path(__file__).resolve().parent
+PROJECT_DIR = HERE.parents[1]
+CSV_PATH_CANDIDATES = [
+    HERE / "the_simulated_file.csv",
+    HERE.parent / "the_simulated_file.csv",
+    PROJECT_DIR / "STEPS" / "STEP_3_SYNTHETIC_TIME_SERIES" / "STEP_3_2_SYNTHETIC_TIME_SERIES" / "OUTPUTS" / "FILES" / "synthetic_dataset.csv",
+    Path('/home/mingo/DATAFLOW_v3/INFERENCE_DICTIONARY_VALIDATION/A_SMALL_SIDE_QUEST/the_simulated_file.csv'),  # legacy path
+]
 # keep plots next to the script
-PLOTS_DIR = os.path.join(HERE, 'PLOTS')
+PLOTS_DIR = HERE / 'PLOTS'
 
 # configuration
 DOWNSAMPLE_STEP = 10  # take every Nth row to speed plotting
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Decorrelate and plot synthetic-series diagnostics."
+    )
+    parser.add_argument(
+        "--input-csv",
+        type=Path,
+        default=None,
+        help="Explicit input CSV path. If omitted, use built-in candidate search.",
+    )
+    parser.add_argument(
+        "--plots-dir",
+        type=Path,
+        default=PLOTS_DIR,
+        help="Output directory for generated plots (default: script PLOTS/).",
+    )
+    parser.add_argument(
+        "--downsample-step",
+        type=int,
+        default=DOWNSAMPLE_STEP,
+        help="Keep every N-th row for plotting speed (default: 10).",
+    )
+    return parser.parse_args()
+
+
+def _first_existing(paths):
+    for path in paths:
+        if Path(path).exists():
+            return Path(path)
+    raise FileNotFoundError(
+        "No input CSV found. Checked:\n" + "\n".join(str(p) for p in paths)
+    )
+
+
 def prepare_plots_dir():
-    if os.path.exists(PLOTS_DIR):
+    if PLOTS_DIR.exists():
         shutil.rmtree(PLOTS_DIR)
-    os.makedirs(PLOTS_DIR, exist_ok=True)
+    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 plot_counter = {'i': 1}
 
 def save_prefixed(fname):
-    out = os.path.join(PLOTS_DIR, f"{plot_counter['i']:02d}_" + fname)
+    out = PLOTS_DIR / (f"{plot_counter['i']:02d}_" + fname)
     plt.savefig(out)
     plot_counter['i'] += 1
-    return out
+    return str(out)
 
 
 def load_and_prepare(path):
@@ -241,8 +282,21 @@ def plot_after_decorrelation(df, decorrelated, slope, intercept):
 
 
 def main():
+    global PLOTS_DIR, DOWNSAMPLE_STEP
+    args = parse_args()
+    if args.downsample_step < 1:
+        raise SystemExit("--downsample-step must be >= 1")
+    DOWNSAMPLE_STEP = int(args.downsample_step)
+    PLOTS_DIR = Path(args.plots_dir).resolve()
+
     prepare_plots_dir()
-    df = load_and_prepare(CSV_PATH)
+    if args.input_csv is None:
+        csv_path = _first_existing(CSV_PATH_CANDIDATES)
+    else:
+        csv_path = Path(args.input_csv).resolve()
+        if not csv_path.exists():
+            raise FileNotFoundError(f"Input CSV not found: {csv_path}")
+    df = load_and_prepare(csv_path)
 
     # quick validation of required columns
     for c in ('flux', 'eff', 'global_rate_hz'):

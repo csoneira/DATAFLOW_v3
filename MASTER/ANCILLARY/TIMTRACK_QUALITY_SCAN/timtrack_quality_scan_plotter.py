@@ -30,6 +30,7 @@ import pandas as pd
 TS_FORMAT = "%Y-%m-%d_%H.%M.%S"
 JOIN_KEYS = ["filename_base", "execution_timestamp", "param_hash"]
 RELERR_BAND = 0.30
+NORM_EVENTS = 1000.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,6 +94,40 @@ def profile_label(df: pd.DataFrame) -> pd.Series:
     return "d0=" + d0 + "|cocut=" + cocut + "|iter=" + itmx
 
 
+def add_time_normalization(df: pd.DataFrame) -> pd.DataFrame:
+    if "tt_events_total_n" not in df.columns:
+        df["tt_events_total_n"] = np.nan
+    if "timtrack_attempted_fit_n" not in df.columns:
+        df["timtrack_attempted_fit_n"] = np.nan
+
+    tt_events = pd.to_numeric(df["tt_events_total_n"], errors="coerce")
+    attempted_events = pd.to_numeric(df["timtrack_attempted_fit_n"], errors="coerce")
+    norm_events = np.where(np.isfinite(tt_events) & (tt_events > 0), tt_events, np.nan)
+    norm_events = np.where(
+        np.isfinite(norm_events),
+        norm_events,
+        np.where(np.isfinite(attempted_events) & (attempted_events > 0), attempted_events, np.nan),
+    )
+    norm_events = np.asarray(norm_events, dtype=float)
+
+    def per_k(series: pd.Series) -> np.ndarray:
+        vals = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+        return np.divide(
+            vals * NORM_EVENTS,
+            norm_events,
+            out=np.full(vals.shape, np.nan, dtype=float),
+            where=np.isfinite(norm_events) & (norm_events > 0),
+        )
+
+    return df.assign(
+        normalization_events_n=norm_events,
+        s_timtrack_fitting_per_1k_events_s=per_k(df["s_timtrack_fitting_s"]),
+        s_tt_main_fit_per_1k_events_s=per_k(df["s_tt_main_fit_s"]),
+        s_tt_residual_loo_per_1k_events_s=per_k(df["s_tt_residual_loo_s"]),
+        total_per_1k_events_s=per_k(df["total_s"]),
+    )
+
+
 def load_merged_metadata(specific_csv: Path, profiling_csv: Path) -> pd.DataFrame:
     specific_df = pd.read_csv(specific_csv, low_memory=False)
     profiling_df = pd.read_csv(profiling_csv, low_memory=False)
@@ -127,6 +162,8 @@ def load_merged_metadata(specific_csv: Path, profiling_csv: Path) -> pd.DataFram
             "s_tt_residual_loo_s",
             "s_tt_writeback_s",
             "total_s",
+            "tt_events_total_n",
+            "timtrack_attempted_fit_n",
         ],
     )
 
@@ -140,6 +177,7 @@ def load_merged_metadata(specific_csv: Path, profiling_csv: Path) -> pd.DataFram
         profile_label=profile_label(merged),
         scan_index=np.arange(len(merged), dtype=int),
     )
+    merged = add_time_normalization(merged)
 
     # Consolidate blocks after column preparation to avoid fragmentation warnings.
     return merged.copy()
@@ -239,8 +277,13 @@ def build_group_summary(merged: pd.DataFrame) -> pd.DataFrame:
         "timtrack_itermax_runout_ratio",
         "timtrack_converged_on_cocut_ratio",
         "s_timtrack_fitting_s",
+        "s_timtrack_fitting_per_1k_events_s",
         "s_tt_main_fit_s",
+        "s_tt_main_fit_per_1k_events_s",
+        "s_tt_residual_loo_per_1k_events_s",
         "total_s",
+        "total_per_1k_events_s",
+        "normalization_events_n",
     ]
 
     group_cols = ["profile_label", "timtrack_d0", "timtrack_cocut", "timtrack_iter_max"]
@@ -279,12 +322,30 @@ def make_figure(
     x = merged["scan_index"].to_numpy(dtype=int)
 
     ax = axes[0, 0]
-    ax.plot(x, merged["s_timtrack_fitting_s"], marker="o", linewidth=1.0, label="s_timtrack_fitting_s")
-    ax.plot(x, merged["s_tt_main_fit_s"], marker="o", linewidth=1.0, label="s_tt_main_fit_s")
-    ax.plot(x, merged["total_s"], marker="o", linewidth=1.0, label="total_s")
-    ax.set_title("Execution Time (s)")
+    ax.plot(
+        x,
+        merged["s_timtrack_fitting_per_1k_events_s"],
+        marker="o",
+        linewidth=1.0,
+        label="s_timtrack_fitting per 1k events",
+    )
+    ax.plot(
+        x,
+        merged["s_tt_main_fit_per_1k_events_s"],
+        marker="o",
+        linewidth=1.0,
+        label="s_tt_main_fit per 1k events",
+    )
+    ax.plot(
+        x,
+        merged["total_per_1k_events_s"],
+        marker="o",
+        linewidth=1.0,
+        label="total_s per 1k events",
+    )
+    ax.set_title("Execution Time Normalized by Event Count")
     ax.set_xlabel("Merged row index")
-    ax.set_ylabel("seconds")
+    ax.set_ylabel("seconds per 1k events")
     ax.grid(alpha=0.25)
     ax.legend(loc="best", fontsize=8)
 
@@ -368,7 +429,7 @@ def make_figure(
     ax.bar(np.arange(len(grouped)), grouped.to_numpy(dtype=float), color="#4C78A8")
     ax.set_xticks(np.arange(len(grouped)))
     ax.set_xticklabels(grouped.index.tolist(), rotation=45, ha="right", fontsize=8)
-    ax.set_title("Median total_s by profile")
+    ax.set_title("Median total_s by profile (absolute)")
     ax.set_ylabel("seconds")
     ax.grid(axis="y", alpha=0.25)
 
@@ -395,7 +456,11 @@ def make_cocut_tradeoff_figure(
         "timtrack_cocut",
         "timtrack_iter_max",
         "timtrack_converged_on_cocut_ratio",
+        "normalization_events_n",
         "s_timtrack_fitting_s",
+        "s_timtrack_fitting_per_1k_events_s",
+        "total_s",
+        "total_per_1k_events_s",
         "fit_compare_median_absrelerr_detached_s_to_1_over_c",
         "fit_compare_median_absrelerr_timtrack_s_to_1_over_c",
     ]
@@ -426,7 +491,14 @@ def make_cocut_tradeoff_figure(
             ax.set_axis_off()
     else:
         x = pd.to_numeric(filtered["timtrack_cocut"], errors="coerce").to_numpy(dtype=float)
-        y_fit = pd.to_numeric(filtered["s_timtrack_fitting_s"], errors="coerce").to_numpy(dtype=float)
+        y_fit = pd.to_numeric(
+            filtered["s_timtrack_fitting_per_1k_events_s"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        y_total = pd.to_numeric(
+            filtered["total_per_1k_events_s"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
         y_det = pd.to_numeric(
             filtered["fit_compare_median_absrelerr_detached_s_to_1_over_c"],
             errors="coerce",
@@ -437,10 +509,12 @@ def make_cocut_tradeoff_figure(
         ).to_numpy(dtype=float)
 
         ax = axes[0]
-        ax.scatter(x, y_fit, s=28, color="#4C78A8", alpha=0.85, label="all points")
+        ax.scatter(x, y_fit, s=28, color="#4C78A8", alpha=0.85, label="s_timtrack_fitting per 1k events")
         ax.plot(x, y_fit, linewidth=0.8, color="#4C78A8", alpha=0.35)
-        ax.set_title("s_timtrack_fitting_s vs cocut (converged_on_cocut_ratio == 1)")
-        ax.set_ylabel("s_timtrack_fitting_s [s]")
+        ax.scatter(x, y_total, s=24, color="#9D755D", alpha=0.75, label="total_s per 1k events")
+        ax.plot(x, y_total, linewidth=0.8, color="#9D755D", alpha=0.35)
+        ax.set_title("Timings vs cocut (normalized by events)")
+        ax.set_ylabel("seconds per 1k events")
         ax.grid(alpha=0.25)
         ax.legend(loc="best", fontsize=8)
 

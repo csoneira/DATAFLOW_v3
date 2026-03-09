@@ -29,7 +29,7 @@ strip_length,,,,,,task_2
 narrow_strip,,,,,,task_2
 wide_strip,,,,,,task_2
 d0,10,10,10,10,10,
-cocut,5,2,2,2,2,
+cocut,1,1,1,1,1,
 iter_max,100,10,10,10,10,
 anc_sy,25,25,25,25,25,
 anc_sts,0.35,0.35,0.35,0.35,0.35,
