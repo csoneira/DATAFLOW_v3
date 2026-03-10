@@ -16,7 +16,6 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import logging
 import sys
@@ -38,6 +37,9 @@ CONFIG_COLUMNS_PATH = PROJECT_DIR / "config_columns.json"
 
 DEFAULT_SYNTHETIC_DATASET = (
     SYNTHETIC_DIR / "STEP_3_2_SYNTHETIC_TIME_SERIES" / "OUTPUTS" / "FILES" / "synthetic_dataset.csv"
+)
+DEFAULT_STEP32_DIAGNOSTIC_CENTER = (
+    SYNTHETIC_DIR / "STEP_3_2_SYNTHETIC_TIME_SERIES" / "OUTPUTS" / "FILES" / "diagnostic_center_series.csv"
 )
 DEFAULT_TIME_SERIES = (
     SYNTHETIC_DIR / "STEP_3_1_TIME_SERIES_CREATION" / "OUTPUTS" / "FILES" / "time_series.csv"
@@ -110,10 +112,6 @@ log = logging.getLogger("STEP_3.3")
 
 CANONICAL_FLUX_COLUMN = "flux_cm2_min"
 CANONICAL_EFF_COLUMN = "eff_sim_1"
-CANONICAL_TIME_EVENTS_COLUMN = "n_events"
-CANONICAL_DENSITY_EXPONENT = 1.0
-CANONICAL_DENSITY_CLIP_MIN = 0.25
-CANONICAL_DENSITY_CLIP_MAX = 4.0
 
 # Import estimation function from STEP 2 module.
 INFERENCE_DIR = PIPELINE_DIR / "STEP_2_INFERENCE"
@@ -121,8 +119,12 @@ if str(INFERENCE_DIR) not in sys.path:
     sys.path.insert(0, str(INFERENCE_DIR))
 try:
     from estimate_parameters import (  # noqa: E402
+        _append_derived_physics_feature_columns,
+        _append_derived_tt_global_rate_column,
         _auto_feature_columns as _shared_auto_feature_columns,
-        estimate_parameters,
+        _derived_feature_columns as _shared_derived_feature_columns,
+        _normalize_derived_physics_features,
+        estimate_from_dataframes,
         resolve_inverse_mapping_cfg,
     )
     from feature_columns_config import (  # noqa: E402
@@ -223,7 +225,8 @@ def _resolve_inference_feature_columns(
     data_df: pd.DataFrame,
     include_global_rate: bool,
     global_rate_col: str,
-) -> tuple[list[str], str]:
+    derived_feature_cfg: object = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str], str]:
     """Resolve feature columns for STEP 3.3 inference using STEP 2.1 criteria."""
     auto_feature_cols = sorted(
         set(_shared_auto_feature_columns(dict_df, include_global_rate, global_rate_col))
@@ -234,11 +237,133 @@ def _resolve_inference_feature_columns(
         dict_df=dict_df,
         default_enabled_columns=auto_feature_cols,
     )
+    derived_cfg_raw = (
+        derived_feature_cfg
+        if isinstance(derived_feature_cfg, dict)
+        else {}
+    )
+    categories = catalog.get("categories", {})
+    if not isinstance(categories, dict):
+        categories = {}
+    trigger_cfg = categories.get("trigger_type", {})
+    if not isinstance(trigger_cfg, dict):
+        trigger_cfg = {}
+    rate_hist_cfg = categories.get("rate_histogram", {})
+    if not isinstance(rate_hist_cfg, dict):
+        rate_hist_cfg = {}
+
+    derived_tt_prefix = str(
+        derived_cfg_raw.get("prefix", catalog.get("prefix", "last"))
+    ).strip() or "last"
+    derived_trigger_types = parse_explicit_feature_columns(
+        derived_cfg_raw.get("trigger_types", trigger_cfg.get("trigger_types", []))
+    )
+    derived_include_to_tt = _safe_bool(
+        derived_cfg_raw.get(
+            "include_to_tt_rate_hz",
+            derived_cfg_raw.get(
+                "include_to_prefix_rates",
+                catalog.get("*_to_*_tt_*_rate_hz", False),
+            ),
+        ),
+        bool(catalog.get("*_to_*_tt_*_rate_hz", False)),
+    )
+    derived_include_trigger_rates = _safe_bool(
+        derived_cfg_raw.get(
+            "include_trigger_type_rates",
+            trigger_cfg.get("enabled", True),
+        ),
+        bool(trigger_cfg.get("enabled", True)),
+    )
+    derived_include_hist = _safe_bool(
+        derived_cfg_raw.get(
+            "include_rate_histogram",
+            rate_hist_cfg.get("enabled", catalog.get("*_*_rate_hz", False)),
+        ),
+        bool(rate_hist_cfg.get("enabled", catalog.get("*_*_rate_hz", False))),
+    )
+    derived_physics_features = _normalize_derived_physics_features(
+        derived_cfg_raw.get("physics_features", [])
+    )
 
     if isinstance(feature_cfg, str):
         mode = feature_cfg.strip().lower()
         if mode == "auto":
-            return auto_feature_cols, "auto"
+            return dict_df, data_df, auto_feature_cols, "auto"
+        if mode == "derived":
+            (
+                dict_derived,
+                data_derived,
+                derived_rate_col,
+                derived_rate_sources,
+            ) = _append_derived_tt_global_rate_column(
+                dict_df=dict_df,
+                data_df=data_df,
+                prefix_selector=derived_tt_prefix,
+                trigger_type_allowlist=derived_trigger_types,
+                include_to_tt_rate_hz=bool(derived_include_to_tt),
+            )
+            if (
+                derived_rate_col is None
+                and global_rate_col in dict_df.columns
+                and global_rate_col in data_df.columns
+            ):
+                derived_rate_col = str(global_rate_col)
+            if derived_rate_col is None:
+                raise ValueError(
+                    "No derived feature global-rate source available. "
+                    "TT trigger-type sum could not be built and fallback global-rate column is missing."
+                )
+            (
+                dict_derived,
+                data_derived,
+                derived_physics_cols,
+            ) = _append_derived_physics_feature_columns(
+                dict_df=dict_derived,
+                data_df=data_derived,
+                rate_column=derived_rate_col,
+                physics_features=derived_physics_features,
+            )
+            feat_dict = _shared_derived_feature_columns(
+                dict_derived,
+                rate_column=derived_rate_col,
+                trigger_type_rate_columns=(
+                    derived_rate_sources
+                    if bool(derived_include_trigger_rates)
+                    else None
+                ),
+                include_rate_histogram=bool(derived_include_hist),
+                physics_feature_columns=derived_physics_cols,
+            )
+            feat_data = _shared_derived_feature_columns(
+                data_derived,
+                rate_column=derived_rate_col,
+                trigger_type_rate_columns=(
+                    derived_rate_sources
+                    if bool(derived_include_trigger_rates)
+                    else None
+                ),
+                include_rate_histogram=bool(derived_include_hist),
+                physics_feature_columns=derived_physics_cols,
+            )
+            selected = sorted(set(feat_dict) & set(feat_data))
+            if not selected:
+                raise ValueError(
+                    "No derived feature columns found in dictionary/dataset intersection. "
+                    "Expected eff_empirical_1..4 and at least one global-rate feature."
+                )
+            log.info(
+                "Derived features: prefix=%s trigger_types=%s include_hist=%s "
+                "include_trigger_rates=%s physics=%s rate_feature=%s rate_sources=%s",
+                derived_tt_prefix,
+                derived_trigger_types,
+                bool(derived_include_hist),
+                bool(derived_include_trigger_rates),
+                derived_physics_features,
+                derived_rate_col,
+                derived_rate_sources,
+            )
+            return dict_derived, data_derived, selected, "derived"
         if mode in {"config_columns", "catalog", "config_columns_json"}:
             selected, info = resolve_feature_columns_from_catalog(
                 catalog=catalog,
@@ -257,13 +382,13 @@ def _resolve_inference_feature_columns(
                     info.get("invalid_exclude_patterns"),
                 )
             if selected:
-                return selected, "config_columns"
+                return dict_df, data_df, selected, "config_columns"
             if auto_feature_cols:
                 log.warning(
                     "No features selected by config_columns catalog; falling back to auto (%d columns).",
                     len(auto_feature_cols),
                 )
-                return auto_feature_cols, "auto_fallback_from_config_columns"
+                return dict_df, data_df, auto_feature_cols, "auto_fallback_from_config_columns"
             raise ValueError("No features selected by config_columns catalog and no auto fallback available.")
 
     requested = parse_explicit_feature_columns(feature_cfg)
@@ -276,7 +401,7 @@ def _resolve_inference_feature_columns(
             "No explicit feature columns found in dictionary/dataset intersection. "
             f"Requested={requested!r}"
         )
-    return selected, "explicit"
+    return dict_df, data_df, selected, "explicit"
 
 
 def _load_lut(lut_path: Path) -> pd.DataFrame:
@@ -407,23 +532,6 @@ def _interpolate_uncertainties(
     return out
 
 
-def _load_step32_module():
-    """Dynamically load STEP 3.2 module to reuse weighting helpers."""
-    step32_path = SYNTHETIC_DIR / "STEP_3_2_SYNTHETIC_TIME_SERIES" / "synthetic_time_series.py"
-    if not step32_path.exists():
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("step32_synthetic_time_series", str(step32_path))
-        if spec is None or spec.loader is None:
-            return None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    except Exception as exc:
-        log.warning("Could not import STEP 3.2 module: %s", exc)
-        return None
-
-
 def _compute_density_center_series(
     *,
     config: dict,
@@ -433,160 +541,142 @@ def _compute_density_center_series(
     dictionary_path: Path,
     dataset_template_path: Path,
 ) -> tuple[np.ndarray | None, np.ndarray | None, str | None]:
-    """Recompute STEP 3.2 density-modulated weighted center for diagnostics."""
-    step32 = _load_step32_module()
-    if step32 is None or time_df.empty:
+    """Load STEP 3.2 diagnostic center series (no recomputation in STEP 3.3)."""
+    _ = dictionary_path
+    _ = dataset_template_path
+    if time_df.empty:
         return None, None, None
 
-    cfg_32 = config.get("step_3_2", {})
-    basis_source = str(cfg_32.get("basis_source", "dataset")).strip().lower()
-
-    if not dictionary_path.exists():
-        return None, None, None
-    dictionary_df = pd.read_csv(dictionary_path, low_memory=False)
-
-    template_df = pd.DataFrame()
-    if dataset_template_path.exists():
-        template_df = pd.read_csv(dataset_template_path, low_memory=False)
-
-    if basis_source == "dictionary":
-        basis_input_df = dictionary_df
-    else:
-        basis_input_df = template_df
-    if basis_input_df.empty:
+    cfg_32 = config.get("step_3_2", {}) if isinstance(config, dict) else {}
+    cfg_33 = config.get("step_3_3", {}) if isinstance(config, dict) else {}
+    center_csv_cfg = (
+        cfg_33.get("step32_diagnostic_center_csv", None)
+        if isinstance(cfg_33, dict) else None
+    )
+    if center_csv_cfg in (None, "", "null", "None"):
+        center_csv_cfg = (
+            cfg_32.get("diagnostic_center_series_csv", None)
+            if isinstance(cfg_32, dict) else None
+        )
+    center_path = _resolve_input_path(center_csv_cfg or DEFAULT_STEP32_DIAGNOSTIC_CENTER)
+    if not center_path.exists():
+        log.warning(
+            "STEP 3.2 diagnostic center CSV not found: %s. "
+            "STEP 3.3 overlay will omit the center curve.",
+            center_path,
+        )
         return None, None, None
 
     try:
-        eff_col_common = step32._choose_common_eff_column(time_df, basis_input_df, eff_pref)
-    except Exception:
+        center_df = pd.read_csv(center_path, low_memory=False)
+    except Exception as exc:
+        log.warning("Could not read STEP 3.2 diagnostic center CSV %s: %s", center_path, exc)
         return None, None, None
-    eff_col_time = eff_col_common
-    eff_col_basis = eff_col_common
-    if flux_col not in time_df.columns or flux_col not in basis_input_df.columns:
+    if center_df.empty:
+        log.warning("STEP 3.2 diagnostic center CSV is empty: %s", center_path)
         return None, None, None
-    parameter_space_cols = step32._resolve_parameter_space_columns_from_cfg(
-        time_df=time_df,
-        basis_df=basis_input_df,
-        preferred_eff=eff_col_common,
-        configured_columns=cfg_32.get("parameter_space_columns", None),
-    )
-    if not parameter_space_cols:
-        return None, None, eff_col_time
 
-    if cfg_32.get("time_n_events_column") is not None:
-        log.warning(
-            "Deprecated key step_3_2.time_n_events_column detected; ignored. "
-            "Using fixed column %s.",
-            CANONICAL_TIME_EVENTS_COLUMN,
-        )
-    time_events_col = CANONICAL_TIME_EVENTS_COLUMN
-    basis_events_col = str(cfg_32.get("basis_n_events_column", "n_events"))
-    basis_events_tol_pct = _safe_float(
-        cfg_32.get("basis_n_events_tolerance_pct", cfg_32.get("basis_n_events_tolerance", 30.0)),
-        30.0,
-    )
-    basis_min_rows = max(1, int(_safe_float(cfg_32.get("basis_min_rows", 1), 1)))
-    basis_parameter_set_col_cfg = cfg_32.get("basis_parameter_set_column", None)
+    flux_center_col = None
+    for c in ("center_flux_cm2_min", "diagnostic_center_flux", "center_flux", flux_col):
+        if c in center_df.columns:
+            flux_center_col = c
+            break
+    if flux_center_col is None:
+        log.warning("STEP 3.2 center CSV has no flux center column: %s", center_path)
+        return None, None, None
 
-    basis_param_all = (
-        basis_input_df[parameter_space_cols]
-        .apply(pd.to_numeric, errors="coerce")
-        .to_numpy(dtype=float)
-    )
-    basis_events_all = None
-    if basis_events_col in basis_input_df.columns:
-        basis_events_all = pd.to_numeric(basis_input_df[basis_events_col], errors="coerce").to_numpy(dtype=float)
-
-    target_param_matrix = (
-        time_df[parameter_space_cols]
-        .apply(pd.to_numeric, errors="coerce")
-        .to_numpy(dtype=float)
-    )
-    target_events = (
-        pd.to_numeric(time_df.get(time_events_col), errors="coerce").to_numpy(dtype=float)
-        if time_events_col in time_df.columns
-        else None
-    )
-    if target_param_matrix.shape[0] == 0:
-        return None, None, eff_col_time
-
-    valid_basis = np.all(np.isfinite(basis_param_all), axis=1)
-    valid_target = np.all(np.isfinite(target_param_matrix), axis=1)
-    if not np.any(valid_basis):
-        return None, None, eff_col_time
-    if not np.all(valid_target):
-        return None, None, eff_col_time
-    dictionary_work = basis_input_df.loc[valid_basis].reset_index(drop=True)
-    basis_param_matrix = basis_param_all[valid_basis]
-    basis_events = None if basis_events_all is None else basis_events_all[valid_basis]
-
-    basis_parameter_set_col = step32._select_parameter_set_column(dictionary_work, basis_parameter_set_col_cfg)
-    if basis_parameter_set_col is None:
-        parameter_set_values = np.asarray([f"row_{i}" for i in range(len(dictionary_work))], dtype=object)
+    eff_col_time = eff_pref
+    if "eff_column_used" in center_df.columns:
+        eff_candidates = center_df["eff_column_used"].dropna().astype(str)
+        if not eff_candidates.empty:
+            eff_col_time = str(eff_candidates.iloc[0]).strip() or eff_pref
     else:
-        parameter_set_values = dictionary_work[basis_parameter_set_col].astype(str).to_numpy(dtype=object)
+        try:
+            eff_col_time = _choose_eff_column(time_df, eff_pref)
+        except KeyError:
+            eff_col_time = eff_pref
 
-    one_per_set_mask, _ = step32._build_one_per_parameter_set_mask(
-        parameter_set_values=parameter_set_values,
-        basis_events=basis_events,
-        target_events=target_events,
-        basis_param_matrix=basis_param_matrix,
-        target_param_matrix=target_param_matrix,
-    )
-    event_mask_extra, _ = step32._build_event_mask(
-        basis_events=basis_events,
-        target_events=target_events,
-        tolerance_pct=basis_events_tol_pct,
-        min_rows=basis_min_rows,
-    )
-    event_mask = one_per_set_mask if event_mask_extra is None else (one_per_set_mask & event_mask_extra)
+    eff_center_col = None
+    for c in ("center_eff", "diagnostic_center_eff", eff_col_time, eff_pref):
+        if c in center_df.columns:
+            eff_center_col = c
+            break
+    if eff_center_col is None:
+        log.warning("STEP 3.2 center CSV has no efficiency center column: %s", center_path)
+        return None, None, eff_col_time
 
-    method = str(cfg_32.get("weighting_method", "gaussian"))
-    top_k_raw = cfg_32.get("top_k", None)
-    top_k = None if top_k_raw in (None, "", 0) else max(1, int(_safe_float(top_k_raw, 8)))
-    distance_hardness = _safe_float(cfg_32.get("distance_hardness", 1.0), 1.0)
+    n_rows = len(time_df)
+    center_flux = np.full(n_rows, np.nan, dtype=float)
+    center_eff = np.full(n_rows, np.nan, dtype=float)
+    aligned_method = None
 
-    density_enabled = _safe_bool(cfg_32.get("density_correction_enabled", True), True)
-    density_scaling = None
-    if density_enabled:
-        for legacy_key in (
-            "density_correction_space",
-            "density_correction_exponent",
-            "density_correction_clip_min",
-            "density_correction_clip_max",
-        ):
-            if cfg_32.get(legacy_key) is not None:
-                log.warning(
-                    "Deprecated key step_3_2.%s detected; ignored. "
-                    "Using fixed density exponent/clip constants.",
-                    legacy_key,
-                )
-        density_k = max(1, int(_safe_float(cfg_32.get("density_correction_k_neighbors", 10), 10)))
-        density_scaling, _ = step32._compute_inverse_density_scaling(
-            basis_param_matrix=basis_param_matrix,
-            k_neighbors=density_k,
-            exponent=CANONICAL_DENSITY_EXPONENT,
-            clip_min=CANONICAL_DENSITY_CLIP_MIN,
-            clip_max=CANONICAL_DENSITY_CLIP_MAX,
+    if "file_index" in center_df.columns and "file_index" in time_df.columns:
+        left = pd.DataFrame({
+            "_row_idx": np.arange(n_rows, dtype=int),
+            "file_index": pd.to_numeric(time_df["file_index"], errors="coerce"),
+        })
+        right = pd.DataFrame({
+            "file_index": pd.to_numeric(center_df["file_index"], errors="coerce"),
+            "_center_flux": pd.to_numeric(center_df[flux_center_col], errors="coerce"),
+            "_center_eff": pd.to_numeric(center_df[eff_center_col], errors="coerce"),
+        })
+        aligned = left.merge(right, on="file_index", how="left", sort=False)
+        center_flux = aligned["_center_flux"].to_numpy(dtype=float)
+        center_eff = aligned["_center_eff"].to_numpy(dtype=float)
+        if np.isfinite(center_flux).any() and np.isfinite(center_eff).any():
+            aligned_method = "file_index"
+
+    if aligned_method is None and "elapsed_hours" in center_df.columns and "elapsed_hours" in time_df.columns:
+        left = pd.DataFrame({
+            "_row_idx": np.arange(n_rows, dtype=int),
+            "elapsed_hours_key": np.round(pd.to_numeric(time_df["elapsed_hours"], errors="coerce"), 10),
+        })
+        right = pd.DataFrame({
+            "elapsed_hours_key": np.round(pd.to_numeric(center_df["elapsed_hours"], errors="coerce"), 10),
+            "_center_flux": pd.to_numeric(center_df[flux_center_col], errors="coerce"),
+            "_center_eff": pd.to_numeric(center_df[eff_center_col], errors="coerce"),
+        })
+        aligned = left.merge(right, on="elapsed_hours_key", how="left", sort=False)
+        center_flux = aligned["_center_flux"].to_numpy(dtype=float)
+        center_eff = aligned["_center_eff"].to_numpy(dtype=float)
+        if np.isfinite(center_flux).any() and np.isfinite(center_eff).any():
+            aligned_method = "elapsed_hours"
+
+    if aligned_method is None:
+        src_flux = pd.to_numeric(center_df[flux_center_col], errors="coerce").to_numpy(dtype=float)
+        src_eff = pd.to_numeric(center_df[eff_center_col], errors="coerce").to_numpy(dtype=float)
+        if len(src_flux) == n_rows:
+            center_flux = src_flux
+            center_eff = src_eff
+            aligned_method = "row_order"
+        else:
+            take = min(n_rows, len(src_flux))
+            center_flux[:take] = src_flux[:take]
+            center_eff[:take] = src_eff[:take]
+            aligned_method = "row_order_trim_pad"
+            log.warning(
+                "STEP 3.2 center-length mismatch (center=%d, time=%d). "
+                "Applied positional trim/pad for first %d rows.",
+                len(src_flux),
+                n_rows,
+                take,
+            )
+
+    finite_pairs = np.isfinite(center_flux) & np.isfinite(center_eff)
+    if not np.any(finite_pairs):
+        log.warning(
+            "STEP 3.2 center CSV loaded but produced no finite aligned rows: %s",
+            center_path,
         )
-
-    weights = step32._build_weights(
-        dict_param_matrix=basis_param_matrix,
-        target_param_matrix=target_param_matrix,
-        method=method,
-        top_k=top_k,
-        distance_hardness=distance_hardness,
-        density_scaling=density_scaling,
-        event_mask=event_mask,
+        return None, None, eff_col_time
+    log.info(
+        "Using STEP 3.2 center series from %s (alignment=%s, finite_pairs=%d/%d).",
+        center_path,
+        aligned_method,
+        int(np.sum(finite_pairs)),
+        int(n_rows),
     )
-    centers = step32._weighted_numeric_columns(
-        weights=weights,
-        dict_df=dictionary_work,
-        columns=[flux_col, eff_col_basis],
-    )
-    c_flux = np.asarray(centers.get(flux_col), dtype=float) if flux_col in centers else None
-    c_eff = np.asarray(centers.get(eff_col_basis), dtype=float) if eff_col_basis in centers else None
-    return c_flux, c_eff, eff_col_time
+    return center_flux, center_eff, eff_col_time
 
 
 def _time_axis(df: pd.DataFrame) -> tuple[np.ndarray, str]:
@@ -757,7 +847,7 @@ def _plot_step32_style_overlay(
     center_eff: np.ndarray | None,
     path: Path,
 ) -> None:
-    """Plot complete+discretized+density-center+estimated without global rate."""
+    """Plot complete+discretized+STEP3.2-center+estimated without global rate."""
     fig, axes = plt.subplots(
         3,
         1,
@@ -814,7 +904,7 @@ def _plot_step32_style_overlay(
             label="Discretized",
         )
 
-    # Density-modulated weighted center (diagnostic from STEP 3.2 logic)
+    # STEP 3.2 reference center (loaded from STEP 3.2 outputs, no recomputation here).
     if center_flux is not None and len(center_flux) == len(x_disc):
         c_flux = np.asarray(center_flux, dtype=float)
         flux_stripe_vals.append(c_flux)
@@ -824,7 +914,7 @@ def _plot_step32_style_overlay(
                 x_disc[mc], c_flux[mc],
                 color="#17BECF", linewidth=1.0, linestyle="-.", marker="s", markersize=2.8,
                 markerfacecolor="#17BECF", markeredgewidth=0.0, alpha=0.9,
-                label="Density-modulated center",
+                label="STEP 3.2 reference center",
             )
     if center_eff is not None and len(center_eff) == len(x_disc):
         c_eff = np.asarray(center_eff, dtype=float)
@@ -835,7 +925,7 @@ def _plot_step32_style_overlay(
                 x_disc[mc], c_eff[mc],
                 color="#BCBD22", linewidth=1.0, linestyle="-.", marker="s", markersize=2.8,
                 markerfacecolor="#BCBD22", markeredgewidth=0.0, alpha=0.9,
-                label="Density-modulated center",
+                label="STEP 3.2 reference center",
             )
 
     # Estimated series (+ uncertainty)
@@ -928,14 +1018,14 @@ def _plot_step32_style_overlay(
     axes[0].grid(True, alpha=0.25)
 
     axes[1].set_ylabel("flux_cm2_min")
-    axes[1].set_title("Flux: complete + discretized + density center + estimated")
+    axes[1].set_title("Flux: complete + discretized + STEP 3.2 center + estimated")
     _apply_mean_striped_background(axes[1], np.concatenate(flux_stripe_vals))
     axes[1].grid(True, alpha=0.25)
     axes[1].legend(loc="best", fontsize=8)
 
     axes[2].set_ylabel("eff")
     axes[2].set_xlabel(x_label)
-    axes[2].set_title("Efficiency: complete + discretized + density center + estimated")
+    axes[2].set_title("Efficiency: complete + discretized + STEP 3.2 center + estimated")
     _apply_mean_striped_background(axes[2], np.concatenate(eff_stripe_vals))
     axes[2].grid(True, alpha=0.25)
     axes[2].legend(loc="best", fontsize=8)
@@ -1321,6 +1411,10 @@ def main() -> int:
     dataset_template_csv_cfg = cfg_33.get("dataset_template_csv", cfg_32.get("dataset_template_csv", None))
     lut_csv_cfg = cfg_33.get("uncertainty_lut_csv", None)
     lut_meta_cfg = cfg_33.get("uncertainty_lut_meta_json", None)
+    step32_center_csv_cfg = cfg_33.get(
+        "step32_diagnostic_center_csv",
+        cfg_32.get("diagnostic_center_series_csv", None),
+    )
 
     synthetic_path = _resolve_input_path(args.synthetic_csv or synthetic_csv_cfg or DEFAULT_SYNTHETIC_DATASET)
     time_series_path = _resolve_input_path(time_series_csv_cfg or DEFAULT_TIME_SERIES)
@@ -1329,6 +1423,7 @@ def main() -> int:
     dataset_template_path = _resolve_input_path(dataset_template_csv_cfg or DEFAULT_DATASET_TEMPLATE)
     lut_path = _resolve_input_path(args.lut_csv or lut_csv_cfg or DEFAULT_LUT)
     lut_meta_path = _resolve_input_path(args.lut_meta_json or lut_meta_cfg or DEFAULT_LUT_META)
+    step32_center_path = _resolve_input_path(step32_center_csv_cfg or DEFAULT_STEP32_DIAGNOSTIC_CENTER)
 
     for label, p in (
         ("Synthetic dataset", synthetic_path),
@@ -1399,12 +1494,13 @@ def main() -> int:
         return 1
 
     try:
-        resolved_feature_columns, feature_strategy = _resolve_inference_feature_columns(
+        dict_work, synthetic_work, resolved_feature_columns, feature_strategy = _resolve_inference_feature_columns(
             feature_cfg=feature_columns_cfg,
             dict_df=dictionary_df,
             data_df=synthetic_df,
             include_global_rate=include_global_rate,
             global_rate_col=global_rate_col,
+            derived_feature_cfg=cfg_21.get("derived_features", {}),
         )
     except ValueError as exc:
         log.error("%s", exc)
@@ -1447,9 +1543,9 @@ def main() -> int:
         time_df[eff_col_time] = pd.to_numeric(synthetic_df.get(eff_col), errors="coerce")
 
     # ── 1) Inference over synthetic dataset ─────────────────────────
-    est_df = estimate_parameters(
-        dictionary_path=str(dictionary_path),
-        dataset_path=str(synthetic_path),
+    est_df = estimate_from_dataframes(
+        dict_df=dict_work,
+        data_df=synthetic_work,
         feature_columns=resolved_feature_columns,
         distance_metric=distance_metric,
         interpolation_k=interpolation_k,
@@ -1536,6 +1632,12 @@ def main() -> int:
                 est_eff_col = c
                 break
 
+    bias_correction_summary = {
+        "enabled": False,
+        "removed": True,
+        "reason": "posthoc_bias_correction_disabled_use_method_level_estimation",
+    }
+
     true_flux_col = f"true_{flux_col}"
     true_eff_col = f"true_{eff_col}"
     flux_param = est_flux_col.replace("est_", "", 1) if est_flux_col.startswith("est_") else flux_col
@@ -1564,6 +1666,8 @@ def main() -> int:
         "synthetic_dataset_csv": str(synthetic_path),
         "dictionary_csv": str(dictionary_path),
         "uncertainty_lut_csv": str(lut_path),
+        "overlay_center_source": "step_3_2_diagnostic_center_csv",
+        "step32_diagnostic_center_csv": str(step32_center_path),
         "distance_metric": distance_metric,
         "interpolation_k": interpolation_k,
         "inverse_mapping": inverse_mapping_cfg,
@@ -1594,6 +1698,7 @@ def main() -> int:
         ),
         "lut_param_names_used": lut_params,
         "density_center_available": bool(center_flux is not None and center_eff is not None),
+        "post_estimation_bias_correction": bias_correction_summary,
     }
     out_summary = FILES_DIR / "correction_summary.json"
     with open(out_summary, "w", encoding="utf-8") as f:

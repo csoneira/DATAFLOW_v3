@@ -101,8 +101,12 @@ def _clear_plots_dir() -> None:
 sys.path.insert(0, str(INFERENCE_DIR))
 from estimate_parameters import (  # noqa: E402
     DISTANCE_FNS,
+    _append_derived_physics_feature_columns,
+    _append_derived_tt_global_rate_column,
     _append_tt_global_sum_feature,
     _auto_feature_columns as _shared_auto_feature_columns,
+    _derived_feature_columns as _shared_derived_feature_columns,
+    _normalize_derived_physics_features,
     _resolve_shared_parameter_exclusion_mode,
     build_shared_parameter_exclusion_mask,
     compute_candidate_distances,
@@ -164,7 +168,10 @@ STEP21_DENSITY_DEFAULTS = {
 }
 
 
-def _merge_step21_density_cfg(config: dict) -> tuple[dict, list[str]]:
+def _merge_step21_density_cfg(
+    config: dict,
+    cfg_21: dict | None = None,
+) -> tuple[dict, list[str]]:
     """Resolve STEP 2.1 density-correction config from centralized STEP 1.3 block.
 
     Priority:
@@ -216,6 +223,13 @@ def _merge_step21_density_cfg(config: dict) -> tuple[dict, list[str]]:
                     key, lv, key, cv,
                 )
 
+    # Final STEP 2.1-local override (highest priority).
+    cfg_21_local = cfg_21 if isinstance(cfg_21, dict) else {}
+    for key in STEP21_DENSITY_KEYS:
+        if key in cfg_21_local and cfg_21_local.get(key) is not None:
+            merged[key] = cfg_21_local.get(key)
+            applied.add(f"step_2_1.{key}")
+
     return merged, sorted(applied)
 
 
@@ -243,6 +257,49 @@ def _resolve_input_path(path_like: str | Path) -> Path:
     if candidate_step.exists():
         return candidate_step
     return candidate_project
+
+
+def _materialize_derived_tt_global_feature_if_needed(
+    *,
+    cfg_21: dict,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    feature_mode = str(cfg_21.get("feature_columns", "auto")).strip().lower()
+    if feature_mode != "derived":
+        return dict_df, data_df
+
+    derived_cfg = cfg_21.get("derived_features", {})
+    if not isinstance(derived_cfg, dict):
+        derived_cfg = {}
+    tt_prefix = str(derived_cfg.get("prefix", "last")).strip() or "last"
+    trigger_types = parse_explicit_feature_columns(derived_cfg.get("trigger_types", []))
+    include_to_tt = _as_bool(derived_cfg.get("include_to_tt_rate_hz", False), False)
+    physics_features = _normalize_derived_physics_features(
+        derived_cfg.get("physics_features", [])
+    )
+
+    dict_out, data_out, derived_rate_col, _ = _append_derived_tt_global_rate_column(
+        dict_df=dict_df,
+        data_df=data_df,
+        prefix_selector=tt_prefix,
+        trigger_type_allowlist=trigger_types,
+        include_to_tt_rate_hz=include_to_tt,
+    )
+    if (
+        derived_rate_col is None
+        and "events_per_second_global_rate" in dict_out.columns
+        and "events_per_second_global_rate" in data_out.columns
+    ):
+        derived_rate_col = "events_per_second_global_rate"
+    if derived_rate_col is not None and physics_features:
+        dict_out, data_out, _ = _append_derived_physics_feature_columns(
+            dict_df=dict_out,
+            data_df=data_out,
+            rate_column=derived_rate_col,
+            physics_features=physics_features,
+        )
+    return dict_out, data_out
 
 
 def _select_default_dataset_path(config: dict) -> Path:
@@ -273,6 +330,7 @@ def _resolve_step21_feature_columns(
     include_global_rate: bool,
     global_rate_col: str,
     catalog_path: Path,
+    derived_feature_cfg: object = None,
 ) -> tuple[list[str], dict]:
     """Resolve STEP 2.1 feature columns from auto/explicit/catalog config."""
     auto_feature_cols = sorted(
@@ -286,6 +344,63 @@ def _resolve_step21_feature_columns(
         default_enabled_columns=auto_feature_cols,
     )
 
+    derived_cfg_raw = (
+        derived_feature_cfg
+        if isinstance(derived_feature_cfg, dict)
+        else {}
+    )
+    categories = catalog.get("categories", {})
+    if not isinstance(categories, dict):
+        categories = {}
+    trigger_cfg = categories.get("trigger_type", {})
+    if not isinstance(trigger_cfg, dict):
+        trigger_cfg = {}
+    rate_hist_cfg = categories.get("rate_histogram", {})
+    if not isinstance(rate_hist_cfg, dict):
+        rate_hist_cfg = {}
+
+    derived_tt_prefix = str(
+        derived_cfg_raw.get("prefix", catalog.get("prefix", "last"))
+    ).strip() or "last"
+    derived_trigger_types = parse_explicit_feature_columns(
+        derived_cfg_raw.get("trigger_types", trigger_cfg.get("trigger_types", []))
+    )
+    derived_include_to_tt = _as_bool(
+        derived_cfg_raw.get(
+            "include_to_tt_rate_hz",
+            derived_cfg_raw.get(
+                "include_to_prefix_rates",
+                catalog.get("*_to_*_tt_*_rate_hz", False),
+            ),
+        ),
+        bool(catalog.get("*_to_*_tt_*_rate_hz", False)),
+    )
+    derived_include_trigger_rates = _as_bool(
+        derived_cfg_raw.get(
+            "include_trigger_type_rates",
+            trigger_cfg.get("enabled", True),
+        ),
+        bool(trigger_cfg.get("enabled", True)),
+    )
+    derived_include_hist = _as_bool(
+        derived_cfg_raw.get(
+            "include_rate_histogram",
+            rate_hist_cfg.get("enabled", catalog.get("*_*_rate_hz", False)),
+        ),
+        bool(rate_hist_cfg.get("enabled", catalog.get("*_*_rate_hz", False))),
+    )
+    derived_physics_features = _normalize_derived_physics_features(
+        derived_cfg_raw.get("physics_features", [])
+    )
+    derived_options = {
+        "tt_prefix": derived_tt_prefix,
+        "trigger_types": derived_trigger_types,
+        "include_to_tt_rate_hz": bool(derived_include_to_tt),
+        "include_trigger_type_rates": bool(derived_include_trigger_rates),
+        "include_rate_histogram": bool(derived_include_hist),
+        "physics_features": derived_physics_features,
+    }
+
     strategy = "explicit"
     selection_info: dict = {
         "catalog_path": str(catalog_path),
@@ -298,6 +413,73 @@ def _resolve_step21_feature_columns(
             strategy = "auto"
             selected = auto_feature_cols
             selection_info["source"] = "step_2_1.feature_columns=auto"
+            return selected, {"strategy": strategy, **selection_info}
+        if mode == "derived":
+            strategy = "derived"
+            (
+                dict_derived,
+                data_derived,
+                derived_rate_col,
+                derived_rate_sources,
+            ) = _append_derived_tt_global_rate_column(
+                dict_df=dict_df,
+                data_df=data_df,
+                prefix_selector=derived_options["tt_prefix"],
+                trigger_type_allowlist=derived_options["trigger_types"],
+                include_to_tt_rate_hz=bool(derived_options["include_to_tt_rate_hz"]),
+            )
+            if derived_rate_col is None and global_rate_col in dict_df.columns and global_rate_col in data_df.columns:
+                derived_rate_col = str(global_rate_col)
+            if derived_rate_col is None:
+                raise ValueError(
+                    "No derived feature global-rate source available. "
+                    "TT trigger-type sum could not be built and fallback global-rate column is missing."
+                )
+            (
+                dict_derived,
+                data_derived,
+                derived_physics_cols,
+            ) = _append_derived_physics_feature_columns(
+                dict_df=dict_derived,
+                data_df=data_derived,
+                rate_column=derived_rate_col,
+                physics_features=derived_options.get("physics_features", []),
+            )
+            feat_dict = _shared_derived_feature_columns(
+                dict_derived,
+                rate_column=derived_rate_col,
+                trigger_type_rate_columns=(
+                    derived_rate_sources
+                    if bool(derived_options["include_trigger_type_rates"])
+                    else None
+                ),
+                include_rate_histogram=bool(derived_options["include_rate_histogram"]),
+                physics_feature_columns=derived_physics_cols,
+            )
+            feat_data = _shared_derived_feature_columns(
+                data_derived,
+                rate_column=derived_rate_col,
+                trigger_type_rate_columns=(
+                    derived_rate_sources
+                    if bool(derived_options["include_trigger_type_rates"])
+                    else None
+                ),
+                include_rate_histogram=bool(derived_options["include_rate_histogram"]),
+                physics_feature_columns=derived_physics_cols,
+            )
+            selected = sorted(set(feat_dict) & set(feat_data))
+            if not selected:
+                raise ValueError(
+                    "No derived feature columns found in dictionary/dataset intersection. "
+                    "Expected eff_empirical_1..4 and at least one global-rate feature."
+                )
+            selection_info["source"] = "step_2_1.feature_columns=derived"
+            selection_info["derived_options"] = {
+                **derived_options,
+                "resolved_global_rate_feature": derived_rate_col,
+                "resolved_global_rate_sources": derived_rate_sources,
+                "resolved_physics_features": derived_physics_cols,
+            }
             return selected, {"strategy": strategy, **selection_info}
         if mode in {"config_columns", "catalog", "config_columns_json"}:
             strategy = "config_columns"
@@ -387,7 +569,7 @@ def main() -> int:
     config = _load_config(Path(args.config))
     _clear_plots_dir()
     cfg_21 = config.get("step_2_1", {})
-    density_cfg, density_cfg_keys = _merge_step21_density_cfg(config)
+    density_cfg, density_cfg_keys = _merge_step21_density_cfg(config, cfg_21)
 
     dict_path = _resolve_input_path(args.dictionary_csv) if args.dictionary_csv else DEFAULT_DICTIONARY
     data_path = _resolve_input_path(args.dataset_csv) if args.dataset_csv else _select_default_dataset_path(config)
@@ -450,6 +632,11 @@ def main() -> int:
 
     dict_df = pd.read_csv(dict_path, low_memory=False)
     data_df = pd.read_csv(data_path, low_memory=False)
+    dict_df, data_df = _materialize_derived_tt_global_feature_if_needed(
+        cfg_21=cfg_21,
+        dict_df=dict_df,
+        data_df=data_df,
+    )
     if dict_df.empty:
         log.error("Dictionary table is empty: %s", dict_path)
         return 1
@@ -465,6 +652,7 @@ def main() -> int:
             include_global_rate=include_global_rate,
             global_rate_col=str(global_rate_col),
             catalog_path=CONFIG_COLUMNS_PATH,
+            derived_feature_cfg=cfg_21.get("derived_features", {}),
         )
     except ValueError as exc:
         log.error("%s", exc)
@@ -501,7 +689,7 @@ def main() -> int:
     )
     if density_cfg_keys:
         log.info(
-            "Density cfg source keys from step_1_3: %s",
+            "Density cfg source keys: %s",
             ", ".join(density_cfg_keys),
         )
     log.info(
@@ -511,8 +699,16 @@ def main() -> int:
         feature_columns_cfg,
         CONFIG_COLUMNS_PATH,
     )
+    if feature_resolution.get("strategy") == "derived":
+        log.info(
+            "Derived feature options: %s",
+            feature_resolution.get("derived_options", {}),
+        )
 
     # ── Run estimation ───────────────────────────────────────────────
+    derived_options = feature_resolution.get("derived_options", {})
+    if not isinstance(derived_options, dict):
+        derived_options = {}
     result_df = estimate_from_dataframes(
         dict_df=dict_df,
         data_df=data_df,
@@ -528,12 +724,19 @@ def main() -> int:
         shared_parameter_match_atol=shared_param_match_atol,
         density_weighting_cfg=density_cfg,
         inverse_mapping_cfg=inverse_mapping_cfg,
+        derived_tt_prefix=str(derived_options.get("tt_prefix", "last")),
+        derived_trigger_types=derived_options.get("trigger_types", []),
+        derived_include_to_tt_rate_hz=bool(derived_options.get("include_to_tt_rate_hz", False)),
+        derived_include_trigger_type_rates=bool(derived_options.get("include_trigger_type_rates", True)),
+        derived_include_rate_histogram=bool(derived_options.get("include_rate_histogram", False)),
+        derived_physics_features=derived_options.get("physics_features", []),
     )
 
     # Attach truth columns needed for validation
     truth_cols = ["flux_cm2_min", "cos_n",
                   "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
-                  "n_events", "is_dictionary_entry"]
+                  "n_events", "is_dictionary_entry",
+                  "param_hash_x", "param_set_id"]
     for col in truth_cols:
         if col in data_df.columns:
             result_df[f"true_{col}"] = data_df[col].values[:len(result_df)]
@@ -561,6 +764,7 @@ def main() -> int:
         "feature_columns_catalog_resolution": feature_resolution,
         "density_weighting": {
             "config": density_cfg,
+            "source_keys": density_cfg_keys,
             "source_keys_from_step_1_3": density_cfg_keys,
         },
         "shared_parameter_candidate_exclusion": {
@@ -1249,6 +1453,53 @@ def _select_showcase_result_row(
     return (chosen_idx, ds_idx, showcase_seed)
 
 
+def _parse_true_is_dictionary_entry_mask(df: pd.DataFrame) -> pd.Series:
+    if "true_is_dictionary_entry" not in df.columns:
+        return pd.Series(False, index=df.index, dtype=bool)
+    return df["true_is_dictionary_entry"].astype(str).str.lower().isin(
+        ("true", "1", "yes", "y")
+    )
+
+
+def _rows_with_dictionary_parameter_set(
+    val: pd.DataFrame,
+    dict_df: pd.DataFrame,
+) -> pd.Series:
+    mask = pd.Series(False, index=val.index, dtype=bool)
+
+    # Preferred: exact parameter hash copied from source dataset.
+    if "true_param_hash_x" in val.columns and "param_hash_x" in dict_df.columns:
+        row_keys = val["true_param_hash_x"].astype(str)
+        dict_keys = set(dict_df["param_hash_x"].astype(str).dropna().tolist())
+        return row_keys.isin(dict_keys).fillna(False)
+
+    # Fallback: tuple over true physical params (and z planes when available).
+    base_cols = [
+        "flux_cm2_min", "cos_n",
+        "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
+        "z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4",
+    ]
+    dict_cols = [c for c in base_cols if c in dict_df.columns and f"true_{c}" in val.columns]
+    if not dict_cols:
+        return mask
+
+    dict_num = dict_df[dict_cols].apply(pd.to_numeric, errors="coerce")
+    val_num = val[[f"true_{c}" for c in dict_cols]].apply(pd.to_numeric, errors="coerce")
+    dict_keys = {
+        tuple(np.round(r, 12))
+        for r in dict_num.to_numpy(dtype=float)
+        if np.all(np.isfinite(r))
+    }
+    if not dict_keys:
+        return mask
+
+    val_keys = [
+        tuple(np.round(r, 12)) if np.all(np.isfinite(r)) else None
+        for r in val_num.to_numpy(dtype=float)
+    ]
+    return pd.Series([k in dict_keys if k is not None else False for k in val_keys], index=val.index)
+
+
 def _make_random_showcase_l2_contour(
     result_df: pd.DataFrame,
     data_df: pd.DataFrame,
@@ -1304,6 +1555,11 @@ def _make_random_showcase_l2_contour(
     row = result_df.loc[chosen_idx]
 
     dict_df = pd.read_csv(dict_path, low_memory=False)
+    dict_df, data_df = _materialize_derived_tt_global_feature_if_needed(
+        cfg_21=cfg_21,
+        dict_df=dict_df,
+        data_df=data_df,
+    )
 
     include_global_rate = _as_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
@@ -1756,6 +2012,11 @@ def _make_random_showcase_distance_matrix(
     row = result_df.loc[chosen_idx]
 
     dict_df = pd.read_csv(dict_path, low_memory=False)
+    dict_df, data_df = _materialize_derived_tt_global_feature_if_needed(
+        cfg_21=cfg_21,
+        dict_df=dict_df,
+        data_df=data_df,
+    )
 
     include_global_rate = _as_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
@@ -1942,7 +2203,8 @@ def _make_random_showcase_distance_matrix(
         histogram_distance_blend_mode=str(inverse_mapping_cfg.get("histogram_distance_blend_mode", "normalized")),
     )
 
-    optimum_values: dict[str, float] = {}
+    best_candidate_values: dict[str, float] = {}
+    anchor_values: dict[str, float] = {}
     finite_dist = np.isfinite(cand_distance)
     row_best_distance = float(pd.to_numeric(pd.Series([row.get("best_distance")]), errors="coerce").iloc[0])
     if np.any(finite_dist) and np.isfinite(row_best_distance):
@@ -1959,7 +2221,18 @@ def _make_random_showcase_distance_matrix(
         for pname in matrix_params:
             v = float(pd.to_numeric(pd.Series([best_row.get(pname)]), errors="coerce").iloc[0])
             if np.isfinite(v):
-                optimum_values[pname] = v
+                best_candidate_values[pname] = v
+
+    # Anchor fixed-parameter slices on the inferred solution itself.
+    # Fallback to nearest-candidate values only when the estimate is unavailable.
+    for pname in matrix_params:
+        est_v = float(pd.to_numeric(pd.Series([row.get(f"est_{pname}")]), errors="coerce").iloc[0])
+        if np.isfinite(est_v):
+            anchor_values[pname] = est_v
+            continue
+        best_v = best_candidate_values.get(pname, np.nan)
+        if np.isfinite(best_v):
+            anchor_values[pname] = float(best_v)
 
     def _limits_with_pad(values: np.ndarray, pad_frac: float = 0.05) -> tuple[float, float]:
         finite = np.asarray(values, dtype=float)
@@ -2013,7 +2286,7 @@ def _make_random_showcase_distance_matrix(
 
             for pname in fixed_params:
                 est_col = f"est_{pname}"
-                target = optimum_values.get(pname, np.nan)
+                target = anchor_values.get(pname, np.nan)
                 if not np.isfinite(target):
                     target = float(pd.to_numeric(pd.Series([row.get(est_col)]), errors="coerce").iloc[0])
                 if not np.isfinite(target):
@@ -2301,7 +2574,8 @@ def _make_random_showcase_distance_matrix(
 
     fig.suptitle(
         "Random showcase distance matrix\n"
-        f"(dataset_index={ds_idx}, metric={distance_metric}, seed={showcase_seed_used}, fixed_tol={fixed_tolerance_pct:.4g}%)",
+        f"(dataset_index={ds_idx}, metric={distance_metric}, seed={showcase_seed_used}, "
+        f"fixed_anchor=estimated, fixed_tol={fixed_tolerance_pct:.4g}%)",
         fontsize=11,
         y=0.995,
     )
@@ -2408,6 +2682,11 @@ def _make_random_showcase_feature_space_matrix(
     row = result_df.loc[chosen_idx]
 
     dict_df = pd.read_csv(dict_path, low_memory=False)
+    dict_df, data_df = _materialize_derived_tt_global_feature_if_needed(
+        cfg_21=cfg_21,
+        dict_df=dict_df,
+        data_df=data_df,
+    )
     include_global_rate = _as_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
 
@@ -2803,9 +3082,52 @@ def _make_plots(
     metric = str((cfg_21 or {}).get("distance_metric", "unknown"))
     k_cfg = (cfg_21 or {}).get("interpolation_k", None)
     k_label = "all" if k_cfg is None else str(k_cfg)
+    exclude_dict_rows = _as_bool(
+        (cfg_21 or {}).get("exclude_dictionary_entries_from_plots", True),
+        True,
+    )
+    exclude_dict_paramset = _as_bool(
+        (cfg_21 or {}).get("exclude_dictionary_paramset_matches_from_plots", True),
+        True,
+    )
+
+    plot_df = result_df.copy()
+    exclusion_mask = pd.Series(False, index=plot_df.index, dtype=bool)
+    if exclude_dict_rows:
+        exclusion_mask |= _parse_true_is_dictionary_entry_mask(plot_df)
+    if exclude_dict_paramset and dict_path is not None and dict_path.exists():
+        try:
+            dict_df_for_plots = pd.read_csv(dict_path, low_memory=False)
+            exclusion_mask |= _rows_with_dictionary_parameter_set(
+                plot_df,
+                dict_df_for_plots,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            log.warning(
+                "Could not resolve dictionary-parameter-set exclusion for STEP 2.1 plots: %s",
+                exc,
+            )
+
+    n_excluded = int(exclusion_mask.sum())
+    if n_excluded > 0:
+        plot_df = plot_df.loc[~exclusion_mask].copy()
+        log.info(
+            "STEP 2.1 plots: excluded %d dictionary-like row(s) from diagnostics "
+            "(dict_entries=%s, dict_paramset_matches=%s). Remaining=%d.",
+            n_excluded,
+            exclude_dict_rows,
+            exclude_dict_paramset,
+            len(plot_df),
+        )
+    if plot_df.empty:
+        log.warning(
+            "STEP 2.1 plots: all rows were excluded by dictionary-like filtering; "
+            "falling back to full result set."
+        )
+        plot_df = result_df.copy()
 
     # ── 1. Distance diagnostics (distribution + method relevance) ───
-    distances = pd.to_numeric(result_df.get("best_distance"), errors="coerce").dropna()
+    distances = pd.to_numeric(plot_df.get("best_distance"), errors="coerce").dropna()
     if not distances.empty:
         q1 = float(distances.quantile(0.25))
         q3 = float(distances.quantile(0.75))
@@ -2891,17 +3213,17 @@ def _make_plots(
         if isinstance(plot_params, (list, tuple, set)):
             selected_params = [
                 str(p) for p in plot_params
-                if f"true_{p}" in result_df.columns and f"est_{p}" in result_df.columns
+                if f"true_{p}" in plot_df.columns and f"est_{p}" in plot_df.columns
             ]
         if not selected_params:
             for pname in ["flux_cm2_min", "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4", "cos_n"]:
-                if f"true_{pname}" in result_df.columns and f"est_{pname}" in result_df.columns:
+                if f"true_{pname}" in plot_df.columns and f"est_{pname}" in plot_df.columns:
                     selected_params.append(pname)
 
         relerr_cols = []
         for pname in selected_params:
-            t = pd.to_numeric(result_df[f"true_{pname}"], errors="coerce")
-            e = pd.to_numeric(result_df[f"est_{pname}"], errors="coerce")
+            t = pd.to_numeric(plot_df[f"true_{pname}"], errors="coerce")
+            e = pd.to_numeric(plot_df[f"est_{pname}"], errors="coerce")
             denom = np.maximum(np.abs(t), 1e-9)
             relerr_cols.append((((e - t).abs() / denom) * 100.0).rename(pname))
 
@@ -2909,7 +3231,7 @@ def _make_plots(
             relerr_df = pd.concat(relerr_cols, axis=1)
             row_relerr = relerr_df.median(axis=1, skipna=True)
             eval_df = pd.DataFrame({
-                "distance": pd.to_numeric(result_df["best_distance"], errors="coerce"),
+                "distance": pd.to_numeric(plot_df["best_distance"], errors="coerce"),
                 "agg_relerr_pct": row_relerr,
             }).dropna()
         else:
@@ -3078,11 +3400,11 @@ def _make_plots(
     # ── 2. True vs estimated scatter for available params ────────────
     # Build all possible pairs, then filter by plot_parameters if set
     all_param_pairs = []
-    for col in result_df.columns:
+    for col in plot_df.columns:
         if col.startswith("est_"):
             pname = col[4:]  # strip "est_"
             true_col = f"true_{pname}"
-            if true_col in result_df.columns:
+            if true_col in plot_df.columns:
                 all_param_pairs.append((true_col, col, pname))
     if plot_params:
         all_param_pairs = [(t, e, l) for t, e, l in all_param_pairs
@@ -3095,8 +3417,8 @@ def _make_plots(
         if n_p == 1:
             axes = [axes]
         for ax, (true_col, est_col, label) in zip(axes, valid_pairs):
-            t = pd.to_numeric(result_df[true_col], errors="coerce")
-            e = pd.to_numeric(result_df[est_col], errors="coerce")
+            t = pd.to_numeric(plot_df[true_col], errors="coerce")
+            e = pd.to_numeric(plot_df[est_col], errors="coerce")
             m = t.notna() & e.notna()
             if m.sum() > 0:
                 ax.scatter(t[m], e[m], s=12, alpha=0.5, color="#F58518")
@@ -3123,7 +3445,7 @@ def _make_plots(
     # ── 3. Random showcase matrix: lower-triangle 2D maps + diagonal projections ──
     if dict_path is not None:
         shared_showcase = _select_showcase_result_row(
-            result_df=result_df,
+            result_df=plot_df,
             cfg_21=cfg_21 or {},
             context_label="Shared showcase",
         )

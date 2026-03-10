@@ -19,6 +19,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
+import re
 
 import matplotlib
 matplotlib.use("Agg")
@@ -42,6 +43,7 @@ else:
     STEP_ROOT = PIPELINE_DIR / "STEPS"
 SYNTHETIC_DIR = STEP_DIR.parent      # STEP_3_SYNTHETIC_TIME_SERIES
 DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
+CONFIG_COLUMNS_PATH = PIPELINE_DIR / "config_columns.json"
 
 DEFAULT_TIME_SERIES = (
     SYNTHETIC_DIR / "STEP_3_1_TIME_SERIES_CREATION" / "OUTPUTS" / "FILES" / "time_series.csv"
@@ -115,6 +117,11 @@ CANONICAL_TIME_DURATION_COLUMN = "duration_seconds"
 CANONICAL_DENSITY_EXPONENT = 1.0
 CANONICAL_DENSITY_CLIP_MIN = 0.25
 CANONICAL_DENSITY_CLIP_MAX = 4.0
+CANONICAL_TT_RATE_CONSISTENCY_BLEND = 0.0
+CANONICAL_HIST_RATE_MEAN_CONSISTENCY_BLEND = 0.0
+
+TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>[A-Za-z0-9]+)_tt_(?P<trigger>[0-9]+)_rate_hz$")
+HIST_RATE_COLUMN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz$")
 
 
 STEP32_WEIGHTING_KEYS = {
@@ -126,6 +133,7 @@ STEP32_WEIGHTING_KEYS = {
     "basis_n_events_tolerance",
     "basis_min_rows",
     "weighting_method",
+    "interpolation_aggregation",
     "distance_hardness",
     "density_correction_enabled",
     "density_correction_k_neighbors",
@@ -159,6 +167,7 @@ STEP32_WEIGHTING_DEFAULTS = {
     "basis_n_events_tolerance_pct": 25,
     "basis_min_rows": 1,
     "weighting_method": "gaussian",
+    "interpolation_aggregation": "local_linear",
     "distance_hardness": 1.0,
     "density_correction_enabled": True,
     "density_correction_k_neighbors": None,
@@ -916,21 +925,127 @@ def _build_weights(
     return w / row_sum
 
 
-def _weighted_numeric_columns(weights: np.ndarray, dict_df: pd.DataFrame, columns: list[str]) -> dict[str, np.ndarray]:
-    """Weighted averages for numeric dictionary columns, NaN-aware."""
+def _normalize_interpolation_aggregation(value: object) -> str:
+    text = str(value).strip().lower() if value is not None else ""
+    if text in {"local_linear", "local-linear", "local_linear_ridge", "llr"}:
+        return "local_linear"
+    return "weighted_mean"
+
+
+def _local_linear_predict(
+    values: np.ndarray,
+    weights_row: np.ndarray,
+    basis_params_std: np.ndarray,
+    target_param_std: np.ndarray,
+    *,
+    ridge_lambda: float = 1e-2,
+) -> float:
+    vals = np.asarray(values, dtype=float)
+    w = np.asarray(weights_row, dtype=float)
+    X = np.asarray(basis_params_std, dtype=float)
+    x0 = np.asarray(target_param_std, dtype=float)
+    if X.ndim != 2 or vals.ndim != 1 or w.ndim != 1:
+        return np.nan
+    if X.shape[0] != vals.size or vals.size != w.size:
+        return np.nan
+    if X.shape[1] != x0.size:
+        return np.nan
+
+    finite_feat = np.all(np.isfinite(X), axis=1)
+    mask = finite_feat & np.isfinite(vals) & np.isfinite(w) & (w > 0.0)
+    if int(np.sum(mask)) < 3:
+        den = float(np.sum(w[np.isfinite(vals) & (w > 0.0)]))
+        if den <= 0:
+            return np.nan
+        num = float(np.sum(w[np.isfinite(vals) & (w > 0.0)] * vals[np.isfinite(vals) & (w > 0.0)]))
+        return num / den
+
+    y = vals[mask]
+    ww = w[mask]
+    Xc = X[mask] - x0[np.newaxis, :]
+    ww_sum = float(np.sum(ww))
+    if ww_sum <= 0.0:
+        return np.nan
+    ww = ww / ww_sum
+
+    A = np.hstack([np.ones((Xc.shape[0], 1), dtype=float), Xc])
+    sqrt_w = np.sqrt(np.clip(ww, 1e-16, None))
+    Aw = A * sqrt_w[:, None]
+    yw = y * sqrt_w
+
+    try:
+        # Unbiased weighted least squares first; ridge penalties can induce
+        # systematic center shifts by shrinking slopes.
+        beta = np.linalg.lstsq(Aw, yw, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        # Fallback to tiny ridge only when the local system is ill-conditioned.
+        n_coef = A.shape[1]
+        reg = np.zeros((n_coef, n_coef), dtype=float)
+        if n_coef > 1:
+            reg[1:, 1:] = max(float(ridge_lambda), 0.0) * np.eye(n_coef - 1, dtype=float)
+        try:
+            beta = np.linalg.solve(Aw.T @ Aw + reg, Aw.T @ yw)
+        except np.linalg.LinAlgError:
+            return float(np.sum(ww * y))
+
+    pred = float(beta[0])
+    if not np.isfinite(pred):
+        return float(np.sum(ww * y))
+    y_min = float(np.nanmin(y))
+    y_max = float(np.nanmax(y))
+    if np.isfinite(y_min) and np.isfinite(y_max):
+        pred = float(np.clip(pred, y_min, y_max))
+    return pred
+
+
+def _weighted_numeric_columns(
+    weights: np.ndarray,
+    dict_df: pd.DataFrame,
+    columns: list[str],
+    *,
+    interpolation_aggregation: str = "weighted_mean",
+    basis_param_matrix: np.ndarray | None = None,
+    target_param_matrix: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    """Interpolate numeric dictionary columns, NaN-aware."""
     out: dict[str, np.ndarray] = {}
     n_rows = weights.shape[0]
+    agg_mode = _normalize_interpolation_aggregation(interpolation_aggregation)
+    use_local_linear = (
+        agg_mode == "local_linear"
+        and basis_param_matrix is not None
+        and target_param_matrix is not None
+    )
+    basis_std = None
+    target_std = None
+    if use_local_linear:
+        basis_std, target_std, _ = _prepare_standardized_param_space(
+            dict_param_matrix=np.asarray(basis_param_matrix, dtype=float),
+            target_param_matrix=np.asarray(target_param_matrix, dtype=float),
+        )
+
     for col in columns:
         values = pd.to_numeric(dict_df[col], errors="coerce").to_numpy(dtype=float)
         valid = np.isfinite(values)
         if not np.any(valid):
             out[col] = np.full(n_rows, np.nan, dtype=float)
             continue
-        w = weights[:, valid]
-        v = values[valid]
-        num = w @ v
-        den = w.sum(axis=1)
-        out[col] = np.divide(num, den, out=np.full(n_rows, np.nan), where=den > 0)
+        if use_local_linear and basis_std is not None and target_std is not None:
+            pred = np.full(n_rows, np.nan, dtype=float)
+            for i in range(n_rows):
+                pred[i] = _local_linear_predict(
+                    values=values,
+                    weights_row=weights[i],
+                    basis_params_std=basis_std,
+                    target_param_std=target_std[i],
+                )
+            out[col] = pred
+        else:
+            w = weights[:, valid]
+            v = values[valid]
+            num = w @ v
+            den = w.sum(axis=1)
+            out[col] = np.divide(num, den, out=np.full(n_rows, np.nan), where=den > 0)
     return out
 
 
@@ -958,19 +1073,292 @@ def _rebuild_efficiencies_string(df: pd.DataFrame) -> None:
     df["efficiencies"] = pd.Series(eff_matrix.tolist(), index=df.index).astype(str)
 
 
+def _load_trigger_type_consistency_catalog() -> tuple[str, list[str]]:
+    """Read trigger-type consistency selector from config_columns.json when present."""
+    prefix = "last"
+    trigger_types: list[str] = []
+    if not CONFIG_COLUMNS_PATH.exists():
+        return prefix, trigger_types
+    try:
+        raw = json.loads(CONFIG_COLUMNS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return prefix, trigger_types
+    prefix = str(raw.get("prefix", "last")).strip() or "last"
+    categories = raw.get("categories", {})
+    if not isinstance(categories, dict):
+        return prefix, trigger_types
+    trigger_cfg = categories.get("trigger_type", {})
+    if not isinstance(trigger_cfg, dict):
+        return prefix, trigger_types
+    if trigger_cfg.get("enabled") is False:
+        return prefix, trigger_types
+    raw_types = trigger_cfg.get("trigger_types", [])
+    if isinstance(raw_types, list):
+        trigger_types = [str(x).strip() for x in raw_types if str(x).strip()]
+    return prefix, trigger_types
+
+
+def _resolve_tt_rate_columns_for_consistency(df: pd.DataFrame) -> tuple[list[str], str | None, list[str]]:
+    """Resolve TT-rate columns used to enforce synthetic global-rate consistency."""
+    col_map: dict[str, dict[str, str]] = {}
+    for col in df.columns:
+        m = TT_RATE_COLUMN_RE.match(str(col))
+        if not m:
+            continue
+        prefix = str(m.group("prefix"))
+        trigger = str(m.group("trigger"))
+        col_map.setdefault(prefix, {})[trigger] = str(col)
+
+    if not col_map:
+        return [], None, []
+
+    pref_selector, trigger_allowlist = _load_trigger_type_consistency_catalog()
+    pref_selector_norm = pref_selector.strip().lower()
+
+    selected_prefix: str | None = None
+    if pref_selector_norm in {"last", "latest"}:
+        for cand in ("post", "fit"):
+            if cand in col_map:
+                selected_prefix = cand
+                break
+        if selected_prefix is None:
+            selected_prefix = sorted(col_map.keys())[-1]
+    else:
+        for key in col_map:
+            if key.lower() == pref_selector_norm:
+                selected_prefix = key
+                break
+        if selected_prefix is None:
+            # Fallback to prefix carrying most columns.
+            selected_prefix = max(col_map.keys(), key=lambda k: len(col_map.get(k, {})))
+
+    available = col_map.get(selected_prefix, {})
+    if not available:
+        return [], selected_prefix, []
+
+    if trigger_allowlist:
+        selected_triggers = [t for t in trigger_allowlist if t in available]
+    else:
+        selected_triggers = sorted(available.keys(), key=lambda x: (len(x), x))
+    cols = [available[t] for t in selected_triggers]
+    return cols, selected_prefix, selected_triggers
+
+
+def _collect_histogram_rate_columns(df: pd.DataFrame) -> list[str]:
+    """Return histogram-bin rate columns sorted by bin index."""
+    pairs: list[tuple[int, str]] = []
+    for col in df.columns:
+        m = HIST_RATE_COLUMN_RE.match(str(col))
+        if not m:
+            continue
+        if str(col) == "events_per_second_global_rate":
+            continue
+        pairs.append((int(m.group("bin")), str(col)))
+    pairs.sort(key=lambda x: x[0])
+    return [c for _, c in pairs]
+
+
+def _tilt_histogram_probabilities_to_target_mean(
+    probs: np.ndarray,
+    bins: np.ndarray,
+    target_mean: float,
+    *,
+    max_iter: int = 80,
+) -> np.ndarray:
+    """Minimal-shape adjustment (exponential tilting) to match target histogram mean."""
+    p = np.asarray(probs, dtype=float).reshape(-1)
+    k = np.asarray(bins, dtype=float).reshape(-1)
+    if p.size == 0 or p.size != k.size or not np.isfinite(target_mean):
+        return p
+    p = np.clip(p, 0.0, None)
+    s = float(np.sum(p))
+    if s <= 0.0:
+        return p
+    p = p / s
+    k_min = float(np.min(k))
+    k_max = float(np.max(k))
+    tgt = float(np.clip(float(target_mean), k_min, k_max))
+
+    eps = 1e-12
+
+    def _mean_at(lam: float) -> tuple[float, np.ndarray]:
+        # Stable normalization in log-space.
+        logw = np.log(np.clip(p, eps, None)) + float(lam) * k
+        logw = logw - float(np.max(logw))
+        w = np.exp(logw)
+        w_sum = float(np.sum(w))
+        if w_sum <= 0.0 or not np.isfinite(w_sum):
+            return float("nan"), p
+        q = w / w_sum
+        mu = float(np.sum(q * k))
+        return mu, q
+
+    mu0 = float(np.sum(p * k))
+    if abs(mu0 - tgt) <= 1e-10:
+        return p
+
+    lo, hi = -40.0, 40.0
+    mu_lo, q_lo = _mean_at(lo)
+    mu_hi, q_hi = _mean_at(hi)
+    if not np.isfinite(mu_lo) or not np.isfinite(mu_hi):
+        return p
+    if tgt <= mu_lo:
+        return q_lo
+    if tgt >= mu_hi:
+        return q_hi
+
+    q_mid = p
+    for _ in range(max_iter):
+        mid = 0.5 * (lo + hi)
+        mu_mid, q_mid = _mean_at(mid)
+        if not np.isfinite(mu_mid):
+            break
+        if abs(mu_mid - tgt) <= 1e-8:
+            return q_mid
+        if mu_mid < tgt:
+            lo = mid
+        else:
+            hi = mid
+    return q_mid
+
+
+def _enforce_rate_consistency_constraints(
+    out_df: pd.DataFrame,
+    *,
+    target_rate: np.ndarray,
+    tt_rate_columns: list[str] | None,
+    histogram_rate_columns: list[str] | None,
+) -> dict:
+    """Enforce synthetic row consistency between rate-like features and target global rate."""
+    info: dict = {
+        "enabled": True,
+        "tt_rate_columns_count": 0,
+        "histogram_rate_columns_count": 0,
+        "tt_target_blend": float(CANONICAL_TT_RATE_CONSISTENCY_BLEND),
+        "hist_mean_target_blend": float(CANONICAL_HIST_RATE_MEAN_CONSISTENCY_BLEND),
+    }
+    rates = np.asarray(target_rate, dtype=float).reshape(-1)
+    n_rows = len(out_df)
+    if rates.size != n_rows:
+        info["enabled"] = False
+        info["reason"] = "target_rate_length_mismatch"
+        return info
+
+    # 1) Trigger-type rates: scale selected TT channels to match target global-rate trend.
+    tt_cols = [c for c in (tt_rate_columns or []) if c in out_df.columns]
+    info["tt_rate_columns_count"] = int(len(tt_cols))
+    if tt_cols:
+        tt_matrix = (
+            out_df[tt_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
+        tt_matrix = np.where(np.isfinite(tt_matrix), np.clip(tt_matrix, 0.0, None), np.nan)
+        tt_sum_before = np.nansum(tt_matrix, axis=1)
+        blend_tt = float(np.clip(CANONICAL_TT_RATE_CONSISTENCY_BLEND, 0.0, 1.0))
+        if blend_tt > 0.0:
+            desired_tt_sum = tt_sum_before + blend_tt * (rates - tt_sum_before)
+            valid = (
+                np.isfinite(rates)
+                & np.isfinite(tt_sum_before)
+                & np.isfinite(desired_tt_sum)
+                & (tt_sum_before > 1e-12)
+            )
+            scale = np.ones(n_rows, dtype=float)
+            scale[valid] = desired_tt_sum[valid] / tt_sum_before[valid]
+            tt_matrix = np.where(np.isfinite(tt_matrix), tt_matrix * scale[:, None], tt_matrix)
+            out_df.loc[:, tt_cols] = tt_matrix
+        tt_sum_after = np.nansum(tt_matrix, axis=1)
+        m_before = np.isfinite(tt_sum_before) & np.isfinite(rates)
+        m_after = np.isfinite(tt_sum_after) & np.isfinite(rates)
+        info["tt_sum_rate_mae_before_hz"] = (
+            float(np.mean(np.abs(tt_sum_before[m_before] - rates[m_before])))
+            if np.any(m_before)
+            else None
+        )
+        info["tt_sum_rate_mae_after_hz"] = (
+            float(np.mean(np.abs(tt_sum_after[m_after] - rates[m_after])))
+            if np.any(m_after)
+            else None
+        )
+
+    # 2) Histogram rates: keep shape but tilt to target mean == target global rate.
+    hist_cols = [c for c in (histogram_rate_columns or []) if c in out_df.columns]
+    info["histogram_rate_columns_count"] = int(len(hist_cols))
+    if hist_cols:
+        bins = np.array([int(HIST_RATE_COLUMN_RE.match(c).group("bin")) for c in hist_cols], dtype=float)
+        raw_hist = out_df[hist_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        hist = np.where(np.isfinite(raw_hist), np.clip(raw_hist, 0.0, None), 0.0)
+
+        sum_before = np.nansum(hist, axis=1)
+        mean_before = np.divide(
+            np.nansum(hist * bins[None, :], axis=1),
+            sum_before,
+            out=np.full(n_rows, np.nan, dtype=float),
+            where=sum_before > 0.0,
+        )
+
+        hist_adj = hist.copy()
+        blend_hist = float(np.clip(CANONICAL_HIST_RATE_MEAN_CONSISTENCY_BLEND, 0.0, 1.0))
+        if blend_hist > 0.0:
+            desired_mean = mean_before + blend_hist * (rates - mean_before)
+            for i in range(n_rows):
+                if not np.isfinite(desired_mean[i]):
+                    continue
+                row = hist_adj[i]
+                mass = float(np.sum(row))
+                if mass <= 0.0:
+                    continue
+                probs = row / mass
+                probs_adj = _tilt_histogram_probabilities_to_target_mean(
+                    probs,
+                    bins,
+                    float(desired_mean[i]),
+                )
+                hist_adj[i] = np.clip(probs_adj, 0.0, None) * mass
+            out_df.loc[:, hist_cols] = hist_adj
+
+        sum_after = np.nansum(hist_adj, axis=1)
+        mean_after = np.divide(
+            np.nansum(hist_adj * bins[None, :], axis=1),
+            sum_after,
+            out=np.full(n_rows, np.nan, dtype=float),
+            where=sum_after > 0.0,
+        )
+        m_before = np.isfinite(mean_before) & np.isfinite(rates)
+        m_after = np.isfinite(mean_after) & np.isfinite(rates)
+        info["hist_mean_rate_mae_before_hz"] = (
+            float(np.mean(np.abs(mean_before[m_before] - rates[m_before])))
+            if np.any(m_before)
+            else None
+        )
+        info["hist_mean_rate_mae_after_hz"] = (
+            float(np.mean(np.abs(mean_after[m_after] - rates[m_after])))
+            if np.any(m_after)
+            else None
+        )
+
+    return info
+
+
 def _make_synthetic_dataset(
     dictionary_df: pd.DataFrame,
     template_df: pd.DataFrame,
     time_df: pd.DataFrame,
     weights: np.ndarray,
+    basis_param_matrix: np.ndarray,
+    target_param_matrix: np.ndarray,
     *,
     flux_col: str,
     eff_col: str,
     time_rate_col: str,
     time_events_col: str,
     time_duration_col: str,
+    interpolation_aggregation: str,
     flux_output_values: np.ndarray | None = None,
     eff_output_values: np.ndarray | None = None,
+    tt_rate_columns_for_consistency: list[str] | None = None,
+    histogram_rate_columns_for_consistency: list[str] | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """Create synthetic dataset preserving template morphology."""
     n_targets = len(time_df)
@@ -986,7 +1374,14 @@ def _make_synthetic_dataset(
         out[col] = dictionary_df[col].to_numpy()[dominant_idx]
 
     numeric_cols = [c for c in common_cols if pd.api.types.is_numeric_dtype(dictionary_df[c])]
-    numeric_values = _weighted_numeric_columns(weights, dictionary_df, numeric_cols)
+    numeric_values = _weighted_numeric_columns(
+        weights,
+        dictionary_df,
+        numeric_cols,
+        interpolation_aggregation=interpolation_aggregation,
+        basis_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
+    )
     for col, values in numeric_values.items():
         out[col] = values
 
@@ -1002,6 +1397,15 @@ def _make_synthetic_dataset(
         output_flux = pd.Series(np.asarray(flux_output_values, dtype=float), index=time_df.index)
     if eff_output_values is not None and len(eff_output_values) == n_targets:
         output_eff = pd.Series(np.asarray(eff_output_values, dtype=float), index=time_df.index)
+
+    # Keep synthetic rate-like feature columns consistent with the known
+    # discretized target global-rate trajectory from STEP 3.1.
+    rate_consistency_info = _enforce_rate_consistency_constraints(
+        out_df=out,
+        target_rate=target_rate.to_numpy(dtype=float),
+        tt_rate_columns=tt_rate_columns_for_consistency,
+        histogram_rate_columns=histogram_rate_columns_for_consistency,
+    )
 
     if "flux_cm2_min" in out.columns:
         out["flux_cm2_min"] = output_flux
@@ -1054,6 +1458,7 @@ def _make_synthetic_dataset(
         extras["dominant_dictionary_filename_base"] = dictionary_df["filename_base"].astype(str).to_numpy()[dominant_idx]
 
     out = pd.concat([out, extras], axis=1).copy()
+    out.attrs["rate_consistency_info"] = rate_consistency_info
     return out, dominant_idx
 
 
@@ -1218,79 +1623,41 @@ def _plot_time_series_overview(
     interpolated_flux: np.ndarray | None,
     interpolated_eff: np.ndarray | None,
     interpolated_label: str,
+    show_diagnostic_center: bool,
     path: Path,
 ) -> None:
     """Plot complete/discretized flux-eff and global-rate comparison."""
-    def _apply_striped_background(ax: plt.Axes, y_vals: np.ndarray) -> None:
-        """Apply stripes at 1%-of-mean increments, uniformly across the y-axis."""
-        y_min, y_max = ax.get_ylim()
-        if not (np.isfinite(y_min) and np.isfinite(y_max)):
-            return
-        span = y_max - y_min
-        if span <= 0.0:
-            return
-
-        y_arr = np.asarray(y_vals, dtype=float)
-        valid = np.isfinite(y_arr)
-        if not np.any(valid):
-            return
-        mean_val = float(np.mean(y_arr[valid]))
-
-        band = abs(mean_val) * 0.01
-        if not np.isfinite(band) or band <= 0.0:
-            band = span * 0.01
-        if band <= 0.0:
-            return
-
-        ax.set_facecolor("#FFFFFF")
-        idx = int(np.floor((y_min - mean_val) / band))
-        y0 = mean_val + idx * band
-        while y0 < y_max:
-            y1 = y0 + band
-            lo = max(y0, y_min)
-            hi = min(y1, y_max)
-            color = "#FFFFFF" if (idx % 2 == 0) else "#D8DDE4"
-            if hi > lo:
-                ax.axhspan(lo, hi, facecolor=color, alpha=1.0, linewidth=0.0, zorder=0)
-            y0 = y1
-            idx += 1
-        ax.set_ylim(y_min, y_max)
-
     fig, axes = plt.subplots(3, 1, figsize=(10, 8.5), sharex=True)
 
     x_disc = pd.to_numeric(time_df.get("elapsed_hours"), errors="coerce")
     y_flux_disc = pd.to_numeric(time_df.get(flux_col), errors="coerce")
     y_eff_disc = pd.to_numeric(time_df.get(eff_col), errors="coerce")
-    flux_stripe_vals = [y_flux_disc.to_numpy(dtype=float)]
-    eff_stripe_vals = [y_eff_disc.to_numpy(dtype=float)]
-    rate_stripe_vals: list[np.ndarray] = []
+    x_syn = pd.to_numeric(synthetic_df.get("elapsed_hours"), errors="coerce")
+    y_syn_flux = pd.to_numeric(synthetic_df.get(flux_col), errors="coerce")
+    y_syn_eff = pd.to_numeric(synthetic_df.get(eff_col), errors="coerce")
 
     if complete_df is not None and not complete_df.empty:
         x_comp = pd.to_numeric(complete_df.get("elapsed_hours"), errors="coerce")
         y_flux_comp = pd.to_numeric(complete_df.get(flux_col), errors="coerce")
         y_eff_comp = pd.to_numeric(complete_df.get(eff_col), errors="coerce")
-        flux_stripe_vals.append(y_flux_comp.to_numpy(dtype=float))
-        eff_stripe_vals.append(y_eff_comp.to_numpy(dtype=float))
         m0 = x_comp.notna() & y_flux_comp.notna()
         m1 = x_comp.notna() & y_eff_comp.notna()
         if m0.any():
-            axes[0].scatter(
+            axes[0].plot(
                 x_comp[m0],
                 y_flux_comp[m0],
-                s=7,
                 color="#1f77b4",
-                alpha=0.55,
-                linewidths=0.0,
+                alpha=0.75,
+                linewidth=1.0,
                 label="Complete curve",
             )
         if m1.any():
-            axes[1].scatter(
+            axes[1].plot(
                 x_comp[m1],
                 y_eff_comp[m1],
-                s=7,
                 color="#FF7F0E",
-                alpha=0.55,
-                linewidths=0.0,
+                alpha=0.75,
+                linewidth=1.0,
                 label="Complete curve",
             )
 
@@ -1317,90 +1684,98 @@ def _plot_time_series_overview(
             label="Discretized",
         )
 
+    m0s = x_syn.notna() & y_syn_flux.notna()
+    m1s = x_syn.notna() & y_syn_eff.notna()
+    if m0s.any():
+        axes[0].plot(
+            x_syn[m0s],
+            y_syn_flux[m0s],
+            color="#D62728",
+            linewidth=1.1,
+            linestyle="-",
+            alpha=0.9,
+            label="Synthetic output",
+        )
+    if m1s.any():
+        axes[1].plot(
+            x_syn[m1s],
+            y_syn_eff[m1s],
+            color="#D62728",
+            linewidth=1.1,
+            linestyle="-",
+            alpha=0.9,
+            label="Synthetic output",
+        )
+
     has_interp_flux = False
-    if interpolated_flux is not None:
+    if show_diagnostic_center and interpolated_flux is not None:
         y_flux_interp = pd.to_numeric(pd.Series(interpolated_flux), errors="coerce")
-        flux_stripe_vals.append(y_flux_interp.to_numpy(dtype=float))
         m0i = x_disc.notna() & y_flux_interp.notna()
         if m0i.any():
             has_interp_flux = True
             axes[0].plot(
                 x_disc[m0i],
                 y_flux_interp[m0i],
-                color="#17BECF",
-                linewidth=1.0,
-                linestyle="-.",
-                marker="s",
-                markersize=2.9,
-                markerfacecolor="#17BECF",
-                markeredgewidth=0.0,
-                alpha=0.9,
+                color="#8C8C8C",
+                linewidth=0.9,
+                linestyle="--",
+                alpha=0.85,
                 label=interpolated_label,
             )
     has_interp_eff = False
-    if interpolated_eff is not None:
+    if show_diagnostic_center and interpolated_eff is not None:
         y_eff_interp = pd.to_numeric(pd.Series(interpolated_eff), errors="coerce")
-        eff_stripe_vals.append(y_eff_interp.to_numpy(dtype=float))
         m1i = x_disc.notna() & y_eff_interp.notna()
         if m1i.any():
             has_interp_eff = True
             axes[1].plot(
                 x_disc[m1i],
                 y_eff_interp[m1i],
-                color="#BCBD22",
-                linewidth=1.0,
-                linestyle="-.",
-                marker="s",
-                markersize=2.9,
-                markerfacecolor="#BCBD22",
-                markeredgewidth=0.0,
-                alpha=0.9,
+                color="#8C8C8C",
+                linewidth=0.9,
+                linestyle="--",
+                alpha=0.85,
                 label=interpolated_label,
             )
 
     axes[0].set_ylabel("flux_cm2_min")
     if has_interp_flux:
-        axes[0].set_title("Flux: complete + discretized + derived center")
+        axes[0].set_title("Flux: complete + discretized + synthetic (+ diagnostic center)")
     else:
-        axes[0].set_title("Flux: complete + discretized (used for synthetic output)")
-    _apply_striped_background(axes[0], np.concatenate(flux_stripe_vals))
+        axes[0].set_title("Flux: complete + discretized + synthetic")
     axes[0].grid(True, alpha=0.25)
     axes[0].legend(loc="best", fontsize=8)
 
     axes[1].set_ylabel("eff")
     if has_interp_eff:
-        axes[1].set_title("Efficiency: complete + discretized + derived center")
+        axes[1].set_title("Efficiency: complete + discretized + synthetic (+ diagnostic center)")
     else:
-        axes[1].set_title("Efficiency: complete + discretized (used for synthetic output)")
-    _apply_striped_background(axes[1], np.concatenate(eff_stripe_vals))
+        axes[1].set_title("Efficiency: complete + discretized + synthetic")
     axes[1].grid(True, alpha=0.25)
     axes[1].legend(loc="best", fontsize=8)
 
-    # Global rate overlays: complete, discretized target, synthetic newly calculated.
+    # Global rate overlays: complete, discretized target, synthetic output.
     if complete_df is not None and not complete_df.empty:
         comp_rate_col = None
-        for c in ("global_rate_hz", "global_rate_hz_mean", "events_per_second_global_rate"):
+        for c in ("global_rate_hz_mean", "global_rate_hz", "events_per_second_global_rate"):
             if c in complete_df.columns:
                 comp_rate_col = c
                 break
         if comp_rate_col is not None:
             x_comp = pd.to_numeric(complete_df.get("elapsed_hours"), errors="coerce")
             y_comp_rate = pd.to_numeric(complete_df.get(comp_rate_col), errors="coerce")
-            rate_stripe_vals.append(y_comp_rate.to_numpy(dtype=float))
             m2c = x_comp.notna() & y_comp_rate.notna()
             if m2c.any():
-                axes[2].scatter(
+                axes[2].plot(
                     x_comp[m2c],
                     y_comp_rate[m2c],
-                    s=7,
                     color="#6F3CC3",
-                    alpha=0.55,
-                    linewidths=0.0,
+                    alpha=0.75,
+                    linewidth=1.0,
                     label="Complete curve",
                 )
 
     y_disc_rate = pd.to_numeric(time_df.get(time_rate_col), errors="coerce")
-    rate_stripe_vals.append(y_disc_rate.to_numpy(dtype=float))
     m2d = x_disc.notna() & y_disc_rate.notna()
     if m2d.any():
         axes[2].scatter(
@@ -1413,36 +1788,34 @@ def _plot_time_series_overview(
             label="Discretized",
         )
 
-    x_syn = pd.to_numeric(synthetic_df.get("elapsed_hours"), errors="coerce")
-    syn_events = pd.to_numeric(synthetic_df.get("n_events"), errors="coerce")
-    syn_dur = pd.to_numeric(synthetic_df.get("duration_seconds"), errors="coerce")
-    y_syn_rate_new = np.divide(
-        syn_events.to_numpy(dtype=float),
-        syn_dur.to_numpy(dtype=float),
-        out=np.full(len(synthetic_df), np.nan, dtype=float),
-        where=np.isfinite(syn_dur.to_numpy(dtype=float)) & (syn_dur.to_numpy(dtype=float) > 0),
-    )
-    rate_stripe_vals.append(np.asarray(y_syn_rate_new, dtype=float))
-    m2s = x_syn.notna() & np.isfinite(y_syn_rate_new)
+    y_syn_rate = pd.to_numeric(synthetic_df.get("events_per_second_global_rate"), errors="coerce")
+    if y_syn_rate.isna().all():
+        syn_events = pd.to_numeric(synthetic_df.get("n_events"), errors="coerce")
+        syn_dur = pd.to_numeric(synthetic_df.get("duration_seconds"), errors="coerce")
+        y_syn_rate = pd.Series(
+            np.divide(
+                syn_events.to_numpy(dtype=float),
+                syn_dur.to_numpy(dtype=float),
+                out=np.full(len(synthetic_df), np.nan, dtype=float),
+                where=np.isfinite(syn_dur.to_numpy(dtype=float)) & (syn_dur.to_numpy(dtype=float) > 0),
+            ),
+            index=synthetic_df.index,
+        )
+    m2s = x_syn.notna() & y_syn_rate.notna()
     if m2s.any():
         axes[2].plot(
             x_syn[m2s],
-            y_syn_rate_new[m2s],
+            y_syn_rate[m2s],
             color="#D62728",
-            linewidth=1.0,
-            linestyle="-.",
-            marker="s",
-            markersize=2.9,
-            markerfacecolor="#D62728",
-            markeredgewidth=0.0,
+            linewidth=1.1,
+            linestyle="-",
             alpha=0.9,
-            label="Synthetic (newly calculated)",
+            label="Synthetic output",
         )
 
     axes[2].set_xlabel("Elapsed time [hours]")
     axes[2].set_ylabel("global rate [Hz]")
-    axes[2].set_title("Global rate: complete + discretized + synthetic (new)")
-    _apply_striped_background(axes[2], np.concatenate(rate_stripe_vals))
+    axes[2].set_title("Global rate: complete + discretized + synthetic")
     axes[2].grid(True, alpha=0.25)
     axes[2].legend(loc="best", fontsize=8)
 
@@ -1775,8 +2148,24 @@ def main() -> int:
         float(basis_filter_info.get("allowed_rows_per_target_max", len(dictionary_work))),
         int(basis_filter_info.get("targets_with_zero_selected_rows", 0)),
     )
+    (
+        tt_rate_consistency_cols,
+        tt_rate_consistency_prefix,
+        tt_rate_consistency_triggers,
+    ) = _resolve_tt_rate_columns_for_consistency(dictionary_work)
+    hist_rate_consistency_cols = _collect_histogram_rate_columns(dictionary_work)
+    log.info(
+        "Synthetic rate consistency: tt_prefix=%s tt_cols=%d hist_bin_cols=%d.",
+        str(tt_rate_consistency_prefix),
+        int(len(tt_rate_consistency_cols)),
+        int(len(hist_rate_consistency_cols)),
+    )
 
     method = str(cfg_32.get("weighting_method", "gaussian"))
+    interpolation_aggregation = _normalize_interpolation_aggregation(
+        cfg_32.get("interpolation_aggregation", "local_linear")
+    )
+    show_diagnostic_center = _safe_bool(cfg_32.get("show_diagnostic_center", False), False)
     top_k_raw = cfg_32.get("top_k", None)
     top_k = None if top_k_raw in (None, "", 0) else _safe_int(top_k_raw, 8, minimum=1)
     distance_hardness = _safe_float(cfg_32.get("distance_hardness", 1.0), 1.0)
@@ -1786,6 +2175,14 @@ def main() -> int:
     )
     density_enabled = _safe_bool(cfg_32.get("density_correction_enabled", True), True)
     density_k = _safe_int(cfg_32.get("density_correction_k_neighbors", 10), 10, minimum=1)
+    log.info(
+        "Interpolation config: weighting_method=%s, aggregation=%s, top_k=%s, hardness=%.3g, show_diagnostic_center=%s",
+        method,
+        interpolation_aggregation,
+        ("all" if top_k is None else str(top_k)),
+        float(distance_hardness),
+        str(show_diagnostic_center).lower(),
+    )
     for legacy_key in (
         "density_correction_space",
         "density_correction_exponent",
@@ -1829,6 +2226,9 @@ def main() -> int:
         weights=weights,
         dict_df=dictionary_work,
         columns=diagnostic_columns,
+        interpolation_aggregation=interpolation_aggregation,
+        basis_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
     )
     diagnostic_flux = np.asarray(
         diagnostic_center_values.get(flux_col, np.full(len(time_df), np.nan, dtype=float)),
@@ -1851,11 +2251,11 @@ def main() -> int:
             if np.any(m_col)
             else None
         )
-    diagnostic_center_label = (
-        "Density-modulated weighted parameter-space center (diagnostic)"
-        if density_enabled
-        else "Weighted parameter-space center (diagnostic)"
-    )
+    center_prefix = "Density-modulated " if density_enabled else ""
+    if interpolation_aggregation == "local_linear":
+        diagnostic_center_label = f"{center_prefix}local-linear parameter-space center (diagnostic)"
+    else:
+        diagnostic_center_label = f"{center_prefix}weighted parameter-space center (diagnostic)"
     diagnostic_flux_mae = diagnostic_param_mae.get(flux_col)
     diagnostic_eff_mae = diagnostic_param_mae.get(eff_col_time)
     log.info(
@@ -1875,19 +2275,44 @@ def main() -> int:
         template_df=template_df,
         time_df=time_df,
         weights=weights,
+        basis_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
         flux_col=flux_col,
         eff_col=eff_col_time,
         time_rate_col=time_rate_col,
         time_events_col=time_events_col,
         time_duration_col=time_duration_col,
+        interpolation_aggregation=interpolation_aggregation,
         flux_output_values=flux_linear,
         eff_output_values=eff_linear,
+        tt_rate_columns_for_consistency=tt_rate_consistency_cols,
+        histogram_rate_columns_for_consistency=hist_rate_consistency_cols,
     )
+    rate_consistency_info = dict(synthetic_df.attrs.get("rate_consistency_info", {}))
+    rate_consistency_info["tt_prefix_selected"] = tt_rate_consistency_prefix
+    rate_consistency_info["tt_trigger_types_selected"] = tt_rate_consistency_triggers
+    rate_consistency_info["tt_columns_selected"] = tt_rate_consistency_cols
 
     # Output files
     out_synth = FILES_DIR / "synthetic_dataset.csv"
     synthetic_df.to_csv(out_synth, index=False)
     log.info("Wrote synthetic dataset: %s (%d rows)", out_synth, len(synthetic_df))
+
+    # Persist the exact STEP 3.2 diagnostic center series so downstream steps
+    # (e.g. STEP 3.3 plots) can reuse it directly without recomputation.
+    center_df = pd.DataFrame({
+        "row_index": np.arange(len(time_df), dtype=int),
+        "file_index": pd.to_numeric(time_df.get("file_index"), errors="coerce").astype("Int64"),
+        "elapsed_hours": pd.to_numeric(time_df.get("elapsed_hours"), errors="coerce"),
+        "center_flux_cm2_min": np.asarray(diagnostic_flux, dtype=float),
+        "center_eff": np.asarray(diagnostic_eff, dtype=float),
+        "eff_column_used": eff_col_time,
+        "center_label": diagnostic_center_label,
+        "interpolation_aggregation": interpolation_aggregation,
+    }, index=time_df.index).reset_index(drop=True)
+    out_center = FILES_DIR / "diagnostic_center_series.csv"
+    center_df.to_csv(out_center, index=False)
+    log.info("Wrote diagnostic center series: %s", out_center)
 
     # Highlight point for contribution diagnostics
     seed_cfg = cfg_32.get("random_seed", None)
@@ -2014,6 +2439,7 @@ def main() -> int:
         interpolated_flux=diagnostic_flux,
         interpolated_eff=diagnostic_eff,
         interpolated_label=diagnostic_center_label,
+        show_diagnostic_center=show_diagnostic_center,
         path=out_plot_series,
     )
     log.info("Wrote plot: %s", out_plot_series)
@@ -2079,6 +2505,7 @@ def main() -> int:
         "n_dictionary_points": int(len(dictionary_work)),
         "n_synthetic_rows": int(len(synthetic_df)),
         "weighting_method": method,
+        "interpolation_aggregation": interpolation_aggregation,
         "distance_definition": "standardized_euclidean_in_parameter_space",
         "distance_hardness": float(distance_hardness),
         "enforce_distance_monotonic_weights": bool(enforce_distance_monotonic_weights),
@@ -2125,6 +2552,8 @@ def main() -> int:
             float(pd.to_numeric(synthetic_df.get("events_per_second_global_rate"), errors="coerce").min()),
             float(pd.to_numeric(synthetic_df.get("events_per_second_global_rate"), errors="coerce").max()),
         ],
+        "rate_consistency_constraints": rate_consistency_info,
+        "diagnostic_center_series_csv": str(out_center),
     }
     out_summary = FILES_DIR / "synthetic_generation_summary.json"
     with open(out_summary, "w", encoding="utf-8") as f:

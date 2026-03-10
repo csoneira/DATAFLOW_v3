@@ -339,6 +339,80 @@ def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
     return float(vals[idx])
 
 
+def _local_linear_estimate(
+    values: np.ndarray,
+    weights: np.ndarray,
+    *,
+    sample_features: np.ndarray | None,
+    neighbor_features: np.ndarray | None,
+    ridge_lambda: float = 1e-2,
+) -> float:
+    vals = np.asarray(values, dtype=float)
+    w = np.asarray(weights, dtype=float)
+    if sample_features is None or neighbor_features is None:
+        return float(np.sum(w * np.nan_to_num(vals)))
+
+    x0 = np.asarray(sample_features, dtype=float)
+    X = np.asarray(neighbor_features, dtype=float)
+    if X.ndim != 2 or x0.ndim != 1 or X.shape[0] != vals.size:
+        return float(np.sum(w * np.nan_to_num(vals)))
+    if X.shape[1] == 0:
+        return float(np.sum(w * np.nan_to_num(vals)))
+
+    feat_mask = np.isfinite(x0)
+    if not np.any(feat_mask):
+        return float(np.sum(w * np.nan_to_num(vals)))
+
+    X = X[:, feat_mask]
+    x0 = x0[feat_mask]
+    row_mask = (
+        np.all(np.isfinite(X), axis=1)
+        & np.isfinite(vals)
+        & np.isfinite(w)
+        & (w > 0.0)
+    )
+    if int(np.sum(row_mask)) < 3:
+        return float(np.sum(w * np.nan_to_num(vals)))
+
+    X_use = X[row_mask]
+    y_use = vals[row_mask]
+    w_use = w[row_mask]
+    w_sum = float(np.sum(w_use))
+    if not np.isfinite(w_sum) or w_sum <= 0.0:
+        return float(np.sum(w * np.nan_to_num(vals)))
+    w_use = w_use / w_sum
+
+    centered = X_use - x0[None, :]
+    A = np.hstack([np.ones((centered.shape[0], 1), dtype=float), centered])
+    sqrt_w = np.sqrt(np.clip(w_use, 1e-16, None))
+    Aw = A * sqrt_w[:, None]
+    yw = y_use * sqrt_w
+
+    try:
+        # Use unbiased weighted least squares by default. Ridge penalties can
+        # shrink slopes and introduce systematic intercept offsets.
+        beta = np.linalg.lstsq(Aw, yw, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        # Fallback: try a tiny ridge regularization only for ill-conditioned rows.
+        n_coef = A.shape[1]
+        reg = np.zeros((n_coef, n_coef), dtype=float)
+        if n_coef > 1:
+            reg[1:, 1:] = max(float(ridge_lambda), 0.0) * np.eye(n_coef - 1, dtype=float)
+        try:
+            beta = np.linalg.solve(Aw.T @ Aw + reg, Aw.T @ yw)
+        except np.linalg.LinAlgError:
+            return float(np.sum(w_use * y_use))
+
+    pred = float(beta[0])
+    if not np.isfinite(pred):
+        return float(np.sum(w_use * y_use))
+    y_min = float(np.nanmin(y_use))
+    y_max = float(np.nanmax(y_use))
+    if np.isfinite(y_min) and np.isfinite(y_max):
+        pred = float(np.clip(pred, y_min, y_max))
+    return pred
+
+
 # =====================================================================
 # Feature selection helpers
 # =====================================================================
@@ -428,7 +502,266 @@ def _auto_feature_columns(
     return cols
 
 
+# ── Derived feature mode ─────────────────────────────────────────────
+# Empirical efficiencies separate the efficiency signal from the flux
+# signal, breaking the degeneracy that afflicts raw TT rates (which are
+# all proportional to flux × f(efficiency)).  The global rate carries
+# the overall flux scale once efficiencies are controlled for.
+DERIVED_EFFICIENCY_COLUMNS = [
+    "eff_empirical_1",
+    "eff_empirical_2",
+    "eff_empirical_3",
+    "eff_empirical_4",
+]
+DERIVED_RATE_COLUMN = "events_per_second_global_rate"
 DERIVED_TT_GLOBAL_RATE_COL = "__derived_tt_global_rate_hz"
+DERIVED_EFF_PRODUCT_COL = "__derived_eff_emp_product"
+DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL = "__derived_log_tt_rate_over_eff_product"
+
+_DERIVED_PHYSICS_FEATURE_ALIASES = {
+    "eff_product": "eff_product",
+    "emp_eff_product": "eff_product",
+    "eff_emp_product": "eff_product",
+    "log_rate_over_eff_product": "log_rate_over_eff_product",
+    "log_tt_rate_over_eff_product": "log_rate_over_eff_product",
+    "log_rate_div_eff_product": "log_rate_over_eff_product",
+    "log_rate_over_effprod": "log_rate_over_eff_product",
+}
+
+
+def _normalize_prefix_selector(value: object) -> str:
+    text = str(value).strip().lower()
+    return text if text else "last"
+
+
+def _normalize_trigger_type_allowlist(value: Sequence[str] | str | None) -> list[str]:
+    raw = parse_explicit_feature_columns(value)
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        norm = _normalize_tt_label(item)
+        if not norm or not _is_multi_plane_tt_label(norm):
+            continue
+        if norm in seen:
+            continue
+        out.append(norm)
+        seen.add(norm)
+    return out
+
+
+def _select_tt_rate_columns_for_prefix(
+    df: pd.DataFrame,
+    *,
+    prefix_selector: str = "last",
+    trigger_type_allowlist: Sequence[str] | str | None = None,
+    include_to_tt_rate_hz: bool = False,
+) -> list[str]:
+    by_prefix: dict[str, list[str]] = {}
+    allowlist = set(_normalize_trigger_type_allowlist(trigger_type_allowlist))
+    for col in df.columns:
+        text = str(col).strip()
+        match = TT_RATE_COLUMN_RE.match(text)
+        if match is None:
+            continue
+        label = _normalize_tt_label(match.group("label"))
+        if not _is_multi_plane_tt_label(label):
+            continue
+        if allowlist and label not in allowlist:
+            continue
+        prefix = str(match.group("prefix")).strip()
+        if not include_to_tt_rate_hz and "_to_" in prefix:
+            continue
+        by_prefix.setdefault(prefix, []).append(text)
+
+    if not by_prefix:
+        return []
+
+    prefix_mode = _normalize_prefix_selector(prefix_selector)
+    if prefix_mode == "last":
+        selected_prefix = min(
+            by_prefix.keys(),
+            key=lambda p: (_prefix_rank(p), -len(by_prefix[p]), p),
+        )
+        return sorted(set(by_prefix[selected_prefix]))
+    return sorted(set(by_prefix.get(prefix_mode, [])))
+
+
+def _common_tt_rate_columns(
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    *,
+    prefix_selector: str = "last",
+    trigger_type_allowlist: Sequence[str] | str | None = None,
+    include_to_tt_rate_hz: bool = False,
+) -> list[str]:
+    from_dict = _select_tt_rate_columns_for_prefix(
+        dict_df,
+        prefix_selector=prefix_selector,
+        trigger_type_allowlist=trigger_type_allowlist,
+        include_to_tt_rate_hz=include_to_tt_rate_hz,
+    )
+    from_data = _select_tt_rate_columns_for_prefix(
+        data_df,
+        prefix_selector=prefix_selector,
+        trigger_type_allowlist=trigger_type_allowlist,
+        include_to_tt_rate_hz=include_to_tt_rate_hz,
+    )
+    return sorted(set(from_dict) & set(from_data))
+
+
+def _append_derived_tt_global_rate_column(
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    *,
+    prefix_selector: str = "last",
+    trigger_type_allowlist: Sequence[str] | str | None = None,
+    include_to_tt_rate_hz: bool = False,
+    output_column: str = DERIVED_TT_GLOBAL_RATE_COL,
+) -> tuple[pd.DataFrame, pd.DataFrame, str | None, list[str]]:
+    """
+    Build a derived global-rate feature from trigger-type sums.
+
+    The derived column is added only when a common TT column set exists
+    in dictionary and dataset.
+    """
+    common_tt = _common_tt_rate_columns(
+        dict_df,
+        data_df,
+        prefix_selector=prefix_selector,
+        trigger_type_allowlist=trigger_type_allowlist,
+        include_to_tt_rate_hz=include_to_tt_rate_hz,
+    )
+    if not common_tt:
+        return dict_df, data_df, None, []
+
+    dict_out = dict_df.copy()
+    data_out = data_df.copy()
+    dict_out[output_column] = dict_out[common_tt].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+    data_out[output_column] = data_out[common_tt].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+    return dict_out, data_out, output_column, common_tt
+
+
+def _rate_histogram_columns(df: pd.DataFrame) -> list[str]:
+    cols: list[tuple[int, str]] = []
+    for col in df.columns:
+        text = str(col).strip()
+        match = RATE_HISTOGRAM_BIN_RE.match(text)
+        if match is None:
+            continue
+        cols.append((int(match.group("bin")), text))
+    cols.sort(key=lambda x: x[0])
+    return [name for _, name in cols]
+
+
+def _normalize_derived_physics_features(value: Sequence[str] | str | bool | None) -> list[str]:
+    if isinstance(value, bool):
+        return ["log_rate_over_eff_product"] if value else []
+    raw = parse_explicit_feature_columns(value)
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        key = str(item).strip().lower()
+        if not key:
+            continue
+        normalized = _DERIVED_PHYSICS_FEATURE_ALIASES.get(key)
+        if normalized is None or normalized in seen:
+            continue
+        out.append(normalized)
+        seen.add(normalized)
+    return out
+
+
+def _append_derived_physics_feature_columns(
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    *,
+    rate_column: str,
+    physics_features: Sequence[str] | str | bool | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    selected = _normalize_derived_physics_features(physics_features)
+    if not selected:
+        return dict_df, data_df, []
+    if rate_column not in dict_df.columns or rate_column not in data_df.columns:
+        return dict_df, data_df, []
+
+    eff_cols = [c for c in DERIVED_EFFICIENCY_COLUMNS if c in dict_df.columns and c in data_df.columns]
+    if not eff_cols:
+        return dict_df, data_df, []
+
+    dict_out = dict_df.copy()
+    data_out = data_df.copy()
+
+    dict_eff = dict_out[eff_cols].apply(pd.to_numeric, errors="coerce")
+    data_eff = data_out[eff_cols].apply(pd.to_numeric, errors="coerce")
+    min_count = len(eff_cols)
+    dict_eff_prod = dict_eff.prod(axis=1, min_count=min_count)
+    data_eff_prod = data_eff.prod(axis=1, min_count=min_count)
+
+    added: list[str] = []
+    if "eff_product" in selected:
+        dict_out[DERIVED_EFF_PRODUCT_COL] = dict_eff_prod
+        data_out[DERIVED_EFF_PRODUCT_COL] = data_eff_prod
+        added.append(DERIVED_EFF_PRODUCT_COL)
+
+    if "log_rate_over_eff_product" in selected:
+        dict_rate = pd.to_numeric(dict_out[rate_column], errors="coerce")
+        data_rate = pd.to_numeric(data_out[rate_column], errors="coerce")
+
+        dict_den = dict_eff_prod.where(dict_eff_prod > 1e-8, np.nan)
+        data_den = data_eff_prod.where(data_eff_prod > 1e-8, np.nan)
+
+        dict_ratio = (dict_rate / dict_den).where(dict_rate > 0.0, np.nan)
+        data_ratio = (data_rate / data_den).where(data_rate > 0.0, np.nan)
+
+        dict_out[DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL] = np.log(
+            np.where(np.isfinite(dict_ratio), dict_ratio, np.nan)
+        )
+        data_out[DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL] = np.log(
+            np.where(np.isfinite(data_ratio), data_ratio, np.nan)
+        )
+        added.append(DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL)
+
+    return dict_out, data_out, added
+
+
+def _derived_feature_columns(
+    df: pd.DataFrame,
+    *,
+    rate_column: str = DERIVED_TT_GLOBAL_RATE_COL,
+    trigger_type_rate_columns: Sequence[str] | None = None,
+    include_rate_histogram: bool = False,
+    physics_feature_columns: Sequence[str] | None = None,
+) -> list[str]:
+    """Select derived features: empirical efficiencies + global-rate proxy.
+
+    The preferred global-rate proxy is the derived TT trigger sum.
+    `events_per_second_global_rate` remains supported as a fallback.
+    """
+    cols: list[str] = []
+    for c in DERIVED_EFFICIENCY_COLUMNS:
+        if c in df.columns:
+            cols.append(c)
+    if rate_column in df.columns:
+        cols.append(rate_column)
+    elif rate_column != DERIVED_RATE_COLUMN and DERIVED_RATE_COLUMN in df.columns:
+        cols.append(DERIVED_RATE_COLUMN)
+    if trigger_type_rate_columns:
+        seen = set(cols)
+        for c in trigger_type_rate_columns:
+            name = str(c).strip()
+            if not name or name in seen:
+                continue
+            if name in df.columns:
+                cols.append(name)
+                seen.add(name)
+    if include_rate_histogram:
+        cols.extend(_rate_histogram_columns(df))
+    if physics_feature_columns:
+        for c in physics_feature_columns:
+            name = str(c).strip()
+            if name and name in df.columns:
+                cols.append(name)
+    return cols
 
 
 def _append_tt_global_sum_feature(
@@ -583,6 +916,8 @@ def _normalize_aggregation_mode(value: object) -> str:
     text = str(value).strip().lower() if value is not None else ""
     if text in {"weighted_median", "median"}:
         return "weighted_median"
+    if text in {"local_linear", "local_linear_ridge", "llr"}:
+        return "local_linear"
     return "weighted_mean"
 
 
@@ -1091,6 +1426,12 @@ def estimate_parameters(
     shared_parameter_match_atol: float = 1e-12,
     density_weighting_cfg: Mapping[str, object] | None = None,
     inverse_mapping_cfg: Mapping[str, object] | None = None,
+    derived_tt_prefix: str = "last",
+    derived_trigger_types: Sequence[str] | str | None = None,
+    derived_include_to_tt_rate_hz: bool = False,
+    derived_include_trigger_type_rates: bool = True,
+    derived_include_rate_histogram: bool = False,
+    derived_physics_features: Sequence[str] | str | bool | None = None,
     histogram_distance_weight: float = 1.0,
     histogram_distance_blend_mode: str = "normalized",
 ) -> pd.DataFrame:
@@ -1156,8 +1497,29 @@ def estimate_parameters(
         neighbor_selection (nearest|knn|all), neighbor_count, weighting
         (uniform|inverse_distance|softmax), inverse_distance_power,
         softmax_temperature, distance_floor, aggregation
-        (weighted_mean|weighted_median), histogram_distance_weight,
+        (weighted_mean|weighted_median|local_linear), histogram_distance_weight,
         histogram_distance_blend_mode (normalized|raw).
+    derived_tt_prefix : str
+        Prefix selector for derived mode TT-sum global rate:
+        "last" (recommended) or explicit prefix name.
+    derived_trigger_types : list[str] | str | None
+        Optional TT label allowlist used in derived mode trigger-sum
+        construction (e.g. "1234,123,234,124,134"). Empty/None uses all
+        available multi-plane trigger types.
+    derived_include_to_tt_rate_hz : bool
+        If True, allow prefixes containing "_to_" when selecting TT
+        columns for derived trigger-sum global rate.
+    derived_include_trigger_type_rates : bool
+        If True, append selected trigger-type rate columns to derived-mode
+        features (in addition to empirical efficiencies and derived TT-sum
+        global rate).
+    derived_include_rate_histogram : bool
+        If True, append `events_per_second_<bin>_rate_hz` histogram bins
+        to derived-mode features.
+    derived_physics_features : list[str] | str | bool | None
+        Optional derived-mode physics transforms to append as features.
+        Supported values: "log_rate_over_eff_product", "eff_product".
+        A boolean True enables "log_rate_over_eff_product".
     histogram_distance_weight : float
         Legacy alias for `inverse_mapping_cfg.histogram_distance_weight`.
     histogram_distance_blend_mode : str
@@ -1193,6 +1555,12 @@ def estimate_parameters(
         shared_parameter_match_atol=shared_parameter_match_atol,
         density_weighting_cfg=density_weighting_cfg,
         inverse_mapping_cfg=inverse_mapping_cfg,
+        derived_tt_prefix=derived_tt_prefix,
+        derived_trigger_types=derived_trigger_types,
+        derived_include_to_tt_rate_hz=derived_include_to_tt_rate_hz,
+        derived_include_trigger_type_rates=derived_include_trigger_type_rates,
+        derived_include_rate_histogram=derived_include_rate_histogram,
+        derived_physics_features=derived_physics_features,
         histogram_distance_weight=histogram_distance_weight,
         histogram_distance_blend_mode=histogram_distance_blend_mode,
     )
@@ -1217,6 +1585,12 @@ def estimate_from_dataframes(
     shared_parameter_match_atol: float = 1e-12,
     density_weighting_cfg: Mapping[str, object] | None = None,
     inverse_mapping_cfg: Mapping[str, object] | None = None,
+    derived_tt_prefix: str = "last",
+    derived_trigger_types: Sequence[str] | str | None = None,
+    derived_include_to_tt_rate_hz: bool = False,
+    derived_include_trigger_type_rates: bool = True,
+    derived_include_rate_histogram: bool = False,
+    derived_physics_features: Sequence[str] | str | bool | None = None,
     histogram_distance_weight: float = 1.0,
     histogram_distance_blend_mode: str = "normalized",
 ) -> pd.DataFrame:
@@ -1226,13 +1600,102 @@ def estimate_from_dataframes(
               if c in dict_df.columns and c in data_df.columns]
 
     # ── Auto-detect feature columns ──────────────────────────────────
-    if isinstance(feature_columns, str) and feature_columns == "auto":
-        # Use the union of columns present in both
+    _feature_mode = (
+        feature_columns.strip().lower()
+        if isinstance(feature_columns, str) else ""
+    )
+    dict_feature_source = dict_df
+    data_feature_source = data_df
+    derived_rate_col_used: str | None = None
+    derived_rate_sources: list[str] = []
+    derived_physics_cols_used: list[str] = []
+    if _feature_mode == "auto":
         feat_from_dict = _auto_feature_columns(dict_df, include_global_rate, global_rate_col)
         feat_from_data = _auto_feature_columns(data_df, include_global_rate, global_rate_col)
         feature_cols = sorted(set(feat_from_dict) & set(feat_from_data))
         if not feature_cols:
             raise ValueError("No common feature columns found between dictionary and dataset.")
+    elif _feature_mode == "derived":
+        (
+            dict_feature_source,
+            data_feature_source,
+            derived_rate_col_used,
+            derived_rate_sources,
+        ) = _append_derived_tt_global_rate_column(
+            dict_df=dict_df,
+            data_df=data_df,
+            prefix_selector=str(derived_tt_prefix),
+            trigger_type_allowlist=derived_trigger_types,
+            include_to_tt_rate_hz=_safe_bool(derived_include_to_tt_rate_hz, False),
+            output_column=DERIVED_TT_GLOBAL_RATE_COL,
+        )
+        if derived_rate_col_used is None and global_rate_col in dict_df.columns and global_rate_col in data_df.columns:
+            derived_rate_col_used = str(global_rate_col)
+        if derived_rate_col_used is None:
+            raise ValueError(
+                "No derived global-rate feature available for derived mode. "
+                "Could not build TT-trigger sum and fallback global-rate column is missing."
+            )
+        (
+            dict_feature_source,
+            data_feature_source,
+            derived_physics_cols_used,
+        ) = _append_derived_physics_feature_columns(
+            dict_df=dict_feature_source,
+            data_df=data_feature_source,
+            rate_column=derived_rate_col_used,
+            physics_features=derived_physics_features,
+        )
+        feat_from_dict = _derived_feature_columns(
+            dict_feature_source,
+            rate_column=derived_rate_col_used,
+            trigger_type_rate_columns=(
+                derived_rate_sources
+                if _safe_bool(derived_include_trigger_type_rates, True)
+                else None
+            ),
+            include_rate_histogram=_safe_bool(derived_include_rate_histogram, False),
+            physics_feature_columns=derived_physics_cols_used,
+        )
+        feat_from_data = _derived_feature_columns(
+            data_feature_source,
+            rate_column=derived_rate_col_used,
+            trigger_type_rate_columns=(
+                derived_rate_sources
+                if _safe_bool(derived_include_trigger_type_rates, True)
+                else None
+            ),
+            include_rate_histogram=_safe_bool(derived_include_rate_histogram, False),
+            physics_feature_columns=derived_physics_cols_used,
+        )
+        feature_cols = sorted(set(feat_from_dict) & set(feat_from_data))
+        if not feature_cols:
+            raise ValueError(
+                "No derived feature columns found in both dictionary and dataset. "
+                "Expected eff_empirical_1..4 and a global-rate feature."
+            )
+        if derived_rate_col_used == DERIVED_TT_GLOBAL_RATE_COL:
+            log.info(
+                "Derived feature mode: using TT-sum global rate from %d trigger-rate column(s): %s",
+                len(derived_rate_sources),
+                derived_rate_sources,
+            )
+        else:
+            log.info(
+                "Derived feature mode: TT-sum unavailable, using fallback rate column '%s'.",
+                derived_rate_col_used,
+            )
+        if _safe_bool(derived_include_rate_histogram, False):
+            n_hist = sum(1 for c in feature_cols if RATE_HISTOGRAM_BIN_RE.match(str(c)))
+            log.info("Derived feature mode: including %d rate-histogram bin feature(s).", n_hist)
+        if _safe_bool(derived_include_trigger_type_rates, True):
+            n_tt = sum(1 for c in feature_cols if TT_RATE_COLUMN_RE.match(str(c)))
+            log.info("Derived feature mode: including %d trigger-type rate feature(s).", n_tt)
+        if derived_physics_cols_used:
+            log.info(
+                "Derived feature mode: including physics transform feature(s): %s",
+                derived_physics_cols_used,
+            )
     else:
         requested_feature_cols = parse_explicit_feature_columns(feature_columns)
         feature_cols = [
@@ -1253,20 +1716,21 @@ def estimate_from_dataframes(
             )
 
     # ── Auto-detect parameter columns ────────────────────────────────
+    feature_col_set = set(feature_cols)
     if param_columns is None:
         param_columns = []
         for c in ["flux_cm2_min", "cos_n",
                    "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
                    "eff_empirical_1", "eff_empirical_2", "eff_empirical_3", "eff_empirical_4"]:
-            if c in dict_df.columns:
+            if c in dict_df.columns and c not in feature_col_set:
                 param_columns.append(c)
         if not param_columns:
             raise ValueError("No parameter columns found in dictionary.")
     log.info("Parameter columns to estimate: %s", param_columns)
 
     # ── Coerce feature columns to numeric ────────────────────────────
-    dict_features = dict_df[feature_cols].apply(pd.to_numeric, errors="coerce")
-    data_features = data_df[feature_cols].apply(pd.to_numeric, errors="coerce")
+    dict_features = dict_feature_source[feature_cols].apply(pd.to_numeric, errors="coerce")
+    data_features = data_feature_source[feature_cols].apply(pd.to_numeric, errors="coerce")
     (
         dict_features,
         data_features,
@@ -1437,6 +1901,8 @@ def estimate_from_dataframes(
         for col in shared_param_cols
     }
     param_set_guard_enabled = (
+        shared_exclusion_enabled
+        and
         "param_set_id" in dict_df.columns
         and "param_set_id" in data_df.columns
         and "param_set_id" not in shared_param_ignore
@@ -1666,6 +2132,10 @@ def estimate_from_dataframes(
                     log.info("  Estimated %d / %d", i + 1, n_data)
                 continue
             weights /= sum_weights
+            sample_base_for_local = data_scaled_base[i] if non_hist_feature_idx else None
+            top_base_for_local = (
+                dict_scaled_base[top_indices] if non_hist_feature_idx else None
+            )
 
             for pc in param_columns:
                 vals = dict_param_arrays[pc][top_indices]
@@ -1679,6 +2149,13 @@ def estimate_from_dataframes(
                         w /= w.sum()
                     if aggregation_mode == "weighted_median":
                         row_result[f"est_{pc}"] = _weighted_median(vals, w)
+                    elif aggregation_mode == "local_linear":
+                        row_result[f"est_{pc}"] = _local_linear_estimate(
+                            vals,
+                            w,
+                            sample_features=sample_base_for_local,
+                            neighbor_features=top_base_for_local,
+                        )
                     else:
                         row_result[f"est_{pc}"] = float(np.sum(w * np.nan_to_num(vals)))
 

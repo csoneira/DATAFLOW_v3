@@ -179,6 +179,64 @@ def _select_default_dataset_path(config: dict) -> Path:
     return DEFAULT_DATASET
 
 
+def _parse_true_is_dictionary_entry_mask(df: pd.DataFrame) -> pd.Series:
+    if "true_is_dictionary_entry" not in df.columns:
+        return pd.Series(False, index=df.index, dtype=bool)
+    return df["true_is_dictionary_entry"].astype(str).str.lower().isin(
+        ("true", "1", "yes", "y")
+    )
+
+
+def _rows_with_dictionary_parameter_set(
+    val: pd.DataFrame,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+) -> pd.Series:
+    """Flag validation rows whose parameter set exists in dictionary."""
+    mask = pd.Series(False, index=val.index, dtype=bool)
+
+    # Preferred: exact identifier mapped from dataset via dataset_index.
+    if (
+        "dataset_index" in val.columns
+        and "param_hash_x" in data_df.columns
+        and "param_hash_x" in dict_df.columns
+    ):
+        idx = pd.to_numeric(val["dataset_index"], errors="coerce")
+        idx_ok = idx.notna() & (idx >= 0) & (idx < len(data_df))
+        if idx_ok.any():
+            row_keys = pd.Series(index=val.index, dtype=object)
+            mapped = data_df.iloc[idx[idx_ok].astype(int).to_numpy()]["param_hash_x"].astype(str).to_numpy()
+            row_keys.loc[idx_ok] = mapped
+            dict_keys = set(dict_df["param_hash_x"].astype(str).dropna().tolist())
+            return row_keys.isin(dict_keys).fillna(False)
+
+    # Fallback: tuple over true physical params (and z planes when available).
+    base_cols = [
+        "flux_cm2_min", "cos_n",
+        "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
+        "z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4",
+    ]
+    dict_cols = [c for c in base_cols if c in dict_df.columns and f"true_{c}" in val.columns]
+    if not dict_cols:
+        return mask
+
+    dict_num = dict_df[dict_cols].apply(pd.to_numeric, errors="coerce")
+    val_num = val[[f"true_{c}" for c in dict_cols]].apply(pd.to_numeric, errors="coerce")
+    dict_keys = {
+        tuple(np.round(r, 12))
+        for r in dict_num.to_numpy(dtype=float)
+        if np.all(np.isfinite(r))
+    }
+    if not dict_keys:
+        return mask
+
+    val_keys = [
+        tuple(np.round(r, 12)) if np.all(np.isfinite(r)) else None
+        for r in val_num.to_numpy(dtype=float)
+    ]
+    return pd.Series([k in dict_keys if k is not None else False for k in val_keys], index=val.index)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Step 2.2: Validate the inverse-problem solution."
@@ -304,10 +362,61 @@ def main() -> int:
     elif "n_events" in data_df.columns:
         val["n_events"] = pd.to_numeric(data_df["n_events"].values[:len(val)], errors="coerce")
 
+    # Optionally exclude dictionary-like rows from reported validation.
+    exclude_dict_rows = _as_bool(cfg_22.get("exclude_dictionary_entries", True), True)
+    exclude_dict_paramset = _as_bool(
+        cfg_22.get("exclude_dictionary_paramset_matches", True),
+        True,
+    )
+    exclusion_mask = pd.Series(False, index=val.index, dtype=bool)
+    if exclude_dict_rows:
+        exclusion_mask |= _parse_true_is_dictionary_entry_mask(val)
+    if exclude_dict_paramset:
+        exclusion_mask |= _rows_with_dictionary_parameter_set(val, dict_df, data_df)
+
+    n_excluded = int(exclusion_mask.sum())
+    val_all = val.copy()
+    val_report = val.loc[~exclusion_mask].copy() if n_excluded > 0 else val.copy()
+    val_in_dict = val.loc[_parse_true_is_dictionary_entry_mask(val)].copy()
+    if val_report.empty:
+        log.warning(
+            "Validation exclusion removed all rows (dict_entries=%s, dict_paramset_matches=%s). "
+            "Falling back to full validation table.",
+            exclude_dict_rows,
+            exclude_dict_paramset,
+        )
+        val_report = val.copy()
+        n_excluded = 0
+    elif n_excluded > 0:
+        log.info(
+            "Validation: excluded %d dictionary-like row(s) "
+            "(dict_entries=%s, dict_paramset_matches=%s). Remaining=%d.",
+            n_excluded,
+            exclude_dict_rows,
+            exclude_dict_paramset,
+            len(val_report),
+        )
+
+    plot_population = str(cfg_22.get("plot_population", "off_dict_strict")).strip().lower()
+    if plot_population in {"all", "full"}:
+        val_for_plots = val_all
+        plot_population_resolved = "all"
+    else:
+        val_for_plots = val_report
+        plot_population_resolved = "off_dict_strict"
+
     # ── Save ─────────────────────────────────────────────────────────
     val_path = FILES_DIR / "validation_results.csv"
-    val.to_csv(val_path, index=False)
-    log.info("Wrote validation results: %s (%d rows)", val_path, len(val))
+    val_all.to_csv(val_path, index=False)
+    val_strict_path = FILES_DIR / "validation_results_off_dict_strict.csv"
+    val_report.to_csv(val_strict_path, index=False)
+    log.info(
+        "Wrote validation results: %s (%d rows, all) and %s (%d rows, off_dict_strict)",
+        val_path,
+        len(val_all),
+        val_strict_path,
+        len(val_report),
+    )
 
     # Summary
     summary: dict = {
@@ -315,24 +424,50 @@ def main() -> int:
         "dictionary_csv": str(dict_path),
         "dataset_csv": str(data_path),
         "dataset_source_mode": dataset_mode,
-        "total_points": len(val),
+        "total_points_input": len(val_all),
+        "total_points": len(val_report),
+        "total_points_all": len(val_all),
+        "total_points_off_dict_strict": len(val_report),
+        "total_points_in_dict": len(val_in_dict),
+        "excluded_dictionary_like_points": int(n_excluded),
+        "exclude_dictionary_entries": bool(exclude_dict_rows),
+        "exclude_dictionary_paramset_matches": bool(exclude_dict_paramset),
+        "plot_population": plot_population_resolved,
         "parameters_validated": param_names,
     }
+    metric_scopes = [
+        ("all", val_all),
+        ("off_dict_strict", val_report),
+        ("in_dict", val_in_dict),
+    ]
+    for scope_name, scope_df in metric_scopes:
+        for pname in param_names:
+            col = f"abs_relerr_{pname}_pct"
+            if col not in scope_df.columns:
+                continue
+            s = pd.to_numeric(scope_df[col], errors="coerce").dropna()
+            if s.empty:
+                continue
+            summary[f"{scope_name}_median_abs_relerr_{pname}_pct"] = float(s.median())
+            summary[f"{scope_name}_p68_abs_relerr_{pname}_pct"] = float(s.quantile(0.68))
+            summary[f"{scope_name}_p95_abs_relerr_{pname}_pct"] = float(s.quantile(0.95))
+
+    # Backward-compatible top-level metrics: prefer off-dict strict.
+    preferred_scope = "off_dict_strict" if len(val_report) > 0 else "all"
+    summary["primary_metrics_scope"] = preferred_scope
     for pname in param_names:
-        col = f"abs_relerr_{pname}_pct"
-        if col in val.columns:
-            s = val[col].dropna()
-            if not s.empty:
-                summary[f"median_abs_relerr_{pname}_pct"] = float(s.median())
-                summary[f"p68_abs_relerr_{pname}_pct"] = float(s.quantile(0.68))
-                summary[f"p95_abs_relerr_{pname}_pct"] = float(s.quantile(0.95))
+        for stat in ("median", "p68", "p95"):
+            key_src = f"{preferred_scope}_{stat}_abs_relerr_{pname}_pct"
+            key_dst = f"{stat}_abs_relerr_{pname}_pct"
+            if key_src in summary:
+                summary[key_dst] = summary[key_src]
 
     with open(FILES_DIR / "validation_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
     # ── Plots ────────────────────────────────────────────────────────
     _make_plots(
-        val,
+        val_for_plots,
         dict_df,
         data_df,
         param_names,

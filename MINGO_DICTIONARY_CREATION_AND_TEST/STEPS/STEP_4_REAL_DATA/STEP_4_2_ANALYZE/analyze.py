@@ -119,7 +119,15 @@ log = logging.getLogger("STEP_4.2")
 if str(INFERENCE_DIR) not in sys.path:
     sys.path.insert(0, str(INFERENCE_DIR))
 try:
-    from estimate_parameters import estimate_from_dataframes, resolve_inverse_mapping_cfg  # noqa: E402
+    from estimate_parameters import (  # noqa: E402
+        DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL,
+        _append_derived_physics_feature_columns,
+        _append_derived_tt_global_rate_column,
+        _derived_feature_columns as _shared_derived_feature_columns,
+        _normalize_derived_physics_features,
+        estimate_from_dataframes,
+        resolve_inverse_mapping_cfg,
+    )
     from feature_columns_config import (  # noqa: E402
         parse_explicit_feature_columns,
         resolve_feature_columns_from_catalog,
@@ -193,6 +201,16 @@ def _safe_bool(value: object, default: bool) -> bool:
     if s in {"0", "false", "no", "n", "off"}:
         return False
     return bool(default)
+
+
+def _safe_int(value: object, default: int, *, minimum: int | None = None) -> int:
+    try:
+        out = int(value)
+    except (TypeError, ValueError):
+        out = int(default)
+    if minimum is not None:
+        out = max(int(minimum), out)
+    return out
 
 
 def _safe_task_ids(raw: object) -> list[int]:
@@ -696,16 +714,19 @@ def _compute_eff_from_rates(
 
     r_miss = pd.to_numeric(df[col_missing_rate], errors="coerce")
     r_1234 = pd.to_numeric(df[col_1234_rate], errors="coerce")
-    denom = r_1234.replace({0.0: np.nan})
-    eff = 1.0 - (r_miss / denom)
+    # Empirical efficiency definition consistent with STEP 1.2 dictionary:
+    #   eff = N(1234) / ( N(1234) + N(three-plane-missing-i) )
+    # This keeps efficiencies bounded in [0, 1] for non-negative rates.
+    denom = (r_1234 + r_miss).replace({0.0: np.nan})
+    eff = r_1234 / denom
     eff = eff.where(np.isfinite(eff), np.nan)
-    return (eff, f"1 - {col_missing_rate}/{col_1234_rate}")
+    return (eff, f"{col_1234_rate}/({col_1234_rate} + {col_missing_rate})")
 
 
 def _compute_empirical_efficiencies_from_rates(
     df: pd.DataFrame,
 ) -> tuple[dict[int, pd.Series], dict[int, str], dict[int, dict[str, str | None]], str | None]:
-    """Compute plane efficiencies from 1 - (three-plane / four-plane) using TT rates."""
+    """Compute plane efficiencies from four/(four+three-missing) using TT rates."""
     preferred_prefixes: list[str] | None = None
     if isinstance(df.attrs.get("preferred_tt_prefixes"), list):
         preferred_prefixes = [str(v) for v in df.attrs.get("preferred_tt_prefixes", [])]
@@ -928,6 +949,8 @@ def _transform_efficiencies_with_fits(
     fit_by_plane: dict[int, list[float]],
     *,
     mode: str = "forward",
+    input_domain_by_plane: dict[int, tuple[float, float]] | None = None,
+    clip_output_to_unit_interval: bool = False,
 ) -> tuple[dict[int, pd.Series], dict[int, str]]:
     """Apply polynomial fit transform per plane.
 
@@ -940,6 +963,18 @@ def _transform_efficiencies_with_fits(
     use_inverse = str(mode).strip().lower() != "forward"
     for plane in (1, 2, 3, 4):
         raw = pd.to_numeric(eff_by_plane.get(plane), errors="coerce")
+        raw_eval = raw.copy()
+        domain_note = ""
+        if input_domain_by_plane is not None and plane in input_domain_by_plane:
+            dom_raw = input_domain_by_plane.get(plane)
+            if isinstance(dom_raw, (list, tuple)) and len(dom_raw) == 2:
+                lo = _safe_float(dom_raw[0], np.nan)
+                hi = _safe_float(dom_raw[1], np.nan)
+                if np.isfinite(lo) and np.isfinite(hi):
+                    if hi < lo:
+                        lo, hi = hi, lo
+                    raw_eval = raw_eval.clip(lower=float(lo), upper=float(hi))
+                    domain_note = f"; x_clipped_to_[{float(lo):.6g},{float(hi):.6g}]"
         if plane not in fit_by_plane:
             transformed[plane] = pd.Series(np.nan, index=raw.index)
             formula[plane] = "missing_fit_polynomial"
@@ -952,13 +987,17 @@ def _transform_efficiencies_with_fits(
         degree = int(coeffs.size - 1)
         poly_expr = _format_polynomial_expr(coeffs, variable="x", precision=8)
         if use_inverse:
-            corr = _invert_polynomial_values(raw, coeffs)
-            formula[plane] = f"inverse_root(P(x)=eff_raw_empirical), deg={degree}, P(x)={poly_expr}"
+            corr = _invert_polynomial_values(raw_eval, coeffs)
+            formula[plane] = (
+                f"inverse_root(P(x)=eff_raw_empirical), deg={degree}, P(x)={poly_expr}{domain_note}"
+            )
         else:
-            corr = pd.Series(np.polyval(coeffs, raw.to_numpy(dtype=float)), index=raw.index)
-            formula[plane] = f"P(eff_raw_empirical), deg={degree}, P(x)={poly_expr}"
-        # Keep transformed efficiencies fully unconstrained (no clipping).
+            corr = pd.Series(np.polyval(coeffs, raw_eval.to_numpy(dtype=float)), index=raw.index)
+            formula[plane] = f"P(eff_raw_empirical), deg={degree}, P(x)={poly_expr}{domain_note}"
         corr = corr.where(np.isfinite(corr), np.nan)
+        if clip_output_to_unit_interval:
+            corr = corr.clip(lower=0.0, upper=1.0)
+            formula[plane] = f"{formula[plane]}; y_clipped_to_[0,1]"
         transformed[plane] = corr
     return (transformed, formula)
 
@@ -1490,6 +1529,7 @@ def _plot_flux_recovery_story_real(
     distance_label: str,
     eff_series: pd.Series,
     eff_label: str,
+    eff_series_map: dict[str, pd.Series] | None,
     global_rate_series: pd.Series,
     global_rate_label: str,
     flux_est_series: pd.Series,
@@ -1538,7 +1578,18 @@ def _plot_flux_recovery_story_real(
         if distance_series is not None
         else np.full(len(xv), np.nan, dtype=float)
     )
-    eff = pd.to_numeric(eff_series, errors="coerce").to_numpy(dtype=float)
+    eff_curves: list[tuple[str, np.ndarray]] = []
+    if eff_series_map:
+        for label, series in eff_series_map.items():
+            vals = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+            if len(vals) == len(xv):
+                eff_curves.append((str(label), vals))
+    if not eff_curves:
+        eff_curves = [(str(eff_label), pd.to_numeric(eff_series, errors="coerce").to_numpy(dtype=float))]
+
+    eff_any_finite = any(np.isfinite(vals).any() for _, vals in eff_curves)
+    eff_all_finite = [vals[np.isfinite(vals)] for _, vals in eff_curves if np.isfinite(vals).any()]
+    eff_bg = np.concatenate(eff_all_finite) if eff_all_finite else np.array([], dtype=float)
     rate = pd.to_numeric(global_rate_series, errors="coerce").to_numpy(dtype=float)
     flux_est = pd.to_numeric(flux_est_series, errors="coerce").to_numpy(dtype=float)
     flux_unc = (
@@ -1554,7 +1605,7 @@ def _plot_flux_recovery_story_real(
 
     valid_any = (
         np.isfinite(distance).any()
-        or np.isfinite(eff).any()
+        or eff_any_finite
         or np.isfinite(rate).any()
         or np.isfinite(flux_est).any()
         or (flux_ref is not None and np.isfinite(flux_ref).any())
@@ -1602,29 +1653,34 @@ def _plot_flux_recovery_story_real(
     _apply_striped_background(axes[0], distance)
     _legend_if_labeled(axes[0], loc="best", fontsize=8)
 
-    # 2) Estimated efficiency.
-    m_eff = np.isfinite(xv) & np.isfinite(eff)
-    if np.any(m_eff):
+    # 2) Estimated efficiencies (all available planes).
+    eff_colors = ["#FF7F0E", "#1F77B4", "#2CA02C", "#9467BD", "#8C564B", "#17BECF"]
+    n_eff_drawn = 0
+    for i, (label, eff_vals) in enumerate(eff_curves):
+        m_eff = np.isfinite(xv) & np.isfinite(eff_vals)
+        if not np.any(m_eff):
+            continue
         order = np.argsort(xv[m_eff])
         xe = xv[m_eff][order]
-        ye = eff[m_eff][order]
+        ye = eff_vals[m_eff][order]
         axes[1].plot(
             xe,
             ye,
-            color="#FF7F0E",
-            linewidth=1.15,
+            color=eff_colors[i % len(eff_colors)],
+            linewidth=1.05,
             marker="o",
-            markersize=3.0,
+            markersize=2.7,
             markerfacecolor="white",
-            markeredgewidth=0.65,
+            markeredgewidth=0.60,
             alpha=0.90,
-            label=f"Estimated efficiency ({eff_label})",
+            label=f"Estimated efficiency ({label})",
         )
-    else:
-        axes[1].text(0.5, 0.5, f"No finite values for {eff_label}", ha="center", va="center")
+        n_eff_drawn += 1
+    if n_eff_drawn == 0:
+        axes[1].text(0.5, 0.5, "No finite estimated efficiency values", ha="center", va="center")
     axes[1].set_ylabel("Estimated eff")
-    _apply_striped_background(axes[1], eff)
-    _legend_if_labeled(axes[1], loc="best", fontsize=8)
+    _apply_striped_background(axes[1], eff_bg)
+    _legend_if_labeled(axes[1], loc="best", fontsize=8, ncol=2)
 
     # 3) Global rate.
     m_rate = np.isfinite(xv) & np.isfinite(rate)
@@ -2093,6 +2149,42 @@ def main() -> int:
         ),
     )
     n_events_column_cfg = cfg_42.get("n_events_column", "auto")
+    derived_feature_subset_mode = str(cfg_42.get("derived_feature_subset", "full")).strip().lower()
+    if derived_feature_subset_mode not in {
+        "full",
+        "tt_only",
+        "tt_plus_global",
+        "tt_plus_global_log",
+        "tt_plus_global_eff",
+    }:
+        log.warning(
+            "Invalid step_4_2.derived_feature_subset=%r; using 'full'.",
+            derived_feature_subset_mode,
+        )
+        derived_feature_subset_mode = "full"
+    derived_tt_only_neighbor_count = _safe_int(
+        cfg_42.get("derived_tt_only_neighbor_count", 120),
+        120,
+        minimum=1,
+    )
+    derived_tt_only_weighting = str(
+        cfg_42.get("derived_tt_only_weighting", "uniform")
+    ).strip().lower()
+    if derived_tt_only_weighting not in {"uniform", "inverse_distance", "softmax"}:
+        log.warning(
+            "Invalid step_4_2.derived_tt_only_weighting=%r; using 'uniform'.",
+            derived_tt_only_weighting,
+        )
+        derived_tt_only_weighting = "uniform"
+    derived_tt_only_aggregation = str(
+        cfg_42.get("derived_tt_only_aggregation", "local_linear")
+    ).strip().lower()
+    if derived_tt_only_aggregation not in {"weighted_mean", "weighted_median", "local_linear"}:
+        log.warning(
+            "Invalid step_4_2.derived_tt_only_aggregation=%r; using 'local_linear'.",
+            derived_tt_only_aggregation,
+        )
+        derived_tt_only_aggregation = "local_linear"
     task_ids_cfg = cfg_41.get("task_ids", config.get("task_ids", [1]))
     selected_task_ids = _safe_task_ids(task_ids_cfg)
     preferred_tt_prefixes = _preferred_tt_prefixes_for_task_ids(selected_task_ids)
@@ -2100,6 +2192,14 @@ def main() -> int:
     eff_transform_mode_requested = str(cfg_42.get("eff_transform_mode", "auto")).strip().lower()
     if eff_transform_mode_requested not in {"auto", "inverse", "forward"}:
         eff_transform_mode_requested = "auto"
+    eff_transform_clip_input_to_dictionary_domain = _safe_bool(
+        cfg_42.get("eff_transform_clip_input_to_dictionary_domain", True),
+        True,
+    )
+    eff_transform_clip_output_to_unit_interval = _safe_bool(
+        cfg_42.get("eff_transform_clip_output_to_unit_interval", True),
+        True,
+    )
 
     log.info("Real collected: %s", real_path)
     log.info("Dictionary:     %s", dict_path)
@@ -2128,28 +2228,122 @@ def main() -> int:
         log.error("Dictionary table is empty: %s", dict_path)
         return 1
 
+    # Prepare per-plane empirical efficiencies before feature resolution so
+    # derived mode can use efficiency coordinates (same method domain as STEP 2.1).
+    # Use the same prefix preference as feature matching (post/fit/...) to keep
+    # rate-space and efficiency-space internally consistent.
+    feature_eff_source_prefix: dict[str, str | None] = {}
+    feature_eff_source_formula: dict[str, dict[str, str]] = {}
+    feature_eff_finite_count: dict[str, dict[str, int]] = {}
+    for label, source_frame in (("real", real_df), ("dictionary", dict_df)):
+        frame = source_frame.copy()
+        frame.attrs["preferred_tt_prefixes"] = preferred_feature_prefixes
+        eff_feature_by_plane, eff_feature_formula_by_plane, _, source_prefix = _compute_empirical_efficiencies_from_rates(frame)
+        feature_eff_source_prefix[label] = source_prefix
+        feature_eff_source_formula[label] = {
+            f"eff{plane}": str(eff_feature_formula_by_plane.get(plane, "missing_rate_columns"))
+            for plane in (1, 2, 3, 4)
+        }
+        counts_by_plane: dict[str, int] = {}
+        injected_cols: dict[str, pd.Series] = {}
+        for plane in (1, 2, 3, 4):
+            col = f"eff_empirical_{plane}"
+            derived_vals = pd.to_numeric(eff_feature_by_plane.get(plane), errors="coerce")
+            if col in frame.columns:
+                existing = pd.to_numeric(frame[col], errors="coerce")
+                injected_cols[col] = existing.where(existing.notna(), derived_vals)
+            else:
+                injected_cols[col] = derived_vals
+            counts_by_plane[f"eff{plane}"] = int(pd.to_numeric(injected_cols[col], errors="coerce").notna().sum())
+        if injected_cols:
+            frame[list(injected_cols.keys())] = pd.DataFrame(injected_cols, index=frame.index)
+        feature_eff_finite_count[label] = counts_by_plane
+        if label == "real":
+            real_df = frame
+        else:
+            dict_df = frame
+    log.info(
+        "Feature empirical efficiencies injected: real_prefix=%s dict_prefix=%s (finite counts real=%s dict=%s)",
+        feature_eff_source_prefix.get("real"),
+        feature_eff_source_prefix.get("dictionary"),
+        feature_eff_finite_count.get("real"),
+        feature_eff_finite_count.get("dictionary"),
+    )
+
+    feature_mode = str(feature_columns_cfg).strip().lower() if isinstance(feature_columns_cfg, str) else ""
     auto_resolution_error: str | None = None
-    try:
-        dict_auto, real_auto, auto_feature_columns, auto_feature_strategy, auto_feature_mapping = _resolve_feature_columns_auto(
-            dict_df=dict_df,
-            real_df=real_df,
-            include_global_rate=include_global_rate,
-            global_rate_col=global_rate_col,
-            preferred_prefixes=preferred_feature_prefixes,
-        )
-    except ValueError as exc:
-        auto_resolution_error = str(exc)
+    if feature_mode == "derived":
         dict_auto, real_auto = dict_df, real_df
         auto_feature_columns = []
-        auto_feature_strategy = "auto_unavailable"
+        auto_feature_strategy = "auto_skipped_for_derived"
         auto_feature_mapping = []
+    else:
+        try:
+            dict_auto, real_auto, auto_feature_columns, auto_feature_strategy, auto_feature_mapping = _resolve_feature_columns_auto(
+                dict_df=dict_df,
+                real_df=real_df,
+                include_global_rate=include_global_rate,
+                global_rate_col=global_rate_col,
+                preferred_prefixes=preferred_feature_prefixes,
+            )
+        except ValueError as exc:
+            auto_resolution_error = str(exc)
+            dict_auto, real_auto = dict_df, real_df
+            auto_feature_columns = []
+            auto_feature_strategy = "auto_unavailable"
+            auto_feature_mapping = []
     catalog = sync_feature_column_catalog(
         catalog_path=CONFIG_COLUMNS_PATH,
         dict_df=dict_df,
         default_enabled_columns=auto_feature_columns,
     )
+    derived_cfg_raw = cfg_21.get("derived_features", {})
+    if not isinstance(derived_cfg_raw, dict):
+        derived_cfg_raw = {}
+    categories = catalog.get("categories", {})
+    if not isinstance(categories, dict):
+        categories = {}
+    trigger_cfg = categories.get("trigger_type", {})
+    if not isinstance(trigger_cfg, dict):
+        trigger_cfg = {}
+    rate_hist_cfg = categories.get("rate_histogram", {})
+    if not isinstance(rate_hist_cfg, dict):
+        rate_hist_cfg = {}
 
-    feature_mode = str(feature_columns_cfg).strip().lower() if isinstance(feature_columns_cfg, str) else ""
+    derived_tt_prefix = str(
+        derived_cfg_raw.get("prefix", catalog.get("prefix", "last"))
+    ).strip() or "last"
+    derived_trigger_types = parse_explicit_feature_columns(
+        derived_cfg_raw.get("trigger_types", trigger_cfg.get("trigger_types", []))
+    )
+    derived_include_to_tt = _safe_bool(
+        derived_cfg_raw.get(
+            "include_to_tt_rate_hz",
+            derived_cfg_raw.get(
+                "include_to_prefix_rates",
+                catalog.get("*_to_*_tt_*_rate_hz", False),
+            ),
+        ),
+        bool(catalog.get("*_to_*_tt_*_rate_hz", False)),
+    )
+    derived_include_trigger_rates = _safe_bool(
+        derived_cfg_raw.get(
+            "include_trigger_type_rates",
+            trigger_cfg.get("enabled", True),
+        ),
+        bool(trigger_cfg.get("enabled", True)),
+    )
+    derived_include_hist = _safe_bool(
+        derived_cfg_raw.get(
+            "include_rate_histogram",
+            rate_hist_cfg.get("enabled", catalog.get("*_*_rate_hz", False)),
+        ),
+        bool(rate_hist_cfg.get("enabled", catalog.get("*_*_rate_hz", False))),
+    )
+    derived_physics_features = _normalize_derived_physics_features(
+        derived_cfg_raw.get("physics_features", [])
+    )
+
     if feature_mode == "auto":
         if auto_resolution_error is not None:
             log.error("%s", auto_resolution_error)
@@ -2158,6 +2352,102 @@ def main() -> int:
         feature_columns = auto_feature_columns
         feature_strategy = auto_feature_strategy
         feature_mapping = auto_feature_mapping
+    elif feature_mode == "derived":
+        (
+            dict_work,
+            real_work,
+            derived_rate_col,
+            derived_rate_sources,
+        ) = _append_derived_tt_global_rate_column(
+            dict_df=dict_df,
+            data_df=real_df,
+            prefix_selector=derived_tt_prefix,
+            trigger_type_allowlist=derived_trigger_types,
+            include_to_tt_rate_hz=bool(derived_include_to_tt),
+        )
+        if (
+            derived_rate_col is None
+            and global_rate_col in dict_df.columns
+            and global_rate_col in real_df.columns
+        ):
+            derived_rate_col = str(global_rate_col)
+        if derived_rate_col is None:
+            log.error(
+                "No derived feature global-rate source available. "
+                "TT trigger-type sum could not be built and fallback global-rate column is missing."
+            )
+            return 1
+        (
+            dict_work,
+            real_work,
+            derived_physics_cols,
+        ) = _append_derived_physics_feature_columns(
+            dict_df=dict_work,
+            data_df=real_work,
+            rate_column=derived_rate_col,
+            physics_features=derived_physics_features,
+        )
+        feat_dict = _shared_derived_feature_columns(
+            dict_work,
+            rate_column=derived_rate_col,
+            trigger_type_rate_columns=(
+                derived_rate_sources
+                if bool(derived_include_trigger_rates)
+                else None
+            ),
+            include_rate_histogram=bool(derived_include_hist),
+            physics_feature_columns=derived_physics_cols,
+        )
+        feat_real = _shared_derived_feature_columns(
+            real_work,
+            rate_column=derived_rate_col,
+            trigger_type_rate_columns=(
+                derived_rate_sources
+                if bool(derived_include_trigger_rates)
+                else None
+            ),
+            include_rate_histogram=bool(derived_include_hist),
+            physics_feature_columns=derived_physics_cols,
+        )
+        feature_columns = sorted(set(feat_dict) & set(feat_real))
+        if derived_feature_subset_mode != "full":
+            subset_cols: list[str] = []
+            if derived_feature_subset_mode in {"tt_only", "tt_plus_global", "tt_plus_global_log", "tt_plus_global_eff"}:
+                subset_cols.extend([c for c in derived_rate_sources if c in feature_columns])
+            if derived_feature_subset_mode in {"tt_plus_global", "tt_plus_global_log", "tt_plus_global_eff"}:
+                if derived_rate_col in feature_columns:
+                    subset_cols.append(derived_rate_col)
+            if derived_feature_subset_mode in {"tt_plus_global_log"}:
+                if DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL in feature_columns:
+                    subset_cols.append(DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL)
+            if derived_feature_subset_mode in {"tt_plus_global_eff"}:
+                subset_cols.extend(
+                    [
+                        c
+                        for c in ("eff_empirical_1", "eff_empirical_2", "eff_empirical_3", "eff_empirical_4")
+                        if c in feature_columns
+                    ]
+                )
+            feature_columns = list(dict.fromkeys(subset_cols))
+        if not feature_columns:
+            log.error(
+                "No derived feature columns found in dictionary/real-data intersection."
+            )
+            return 1
+        feature_strategy = "derived"
+        feature_mapping = []
+        log.info(
+            "Derived features: prefix=%s trigger_types=%s include_hist=%s "
+            "include_trigger_rates=%s physics=%s rate_feature=%s rate_sources=%s subset=%s",
+            derived_tt_prefix,
+            derived_trigger_types,
+            bool(derived_include_hist),
+            bool(derived_include_trigger_rates),
+            derived_physics_features,
+            derived_rate_col,
+            derived_rate_sources,
+            derived_feature_subset_mode,
+        )
     elif feature_mode in {"config_columns", "catalog", "config_columns_json"}:
         selected, catalog_info = resolve_feature_columns_from_catalog(
             catalog=catalog,
@@ -2211,6 +2501,19 @@ def main() -> int:
         return 1
     log.info("Using %d features (%s).", len(feature_columns), feature_strategy)
 
+    inverse_mapping_cfg_runtime = dict(inverse_mapping_cfg)
+    if feature_mode == "derived" and derived_feature_subset_mode == "tt_only":
+        inverse_mapping_cfg_runtime["neighbor_selection"] = "knn"
+        inverse_mapping_cfg_runtime["neighbor_count"] = int(derived_tt_only_neighbor_count)
+        inverse_mapping_cfg_runtime["weighting"] = str(derived_tt_only_weighting)
+        inverse_mapping_cfg_runtime["aggregation"] = str(derived_tt_only_aggregation)
+        log.info(
+            "Applied STEP 4.2 tt_only runtime override: selection=knn k=%d weighting=%s aggregation=%s.",
+            int(derived_tt_only_neighbor_count),
+            str(derived_tt_only_weighting),
+            str(derived_tt_only_aggregation),
+        )
+
     est_df = estimate_from_dataframes(
         dict_df=dict_work,
         data_df=real_work,
@@ -2220,7 +2523,7 @@ def main() -> int:
         include_global_rate=False,
         global_rate_col=global_rate_col,
         exclude_same_file=exclude_same_file,
-        inverse_mapping_cfg=inverse_mapping_cfg,
+        inverse_mapping_cfg=inverse_mapping_cfg_runtime,
     )
 
     real_with_idx = real_df.copy()
@@ -2236,7 +2539,7 @@ def main() -> int:
     elif "n_events" not in merged.columns:
         merged["n_events"] = np.nan
 
-    # Real-data efficiencies from rates: eff_i = 1 - threeplane_i / fourplane.
+    # Real-data efficiencies from rates: eff_i = fourplane / (fourplane + threeplane_i).
     merged.attrs["preferred_tt_prefixes"] = preferred_tt_prefixes
     raw_eff_by_plane, raw_eff_formula_by_plane, raw_eff_cols_by_plane, raw_eff_selected_prefix = _compute_empirical_efficiencies_from_rates(merged)
     for plane in (1, 2, 3, 4):
@@ -2251,6 +2554,37 @@ def main() -> int:
     for plane in (1, 2, 3, 4):
         dict_df_plot[f"dict_eff{plane}_raw_from_rates"] = dict_eff_by_plane[plane]
     dict_eff2_col = "dict_eff2_raw_from_rates"
+
+    fit_input_domain_by_plane: dict[int, tuple[float, float]] = {}
+    for plane in (1, 2, 3, 4):
+        vals = pd.to_numeric(dict_eff_by_plane.get(plane), errors="coerce").to_numpy(dtype=float)
+        m = np.isfinite(vals)
+        if np.any(m):
+            lo = float(np.nanmin(vals[m]))
+            hi = float(np.nanmax(vals[m]))
+            if np.isfinite(lo) and np.isfinite(hi):
+                if hi < lo:
+                    lo, hi = hi, lo
+                fit_input_domain_by_plane[plane] = (lo, hi)
+
+    real_raw_eff_outside_domain_fraction: dict[str, float] = {}
+    for plane in (1, 2, 3, 4):
+        vals = pd.to_numeric(raw_eff_by_plane.get(plane), errors="coerce").to_numpy(dtype=float)
+        m = np.isfinite(vals)
+        frac = np.nan
+        dom = fit_input_domain_by_plane.get(plane)
+        if dom is not None and np.any(m):
+            lo, hi = dom
+            frac = float(np.mean((vals[m] < lo) | (vals[m] > hi)))
+            if eff_transform_clip_input_to_dictionary_domain and frac > 0.0:
+                log.warning(
+                    "Plane %d: %.1f%% of raw empirical efficiencies lie outside dictionary fit domain [%.4f, %.4f]; clipping input before polynomial transform.",
+                    plane,
+                    100.0 * frac,
+                    lo,
+                    hi,
+                )
+        real_raw_eff_outside_domain_fraction[f"eff{plane}"] = frac
 
     # Preferred global-rate columns for real and dictionary data.
     real_global_rate_col = _pick_global_rate_column(merged, preferred=global_rate_col)
@@ -2273,6 +2607,10 @@ def main() -> int:
         raw_eff_by_plane,
         fit_models_by_plane,
         mode=eff_transform_mode,
+        input_domain_by_plane=(
+            fit_input_domain_by_plane if eff_transform_clip_input_to_dictionary_domain else None
+        ),
+        clip_output_to_unit_interval=eff_transform_clip_output_to_unit_interval,
     )
     for plane in (1, 2, 3, 4):
         merged[f"eff{plane}_transformed"] = transformed_eff_by_plane[plane]
@@ -2281,6 +2619,10 @@ def main() -> int:
         dict_eff_by_plane,
         fit_models_by_plane,
         mode=eff_transform_mode,
+        input_domain_by_plane=(
+            fit_input_domain_by_plane if eff_transform_clip_input_to_dictionary_domain else None
+        ),
+        clip_output_to_unit_interval=eff_transform_clip_output_to_unit_interval,
     )
     for plane in (1, 2, 3, 4):
         dict_df_plot[f"dict_eff{plane}_transformed_from_rates"] = dict_transformed_eff_by_plane[plane]
@@ -2456,6 +2798,21 @@ def main() -> int:
         if has_dict_eff2_trans
         else 0.0
     )
+    transformed_eff_frac_physical_real: dict[str, float] = {}
+    transformed_eff_frac_physical_dict: dict[str, float] = {}
+    for plane in (1, 2, 3, 4):
+        real_col = f"eff{plane}_transformed"
+        dict_col = f"dict_eff{plane}_transformed_from_rates"
+        transformed_eff_frac_physical_real[f"eff{plane}"] = (
+            _fraction_in_closed_interval(merged[real_col], 0.0, 1.0)
+            if real_col in merged.columns
+            else 0.0
+        )
+        transformed_eff_frac_physical_dict[f"eff{plane}"] = (
+            _fraction_in_closed_interval(dict_df_plot[dict_col], 0.0, 1.0)
+            if dict_col in dict_df_plot.columns
+            else 0.0
+        )
 
     if eff2_plot_source_cfg == "raw":
         use_transformed_eff2_for_plane_plot = False
@@ -2520,6 +2877,13 @@ def main() -> int:
         )
 
     story_eff_col = eff_est_col if eff_est_col is not None else est_curve_eff_col
+    story_eff_series_map: dict[str, pd.Series] = {}
+    for plane in (1, 2, 3, 4):
+        col = f"est_eff_sim_{plane}"
+        if col in merged.columns and pd.to_numeric(merged[col], errors="coerce").notna().any():
+            story_eff_series_map[col] = merged[col]
+    if not story_eff_series_map and story_eff_col is not None and story_eff_col in merged.columns:
+        story_eff_series_map[story_eff_col] = merged[story_eff_col]
 
     if flux_est_col is not None and story_eff_col is not None and real_global_rate_col is not None:
         _plot_flux_recovery_story_real(
@@ -2530,6 +2894,7 @@ def main() -> int:
             distance_label=distance_col,
             eff_series=merged[story_eff_col],
             eff_label=story_eff_col,
+            eff_series_map=story_eff_series_map,
             global_rate_series=merged[real_global_rate_col],
             global_rate_label=real_global_rate_col,
             flux_est_series=merged[flux_est_col],
@@ -2564,7 +2929,9 @@ def main() -> int:
         "distance_metric": distance_metric,
         "interpolation_k": interpolation_k,
         "inverse_mapping": inverse_mapping_cfg,
+        "inverse_mapping_runtime_applied": inverse_mapping_cfg_runtime,
         "feature_strategy": feature_strategy,
+        "derived_feature_subset_mode": derived_feature_subset_mode,
         "n_features_used": int(len(feature_columns)),
         "feature_columns_used": feature_columns,
         "n_rows": int(len(merged)),
@@ -2602,6 +2969,35 @@ def main() -> int:
         "eff_transform_mode_requested": eff_transform_mode_requested,
         "eff_transform_mode": eff_transform_mode,
         "eff_transform_mode_resolution_reason": eff_transform_mode_reason,
+        "eff_transform_clip_input_to_dictionary_domain": bool(
+            eff_transform_clip_input_to_dictionary_domain
+        ),
+        "eff_transform_clip_output_to_unit_interval": bool(
+            eff_transform_clip_output_to_unit_interval
+        ),
+        "eff_transform_input_domain_by_plane": {
+            f"eff{p}": {
+                "min": (
+                    float(fit_input_domain_by_plane[p][0])
+                    if p in fit_input_domain_by_plane
+                    else None
+                ),
+                "max": (
+                    float(fit_input_domain_by_plane[p][1])
+                    if p in fit_input_domain_by_plane
+                    else None
+                ),
+            }
+            for p in (1, 2, 3, 4)
+        },
+        "real_raw_efficiency_fraction_outside_fit_domain_by_plane": {
+            f"eff{p}": (
+                float(real_raw_eff_outside_domain_fraction.get(f"eff{p}"))
+                if np.isfinite(real_raw_eff_outside_domain_fraction.get(f"eff{p}", np.nan))
+                else None
+            )
+            for p in (1, 2, 3, 4)
+        },
         "raw_efficiency_columns": {
             "eff1": "eff1_raw_from_data",
             "eff2": "eff2_raw_from_data",
@@ -2613,6 +3009,11 @@ def main() -> int:
         "efficiency_source_preferred_prefix_order": preferred_tt_prefixes,
         "efficiency_source_prefix_used_real": raw_eff_selected_prefix,
         "efficiency_source_prefix_used_dictionary": dict_eff_selected_prefix,
+        "feature_empirical_efficiency_preferred_prefix_order": preferred_feature_prefixes,
+        "feature_empirical_efficiency_prefix_used_real": feature_eff_source_prefix.get("real"),
+        "feature_empirical_efficiency_prefix_used_dictionary": feature_eff_source_prefix.get("dictionary"),
+        "feature_empirical_efficiency_finite_counts": feature_eff_finite_count,
+        "feature_empirical_efficiency_formulas": feature_eff_source_formula,
         "raw_efficiency_formulas": {f"eff{p}": raw_eff_formula_by_plane.get(p) for p in (1, 2, 3, 4)},
         "raw_efficiency_rate_columns": {
             f"eff{p}": raw_eff_cols_by_plane.get(p, {})
@@ -2636,6 +3037,10 @@ def main() -> int:
         "eff2_global_rate_transformed_fraction_in_0_1": {
             "real": float(real_eff2_trans_frac_physical),
             "dictionary": float(dict_eff2_trans_frac_physical),
+        },
+        "transformed_efficiency_fraction_in_0_1_by_plane": {
+            "real": transformed_eff_frac_physical_real,
+            "dictionary": transformed_eff_frac_physical_dict,
         },
         "eff2_formula": (
             transformed_eff_formula_by_plane.get(2)

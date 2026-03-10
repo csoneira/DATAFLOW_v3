@@ -713,6 +713,9 @@ def _generate_synthetic_rows(
     event_mask = one_per_set_mask if event_mask_extra is None else (one_per_set_mask & event_mask_extra)
 
     method = str(cfg_weight.get("weighting_method", "gaussian"))
+    interpolation_aggregation = step32._normalize_interpolation_aggregation(
+        cfg_weight.get("interpolation_aggregation", "local_linear")
+    )
     top_k_raw = cfg_weight.get("top_k", None)
     top_k = None if top_k_raw in (None, "", 0) else step32._safe_int(top_k_raw, 8, minimum=1)
     distance_hardness = step32._safe_float(cfg_weight.get("distance_hardness", 1.0), 1.0)
@@ -761,11 +764,14 @@ def _generate_synthetic_rows(
         template_df=base_dataset_df,
         time_df=time_df,
         weights=weights,
+        basis_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
         flux_col=flux_col,
         eff_col=eff_col_time,
         time_rate_col=time_rate_col,
         time_events_col=time_events_col,
         time_duration_col=time_duration_col,
+        interpolation_aggregation=interpolation_aggregation,
         flux_output_values=target_flux,
         eff_output_values=target_eff,
     )
@@ -781,6 +787,7 @@ def _generate_synthetic_rows(
         "one_per_set_mode": str(one_per_set_info.get("mode", "unknown")),
         "event_tolerance_info": extra_info,
         "weighting_method": method,
+        "interpolation_aggregation": interpolation_aggregation,
         "distance_definition": "standardized_euclidean_in_parameter_space",
         "distance_hardness": float(distance_hardness),
         "enforce_distance_monotonic_weights": bool(enforce_distance_monotonic_weights),
