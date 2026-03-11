@@ -19,7 +19,7 @@ regular_mesh_relative_span: 0.5
 
 # Step 3
 ## Efficiencies
-efficiencies: [0.01, 1]
+efficiencies: [0.6, 1]
 efficiencies_identical: false
 # Used only when efficiencies_identical=false.
 # Maximum allowed difference between the lowest and highest plane efficiency
@@ -27,7 +27,7 @@ efficiencies_identical: false
 # Example tunings:
 # - 0.8  -> allows up to 0.8 spread
 # - null -> disable spread cap; each plane is sampled in full [min,max]
-efficiencies_max_spread: null
+efficiencies_max_spread: 0.15
 
 # Optional: generate multiple rows per run, sharing selected columns.
 repeat_samples: 1

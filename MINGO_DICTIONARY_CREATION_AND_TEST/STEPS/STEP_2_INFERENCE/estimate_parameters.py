@@ -15,6 +15,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 
 from __future__ import annotations
 
+from itertools import combinations
 import logging
 from pathlib import Path
 import re
@@ -62,18 +63,29 @@ def _poisson(a: np.ndarray, b: np.ndarray) -> float:
     return float(2.0 * np.sum(term))
 
 
-def _l2_many(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+def _l2_many(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    min_valid_dims: int = 2,
+) -> np.ndarray:
     """Vectorized L2 distance from one sample vector to many candidate vectors."""
     mask = np.isfinite(a)[None, :] & np.isfinite(b)
     valid_counts = np.sum(mask, axis=1)
     diff = np.where(mask, b - a[None, :], 0.0)
     out = np.sqrt(np.sum(diff * diff, axis=1))
     out = out.astype(float, copy=False)
-    out[valid_counts < 2] = np.nan
+    min_dims = max(int(min_valid_dims), 1)
+    out[valid_counts < min_dims] = np.nan
     return out
 
 
-def _chi2_many(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+def _chi2_many(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    min_valid_dims: int = 2,
+) -> np.ndarray:
     """Vectorized chi2-like distance from one sample to many candidates."""
     mask = np.isfinite(a)[None, :] & np.isfinite(b)
     valid_counts = np.sum(mask, axis=1)
@@ -82,11 +94,17 @@ def _chi2_many(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     # Poisson variance estimate: max(|observed|, 1) prevents division by zero
     variance_floor = np.maximum(np.abs(y_t), 1.0)
     out = np.sum((y_t - y_p) ** 2 / variance_floor, axis=1).astype(float, copy=False)
-    out[valid_counts < 2] = np.nan
+    min_dims = max(int(min_valid_dims), 1)
+    out[valid_counts < min_dims] = np.nan
     return out
 
 
-def _poisson_many(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+def _poisson_many(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    min_valid_dims: int = 2,
+) -> np.ndarray:
     """Vectorized Poisson deviance-like distance from one sample to many candidates."""
     mask = np.isfinite(a)[None, :] & np.isfinite(b)
     valid_counts = np.sum(mask, axis=1)
@@ -97,7 +115,8 @@ def _poisson_many(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         term = np.where(y_t > 0.0, y_t * np.log(ratio) - (y_t - y_p), y_p)
     out = 2.0 * np.sum(np.where(mask, term, 0.0), axis=1)
     out = out.astype(float, copy=False)
-    out[valid_counts < 2] = np.nan
+    min_dims = max(int(min_valid_dims), 1)
+    out[valid_counts < min_dims] = np.nan
     return out
 
 
@@ -129,6 +148,22 @@ def _histogram_feature_indices(feature_cols: Sequence[str]) -> list[int]:
         indexed.append((int(match.group("bin")), idx))
     indexed.sort(key=lambda x: x[0])
     return [idx for _, idx in indexed]
+
+
+def _shared_histogram_feature_columns(
+    dict_cols: Sequence[object],
+    data_cols: Sequence[object],
+) -> list[str]:
+    """Resolve shared histogram-bin rate columns ordered by bin index."""
+    data_col_set = {str(c) for c in data_cols}
+    by_bin: dict[int, str] = {}
+    for col in dict_cols:
+        name = str(col)
+        match = RATE_HISTOGRAM_BIN_RE.match(name)
+        if match is None or name not in data_col_set:
+            continue
+        by_bin.setdefault(int(match.group("bin")), name)
+    return [by_bin[k] for k in sorted(by_bin)]
 
 
 def _histogram_emd_many(sample_hist: np.ndarray, candidates_hist: np.ndarray) -> np.ndarray:
@@ -175,6 +210,7 @@ def _distance_many(
     cand_mat: np.ndarray | None,
     *,
     distance_metric: str,
+    min_valid_dims: int = 2,
 ) -> np.ndarray | None:
     if sample_vec is None or cand_mat is None:
         return None
@@ -186,7 +222,10 @@ def _distance_many(
         return np.asarray([], dtype=float)
     dist_many_fn = DISTANCE_FNS_MANY.get(distance_metric, None)
     if dist_many_fn is not None:
-        return np.asarray(dist_many_fn(sample, candidates), dtype=float)
+        return np.asarray(
+            dist_many_fn(sample, candidates, min_valid_dims=max(int(min_valid_dims), 1)),
+            dtype=float,
+        )
     dist_fn = DISTANCE_FNS.get(distance_metric, _l2)
     return np.asarray([dist_fn(sample, candidates[j]) for j in range(candidates.shape[0])], dtype=float)
 
@@ -258,6 +297,7 @@ def compute_candidate_distances(
     candidates_hist_raw: np.ndarray | None,
     histogram_distance_weight: float,
     histogram_distance_blend_mode: str,
+    min_valid_non_hist_dims: int = 2,
 ) -> np.ndarray:
     """
     Compute candidate distances with the same feature+histogram composition used
@@ -267,6 +307,7 @@ def compute_candidate_distances(
         sample_scaled_non_hist,
         candidates_scaled_non_hist,
         distance_metric=distance_metric,
+        min_valid_dims=max(int(min_valid_non_hist_dims), 1),
     )
     hist = None
     if sample_hist_raw is not None and candidates_hist_raw is not None:
@@ -345,6 +386,7 @@ def _local_linear_estimate(
     *,
     sample_features: np.ndarray | None,
     neighbor_features: np.ndarray | None,
+    parameter_name: str | None = None,
     ridge_lambda: float = 1e-2,
 ) -> float:
     vals = np.asarray(values, dtype=float)
@@ -385,8 +427,22 @@ def _local_linear_estimate(
     centered = X_use - x0[None, :]
     A = np.hstack([np.ones((centered.shape[0], 1), dtype=float), centered])
     sqrt_w = np.sqrt(np.clip(w_use, 1e-16, None))
+    is_eff_param = False
+    if parameter_name is not None:
+        pname = str(parameter_name).strip().lower()
+        is_eff_param = pname.startswith("eff_") or ("_eff_" in pname)
+
+    y_fit = np.asarray(y_use, dtype=float)
+    if is_eff_param:
+        # Efficiency-like parameters are physically bounded in [0,1].
+        # Fit local linear model in logit space to avoid hard clipping to
+        # local neighbor ranges, which can cause artificial saturation.
+        eps = 1e-6
+        y_fit = np.clip(y_fit, eps, 1.0 - eps)
+        y_fit = np.log(y_fit / (1.0 - y_fit))
+
     Aw = A * sqrt_w[:, None]
-    yw = y_use * sqrt_w
+    yw = y_fit * sqrt_w
 
     try:
         # Use unbiased weighted least squares by default. Ridge penalties can
@@ -401,15 +457,23 @@ def _local_linear_estimate(
         try:
             beta = np.linalg.solve(Aw.T @ Aw + reg, Aw.T @ yw)
         except np.linalg.LinAlgError:
-            return float(np.sum(w_use * y_use))
+            pred_fallback = float(np.sum(w_use * y_use))
+            if is_eff_param and np.isfinite(pred_fallback):
+                return float(np.clip(pred_fallback, 1e-6, 1.0 - 1e-6))
+            return pred_fallback
 
     pred = float(beta[0])
     if not np.isfinite(pred):
         return float(np.sum(w_use * y_use))
-    y_min = float(np.nanmin(y_use))
-    y_max = float(np.nanmax(y_use))
-    if np.isfinite(y_min) and np.isfinite(y_max):
-        pred = float(np.clip(pred, y_min, y_max))
+    if is_eff_param:
+        # inverse-logit with numerical stability
+        pred = float(1.0 / (1.0 + np.exp(-np.clip(pred, -40.0, 40.0))))
+        pred = float(np.clip(pred, 1e-6, 1.0 - 1e-6))
+    else:
+        y_min = float(np.nanmin(y_use))
+        y_max = float(np.nanmax(y_use))
+        if np.isfinite(y_min) and np.isfinite(y_max):
+            pred = float(np.clip(pred, y_min, y_max))
     return pred
 
 
@@ -517,11 +581,18 @@ DERIVED_RATE_COLUMN = "events_per_second_global_rate"
 DERIVED_TT_GLOBAL_RATE_COL = "__derived_tt_global_rate_hz"
 DERIVED_EFF_PRODUCT_COL = "__derived_eff_emp_product"
 DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL = "__derived_log_tt_rate_over_eff_product"
+DERIVED_LOG_EFF_PAIR_SUM_COL = "__derived_log_eff_pair_sum"
+DERIVED_LOG_EFF_TRIPLET_SUM_COL = "__derived_log_eff_triplet_sum"
 
 _DERIVED_PHYSICS_FEATURE_ALIASES = {
     "eff_product": "eff_product",
     "emp_eff_product": "eff_product",
     "eff_emp_product": "eff_product",
+    "eff_coincidence_moments": "eff_coincidence_moments",
+    "eff_pair_triplet_products": "eff_coincidence_moments",
+    "pair_triplet_eff_products": "eff_coincidence_moments",
+    "eff_pair_triplet_sums": "eff_coincidence_moments",
+    "coincidence_eff_moments": "eff_coincidence_moments",
     "log_rate_over_eff_product": "log_rate_over_eff_product",
     "log_tt_rate_over_eff_product": "log_rate_over_eff_product",
     "log_rate_div_eff_product": "log_rate_over_eff_product",
@@ -697,11 +768,49 @@ def _append_derived_physics_feature_columns(
     dict_eff_prod = dict_eff.prod(axis=1, min_count=min_count)
     data_eff_prod = data_eff.prod(axis=1, min_count=min_count)
 
+    def _sum_eff_products(eff_frame: pd.DataFrame, order: int) -> pd.Series:
+        arr = eff_frame.to_numpy(dtype=float)
+        n_rows, n_eff = arr.shape
+        out = np.full(n_rows, np.nan, dtype=float)
+        if n_eff < order:
+            return pd.Series(out, index=eff_frame.index)
+        finite_all = np.isfinite(arr).all(axis=1)
+        if not np.any(finite_all):
+            return pd.Series(out, index=eff_frame.index)
+        total = np.zeros(n_rows, dtype=float)
+        for idxs in combinations(range(n_eff), order):
+            term = np.ones(n_rows, dtype=float)
+            for idx in idxs:
+                term *= arr[:, idx]
+            total += term
+        out[finite_all] = total[finite_all]
+        return pd.Series(out, index=eff_frame.index)
+
     added: list[str] = []
     if "eff_product" in selected:
         dict_out[DERIVED_EFF_PRODUCT_COL] = dict_eff_prod
         data_out[DERIVED_EFF_PRODUCT_COL] = data_eff_prod
         added.append(DERIVED_EFF_PRODUCT_COL)
+
+    if "eff_coincidence_moments" in selected:
+        dict_pair_sum = _sum_eff_products(dict_eff, order=2)
+        data_pair_sum = _sum_eff_products(data_eff, order=2)
+        dict_triplet_sum = _sum_eff_products(dict_eff, order=3)
+        data_triplet_sum = _sum_eff_products(data_eff, order=3)
+
+        dict_out[DERIVED_LOG_EFF_PAIR_SUM_COL] = np.log(
+            np.where(dict_pair_sum > 1e-12, dict_pair_sum, np.nan)
+        )
+        data_out[DERIVED_LOG_EFF_PAIR_SUM_COL] = np.log(
+            np.where(data_pair_sum > 1e-12, data_pair_sum, np.nan)
+        )
+        dict_out[DERIVED_LOG_EFF_TRIPLET_SUM_COL] = np.log(
+            np.where(dict_triplet_sum > 1e-12, dict_triplet_sum, np.nan)
+        )
+        data_out[DERIVED_LOG_EFF_TRIPLET_SUM_COL] = np.log(
+            np.where(data_triplet_sum > 1e-12, data_triplet_sum, np.nan)
+        )
+        added.extend([DERIVED_LOG_EFF_PAIR_SUM_COL, DERIVED_LOG_EFF_TRIPLET_SUM_COL])
 
     if "log_rate_over_eff_product" in selected:
         dict_rate = pd.to_numeric(dict_out[rate_column], errors="coerce")
@@ -806,6 +915,86 @@ def _append_tt_global_sum_feature(
     return dict_out, data_out, out_cols, alias, tt_cols
 
 
+def _mask_out_of_support_efficiency_features(
+    *,
+    dict_features: pd.DataFrame,
+    data_features: pd.DataFrame,
+    feature_cols: Sequence[str],
+    non_hist_feature_idx: Sequence[int],
+    base_eff_feature_idx: np.ndarray,
+    enabled: bool,
+) -> tuple[pd.DataFrame, np.ndarray | None, dict]:
+    """
+    Mask empirical-efficiency feature values outside dictionary support.
+
+    For inverse mapping, distances are only meaningful inside the dictionary
+    feature support. Per-row masking avoids forcing boundary matches when real
+    data falls outside support in some efficiency planes.
+    """
+    info: dict = {
+        "enabled": bool(enabled),
+        "n_eff_features_considered": int(base_eff_feature_idx.size),
+        "n_rows_any_masked": 0,
+        "fraction_rows_any_masked": 0.0,
+        "mean_masked_eff_features_per_row": 0.0,
+        "per_feature": {},
+    }
+    if not enabled or base_eff_feature_idx.size == 0:
+        return data_features, None, info
+
+    data_out = data_features.copy()
+    n_data = len(data_out)
+    if n_data == 0:
+        return data_out, np.zeros((0, len(non_hist_feature_idx)), dtype=bool), info
+
+    masked_non_hist = np.zeros((n_data, len(non_hist_feature_idx)), dtype=bool)
+    for j_non_hist in base_eff_feature_idx:
+        if j_non_hist < 0 or j_non_hist >= len(non_hist_feature_idx):
+            continue
+        full_idx = int(non_hist_feature_idx[int(j_non_hist)])
+        if full_idx < 0 or full_idx >= len(feature_cols):
+            continue
+        col = str(feature_cols[full_idx])
+
+        dvals = pd.to_numeric(dict_features[col], errors="coerce")
+        finite_d = np.isfinite(dvals.to_numpy(dtype=float))
+        if not np.any(finite_d):
+            info["per_feature"][col] = {
+                "dict_min": None,
+                "dict_max": None,
+                "rows_masked": 0,
+                "fraction_rows_masked": 0.0,
+                "reason": "no_finite_dictionary_values",
+            }
+            continue
+
+        dict_min = float(np.nanmin(dvals.to_numpy(dtype=float)))
+        dict_max = float(np.nanmax(dvals.to_numpy(dtype=float)))
+        tol = max(1e-12, 1e-12 * max(1.0, abs(dict_min), abs(dict_max)))
+        x = pd.to_numeric(data_out[col], errors="coerce")
+        outside = x.notna() & ((x < (dict_min - tol)) | (x > (dict_max + tol)))
+        n_mask = int(outside.sum())
+        if n_mask > 0:
+            data_out.loc[outside, col] = np.nan
+            masked_non_hist[outside.to_numpy(dtype=bool), int(j_non_hist)] = True
+
+        info["per_feature"][col] = {
+            "dict_min": dict_min,
+            "dict_max": dict_max,
+            "rows_masked": n_mask,
+            "fraction_rows_masked": float(n_mask / n_data),
+        }
+
+    if masked_non_hist.size:
+        row_counts = np.sum(masked_non_hist, axis=1)
+        rows_any = row_counts > 0
+        info["n_rows_any_masked"] = int(np.sum(rows_any))
+        info["fraction_rows_any_masked"] = float(np.mean(rows_any))
+        info["mean_masked_eff_features_per_row"] = float(np.mean(row_counts))
+
+    return data_out, masked_non_hist, info
+
+
 # =====================================================================
 # Density-aware interpolation helpers
 # =====================================================================
@@ -819,6 +1008,7 @@ _DENSITY_CORRECTION_CLIP_MIN = 0.25
 _DENSITY_CORRECTION_CLIP_MAX = 4.0
 
 _INVERSE_MAPPING_DEFAULTS = {
+    "estimation_mode": "single_stage",
     "neighbor_selection": "knn",
     "neighbor_count": 5,
     "weighting": "inverse_distance",
@@ -826,8 +1016,16 @@ _INVERSE_MAPPING_DEFAULTS = {
     "softmax_temperature": 1.0,
     "distance_floor": 1e-12,
     "aggregation": "weighted_mean",
+    "stage2_efficiency_conditioning_weight": 1.0,
+    "stage2_efficiency_gate_max": 0.20,
+    "stage2_efficiency_gate_min_candidates": 24,
+    "stage2_use_rate_histogram": True,
+    "stage2_histogram_distance_weight": 1.0,
     "histogram_distance_weight": 1.0,
     "histogram_distance_blend_mode": "normalized",
+    # When real-data empirical efficiencies lie outside dictionary support,
+    # distance in those dimensions is not meaningful. Mask them per-row.
+    "mask_out_of_support_eff_features": False,
 }
 
 
@@ -928,6 +1126,21 @@ def _normalize_hist_blend_mode(value: object) -> str:
     return "normalized"
 
 
+def _normalize_estimation_mode(value: object) -> str:
+    text = str(value).strip().lower() if value is not None else ""
+    if text in {
+        "two_stage_eff_address_then_flux",
+        "two_stage_address",
+        "two_stage_address_then_flux",
+        "eff_address_then_flux",
+        "2stage_address",
+    }:
+        return "two_stage_eff_address_then_flux"
+    if text in {"two_stage", "two_stage_eff_then_flux", "eff_then_flux", "2stage"}:
+        return "two_stage_eff_then_flux"
+    return "single_stage"
+
+
 def _legacy_neighbor_selection_from_interpolation_k(
     interpolation_k: int | None,
 ) -> tuple[str, int | None]:
@@ -963,6 +1176,7 @@ def resolve_inverse_mapping_cfg(
 
     if isinstance(inverse_mapping_cfg, Mapping):
         for key in (
+            "estimation_mode",
             "neighbor_selection",
             "neighbor_count",
             "weighting",
@@ -970,12 +1184,19 @@ def resolve_inverse_mapping_cfg(
             "softmax_temperature",
             "distance_floor",
             "aggregation",
+            "stage2_efficiency_conditioning_weight",
+            "stage2_efficiency_gate_max",
+            "stage2_efficiency_gate_min_candidates",
+            "stage2_use_rate_histogram",
+            "stage2_histogram_distance_weight",
             "histogram_distance_weight",
             "histogram_distance_blend_mode",
+            "mask_out_of_support_eff_features",
         ):
             if key in inverse_mapping_cfg and inverse_mapping_cfg.get(key) is not None:
                 cfg[key] = inverse_mapping_cfg.get(key)
 
+    cfg["estimation_mode"] = _normalize_estimation_mode(cfg.get("estimation_mode"))
     cfg["neighbor_selection"] = _normalize_neighbor_selection(cfg.get("neighbor_selection"))
     if cfg["neighbor_selection"] == "nearest":
         cfg["neighbor_count"] = 1
@@ -1003,12 +1224,49 @@ def resolve_inverse_mapping_cfg(
         1e-15,
     )
     cfg["aggregation"] = _normalize_aggregation_mode(cfg.get("aggregation"))
+    cfg["stage2_efficiency_conditioning_weight"] = max(
+        _safe_float(
+            cfg.get("stage2_efficiency_conditioning_weight"),
+            float(_INVERSE_MAPPING_DEFAULTS["stage2_efficiency_conditioning_weight"]),
+        ),
+        0.0,
+    )
+    cfg["stage2_efficiency_gate_max"] = max(
+        _safe_float(
+            cfg.get("stage2_efficiency_gate_max"),
+            float(_INVERSE_MAPPING_DEFAULTS["stage2_efficiency_gate_max"]),
+        ),
+        0.0,
+    )
+    cfg["stage2_efficiency_gate_min_candidates"] = max(
+        1,
+        _safe_int(
+            cfg.get("stage2_efficiency_gate_min_candidates"),
+            int(_INVERSE_MAPPING_DEFAULTS["stage2_efficiency_gate_min_candidates"]),
+            minimum=1,
+        ),
+    )
+    cfg["stage2_use_rate_histogram"] = _safe_bool(
+        cfg.get("stage2_use_rate_histogram"),
+        bool(_INVERSE_MAPPING_DEFAULTS["stage2_use_rate_histogram"]),
+    )
+    cfg["stage2_histogram_distance_weight"] = max(
+        _safe_float(
+            cfg.get("stage2_histogram_distance_weight"),
+            float(_INVERSE_MAPPING_DEFAULTS["stage2_histogram_distance_weight"]),
+        ),
+        0.0,
+    )
     cfg["histogram_distance_weight"] = max(
         _safe_float(cfg.get("histogram_distance_weight"), float(_INVERSE_MAPPING_DEFAULTS["histogram_distance_weight"])),
         0.0,
     )
     cfg["histogram_distance_blend_mode"] = _normalize_hist_blend_mode(
         cfg.get("histogram_distance_blend_mode")
+    )
+    cfg["mask_out_of_support_eff_features"] = _safe_bool(
+        cfg.get("mask_out_of_support_eff_features"),
+        bool(_INVERSE_MAPPING_DEFAULTS["mask_out_of_support_eff_features"]),
     )
     return cfg
 
@@ -1429,7 +1687,7 @@ def estimate_parameters(
     derived_tt_prefix: str = "last",
     derived_trigger_types: Sequence[str] | str | None = None,
     derived_include_to_tt_rate_hz: bool = False,
-    derived_include_trigger_type_rates: bool = True,
+    derived_include_trigger_type_rates: bool = False,
     derived_include_rate_histogram: bool = False,
     derived_physics_features: Sequence[str] | str | bool | None = None,
     histogram_distance_weight: float = 1.0,
@@ -1498,7 +1756,8 @@ def estimate_parameters(
         (uniform|inverse_distance|softmax), inverse_distance_power,
         softmax_temperature, distance_floor, aggregation
         (weighted_mean|weighted_median|local_linear), histogram_distance_weight,
-        histogram_distance_blend_mode (normalized|raw).
+        histogram_distance_blend_mode (normalized|raw),
+        mask_out_of_support_eff_features (bool; default True).
     derived_tt_prefix : str
         Prefix selector for derived mode TT-sum global rate:
         "last" (recommended) or explicit prefix name.
@@ -1518,7 +1777,8 @@ def estimate_parameters(
         to derived-mode features.
     derived_physics_features : list[str] | str | bool | None
         Optional derived-mode physics transforms to append as features.
-        Supported values: "log_rate_over_eff_product", "eff_product".
+        Supported values: "log_rate_over_eff_product", "eff_product",
+        "eff_coincidence_moments" (log-sum of pair/triplet efficiency products).
         A boolean True enables "log_rate_over_eff_product".
     histogram_distance_weight : float
         Legacy alias for `inverse_mapping_cfg.histogram_distance_weight`.
@@ -1588,7 +1848,7 @@ def estimate_from_dataframes(
     derived_tt_prefix: str = "last",
     derived_trigger_types: Sequence[str] | str | None = None,
     derived_include_to_tt_rate_hz: bool = False,
-    derived_include_trigger_type_rates: bool = True,
+    derived_include_trigger_type_rates: bool = False,
     derived_include_rate_histogram: bool = False,
     derived_physics_features: Sequence[str] | str | bool | None = None,
     histogram_distance_weight: float = 1.0,
@@ -1651,7 +1911,7 @@ def estimate_from_dataframes(
             rate_column=derived_rate_col_used,
             trigger_type_rate_columns=(
                 derived_rate_sources
-                if _safe_bool(derived_include_trigger_type_rates, True)
+                if _safe_bool(derived_include_trigger_type_rates, False)
                 else None
             ),
             include_rate_histogram=_safe_bool(derived_include_rate_histogram, False),
@@ -1662,7 +1922,7 @@ def estimate_from_dataframes(
             rate_column=derived_rate_col_used,
             trigger_type_rate_columns=(
                 derived_rate_sources
-                if _safe_bool(derived_include_trigger_type_rates, True)
+                if _safe_bool(derived_include_trigger_type_rates, False)
                 else None
             ),
             include_rate_histogram=_safe_bool(derived_include_rate_histogram, False),
@@ -1688,7 +1948,7 @@ def estimate_from_dataframes(
         if _safe_bool(derived_include_rate_histogram, False):
             n_hist = sum(1 for c in feature_cols if RATE_HISTOGRAM_BIN_RE.match(str(c)))
             log.info("Derived feature mode: including %d rate-histogram bin feature(s).", n_hist)
-        if _safe_bool(derived_include_trigger_type_rates, True):
+        if _safe_bool(derived_include_trigger_type_rates, False):
             n_tt = sum(1 for c in feature_cols if TT_RATE_COLUMN_RE.match(str(c)))
             log.info("Derived feature mode: including %d trigger-type rate feature(s).", n_tt)
         if derived_physics_cols_used:
@@ -1757,12 +2017,41 @@ def estimate_from_dataframes(
     hist_feature_idx = _histogram_feature_indices(feature_cols)
     hist_feature_set = set(hist_feature_idx)
     non_hist_feature_idx = [idx for idx in range(len(feature_cols)) if idx not in hist_feature_set]
+    non_hist_feature_cols = [str(feature_cols[idx]) for idx in non_hist_feature_idx]
+
+    def _is_raw_tt_rate_feature(name: str) -> bool:
+        text = str(name).strip()
+        if text.startswith(DERIVED_TT_GLOBAL_RATE_COL):
+            return False
+        return TT_RATE_COLUMN_RE.match(text) is not None
+
+    base_eff_feature_idx = np.asarray(
+        [
+            j
+            for j, name in enumerate(non_hist_feature_cols)
+            if str(name).startswith("eff_empirical_")
+        ],
+        dtype=int,
+    )
+    base_tt_feature_idx = np.asarray(
+        [j for j, name in enumerate(non_hist_feature_cols) if _is_raw_tt_rate_feature(name)],
+        dtype=int,
+    )
+    base_other_feature_idx = np.asarray(
+        [
+            j
+            for j in range(len(non_hist_feature_cols))
+            if j not in set(base_eff_feature_idx.tolist() + base_tt_feature_idx.tolist())
+        ],
+        dtype=int,
+    )
     inverse_cfg = resolve_inverse_mapping_cfg(
         inverse_mapping_cfg=inverse_mapping_cfg,
         interpolation_k=interpolation_k,
         histogram_distance_weight=histogram_distance_weight,
         histogram_distance_blend_mode=histogram_distance_blend_mode,
     )
+    estimation_mode = str(inverse_cfg.get("estimation_mode", "single_stage"))
     neighbor_selection = str(inverse_cfg["neighbor_selection"])
     neighbor_count = inverse_cfg.get("neighbor_count")
     neighbor_weighting = str(inverse_cfg["weighting"])
@@ -1770,8 +2059,38 @@ def estimate_from_dataframes(
     softmax_temperature = float(inverse_cfg["softmax_temperature"])
     distance_floor = float(inverse_cfg["distance_floor"])
     aggregation_mode = str(inverse_cfg["aggregation"])
+    stage2_eff_conditioning_weight = float(
+        inverse_cfg.get("stage2_efficiency_conditioning_weight", 1.0)
+    )
+    stage2_eff_gate_max = float(
+        inverse_cfg.get(
+            "stage2_efficiency_gate_max",
+            _INVERSE_MAPPING_DEFAULTS["stage2_efficiency_gate_max"],
+        )
+    )
+    stage2_eff_gate_min_candidates = int(
+        inverse_cfg.get(
+            "stage2_efficiency_gate_min_candidates",
+            _INVERSE_MAPPING_DEFAULTS["stage2_efficiency_gate_min_candidates"],
+        )
+    )
+    stage2_use_rate_histogram = bool(
+        inverse_cfg.get(
+            "stage2_use_rate_histogram",
+            _INVERSE_MAPPING_DEFAULTS["stage2_use_rate_histogram"],
+        )
+    )
+    stage2_hist_distance_weight = float(
+        inverse_cfg.get(
+            "stage2_histogram_distance_weight",
+            _INVERSE_MAPPING_DEFAULTS["stage2_histogram_distance_weight"],
+        )
+    )
     hist_distance_weight = float(inverse_cfg["histogram_distance_weight"])
     hist_distance_blend_mode = str(inverse_cfg["histogram_distance_blend_mode"])
+    mask_out_of_support_eff_features = bool(
+        inverse_cfg.get("mask_out_of_support_eff_features", True)
+    )
     if hist_feature_idx and not non_hist_feature_idx and hist_distance_weight <= 0.0:
         # Histogram-only feature sets need non-zero distance contribution.
         hist_distance_weight = 1.0
@@ -1788,12 +2107,73 @@ def estimate_from_dataframes(
         )
 
     log.info(
-        "Inverse mapping: selection=%s k=%s weighting=%s aggregation=%s",
+        "Inverse mapping: mode=%s selection=%s k=%s weighting=%s aggregation=%s",
+        estimation_mode,
         neighbor_selection,
         ("all" if neighbor_count is None else str(neighbor_count)),
         neighbor_weighting,
         aggregation_mode,
     )
+    if estimation_mode == "two_stage_eff_address_then_flux":
+        log.info(
+            "Two-stage address mode: gate_max=%.3g gate_min_candidates=%d use_rate_histogram=%s stage2_hist_weight=%.3g",
+            stage2_eff_gate_max,
+            stage2_eff_gate_min_candidates,
+            str(stage2_use_rate_histogram).lower(),
+            stage2_hist_distance_weight,
+        )
+
+    data_features, out_of_support_eff_mask_non_hist, out_of_support_eff_info = (
+        _mask_out_of_support_efficiency_features(
+            dict_features=dict_features,
+            data_features=data_features,
+            feature_cols=feature_cols,
+            non_hist_feature_idx=non_hist_feature_idx,
+            base_eff_feature_idx=base_eff_feature_idx,
+            enabled=mask_out_of_support_eff_features,
+        )
+    )
+    if (
+        out_of_support_eff_info.get("enabled")
+        and out_of_support_eff_info.get("n_eff_features_considered", 0) > 0
+    ):
+        n_rows_any = int(out_of_support_eff_info.get("n_rows_any_masked", 0))
+        frac_rows_any = float(out_of_support_eff_info.get("fraction_rows_any_masked", 0.0))
+        mean_masked = float(
+            out_of_support_eff_info.get("mean_masked_eff_features_per_row", 0.0)
+        )
+        per_feature = out_of_support_eff_info.get("per_feature", {})
+        if n_rows_any > 0:
+            details = []
+            if isinstance(per_feature, Mapping):
+                for name, stats in per_feature.items():
+                    if not isinstance(stats, Mapping):
+                        continue
+                    frac = float(stats.get("fraction_rows_masked", 0.0))
+                    if frac <= 0.0:
+                        continue
+                    details.append(f"{name}:{100.0 * frac:.1f}%")
+            if details:
+                log.warning(
+                    "Out-of-support empirical-efficiency masking applied: rows_any=%d/%d (%.1f%%), mean_masked_per_row=%.3f; per-feature=%s",
+                    n_rows_any,
+                    len(data_features),
+                    100.0 * frac_rows_any,
+                    mean_masked,
+                    ", ".join(details),
+                )
+            else:
+                log.warning(
+                    "Out-of-support empirical-efficiency masking applied: rows_any=%d/%d (%.1f%%), mean_masked_per_row=%.3f.",
+                    n_rows_any,
+                    len(data_features),
+                    100.0 * frac_rows_any,
+                    mean_masked,
+                )
+        else:
+            log.info(
+                "Out-of-support empirical-efficiency masking enabled: no rows outside support."
+            )
 
     dict_feature_raw_np = dict_features.to_numpy(dtype=float)
     data_feature_raw_np = data_features.to_numpy(dtype=float)
@@ -1831,6 +2211,38 @@ def estimate_from_dataframes(
     else:
         dict_hist_matrix = None
         data_hist_matrix = None
+
+    stage2_hist_cols: list[str] = []
+    stage2_hist_matrix_dict: np.ndarray | None = None
+    stage2_hist_matrix_data: np.ndarray | None = None
+    if stage2_use_rate_histogram:
+        stage2_hist_cols = _shared_histogram_feature_columns(dict_df.columns, data_df.columns)
+        if stage2_hist_cols:
+            stage2_hist_matrix_dict = (
+                dict_df[stage2_hist_cols]
+                .apply(pd.to_numeric, errors="coerce")
+                .to_numpy(dtype=float)
+            )
+            stage2_hist_matrix_data = (
+                data_df[stage2_hist_cols]
+                .apply(pd.to_numeric, errors="coerce")
+                .to_numpy(dtype=float)
+            )
+        elif hist_feature_idx and dict_hist_matrix is not None and data_hist_matrix is not None:
+            # Fallback to selected histogram features when explicit bins are not available.
+            stage2_hist_matrix_dict = dict_hist_matrix
+            stage2_hist_matrix_data = data_hist_matrix
+    if estimation_mode == "two_stage_eff_address_then_flux":
+        log.info(
+            "Two-stage address mode histogram bins: %d",
+            int(len(stage2_hist_cols))
+            if stage2_hist_cols
+            else (int(dict_hist_matrix.shape[1]) if dict_hist_matrix is not None else 0),
+        )
+        if stage2_hist_matrix_dict is None:
+            log.warning(
+                "Two-stage address mode: no rate-histogram bins resolved; stage 2 will use non-hist rate features only."
+            )
 
     # ── z-position arrays for fast matching ──────────────────────────
     dict_z = dict_df[z_cols].to_numpy(dtype=float) if z_cols else None
@@ -1956,6 +2368,213 @@ def estimate_from_dataframes(
     elif isinstance(density_weighting_cfg, Mapping):
         log.info("Density correction disabled for this run (%s).", density_info.get("reason", "disabled"))
 
+    eff_sim_param_columns = [pc for pc in param_columns if str(pc).startswith("eff_sim_")]
+    flux_param_columns = [pc for pc in param_columns if "flux" in str(pc).lower()]
+    param_span_by_name: dict[str, float] = {}
+    for pc in param_columns:
+        arr = np.asarray(dict_param_arrays[pc], dtype=float)
+        finite = arr[np.isfinite(arr)]
+        if finite.size < 2:
+            param_span_by_name[pc] = 1.0
+            continue
+        span = float(np.max(finite) - np.min(finite))
+        param_span_by_name[pc] = span if np.isfinite(span) and span > 1e-12 else 1.0
+
+    stage2_rate_feature_idx = np.asarray(
+        [
+            j
+            for j, name in enumerate(non_hist_feature_cols)
+            if (
+                ("rate" in str(name).lower())
+                and (not str(name).startswith("eff_empirical_"))
+            )
+        ],
+        dtype=int,
+    )
+    if stage2_rate_feature_idx.size == 0:
+        stage2_rate_feature_idx = np.asarray(base_other_feature_idx, dtype=int)
+    is_two_stage_soft_mode = estimation_mode == "two_stage_eff_then_flux"
+    is_two_stage_address_mode = estimation_mode == "two_stage_eff_address_then_flux"
+    is_two_stage_mode = is_two_stage_soft_mode or is_two_stage_address_mode
+
+    def _resolve_k_use(n_available: int) -> int:
+        if n_available <= 0:
+            return 0
+        if neighbor_selection == "nearest":
+            return 1
+        if neighbor_selection == "all":
+            return int(n_available)
+        k_eff = int(neighbor_count) if neighbor_count is not None else int(n_available)
+        return min(max(1, k_eff), int(n_available))
+
+    def _select_top_neighbors(
+        valid_indices_local: np.ndarray,
+        valid_distances_local: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if len(valid_indices_local) == 0:
+            return (
+                np.asarray([], dtype=int),
+                np.asarray([], dtype=float),
+            )
+        order_local = np.argsort(valid_distances_local)
+        sorted_idx = np.asarray(valid_indices_local[order_local], dtype=int)
+        sorted_dist = np.asarray(valid_distances_local[order_local], dtype=float)
+        k_use_local = _resolve_k_use(len(sorted_idx))
+        return sorted_idx[:k_use_local], sorted_dist[:k_use_local]
+
+    def _build_weights_for_top(
+        top_indices_local: np.ndarray,
+        top_distances_local: np.ndarray,
+    ) -> np.ndarray:
+        if len(top_indices_local) == 0:
+            return np.asarray([], dtype=float)
+        weights_local = _build_neighbor_weights(
+            top_distances_local,
+            weighting_mode=neighbor_weighting,
+            idw_power=inverse_distance_power,
+            softmax_temperature=softmax_temperature,
+            distance_floor=distance_floor,
+        )
+        if density_scaling_all is not None:
+            density_scaling_top = np.asarray(
+                density_scaling_all[top_indices_local], dtype=float
+            )
+            density_scaling_top = np.where(
+                np.isfinite(density_scaling_top), density_scaling_top, 0.0
+            )
+            weights_local = weights_local * density_scaling_top
+        weights_local = np.where(np.isfinite(weights_local), weights_local, 0.0)
+        sum_weights = float(np.sum(weights_local))
+        if sum_weights > 0.0:
+            weights_local /= sum_weights
+        return weights_local
+
+    def _aggregate_param_from_top(
+        *,
+        param_name: str,
+        top_indices_local: np.ndarray,
+        weights_local: np.ndarray,
+        sample_features_local: np.ndarray | None,
+        neighbor_features_local: np.ndarray | None,
+    ) -> float:
+        vals_local = np.asarray(dict_param_arrays[param_name][top_indices_local], dtype=float)
+        finite_local = np.isfinite(vals_local)
+        if np.sum(finite_local) == 0:
+            return np.nan
+        w_local = np.asarray(weights_local, dtype=float).copy()
+        w_local[~finite_local] = 0.0
+        w_sum_local = float(np.sum(w_local))
+        if w_sum_local <= 0.0:
+            return np.nan
+        w_local /= w_sum_local
+        if aggregation_mode == "weighted_median":
+            return float(_weighted_median(vals_local, w_local))
+        if aggregation_mode == "local_linear":
+            return float(
+                _local_linear_estimate(
+                    vals_local,
+                    w_local,
+                    sample_features=sample_features_local,
+                    neighbor_features=neighbor_features_local,
+                    parameter_name=param_name,
+                )
+            )
+        return float(np.sum(w_local * np.nan_to_num(vals_local)))
+
+    def _compute_candidate_distances_subset(
+        *,
+        row_idx: int,
+        cand_indices_local: np.ndarray,
+        base_feature_idx_local: np.ndarray,
+        include_hist: bool,
+    ) -> np.ndarray:
+        if len(cand_indices_local) == 0:
+            return np.asarray([], dtype=float)
+        sample_scaled_non_hist_local = (
+            data_scaled_base[row_idx, base_feature_idx_local]
+            if base_feature_idx_local.size > 0
+            else None
+        )
+        candidates_scaled_non_hist_local = (
+            dict_scaled_base[cand_indices_local][:, base_feature_idx_local]
+            if base_feature_idx_local.size > 0
+            else None
+        )
+        sample_hist_local = (
+            data_hist_matrix[row_idx]
+            if (
+                include_hist
+                and hist_feature_idx
+                and data_hist_matrix is not None
+            )
+            else None
+        )
+        candidates_hist_local = (
+            dict_hist_matrix[cand_indices_local]
+            if (
+                include_hist
+                and hist_feature_idx
+                and dict_hist_matrix is not None
+            )
+            else None
+        )
+        return compute_candidate_distances(
+            distance_metric=distance_metric,
+            sample_scaled_non_hist=sample_scaled_non_hist_local,
+            candidates_scaled_non_hist=candidates_scaled_non_hist_local,
+            sample_hist_raw=sample_hist_local,
+            candidates_hist_raw=candidates_hist_local,
+            histogram_distance_weight=hist_distance_weight,
+            histogram_distance_blend_mode=hist_distance_blend_mode,
+            min_valid_non_hist_dims=1,
+        )
+
+    def _compute_stage2_candidate_distances(
+        *,
+        row_idx: int,
+        cand_indices_local: np.ndarray,
+    ) -> np.ndarray:
+        sample_scaled_non_hist_local = (
+            data_scaled_base[row_idx, stage2_rate_feature_idx]
+            if stage2_rate_feature_idx.size > 0
+            else None
+        )
+        candidates_scaled_non_hist_local = (
+            dict_scaled_base[cand_indices_local][:, stage2_rate_feature_idx]
+            if stage2_rate_feature_idx.size > 0
+            else None
+        )
+
+        sample_hist_local = None
+        candidates_hist_local = None
+        hist_weight_local = float(hist_distance_weight)
+        if (
+            stage2_use_rate_histogram
+            and stage2_hist_matrix_dict is not None
+            and stage2_hist_matrix_data is not None
+        ):
+            sample_hist_local = stage2_hist_matrix_data[row_idx]
+            candidates_hist_local = stage2_hist_matrix_dict[cand_indices_local]
+            hist_weight_local = float(stage2_hist_distance_weight)
+        elif dict_hist_matrix is not None and data_hist_matrix is not None:
+            sample_hist_local = data_hist_matrix[row_idx]
+            candidates_hist_local = dict_hist_matrix[cand_indices_local]
+            hist_weight_local = float(stage2_hist_distance_weight)
+
+        if stage2_rate_feature_idx.size == 0 and sample_hist_local is None:
+            return np.full(len(cand_indices_local), np.nan, dtype=float)
+
+        return compute_candidate_distances(
+            distance_metric=distance_metric,
+            sample_scaled_non_hist=sample_scaled_non_hist_local,
+            candidates_scaled_non_hist=candidates_scaled_non_hist_local,
+            sample_hist_raw=sample_hist_local,
+            candidates_hist_raw=candidates_hist_local,
+            histogram_distance_weight=max(hist_weight_local, 0.0),
+            histogram_distance_blend_mode=hist_distance_blend_mode,
+            min_valid_non_hist_dims=1,
+        )
+
     # ── Estimate for each dataset entry ──────────────────────────────
     results = []
     n_data = len(data_df)
@@ -1968,6 +2587,26 @@ def estimate_from_dataframes(
         row_result: dict = {"dataset_index": i}
         if join_col and data_ids:
             row_result["filename_base"] = data_ids[i]
+        row_result["estimation_mode_used"] = "single_stage"
+        row_result["stage1_best_distance_eff"] = np.nan
+        row_result["stage2_best_distance_rate"] = np.nan
+        row_result["stage2_efficiency_conditioning_penalty"] = np.nan
+        row_result["n_neighbors_stage1"] = 0
+        row_result["n_neighbors_stage2"] = 0
+        row_result["stage2_candidates_before_gate"] = 0
+        row_result["stage2_candidates_after_gate"] = 0
+        row_result["stage2_efficiency_gate_threshold"] = np.nan
+        row_result["stage2_efficiency_gate_fallback"] = False
+        row_result["stage2_histogram_bins_used"] = int(
+            stage2_hist_matrix_dict.shape[1]
+            if stage2_hist_matrix_dict is not None
+            else (dict_hist_matrix.shape[1] if dict_hist_matrix is not None else 0)
+        )
+        n_eff_masked = 0
+        if out_of_support_eff_mask_non_hist is not None and i < out_of_support_eff_mask_non_hist.shape[0]:
+            n_eff_masked = int(np.sum(out_of_support_eff_mask_non_hist[i]))
+        row_result["n_eff_features_masked_out_of_support"] = n_eff_masked
+        row_result["any_eff_feature_masked_out_of_support"] = bool(n_eff_masked > 0)
 
         # Find z-compatible candidates
         if dict_z is not None and data_z is not None:
@@ -2085,43 +2724,84 @@ def estimate_from_dataframes(
         valid_indices = valid_indices[order]
         valid_distances = valid_distances[order]
 
+        best_j = int(valid_indices[0])
         row_result["best_distance"] = float(valid_distances[0])
 
-        # Select neighborhood according to inverse-mapping strategy.
-        if neighbor_selection == "nearest":
-            k_use = 1
-        elif neighbor_selection == "all":
-            k_use = len(valid_indices)
-        else:
-            k_eff = int(neighbor_count) if neighbor_count is not None else len(valid_indices)
-            k_use = min(max(1, k_eff), len(valid_indices))
-        top_indices = valid_indices[:k_use]
-        top_distances = valid_distances[:k_use]
-        row_result["n_neighbors_used"] = int(k_use)
+        # Feature-group diagnostics at the best dictionary match.
+        row_result["best_distance_base_l2"] = np.nan
+        row_result["best_distance_base_l2_eff_empirical"] = np.nan
+        row_result["best_distance_base_l2_tt_rates"] = np.nan
+        row_result["best_distance_base_l2_other"] = np.nan
+        row_result["best_distance_base_share_eff_empirical"] = np.nan
+        row_result["best_distance_base_share_tt_rates"] = np.nan
+        row_result["best_distance_base_share_other"] = np.nan
+        row_result["best_distance_non_hist_finite_dims"] = 0
+        row_result["best_distance_hist_emd"] = np.nan
 
-        if k_use == 1 or top_distances[0] <= distance_floor:
+        if non_hist_feature_idx:
+            sample_base_vec = np.asarray(data_scaled_base[i], dtype=float)
+            best_base_vec = np.asarray(dict_scaled_base[best_j], dtype=float)
+            finite_base = np.isfinite(sample_base_vec) & np.isfinite(best_base_vec)
+            row_result["best_distance_non_hist_finite_dims"] = int(np.sum(finite_base))
+            if np.any(finite_base):
+                delta = np.zeros_like(sample_base_vec, dtype=float)
+                delta[finite_base] = sample_base_vec[finite_base] - best_base_vec[finite_base]
+
+                def _group_l2(group_idx: np.ndarray) -> float:
+                    if group_idx.size == 0:
+                        return 0.0
+                    use = group_idx[finite_base[group_idx]]
+                    if use.size == 0:
+                        return np.nan
+                    vals = delta[use]
+                    return float(np.sqrt(np.sum(vals * vals)))
+
+                base_l2 = float(np.sqrt(np.sum(delta[finite_base] * delta[finite_base])))
+                eff_l2 = _group_l2(base_eff_feature_idx)
+                tt_l2 = _group_l2(base_tt_feature_idx)
+                other_l2 = _group_l2(base_other_feature_idx)
+
+                row_result["best_distance_base_l2"] = base_l2
+                row_result["best_distance_base_l2_eff_empirical"] = eff_l2
+                row_result["best_distance_base_l2_tt_rates"] = tt_l2
+                row_result["best_distance_base_l2_other"] = other_l2
+
+                denom = base_l2 * base_l2
+                if np.isfinite(denom) and denom > 0.0:
+                    row_result["best_distance_base_share_eff_empirical"] = (
+                        float(eff_l2 * eff_l2 / denom) if np.isfinite(eff_l2) else np.nan
+                    )
+                    row_result["best_distance_base_share_tt_rates"] = (
+                        float(tt_l2 * tt_l2 / denom) if np.isfinite(tt_l2) else np.nan
+                    )
+                    row_result["best_distance_base_share_other"] = (
+                        float(other_l2 * other_l2 / denom) if np.isfinite(other_l2) else np.nan
+                    )
+
+        if hist_feature_idx and data_hist_matrix is not None and dict_hist_matrix is not None:
+            hist_pair = _histogram_emd_many(
+                np.asarray(data_hist_matrix[i], dtype=float),
+                np.asarray(dict_hist_matrix[best_j : best_j + 1], dtype=float),
+            )
+            if hist_pair.size:
+                row_result["best_distance_hist_emd"] = (
+                    float(hist_pair[0]) if np.isfinite(hist_pair[0]) else np.nan
+                )
+
+        # Select neighborhood according to inverse-mapping strategy.
+        top_indices, top_distances = _select_top_neighbors(valid_indices, valid_distances)
+        row_result["n_neighbors_used"] = int(len(top_indices))
+
+        if len(top_indices) == 0:
+            for pc in param_columns:
+                row_result[f"est_{pc}"] = np.nan
+        elif len(top_indices) == 1 or top_distances[0] <= distance_floor:
             # Nearest-only (or exact match)
             best_j = top_indices[0]
             for pc in param_columns:
                 row_result[f"est_{pc}"] = float(dict_param_arrays[pc][best_j])
         else:
-            weights = _build_neighbor_weights(
-                top_distances,
-                weighting_mode=neighbor_weighting,
-                idw_power=inverse_distance_power,
-                softmax_temperature=softmax_temperature,
-                distance_floor=distance_floor,
-            )
-            if density_scaling_all is not None:
-                density_scaling_top = np.asarray(
-                    density_scaling_all[top_indices], dtype=float
-                )
-                density_scaling_top = np.where(
-                    np.isfinite(density_scaling_top), density_scaling_top, 0.0
-                )
-                weights = weights * density_scaling_top
-
-            weights = np.where(np.isfinite(weights), weights, 0.0)
+            weights = _build_weights_for_top(top_indices, top_distances)
             sum_weights = float(np.sum(weights))
             if sum_weights <= 0.0:
                 best_j = top_indices[0]
@@ -2131,33 +2811,162 @@ def estimate_from_dataframes(
                 if (i + 1) % 200 == 0 or i == n_data - 1:
                     log.info("  Estimated %d / %d", i + 1, n_data)
                 continue
-            weights /= sum_weights
             sample_base_for_local = data_scaled_base[i] if non_hist_feature_idx else None
             top_base_for_local = (
                 dict_scaled_base[top_indices] if non_hist_feature_idx else None
             )
 
             for pc in param_columns:
-                vals = dict_param_arrays[pc][top_indices]
-                finite = np.isfinite(vals)
-                if finite.sum() == 0:
-                    row_result[f"est_{pc}"] = np.nan
-                else:
-                    w = weights.copy()
-                    w[~finite] = 0.0
-                    if w.sum() > 0:
-                        w /= w.sum()
-                    if aggregation_mode == "weighted_median":
-                        row_result[f"est_{pc}"] = _weighted_median(vals, w)
-                    elif aggregation_mode == "local_linear":
-                        row_result[f"est_{pc}"] = _local_linear_estimate(
-                            vals,
-                            w,
-                            sample_features=sample_base_for_local,
-                            neighbor_features=top_base_for_local,
-                        )
+                row_result[f"est_{pc}"] = _aggregate_param_from_top(
+                    param_name=pc,
+                    top_indices_local=top_indices,
+                    weights_local=weights,
+                    sample_features_local=sample_base_for_local,
+                    neighbor_features_local=top_base_for_local,
+                )
+
+        if (
+            is_two_stage_mode
+            and len(eff_sim_param_columns) > 0
+            and len(flux_param_columns) > 0
+            and base_eff_feature_idx.size > 0
+        ):
+            stage1_eff_estimates: dict[str, float] = {}
+            stage1_distances = _compute_candidate_distances_subset(
+                row_idx=i,
+                cand_indices_local=cand_indices,
+                base_feature_idx_local=np.asarray(base_eff_feature_idx, dtype=int),
+                include_hist=False,
+            )
+            valid_stage1 = np.isfinite(stage1_distances)
+            if np.any(valid_stage1):
+                stage1_indices = cand_indices[valid_stage1]
+                stage1_dist = stage1_distances[valid_stage1]
+                top1_indices, top1_distances = _select_top_neighbors(stage1_indices, stage1_dist)
+                if len(top1_indices) > 0:
+                    row_result["n_neighbors_stage1"] = int(len(top1_indices))
+                    row_result["stage1_best_distance_eff"] = float(np.min(top1_distances))
+                    if len(top1_indices) == 1 or top1_distances[0] <= distance_floor:
+                        idx1 = int(top1_indices[0])
+                        for pc in eff_sim_param_columns:
+                            est_val = float(dict_param_arrays[pc][idx1])
+                            row_result[f"est_{pc}"] = est_val
+                            stage1_eff_estimates[pc] = est_val
                     else:
-                        row_result[f"est_{pc}"] = float(np.sum(w * np.nan_to_num(vals)))
+                        w1 = _build_weights_for_top(top1_indices, top1_distances)
+                        if float(np.sum(w1)) > 0.0:
+                            sample_eff_local = data_scaled_base[i, base_eff_feature_idx]
+                            top_eff_local = dict_scaled_base[top1_indices][:, base_eff_feature_idx]
+                            for pc in eff_sim_param_columns:
+                                est_val = _aggregate_param_from_top(
+                                    param_name=pc,
+                                    top_indices_local=top1_indices,
+                                    weights_local=w1,
+                                    sample_features_local=sample_eff_local,
+                                    neighbor_features_local=top_eff_local,
+                                )
+                                row_result[f"est_{pc}"] = est_val
+                                if np.isfinite(est_val):
+                                    stage1_eff_estimates[pc] = float(est_val)
+
+            if stage1_eff_estimates:
+                stage2_distances = _compute_stage2_candidate_distances(
+                    row_idx=i,
+                    cand_indices_local=cand_indices,
+                )
+                valid_stage2 = np.isfinite(stage2_distances)
+                if np.any(valid_stage2):
+                    stage2_indices = cand_indices[valid_stage2]
+                    stage2_dist = stage2_distances[valid_stage2]
+                    row_result["stage2_candidates_before_gate"] = int(len(stage2_indices))
+                    stage2_penalty = np.zeros(len(stage2_indices), dtype=float)
+                    n_eff_used = 0
+                    for pc, est_val in stage1_eff_estimates.items():
+                        if not np.isfinite(est_val):
+                            continue
+                        span = float(param_span_by_name.get(pc, 1.0))
+                        span = span if np.isfinite(span) and span > 1e-12 else 1.0
+                        cand_vals = np.asarray(dict_param_arrays[pc][stage2_indices], dtype=float)
+                        finite_eff = np.isfinite(cand_vals)
+                        if not np.any(finite_eff):
+                            continue
+                        comp = np.zeros(len(stage2_indices), dtype=float)
+                        comp[finite_eff] = ((cand_vals[finite_eff] - float(est_val)) / span) ** 2
+                        stage2_penalty += comp
+                        n_eff_used += 1
+                    if n_eff_used > 0:
+                        stage2_penalty = np.sqrt(stage2_penalty / float(n_eff_used))
+                    else:
+                        stage2_penalty[:] = 0.0
+                    row_result["stage2_efficiency_gate_threshold"] = (
+                        float(stage2_eff_gate_max) if is_two_stage_address_mode else np.nan
+                    )
+
+                    if is_two_stage_address_mode and len(stage2_indices) > 0 and n_eff_used > 0:
+                        gate_mask = np.isfinite(stage2_penalty) & (
+                            stage2_penalty <= float(stage2_eff_gate_max)
+                        )
+                        min_keep = min(
+                            max(1, int(stage2_eff_gate_min_candidates)),
+                            int(len(stage2_indices)),
+                        )
+                        if int(np.sum(gate_mask)) < min_keep:
+                            finite_pen = np.isfinite(stage2_penalty)
+                            if np.any(finite_pen):
+                                finite_pos = np.where(finite_pen)[0]
+                                order_gate = np.argsort(stage2_penalty[finite_pos])
+                                keep_pos = finite_pos[order_gate][:min_keep]
+                            else:
+                                keep_pos = np.arange(min_keep, dtype=int)
+                            gate_mask = np.zeros(len(stage2_indices), dtype=bool)
+                            gate_mask[keep_pos] = True
+                            row_result["stage2_efficiency_gate_fallback"] = True
+                        stage2_indices = stage2_indices[gate_mask]
+                        stage2_dist = stage2_dist[gate_mask]
+                        stage2_penalty = stage2_penalty[gate_mask]
+
+                    row_result["stage2_candidates_after_gate"] = int(len(stage2_indices))
+                    if len(stage2_indices) > 0:
+                        stage2_dist_combined = stage2_dist + float(stage2_eff_conditioning_weight) * stage2_penalty
+                        order2 = np.argsort(stage2_dist_combined)
+                        stage2_indices = stage2_indices[order2]
+                        stage2_dist_combined = stage2_dist_combined[order2]
+                        stage2_penalty = stage2_penalty[order2]
+                        top2_indices, top2_distances = _select_top_neighbors(stage2_indices, stage2_dist_combined)
+                        if len(top2_indices) > 0:
+                            row_result["estimation_mode_used"] = (
+                                "two_stage_eff_address_then_flux"
+                                if is_two_stage_address_mode
+                                else "two_stage_eff_then_flux"
+                            )
+                            row_result["n_neighbors_stage2"] = int(len(top2_indices))
+                            row_result["stage2_best_distance_rate"] = float(np.min(top2_distances))
+                            row_result["stage2_efficiency_conditioning_penalty"] = float(stage2_penalty[0])
+                            if len(top2_indices) == 1 or top2_distances[0] <= distance_floor:
+                                idx2 = int(top2_indices[0])
+                                for pc in flux_param_columns:
+                                    row_result[f"est_{pc}"] = float(dict_param_arrays[pc][idx2])
+                            else:
+                                w2 = _build_weights_for_top(top2_indices, top2_distances)
+                                if float(np.sum(w2)) > 0.0:
+                                    sample_rate_local = (
+                                        data_scaled_base[i, stage2_rate_feature_idx]
+                                        if stage2_rate_feature_idx.size > 0
+                                        else None
+                                    )
+                                    top_rate_local = (
+                                        dict_scaled_base[top2_indices][:, stage2_rate_feature_idx]
+                                        if stage2_rate_feature_idx.size > 0
+                                        else None
+                                    )
+                                    for pc in flux_param_columns:
+                                        row_result[f"est_{pc}"] = _aggregate_param_from_top(
+                                            param_name=pc,
+                                            top_indices_local=top2_indices,
+                                            weights_local=w2,
+                                            sample_features_local=sample_rate_local,
+                                            neighbor_features_local=top_rate_local,
+                                        )
 
         results.append(row_result)
 
@@ -2175,4 +2984,34 @@ def estimate_from_dataframes(
         )
 
     result_df = pd.DataFrame(results)
+    result_df.attrs["efficiency_feature_out_of_support_masking"] = out_of_support_eff_info
+
+    if "best_distance_base_share_tt_rates" in result_df.columns:
+        tt_vals = pd.to_numeric(
+            result_df["best_distance_base_share_tt_rates"], errors="coerce"
+        ).to_numpy(dtype=float)
+        eff_vals = pd.to_numeric(
+            result_df["best_distance_base_share_eff_empirical"], errors="coerce"
+        ).to_numpy(dtype=float)
+        other_vals = pd.to_numeric(
+            result_df["best_distance_base_share_other"], errors="coerce"
+        ).to_numpy(dtype=float)
+        finite_any = np.isfinite(tt_vals) | np.isfinite(eff_vals) | np.isfinite(other_vals)
+        if np.any(finite_any):
+            tt_med = float(np.nanmedian(tt_vals))
+            eff_med = float(np.nanmedian(eff_vals))
+            other_med = float(np.nanmedian(other_vals))
+            log.info(
+                "Best-match non-hist distance share medians: eff=%.3f tt=%.3f other=%.3f",
+                eff_med,
+                tt_med,
+                other_med,
+            )
+            if tt_med > 0.60:
+                log.warning(
+                    "TT-rate features dominate non-hist best-match distance (median share=%.3f). "
+                    "This can re-couple flux and efficiency in inverse mapping.",
+                    tt_med,
+                )
+
     return result_df

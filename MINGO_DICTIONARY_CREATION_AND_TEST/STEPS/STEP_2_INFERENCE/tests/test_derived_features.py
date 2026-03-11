@@ -28,6 +28,8 @@ sys.path.insert(0, str(_INFERENCE_DIR))
 from estimate_parameters import (
     DERIVED_EFF_PRODUCT_COL,
     DERIVED_EFFICIENCY_COLUMNS,
+    DERIVED_LOG_EFF_PAIR_SUM_COL,
+    DERIVED_LOG_EFF_TRIPLET_SUM_COL,
     DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL,
     DERIVED_RATE_COLUMN,
     DERIVED_TT_GLOBAL_RATE_COL,
@@ -112,9 +114,18 @@ class TestDerivedFeatureColumns:
 
     def test_physics_feature_alias_normalization(self):
         feats = _normalize_derived_physics_features(
-            ["log_tt_rate_over_eff_product", "eff_emp_product", "unknown"]
+            [
+                "log_tt_rate_over_eff_product",
+                "eff_emp_product",
+                "eff_pair_triplet_products",
+                "unknown",
+            ]
         )
-        assert feats == ["log_rate_over_eff_product", "eff_product"]
+        assert feats == [
+            "log_rate_over_eff_product",
+            "eff_product",
+            "eff_coincidence_moments",
+        ]
 
     def test_physics_features_are_constructed(self, data):
         dict_df, data_df = data
@@ -124,20 +135,32 @@ class TestDerivedFeatureColumns:
             dict_df=d2,
             data_df=x2,
             rate_column=derived_col,
-            physics_features=["log_rate_over_eff_product", "eff_product"],
+            physics_features=[
+                "log_rate_over_eff_product",
+                "eff_product",
+                "eff_coincidence_moments",
+            ],
         )
         assert DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL in added
         assert DERIVED_EFF_PRODUCT_COL in added
+        assert DERIVED_LOG_EFF_PAIR_SUM_COL in added
+        assert DERIVED_LOG_EFF_TRIPLET_SUM_COL in added
         assert DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL in d3.columns
         assert DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL in x3.columns
         assert DERIVED_EFF_PRODUCT_COL in d3.columns
         assert DERIVED_EFF_PRODUCT_COL in x3.columns
+        assert DERIVED_LOG_EFF_PAIR_SUM_COL in d3.columns
+        assert DERIVED_LOG_EFF_PAIR_SUM_COL in x3.columns
+        assert DERIVED_LOG_EFF_TRIPLET_SUM_COL in d3.columns
+        assert DERIVED_LOG_EFF_TRIPLET_SUM_COL in x3.columns
         assert (
             pd.to_numeric(d3[DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL], errors="coerce")
             .notna()
             .sum()
             > 0
         )
+        assert pd.to_numeric(d3[DERIVED_LOG_EFF_PAIR_SUM_COL], errors="coerce").notna().sum() > 0
+        assert pd.to_numeric(d3[DERIVED_LOG_EFF_TRIPLET_SUM_COL], errors="coerce").notna().sum() > 0
 
     def test_derived_feature_columns_include_physics_columns(self, data):
         dict_df, data_df = data
