@@ -47,7 +47,7 @@ else:
 DEFAULT_DICTIONARY = (
     STEP_ROOT
     / "STEP_1_SETUP"
-    / "STEP_1_2_BUILD_DICTIONARY"
+    / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
     / "OUTPUTS"
     / "FILES"
     / "dictionary.csv"

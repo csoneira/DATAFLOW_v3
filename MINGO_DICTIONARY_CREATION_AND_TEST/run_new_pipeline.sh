@@ -42,8 +42,10 @@ fi
 # Step definitions: label → script
 declare -A STEP_SCRIPTS
 STEP_SCRIPTS["1.1"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/collect_data.py"
-STEP_SCRIPTS["1.2"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/build_dictionary.py"
-STEP_SCRIPTS["1.3"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_3_ENLARGE_DATASET/enlarge_dataset.py"
+STEP_SCRIPTS["1.2"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_2_TRANSFORM_FEATURE_SPACE/transform_feature_space.py"
+STEP_SCRIPTS["1.3"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_3_BUILD_DICTIONARY/build_dictionary.py"
+STEP_SCRIPTS["1.4"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_4_ENSURE_CONTINUITY_DICTIONARY/ensure_continuity_dictionary.py"
+STEP_SCRIPTS["1.5"]="${STEP_ROOT}/STEP_1_SETUP/STEP_1_5_TUNE_DISTANCE_DEFINITION/tune_distance_definition.py"
 STEP_SCRIPTS["2.1"]="${STEP_ROOT}/STEP_2_INFERENCE/STEP_2_1_ESTIMATE_PARAMS/estimate_and_plot.py"
 STEP_SCRIPTS["2.2"]="${STEP_ROOT}/STEP_2_INFERENCE/STEP_2_2_VALIDATION/validate_solution.py"
 STEP_SCRIPTS["2.3"]="${STEP_ROOT}/STEP_2_INFERENCE/STEP_2_3_UNCERTAINTY/build_uncertainty_lut.py"
@@ -54,13 +56,15 @@ STEP_SCRIPTS["4.1"]="${STEP_ROOT}/STEP_4_REAL_DATA/STEP_4_1_COLLECT_REAL_DATA/co
 STEP_SCRIPTS["4.2"]="${STEP_ROOT}/STEP_4_REAL_DATA/STEP_4_2_ANALYZE/analyze.py"
 
 # Ordered list
-STEP_ORDER=("1.1" "1.2" "1.3" "2.1" "2.2" "2.3" "3.1" "3.2" "3.3" "4.1" "4.2")
+STEP_ORDER=("1.1" "1.2" "1.3" "1.4" "1.5" "2.1" "2.2" "2.3" "3.1" "3.2" "3.3" "4.1" "4.2")
 
 # Step descriptions
 declare -A STEP_DESC
 STEP_DESC["1.1"]="Collect simulated data & match with simulation parameters"
-STEP_DESC["1.2"]="Build dictionary and dataset (filter outliers, select entries)"
-STEP_DESC["1.3"]="Optionally enlarge STEP 1.2 dataset using STEP 3-style synthetic generation"
+STEP_DESC["1.2"]="Transform expanded feature space (per-prefix global rates + helper features)"
+STEP_DESC["1.3"]="Build dictionary + holdout dataset (quality filters, no continuity)"
+STEP_DESC["1.4"]="Ensure continuity of dictionary (filter discontinuous entries)"
+STEP_DESC["1.5"]="Tune feature-space distance definition (Lp norm + per-feature weights)"
 STEP_DESC["2.1"]="Estimate parameters (inverse problem via dictionary matching)"
 STEP_DESC["2.2"]="Validate solution (estimated vs simulated, error analysis)"
 STEP_DESC["2.3"]="Uncertainty assessment (build LUT from error distributions)"

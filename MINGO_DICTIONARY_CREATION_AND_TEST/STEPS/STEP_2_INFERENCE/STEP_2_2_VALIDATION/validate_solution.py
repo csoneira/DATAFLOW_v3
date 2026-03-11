@@ -42,16 +42,12 @@ DEFAULT_ESTIMATED = (
     / "OUTPUTS" / "FILES" / "estimated_params.csv"
 )
 DEFAULT_DICTIONARY = (
-    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
+    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
     / "OUTPUTS" / "FILES" / "dictionary.csv"
 )
 DEFAULT_DATASET = (
-    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_2_BUILD_DICTIONARY"
+    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
     / "OUTPUTS" / "FILES" / "dataset.csv"
-)
-DEFAULT_DATASET_ENLARGED = (
-    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_3_ENLARGE_DATASET"
-    / "OUTPUTS" / "FILES" / "enlarged_dataset.csv"
 )
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
@@ -161,21 +157,7 @@ def _resolve_input_path(path_like: str | Path) -> Path:
 
 
 def _select_default_dataset_path(config: dict) -> Path:
-    cfg_13 = config.get("step_1_3", {})
-    enabled_13 = _as_bool(cfg_13.get("enabled", False), False)
-    if not enabled_13:
-        return DEFAULT_DATASET
-
-    enlarged_cfg = cfg_13.get("enlarged_dataset_csv", None)
-    enlarged_path = _resolve_input_path(enlarged_cfg) if enlarged_cfg else DEFAULT_DATASET_ENLARGED
-    if enlarged_path.exists():
-        log.info("STEP 1.3 selection: using enlarged dataset for STEP 2 (%s).", enlarged_path)
-        return enlarged_path
-
-    log.warning(
-        "STEP 1.3 is enabled but enlarged dataset file is missing: %s. Falling back to STEP 1.2 dataset.",
-        enlarged_path,
-    )
+    """Dataset enlargement is removed from active flow; always use STEP 1.2 dataset."""
     return DEFAULT_DATASET
 
 
@@ -255,14 +237,8 @@ def main() -> int:
     est_path = _resolve_input_path(args.estimated_csv) if args.estimated_csv else DEFAULT_ESTIMATED
     dict_path = _resolve_input_path(args.dictionary_csv) if args.dictionary_csv else DEFAULT_DICTIONARY
     data_path = _resolve_input_path(args.dataset_csv) if args.dataset_csv else _select_default_dataset_path(config)
-    cfg_13 = config.get("step_1_3", {})
     if args.dataset_csv:
         dataset_mode = "cli_dataset_override"
-    elif (
-        _as_bool(cfg_13.get("enabled", False), False)
-        and data_path.resolve() != DEFAULT_DATASET.resolve()
-    ):
-        dataset_mode = "step_1_3_enlarged"
     else:
         dataset_mode = "step_1_2_original"
 
@@ -727,17 +703,20 @@ def _make_plots(
                     color="#555555",
                 )
         else:
-            ax2.set_title("In-dict vs off-dict strict")
-            ax2.text(
-                0.5,
-                0.5,
-                "true_is_dictionary_entry\nnot available",
-                ha="center",
-                va="center",
-                transform=ax2.transAxes,
-                fontsize=8,
-                color="#555555",
-            )
+            # No dict/off-dict split: show overall relative error histogram
+            all_raw = r[m]
+            all_vals = all_raw[(all_raw >= relerr_plot_min) & (all_raw <= relerr_plot_max)]
+            if not all_vals.empty:
+                ax2.hist(
+                    all_vals,
+                    bins=40,
+                    histtype="step",
+                    linewidth=1.8,
+                    color="#1f77b4",
+                    label=f"All (n={len(all_vals)})",
+                )
+                ax2.legend(fontsize=8)
+            ax2.set_title(f"Relative error distribution: {pname}")
             ax2.set_xlabel(f"Rel. error {pname} [%]")
             ax2.set_ylabel("Count")
             ax2.set_xlim(relerr_plot_min, relerr_plot_max)
@@ -747,77 +726,124 @@ def _make_plots(
         _save_figure(fig, PLOTS_DIR / f"validation_{pname}.png")
         plt.close(fig)
 
-    # ── 2. Contour plots in flux-eff space (one per plot-relevant param) ──
-    flux_true = "true_flux_cm2_min"
+    # ── 2. Contour plots: lower-triangular matrix of parameter pairs ───
+    # Each cell (i, j) with i > j shows data in (true_param_j, true_param_i)
+    # plane, colored by |mean relative error| across all parameters.
+    # Diagonal shows the 1-D relative error histogram for that parameter.
+    # Upper triangle is blank.
     contour_params = selected_params
-    for pname in contour_params:
-        relerr_col = f"relerr_{pname}_pct"
-        if flux_true not in val.columns or relerr_col not in val.columns:
-            continue
-        # Pick the best available eff column for the y-axis
-        eff_col = None
-        for candidate in ["true_eff_sim_1", "true_eff_sim_2",
-                          "true_eff_empirical_1", "true_eff_empirical_2"]:
-            if candidate in val.columns and candidate != f"true_{pname}":
-                eff_col = candidate
-                break
-        if eff_col is None:
-            for c in val.columns:
-                if c.startswith("true_") and c not in (flux_true, f"true_{pname}"):
-                    eff_col = c
-                    break
-        if eff_col is None:
-            continue
-        eff_label = eff_col.replace("true_", "")
+    n_cp = len(contour_params)
 
-        fx = pd.to_numeric(val[flux_true], errors="coerce")
-        ey = pd.to_numeric(val[eff_col], errors="coerce")
-        er = pd.to_numeric(val[relerr_col], errors="coerce")  # signed
-        m = fx.notna() & ey.notna() & er.notna() & (er.abs() <= relerr_clip)
-        if m.sum() < 10:
-            continue
+    # Precompute per-row mean |rel error| for coloring
+    relerr_cols_avail = [f"relerr_{p}_pct" for p in contour_params
+                         if f"relerr_{p}_pct" in val.columns]
+    if relerr_cols_avail and n_cp >= 2:
+        relerr_matrix = val[relerr_cols_avail].apply(pd.to_numeric, errors="coerce")
+        mean_abs_relerr = relerr_matrix.abs().mean(axis=1)
 
-        fig, ax = plt.subplots(figsize=(8, 6))
-
-        # Dictionary crosses BEHIND, semi-transparent
-        dict_flux = pd.to_numeric(dict_df.get("flux_cm2_min"), errors="coerce")
-        dict_eff = pd.to_numeric(dict_df.get(eff_label), errors="coerce")
-        dm = dict_flux.notna() & dict_eff.notna()
-        if dm.sum() > 0:
-            ax.scatter(
-                dict_flux[dm], dict_eff[dm],
-                s=50, marker="x", color="grey", linewidths=0.8,
-                alpha=0.25, zorder=1, label="Dictionary entries",
-            )
-
-        # Data points ON TOP, signed relative error
-        er_vals = er[m].values
         if relerr_plot_min < 0 < relerr_plot_max:
-            norm = mcolors.TwoSlopeNorm(
-                vmin=relerr_plot_min, vcenter=0.0, vmax=relerr_plot_max
+            color_norm = mcolors.TwoSlopeNorm(
+                vmin=relerr_plot_min, vcenter=0.0, vmax=relerr_plot_max,
             )
         else:
-            norm = mcolors.Normalize(vmin=relerr_plot_min, vmax=relerr_plot_max)
-        sc = ax.scatter(
-            fx[m], ey[m], c=er_vals,
-            cmap=signed_relerr_cmap,
-            s=28,
-            alpha=0.95,
-            norm=norm,
-            zorder=3,
-            edgecolors="#1A1A1A",
-            linewidths=0.38,
+            color_norm = mcolors.Normalize(vmin=relerr_plot_min, vmax=relerr_plot_max)
+        # For the unsigned mean, symmetric norm from 0 to max
+        abs_norm = mcolors.Normalize(vmin=0.0, vmax=relerr_plot_max)
+
+        # Dictionary coordinates for background crosses
+        dict_param_arrays: dict[str, pd.Series] = {}
+        for p in contour_params:
+            if p in dict_df.columns:
+                dict_param_arrays[p] = pd.to_numeric(dict_df[p], errors="coerce")
+
+        fig, axes = plt.subplots(
+            n_cp, n_cp, figsize=(3.0 * n_cp, 3.0 * n_cp), squeeze=False,
         )
-        fig.colorbar(sc, ax=ax, label=f"Rel. error {pname} [%] (clipped)", shrink=0.85)
 
-        if dm.sum() > 0:
-            ax.legend(fontsize=8)
+        for i, py in enumerate(contour_params):
+            true_y_col = f"true_{py}"
+            relerr_y_col = f"relerr_{py}_pct"
+            for j, px in enumerate(contour_params):
+                ax = axes[i, j]
+                true_x_col = f"true_{px}"
 
-        ax.set_xlabel("True flux [cm⁻² min⁻¹]")
-        ax.set_ylabel(f"True {eff_label}")
-        ax.set_title(f"Rel. error of {pname} in flux–efficiency plane")
-        fig.tight_layout()
-        _save_figure(fig, PLOTS_DIR / f"contour_relerr_{pname}.png")
+                if i == j:
+                    # Diagonal: relative error histogram for this parameter
+                    if relerr_y_col in val.columns:
+                        er = pd.to_numeric(val[relerr_y_col], errors="coerce")
+                        er_clip = er[er.abs() <= relerr_clip].dropna()
+                        er_win = er_clip[
+                            (er_clip >= relerr_plot_min) & (er_clip <= relerr_plot_max)
+                        ]
+                        if not er_win.empty:
+                            ax.hist(
+                                er_win, bins=40, histtype="stepfilled",
+                                color="#4C78A8", alpha=0.6, edgecolor="#2a5080",
+                            )
+                        ax.axvline(0, color="k", ls="--", lw=0.7, alpha=0.5)
+                        med = float(er_clip.median()) if not er_clip.empty else 0.0
+                        ax.axvline(med, color="red", ls="-", lw=0.9, alpha=0.7)
+                        ax.set_xlim(relerr_plot_min, relerr_plot_max)
+                    ax.set_xlabel(f"Rel. err {py} [%]", fontsize=7)
+                    ax.set_ylabel("Count", fontsize=7)
+                    ax.set_title(py, fontsize=8, fontweight="bold")
+
+                elif i > j:
+                    # Lower triangle: scatter (true_px, true_py) colored by rel error of py
+                    if true_x_col not in val.columns or true_y_col not in val.columns:
+                        ax.axis("off")
+                        continue
+                    if relerr_y_col not in val.columns:
+                        ax.axis("off")
+                        continue
+
+                    tx = pd.to_numeric(val[true_x_col], errors="coerce")
+                    ty = pd.to_numeric(val[true_y_col], errors="coerce")
+                    er = pd.to_numeric(val[relerr_y_col], errors="coerce")
+                    m = tx.notna() & ty.notna() & er.notna() & (er.abs() <= relerr_clip)
+                    if m.sum() < 3:
+                        ax.axis("off")
+                        continue
+
+                    # Dictionary crosses behind
+                    if px in dict_param_arrays and py in dict_param_arrays:
+                        dx = dict_param_arrays[px]
+                        dy = dict_param_arrays[py]
+                        dm = dx.notna() & dy.notna()
+                        if dm.sum() > 0:
+                            ax.scatter(
+                                dx[dm], dy[dm],
+                                s=20, marker="x", color="grey",
+                                linewidths=0.5, alpha=0.2, zorder=1,
+                            )
+
+                    sc = ax.scatter(
+                        tx[m], ty[m], c=er[m].values,
+                        cmap=signed_relerr_cmap, s=12, alpha=0.85,
+                        norm=color_norm, zorder=3,
+                        edgecolors="#1A1A1A", linewidths=0.25,
+                    )
+                    ax.set_xlabel(f"True {px}", fontsize=7)
+                    ax.set_ylabel(f"True {py}", fontsize=7)
+
+                else:
+                    # Upper triangle: blank
+                    ax.axis("off")
+
+                ax.tick_params(labelsize=5)
+
+        # Shared colorbar
+        cbar_ax = fig.add_axes([0.92, 0.15, 0.015, 0.7])
+        sm = plt.cm.ScalarMappable(cmap=signed_relerr_cmap, norm=color_norm)
+        sm.set_array([])
+        fig.colorbar(sm, cax=cbar_ax, label="Rel. error [%]")
+
+        fig.suptitle(
+            "Validation: relative error in parameter space (lower triangle)",
+            fontsize=11,
+        )
+        fig.subplots_adjust(right=0.90, hspace=0.35, wspace=0.35)
+        _save_figure(fig, PLOTS_DIR / "contour_relerr_matrix.png")
         plt.close(fig)
 
     # ── 3. Error vs event count ──────────────────────────────────────

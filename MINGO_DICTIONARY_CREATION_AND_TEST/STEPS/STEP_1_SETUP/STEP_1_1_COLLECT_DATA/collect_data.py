@@ -5,7 +5,7 @@ Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_D
 Purpose: STEP 1.1 — Collect simulated data results and match with simulation parameters.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
-Last Updated: 2026-03-02
+Last Updated: 2026-03-11
 Runtime: python3
 Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/collect_data.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
@@ -73,30 +73,6 @@ _PLOT_EXTENSIONS = {
     ".webp",
 }
 
-CANONICAL_TT_LABELS = frozenset(
-    {
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-        "12",
-        "13",
-        "14",
-        "23",
-        "24",
-        "34",
-        "123",
-        "124",
-        "134",
-        "234",
-        "1234",
-    }
-)
-TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
-RATE_HIST_BIN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz")
-
-
 def _clear_plots_dir() -> None:
     """Remove previously generated plot files from the plots directory."""
     removed = 0
@@ -118,6 +94,15 @@ log = logging.getLogger("STEP_1.1")
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
+DEFAULT_PARAMETER_SPACE_COLUMNS = (
+    "flux_cm2_min",
+    "eff_p1",
+    "eff_p2",
+    "eff_p3",
+    "eff_p4",
+    "cos_n",
+)
+
 def _task_metadata_dir(station_id: int, task_id: int) -> Path:
     """Return the task metadata directory."""
     station = f"MINGO{station_id:02d}"
@@ -125,6 +110,23 @@ def _task_metadata_dir(station_id: int, task_id: int) -> Path:
         REPO_ROOT / "STATIONS" / station / "STAGE_1" / "EVENT_DATA"
         / "STEP_1" / f"TASK_{task_id}" / "METADATA"
     )
+
+
+def _discover_all_task_ids(station_id: int) -> list[int]:
+    """Discover all TASK_<id> folders available for the selected station."""
+    station = f"MINGO{station_id:02d}"
+    base = REPO_ROOT / "STATIONS" / station / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+    if not base.exists():
+        return []
+    out: list[int] = []
+    for child in sorted(base.iterdir()):
+        if not child.is_dir():
+            continue
+        match = re.match(r"^TASK_(\d+)$", child.name)
+        if match is None:
+            continue
+        out.append(int(match.group(1)))
+    return sorted(set(out))
 
 
 def _task_specific_metadata_path(station_id: int, task_id: int) -> Path:
@@ -185,21 +187,6 @@ def _aggregate_latest(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _normalize_tt_label(label: object) -> str:
-    text = str(label).strip()
-    if not text:
-        return ""
-    try:
-        value = float(text)
-    except (TypeError, ValueError):
-        return text
-    if not np.isfinite(value):
-        return ""
-    if float(value).is_integer():
-        return str(int(value))
-    return text
-
-
 def _safe_task_ids(raw: object) -> list[int]:
     if raw is None:
         return [1]
@@ -224,207 +211,204 @@ def _safe_task_ids(raw: object) -> list[int]:
     return sorted(set(out)) or [1]
 
 
-def _preferred_tt_prefixes_for_task_ids(task_ids: list[int]) -> tuple[str, ...]:
-    """Preferred TT-rate prefixes based on the most advanced selected task."""
-    max_task_id = max(task_ids) if task_ids else 1
-    if max_task_id <= 1:
-        return ("raw_tt", "clean_tt")
-    if max_task_id == 2:
-        return ("clean_tt", "raw_to_clean_tt", "raw_tt")
-    if max_task_id == 3:
-        return ("cal_tt", "clean_tt", "raw_to_clean_tt", "raw_tt")
-    if max_task_id == 4:
-        return ("list_tt", "list_to_fit_tt", "cal_tt", "clean_tt", "raw_to_clean_tt", "raw_tt")
-    return (
-        "post_tt",
-        "fit_to_post_tt",
-        "fit_tt",
-        "list_to_fit_tt",
-        "list_tt",
-        "cal_tt",
-        "clean_tt",
-        "raw_to_clean_tt",
-        "raw_tt",
-        "corr_tt",
-        "task5_to_corr_tt",
-        "fit_to_corr_tt",
-        "definitive_tt",
-    )
+def _normalize_string_list(raw: object) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        text = raw.strip()
+        return [text] if text else []
+    if isinstance(raw, (list, tuple)):
+        out: list[str] = []
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                out.append(item.strip())
+        return out
+    return []
 
 
-def _resolve_metadata_prefix_override(raw: object) -> str | None:
-    """Normalize optional metadata prefix override from config."""
-    if raw in (None, "", "null", "None"):
-        return None
-    text = str(raw).strip()
-    if not text:
-        return None
-    if text.lower() == "auto":
-        return None
-    return text.rstrip("_")
+def _as_bool(raw: object, default: bool) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+    return bool(default)
 
 
-def _attach_tt_sum_global_rate(
-    meta_df: pd.DataFrame,
-    preferred_prefixes: tuple[str, ...],
-) -> tuple[pd.DataFrame, str | None, dict[str, int]]:
-    by_prefix: dict[str, list[str]] = {}
-    for col in meta_df.columns:
-        match = TT_RATE_COLUMN_RE.match(str(col))
-        if match is None:
-            continue
-        prefix = str(match.group("prefix")).strip()
-        label = _normalize_tt_label(match.group("label"))
-        if label not in CANONICAL_TT_LABELS:
-            continue
-        by_prefix.setdefault(prefix, []).append(col)
+def _resolve_parameter_space_selection(
+    params_df: pd.DataFrame,
+    *,
+    cfg_11: dict,
+) -> tuple[list[str], dict]:
+    available = list(params_df.columns)
+    available_set = set(available)
+    auto_candidates = [c for c in DEFAULT_PARAMETER_SPACE_COLUMNS if c in available_set]
 
-    if not by_prefix:
-        return meta_df, None, {
-            "selected_non_positive_rows": 0,
-            "fallback_existing_global_rows": 0,
-            "fallback_alt_prefix_rows": 0,
-        }
-
-    selected_prefix: str | None = None
-    for preferred in preferred_prefixes:
-        if preferred in by_prefix and by_prefix[preferred]:
-            selected_prefix = preferred
-            break
-    if selected_prefix is None:
-        selected_prefix = min(by_prefix.keys(), key=lambda p: (-len(by_prefix[p]), p))
-
-    prefix_rates: dict[str, pd.Series] = {}
-    for prefix, cols in by_prefix.items():
-        use_cols = sorted(set(cols))
-        if not use_cols:
-            continue
-        rate_sum = pd.Series(0.0, index=meta_df.index, dtype=float)
-        valid_any = pd.Series(False, index=meta_df.index)
-        for col in use_cols:
-            numeric = pd.to_numeric(meta_df[col], errors="coerce")
-            rate_sum = rate_sum + numeric.fillna(0.0)
-            valid_any = valid_any | numeric.notna()
-        prefix_rates[prefix] = rate_sum.where(valid_any, np.nan)
-
-    if selected_prefix not in prefix_rates:
-        return meta_df, None, {
-            "selected_non_positive_rows": 0,
-            "fallback_existing_global_rows": 0,
-            "fallback_alt_prefix_rows": 0,
-        }
-
-    out = meta_df.copy()
-    derived = prefix_rates[selected_prefix].copy()
-    selected_non_positive = int((derived.isna() | (derived <= 0.0)).sum())
-
-    if "events_per_second_global_rate" in out.columns:
-        existing_global = pd.to_numeric(out["events_per_second_global_rate"], errors="coerce")
+    raw_selected = cfg_11.get("parameter_space_columns", "auto")
+    requested: list[str]
+    requested_unmatched: list[str] = []
+    selection_mode = "auto_default"
+    if isinstance(raw_selected, str) and raw_selected.strip().lower() == "auto":
+        requested = auto_candidates.copy()
     else:
-        existing_global = pd.Series(np.nan, index=out.index, dtype=float)
+        requested_raw = _normalize_string_list(raw_selected)
+        requested = [c for c in requested_raw if c in available_set]
+        requested_unmatched = [c for c in requested_raw if c not in available_set]
+        selection_mode = "configured_list"
 
-    fallback_existing_mask = (
-        (derived.isna() | (derived <= 0.0))
-        & existing_global.notna()
-        & (existing_global > 0.0)
+    excluded = set(_normalize_string_list(cfg_11.get("parameter_space_exclude_columns")))
+    drop_constant = _as_bool(
+        cfg_11.get("parameter_space_drop_constant_columns", True),
+        default=True,
     )
-    fallback_existing_rows = int(fallback_existing_mask.sum())
-    if fallback_existing_rows > 0:
-        derived = derived.where(~fallback_existing_mask, existing_global)
+    drop_unselected = _as_bool(
+        cfg_11.get("drop_unselected_parameter_columns_from_dataset", True),
+        default=True,
+    )
 
-    remaining = (derived.isna() | (derived <= 0.0))
-    fallback_alt_rows = 0
-    alt_prefixes = [
-        *[p for p in preferred_prefixes if p in prefix_rates and p != selected_prefix],
-        *[p for p in sorted(prefix_rates.keys()) if p != selected_prefix and p not in preferred_prefixes],
-    ]
-    for alt_prefix in alt_prefixes:
-        alt_values = prefix_rates[alt_prefix]
-        alt_mask = remaining & alt_values.notna() & (alt_values > 0.0)
-        if not bool(alt_mask.any()):
+    selected: list[str] = []
+    excluded_by_config: list[str] = []
+    constant_removed: list[str] = []
+    for col in requested:
+        if col in excluded:
+            excluded_by_config.append(col)
             continue
-        used_rows = int(alt_mask.sum())
-        fallback_alt_rows += used_rows
-        derived = derived.where(~alt_mask, alt_values)
-        remaining = (derived.isna() | (derived <= 0.0))
-        if not bool(remaining.any()):
-            break
+        if drop_constant:
+            vals = pd.to_numeric(params_df[col], errors="coerce")
+            nunique = int(vals.dropna().nunique())
+            if nunique <= 1:
+                constant_removed.append(col)
+                continue
+        selected.append(col)
 
-    out["events_per_second_global_rate"] = derived
-    return out, selected_prefix, {
-        "selected_non_positive_rows": selected_non_positive,
-        "fallback_existing_global_rows": fallback_existing_rows,
-        "fallback_alt_prefix_rows": fallback_alt_rows,
+    selected = list(dict.fromkeys(selected))
+    if not selected and auto_candidates:
+        fallback = [c for c in auto_candidates if c not in excluded]
+        if drop_constant:
+            fallback = [
+                c
+                for c in fallback
+                if int(pd.to_numeric(params_df[c], errors="coerce").dropna().nunique()) > 1
+            ]
+        selected = list(dict.fromkeys(fallback))
+
+    alias_map: dict[str, str] = {}
+    for i in range(1, 5):
+        pcol = f"eff_p{i}"
+        sim_col = f"eff_sim_{i}"
+        alias_map[pcol] = sim_col
+        alias_map[sim_col] = sim_col
+    downstream_preferred: list[str] = []
+    for col in selected:
+        mapped = alias_map.get(col, col)
+        if mapped not in downstream_preferred:
+            downstream_preferred.append(mapped)
+
+    columns_removed_from_dataset = []
+    if drop_unselected:
+        candidate_pool = list(dict.fromkeys(auto_candidates + _normalize_string_list(raw_selected)))
+        columns_removed_from_dataset = [
+            c for c in candidate_pool if c in available_set and c not in selected
+        ]
+
+    info = {
+        "selection_mode": selection_mode,
+        "parameter_space_columns_requested_raw": raw_selected,
+        "parameter_space_columns_available_auto": auto_candidates,
+        "parameter_space_columns_requested_unmatched": requested_unmatched,
+        "parameter_space_columns_excluded_by_config": excluded_by_config,
+        "parameter_space_columns_removed_as_constant": constant_removed,
+        "parameter_space_columns_selected": selected,
+        "parameter_space_columns_downstream_preferred": downstream_preferred,
+        "parameter_space_column_aliases": alias_map,
+        "drop_unselected_parameter_columns_from_dataset": bool(drop_unselected),
+        "parameter_space_columns_removed_from_dataset": columns_removed_from_dataset,
     }
+    return selected, info
 
 
 def _resolve_event_count_column(df: pd.DataFrame) -> str | None:
     """Return preferred event-count column name if available."""
-    for candidate in (
+    base_candidates = (
         "selected_rows",
         "requested_rows",
         "generated_events_count",
         "num_events",
         "event_count",
-    ):
+    )
+    for candidate in base_candidates:
         if candidate in df.columns:
             return candidate
+    for source in ("trigger_type", "rate_histogram", "specific"):
+        for candidate in base_candidates:
+            source_col = f"{source}__{candidate}"
+            if source_col in df.columns:
+                return source_col
     return None
 
 
-def _load_rate_histogram_bins(
+def _load_task_metadata_csv(
     *,
     station_id: int,
     task_id: int,
+    source_name: str,
+    path: Path,
     metadata_agg: str,
-) -> tuple[pd.DataFrame | None, list[str]]:
-    """Load per-file rate-histogram metadata columns for one task (if available)."""
-    rate_hist_path = _task_rate_histogram_metadata_path(station_id, task_id)
-    if not rate_hist_path.exists():
-        log.info("Rate-histogram metadata CSV not found for task %d: %s", task_id, rate_hist_path)
-        return (None, [])
-
-    log.info("Loading metadata (rate_histogram) for task %d: %s", task_id, rate_hist_path)
-    rate_hist_df = pd.read_csv(rate_hist_path, low_memory=False)
-    if "filename_base" not in rate_hist_df.columns:
-        log.warning(
-            "  Task %d rate_histogram metadata has no 'filename_base'; skipping histogram merge.",
-            task_id,
+) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing required {source_name} metadata for task {task_id}: {path}"
         )
-        return (None, [])
+    log.info("Loading metadata (%s) for task %d: %s", source_name, task_id, path)
+    meta_df = pd.read_csv(path, low_memory=False)
+    if "filename_base" not in meta_df.columns:
+        raise KeyError(
+            f"Metadata source '{source_name}' for task {task_id} has no 'filename_base' column."
+        )
     if metadata_agg == "latest":
-        rate_hist_df = _aggregate_latest(rate_hist_df)
-
-    base_cols = [
-        col for col in (
-            "events_per_second_global_rate",
-            "events_per_second_total_seconds",
-            "count_rate_denominator_seconds",
-        )
-        if col in rate_hist_df.columns
-    ]
-    hist_cols = [
-        c for c in rate_hist_df.columns
-        if RATE_HIST_BIN_RE.match(str(c)) is not None
-    ]
-    hist_cols.sort(key=lambda c: int(RATE_HIST_BIN_RE.match(str(c)).group("bin")))
-    if not hist_cols and not base_cols:
-        log.warning(
-            "  Task %d rate_histogram metadata has no usable rate columns.",
-            task_id,
-        )
-        return (None, [])
-
-    merge_cols = [*base_cols, *hist_cols]
-    out = rate_hist_df[["filename_base", *merge_cols]].copy()
-    out = out.groupby("filename_base", sort=False).tail(1)
+        meta_df = _aggregate_latest(meta_df)
+    meta_df = meta_df.groupby("filename_base", sort=False).tail(1).reset_index(drop=True)
     log.info(
-        "  Rate-histogram rows (after aggregation): %d with %d base-rate columns and %d bin columns.",
-        len(out),
-        len(base_cols),
-        len(hist_cols),
+        "  %s rows (after aggregation): %d, columns=%d",
+        source_name,
+        len(meta_df),
+        len(meta_df.columns),
     )
-    return (out, merge_cols)
+    return meta_df
+
+
+def _merge_metadata_sources_equal_level(
+    *,
+    task_id: int,
+    ordered_sources: list[tuple[str, pd.DataFrame]],
+) -> tuple[pd.DataFrame, dict]:
+    if not ordered_sources:
+        raise ValueError(f"No metadata sources were provided for task {task_id}.")
+    merged = ordered_sources[0][1].copy()
+    info: dict = {
+        "task_id": int(task_id),
+        "source_names": [name for name, _ in ordered_sources],
+        "rows_per_source_before_merge": {
+            name: int(len(df)) for name, df in ordered_sources
+        },
+        "renamed_overlap_columns": {},
+    }
+
+    for source_name, source_df in ordered_sources[1:]:
+        overlap = sorted(
+            set(merged.columns).intersection(set(source_df.columns)) - {"filename_base"}
+        )
+        renamed = {}
+        if overlap:
+            renamed = {col: f"{source_name}__{col}" for col in overlap}
+            source_df = source_df.rename(columns=renamed)
+        merged = merged.merge(source_df, on="filename_base", how="inner")
+        info["renamed_overlap_columns"][source_name] = renamed
+        info[f"rows_after_merge_with_{source_name}"] = int(len(merged))
+    return merged, info
 
 
 def _normalize_metadata_agg(raw: object) -> str:
@@ -509,117 +493,6 @@ def _ensure_efficiency_columns(
     return out
 
 
-def _numeric_combo_key(df: pd.DataFrame, cols: list[str]) -> pd.Series:
-    work = pd.DataFrame(index=df.index)
-    for col in cols:
-        work[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return work.apply(
-        lambda row: "|".join(
-            "nan" if pd.isna(value) else f"{float(value):.9f}"
-            for value in row.values
-        ),
-        axis=1,
-    )
-
-
-def _filter_params_to_current_mesh_support(
-    params_df: pd.DataFrame,
-    *,
-    mesh_path: Path,
-) -> tuple[pd.DataFrame, int, str | None]:
-    if not mesh_path.exists():
-        log.warning("Current param mesh not found (%s); skipping mesh-support filter.", mesh_path)
-        return params_df, 0, None
-
-    mesh_df = pd.read_csv(mesh_path, low_memory=False)
-    if mesh_df.empty:
-        log.warning("Current param mesh is empty (%s); skipping mesh-support filter.", mesh_path)
-        return params_df, 0, None
-
-    params_work = _ensure_efficiency_columns(params_df)
-    mesh_work = _ensure_efficiency_columns(mesh_df)
-
-    params_ids = (
-        pd.to_numeric(params_work["param_set_id"], errors="coerce")
-        if "param_set_id" in params_work.columns
-        else None
-    )
-    mesh_ids = (
-        pd.to_numeric(mesh_work["param_set_id"], errors="coerce").dropna().astype(int)
-        if "param_set_id" in mesh_work.columns
-        else pd.Series(dtype=int)
-    )
-    if params_ids is not None and not mesh_ids.empty:
-        id_mask = params_ids.astype("Int64").isin(set(mesh_ids.tolist()))
-        if bool(id_mask.any()):
-            filtered = params_work.loc[id_mask].reset_index(drop=True)
-            removed = int(len(params_work) - len(filtered))
-            return filtered, removed, "param_set_id"
-
-    params_combo_cols = [
-        "cos_n",
-        "flux_cm2_min",
-        "z_plane_1",
-        "z_plane_2",
-        "z_plane_3",
-        "z_plane_4",
-        "eff_p1",
-        "eff_p2",
-        "eff_p3",
-        "eff_p4",
-    ]
-    mesh_combo_cols = [
-        "cos_n",
-        "flux_cm2_min",
-        "z_p1",
-        "z_p2",
-        "z_p3",
-        "z_p4",
-        "eff_p1",
-        "eff_p2",
-        "eff_p3",
-        "eff_p4",
-    ]
-    if not all(col in params_work.columns for col in params_combo_cols):
-        log.warning(
-            "Simulation params missing columns required for mesh-support combo filter; skipping filter."
-        )
-        return params_work, 0, None
-    if not all(col in mesh_work.columns for col in mesh_combo_cols):
-        log.warning("Param mesh missing columns required for combo filter; skipping filter.")
-        return params_work, 0, None
-
-    params_keys = _numeric_combo_key(params_work, params_combo_cols)
-    mesh_keys = _numeric_combo_key(mesh_work, mesh_combo_cols)
-    support = set(mesh_keys.tolist())
-    keep_mask = params_keys.isin(support)
-    filtered = params_work.loc[keep_mask].reset_index(drop=True)
-    removed = int(len(params_work) - len(filtered))
-    return filtered, removed, "combo"
-
-
-def _add_flux_proxy_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
-    if "events_per_second_global_rate" not in df.columns:
-        return df, False
-    out = _ensure_efficiency_columns(df)
-    eff_cols = ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
-    if not all(col in out.columns for col in eff_cols):
-        return out, False
-
-    eff_df = out[eff_cols].apply(pd.to_numeric, errors="coerce")
-    valid_eff = eff_df.notna().all(axis=1)
-    eff_prod = eff_df.prod(axis=1, min_count=4).where(valid_eff, np.nan)
-    rate = pd.to_numeric(out["events_per_second_global_rate"], errors="coerce")
-
-    out["efficiency_product_4planes"] = eff_prod
-    proxy = pd.Series(np.nan, index=out.index, dtype=float)
-    valid_proxy = eff_prod > 0.0
-    proxy.loc[valid_proxy] = rate.loc[valid_proxy] / eff_prod.loc[valid_proxy]
-    out["flux_proxy_rate_div_effprod"] = proxy
-    return out, True
-
-
 # ── Main ─────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -633,7 +506,21 @@ def main() -> int:
     _clear_plots_dir()
 
     station_id = int(config.get("station_id", 0))
-    task_ids = _safe_task_ids(config.get("task_ids", [1]))
+    configured_task_ids = _safe_task_ids(config.get("task_ids", [1]))
+    discovered_task_ids = _discover_all_task_ids(station_id)
+    if not discovered_task_ids:
+        log.error(
+            "No TASK_<id> directories found for station %d. Cannot collect metadata.",
+            station_id,
+        )
+        return 1
+    task_ids = discovered_task_ids
+    if configured_task_ids != task_ids:
+        log.warning(
+            "Ignoring configured task_ids=%s. STEP 1.1 collects all available tasks: %s.",
+            configured_task_ids,
+            task_ids,
+        )
     cfg_11 = config.get("step_1_1", {})
     min_rows_raw = cfg_11.get("min_rows_for_dataset", 0)
     try:
@@ -644,43 +531,23 @@ def main() -> int:
             min_rows_raw,
         )
         min_rows_for_dataset = 0
-    metadata_prefix_override = _resolve_metadata_prefix_override(
-        cfg_11.get("metadata_prefix", "auto")
-    )
-    preferred_tt_prefixes = list(_preferred_tt_prefixes_for_task_ids(task_ids))
-    if metadata_prefix_override is not None:
-        preferred_tt_prefixes = [
-            metadata_prefix_override,
-            *[p for p in preferred_tt_prefixes if p != metadata_prefix_override],
-        ]
-    preferred_tt_prefixes_t = tuple(preferred_tt_prefixes)
-    if metadata_prefix_override is None:
-        log.info(
-            "STEP 1.1 metadata_prefix=auto -> preferred TT prefixes from task_ids %s: %s",
-            task_ids,
-            preferred_tt_prefixes_t,
-        )
-    else:
-        log.info(
-            "STEP 1.1 metadata_prefix override '%s' -> preferred TT prefixes: %s",
-            metadata_prefix_override,
-            preferred_tt_prefixes_t,
-        )
-
     default_sim_params_path = (
         REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
     )
+    sim_params_path = default_sim_params_path
     sim_params_cfg = config.get("simulation_params_csv", None)
-    if sim_params_cfg in (None, "", "null", "None"):
-        sim_params_path = default_sim_params_path
-    else:
-        sim_params_path = Path(str(sim_params_cfg)).expanduser()
+    if sim_params_cfg not in (None, "", "null", "None"):
+        log.warning(
+            "Ignoring simulation_params_csv override (%r). STEP 1.1 always uses %s.",
+            sim_params_cfg,
+            default_sim_params_path,
+        )
     param_mesh_cfg = config.get("param_mesh_csv", None)
-    param_mesh_path: Path | None = None
     if param_mesh_cfg not in (None, "", "null", "None"):
-        param_mesh_path = Path(str(param_mesh_cfg)).expanduser()
-        if not param_mesh_path.is_absolute():
-            param_mesh_path = (REPO_ROOT / param_mesh_path).resolve()
+        log.warning(
+            "Ignoring param_mesh_csv (%r). STEP 1.1 no longer applies mesh-support filtering.",
+            param_mesh_cfg,
+        )
     z_config = config.get("z_position_config", None)
     metadata_agg = _normalize_metadata_agg(config.get("metadata_agg", "latest"))
 
@@ -698,30 +565,9 @@ def main() -> int:
     params_df = params_df.drop(columns=["file_name"], errors="ignore")
     params_df = _ensure_efficiency_columns(params_df)
     log.info("  Simulation params rows: %d", len(params_df))
-    removed_outside_mesh = 0
-    mesh_filter_mode: str | None = None
-    if param_mesh_path is not None:
-        params_df, removed_outside_mesh, mesh_filter_mode = _filter_params_to_current_mesh_support(
-            params_df,
-            mesh_path=param_mesh_path,
-        )
-        if mesh_filter_mode is not None:
-            log.info(
-                "Applied optional mesh-support filter (%s): removed %d row(s), %d remain.",
-                mesh_filter_mode,
-                removed_outside_mesh,
-                len(params_df),
-            )
-        if params_df.empty:
-            log.error(
-                "No simulation rows remain after applying optional mesh-support filter from %s.",
-                param_mesh_path,
-            )
-            return 1
-    else:
-        log.info(
-            "No optional param_mesh_csv configured; using step_final_simulation_params.csv as source of truth."
-        )
+    log.info(
+        "Using step_final_simulation_params.csv as STEP 1.1 source of truth (no mesh filter)."
+    )
 
     # ── Determine z-position configuration ───────────────────────────
     z_cols = ["z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"]
@@ -771,122 +617,91 @@ def main() -> int:
         log.error("No rows remain after z-position cut. Check your z_position_config.")
         return 1
 
+    parameter_space_columns, parameter_space_info = _resolve_parameter_space_selection(
+        params_df,
+        cfg_11=cfg_11,
+    )
+    if not parameter_space_columns:
+        log.error(
+            "No parameter-space columns were selected for STEP 1.1. "
+            "Set step_1_1.parameter_space_columns to a non-empty list."
+        )
+        return 1
+
+    drop_unselected = bool(parameter_space_info.get("drop_unselected_parameter_columns_from_dataset", True))
+    removed_parameter_columns: list[str] = []
+    if drop_unselected:
+        to_drop = [
+            c
+            for c in parameter_space_info.get("parameter_space_columns_removed_from_dataset", [])
+            if c in params_df.columns and c != "filename_base"
+        ]
+        if to_drop:
+            params_df = params_df.drop(columns=to_drop, errors="ignore")
+            removed_parameter_columns = to_drop
+    parameter_space_info["parameter_space_columns_removed_from_dataset"] = removed_parameter_columns
+
+    log.info("Parameter-space columns selected: %s", parameter_space_columns)
+    if removed_parameter_columns:
+        log.info(
+            "Removed non-selected parameter columns from STEP 1.1 dataset: %s",
+            removed_parameter_columns,
+        )
+
     # ── Collect metadata for each task and merge ─────────────────────
     all_merged: list[pd.DataFrame] = []
-    total_selected_non_positive_rates = 0
-    total_fallback_existing_rates = 0
-    total_fallback_alt_prefix_rates = 0
 
     for task_id in task_ids:
         specific_path = _task_specific_metadata_path(station_id, task_id)
         trigger_path = _task_trigger_type_metadata_path(station_id, task_id)
+        rate_hist_path = _task_rate_histogram_metadata_path(station_id, task_id)
+        try:
+            trigger_df = _load_task_metadata_csv(
+                station_id=station_id,
+                task_id=task_id,
+                source_name="trigger_type",
+                path=trigger_path,
+                metadata_agg=metadata_agg,
+            )
+            rate_hist_df = _load_task_metadata_csv(
+                station_id=station_id,
+                task_id=task_id,
+                source_name="rate_histogram",
+                path=rate_hist_path,
+                metadata_agg=metadata_agg,
+            )
+            specific_df = _load_task_metadata_csv(
+                station_id=station_id,
+                task_id=task_id,
+                source_name="specific",
+                path=specific_path,
+                metadata_agg=metadata_agg,
+            )
+        except (FileNotFoundError, KeyError) as exc:
+            log.error("%s", exc)
+            return 1
 
-        meta_df: pd.DataFrame | None = None
-
-        # Primary source: trigger_type metadata.
-        if trigger_path.exists():
-            log.info("Loading metadata (trigger_type) for task %d: %s", task_id, trigger_path)
-            trigger_df = pd.read_csv(trigger_path, low_memory=False)
-            if "filename_base" not in trigger_df.columns:
-                log.error("  No 'filename_base' column in task %d trigger_type metadata.", task_id)
-                trigger_df = None
-            elif metadata_agg == "latest":
-                trigger_df = _aggregate_latest(trigger_df)
-            if trigger_df is not None:
-                log.info("  Trigger-type rows (after aggregation): %d", len(trigger_df))
-                meta_df = trigger_df
-        else:
-            log.info("Trigger-type metadata CSV not found for task %d: %s", task_id, trigger_path)
-
-        # Fallback source: specific metadata only when trigger_type is unavailable.
-        if meta_df is None:
-            if specific_path.exists():
-                log.warning(
-                    "Using fallback metadata (specific) for task %d because trigger_type is unavailable: %s",
-                    task_id,
-                    specific_path,
-                )
-                specific_df = pd.read_csv(specific_path, low_memory=False)
-                if "filename_base" not in specific_df.columns:
-                    log.error("  No 'filename_base' column in task %d specific metadata.", task_id)
-                else:
-                    if metadata_agg == "latest":
-                        specific_df = _aggregate_latest(specific_df)
-                    log.info("  Specific rows (after aggregation): %d", len(specific_df))
-                    meta_df = specific_df
-            else:
-                log.warning("Specific metadata CSV not found for task %d: %s", task_id, specific_path)
-
-        if meta_df is None:
-            log.warning("No usable metadata for task %d — skipping.", task_id)
-            continue
-
-        rate_hist_df, rate_hist_cols = _load_rate_histogram_bins(
-            station_id=station_id,
+        meta_df, merge_info = _merge_metadata_sources_equal_level(
             task_id=task_id,
-            metadata_agg=metadata_agg,
+            ordered_sources=[
+                ("trigger_type", trigger_df),
+                ("rate_histogram", rate_hist_df),
+                ("specific", specific_df),
+            ],
         )
-        if rate_hist_df is not None and rate_hist_cols:
-            new_hist_cols = [c for c in rate_hist_cols if c not in meta_df.columns]
-            if new_hist_cols:
-                meta_df = meta_df.merge(
-                    rate_hist_df[["filename_base", *new_hist_cols]],
-                    on="filename_base",
-                    how="left",
-                )
-                rows_with_hist = int(meta_df[new_hist_cols].notna().any(axis=1).sum())
-                log.info(
-                    "  Joined rate_histogram bins for task %d: %d columns, %d/%d rows with histogram values.",
-                    task_id,
-                    len(new_hist_cols),
-                    rows_with_hist,
-                    len(meta_df),
-                )
-            else:
-                log.info(
-                    "  Rate-histogram bin columns already present for task %d; merge skipped.",
-                    task_id,
-                )
-
-        meta_df, rate_prefix, rate_stats = _attach_tt_sum_global_rate(
-            meta_df,
-            preferred_prefixes=preferred_tt_prefixes_t,
+        log.info(
+            "  Metadata merged at equal level for task %d: rows=%d, columns=%d.",
+            task_id,
+            len(meta_df),
+            len(meta_df.columns),
         )
-        total_selected_non_positive_rates += int(rate_stats.get("selected_non_positive_rows", 0))
-        total_fallback_existing_rates += int(rate_stats.get("fallback_existing_global_rows", 0))
-        total_fallback_alt_prefix_rates += int(rate_stats.get("fallback_alt_prefix_rows", 0))
-        if rate_prefix is not None:
-            log.info(
-                "  Global rate for task %d set as TT-rate sum from prefix '%s'.",
-                task_id,
-                rate_prefix,
-            )
-            if rate_stats.get("fallback_existing_global_rows", 0):
-                log.warning(
-                    "  Task %d global-rate fallback: %d row(s) kept existing histogram global rate "
-                    "because selected TT prefix '%s' was non-positive.",
-                    task_id,
-                    int(rate_stats.get("fallback_existing_global_rows", 0)),
-                    rate_prefix,
-                )
-            if rate_stats.get("fallback_alt_prefix_rows", 0):
-                log.warning(
-                    "  Task %d global-rate fallback: %d row(s) replaced using alternate TT prefixes.",
-                    task_id,
-                    int(rate_stats.get("fallback_alt_prefix_rows", 0)),
-                )
-        elif "events_per_second_global_rate" in meta_df.columns:
-            log.info(
-                "  Using existing global-rate column for task %d: events_per_second_global_rate",
-                task_id,
-            )
-        else:
-            log.warning(
-                "  No TT-rate columns found to derive global rate for task %d.",
-                task_id,
-            )
-
-        log.info("  Metadata rows (selected source): %d", len(meta_df))
+        if merge_info.get("renamed_overlap_columns"):
+            overlap_counts = {
+                key: int(len(val))
+                for key, val in merge_info["renamed_overlap_columns"].items()
+                if isinstance(val, dict)
+            }
+            log.info("  Metadata overlap columns renamed by source: %s", overlap_counts)
 
         # Inner join on filename_base: only keep rows present in BOTH
         merged = params_df.merge(meta_df, on="filename_base", how="inner")
@@ -902,14 +717,6 @@ def main() -> int:
 
     collected = pd.concat(all_merged, ignore_index=True)
     log.info("Total collected rows (all tasks): %d", len(collected))
-    if total_selected_non_positive_rates > 0:
-        log.info(
-            "Global-rate derivation summary: %d selected-prefix row(s) were non-positive; "
-            "%d row(s) used existing histogram global rate; %d row(s) used alternate TT prefix sums.",
-            total_selected_non_positive_rates,
-            total_fallback_existing_rates,
-            total_fallback_alt_prefix_rates,
-        )
 
     ev_col = _resolve_event_count_column(collected)
     removed_below_min_rows = 0
@@ -939,23 +746,29 @@ def main() -> int:
                 )
                 return 1
 
-    collected, has_flux_proxy = _add_flux_proxy_columns(collected)
-    if has_flux_proxy:
-        valid_proxy = int(collected["flux_proxy_rate_div_effprod"].notna().sum())
-        log.info(
-            "Added derived flux proxy column 'flux_proxy_rate_div_effprod' (%d/%d non-null rows).",
-            valid_proxy,
-            len(collected),
-        )
-    else:
-        log.warning(
-            "Could not derive flux proxy column; required columns were missing."
-        )
-
     # ── Save ─────────────────────────────────────────────────────────
     out_path = FILES_DIR / "collected_data.csv"
     collected.to_csv(out_path, index=False)
     log.info("Wrote collected data: %s", out_path)
+
+    parameter_space_path = FILES_DIR / "parameter_space_columns.json"
+    parameter_space_payload = {
+        "parameter_space_columns": parameter_space_columns,
+        "selected_parameter_space_columns": parameter_space_columns,
+        "parameter_space_columns_downstream_preferred": parameter_space_info.get(
+            "parameter_space_columns_downstream_preferred",
+            parameter_space_columns,
+        ),
+        "parameter_space_column_aliases": parameter_space_info.get(
+            "parameter_space_column_aliases", {}
+        ),
+        "selection": parameter_space_info,
+    }
+    parameter_space_path.write_text(
+        json.dumps(parameter_space_payload, indent=2),
+        encoding="utf-8",
+    )
+    log.info("Wrote parameter-space selection: %s", parameter_space_path)
 
     # Save the selected z configuration for downstream steps
     z_info = {
@@ -965,19 +778,23 @@ def main() -> int:
         "z_config_seed_from_config": z_config_seed_from_config,
         "total_rows": len(collected),
         "task_ids_used": task_ids,
+        "task_ids_discovered": task_ids,
+        "task_ids_config_ignored": configured_task_ids,
         "station_id": station_id,
-        "param_mesh_path": None if param_mesh_path is None else str(param_mesh_path),
-        "mesh_support_filter_mode": mesh_filter_mode,
-        "rows_removed_outside_mesh_support": int(removed_outside_mesh),
-        "metadata_prefix_override": metadata_prefix_override,
-        "metadata_prefix_preferred_order": list(preferred_tt_prefixes_t),
-        "global_rate_selected_non_positive_rows": int(total_selected_non_positive_rates),
-        "global_rate_fallback_existing_rows": int(total_fallback_existing_rates),
-        "global_rate_fallback_alt_prefix_rows": int(total_fallback_alt_prefix_rates),
+        "simulation_params_source": str(sim_params_path),
+        "mesh_support_filter_mode": "disabled",
+        "rows_removed_outside_mesh_support": 0,
+        "metadata_sources_required": ["trigger_type", "rate_histogram", "specific"],
         "min_rows_for_dataset": int(min_rows_for_dataset),
         "event_count_column_used": ev_col,
         "rows_removed_below_min_rows": int(removed_below_min_rows),
-        "has_flux_proxy_rate_div_effprod": bool(has_flux_proxy),
+        "has_flux_proxy_rate_div_effprod": False,
+        "parameter_space_columns": parameter_space_columns,
+        "parameter_space_columns_downstream_preferred": parameter_space_payload.get(
+            "parameter_space_columns_downstream_preferred", parameter_space_columns
+        ),
+        "parameter_space_columns_json": str(parameter_space_path),
+        "parameter_space_selection": parameter_space_info,
     }
     z_info_path = FILES_DIR / "z_config_selected.json"
     with open(z_info_path, "w", encoding="utf-8") as f:
