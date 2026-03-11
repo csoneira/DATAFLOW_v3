@@ -108,11 +108,36 @@ CANONICAL_TIME_EVENTS_COLUMN = "n_events"
 CANONICAL_TIME_RATE_COLUMN = "global_rate_hz_mean"
 CANONICAL_TIME_RATE_FALLBACK_COLUMN = "global_rate_hz_mid"
 CANONICAL_TIME_DURATION_COLUMN = "duration_seconds"
-CANONICAL_DENSITY_EXPONENT = 1.0
-CANONICAL_DENSITY_CLIP_MIN = 0.25
-CANONICAL_DENSITY_CLIP_MAX = 4.0
 
-STEP32_WEIGHTING_KEYS = {
+SIMPLE_WEIGHTING_KEYS = {
+    "basis_source",
+    "basis_n_events_column",
+    "basis_parameter_set_column",
+    "parameter_space_columns",
+    "basis_n_events_tolerance_pct",
+    "basis_min_rows",
+    "neighbor_mode",
+    "neighbor_count",
+    "weighting",
+    "distance_power",
+    "aggregation",
+}
+
+SIMPLE_WEIGHTING_DEFAULTS = {
+    "basis_source": "dataset",
+    "basis_n_events_column": "n_events",
+    "basis_parameter_set_column": "param_hash_x",
+    "parameter_space_columns": None,
+    "basis_n_events_tolerance_pct": 25.0,
+    "basis_min_rows": 1,
+    "neighbor_mode": "knn",
+    "neighbor_count": 12,
+    "weighting": "distance",
+    "distance_power": 2.0,
+    "aggregation": "local_linear",
+}
+
+LEGACY_WEIGHTING_KEYS = {
     "basis_source",
     "basis_n_events_column",
     "basis_parameter_set_column",
@@ -121,20 +146,30 @@ STEP32_WEIGHTING_KEYS = {
     "basis_n_events_tolerance",
     "basis_min_rows",
     "weighting_method",
+    "interpolation_aggregation",
+    "distance_hardness",
+    "top_k",
     "distance_sigma_flux_fraction",
     "distance_sigma_eff_fraction",
     "distance_sigma_flux_abs",
     "distance_sigma_eff_abs",
-    "distance_hardness",
     "density_correction_enabled",
     "density_correction_k_neighbors",
     "enforce_distance_monotonic_weights",
-    "top_k",
     "random_seed",
     "highlight_point_index",
 }
 
-STEP32_WEIGHTING_LEGACY_IGNORED_KEYS = {
+LEGACY_WEIGHTING_IGNORED_KEYS = {
+    "density_correction_enabled",
+    "density_correction_k_neighbors",
+    "enforce_distance_monotonic_weights",
+    "distance_sigma_flux_fraction",
+    "distance_sigma_eff_fraction",
+    "distance_sigma_flux_abs",
+    "distance_sigma_eff_abs",
+    "random_seed",
+    "highlight_point_index",
     "flux_column",
     "eff_column",
     "time_n_events_column",
@@ -144,27 +179,6 @@ STEP32_WEIGHTING_LEGACY_IGNORED_KEYS = {
     "density_correction_exponent",
     "density_correction_clip_min",
     "density_correction_clip_max",
-}
-
-STEP32_WEIGHTING_DEFAULTS = {
-    "basis_source": "dataset",
-    "basis_n_events_column": "n_events",
-    "basis_parameter_set_column": "param_hash_x",
-    "parameter_space_columns": None,
-    "basis_n_events_tolerance_pct": 25,
-    "basis_min_rows": 1,
-    "weighting_method": "gaussian",
-    "distance_sigma_flux_fraction": 0.15,
-    "distance_sigma_eff_fraction": 0.15,
-    "distance_sigma_flux_abs": None,
-    "distance_sigma_eff_abs": None,
-    "distance_hardness": 1.0,
-    "density_correction_enabled": True,
-    "density_correction_k_neighbors": None,
-    "enforce_distance_monotonic_weights": False,
-    "top_k": None,
-    "random_seed": None,
-    "highlight_point_index": None,
 }
 
 
@@ -264,88 +278,150 @@ def _pick_cfg(cfg_13: dict, cfg_31: dict, key: str, default: object) -> object:
     return default
 
 
-def _merge_weighting_cfg(cfg_32: dict, cfg_13: dict) -> dict:
-    """Build STEP 3.2-style weighting config for STEP 1.3 generation.
+def _normalize_neighbor_mode(value: object) -> str:
+    text = str(value).strip().lower() if value is not None else ""
+    if text in {"nearest", "nn", "1nn"}:
+        return "nearest"
+    if text in {"all", "global"}:
+        return "all"
+    return "knn"
 
-    Priority:
-    1. internal defaults,
-    2. `step_1_3.weighting_shared` (centralized weighting block),
-       fallback: `step_1_3.step_3_2_weighting` (deprecated alias),
-    3. `step_1_3.weighting_overrides` (final explicit overrides).
-    """
+
+def _normalize_weighting_mode(value: object) -> str:
+    text = str(value).strip().lower() if value is not None else ""
+    if text in {"uniform", "flat"}:
+        return "uniform"
+    return "distance"
+
+
+def _apply_legacy_weighting_block(merged: dict, block: dict, source_name: str) -> None:
+    """Map legacy STEP 3.2-style weighting knobs into the simplified model."""
+    if not isinstance(block, dict):
+        return
+
+    if block:
+        log.warning(
+            "Using deprecated %s block; prefer step_1_3.simple_weighting.",
+            source_name,
+        )
+
+    for key in LEGACY_WEIGHTING_IGNORED_KEYS:
+        if block.get(key) is not None:
+            log.warning(
+                "Deprecated key %s.%s detected; ignored in simplified STEP 1.3 weighting.",
+                source_name,
+                key,
+            )
+
+    for key in (
+        "basis_source",
+        "basis_n_events_column",
+        "basis_parameter_set_column",
+        "parameter_space_columns",
+        "basis_min_rows",
+    ):
+        value = block.get(key, None)
+        if value is not None:
+            merged[key] = value
+
+    tol_pct = block.get("basis_n_events_tolerance_pct", None)
+    if tol_pct is None:
+        tol_pct = block.get("basis_n_events_tolerance", None)
+    if tol_pct is not None:
+        merged["basis_n_events_tolerance_pct"] = tol_pct
+
+    if block.get("interpolation_aggregation", None) is not None:
+        merged["aggregation"] = block["interpolation_aggregation"]
+    if block.get("distance_hardness", None) is not None:
+        merged["distance_power"] = block["distance_hardness"]
+
+    method = str(block.get("weighting_method", "")).strip().lower()
+    top_k_raw = block.get("top_k", None)
+    has_top_k = top_k_raw not in (None, "", 0, "0")
+    if has_top_k:
+        merged["neighbor_count"] = _safe_int(top_k_raw, int(merged.get("neighbor_count", 12)), minimum=1)
+
+    if method in {"nearest", "nn"}:
+        merged["neighbor_mode"] = "nearest"
+        merged["weighting"] = "uniform"
+    elif method == "gaussian":
+        merged["neighbor_mode"] = "knn" if has_top_k else "all"
+        merged["weighting"] = "distance"
+    elif method:
+        log.warning(
+            "Unsupported legacy weighting_method=%r in %s; using simplified defaults.",
+            method,
+            source_name,
+        )
+
+
+def _merge_weighting_cfg(cfg_32: dict, cfg_13: dict) -> dict:
+    """Build simplified STEP 1.3 weighting config (neighbor-based, no density correction)."""
     raw_cfg_32 = dict(cfg_32) if isinstance(cfg_32, dict) else {}
     ignored_step32_weighting_keys = sorted(
-        key for key in raw_cfg_32.keys() if key in STEP32_WEIGHTING_KEYS
+        key for key in raw_cfg_32.keys() if key in LEGACY_WEIGHTING_KEYS
     )
     if ignored_step32_weighting_keys:
         log.info(
-            "Ignoring %d weighting key(s) from step_3_2; using step_1_3.weighting_shared + internal defaults.",
+            "Ignoring %d weighting key(s) from step_3_2; STEP 1.3 now uses step_1_3.simple_weighting.",
             len(ignored_step32_weighting_keys),
         )
-    for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
+    for legacy_key in LEGACY_WEIGHTING_IGNORED_KEYS:
         if raw_cfg_32.get(legacy_key) is not None:
             log.warning(
-                "Deprecated key step_3_2.%s detected; ignored. Using fixed canonical settings.",
+                "Deprecated key step_3_2.%s detected; ignored in simplified STEP 1.3 weighting.",
                 legacy_key,
             )
 
-    merged = dict(STEP32_WEIGHTING_DEFAULTS)
+    merged = dict(SIMPLE_WEIGHTING_DEFAULTS)
+
+    # Backward compatibility path: old step_1_3 weighting blocks.
     legacy_central_weighting = cfg_13.get("step_3_2_weighting", {})
-    if isinstance(legacy_central_weighting, dict):
-        if legacy_central_weighting and not isinstance(cfg_13.get("weighting_shared"), dict):
-            log.info(
-                "Using deprecated key step_1_3.step_3_2_weighting; prefer step_1_3.weighting_shared."
-            )
-        for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
-            if legacy_central_weighting.get(legacy_key) is not None:
-                log.warning(
-                    "Deprecated key step_1_3.step_3_2_weighting.%s detected; ignored. "
-                    "Using fixed canonical settings.",
-                    legacy_key,
-                )
-        for key in STEP32_WEIGHTING_KEYS:
-            value = legacy_central_weighting.get(key, None)
-            if value is not None:
-                merged[key] = value
-
-    # Warn when deprecated and current keys conflict
-    central_check = cfg_13.get("weighting_shared", {})
-    if isinstance(legacy_central_weighting, dict) and isinstance(central_check, dict):
-        for key in STEP32_WEIGHTING_KEYS:
-            lv, cv = legacy_central_weighting.get(key), central_check.get(key)
-            if lv is not None and cv is not None and lv != cv:
-                log.warning(
-                    "Config conflict: step_1_3.step_3_2_weighting.%s=%r vs "
-                    "step_1_3.weighting_shared.%s=%r; using weighting_shared.",
-                    key, lv, key, cv,
-                )
-
+    _apply_legacy_weighting_block(
+        merged,
+        legacy_central_weighting if isinstance(legacy_central_weighting, dict) else {},
+        "step_1_3.step_3_2_weighting",
+    )
     central_weighting = cfg_13.get("weighting_shared", {})
-    if isinstance(central_weighting, dict):
-        for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
-            if central_weighting.get(legacy_key) is not None:
-                log.warning(
-                    "Deprecated key step_1_3.weighting_shared.%s detected; ignored. "
-                    "Using fixed canonical settings.",
-                    legacy_key,
-                )
-        for key in STEP32_WEIGHTING_KEYS:
-            value = central_weighting.get(key, None)
-            if value is not None:
-                merged[key] = value
+    _apply_legacy_weighting_block(
+        merged,
+        central_weighting if isinstance(central_weighting, dict) else {},
+        "step_1_3.weighting_shared",
+    )
     overrides = cfg_13.get("weighting_overrides", {})
-    if isinstance(overrides, dict):
-        for legacy_key in STEP32_WEIGHTING_LEGACY_IGNORED_KEYS:
-            if overrides.get(legacy_key) is not None:
-                log.warning(
-                    "Deprecated key step_1_3.weighting_overrides.%s detected; ignored. "
-                    "Using fixed canonical settings.",
-                    legacy_key,
-                )
-        for key in STEP32_WEIGHTING_KEYS:
-            value = overrides.get(key, None)
+    _apply_legacy_weighting_block(
+        merged,
+        overrides if isinstance(overrides, dict) else {},
+        "step_1_3.weighting_overrides",
+    )
+
+    # Preferred simplified block.
+    simple_weighting = cfg_13.get("simple_weighting", {})
+    if isinstance(simple_weighting, dict):
+        for key in SIMPLE_WEIGHTING_KEYS:
+            value = simple_weighting.get(key, None)
             if value is not None:
                 merged[key] = value
+
+    basis_source = str(merged.get("basis_source", "dataset")).strip().lower()
+    if basis_source not in {"dataset", "dictionary"}:
+        log.warning("Invalid basis_source=%r; falling back to 'dataset'.", basis_source)
+        basis_source = "dataset"
+    merged["basis_source"] = basis_source
+    merged["basis_n_events_column"] = str(merged.get("basis_n_events_column", "n_events"))
+    merged["basis_parameter_set_column"] = str(merged.get("basis_parameter_set_column", "param_hash_x"))
+    merged["basis_n_events_tolerance_pct"] = _safe_float(
+        merged.get("basis_n_events_tolerance_pct", 25.0),
+        25.0,
+    )
+    merged["basis_min_rows"] = _safe_int(merged.get("basis_min_rows", 1), 1, minimum=1)
+    merged["neighbor_mode"] = _normalize_neighbor_mode(merged.get("neighbor_mode", "knn"))
+    merged["neighbor_count"] = _safe_int(merged.get("neighbor_count", 12), 12, minimum=1)
+    merged["weighting"] = _normalize_weighting_mode(merged.get("weighting", "distance"))
+    merged["distance_power"] = _safe_float(merged.get("distance_power", 2.0), 2.0)
+    if not np.isfinite(float(merged["distance_power"])) or float(merged["distance_power"]) <= 0.0:
+        merged["distance_power"] = 2.0
+    merged["aggregation"] = str(merged.get("aggregation", "local_linear"))
     return merged
 
 
@@ -622,17 +698,6 @@ def _generate_synthetic_rows(
     if not parameter_space_cols:
         raise ValueError("No shared parameter-space columns found between generated targets and basis table.")
 
-    for legacy_key in ("time_n_events_column", "time_rate_column", "time_duration_column"):
-        if cfg_weight.get(legacy_key) is not None:
-            log.warning(
-                "Deprecated key step_1_3.weighting_shared.%s detected; ignored. "
-                "Using fixed time columns %s/%s/%s.",
-                legacy_key,
-                CANONICAL_TIME_EVENTS_COLUMN,
-                CANONICAL_TIME_RATE_COLUMN,
-                CANONICAL_TIME_DURATION_COLUMN,
-            )
-
     time_events_col = CANONICAL_TIME_EVENTS_COLUMN
     if time_events_col not in time_df.columns:
         raise KeyError(f"Target time-series column '{time_events_col}' not found.")
@@ -712,41 +777,32 @@ def _generate_synthetic_rows(
     )
     event_mask = one_per_set_mask if event_mask_extra is None else (one_per_set_mask & event_mask_extra)
 
-    method = str(cfg_weight.get("weighting_method", "gaussian"))
-    interpolation_aggregation = step32._normalize_interpolation_aggregation(
-        cfg_weight.get("interpolation_aggregation", "local_linear")
-    )
-    top_k_raw = cfg_weight.get("top_k", None)
-    top_k = None if top_k_raw in (None, "", 0) else step32._safe_int(top_k_raw, 8, minimum=1)
-    distance_hardness = step32._safe_float(cfg_weight.get("distance_hardness", 1.0), 1.0)
-    enforce_distance_monotonic_weights = step32._safe_bool(
-        cfg_weight.get("enforce_distance_monotonic_weights", False),
-        False,
-    )
+    neighbor_mode = _normalize_neighbor_mode(cfg_weight.get("neighbor_mode", "knn"))
+    neighbor_count = _safe_int(cfg_weight.get("neighbor_count", 12), 12, minimum=1)
+    weighting_mode = _normalize_weighting_mode(cfg_weight.get("weighting", "distance"))
+    distance_power = _safe_float(cfg_weight.get("distance_power", 2.0), 2.0)
+    if not np.isfinite(distance_power) or distance_power <= 0.0:
+        distance_power = 2.0
 
-    density_enabled = step32._safe_bool(cfg_weight.get("density_correction_enabled", True), True)
-    density_scaling = None
-    if density_enabled:
-        for legacy_key in (
-            "density_correction_space",
-            "density_correction_exponent",
-            "density_correction_clip_min",
-            "density_correction_clip_max",
-        ):
-            if cfg_weight.get(legacy_key) is not None:
-                log.warning(
-                    "Deprecated key step_1_3.weighting_shared.%s detected; ignored. "
-                    "Using fixed density exponent/clip constants.",
-                    legacy_key,
-                )
-        density_k = step32._safe_int(cfg_weight.get("density_correction_k_neighbors", 10), 10, minimum=1)
-        density_scaling, _ = step32._compute_inverse_density_scaling(
-            basis_param_matrix=basis_param_matrix,
-            k_neighbors=density_k,
-            exponent=CANONICAL_DENSITY_EXPONENT,
-            clip_min=CANONICAL_DENSITY_CLIP_MIN,
-            clip_max=CANONICAL_DENSITY_CLIP_MAX,
-        )
+    if neighbor_mode == "nearest":
+        method = "nearest"
+        top_k = 1
+        weighting_effective = "nearest"
+        distance_hardness = 1.0
+    else:
+        method = "gaussian"
+        top_k = None if neighbor_mode == "all" else int(neighbor_count)
+        if weighting_mode == "uniform":
+            # Tiny hardness approximates flat local weighting.
+            distance_hardness = 1e-6
+            weighting_effective = "uniform"
+        else:
+            distance_hardness = max(float(distance_power), 1e-6)
+            weighting_effective = "distance"
+
+    interpolation_aggregation = step32._normalize_interpolation_aggregation(
+        cfg_weight.get("aggregation", "local_linear")
+    )
 
     weights = step32._build_weights(
         dict_param_matrix=basis_param_matrix,
@@ -754,9 +810,9 @@ def _generate_synthetic_rows(
         method=method,
         top_k=top_k,
         distance_hardness=distance_hardness,
-        density_scaling=density_scaling,
+        density_scaling=None,
         event_mask=event_mask,
-        enforce_distance_monotonic_weights=enforce_distance_monotonic_weights,
+        enforce_distance_monotonic_weights=False,
     )
 
     synthetic_df, dominant_idx = step32._make_synthetic_dataset(
@@ -786,13 +842,16 @@ def _generate_synthetic_rows(
         "parameter_space_dimensions": int(len(parameter_space_cols)),
         "one_per_set_mode": str(one_per_set_info.get("mode", "unknown")),
         "event_tolerance_info": extra_info,
-        "weighting_method": method,
+        "neighbor_mode": neighbor_mode,
+        "neighbor_count": int(neighbor_count) if neighbor_mode == "knn" else None,
+        "weighting_mode": weighting_effective,
+        "backend_weighting_method": method,
         "interpolation_aggregation": interpolation_aggregation,
         "distance_definition": "standardized_euclidean_in_parameter_space",
-        "distance_hardness": float(distance_hardness),
-        "enforce_distance_monotonic_weights": bool(enforce_distance_monotonic_weights),
+        "distance_power": float(distance_power) if weighting_effective == "distance" else None,
+        "distance_hardness_backend": float(distance_hardness),
         "top_k": int(top_k) if top_k is not None else None,
-        "density_correction_enabled": bool(density_enabled),
+        "density_correction_enabled": False,
         "dominant_basis_unique_count": int(len(np.unique(dominant_idx))),
     }
     return synthetic_df, info

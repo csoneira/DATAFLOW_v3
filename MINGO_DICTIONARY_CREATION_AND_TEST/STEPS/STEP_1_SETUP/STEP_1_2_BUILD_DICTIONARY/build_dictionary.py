@@ -1625,9 +1625,200 @@ def _plot_dictionary_coverage(
     plt.close(fig)
 
 
+def _dictionary_coverage_metrics(
+    dictionary: pd.DataFrame,
+    *,
+    x_col: str,
+    y_col: str,
+) -> dict | None:
+    """Compute compact pairwise coverage metrics in normalized 2D space."""
+    if x_col not in dictionary.columns or y_col not in dictionary.columns:
+        return None
+    xy = dictionary[[x_col, y_col]].apply(pd.to_numeric, errors="coerce").dropna()
+    if len(xy) < 3:
+        return None
+
+    x = xy[x_col].to_numpy(dtype=float)
+    y = xy[y_col].to_numpy(dtype=float)
+    x_min, x_max = float(np.min(x)), float(np.max(x))
+    y_min, y_max = float(np.min(y)), float(np.max(y))
+    x_span = x_max - x_min if x_max > x_min else 1.0
+    y_span = y_max - y_min if y_max > y_min else 1.0
+    points = np.column_stack([(x - x_min) / x_span, (y - y_min) / y_span])
+    points = np.unique(points, axis=0)
+    if len(points) < 3:
+        return None
+
+    nn_d = _nearest_neighbor_distances(points)
+    nn_valid = nn_d[np.isfinite(nn_d)]
+    if nn_valid.size == 0:
+        return None
+    nn_pct = nn_valid * 100.0
+
+    rng = np.random.default_rng(42)
+    q = rng.random((5000, 2))
+    q_min_d = _min_distance_to_points(q, points)
+    radii = np.linspace(0.005, 0.60, 60)
+    coverage_pct = np.array(
+        [float(100.0 * np.mean(q_min_d <= r)) for r in radii],
+        dtype=float,
+    )
+    idx = np.where(coverage_pct >= 90.0)[0]
+    r90 = float((radii[idx[0]] * 100.0)) if len(idx) else float("nan")
+    hull = _convex_hull(points)
+    hull_area_pct = float(_polygon_area(hull) * 100.0)
+
+    return {
+        "points": points,
+        "hull": hull,
+        "n_points": int(len(points)),
+        "hull_area_pct": hull_area_pct,
+        "nn_p50_pct": float(np.nanpercentile(nn_pct, 50)),
+        "nn_p95_pct": float(np.nanpercentile(nn_pct, 95)),
+        "radius_90pct_cov_pct": r90,
+    }
+
+
+def _plot_dictionary_coverage_overview(
+    dictionary: pd.DataFrame,
+    *,
+    pairs: list[tuple[str, str]],
+    path,
+) -> None:
+    """Single-figure dictionary coverage overview for all requested parameter pairs."""
+    if not pairs:
+        log.warning("No parameter pairs available for dictionary coverage overview.")
+        return
+
+    n_pairs = len(pairs)
+    n_cols = 3 if n_pairs > 1 else 1
+    n_rows = int(np.ceil(n_pairs / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.2 * n_cols, 4.6 * n_rows))
+    axes_arr = np.atleast_1d(axes).ravel()
+
+    for idx, (x_col, y_col) in enumerate(pairs):
+        ax = axes_arr[idx]
+        metrics = _dictionary_coverage_metrics(dictionary, x_col=x_col, y_col=y_col)
+        if metrics is None:
+            ax.text(
+                0.5,
+                0.5,
+                "Insufficient valid points",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_title(f"{x_col} vs {y_col}")
+            ax.set_xlim(0.0, 1.0)
+            ax.set_ylim(0.0, 1.0)
+            ax.grid(True, alpha=0.2)
+            continue
+
+        pts = metrics["points"]
+        hull = metrics["hull"]
+        ax.scatter(
+            pts[:, 0],
+            pts[:, 1],
+            s=12,
+            color="#4C78A8",
+            alpha=0.65,
+            edgecolors="none",
+            zorder=2,
+        )
+        if len(hull) >= 3:
+            closed = np.vstack([hull, hull[0]])
+            ax.plot(closed[:, 0], closed[:, 1], color="#E45756", linewidth=1.2, linestyle="--", zorder=3)
+            ax.fill(closed[:, 0], closed[:, 1], color="#E45756", alpha=0.07, zorder=1)
+
+        ax.set_xlim(0.0, 1.0)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel(f"Norm {x_col}", fontsize=8)
+        ax.set_ylabel(f"Norm {y_col}", fontsize=8)
+        ax.set_title(
+            f"{x_col} vs {y_col}\n"
+            f"Hull={metrics['hull_area_pct']:.1f}% | "
+            f"NN50={metrics['nn_p50_pct']:.2f}% | "
+            f"R90={metrics['radius_90pct_cov_pct']:.2f}%",
+            fontsize=8.5,
+        )
+        ax.grid(True, alpha=0.2)
+
+    for ax in axes_arr[n_pairs:]:
+        ax.axis("off")
+
+    fig.suptitle(
+        "Dictionary Coverage Overview (All Parameter Pairs, Normalized)",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=(0.0, 0.01, 1.0, 0.96))
+    _save_figure(fig, path, dpi=150)
+    plt.close(fig)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Dictionary continuity validation
 # ═══════════════════════════════════════════════════════════════════
+
+def _normalize_continuity_validation_cfg(raw_cfg: object) -> dict:
+    """Normalize STEP 1.2 continuity config with a simplified default profile."""
+    cfg_in = raw_cfg if isinstance(raw_cfg, dict) else {}
+    cfg = dict(cfg_in)
+
+    mode_raw = cfg.get("mode", None)
+    if mode_raw is None and "simple_mode" in cfg:
+        mode_raw = "simple" if _as_bool(cfg.get("simple_mode"), True) else "advanced"
+    mode = str(mode_raw).strip().lower() if mode_raw is not None else "nuclear"
+    if mode not in {"nuclear", "simple", "advanced", "legacy"}:
+        log.warning("Invalid continuity_validation.mode=%r; using 'nuclear'.", mode_raw)
+        mode = "nuclear"
+    cfg["mode"] = mode
+    simple_mode = mode == "simple"
+    nuclear_mode = mode == "nuclear"
+
+    def _set_default(key: str, value: object) -> None:
+        if key not in cfg or cfg.get(key) is None:
+            cfg[key] = value
+
+    _set_default("enabled", True)
+    _set_default("fail_on_error", True)
+    _set_default("param_coverage_enabled", True)
+    _set_default("injectivity_enabled", True)
+    _set_default("support_check_enabled", True)
+    _set_default("distance_preimage_enabled", True if (simple_mode or nuclear_mode) else False)
+    _set_default("isotonic_check_enabled", False if simple_mode else True)
+    _set_default("topology_enabled", False if simple_mode else True)
+    _set_default("density_check_enabled", False if simple_mode else True)
+    _set_default("feature_selection_enabled", False if simple_mode else True)
+    _set_default("filter_include_topology", False if simple_mode else True)
+    _set_default("filter_include_injectivity", True)
+    _set_default("filter_enabled", True)
+
+    # Simple profile prioritizes stable output generation over hard aborts.
+    if simple_mode or nuclear_mode:
+        if _as_bool(cfg.get("fail_on_error", False), False):
+            log.warning(
+                "continuity_validation.fail_on_error is ignored in %s mode; using fail_on_error=false.",
+                mode,
+            )
+        cfg["fail_on_error"] = False
+        _set_default("use_step12_selected_artifact", False)
+        if nuclear_mode:
+            # Nuclear profile is intentionally low-knob: force advanced
+            # optional checks/features off regardless of incoming config.
+            cfg["topology_enabled"] = False
+            cfg["density_check_enabled"] = False
+            cfg["isotonic_check_enabled"] = False
+            cfg["feature_selection_enabled"] = False
+            cfg["injectivity_enabled"] = False
+            cfg["filter_include_topology"] = False
+            cfg["filter_include_injectivity"] = False
+            cfg["distance_preimage_enabled"] = True
+            cfg["filter_enabled"] = False
+    else:
+        _set_default("use_step12_selected_artifact", True)
+
+    return cfg
 
 def _validate_dictionary_continuity(
     dictionary: pd.DataFrame,
@@ -1643,11 +1834,12 @@ def _validate_dictionary_continuity(
     Runs continuity checks on the dictionary after selection:
       1. Parameter-space coverage (NN distances)
       2. Local continuity (feature → parameter CV)
-      3. Bidirectional neighborhood continuity (parameter ↔ feature topology)
-      4. Local injectivity in feature -> parameter mapping
-      5. Isotonic calibration bounds
-      6. Support adequacy per efficiency plane
-      7. Density uniformity in flux × eff space
+      3. Distance pre-image continuity (feature-space NN distances -> parameter-space NN distances)
+      4. Bidirectional neighborhood continuity (parameter ↔ feature topology)
+      5. Local injectivity in feature -> parameter mapping
+      6. Isotonic calibration bounds
+      7. Support adequacy per efficiency plane
+      8. Density uniformity in flux × eff space
 
     Returns (overall_status, metrics_dict, messages_list).
     overall_status is "PASS", "WARN", or "FAIL".
@@ -1660,7 +1852,10 @@ def _validate_dictionary_continuity(
         )
 
     # ── Check 1: Parameter-Space Coverage ─────────────────────────
-    check1 = _cv_check_param_coverage(dictionary, dataset, param_cols)
+    if bool(cfg.get("param_coverage_enabled", True)):
+        check1 = _cv_check_param_coverage(dictionary, dataset, param_cols)
+    else:
+        check1 = {"status": "SKIPPED", "reason": "param_coverage_disabled"}
     checks["param_space_coverage"] = check1
     if check1["status"] == "SKIPPED":
         messages.append(
@@ -1695,24 +1890,61 @@ def _validate_dictionary_continuity(
             f"worst_param={check2.get('worst_param', 'na')})"
         )
 
-    # ── Check 3: Bidirectional neighborhood continuity ────────────
-    topo_k = cfg.get("topology_k", k)
-    topo_overlap_p10_min = cfg.get("topology_overlap_p10_min", 0.20)
-    topo_overlap_median_min = cfg.get("topology_overlap_median_min", 0.30)
-    topo_fwd_p95_max = cfg.get("topology_forward_expansion_p95_max", 8.0)
-    topo_bwd_p95_max = cfg.get("topology_backward_expansion_p95_max", 8.0)
-    topo_bad_fraction_max = cfg.get("topology_bad_fraction_max", 0.20)
-    check3 = _cv_check_bidirectional_topology_continuity(
-        dictionary,
-        param_cols,
-        feature_cols=feature_cols,
-        k=topo_k,
-        overlap_p10_min=topo_overlap_p10_min,
-        overlap_median_min=topo_overlap_median_min,
-        forward_expansion_p95_max=topo_fwd_p95_max,
-        backward_expansion_p95_max=topo_bwd_p95_max,
-        bad_fraction_max=topo_bad_fraction_max,
-    )
+    # ── Check 3: Distance pre-image continuity ────────────────────
+    if bool(cfg.get("distance_preimage_enabled", False)):
+        dist_preimage_k = cfg.get("distance_preimage_k", k)
+        dist_preimage_corr_p10_min = cfg.get("distance_preimage_corr_p10_min", 0.35)
+        dist_preimage_relerr_p95_max = cfg.get("distance_preimage_relerr_p95_max", 0.75)
+        dist_preimage_bad_fraction_max = cfg.get("distance_preimage_bad_fraction_max", 0.20)
+        check2b = _cv_check_distance_preimage_continuity(
+            dictionary,
+            param_cols,
+            feature_cols=feature_cols,
+            k=dist_preimage_k,
+            corr_p10_min=dist_preimage_corr_p10_min,
+            relerr_p95_max=dist_preimage_relerr_p95_max,
+            bad_fraction_max=dist_preimage_bad_fraction_max,
+        )
+    else:
+        check2b = {"status": "SKIPPED", "reason": "distance_preimage_disabled"}
+    checks["distance_preimage_continuity"] = check2b
+    if check2b["status"] == "SKIPPED":
+        messages.append(
+            f"distance_preimage_continuity=SKIPPED ({check2b.get('reason', 'no_reason')})"
+        )
+    else:
+        max_param = str(check2b.get("max_distance_param", "na"))
+        max_p95 = float(check2b.get("max_distance_p95", np.nan))
+        messages.append(
+            f"distance_preimage_continuity={check2b['status']} "
+            f"(corr_p10={check2b.get('corr_p10', np.nan):.3f}, "
+            f"corr_median={check2b.get('corr_median', np.nan):.3f}, "
+            f"relerr_p95={check2b.get('relerr_p95', np.nan):.3f}, "
+            f"bad_fraction={check2b.get('bad_fraction', np.nan):.4f}, "
+            f"max_param_distance_p95={max_param}:{max_p95:.3f})"
+        )
+
+    # ── Check 4: Bidirectional neighborhood continuity ────────────
+    if bool(cfg.get("topology_enabled", True)):
+        topo_k = cfg.get("topology_k", k)
+        topo_overlap_p10_min = cfg.get("topology_overlap_p10_min", 0.20)
+        topo_overlap_median_min = cfg.get("topology_overlap_median_min", 0.30)
+        topo_fwd_p95_max = cfg.get("topology_forward_expansion_p95_max", 8.0)
+        topo_bwd_p95_max = cfg.get("topology_backward_expansion_p95_max", 8.0)
+        topo_bad_fraction_max = cfg.get("topology_bad_fraction_max", 0.20)
+        check3 = _cv_check_bidirectional_topology_continuity(
+            dictionary,
+            param_cols,
+            feature_cols=feature_cols,
+            k=topo_k,
+            overlap_p10_min=topo_overlap_p10_min,
+            overlap_median_min=topo_overlap_median_min,
+            forward_expansion_p95_max=topo_fwd_p95_max,
+            backward_expansion_p95_max=topo_bwd_p95_max,
+            bad_fraction_max=topo_bad_fraction_max,
+        )
+    else:
+        check3 = {"status": "SKIPPED", "reason": "topology_disabled"}
     checks["topology_bidirectional_continuity"] = check3
     if check3["status"] == "SKIPPED":
         messages.append(
@@ -1728,7 +1960,7 @@ def _validate_dictionary_continuity(
             f"bad_fraction={check3.get('bad_fraction', np.nan):.4f})"
         )
 
-    # ── Check 4: Local Injectivity ────────────────────────────────
+    # ── Check 5: Local Injectivity ────────────────────────────────
     injectivity_enabled = bool(cfg.get("injectivity_enabled", True))
     if injectivity_enabled:
         injectivity_k = cfg.get("injectivity_k", k)
@@ -1770,8 +2002,11 @@ def _validate_dictionary_continuity(
             f"bad_fraction={check4.get('bad_fraction', np.nan):.4f})"
         )
 
-    # ── Check 5: Isotonic Calibration Bounds ──────────────────────
-    check5 = _cv_check_isotonic_bounds(isotonic_by_plane)
+    # ── Check 6: Isotonic Calibration Bounds ──────────────────────
+    if bool(cfg.get("isotonic_check_enabled", True)):
+        check5 = _cv_check_isotonic_bounds(isotonic_by_plane)
+    else:
+        check5 = {"status": "SKIPPED", "reason": "isotonic_check_disabled"}
     checks["isotonic_bounds"] = check5
     if check5["status"] == "SKIPPED":
         messages.append(
@@ -1786,12 +2021,19 @@ def _validate_dictionary_continuity(
             f"isotonic_bounds=PASS (planes_checked={check5.get('planes_checked', [])})"
         )
 
-    # ── Check 6: Support Adequacy ─────────────────────────────────
+    # ── Check 7: Support Adequacy ─────────────────────────────────
     oos_max = cfg.get("out_of_support_max_fraction", 0.30)
-    check6 = _cv_check_support_adequacy(dictionary, dataset, oos_max=oos_max)
+    if bool(cfg.get("support_check_enabled", True)):
+        check6 = _cv_check_support_adequacy(dictionary, dataset, oos_max=oos_max)
+    else:
+        check6 = {"status": "SKIPPED", "reason": "support_check_disabled"}
     checks["support_adequacy"] = check6
     oos_by_plane = check6.get("out_of_support_fraction_by_plane", {})
-    if oos_by_plane:
+    if check6["status"] == "SKIPPED":
+        messages.append(
+            f"support_adequacy=SKIPPED ({check6.get('reason', 'no_reason')})"
+        )
+    elif oos_by_plane:
         worst_plane = max(oos_by_plane, key=oos_by_plane.get)
         worst_frac = float(oos_by_plane[worst_plane])
         messages.append(
@@ -1802,10 +2044,14 @@ def _validate_dictionary_continuity(
     else:
         messages.append("support_adequacy=SKIPPED (no_plane_overlap)")
 
-    # ── Check 7: Density Uniformity ───────────────────────────────
-    n_bins = cfg.get("density_grid_bins", 5)
-    ratio_max = cfg.get("density_ratio_max", 20.0)
-    check7 = _cv_check_density_uniformity(dictionary, n_bins=n_bins, ratio_max=ratio_max)
+    # ── Check 8: Density Uniformity ───────────────────────────────
+    if bool(cfg.get("density_check_enabled", True)):
+        n_bins = cfg.get("density_grid_bins", 5)
+        ratio_max = cfg.get("density_ratio_max", 20.0)
+        check7 = _cv_check_density_uniformity(dictionary, n_bins=n_bins, ratio_max=ratio_max)
+    else:
+        check7 = {"status": "SKIPPED", "reason": "density_check_disabled"}
+        ratio_max = cfg.get("density_ratio_max", 20.0)
     checks["density_uniformity"] = check7
     if check7["status"] == "SKIPPED":
         messages.append(
@@ -1867,6 +2113,17 @@ def _cv_metrics_for_json(cv_metrics: dict) -> dict:
     topo.pop("backward_expansion_per_entry", None)
     topo.pop("bad_point_mask", None)
     topo.pop("row_indices", None)
+    preimg = checks.get("distance_preimage_continuity", {})
+    preimg.pop("corr_per_entry", None)
+    preimg.pop("relerr_median_per_entry", None)
+    preimg.pop("local_scale_per_entry", None)
+    preimg.pop("feature_distance_median_per_entry", None)
+    preimg.pop("parameter_distance_median_per_entry", None)
+    preimg.pop("per_param_distance_median_per_entry_by_param", None)
+    preimg.pop("per_param_relerr_median_per_entry_by_param", None)
+    preimg.pop("per_param_local_scale_per_entry_by_param", None)
+    preimg.pop("bad_point_mask", None)
+    preimg.pop("row_indices", None)
     inj = checks.get("local_injectivity", {})
     inj.pop("span_fraction_per_entry_by_param", None)
     inj.pop("max_span_fraction_per_entry", None)
@@ -2237,6 +2494,243 @@ def _cv_check_local_continuity(
         },
         "worst_cv_per_entry": worst_cv.tolist(),
         "row_indices": row_indices,
+    }
+
+
+def _cv_check_distance_preimage_continuity(
+    dictionary: pd.DataFrame,
+    param_cols: list[str],
+    *,
+    feature_cols: list[str] | None = None,
+    k: int = 10,
+    corr_p10_min: float = 0.35,
+    relerr_p95_max: float = 0.75,
+    bad_fraction_max: float = 0.20,
+) -> dict:
+    """Continuity check based on Euclidean distance preservation from feature to parameter space.
+
+    For each point i:
+      1) find k nearest neighbors in feature space;
+      2) compute feature distances d_f(i, j) and parameter distances d_p(i, j) to those neighbors;
+      3) estimate a local scale s_i = median(d_p / d_f);
+      4) compute local fit error |d_p - s_i d_f| / max(s_i d_f, eps).
+
+    This yields a low-knob pre-image continuity diagnostic:
+      - corr_i: local correlation between d_f and d_p
+      - relerr_i: local median relative error after one-parameter scaling
+    """
+    requested_feature_cols = (
+        [str(c).strip() for c in feature_cols if str(c).strip()]
+        if feature_cols
+        else [f"eff_empirical_{p}" for p in (1, 2, 3, 4)]
+    )
+    requested_feature_cols = list(dict.fromkeys(requested_feature_cols))
+    feat_cols = [c for c in requested_feature_cols if c in dictionary.columns]
+    missing_feats = [c for c in requested_feature_cols if c not in dictionary.columns]
+    if len(feat_cols) < 1:
+        return {
+            "status": "SKIPPED",
+            "reason": "missing_feature_columns",
+            "requested_feature_columns": requested_feature_cols,
+            "missing_columns": missing_feats or requested_feature_cols,
+        }
+
+    usable_params = [c for c in param_cols if c in dictionary.columns]
+    if len(usable_params) < 1:
+        return {"status": "SKIPPED", "reason": "insufficient_param_columns"}
+
+    used_cols = feat_cols + usable_params
+    work = dictionary[used_cols].apply(pd.to_numeric, errors="coerce").dropna()
+    if len(work) < 4:
+        return {"status": "SKIPPED", "reason": "too_few_valid_rows"}
+
+    row_indices = np.asarray(work.index.to_list(), dtype=int)
+    feat = work[feat_cols].to_numpy(dtype=float)
+    params = work[usable_params].to_numpy(dtype=float)
+    n = len(work)
+
+    def _minmax_norm(arr: np.ndarray) -> np.ndarray:
+        lo = np.nanmin(arr, axis=0)
+        hi = np.nanmax(arr, axis=0)
+        span = hi - lo
+        span = np.where(np.isfinite(span) & (span > 0.0), span, 1.0)
+        return (arr - lo) / span
+
+    feat_norm = _minmax_norm(feat)
+    param_norm = _minmax_norm(params)
+
+    try:
+        k_int = int(k)
+    except (TypeError, ValueError):
+        k_int = 10
+    k_use = max(2, min(k_int, n - 1))
+
+    eps = 1e-12
+    corr_per_entry = np.full(n, np.nan, dtype=float)
+    relerr_median_per_entry = np.full(n, np.nan, dtype=float)
+    local_scale_per_entry = np.full(n, np.nan, dtype=float)
+    feature_distance_median_per_entry = np.full(n, np.nan, dtype=float)
+    parameter_distance_median_per_entry = np.full(n, np.nan, dtype=float)
+    per_param_distance_median_per_entry = np.full((n, len(usable_params)), np.nan, dtype=float)
+    per_param_relerr_median_per_entry = np.full((n, len(usable_params)), np.nan, dtype=float)
+    per_param_local_scale_per_entry = np.full((n, len(usable_params)), np.nan, dtype=float)
+    bad_mask = np.zeros(n, dtype=bool)
+
+    for i in range(n):
+        d_feat_all = np.sqrt(np.sum((feat_norm - feat_norm[i]) ** 2, axis=1))
+        d_feat_all[i] = np.inf
+        nn_idx = np.argpartition(d_feat_all, kth=k_use - 1)[:k_use]
+
+        d_feat = d_feat_all[nn_idx]
+        d_param = np.sqrt(np.sum((param_norm[nn_idx] - param_norm[i]) ** 2, axis=1))
+        d_param_by_dim = np.abs(param_norm[nn_idx] - param_norm[i])
+
+        valid = np.isfinite(d_feat) & np.isfinite(d_param)
+        if np.count_nonzero(valid) < 2:
+            continue
+
+        x = d_feat[valid]
+        y = d_param[valid]
+        feature_distance_median_per_entry[i] = float(np.median(x))
+        parameter_distance_median_per_entry[i] = float(np.median(y))
+
+        ratio = y / np.maximum(x, eps)
+        ratio = ratio[np.isfinite(ratio)]
+        if ratio.size == 0:
+            continue
+
+        local_scale = float(np.median(ratio))
+        local_scale_per_entry[i] = local_scale
+        pred = np.maximum(local_scale * x, eps)
+        relerr = np.abs(y - pred) / pred
+        relerr = relerr[np.isfinite(relerr)]
+        rel_med = float(np.median(relerr)) if relerr.size > 0 else np.nan
+        relerr_median_per_entry[i] = rel_med
+
+        for j in range(len(usable_params)):
+            yj = d_param_by_dim[:, j]
+            valid_j = np.isfinite(d_feat) & np.isfinite(yj)
+            if np.count_nonzero(valid_j) < 2:
+                continue
+            xj = d_feat[valid_j]
+            yjv = yj[valid_j]
+            per_param_distance_median_per_entry[i, j] = float(np.median(yjv))
+            ratio_j = yjv / np.maximum(xj, eps)
+            ratio_j = ratio_j[np.isfinite(ratio_j)]
+            if ratio_j.size == 0:
+                continue
+            scale_j = float(np.median(ratio_j))
+            per_param_local_scale_per_entry[i, j] = scale_j
+            pred_j = np.maximum(scale_j * xj, eps)
+            relerr_j = np.abs(yjv - pred_j) / pred_j
+            relerr_j = relerr_j[np.isfinite(relerr_j)]
+            if relerr_j.size == 0:
+                continue
+            per_param_relerr_median_per_entry[i, j] = float(np.median(relerr_j))
+
+        sx = float(np.std(x))
+        sy = float(np.std(y))
+        if sx <= eps and sy <= eps:
+            corr = 1.0
+        elif sx <= eps or sy <= eps:
+            corr = 0.0
+        else:
+            corr = float(np.corrcoef(x, y)[0, 1])
+        corr_per_entry[i] = corr
+
+        # Correlation is kept for diagnostics, but pass/fail is driven by
+        # distance-fit error to avoid false alarms from tied-distance grids.
+        bad_mask[i] = rel_med > float(relerr_p95_max)
+
+    finite_corr = corr_per_entry[np.isfinite(corr_per_entry)]
+    finite_relerr = relerr_median_per_entry[np.isfinite(relerr_median_per_entry)]
+    finite_scale = local_scale_per_entry[np.isfinite(local_scale_per_entry)]
+    if finite_corr.size < 3 or finite_relerr.size < 3:
+        return {"status": "SKIPPED", "reason": "insufficient_finite_distance_metrics"}
+
+    corr_p10 = float(np.percentile(finite_corr, 10))
+    corr_median = float(np.percentile(finite_corr, 50))
+    relerr_p50 = float(np.percentile(finite_relerr, 50))
+    relerr_p95 = float(np.percentile(finite_relerr, 95))
+    bad_fraction = float(np.mean(bad_mask))
+
+    per_param_distance_p50_by_param: dict[str, float] = {}
+    per_param_distance_p95_by_param: dict[str, float] = {}
+    per_param_relerr_p50_by_param: dict[str, float] = {}
+    per_param_relerr_p95_by_param: dict[str, float] = {}
+    for j, pcol in enumerate(usable_params):
+        dvals = per_param_distance_median_per_entry[:, j]
+        dvals = dvals[np.isfinite(dvals)]
+        if dvals.size > 0:
+            per_param_distance_p50_by_param[pcol] = round(float(np.percentile(dvals, 50)), 4)
+            per_param_distance_p95_by_param[pcol] = round(float(np.percentile(dvals, 95)), 4)
+        rvals = per_param_relerr_median_per_entry[:, j]
+        rvals = rvals[np.isfinite(rvals)]
+        if rvals.size > 0:
+            per_param_relerr_p50_by_param[pcol] = round(float(np.percentile(rvals, 50)), 4)
+            per_param_relerr_p95_by_param[pcol] = round(float(np.percentile(rvals, 95)), 4)
+
+    max_distance_param = None
+    max_distance_p95 = np.nan
+    if per_param_distance_p95_by_param:
+        max_distance_param = max(
+            per_param_distance_p95_by_param,
+            key=lambda c: float(per_param_distance_p95_by_param.get(c, -np.inf)),
+        )
+        max_distance_p95 = float(per_param_distance_p95_by_param[max_distance_param])
+
+    warn = (
+        (relerr_p95 > float(relerr_p95_max))
+        or (bad_fraction > float(bad_fraction_max))
+    )
+    status = "WARN" if warn else "PASS"
+
+    return {
+        "status": status,
+        "feature_columns": feat_cols,
+        "n_feature_dimensions": int(len(feat_cols)),
+        "missing_feature_columns": missing_feats,
+        "n_points": int(n),
+        "k_used": int(k_use),
+        "corr_p10": round(corr_p10, 4),
+        "corr_median": round(corr_median, 4),
+        "relerr_p50": round(relerr_p50, 4),
+        "relerr_p95": round(relerr_p95, 4),
+        "bad_fraction": round(bad_fraction, 4),
+        "local_scale_median": (
+            round(float(np.percentile(finite_scale, 50)), 4) if finite_scale.size > 0 else np.nan
+        ),
+        "per_param_distance_median_p50_by_param": per_param_distance_p50_by_param,
+        "per_param_distance_median_p95_by_param": per_param_distance_p95_by_param,
+        "per_param_relerr_median_p50_by_param": per_param_relerr_p50_by_param,
+        "per_param_relerr_median_p95_by_param": per_param_relerr_p95_by_param,
+        "max_distance_param": max_distance_param,
+        "max_distance_p95": round(float(max_distance_p95), 4) if np.isfinite(max_distance_p95) else np.nan,
+        "thresholds": {
+            "corr_p10_min": float(corr_p10_min),
+            "corr_p10_min_applied": False,
+            "relerr_p95_max": float(relerr_p95_max),
+            "bad_fraction_max": float(bad_fraction_max),
+        },
+        "corr_per_entry": corr_per_entry.tolist(),
+        "relerr_median_per_entry": relerr_median_per_entry.tolist(),
+        "local_scale_per_entry": local_scale_per_entry.tolist(),
+        "feature_distance_median_per_entry": feature_distance_median_per_entry.tolist(),
+        "parameter_distance_median_per_entry": parameter_distance_median_per_entry.tolist(),
+        "per_param_distance_median_per_entry_by_param": {
+            pcol: per_param_distance_median_per_entry[:, j].tolist()
+            for j, pcol in enumerate(usable_params)
+        },
+        "per_param_relerr_median_per_entry_by_param": {
+            pcol: per_param_relerr_median_per_entry[:, j].tolist()
+            for j, pcol in enumerate(usable_params)
+        },
+        "per_param_local_scale_per_entry_by_param": {
+            pcol: per_param_local_scale_per_entry[:, j].tolist()
+            for j, pcol in enumerate(usable_params)
+        },
+        "bad_point_mask": bad_mask.astype(bool).tolist(),
+        "row_indices": row_indices.tolist(),
     }
 
 
@@ -2736,38 +3230,116 @@ def _plot_continuity_validation(
     )
     _status_badge(ax, c1_status, "lower is better")
 
-    # ── (0,1) Local Continuity ────────────────────────────────────
+    # ── (0,1) Distance pre-image continuity (or local-CV fallback) ──
     ax = axes[0, 1]
-    c2 = checks.get("local_continuity", {})
-    c2_status = str(c2.get("status", "SKIPPED")).upper()
-    cv_thr = float(c2.get("cv_threshold", 0.50))
-    worst_cv = np.asarray(c2.get("worst_cv_per_entry", []), dtype=float)
-    worst_cv = worst_cv[np.isfinite(worst_cv)]
-    if worst_cv.size > 0:
-        n_bins = int(np.clip(np.sqrt(worst_cv.size) * 1.5, 15, 60))
-        ax.hist(worst_cv, bins=n_bins, color="#2A9D8F", alpha=0.82, edgecolor="white", linewidth=0.35)
-        ax.axvline(cv_thr, color="#E45756", linewidth=1.4, linestyle="-.", label=f"Threshold={cv_thr:.3f}")
-        x_hi = float(max(cv_thr * 1.35, np.percentile(worst_cv, 99) * 1.15, 1e-4))
-        ax.axvspan(cv_thr, x_hi, color="#FDE2E1", alpha=0.35)
-        ax.set_xlim(left=0.0, right=x_hi)
-        ax.set_xlabel("Worst-parameter local CV per entry")
-        ax.set_ylabel("Dictionary entries")
-        disc_frac = float(c2.get("discontinuous_fraction", np.nan))
-        ax2 = ax.twinx()
-        cv_sorted = np.sort(worst_cv)
-        cdf_pct = np.linspace(100.0 / len(cv_sorted), 100.0, len(cv_sorted))
-        ax2.plot(cv_sorted, cdf_pct, color="#1F3A5F", linewidth=1.0, alpha=0.9)
-        ax2.set_ylabel("CDF [%]", color="#1F3A5F")
-        ax2.tick_params(axis="y", labelsize=7, colors="#1F3A5F")
-        ax.legend(fontsize=7, loc="upper left")
+    c2b = checks.get("distance_preimage_continuity", {})
+    c2b_status = str(c2b.get("status", "SKIPPED")).upper()
+    f_med = np.asarray(c2b.get("feature_distance_median_per_entry", []), dtype=float)
+    p_med = np.asarray(c2b.get("parameter_distance_median_per_entry", []), dtype=float)
+    bad_mask_preimg = np.asarray(c2b.get("bad_point_mask", []), dtype=bool)
+    valid = np.isfinite(f_med) & np.isfinite(p_med)
+    if valid.size == f_med.size and bad_mask_preimg.size == f_med.size:
+        bad = bad_mask_preimg[valid]
+    else:
+        bad = np.zeros(np.count_nonzero(valid), dtype=bool)
+    if np.count_nonzero(valid) > 0:
+        x = f_med[valid]
+        y = p_med[valid]
+        if x.size > 2500:
+            hb = ax.hexbin(x, y, gridsize=42, mincnt=1, cmap="Blues")
+            fig.colorbar(hb, ax=ax, fraction=0.046, pad=0.02, label="Point count")
+        else:
+            ax.scatter(x[~bad], y[~bad], s=12, color="#4C78A8", alpha=0.45, edgecolors="none", label="OK")
+            if np.any(bad):
+                ax.scatter(
+                    x[bad],
+                    y[bad],
+                    s=16,
+                    facecolors="none",
+                    edgecolors="#E45756",
+                    linewidths=0.8,
+                    label="Flagged",
+                )
+            ratio = y / np.maximum(x, 1e-12)
+            finite_ratio = ratio[np.isfinite(ratio)]
+            if finite_ratio.size > 0:
+                slope = float(np.median(finite_ratio))
+                x_line = np.linspace(0.0, float(np.max(x) * 1.02), 120)
+                ax.plot(
+                    x_line,
+                    slope * x_line,
+                    color="#1F3A5F",
+                    linewidth=1.2,
+                    linestyle="--",
+                    label="local-scale fit",
+                )
+
+        ax.set_xlabel("Median feature-space k-NN distance (normalized Euclidean)")
+        ax.set_ylabel("Median parameter-space pre-image distance (normalized)")
+        rel_p95 = float(c2b.get("relerr_p95", np.nan))
+        bad_frac = float(c2b.get("bad_fraction", np.nan))
+        max_param = str(c2b.get("max_distance_param", "na"))
+        max_param_p95 = float(c2b.get("max_distance_p95", np.nan))
         ax.set_title(
-            "Local Continuity (Feature -> Parameter)\n"
-            f"discontinuous_fraction={disc_frac:.3f} (target <= 0.10)"
+            "Distance Pre-Image (Overall)\n"
+            f"relerr_p95={rel_p95:.3f}, bad_fraction={bad_frac:.3f}, "
+            f"max p95={max_param}:{max_param_p95:.3f}"
+        )
+        ax.text(
+            0.98,
+            0.02,
+            "Per-parameter distances are shown\nin separate plots.",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=7,
+            bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "edgecolor": "#B0B0B0", "alpha": 0.85},
+        )
+        ax.legend(fontsize=7, loc="upper left", frameon=False)
+        thresholds = c2b.get("thresholds", {}) if isinstance(c2b.get("thresholds", {}), dict) else {}
+        rel_thr = float(thresholds.get("relerr_p95_max", np.nan))
+        bad_thr = float(thresholds.get("bad_fraction_max", np.nan))
+        _status_badge(
+            ax,
+            c2b_status,
+            (
+                f"relerr_p95<={rel_thr:.2f}, bad_fraction<={bad_thr:.2f}"
+                if np.isfinite(rel_thr) and np.isfinite(bad_thr)
+                else ""
+            ),
         )
     else:
-        ax.text(0.5, 0.5, "No local-CV vectors available", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("Local Continuity (Feature -> Parameter)")
-    _status_badge(ax, c2_status, f"CV threshold={cv_thr:.3f}")
+        # Fallback: show local continuity distribution if pre-image check is disabled/skipped.
+        c2 = checks.get("local_continuity", {})
+        c2_status = str(c2.get("status", "SKIPPED")).upper()
+        cv_thr = float(c2.get("cv_threshold", 0.50))
+        worst_cv = np.asarray(c2.get("worst_cv_per_entry", []), dtype=float)
+        worst_cv = worst_cv[np.isfinite(worst_cv)]
+        if worst_cv.size > 0:
+            n_bins = int(np.clip(np.sqrt(worst_cv.size) * 1.5, 15, 60))
+            ax.hist(worst_cv, bins=n_bins, color="#2A9D8F", alpha=0.82, edgecolor="white", linewidth=0.35)
+            ax.axvline(cv_thr, color="#E45756", linewidth=1.4, linestyle="-.", label=f"Threshold={cv_thr:.3f}")
+            x_hi = float(max(cv_thr * 1.35, np.percentile(worst_cv, 99) * 1.15, 1e-4))
+            ax.axvspan(cv_thr, x_hi, color="#FDE2E1", alpha=0.35)
+            ax.set_xlim(left=0.0, right=x_hi)
+            ax.set_xlabel("Worst-parameter local CV per entry")
+            ax.set_ylabel("Dictionary entries")
+            disc_frac = float(c2.get("discontinuous_fraction", np.nan))
+            ax2 = ax.twinx()
+            cv_sorted = np.sort(worst_cv)
+            cdf_pct = np.linspace(100.0 / len(cv_sorted), 100.0, len(cv_sorted))
+            ax2.plot(cv_sorted, cdf_pct, color="#1F3A5F", linewidth=1.0, alpha=0.9)
+            ax2.set_ylabel("CDF [%]", color="#1F3A5F")
+            ax2.tick_params(axis="y", labelsize=7, colors="#1F3A5F")
+            ax.legend(fontsize=7, loc="upper left")
+            ax.set_title(
+                "Local Continuity (Feature -> Parameter)\n"
+                f"discontinuous_fraction={disc_frac:.3f} (target <= 0.10)"
+            )
+        else:
+            ax.text(0.5, 0.5, "No pre-image/local-CV vectors available", ha="center", va="center", transform=ax.transAxes)
+            ax.set_title("Distance Pre-Image Continuity")
+        _status_badge(ax, c2_status, f"CV threshold={cv_thr:.3f}")
 
     # ── (0,2) Topology Continuity ─────────────────────────────────
     ax = axes[0, 2]
@@ -2856,22 +3428,22 @@ def _plot_continuity_validation(
             else np.nan
         )
     )
-    inj_text = (
-        f"injectivity={c_inj_status}\n"
-        f"flux_span_p95={float(c_inj.get('flux_span_fraction_p95', np.nan)):.3f} (thr={float(inj_thr):.3f})\n"
-        f"bad_fraction={float(c_inj.get('bad_fraction', np.nan)):.3f} (thr={float(inj_bad_thr):.3f})"
-    )
-    ax.text(
-        0.015,
-        0.985,
-        inj_text,
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=8,
-        family="monospace",
-        bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "#B0B0B0", "alpha": 0.88},
-    )
+    if c_inj_status != "SKIPPED":
+        inj_text = (
+            f"injectivity={c_inj_status} | "
+            f"flux_span_p95={float(c_inj.get('flux_span_fraction_p95', np.nan)):.3f}"
+        )
+        ax.text(
+            0.015,
+            0.985,
+            inj_text,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=7.5,
+            family="monospace",
+            bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "edgecolor": "#B0B0B0", "alpha": 0.88},
+        )
     _status_badge(
         ax,
         topo_panel_status,
@@ -2957,22 +3529,24 @@ def _plot_continuity_validation(
     dens_thr = float(c5.get("density_ratio_max_threshold", np.nan))
     empty_frac = float(c5.get("empty_bin_fraction", np.nan))
     iso_violations = len(c_iso.get("violations", [])) if isinstance(c_iso.get("violations", []), list) else 0
-    detail = (
-        f"density_ratio={dens_ratio:.2f} (thr={dens_thr:.2f})\n"
-        f"empty_bins={empty_frac:.3f}\n"
-        f"isotonic={iso_status} (violations={iso_violations})"
-    )
-    ax.text(
-        0.01,
-        0.99,
-        detail,
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=8,
-        family="monospace",
-        bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "#B0B0B0", "alpha": 0.88},
-    )
+    detail_lines: list[str] = []
+    if c5_status != "SKIPPED" and np.isfinite(dens_ratio):
+        detail_lines.append(f"density_ratio={dens_ratio:.2f} (thr={dens_thr:.2f})")
+        detail_lines.append(f"empty_bins={empty_frac:.3f}")
+    if iso_status != "SKIPPED":
+        detail_lines.append(f"isotonic={iso_status} (violations={iso_violations})")
+    if detail_lines:
+        ax.text(
+            0.01,
+            0.99,
+            "\n".join(detail_lines),
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=7.5,
+            family="monospace",
+            bbox={"boxstyle": "round,pad=0.22", "facecolor": "white", "edgecolor": "#B0B0B0", "alpha": 0.88},
+        )
     ax.set_title("Density + Isotonic Diagnostics")
     _status_badge(ax, panel_status, "density/isotonic")
 
@@ -2981,6 +3555,7 @@ def _plot_continuity_validation(
     ax.axis("off")
     ordered_checks = [
         ("param_space_coverage", "Coverage"),
+        ("distance_preimage_continuity", "Distance pre-image"),
         ("local_continuity", "Local continuity"),
         ("topology_bidirectional_continuity", "Topology continuity"),
         ("local_injectivity", "Local injectivity"),
@@ -2991,26 +3566,15 @@ def _plot_continuity_validation(
     features = cv_metrics.get("feature_columns_used", [])
     if not features:
         features = [c for c in (feature_cols or []) if c in dictionary.columns]
-    feature_preview = ", ".join(features[:6]) if features else "none"
-    if len(features) > 6:
-        feature_preview += ", ..."
-
     summary_lines: list[tuple[str, str]] = []
     summary_lines.append((f"overall: {cv_metrics.get('status', 'N/A')}", str(cv_metrics.get("status", "N/A")).upper()))
     summary_lines.append((f"dictionary_rows: {len(dictionary)}", ""))
     summary_lines.append((f"dataset_rows: {len(dataset)}", ""))
-    summary_lines.append((f"feature_cols({len(features)}): {feature_preview}", ""))
+    summary_lines.append((f"feature_cols: {len(features)}", ""))
     summary_lines.append(("", ""))
     for key, label in ordered_checks:
         st = str((checks.get(key, {}) or {}).get("status", "SKIPPED")).upper()
         summary_lines.append((f"{label}: {st}", st))
-
-    msgs = cv_metrics.get("messages", [])
-    if isinstance(msgs, list) and msgs:
-        summary_lines.append(("", ""))
-        summary_lines.append(("messages:", ""))
-        for msg in msgs[:5]:
-            summary_lines.append((f"- {msg}", ""))
 
     y0 = 0.97
     step = 0.067
@@ -3036,7 +3600,149 @@ def _plot_continuity_validation(
         fontweight="bold",
     )
     fig.tight_layout(rect=(0.0, 0.01, 1.0, 0.96))
-    fig.savefig(output_path, dpi=170, bbox_inches="tight")
+    _save_figure(fig, output_path, dpi=170, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_continuity_distance_preimage_by_parameter(
+    cv_metrics: dict,
+    path,
+) -> None:
+    """Plot feature-distance vs per-parameter spread in one multi-panel figure."""
+    checks = cv_metrics.get("checks", {}) if isinstance(cv_metrics.get("checks", {}), dict) else {}
+    preimg = checks.get("distance_preimage_continuity", {}) if isinstance(checks.get("distance_preimage_continuity", {}), dict) else {}
+    f_med = np.asarray(preimg.get("feature_distance_median_per_entry", []), dtype=float)
+    bad_mask = np.asarray(preimg.get("bad_point_mask", []), dtype=bool)
+    per_param_dist = (
+        preimg.get("per_param_distance_median_per_entry_by_param", {})
+        if isinstance(preimg.get("per_param_distance_median_per_entry_by_param", {}), dict)
+        else {}
+    )
+    per_param_dist_p95 = (
+        preimg.get("per_param_distance_median_p95_by_param", {})
+        if isinstance(preimg.get("per_param_distance_median_p95_by_param", {}), dict)
+        else {}
+    )
+    per_param_relerr_p95 = (
+        preimg.get("per_param_relerr_median_p95_by_param", {})
+        if isinstance(preimg.get("per_param_relerr_median_p95_by_param", {}), dict)
+        else {}
+    )
+    rel_thr = float(
+        (
+            preimg.get("thresholds", {}).get("relerr_p95_max", np.nan)
+            if isinstance(preimg.get("thresholds", {}), dict)
+            else np.nan
+        )
+    )
+    if f_med.size == 0 or not per_param_dist:
+        return
+
+    rank = sorted(
+        (
+            (str(p), float(per_param_dist_p95.get(p, np.nan)))
+            for p in per_param_dist.keys()
+            if np.isfinite(float(per_param_dist_p95.get(p, np.nan)))
+        ),
+        key=lambda t: -t[1],
+    )
+    ordered_params = [p for p, _ in rank] or [str(p) for p in per_param_dist.keys()]
+    usable_params: list[str] = []
+    for pcol in ordered_params:
+        y_vals = np.asarray(per_param_dist.get(pcol, []), dtype=float)
+        if y_vals.size != f_med.size:
+            continue
+        valid = np.isfinite(f_med) & np.isfinite(y_vals)
+        if np.count_nonzero(valid) < 3:
+            continue
+        usable_params.append(str(pcol))
+    if not usable_params:
+        return
+
+    n_panels = len(usable_params)
+    n_cols = 3 if n_panels >= 3 else n_panels
+    n_rows = int(np.ceil(n_panels / max(n_cols, 1)))
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(5.2 * n_cols, 3.9 * n_rows),
+        sharey=True,
+        squeeze=False,
+    )
+    axes_flat = axes.ravel()
+    all_y_pct: list[np.ndarray] = []
+    for pcol in usable_params:
+        y_vals = np.asarray(per_param_dist.get(pcol, []), dtype=float)
+        valid = np.isfinite(f_med) & np.isfinite(y_vals)
+        y_pct = y_vals[valid] * 100.0
+        if y_pct.size > 0:
+            all_y_pct.append(y_pct)
+    if all_y_pct:
+        y_concat = np.concatenate(all_y_pct)
+        y_hi = float(np.percentile(y_concat, 99.5)) if y_concat.size > 0 else 100.0
+        y_hi = float(np.clip(y_hi * 1.08, 2.0, 100.0))
+    else:
+        y_hi = 100.0
+
+    for idx, pcol in enumerate(usable_params):
+        ax = axes_flat[idx]
+        y_vals = np.asarray(per_param_dist.get(pcol, []), dtype=float)
+        valid = np.isfinite(f_med) & np.isfinite(y_vals)
+        x = f_med[valid]
+        y = y_vals[valid] * 100.0
+        if bad_mask.size == f_med.size:
+            bad = bad_mask[valid]
+        else:
+            bad = np.zeros(np.count_nonzero(valid), dtype=bool)
+        if x.size > 3000:
+            ax.hexbin(x, y, gridsize=36, mincnt=1, cmap="Blues")
+        else:
+            ax.scatter(x[~bad], y[~bad], s=11, color="#4C78A8", alpha=0.45, edgecolors="none", label="OK")
+            if np.any(bad):
+                ax.scatter(
+                    x[bad],
+                    y[bad],
+                    s=14,
+                    facecolors="none",
+                    edgecolors="#E45756",
+                    linewidths=0.8,
+                    label="Flagged",
+                )
+            if idx == 0:
+                ax.legend(fontsize=7, loc="upper left", frameon=False)
+
+        ratio = y / np.maximum(x, 1e-12)
+        ratio = ratio[np.isfinite(ratio)]
+        if ratio.size > 0:
+            slope = float(np.median(ratio))
+            x_line = np.linspace(0.0, float(np.max(x) * 1.02), 120)
+            ax.plot(x_line, slope * x_line, color="#1F3A5F", linewidth=1.1, linestyle="--")
+
+        dist_p95 = float(per_param_dist_p95.get(pcol, np.nan))
+        rel_p95 = float(per_param_relerr_p95.get(pcol, np.nan))
+        local_status = "WARN" if (np.isfinite(rel_p95) and np.isfinite(rel_thr) and rel_p95 > rel_thr) else "PASS"
+        ax.set_title(
+            f"Distance Pre-Image: {pcol} ({local_status})\n"
+            f"dist_p95={100.0 * dist_p95:.1f}%, relerr_p95={rel_p95:.3f}",
+            fontsize=9.5,
+        )
+        ax.set_xlabel("Feature k-NN distance (normalized Euclidean)")
+        if idx % n_cols == 0:
+            ax.set_ylabel("Parameter spread [% of parameter range]")
+        ax.set_ylim(0.0, y_hi)
+        ax.grid(True, alpha=0.22)
+        ax.tick_params(labelsize=8)
+
+    for ax in axes_flat[n_panels:]:
+        ax.axis("off")
+
+    fig.suptitle(
+        "Distance Pre-Image by Parameter (shared y-axis)",
+        fontsize=11,
+        fontweight="bold",
+    )
+    fig.tight_layout(rect=(0.0, 0.01, 1.0, 0.95))
+    _save_figure(fig, Path(path), dpi=165, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -3442,29 +4148,8 @@ def _plot_continuity_neighborhood_example(
             y=0.998,
         )
 
-    _plot_direction(
-        idx_param_near,
-        param_cols,
-        feat_cols,
-        source_name="Parameter",
-        target_name="Feature",
-        source_norm=p_norm,
-        target_norm=f_norm,
-        out_name_suffix="param_to_feature_matrix",
-    )
-    _plot_direction(
-        idx_feat_near,
-        feat_cols,
-        param_cols,
-        source_name="Feature",
-        target_name="Parameter",
-        source_norm=f_norm,
-        target_norm=p_norm,
-        out_name_suffix="feature_to_param_matrix",
-    )
-
-    fig = plt.figure(figsize=(32, 11))
-    halves = fig.subfigures(1, 2, wspace=0.02)
+    fig = plt.figure(figsize=(18, 20))
+    halves = fig.subfigures(2, 1, hspace=0.06)
     _draw_direction_half(
         halves[0],
         idx_param_near,
@@ -3489,10 +4174,10 @@ def _plot_continuity_neighborhood_example(
         "Bidirectional Neighborhood Continuity (Topology-Aware, Deterministic Source Neighborhoods)",
         fontsize=13,
         fontweight="bold",
-        y=0.997,
+        y=0.995,
     )
     combined_path = out_base.with_name(f"{out_base.stem}_bidirectional{out_base.suffix}")
-    fig.savefig(combined_path, dpi=150, bbox_inches="tight")
+    _save_figure(fig, combined_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -4344,7 +5029,7 @@ def main() -> int:
     log.info("  Dictionary entries (unique param sets): %d", len(dictionary))
 
     # ── Continuity validation ─────────────────────────────────────
-    cv_cfg = cfg_12.get("continuity_validation", {})
+    cv_cfg = _normalize_continuity_validation_cfg(cfg_12.get("continuity_validation", {}))
     cv_metrics_pre_filter: dict | None = None
     continuity_feature_cols: list[str] = []
     continuity_feature_resolution: dict | None = None
@@ -4364,13 +5049,29 @@ def main() -> int:
         "removed_fraction": 0.0,
     }
     if cv_cfg.get("enabled", True):
-        feature_selection_enabled = bool(cv_cfg.get("feature_selection_enabled", True))
+        use_step12_selected_artifact = _as_bool(
+            cv_cfg.get("use_step12_selected_artifact", True),
+            True,
+        )
+        log.info(
+            "  CONTINUITY profile: mode=%s, fail_on_error=%s, topology_enabled=%s, density_check_enabled=%s, feature_selection_enabled=%s, use_step12_selected_artifact=%s",
+            cv_cfg.get("mode", "simple"),
+            bool(cv_cfg.get("fail_on_error", False)),
+            bool(cv_cfg.get("topology_enabled", True)),
+            bool(cv_cfg.get("density_check_enabled", True)),
+            bool(cv_cfg.get("feature_selection_enabled", False)),
+            bool(use_step12_selected_artifact),
+        )
+        feature_selection_enabled = _as_bool(
+            cv_cfg.get("feature_selection_enabled", False),
+            False,
+        )
         dict_cv_pre, data_cv_pre, continuity_feature_cols, continuity_feature_resolution = (
             _resolve_step21_feature_space_for_continuity(
                 dictionary,
                 dataset,
                 config,
-                prefer_step12_selected_artifact=not feature_selection_enabled,
+                prefer_step12_selected_artifact=bool(use_step12_selected_artifact),
             )
         )
         if continuity_feature_resolution and continuity_feature_resolution.get("warning"):
@@ -4442,7 +5143,10 @@ def main() -> int:
 
         for msg in cv_messages_pre:
             if cv_status_pre == "FAIL":
-                log.error("  CONTINUITY(pre): %s", msg)
+                if cv_cfg.get("fail_on_error", False):
+                    log.error("  CONTINUITY(pre): %s", msg)
+                else:
+                    log.warning("  CONTINUITY(pre): %s", msg)
             elif cv_status_pre == "WARN":
                 log.warning("  CONTINUITY(pre): %s", msg)
             else:
@@ -4467,7 +5171,7 @@ def main() -> int:
                         dictionary,
                         dataset,
                         config,
-                        prefer_step12_selected_artifact=not feature_selection_enabled,
+                        prefer_step12_selected_artifact=bool(use_step12_selected_artifact),
                     )
                 )
                 selected_after_filter = [
@@ -4493,7 +5197,10 @@ def main() -> int:
                 )
                 for msg in cv_messages:
                     if cv_status == "FAIL":
-                        log.error("  CONTINUITY(post): %s", msg)
+                        if cv_cfg.get("fail_on_error", False):
+                            log.error("  CONTINUITY(post): %s", msg)
+                        else:
+                            log.warning("  CONTINUITY(post): %s", msg)
                     elif cv_status == "WARN":
                         log.warning("  CONTINUITY(post): %s", msg)
                     else:
@@ -4601,6 +5308,7 @@ def main() -> int:
         "isotonic_calibration_eff_4": isotonic_by_plane.get(4),
         "isotonic_calibration_relation": "simulated = f_isotonic(empirical)",
         "continuity_validation": _cv_metrics_for_json(cv_metrics),
+        "continuity_validation_cfg_effective": cv_cfg,
         "continuity_validation_pre_filter": (
             _cv_metrics_for_json(cv_metrics_pre_filter) if cv_metrics_pre_filter else None
         ),
@@ -4623,7 +5331,14 @@ def main() -> int:
             dataset_for_plots,
             continuity_feature_cols_for_plots,
             _,
-        ) = _resolve_step21_feature_space_for_continuity(dictionary, dataset, config)
+        ) = _resolve_step21_feature_space_for_continuity(
+            dictionary,
+            dataset,
+            config,
+            prefer_step12_selected_artifact=bool(
+                _as_bool(cv_cfg.get("use_step12_selected_artifact", True), True)
+            ),
+        )
         selected_for_plots = [
             c for c in (feature_selection_report.get("selected_feature_columns", []) or [])
             if c in dictionary_for_plots.columns and c in dataset_for_plots.columns
@@ -4697,33 +5412,7 @@ def _make_plots(
         log.warning("Dataset is empty — skipping plots.")
         return
 
-    # ── 1. Parameter histograms: data vs dictionary ──────────────────
-    hist_cols = [c for c in plot_cols if c in dataset.columns]
-    if hist_cols:
-        n_cols = len(hist_cols)
-        fig, axes = plt.subplots(1, n_cols, figsize=(4 * n_cols, 4))
-        if n_cols == 1:
-            axes = [axes]
-        for ax, col in zip(axes, hist_cols):
-            d_vals = pd.to_numeric(dataset[col], errors="coerce").dropna()
-            if not d_vals.empty:
-                ax.hist(d_vals, bins=30, alpha=0.5, color="#4C78A8",
-                        label="Dataset", density=True)
-            if not dictionary.empty:
-                dict_vals = pd.to_numeric(dictionary[col], errors="coerce").dropna()
-                if not dict_vals.empty:
-                    ax.hist(dict_vals, bins=30, alpha=0.6, color="#E45756",
-                            label="Dictionary", density=True)
-            ax.set_xlabel(col)
-            ax.set_ylabel("Density")
-            ax.set_title(col)
-            ax.legend(fontsize=7)
-        fig.suptitle("Parameter distributions: dataset vs dictionary", fontsize=11)
-        fig.tight_layout()
-        _save_figure(fig, PLOTS_DIR / "parameter_histograms.png")
-        plt.close(fig)
-
-    # ── 2. Scatter matrix of key params (data vs dictionary) ─────────
+    # ── 1. Scatter matrix of key params (data vs dictionary) ─────────
     scatter_cols = [c for c in plot_cols if c in dataset.columns]
     n_sc = len(scatter_cols)
     if n_sc >= 2:
@@ -4767,7 +5456,7 @@ def _make_plots(
         _save_figure(fig, PLOTS_DIR / "parameter_scatter_matrix.png")
         plt.close(fig)
 
-    # ── 3. Comprehensive relative error report for eff 1..4 ────
+    # ── 2. Comprehensive relative error report for eff 1..4 ────
     _plot_relerr_report(
         dataset,
         dictionary,
@@ -4783,7 +5472,7 @@ def _make_plots(
         fit_order_by_plane=fit_order_by_plane,
     )
 
-    # ── 4. Events distribution ───────────────────────────────────────
+    # ── 3. Events distribution ───────────────────────────────────────
     if "n_events" in dataset.columns:
         fig, ax = plt.subplots(figsize=(6, 4))
         d_ev = dataset["n_events"].dropna()
@@ -4801,24 +5490,21 @@ def _make_plots(
         _save_figure(fig, PLOTS_DIR / "event_count_histogram.png")
         plt.close(fig)
 
-    # ── 5. Dictionary coverage (NN spacing + radius-based filling) ──
+    # ── 4. Dictionary coverage (single overview figure) ──
     coverage_cols = [c for c in plot_cols if c in dictionary.columns]
     coverage_pairs = list(combinations(coverage_cols, 2))
     if not coverage_pairs and "flux_cm2_min" in dictionary.columns and "eff_sim_1" in dictionary.columns:
         coverage_pairs = [("flux_cm2_min", "eff_sim_1")]
     if not coverage_pairs:
         log.warning("No valid parameter pairs for dictionary coverage diagnostics.")
-    for x_col, y_col in coverage_pairs:
-        sx = _sanitize_plot_token(x_col)
-        sy = _sanitize_plot_token(y_col)
-        _plot_dictionary_coverage(
+    else:
+        _plot_dictionary_coverage_overview(
             dictionary,
-            PLOTS_DIR / f"dictionary_coverage_{sx}__{sy}.png",
-            x_col=x_col,
-            y_col=y_col,
+            pairs=coverage_pairs,
+            path=PLOTS_DIR / "dictionary_coverage_overview.png",
         )
 
-    # ── 6. Efficiency sim vs empirical (2×2 scatter) ─────────────────
+    # ── 5. Efficiency sim vs empirical (2×2 scatter) ─────────────────
     _plot_eff_sim_vs_empirical(
         dataset,
         dictionary,
@@ -4826,21 +5512,21 @@ def _make_plots(
         fit_poly_by_plane=fit_poly_by_plane,
     )
 
-    # ── 7. Empirical efficiency 2 vs 3 (single-panel scatter) ──────
+    # ── 6. Empirical efficiency 2 vs 3 (single-panel scatter) ──────
     _plot_empirical_eff2_vs_eff3(
         dataset,
         dictionary,
         PLOTS_DIR / "scatter_empirical_eff2_vs_eff3.png",
     )
 
-    # ── 8. Iso-rate contour in flux–eff space ────────────────────────
+    # ── 7. Iso-rate contour in flux–eff space ────────────────────────
     _plot_iso_rate(
         dictionary,
         PLOTS_DIR / "iso_rate_global_rate.png",
         eff_band_tolerance_pct=iso_rate_eff_band_tolerance_pct,
     )
 
-    # ── 9. Continuity validation ──────────────────────────────────
+    # ── 8. Continuity validation ──────────────────────────────────
     if cv_metrics and cv_metrics.get("enabled", False):
         _plot_continuity_validation(
             dictionary,
@@ -4851,7 +5537,7 @@ def _make_plots(
             PLOTS_DIR / "continuity_validation.png",
         )
 
-    # ── 10. Neighborhood mapping example (parameter ↔ feature) ───────
+    # ── 9. Neighborhood mapping example (parameter ↔ feature) ───────
     if not dictionary.empty:
         _plot_continuity_neighborhood_example(
             dictionary,
@@ -4859,6 +5545,13 @@ def _make_plots(
             param_cols=param_cols,
             feature_cols=continuity_feature_cols,
             cv_metrics=cv_metrics,
+        )
+
+    # ── 10. Distance pre-image by parameter (one plot per parameter) ─
+    if cv_metrics and cv_metrics.get("enabled", False):
+        _plot_continuity_distance_preimage_by_parameter(
+            cv_metrics,
+            PLOTS_DIR / "continuity_distance_preimage_by_param.png",
         )
 
 

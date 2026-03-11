@@ -5,4 +5,4 @@ param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
 param_mesh_sim_run: none
 chunk_rows: 50000
 plot_sample_rows: true
-n_tracks: 18000000
+n_tracks: 20000000

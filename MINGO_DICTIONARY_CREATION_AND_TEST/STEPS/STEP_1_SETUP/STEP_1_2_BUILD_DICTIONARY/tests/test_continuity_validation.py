@@ -159,6 +159,50 @@ def test_local_continuity_warns_degenerate() -> None:
     assert c2["n_discontinuous"] > 0
 
 
+def test_distance_preimage_continuity_passes_smooth_injective() -> None:
+    dictionary = _make_grid_dictionary(n_flux=18, n_eff=18)
+    flux = dictionary["flux_cm2_min"].to_numpy(dtype=float)
+    flux_norm = (flux - np.min(flux)) / max(np.max(flux) - np.min(flux), 1e-12)
+    dictionary["eff_empirical_1"] = 0.82 * dictionary["eff_sim_1"] + 0.06 * flux_norm
+    dictionary["eff_empirical_2"] = 0.80 * dictionary["eff_sim_2"] + 0.05 * flux_norm
+    dictionary["eff_empirical_3"] = 0.78 * dictionary["eff_sim_3"] + 0.04 * flux_norm
+    dictionary["eff_empirical_4"] = 0.76 * dictionary["eff_sim_4"] + 0.03 * flux_norm
+    dataset = dictionary.copy()
+    cfg = {**DEFAULT_CFG, "distance_preimage_enabled": True}
+
+    _, metrics, _ = _validate_dictionary_continuity(
+        dictionary, dataset, PARAM_COLS, cfg, _default_isotonic(),
+    )
+    cpre = metrics["checks"]["distance_preimage_continuity"]
+    assert cpre["status"] == "PASS"
+    assert np.isfinite(cpre["corr_p10"])
+    assert np.isfinite(cpre["relerr_p95"])
+
+
+def test_distance_preimage_continuity_warns_scrambled_mapping() -> None:
+    dictionary = _make_grid_dictionary(n_flux=15, n_eff=15)
+    rng = np.random.RandomState(19)
+    perm = rng.permutation(len(dictionary))
+    for p in (1, 2, 3, 4):
+        col = f"eff_empirical_{p}"
+        dictionary[col] = dictionary[col].to_numpy()[perm]
+    dataset = dictionary.copy()
+    cfg = {
+        **DEFAULT_CFG,
+        "distance_preimage_enabled": True,
+        "distance_preimage_corr_p10_min": 0.35,
+        "distance_preimage_relerr_p95_max": 0.75,
+        "distance_preimage_bad_fraction_max": 0.20,
+    }
+
+    _, metrics, _ = _validate_dictionary_continuity(
+        dictionary, dataset, PARAM_COLS, cfg, _default_isotonic(),
+    )
+    cpre = metrics["checks"]["distance_preimage_continuity"]
+    assert cpre["status"] == "WARN"
+    assert (cpre["corr_p10"] < 0.35) or (cpre["relerr_p95"] > 0.75)
+
+
 # ── Test 5: Isotonic bounds fail on negative slope ────────────────
 
 def test_topology_bidirectional_passes_smooth() -> None:
